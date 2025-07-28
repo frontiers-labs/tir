@@ -17,7 +17,7 @@ name = "tmdlc"
 path = "bin.rs"
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 
 [[bench]]
 name = "parser"

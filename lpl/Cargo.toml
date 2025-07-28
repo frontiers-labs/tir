@@ -9,7 +9,7 @@ cfg-if = "1.0.0"
 smallvec = "1.13.2"
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 serde = "1.0.215"
 serde_json = "1.0.133"
 
