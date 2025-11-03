@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 tir-macros = { path = "../macros/" }
 thiserror = "2.0"
-ariadne = "0.5.0"
+ariadne = "0.6.0"
 strsim = "0.11.1"
 linkme = "0.3.27"
 dyn-clone = "1.0.17"
