@@ -1,4 +1,4 @@
-//! Lowers the C [`ast`] to TIR using the `builtin` and `ptr` dialects.
+//! Lowers the C [`crate::ast`] to TIR using the `builtin` and `ptr` dialects.
 //!
 //! The lowering is intentionally memory-based (the unoptimised, "no memory
 //! SSA" shape a C frontend emits before any mem2reg pass): every parameter and

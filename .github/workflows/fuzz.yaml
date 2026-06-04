@@ -3,7 +3,7 @@ name: Fuzz
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0,12 * * *'
+    - cron: "0 0,12 * * *"
 
 permissions:
   contents: read
@@ -15,11 +15,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-    - uses: Swatinem/rust-cache@v2
-    - name: Build fuzz targets
-      run: cargo check -p tir-fuzz --bins
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build fuzz targets
+        run: cargo check -p tir-fuzz --bins
 
   fuzz:
     runs-on: ubuntu-latest
@@ -32,12 +32,12 @@ jobs:
           - arm64-assembly-fuzz
       max-parallel: 3
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@nightly
-      with:
-        components: llvm-tools-preview
-    - uses: Swatinem/rust-cache@v2
-    - name: Install cargo-fuzz
-      run: cargo install cargo-fuzz --locked
-    - name: Fuzz
-      run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -max_len=16384
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Fuzz
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -max_len=16384

@@ -6,6 +6,5 @@
   - [Defining Dialects](./design/defining_dialects.md)
 - [TIR Machine Description Language](./tmdl/index.md)
   - [TMDL Syntax Guide](./tmdl/syntax.md)
-  - [TMDL Parser Design](./tmdl/parser.md)
-- [API Docs](./api/tir_core/index.html)
-- [Language Parsing Library](./lpl/index.md)
+- [TMDL Parser Design](./tmdl/parser.md)
+- [API Docs](./api_docs.md)

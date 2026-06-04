@@ -1,4 +1,4 @@
-//! A [`chumsky`]-based parser turning a token stream into the [`ast`], in the
+//! A [`chumsky`]-based parser turning a token stream into the [`crate::ast`], in the
 //! same style as the TMDL compiler's parser (combinators over a token slice
 //! with `Rich` errors).
 //!

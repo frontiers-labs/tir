@@ -3,9 +3,9 @@ name: Code Coverage
 on:
   merge_group:
   pull_request:
-    branches: [ "main" ]
+    branches: ["master"]
   push:
-    branches: [ "main" ]
+    branches: ["master"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,39 +15,39 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        components: llvm-tools-preview
-    - uses: taiki-e/install-action@nextest
-    - uses: Swatinem/rust-cache@v2
-    - name: Build
-      run: cargo build --verbose
-      env:
-        CARGO_INCREMENTAL: '0'
-        RUSTFLAGS: '-C instrument-coverage --deny warnings'
-        RUSTDOCFLAGS: '-C instrument-coverage'
-    - name: Run cargo tests
-      # The FileCheck-style `lit` suites run as ordinary integration tests, so
-      # this also exercises the check tests.
-      run: cargo nextest r -v
-      env:
-        CARGO_INCREMENTAL: '0'
-        RUSTFLAGS: '-C instrument-coverage --deny warnings'
-        RUSTDOCFLAGS: '-C instrument-coverage'
-    - uses: taiki-e/install-action@grcov
-    - name: Run grcov
-      run: |
-        grcov . --binary-path target/debug/ -s . -t lcov --branch --llvm \
-            --ignore '../*' \
-            --ignore "/*" \
-            --ignore 'macros/*' \
-            --ignore 'fuzz/*' \
-            --ignore 'utils/*' \
-            --ignore 'xtask/*' \
-            --ignore '**/tests/**' \
-            -o lcov.info
-    - name: Coveralls
-      uses: coverallsapp/github-action@v2
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --verbose
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTFLAGS: "-C instrument-coverage --deny warnings"
+          RUSTDOCFLAGS: "-C instrument-coverage"
+      - name: Run cargo tests
+        # The FileCheck-style `lit` suites run as ordinary integration tests, so
+        # this also exercises the check tests.
+        run: cargo nextest r -v
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTFLAGS: "-C instrument-coverage --deny warnings"
+          RUSTDOCFLAGS: "-C instrument-coverage"
+      - uses: taiki-e/install-action@grcov
+      - name: Run grcov
+        run: |
+          grcov . --binary-path target/debug/ -s . -t lcov --branch --llvm \
+              --ignore '../*' \
+              --ignore "/*" \
+              --ignore 'macros/*' \
+              --ignore 'fuzz/*' \
+              --ignore 'utils/*' \
+              --ignore 'xtask/*' \
+              --ignore '**/tests/**' \
+              -o lcov.info
+      - name: Coveralls
+        uses: coverallsapp/github-action@v2

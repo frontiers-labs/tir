@@ -12,7 +12,7 @@ pub struct APInt {
     /// Whether this integer is signed
     signed: bool,
     /// The value, stored as a u64 for widths <= 64 bits
-    /// For widths > 64, we'd extend this to use a Vec<u64>
+    /// For widths > 64, we'd extend this to use a `Vec<u64>`.
     value: u64,
 }
 

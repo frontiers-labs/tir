@@ -2,7 +2,7 @@ name: Deploy docs
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["master"]
   workflow_dispatch:
 
 permissions:
@@ -10,19 +10,19 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        components: llvm-tools-preview
-    - uses: Swatinem/rust-cache@v2
-    - uses: taiki-e/install-action@mdbook
-    - name: Build docs
-      run: cargo xtask docs
-    - uses: actions/upload-pages-artifact@v3.0.1
-      with:
-        path: book
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@mdbook
+      - name: Build docs
+        run: cargo xtask docs
+      - uses: actions/upload-pages-artifact@v3.0.1
+        with:
+          path: book
   deploy:
     needs: build
     permissions:
@@ -32,7 +32,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

@@ -4,7 +4,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 
 /// Print a user-friendly parse error using ariadne, highlighting the given span.
 ///
-/// - `source_name`: logical name of the source (e.g., file path or "<stdin>")
+/// - `source_name`: logical name of the source (e.g., file path or `"<stdin>"`)
 /// - `source`: full source text
 /// - `span`: byte offset into `source` where the error occurred
 /// - `err`: the semantic error to display
