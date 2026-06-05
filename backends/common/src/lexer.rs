@@ -24,10 +24,10 @@ pub enum Token<'src> {
     #[token(".global")]
     Global,
 
-    #[regex("[a-zA-Z_][a-zA-Z0-9_\\.]+:", |n| { let n = n.slice(); &n[0..n.len() - 1] })]
+    #[regex("[a-zA-Z_][a-zA-Z0-9_\\.]*:", |n| { let n = n.slice(); &n[0..n.len() - 1] })]
     Label(&'src str),
 
-    #[regex("[a-zA-Z_][a-zA-Z0-9_\\.]+", |name| name.slice())]
+    #[regex("[a-zA-Z_][a-zA-Z0-9_\\.]*", |name| name.slice())]
     Ident(&'src str),
 
     #[regex("-?[0-9]+", |num| num.slice())]
@@ -71,11 +71,16 @@ impl<'src> tir::parse::tokens::TokenLike<'src> for Token<'src> {
 
 #[cfg(test)]
 mod tests {
-    use crate::lexer::lex;
+    use crate::lexer::{Token, lex};
 
     #[test]
     fn asm_rejects_unknown_punctuation_without_panicking() {
         assert_eq!(lex(".0"), Err(()));
+    }
+
+    #[test]
+    fn asm_accepts_single_character_identifiers_and_labels() {
+        assert_eq!(lex("a b:"), Ok(vec![Token::Ident("a"), Token::Label("b")]));
     }
 
     #[test]
