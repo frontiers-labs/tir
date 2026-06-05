@@ -37,6 +37,48 @@ struct TestCase {
     run_lines: Vec<String>,
 }
 
+/// Build a workspace binary once and copy it beside the current test executable.
+///
+/// Running `cargo run` from every parallel lit test can race with Cargo rewriting
+/// the target binary while another test tries to execute it. Tests should run
+/// this stable copy instead.
+pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
+    let test_exe = std::env::current_exe().expect("current test executable path");
+    let deps_dir = test_exe.parent().expect("test executable directory");
+    let profile_dir = deps_dir.parent().expect("test profile directory");
+    let profile = profile_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("test profile name");
+
+    let mut cargo = Command::new("cargo");
+    cargo.args(["build", "-q", "-p", package]);
+    if profile == "release" {
+        cargo.arg("--release");
+    }
+    let status = cargo.status().expect("spawn cargo build");
+    assert!(
+        status.success(),
+        "cargo build -p {package} failed: {status}"
+    );
+
+    let source = profile_dir.join(bin.to_owned() + std::env::consts::EXE_SUFFIX);
+    let dest = deps_dir.join(format!(
+        "{}-lit-{}{}",
+        bin,
+        std::process::id(),
+        std::env::consts::EXE_SUFFIX
+    ));
+    std::fs::copy(&source, &dest).unwrap_or_else(|e| {
+        panic!(
+            "copy built binary from '{}' to '{}': {e}",
+            source.display(),
+            dest.display()
+        )
+    });
+    dest
+}
+
 /// Collect tests, run them through libtest-mimic and exit the process.
 ///
 /// `manifest_dir` is typically `env!("CARGO_MANIFEST_DIR")`, `checks_subdir`
