@@ -256,6 +256,9 @@ impl APInt {
 
     /// Arithmetic shift right (preserves sign for signed integers)
     pub fn ashr(&self, shift: u32) -> Self {
+        if shift == 0 {
+            return self.clone();
+        }
         if shift >= self.width {
             // Fill with sign bit
             if self.is_negative() {
@@ -964,6 +967,16 @@ mod tests {
     fn test_arithmetic_shift() {
         let a = APInt::new_signed(8, -16); // 0b11110000
         assert_eq!(a.ashr(2).to_u64(), 0b11111100); // Still negative
+    }
+
+    #[test]
+    fn test_arithmetic_shift_64_bit_by_zero() {
+        let a = APInt::new_signed(64, -16);
+        let shifted = a.ashr(0);
+
+        assert_eq!(shifted.width(), 64);
+        assert_eq!(shifted.to_i64(), -16);
+        assert!(shifted.is_signed());
     }
 
     #[test]
