@@ -217,6 +217,7 @@ dialect! {
             BranchGeUnsignedOp,
             JumpAndLinkOp,
             JumpAndLinkRegOp,
+            EnvironmentCallOp,
             VirtualReturnOp
         ],
     }
@@ -228,8 +229,210 @@ pub mod ops {
 
 impl RiscvDialect {
     pub fn get_asm_parser(&self) -> tir_be_common::AsmParser {
-        tir_be_common::AsmParser::new(get_instruction_parsers())
+        tir_be_common::AsmParser::with_preprocessor(get_instruction_parsers(), preprocess_asm)
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AsmSection {
+    Text,
+    Data,
+}
+
+fn preprocess_asm(src: &str) -> String {
+    let labels = collect_asm_labels(src);
+    let mut section = AsmSection::Text;
+    let mut text_offset = 0i64;
+    let mut out = String::new();
+
+    for line in src.lines() {
+        let Some((prefix, body)) = split_label(line) else {
+            let rewritten = rewrite_asm_line(line, section, text_offset, &labels);
+            text_offset += text_size(&rewritten, section);
+            update_section(&rewritten, &mut section);
+            out.push_str(&rewritten);
+            out.push('\n');
+            continue;
+        };
+
+        out.push_str(prefix);
+        out.push('\n');
+        let rewritten = rewrite_asm_line(body, section, text_offset, &labels);
+        text_offset += text_size(&rewritten, section);
+        update_section(&rewritten, &mut section);
+        if !rewritten.trim().is_empty() {
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
+fn collect_asm_labels(src: &str) -> std::collections::HashMap<String, i64> {
+    let mut labels = std::collections::HashMap::new();
+    let mut section = AsmSection::Text;
+    let mut text_offset = 0i64;
+    let mut data_offset = 0i64;
+
+    for line in src.lines() {
+        let body = if let Some((label, rest)) = split_label(line) {
+            let addr = if section == AsmSection::Text {
+                text_offset
+            } else {
+                data_offset
+            };
+            labels.insert(label.trim_end_matches(':').trim().to_string(), addr);
+            rest
+        } else {
+            line
+        };
+
+        let clean = strip_asm_comment(body).trim();
+        update_section(clean, &mut section);
+        match section {
+            AsmSection::Text => text_offset += text_size(clean, section),
+            AsmSection::Data => data_offset = data_offset_after(clean, data_offset),
+        }
+    }
+
+    labels
+}
+
+fn rewrite_asm_line(
+    line: &str,
+    section: AsmSection,
+    text_offset: i64,
+    labels: &std::collections::HashMap<String, i64>,
+) -> String {
+    if section != AsmSection::Text {
+        return line.to_string();
+    }
+
+    let clean = strip_asm_comment(line);
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    let parts = asm_words(clean);
+    if parts.is_empty() {
+        return line.to_string();
+    }
+
+    match parts[0] {
+        "la" if parts.len() == 3 => {
+            if let Some(addr) = labels.get(parts[2]) {
+                return format!("{indent}addi {}, x0, {addr}", parts[1]);
+            }
+        }
+        "j" if parts.len() == 2 => {
+            if let Some(target) = labels.get(parts[1]) {
+                return format!("{indent}jal x0, {}", target - text_offset);
+            }
+        }
+        "nop" if parts.len() == 1 => return format!("{indent}addi x0, x0, 0"),
+        "beq" | "bne" | "blt" | "bge" | "bltu" | "bgeu" if parts.len() == 4 => {
+            if let Some(target) = labels.get(parts[3]) {
+                return format!(
+                    "{indent}{} {}, {}, {}",
+                    parts[0],
+                    parts[1],
+                    parts[2],
+                    target - text_offset
+                );
+            }
+        }
+        "jal" if parts.len() == 3 => {
+            if let Some(target) = labels.get(parts[2]) {
+                return format!("{indent}jal {}, {}", parts[1], target - text_offset);
+            }
+        }
+        _ => {}
+    }
+
+    line.to_string()
+}
+
+fn split_label(line: &str) -> Option<(&str, &str)> {
+    let clean = strip_asm_comment(line);
+    let colon = clean.find(':')?;
+    let label = &clean[..colon];
+    let trimmed = label.trim();
+    if trimmed.is_empty()
+        || !trimmed
+            .chars()
+            .all(|c| c == '_' || c == '.' || c.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some((&line[..colon + 1], &line[colon + 1..]))
+}
+
+fn strip_asm_comment(line: &str) -> &str {
+    line.split_once('#').map_or(line, |(line, _)| line)
+}
+
+fn asm_words(line: &str) -> Vec<&str> {
+    line.split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn update_section(line: &str, section: &mut AsmSection) {
+    let clean = strip_asm_comment(line).trim();
+    if clean.starts_with(".text") || clean.starts_with(".section .text") {
+        *section = AsmSection::Text;
+    } else if clean.starts_with(".data")
+        || clean.starts_with(".section .data")
+        || clean.starts_with(".section .rodata")
+        || clean.starts_with(".section .bss")
+    {
+        *section = AsmSection::Data;
+    }
+}
+
+fn text_size(line: &str, section: AsmSection) -> i64 {
+    if section == AsmSection::Text && is_asm_instruction(line) {
+        4
+    } else {
+        0
+    }
+}
+
+fn is_asm_instruction(line: &str) -> bool {
+    let clean = strip_asm_comment(line).trim();
+    !clean.is_empty() && !clean.starts_with('.')
+}
+
+fn data_offset_after(line: &str, offset: i64) -> i64 {
+    let clean = strip_asm_comment(line).trim();
+    let parts = asm_words(clean);
+    match parts.as_slice() {
+        [".dword", ..] => offset + 8,
+        [".word", ..] => offset + 4,
+        [".space", n, ..] => offset + n.parse::<i64>().unwrap_or(0),
+        [".align", n, ..] => {
+            let align = 1i64 << n.parse::<u32>().unwrap_or(0);
+            ((offset + align - 1) / align) * align
+        }
+        [".string", rest @ ..] => {
+            let text = rest.join(" ");
+            offset + string_literal_len(&text).unwrap_or(0) + 1
+        }
+        _ => offset,
+    }
+}
+
+fn string_literal_len(text: &str) -> Option<i64> {
+    let text = text.trim();
+    let text = text.strip_prefix('"')?.strip_suffix('"')?;
+    let mut len = 0;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            let _ = chars.next();
+        }
+        len += 1;
+    }
+    Some(len)
 }
 
 fn lower_func_and_return_to_asm_symbol(

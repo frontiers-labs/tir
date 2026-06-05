@@ -1,4 +1,4 @@
-# RUNx: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
+# RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
 
     .section .text
 shift_test:

@@ -16,12 +16,24 @@ pub struct AsmParser {
     /// can name several instruction forms (register vs. immediate), so each key
     /// maps to a list tried in turn with backtracking.
     instruction_parsers: HashMap<String, Vec<AsmInstructionParser>>,
+    preprocessor: Option<fn(&str) -> String>,
 }
 
 impl AsmParser {
     pub fn new(instruction_parsers: HashMap<String, Vec<AsmInstructionParser>>) -> Self {
         AsmParser {
             instruction_parsers,
+            preprocessor: None,
+        }
+    }
+
+    pub fn with_preprocessor(
+        instruction_parsers: HashMap<String, Vec<AsmInstructionParser>>,
+        preprocessor: fn(&str) -> String,
+    ) -> Self {
+        AsmParser {
+            instruction_parsers,
+            preprocessor: Some(preprocessor),
         }
     }
 
@@ -29,6 +41,13 @@ impl AsmParser {
     pub fn parse_asm(&self, context: &tir::Context, src: &str) -> Result<ModuleOp, ()> {
         let module = ModuleOpBuilder::new(context).build();
 
+        let preprocessed;
+        let src = if let Some(preprocessor) = self.preprocessor {
+            preprocessed = preprocessor(src);
+            preprocessed.as_str()
+        } else {
+            src
+        };
         let tokens = lex(src)?;
 
         let mut parser = Parser::new(&tokens);

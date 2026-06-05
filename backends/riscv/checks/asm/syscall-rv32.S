@@ -1,5 +1,4 @@
 # RUN: tir mc --march=rv32i --stage=regalloc %s | filecheck %s
-# XFAIL: *
 
     .section .text
     .global _exit
@@ -10,4 +9,4 @@ _exit:
 
 # CHECK: riscv.addi {rd = x10, rs1 = x0, imm = 0}
 # CHECK-NEXT: riscv.addi {rd = x17, rs1 = x0, imm = 93}
-# CHECK-NEXT: ecall
+# CHECK-NEXT: riscv.ecall

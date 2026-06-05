@@ -61,6 +61,24 @@ instruction JumpAndLinkReg for [RV32I, RV64I] : IType {
     }
 }
 
+instruction EnvironmentCall for [RV32I, RV64I] {
+    param MNEMONIC: String = "ecall";
+
+    operands {
+    }
+
+    encoding {
+        0..31 => 0x00000073,
+    }
+
+    asm {
+        "{self.MNEMONIC}"
+    }
+
+    behavior {
+    }
+}
+
 template BranchOp for [RV32I, RV64I] : BType {
     param OPCODE: bits<7> = 0b1100011;
 }

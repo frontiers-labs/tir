@@ -537,8 +537,10 @@ fn emit_instructions<'a>(
 
                 fn execute(
                     &self,
-                    machine: &mut dyn tir_be_common::MachineContext,
+                    _machine: &mut dyn tir_be_common::MachineContext,
                 ) -> Result<(), tir_be_common::SimTrap> {
+                    let machine = _machine;
+                    let _ = &mut *machine;
                     #execute_body
                 }
             }
@@ -616,12 +618,8 @@ fn emit_instructions<'a>(
                             }
                         }
                     }
-                    AsmAction::Skip => {
-                        parse_steps.push(quote! {});
-                    }
-                    AsmAction::SkipMnemonic => {
-                        parse_steps.push(quote! {});
-                    }
+                    AsmAction::Skip => {}
+                    AsmAction::SkipMnemonic => {}
                     AsmAction::LParen => {
                         parse_steps.push(quote! {
                             match parser.bump() {
@@ -642,19 +640,35 @@ fn emit_instructions<'a>(
             }
 
             let parse_fn_ident = format_ident!("parse_{}_inst", &inst.name.to_lowercase());
-            instruction_parsers_impls.push(quote! {
-                fn #parse_fn_ident<'src>(
-                    context: &tir::Context,
-                    builder: &mut tir::IRBuilder,
-                    parser: &mut tir::parse::tokens::Parser<'src, tir_be_common::Token<'src>>,
-                ) -> Result<(), ()> {
-                    let mut op_builder = #builder_ident::new(context);
-                    #(#parse_steps)*
-                    let op = op_builder.build();
-                    builder.insert(op);
-                    Ok(())
+            let parser_impl = if parse_steps.is_empty() {
+                quote! {
+                    fn #parse_fn_ident<'src>(
+                        context: &tir::Context,
+                        builder: &mut tir::IRBuilder,
+                        _parser: &mut tir::parse::tokens::Parser<'src, tir_be_common::Token<'src>>,
+                    ) -> Result<(), ()> {
+                        let op_builder = #builder_ident::new(context);
+                        let op = op_builder.build();
+                        builder.insert(op);
+                        Ok(())
+                    }
                 }
-            });
+            } else {
+                quote! {
+                    fn #parse_fn_ident<'src>(
+                        context: &tir::Context,
+                        builder: &mut tir::IRBuilder,
+                        parser: &mut tir::parse::tokens::Parser<'src, tir_be_common::Token<'src>>,
+                    ) -> Result<(), ()> {
+                        let mut op_builder = #builder_ident::new(context);
+                        #(#parse_steps)*
+                        let op = op_builder.build();
+                        builder.insert(op);
+                        Ok(())
+                    }
+                }
+            };
+            instruction_parsers_impls.push(parser_impl);
 
             if let Some(mn) = mnemonic.as_deref().or(Some(op_name)) {
                 let mn_lit = proc_macro2::Literal::string(mn);
