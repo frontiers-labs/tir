@@ -456,7 +456,7 @@ impl APInt {
         assert_eq!(self.width, other.width, "Widths must match");
         assert!(!other.is_zero(), "Division by zero");
         let mask = Self::mask_for_width(self.width);
-        let result = self.to_i64() / other.to_i64();
+        let result = self.to_i64().wrapping_div(other.to_i64());
         APInt {
             width: self.width,
             signed: true,
@@ -480,7 +480,7 @@ impl APInt {
         assert_eq!(self.width, other.width, "Widths must match");
         assert!(!other.is_zero(), "Division by zero");
         let mask = Self::mask_for_width(self.width);
-        let result = self.to_i64() % other.to_i64();
+        let result = self.to_i64().wrapping_rem(other.to_i64());
         APInt {
             width: self.width,
             signed: true,
@@ -964,6 +964,15 @@ mod tests {
     fn test_arithmetic_shift() {
         let a = APInt::new_signed(8, -16); // 0b11110000
         assert_eq!(a.ashr(2).to_u64(), 0b11111100); // Still negative
+    }
+
+    #[test]
+    fn test_signed_division_overflow_wraps() {
+        let min = APInt::min_value(64, true);
+        let minus_one = APInt::new_signed(64, -1);
+
+        assert_eq!(min.sdiv(&minus_one).to_i64(), i64::MIN);
+        assert_eq!(min.srem(&minus_one).to_i64(), 0);
     }
 
     #[test]
