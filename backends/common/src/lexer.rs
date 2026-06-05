@@ -39,15 +39,14 @@ pub enum Token<'src> {
 
 #[allow(clippy::result_unit_err)]
 pub fn lex<'src>(source: &'src str) -> Result<Vec<Token<'src>>, ()> {
-    let mut lexer = Token::lexer(source);
+    let lexer = Token::lexer(source);
 
     let mut tokens = vec![];
 
-    while let Some(token) = lexer.next() {
+    for token in lexer {
         match token {
             Ok(token) => tokens.push(token),
-            // FIXME: technically, lexers are not supposed to fail. Need to decide whether to throw an error or just panic.
-            Err(_) => panic!("Error at {:?}", lexer.span()),
+            Err(_) => return Err(()),
         }
     }
 
@@ -73,6 +72,11 @@ impl<'src> tir::parse::tokens::TokenLike<'src> for Token<'src> {
 #[cfg(test)]
 mod tests {
     use crate::lexer::lex;
+
+    #[test]
+    fn asm_rejects_unknown_punctuation_without_panicking() {
+        assert_eq!(lex(".0"), Err(()));
+    }
 
     #[test]
     fn asm_smoke() {

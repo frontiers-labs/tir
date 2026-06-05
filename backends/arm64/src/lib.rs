@@ -312,6 +312,17 @@ mod tests {
     }
 
     #[test]
+    fn arm64_assembly_parser_rejects_fuzzer_crash_without_panicking() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<Arm64Dialect>();
+        let arm64 = context.find_dialect::<Arm64Dialect>().unwrap();
+        let parser = arm64.get_asm_parser();
+
+        assert!(parser.parse_asm(&context, ".0").is_err());
+    }
+
+    #[test]
     fn arm64_add_lowers_to_arm64_add() {
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
