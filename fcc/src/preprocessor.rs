@@ -169,11 +169,11 @@ impl<'a> IfExpr<'a> {
         let val = self.or();
         if matches!(self.peek(), Some(PreprocToken::Question)) {
             self.bump();
-            let then = self.or();
+            let then = self.ternary();
             if matches!(self.peek(), Some(PreprocToken::Colon)) {
                 self.bump();
             }
-            let else_ = self.or();
+            let else_ = self.ternary();
             if val != 0 { then } else { else_ }
         } else {
             val
