@@ -24,6 +24,12 @@ pub enum Token<'src> {
     #[token(".global")]
     Global,
 
+    #[regex(r#"\.[a-zA-Z][a-zA-Z0-9_\.]*"#, |directive| directive.slice())]
+    Directive(&'src str),
+
+    #[regex(r#""([^"\\]|\\.)*""#, |string| string.slice())]
+    StringLit(&'src str),
+
     #[regex("[a-zA-Z_][a-zA-Z0-9_\\.]*:", |n| { let n = n.slice(); &n[0..n.len() - 1] })]
     Label(&'src str),
 
