@@ -97,42 +97,114 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     let mut operand_fn_params = vec![];
     let mut operand_fn_builders = vec![];
 
+    let has_variadic = operands.iter().any(|o| o.variadic);
+
     for operand in &operands {
         let field = format_ident!("{}", operand.name);
-        operand_fields.push(quote! {
-            #field: Option<tir::ValueId>
-        });
-        operand_defaults.push(quote! {
-            #field: None
-        });
-        operand_builders.push(quote! {
-            pub fn #field(mut self, v: tir::ValueId) -> Self {
-                self.#field = Some(v);
-                self
-            }
-        });
-        operand_fn_params.push(quote! {
-            #field: impl Into<tir::Operand>
-        });
-        operand_fn_builders.push(quote! {
-            let #field = #field.into();
-            if let Some(value) = #field.into_option() {
-                builder = builder.#field(value);
-            }
-        });
+        if operand.variadic {
+            operand_fields.push(quote! {
+                #field: Vec<tir::ValueId>
+            });
+            operand_defaults.push(quote! {
+                #field: Vec::new()
+            });
+            operand_builders.push(quote! {
+                pub fn #field(mut self, v: Vec<tir::ValueId>) -> Self {
+                    self.#field = v;
+                    self
+                }
+            });
+            operand_fn_params.push(quote! {
+                #field: Vec<tir::ValueId>
+            });
+            operand_fn_builders.push(quote! {
+                builder = builder.#field(#field);
+            });
+        } else {
+            operand_fields.push(quote! {
+                #field: Option<tir::ValueId>
+            });
+            operand_defaults.push(quote! {
+                #field: None
+            });
+            operand_builders.push(quote! {
+                pub fn #field(mut self, v: tir::ValueId) -> Self {
+                    self.#field = Some(v);
+                    self
+                }
+            });
+            operand_fn_params.push(quote! {
+                #field: impl Into<tir::Operand>
+            });
+            operand_fn_builders.push(quote! {
+                let #field = #field.into();
+                if let Some(value) = #field.into_option() {
+                    builder = builder.#field(value);
+                }
+            });
+        }
     }
 
+    // Collect operands in declaration order. Variadic ops additionally record each
+    // declared operand's segment size in the `operand_segment_sizes` attribute so
+    // groups can be recovered; fixed-arity ops keep the original simple collection.
     let operand_collect: Vec<_> = operands
         .iter()
         .map(|operand| {
             let field = format_ident!("{}", operand.name);
-            quote! {
-                if let Some(v) = self.#field {
-                    operand_vec.push(v);
+            if !has_variadic {
+                quote! {
+                    if let Some(v) = self.#field {
+                        operand_vec.push(v);
+                    }
+                }
+            } else if operand.variadic {
+                quote! {
+                    operand_segment_sizes.push(self.#field.len() as u64);
+                    operand_vec.extend(self.#field.iter().copied());
+                }
+            } else {
+                quote! {
+                    if let Some(v) = self.#field {
+                        operand_segment_sizes.push(1);
+                        operand_vec.push(v);
+                    } else {
+                        operand_segment_sizes.push(0);
+                    }
                 }
             }
         })
         .collect();
+
+    let segment_sizes_setup = if has_variadic {
+        quote! { let mut operand_segment_sizes: Vec<u64> = vec![]; }
+    } else {
+        quote! {}
+    };
+
+    // `attributes` only needs to be mutable when a variadic op appends its segment
+    // sizes, so bind it accordingly to avoid an `unused_mut` warning otherwise.
+    let attributes_binding = if has_variadic {
+        quote! { let mut attributes = self.attributes; }
+    } else {
+        quote! { let attributes = self.attributes; }
+    };
+
+    let segment_sizes_attr = if has_variadic {
+        quote! {
+            attributes.push(tir::attributes::NamedAttribute::new(
+                "operand_segment_sizes",
+                tir::attributes::AttributeValue::Array(
+                    operand_segment_sizes
+                        .iter()
+                        .map(|n| tir::attributes::AttributeValue::UInt(*n))
+                        .collect(),
+                ),
+            ));
+        }
+    } else {
+        quote! {}
+    };
 
     // Result support
     let result_accessor = if has_results {
@@ -382,6 +454,139 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         quote! { impl tir::Verifiable for #struct_name {} }
     };
 
+    // Per-operand value checks (existence, defining-op/block-arg, type constraint),
+    // shared by the fixed-arity and variadic validation loops. Expects `value_id`,
+    // `operand_name`, and `idx` in scope.
+    let operand_value_checks = quote! {
+        if !context.has_value(value_id) {
+            return Err(tir::Error::VerificationError(format!(
+                "{} operand '{}' references unknown value %{id}",
+                <Self as tir::Operation>::name(),
+                operand_name,
+                id = value_id.number()
+            )));
+        }
+
+        let value = context.get_value(value_id);
+        match value.defining_op() {
+            Some(def_op) => {
+                if !context.has_operation(def_op) {
+                    return Err(tir::Error::VerificationError(format!(
+                        "{} operand '{}' value %{id} references missing defining op",
+                        <Self as tir::Operation>::name(),
+                        operand_name,
+                        id = value_id.number()
+                    )));
+                }
+            }
+            None => {
+                if !context.is_block_argument(value_id) {
+                    return Err(tir::Error::VerificationError(format!(
+                        "{} operand '{}' value %{id} has no defining op and is not a block argument",
+                        <Self as tir::Operation>::name(),
+                        operand_name,
+                        id = value_id.number()
+                    )));
+                }
+            }
+        }
+
+        let actual_ty = value.ty();
+        let actual_ty_data = context.get_type_data(actual_ty);
+        if !operand_constraint_checkers[idx](actual_ty_data.as_ref()) {
+            return Err(tir::Error::VerificationError(format!(
+                "{} operand '{}' expected constraint {}, got {}",
+                <Self as tir::Operation>::name(),
+                operand_name,
+                operand_constraint_names[idx],
+                context.type_to_string(actual_ty)
+            )));
+        }
+    };
+
+    let operand_validation = if has_variadic {
+        quote! {
+            // Variadic ops recover their operand grouping from the segment sizes
+            // recorded at build time, then validate each declared operand's segment.
+            let segment_sizes: Vec<usize> = match <Self as tir::Operation>::attributes(self)
+                .iter()
+                .find(|a| a.name == "operand_segment_sizes")
+                .map(|a| &a.value)
+            {
+                Some(tir::attributes::AttributeValue::Array(items)) => items
+                    .iter()
+                    .map(|v| match v {
+                        tir::attributes::AttributeValue::UInt(n) => *n as usize,
+                        _ => 0usize,
+                    })
+                    .collect(),
+                _ => {
+                    return Err(tir::Error::VerificationError(format!(
+                        "{} missing operand_segment_sizes attribute",
+                        <Self as tir::Operation>::name()
+                    )));
+                }
+            };
+
+            if segment_sizes.len() != operand_specs.len() {
+                return Err(tir::Error::VerificationError(format!(
+                    "{} expects {} operand segments, got {}",
+                    <Self as tir::Operation>::name(),
+                    operand_specs.len(),
+                    segment_sizes.len()
+                )));
+            }
+
+            let total: usize = segment_sizes.iter().sum();
+            if total != operands.len() {
+                return Err(tir::Error::VerificationError(format!(
+                    "{} operand segment sizes sum to {}, but it has {} operands",
+                    <Self as tir::Operation>::name(),
+                    total,
+                    operands.len()
+                )));
+            }
+
+            let mut __cursor = 0usize;
+            for (idx, (operand_name, _type_spec)) in operand_specs.iter().enumerate() {
+                let __count = segment_sizes[idx];
+                for __k in 0..__count {
+                    let value_id = operands[__cursor + __k];
+                    #operand_value_checks
+                }
+                __cursor += __count;
+            }
+        }
+    } else {
+        quote! {
+            if operands.len() > operand_specs.len() {
+                return Err(tir::Error::VerificationError(format!(
+                    "{} expects at most {} operands, got {}",
+                    <Self as tir::Operation>::name(),
+                    operand_specs.len(),
+                    operands.len()
+                )));
+            }
+
+            for (idx, (operand_name, type_spec)) in operand_specs.iter().enumerate() {
+                let is_optional = type_spec.starts_with('?');
+
+                let Some(value_id) = operands.get(idx).copied() else {
+                    if is_optional {
+                        continue;
+                    }
+                    return Err(tir::Error::VerificationError(format!(
+                        "{} missing required operand '{}'",
+                        <Self as tir::Operation>::name(),
+                        operand_name
+                    )));
+                };
+
+                #operand_value_checks
+            }
+        }
+    };
+
     quote! {
         pub struct #struct_name(std::sync::Arc<tir::OpInstance>);
 
@@ -406,74 +611,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
                 ];
                 let operands = <Self as tir::Operation>::operands(self);
 
-                if operands.len() > operand_specs.len() {
-                    return Err(tir::Error::VerificationError(format!(
-                        "{} expects at most {} operands, got {}",
-                        <Self as tir::Operation>::name(),
-                        operand_specs.len(),
-                        operands.len()
-                    )));
-                }
-
-                for (idx, (operand_name, type_spec)) in operand_specs.iter().enumerate() {
-                    let is_optional = type_spec.starts_with('?');
-
-                    let Some(value_id) = operands.get(idx).copied() else {
-                        if is_optional {
-                            continue;
-                        }
-                        return Err(tir::Error::VerificationError(format!(
-                            "{} missing required operand '{}'",
-                            <Self as tir::Operation>::name(),
-                            operand_name
-                        )));
-                    };
-
-                    if !context.has_value(value_id) {
-                        return Err(tir::Error::VerificationError(format!(
-                            "{} operand '{}' references unknown value %{id}",
-                            <Self as tir::Operation>::name(),
-                            operand_name,
-                            id = value_id.number()
-                        )));
-                    }
-
-                    let value = context.get_value(value_id);
-                    match value.defining_op() {
-                        Some(def_op) => {
-                            if !context.has_operation(def_op) {
-                                return Err(tir::Error::VerificationError(format!(
-                                    "{} operand '{}' value %{id} references missing defining op",
-                                    <Self as tir::Operation>::name(),
-                                    operand_name,
-                                    id = value_id.number()
-                                )));
-                            }
-                        }
-                        None => {
-                            if !context.is_block_argument(value_id) {
-                                return Err(tir::Error::VerificationError(format!(
-                                    "{} operand '{}' value %{id} has no defining op and is not a block argument",
-                                    <Self as tir::Operation>::name(),
-                                    operand_name,
-                                    id = value_id.number()
-                                )));
-                            }
-                        }
-                    }
-
-                    let actual_ty = value.ty();
-                    let actual_ty_data = context.get_type_data(actual_ty);
-                    if !operand_constraint_checkers[idx](actual_ty_data.as_ref()) {
-                        return Err(tir::Error::VerificationError(format!(
-                            "{} operand '{}' expected constraint {}, got {}",
-                            <Self as tir::Operation>::name(),
-                            operand_name,
-                            operand_constraint_names[idx],
-                            context.type_to_string(actual_ty)
-                        )));
-                    }
-                }
+                #operand_validation
 
                 if self.0.results.len() != result_specs.len() {
                     return Err(tir::Error::VerificationError(format!(
@@ -679,9 +817,13 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
                 #attribute_verifier
 
                 let mut operand_vec: Vec<tir::ValueId> = vec![];
+                #segment_sizes_setup
                 #(#operand_collect)*
 
                 #result_build
+
+                #attributes_binding
+                #segment_sizes_attr
 
                 let instance = tir::OpInstance {
                     id: tir::OpId::invalid(),
@@ -691,7 +833,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
                     operands: operand_vec,
                     results: result_vec,
                     regions,
-                    attributes: self.attributes,
+                    attributes,
                     attribute_roles: #struct_name::attribute_roles(),
                 };
 
@@ -743,6 +885,10 @@ struct Region {
 struct ValueSpec {
     name: String,
     ty: String,
+    /// A `*`-prefixed operand accepts zero or more values (an MLIR-style variadic
+    /// segment). Operand grouping is then recovered from the stored
+    /// `operand_segment_sizes` attribute.
+    variadic: bool,
 }
 
 impl Parse for Operation {
@@ -1194,9 +1340,13 @@ fn get_value_specs(expr: &Expr) -> Option<Vec<ValueSpec>> {
         Expr::Struct(s) => Some(
             s.fields
                 .iter()
-                .map(|f| ValueSpec {
-                    name: field_name(f),
-                    ty: expr_as_string(&f.expr),
+                .map(|f| {
+                    let ty = expr_as_string(&f.expr);
+                    ValueSpec {
+                        name: field_name(f),
+                        variadic: ty.starts_with('*'),
+                        ty,
+                    }
                 })
                 .collect(),
         ),
@@ -1211,6 +1361,7 @@ fn get_value_specs(expr: &Expr) -> Option<Vec<ValueSpec>> {
                     ValueSpec {
                         name: p.path.get_ident().unwrap().to_string(),
                         ty: "Any".to_string(),
+                        variadic: false,
                     }
                 })
                 .collect(),
@@ -1220,7 +1371,10 @@ fn get_value_specs(expr: &Expr) -> Option<Vec<ValueSpec>> {
 }
 
 fn normalize_constraint_name(spec: &str) -> String {
-    spec.strip_prefix('?').unwrap_or(spec).to_string()
+    spec.strip_prefix('?')
+        .or_else(|| spec.strip_prefix('*'))
+        .unwrap_or(spec)
+        .to_string()
 }
 
 fn parse_constraint_tokens(spec: &str) -> proc_macro2::TokenStream {
