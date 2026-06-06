@@ -162,6 +162,22 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Parse a basic block reference of the form `^bb<number>` (e.g. `^bb2`),
+    /// returning the referenced [`BlockId`](crate::BlockId).
+    pub fn parse_block_ref(&mut self) -> Option<crate::BlockId> {
+        let mark = self.position;
+        if !self.parse_token("^bb") {
+            return None;
+        }
+        match self.parse_number() {
+            Some(n) if n >= 0 => Some(crate::BlockId::from_number(n as u32)),
+            _ => {
+                self.position = mark;
+                None
+            }
+        }
+    }
+
     pub fn parse_symbol_name(&mut self) -> Option<&'src str> {
         if self
             .src

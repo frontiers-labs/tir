@@ -556,6 +556,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
                         "Dict" => matches!(attr.value, tir::attributes::AttributeValue::Dict(_)),
                         "Register" => matches!(attr.value, tir::attributes::AttributeValue::Register(_)),
                         "Type" => matches!(attr.value, tir::attributes::AttributeValue::Type(_)),
+                        "Block" => matches!(attr.value, tir::attributes::AttributeValue::Block(_)),
                         _ => false,
                     };
 

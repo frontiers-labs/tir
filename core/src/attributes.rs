@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{Context, TypeId};
+use crate::{BlockId, Context, TypeId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttributeValue {
@@ -14,6 +14,9 @@ pub enum AttributeValue {
     Dict(BTreeMap<String, AttributeValue>),
     Register(RegisterAttr),
     Type(TypeId),
+    /// A reference to a basic block, used by terminators to name their successors
+    /// (e.g. the targets of `br`/`cond_br`).
+    Block(BlockId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +101,7 @@ impl AttributeValue {
                 }
             },
             AttributeValue::Type(ty) => context.print_type(*ty, fmt),
+            AttributeValue::Block(block) => fmt.write(format!("^bb{}", block.number())),
         }
     }
 }
@@ -201,5 +205,11 @@ impl From<RegisterAttr> for AttributeValue {
 impl From<TypeId> for AttributeValue {
     fn from(value: TypeId) -> Self {
         AttributeValue::Type(value)
+    }
+}
+
+impl From<BlockId> for AttributeValue {
+    fn from(value: BlockId) -> Self {
+        AttributeValue::Block(value)
     }
 }

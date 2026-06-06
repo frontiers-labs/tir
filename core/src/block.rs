@@ -20,6 +20,14 @@ impl BlockId {
     pub(crate) fn new(id: u32) -> Self {
         Self(id)
     }
+
+    pub fn number(&self) -> u32 {
+        self.0
+    }
+
+    pub fn from_number(n: u32) -> Self {
+        Self(n)
+    }
 }
 
 impl Block {
