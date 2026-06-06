@@ -158,6 +158,67 @@ operation! {
     }
 }
 
+// Virtual control-flow ops: the lowered form of `builtin.br`/`builtin.cond_br`.
+// They carry the successor block references and the values forwarded to each
+// successor's block arguments, deferring branch-target encoding to a later pass
+// (mirroring how `vret` defers the return sequence).
+operation! {
+    VirtualBranchOp {
+        name: "vbr",
+        dialect: "riscv",
+        format: "custom",
+        operands: O {
+            dest_args: "*Any",
+        },
+        attributes: A {
+            dest: "Block",
+        },
+    }
+}
+
+impl VirtualBranchOp {
+    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
+        tir_be_common::print_branch(fmt, self, "riscv.vbr")
+    }
+
+    fn custom_parse(
+        parser: &mut tir::parse::text::Parser,
+        _context: &tir::Context,
+    ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
+        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+    }
+}
+
+operation! {
+    VirtualCondBranchOp {
+        name: "vcond_br",
+        dialect: "riscv",
+        format: "custom",
+        operands: O {
+            condition: "Any",
+            true_args: "*Any",
+            false_args: "*Any",
+        },
+        attributes: A {
+            true_dest: "Block",
+            false_dest: "Block",
+        },
+    }
+}
+
+impl VirtualCondBranchOp {
+    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
+        tir_be_common::print_branch(fmt, self, "riscv.vcond_br")
+    }
+
+    fn custom_parse(
+        parser: &mut tir::parse::text::Parser,
+        _context: &tir::Context,
+    ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
+        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+    }
+}
+
 dialect! {
     RiscvDialect {
         name: "riscv",
@@ -217,7 +278,9 @@ dialect! {
             BranchGeUnsignedOp,
             JumpAndLinkOp,
             JumpAndLinkRegOp,
-            VirtualReturnOp
+            VirtualReturnOp,
+            VirtualBranchOp,
+            VirtualCondBranchOp
         ],
     }
 }
@@ -298,9 +361,44 @@ fn lower_func_and_return_to_asm_symbol(
     Ok(false)
 }
 
+/// Lower the builtin control-flow terminators to RISC-V virtual branch ops,
+/// preserving successor block references and forwarded block arguments.
+fn lower_branches(
+    context: &tir::Context,
+    op: &tir::OperationRef,
+    rewriter: &mut tir::Rewriter,
+) -> Result<bool, tir::PassError> {
+    use tir::attributes::AttributeValue;
+    use tir::builtin::{BranchOp, CondBranchOp};
+
+    if let Some(br) = op.as_op::<BranchOp>() {
+        let lowered = VirtualBranchOpBuilder::new(context)
+            .dest_args(br.dest_args())
+            .attr("dest", AttributeValue::Block(br.dest()))
+            .build();
+        rewriter.replace_op(op, &lowered)?;
+        return Ok(true);
+    }
+
+    if let Some(cond_br) = op.as_op::<CondBranchOp>() {
+        let lowered = VirtualCondBranchOpBuilder::new(context)
+            .condition(cond_br.condition())
+            .true_args(cond_br.true_args())
+            .false_args(cond_br.false_args())
+            .attr("true_dest", AttributeValue::Block(cond_br.true_dest()))
+            .attr("false_dest", AttributeValue::Block(cond_br.false_dest()))
+            .build();
+        rewriter.replace_op(op, &lowered)?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 pub fn create_isel_pass(context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
     tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context))
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
+        .with_op_lowering(lower_branches)
 }
 
 /// The RISC-V stack pointer (`sp` = `x2`).
@@ -443,11 +541,108 @@ tir_be_common::register_target!(select_riscv, ["riscv32", "riscv64"]);
 mod tests {
     use tir::{
         Context, IRBuilder, IRFormatter, Operation, PassManager,
-        builtin::{FuncOp, IntegerType, ops},
+        builtin::{FuncOp, IntegerType, UnitType, ops},
     };
     use tir_be_common::AsmDialect;
 
     use crate::{RiscvDialect, create_isel_pass, create_regalloc_pass};
+
+    fn body_op_names(context: &Context, region_id: tir::RegionId) -> Vec<&'static str> {
+        context
+            .get_region(region_id)
+            .iter(context.clone())
+            .next()
+            .unwrap()
+            .op_ids()
+            .into_iter()
+            .map(|id| context.get_op(id).name)
+            .collect()
+    }
+
+    #[test]
+    fn builtin_br_lowers_to_virtual() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let module = ops::module(&context, None).build();
+        let region = context.create_region();
+        let entry = context.create_block(vec![]);
+        region.add_block(entry.id());
+        let target = context.create_block(vec![]);
+
+        let func = ops::func(&context, "demo", UnitType::new(&context), Some(region.id())).build();
+        let mut fb = IRBuilder::new(func.body());
+        fb.insert(ops::br(&context, vec![], target.id()).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let mut pm = PassManager::new();
+        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.run(&context, context.get_op(module.id()))
+            .expect("isel should lower the branch");
+
+        assert_eq!(
+            body_op_names(&context, region.id()),
+            vec!["vbr", "symbol_end"]
+        );
+    }
+
+    #[test]
+    fn builtin_cond_br_lowers_to_virtual() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let i1 = IntegerType::new(&context, 1);
+        let i32 = IntegerType::new(&context, 32);
+        let module = ops::module(&context, None).build();
+
+        let cond = context.create_value(i1, None);
+        let x = context.create_value(i32, None);
+        let region = context.create_region();
+        let block = context.create_block(vec![cond, x]);
+        region.add_block(block.id());
+
+        let func = ops::func(&context, "demo", UnitType::new(&context), Some(region.id())).build();
+        let fbody = func.body();
+        let args = fbody.arguments();
+        let (cond_id, x_id) = (args[0].id(), args[1].id());
+
+        let t = context.create_block(vec![]);
+        let f = context.create_block(vec![]);
+
+        let mut fb = IRBuilder::new(func.body());
+        let add = ops::addi(&context, x_id, x_id, i32).build();
+        let add_r = add.result();
+        fb.insert(add);
+        fb.insert(ops::cond_br(&context, cond_id, vec![add_r], vec![], t.id(), f.id()).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let mut pm = PassManager::new();
+        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.run(&context, context.get_op(module.id()))
+            .expect("isel should lower the conditional branch");
+
+        // The data op selects (addw), the conditional branch lowers to the virtual
+        // op, and no builtin control flow remains.
+        assert_eq!(
+            body_op_names(&context, region.id()),
+            vec!["addw", "vcond_br", "symbol_end"]
+        );
+        let mut buf = String::new();
+        let mut fmt = IRFormatter::new(&mut buf);
+        module.print(&mut fmt).expect("print lowered module");
+        assert!(
+            !buf.contains("builtin"),
+            "no builtin ops should remain:\n{buf}"
+        );
+    }
 
     #[test]
     fn machine_models_resolve_scheduling_classes() {
