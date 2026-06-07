@@ -22,29 +22,6 @@ operation! {
     }
 }
 
-fn print_block_label(
-    fmt: &mut tir::IRFormatter,
-    context: &tir::Context,
-    block: &std::sync::Arc<tir::Block>,
-) -> Result<(), std::fmt::Error> {
-    let args = block.arguments();
-    if args.is_empty() {
-        fmt.writeln(format!("^bb{}:", block.id().number()))?;
-        return Ok(());
-    }
-
-    fmt.write(format!("^bb{}(", block.id().number()))?;
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
-            fmt.write(", ")?;
-        }
-        fmt.write(format!("%{}: ", arg.id().number()))?;
-        context.print_type(arg.ty(), fmt)?;
-    }
-    fmt.writeln("):")?;
-    Ok(())
-}
-
 impl FuncOpBuilder {
     pub fn sym_name(self, name: &str) -> Self {
         self.attr(
@@ -109,23 +86,7 @@ impl FuncOp {
             context.print_type(ret_type, fmt)?;
         }
 
-        // Print body region
-        fmt.writeln(" {")?;
-        fmt.push();
-        let region = self.regions().next().unwrap();
-        let mut first = true;
-        for block in region.iter(context.clone()) {
-            if first {
-                first = false;
-            } else {
-                print_block_label(fmt, &context, &block)?;
-            }
-            for op in block.iter(context.clone()) {
-                op.as_dyn_op().print(fmt)?;
-            }
-        }
-        fmt.pop();
-        fmt.writeln("}")?;
+        tir::region_format::print_op_region(fmt, &context, self, 0)?;
 
         Ok(())
     }
@@ -187,7 +148,7 @@ impl FuncOp {
         };
 
         // Parse body region { ... }
-        let body_region = parser.parse_single_block_region_with_args(context, block_args)?;
+        let body_region = parser.parse_region_with_entry_args(context, block_args)?;
 
         let builder = FuncOpBuilder::new(context)
             .sym_name(&sym_name)

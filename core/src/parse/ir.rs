@@ -78,22 +78,11 @@ impl ValueScope {
 }
 
 impl<'src> TextParser<'src> {
-    pub fn parse_single_block_region(
-        &mut self,
-        context: &Context,
-    ) -> Result<Arc<Region>, (Span, Error)> {
-        self.parse_single_block_region_with_args(context, vec![])
+    pub fn parse_region(&mut self, context: &Context) -> Result<Arc<Region>, (Span, Error)> {
+        self.parse_region_with_entry_args(context, vec![])
     }
 
-    pub fn parse_single_block_region_with_args(
-        &mut self,
-        context: &Context,
-        block_args: Vec<Value>,
-    ) -> Result<Arc<Region>, (Span, Error)> {
-        self.parse_block_region_with_entry_args(context, block_args)
-    }
-
-    pub fn parse_block_region_with_entry_args(
+    pub fn parse_region_with_entry_args(
         &mut self,
         context: &Context,
         entry_args: Vec<Value>,

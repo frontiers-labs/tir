@@ -57,7 +57,7 @@ impl ForOp {
             self.operands()[1].number(),
             self.operands()[2].number()
         ))?;
-        print_block_region(fmt, &self.0.context.upgrade(), self.body())
+        tir::region_format::print_op_region(fmt, &self.0.context.upgrade(), self, 0)
     }
 
     fn custom_parse(
@@ -69,7 +69,7 @@ impl ForOp {
         let upper_bound = parse_value_id(parser)?;
         expect_token(parser, ",")?;
         let step = parse_value_id(parser)?;
-        let body = parser.parse_single_block_region(context)?.id();
+        let body = parser.parse_region(context)?.id();
 
         Ok(Box::new(
             ForOpBuilder::new(context)
@@ -113,7 +113,7 @@ impl WhileOp {
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         fmt.write(format!("scf.while %{}", self.condition().number()))?;
-        print_block_region(fmt, &self.0.context.upgrade(), self.body())
+        tir::region_format::print_op_region(fmt, &self.0.context.upgrade(), self, 0)
     }
 
     fn custom_parse(
@@ -121,7 +121,7 @@ impl WhileOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let condition = parse_value_id(parser)?;
-        let body = parser.parse_single_block_region(context)?.id();
+        let body = parser.parse_region(context)?.id();
         Ok(Box::new(
             WhileOpBuilder::new(context)
                 .condition(condition)
@@ -166,9 +166,10 @@ impl IfOp {
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         fmt.write(format!("scf.if %{}", self.condition().number()))?;
-        print_block_region(fmt, &self.0.context.upgrade(), self.then_body())?;
+        let context = self.0.context.upgrade();
+        tir::region_format::print_op_region(fmt, &context, self, 0)?;
         fmt.write(" else")?;
-        print_block_region(fmt, &self.0.context.upgrade(), self.else_body())
+        tir::region_format::print_op_region(fmt, &context, self, 1)
     }
 
     fn custom_parse(
@@ -176,9 +177,9 @@ impl IfOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let condition = parse_value_id(parser)?;
-        let then_body = parser.parse_single_block_region(context)?.id();
+        let then_body = parser.parse_region(context)?.id();
         expect_token(parser, "else")?;
-        let else_body = parser.parse_single_block_region(context)?.id();
+        let else_body = parser.parse_region(context)?.id();
 
         Ok(Box::new(
             IfOpBuilder::new(context)
@@ -224,20 +225,6 @@ fn expect_token(
     } else {
         Err((parser.span(), Error::ExpectedToken(token)))
     }
-}
-
-fn print_block_region(
-    fmt: &mut tir::IRFormatter,
-    context: &Context,
-    block: Arc<tir::Block>,
-) -> Result<(), std::fmt::Error> {
-    fmt.writeln(" {")?;
-    fmt.push();
-    for op in block.iter(context.clone()) {
-        op.as_dyn_op().print(fmt)?;
-    }
-    fmt.pop();
-    fmt.writeln("}")
 }
 
 fn verify_i1_operand(context: &Context, value: ValueId, label: &str) -> Result<(), Error> {

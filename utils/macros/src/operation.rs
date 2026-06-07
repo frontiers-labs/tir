@@ -1557,7 +1557,7 @@ fn make_generic_printer(
     };
 
     let regions = if regions.len() == 1 && regions[0].single_block {
-        make_single_block_region_printer(&regions[0])
+        make_single_block_region_printer(&regions[0], 0)
     } else {
         quote! {}
     };
@@ -1596,18 +1596,13 @@ fn make_generic_printer(
     }
 }
 
-fn make_single_block_region_printer(region: &Region) -> proc_macro2::TokenStream {
-    let name = format_ident!("{}", region.name);
+fn make_single_block_region_printer(region: &Region, index: usize) -> proc_macro2::TokenStream {
+    let _ = region;
     quote! {
-        fmt.writeln(" {")?;
-        let context = self.0.context.upgrade();
-        fmt.push();
-        for op in self.#name().iter(context.clone()) {
-            let dyn_op = op.as_dyn_op();
-            dyn_op.print(fmt)?;
+        {
+            let context = self.0.context.upgrade();
+            tir::region_format::print_op_region(fmt, &context, self, #index)?;
         }
-        fmt.pop();
-        fmt.writeln("}")?;
     }
 }
 
@@ -1621,7 +1616,7 @@ fn make_parser(
         let region_name = format_ident!("{}", regions[0].name);
         (
             quote! {
-               let #region_name = parser.parse_single_block_region(context)?.id();
+               let #region_name = parser.parse_region(context)?.id();
             },
             quote! {
                 .#region_name(#region_name)

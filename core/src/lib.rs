@@ -22,6 +22,7 @@ mod pass;
 pub mod passes;
 pub mod pbqp;
 mod region;
+pub mod region_format;
 pub mod sem_expr;
 mod ty;
 pub mod utils;
