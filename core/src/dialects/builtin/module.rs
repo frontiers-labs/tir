@@ -55,7 +55,7 @@ mod tests {
             .unwrap()
             .as_op::<FuncOp>()
             .expect("func op");
-        let region = func.regions().nth(0).unwrap();
+        let region = func.regions().next().unwrap();
         assert_eq!(region.iter(context.clone()).len(), 2);
         assert!(module.verify(&context).is_ok());
     }

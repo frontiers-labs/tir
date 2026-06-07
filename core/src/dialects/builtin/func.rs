@@ -112,7 +112,7 @@ impl FuncOp {
         // Print body region
         fmt.writeln(" {")?;
         fmt.push();
-        let region = self.regions().nth(0).unwrap();
+        let region = self.regions().next().unwrap();
         let mut first = true;
         for block in region.iter(context.clone()) {
             if first {
@@ -303,7 +303,7 @@ mod tests {
     return %0
   }"#;
         let func = parse_ir::<FuncOp>(&context, src).expect("parse labeled blocks");
-        let region = func.regions().nth(0).unwrap();
+        let region = func.regions().next().unwrap();
         assert_eq!(region.iter(context.clone()).len(), 2);
         assert!(func.verify(&context).is_ok());
 

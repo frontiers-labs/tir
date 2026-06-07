@@ -133,10 +133,7 @@ impl<'src> TextParser<'src> {
         Ok(region)
     }
 
-    fn try_parse_block_label(
-        &mut self,
-        context: &Context,
-    ) -> ParseResult<Option<BlockLabel>> {
+    fn try_parse_block_label(&mut self, context: &Context) -> ParseResult<Option<BlockLabel>> {
         let mark = self.pos();
         let Some(block) = self.parse_block_ref() else {
             return Ok(None);

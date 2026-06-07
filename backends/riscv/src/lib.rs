@@ -75,10 +75,8 @@ fn parse_riscv_isa_string(march: &str) -> Option<TargetConfig> {
     let rest = march.strip_prefix("rv")?;
     let (xlen, rest) = if let Some(rest) = rest.strip_prefix("32") {
         (32, rest)
-    } else if let Some(rest) = rest.strip_prefix("64") {
-        (64, rest)
     } else {
-        return None;
+        (64, rest.strip_prefix("64")?)
     };
 
     let mut chars = rest.chars().peekable();

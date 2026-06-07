@@ -503,7 +503,7 @@ fn check_template_parents(
                         current.span,
                         format!(
                             "Unknown parent template '{}' for template '{}'",
-                            parent_name, &current.name
+                            parent_name, current.name
                         ),
                     ),
                 ));
