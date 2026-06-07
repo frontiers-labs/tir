@@ -2,10 +2,12 @@ use std::collections::HashMap;
 
 use crate::{Context, OpId, TypeId};
 
+mod dominance;
 mod egraph;
 mod pattern;
 mod postorder;
 
+pub use dominance::{DomNode, DominatorTree};
 pub use egraph::{EClassId, EGraph, EMatch, ENode, Rewrite, SaturationLimits};
 pub use pattern::{
     CoverCandidate, CoverLegality, GraphCoverDriver, MatchBinding, OperandConstraint, Pattern,
