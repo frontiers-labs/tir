@@ -101,7 +101,9 @@ impl AttributeValue {
                 }
             },
             AttributeValue::Type(ty) => context.print_type(*ty, fmt),
-            AttributeValue::Block(block) => fmt.write(format!("^bb{}", block.number())),
+            AttributeValue::Block(block) => {
+                fmt.write(format!("^bb{}", fmt.region_block_number(*block)))
+            }
         }
     }
 }

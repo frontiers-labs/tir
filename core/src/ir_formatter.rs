@@ -1,9 +1,13 @@
+use std::collections::HashMap;
 use std::fmt::Write;
+
+use crate::BlockId;
 
 pub struct IRFormatter<'a> {
     w: &'a mut dyn Write,
     padding: u8,
     new_line: bool,
+    region_block_numbers: Vec<HashMap<BlockId, u32>>,
 }
 
 impl<'a> IRFormatter<'a> {
@@ -12,7 +16,23 @@ impl<'a> IRFormatter<'a> {
             w,
             padding: 0,
             new_line: true,
+            region_block_numbers: vec![],
         }
+    }
+
+    pub fn push_region_block_numbers(&mut self, numbers: HashMap<BlockId, u32>) {
+        self.region_block_numbers.push(numbers);
+    }
+
+    pub fn pop_region_block_numbers(&mut self) {
+        self.region_block_numbers.pop();
+    }
+
+    pub fn region_block_number(&self, block: BlockId) -> u32 {
+        self.region_block_numbers
+            .last()
+            .and_then(|numbers| numbers.get(&block).copied())
+            .unwrap_or_else(|| block.number())
     }
 
     pub fn push(&mut self) {

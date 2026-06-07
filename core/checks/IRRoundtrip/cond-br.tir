@@ -2,11 +2,11 @@
 
 module {
   func @select(%0: !i1) -> !i32 {
-    cond_br %0, ^bb2, ^bb3
-  ^bb2:
+    cond_br %0, ^bb1, ^bb2
+  ^bb1:
     %1 = constant {value = 1} : !i32
     return %1
-  ^bb3:
+  ^bb2:
     %2 = constant {value = 0} : !i32
     return %2
   }
@@ -15,11 +15,11 @@ module {
 
 // CHECK: module {
 // CHECK-NEXT: func @select(%{{[0-9]+}}: !i1) -> !i32 {
-// CHECK-NEXT: cond_br %{{[0-9]+}}, ^bb2, ^bb3
-// CHECK-NEXT: ^bb2:
+// CHECK-NEXT: cond_br %{{[0-9]+}}, ^bb1, ^bb2
+// CHECK-NEXT: ^bb1:
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 1} : !i32
 // CHECK-NEXT: return %{{[0-9]+}}
-// CHECK-NEXT: ^bb3:
+// CHECK-NEXT: ^bb2:
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i32
 // CHECK-NEXT: return %{{[0-9]+}}
 // CHECK-NEXT: }

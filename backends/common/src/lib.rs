@@ -113,7 +113,7 @@ pub fn print_branch(
     }
     for attr in op.attributes() {
         if let AttributeValue::Block(block) = &attr.value {
-            fmt.write(format!(" ^bb{}", block.number()))?;
+            fmt.write(format!(" ^bb{}", fmt.region_block_number(*block)))?;
         }
     }
     fmt.write("\n")

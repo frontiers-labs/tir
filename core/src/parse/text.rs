@@ -1,13 +1,28 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::Region;
+use crate::block::BlockId;
 use crate::parse::common::{Cursor, Span};
+
+pub(crate) struct RegionParseState {
+    pub region: Arc<Region>,
+    pub indices: HashMap<u32, BlockId>,
+}
 
 pub struct Parser<'src> {
     src: &'src str,
     position: u32,
+    pub(crate) region_parse: Option<RegionParseState>,
 }
 
 impl<'src> Parser<'src> {
     pub fn new(src: &'src str) -> Self {
-        Self { src, position: 0 }
+        Self {
+            src,
+            position: 0,
+            region_parse: None,
+        }
     }
 
     pub fn peek_char(&self) -> Option<char> {
@@ -162,20 +177,25 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse a basic block reference of the form `^bb<number>` (e.g. `^bb2`),
-    /// returning the referenced [`BlockId`](crate::BlockId).
-    pub fn parse_block_ref(&mut self) -> Option<crate::BlockId> {
+    /// Parse the region-local index in a `^bb<number>` reference.
+    pub fn parse_block_index(&mut self) -> Option<u32> {
         let mark = self.position;
         if !self.parse_token("^bb") {
             return None;
         }
         match self.parse_number() {
-            Some(n) if n >= 0 => Some(crate::BlockId::from_number(n as u32)),
+            Some(n) if n >= 0 => Some(n as u32),
             _ => {
                 self.position = mark;
                 None
             }
         }
+    }
+
+    /// Parse a `^bb<number>` reference, returning a [`BlockId`](crate::BlockId)
+    /// without applying any active region parse scope.
+    pub fn parse_block_ref(&mut self) -> Option<BlockId> {
+        self.parse_block_index().map(BlockId::from_number)
     }
 
     pub fn parse_symbol_name(&mut self) -> Option<&'src str> {

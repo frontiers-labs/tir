@@ -190,7 +190,7 @@ fn print_successor(
     block: BlockId,
     args: &[ValueId],
 ) -> Result<(), std::fmt::Error> {
-    fmt.write(format!("^bb{}", block.number()))?;
+    fmt.write(format!("^bb{}", fmt.region_block_number(block)))?;
     if args.is_empty() {
         return Ok(());
     }
@@ -215,8 +215,13 @@ fn parse_successor(
     parser: &mut tir::parse::text::Parser,
     context: &Context,
 ) -> Result<(BlockId, Vec<ValueId>), (tir::parse::Span, Error)> {
-    let block = parse_block_ref(parser)?;
+    use tir::parse::common::Cursor;
+    let index = parser
+        .parse_block_index()
+        .ok_or_else(|| (parser.span(), Error::ExpectedToken("^bb")))?;
+
     let mut args = vec![];
+    let mut arg_types = vec![];
     if parser.parse_token("(") {
         loop {
             args.push(parse_value_id(parser)?);
@@ -226,10 +231,8 @@ fn parse_successor(
             break;
         }
         expect_token(parser, ":")?;
-        // Argument types are carried by the values themselves; parse and discard
-        // them so the textual form round-trips.
         loop {
-            parse_arg_type(parser, context)?;
+            arg_types.push(parse_arg_type(parser, context)?);
             if parser.parse_token(",") {
                 continue;
             }
@@ -237,6 +240,8 @@ fn parse_successor(
         }
         expect_token(parser, ")")?;
     }
+
+    let block = parser.resolve_region_block_index(context, index, &arg_types)?;
     Ok((block, args))
 }
 
@@ -251,15 +256,6 @@ fn parse_value_id(
         .parse::<u32>()
         .map_err(|_| (parser.span(), Error::UnknownValueRef(value_ref.to_string())))?;
     Ok(ValueId::from_number(id))
-}
-
-fn parse_block_ref(
-    parser: &mut tir::parse::text::Parser,
-) -> Result<BlockId, (tir::parse::Span, Error)> {
-    use tir::parse::common::Cursor;
-    parser
-        .parse_block_ref()
-        .ok_or_else(|| (parser.span(), Error::ExpectedToken("^bb")))
 }
 
 fn parse_arg_type(
