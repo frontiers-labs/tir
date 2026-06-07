@@ -1,0 +1,27 @@
+// RUN: tir opt --pass mem2reg %s | filecheck %s
+
+// The only store sits on one side of the scf.if, so its block does not dominate
+// the load placed after the join. The dominator tree reports no dominance, the
+// reaching value is ambiguous (a phi would be required), and the slot is left
+// untouched in memory.
+
+module {
+  func @guarded(%0: !i1, %1: !i32) -> !i32 {
+    %2 = ptr.alloca : !ptr.p<!i32>
+    scf.if %0 {
+      ptr.store %1, %2
+      scf.yield
+    } else {
+      scf.yield
+    }
+    %3 = ptr.load %2 : !i32
+    return %3
+  }
+  module_end
+}
+
+// CHECK-LABEL: func @guarded
+// CHECK: ptr.alloca
+// CHECK: ptr.store
+// CHECK: ptr.load
+// CHECK: return

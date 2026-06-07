@@ -1,0 +1,29 @@
+// RUN: tir opt --pass mem2reg %s | filecheck %s
+// RUN: tir opt --pass builtin.func(mem2reg) %s | filecheck %s
+
+// The store lives in the entry block, which dominates the entry of the scf.if
+// region holding the load (entering the region passes through the parent op).
+// The dominator tree therefore lets the single store forward across structured
+// control flow, so the slot is promoted and %3 becomes %1.
+
+module {
+  func @forward(%0: !i1, %1: !i32) -> !i32 {
+    %2 = ptr.alloca : !ptr.p<!i32>
+    ptr.store %1, %2
+    scf.if %0 {
+      %3 = ptr.load %2 : !i32
+      %4 = addi %3, %3 : !i32
+      scf.yield
+    } else {
+      scf.yield
+    }
+    return %1
+  }
+  module_end
+}
+
+// CHECK-LABEL: func @forward
+// CHECK-NOT: ptr.alloca
+// CHECK-NOT: ptr.store
+// CHECK-NOT: ptr.load
+// CHECK: addi %1, %1
