@@ -19,7 +19,11 @@ operation! {
     }
 }
 
-impl Terminator for BranchOp {}
+impl Terminator for BranchOp {
+    fn successors(&self) -> Vec<BlockId> {
+        vec![self.dest()]
+    }
+}
 
 impl BranchOp {
     pub fn dest(&self) -> BlockId {
@@ -29,10 +33,6 @@ impl BranchOp {
     /// The values forwarded to the destination block's arguments.
     pub fn dest_args(&self) -> Vec<ValueId> {
         self.operands().to_vec()
-    }
-
-    pub fn successors(&self) -> Vec<BlockId> {
-        vec![self.dest()]
     }
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
@@ -74,7 +74,11 @@ operation! {
     }
 }
 
-impl Terminator for CondBranchOp {}
+impl Terminator for CondBranchOp {
+    fn successors(&self) -> Vec<BlockId> {
+        vec![self.true_dest(), self.false_dest()]
+    }
+}
 
 impl CondBranchOp {
     pub fn condition(&self) -> ValueId {
@@ -99,10 +103,6 @@ impl CondBranchOp {
     pub fn false_args(&self) -> Vec<ValueId> {
         let (start, end) = self.false_range();
         self.operands()[start..end].to_vec()
-    }
-
-    pub fn successors(&self) -> Vec<BlockId> {
-        vec![self.true_dest(), self.false_dest()]
     }
 
     // Operand layout is [condition, true_args.., false_args..]; the segment sizes

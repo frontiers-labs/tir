@@ -1,4 +1,4 @@
-use crate::{Context, Operation, ValueId};
+use crate::{BlockId, Context, Operation, ValueId};
 
 pub trait Commutative {
     fn is_commutative(&self) -> bool {
@@ -17,6 +17,11 @@ pub trait Terminator {
     fn is_terminator(&self) -> bool {
         true
     }
+
+    fn successors(&self) -> Vec<BlockId> {
+        Vec::new()
+    }
+
     fn verify_interface(
         &self,
         _this: &dyn Operation,

@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::Operation;
-use crate::graph::{Dag, DominatorTree, NodeId};
+use crate::analysis::DominatorTree;
+use crate::graph::{Dag, NodeId};
 use crate::{
     BlockId, Context, MemoryRead, MemoryWrite, OpId, OperationRef, Pass, PassError, PassTarget,
     PromotableAllocation, Rewriter, ValueId, builtin::FuncOp,

@@ -4,6 +4,7 @@ extern crate self as tir;
 // downstream crates without each of them depending on it directly.
 pub use linkme;
 
+pub mod analysis;
 pub mod attributes;
 mod block;
 mod builder;

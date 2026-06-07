@@ -5,12 +5,7 @@
 //! dominance (see "Extending Dominance to MLIR Regions", LLVM Dev Mtg 2023), the
 //! tree is built over a unified CFG whose nodes are basic blocks drawn from the
 //! root operation's region and, transitively, every nested region reachable from
-//! it. Two kinds of edges connect those blocks:
-//!
-//! * unstructured control flow: a block's terminator (`br`/`cond_br`) targets
-//!   sibling blocks in the same region;
-//! * structured control flow: a block that contains an operation with regions
-//!   (e.g. `scf.for`) flows into the entry block of each of those regions.
+//! it.
 //!
 //! The resulting tree is exposed through the [`Dag`] trait by delegating to an
 //! internal [`PostOrderDag`]; the custom constructors build the edge structure
@@ -19,8 +14,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    BlockId, Context, OpId, TypeId,
-    builtin::{BranchOp, CondBranchOp},
+    BlockId, Context, OpId, Terminator, TypeId,
     graph::{Dag, MutDag, Node, NodeId, PostOrderDag},
 };
 
@@ -279,11 +273,8 @@ fn build_cfg(context: &Context, root: OpId) -> Cfg {
 
 fn terminator_successors(context: &Context, op: OpId) -> Vec<BlockId> {
     let instance = context.get_op(op);
-    if let Some(branch) = instance.clone().as_op::<BranchOp>() {
-        return branch.successors();
-    }
-    if let Some(branch) = instance.as_op::<CondBranchOp>() {
-        return branch.successors();
+    if let Some(terminator) = instance.clone().as_interface::<dyn Terminator>() {
+        return terminator.successors();
     }
     Vec::new()
 }
