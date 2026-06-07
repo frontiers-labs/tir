@@ -1,0 +1,21 @@
+// RUN: tir opt %s | filecheck %s
+
+module {
+  func @jump() -> !i32 {
+    br ^bb2
+  ^bb2:
+    %0 = constant {value = 42} : !i32
+    return %0
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: func @jump() -> !i32 {
+// CHECK-NEXT: br ^bb2
+// CHECK-NEXT: ^bb2:
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 42} : !i32
+// CHECK-NEXT: return %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }

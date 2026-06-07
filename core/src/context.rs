@@ -403,10 +403,31 @@ impl Context {
         block
     }
 
+    pub(crate) fn create_block_at(&self, id: BlockId, arguments: Vec<Value>) -> Arc<Block> {
+        let mut inner = self.0.write();
+
+        let next = inner
+            .last_block_id
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .max(id.number() + 1);
+        inner
+            .last_block_id
+            .store(next, std::sync::atomic::Ordering::SeqCst);
+
+        let block = Arc::new(Block::new(id, arguments));
+        inner.blocks.insert(id, block.clone());
+
+        block
+    }
+
     pub fn get_block(&self, id: BlockId) -> Arc<Block> {
         let inner = self.0.read();
 
         inner.blocks.get(&id).unwrap().clone()
+    }
+
+    pub(crate) fn has_block(&self, id: BlockId) -> bool {
+        self.0.read().blocks.contains_key(&id)
     }
 
     pub fn get_region(&self, id: RegionId) -> Arc<Region> {

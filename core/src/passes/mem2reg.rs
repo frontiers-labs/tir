@@ -277,8 +277,7 @@ mod tests {
     }
 
     /// A store in the entry block dominates a load in a successor block, so the
-    /// value is forwarded across the branch. The `FuncOp` printer only shows the
-    /// entry block, so these multi-block cases inspect the IR directly.
+    /// value is forwarded across the branch.
     #[test]
     fn promotes_across_unstructured_branch() {
         let context = Context::with_default_dialects();

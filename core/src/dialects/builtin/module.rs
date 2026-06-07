@@ -34,6 +34,33 @@ mod tests {
     };
 
     #[test]
+    fn module_parses_labeled_func_blocks() {
+        use crate::builtin::FuncOp;
+
+        let context = Context::with_default_dialects();
+        let src = r#"module {
+  func @jump() -> !i32 {
+    br ^bb2
+  ^bb2:
+    %0 = constant {value = 42} : !i32
+    return %0
+  }
+  module_end
+}"#;
+        let module = parse_ir::<ModuleOp>(&context, src).expect("parse module");
+        let func = module
+            .body()
+            .iter(context.clone())
+            .next()
+            .unwrap()
+            .as_op::<FuncOp>()
+            .expect("func op");
+        let region = func.regions().nth(0).unwrap();
+        assert_eq!(region.iter(context.clone()).len(), 2);
+        assert!(module.verify(&context).is_ok());
+    }
+
+    #[test]
     fn module_creation() {
         let context = Context::with_default_dialects();
         let m = ops::module(&context, None).build();

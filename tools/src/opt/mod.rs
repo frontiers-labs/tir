@@ -27,15 +27,17 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, &input)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0))?;
 
-    let pipeline = args.passes.join(",");
-    let mut pm = tir::parse_pipeline(&pipeline).map_err(|e| {
-        format!(
-            "{e} (available passes: {})",
-            tir::registered_passes().join(", ")
-        )
-    })?;
-    pm.run(&context, context.get_op(module.id()))
-        .map_err(|e| format!("pass pipeline failed: {e}"))?;
+    if !args.passes.is_empty() {
+        let pipeline = args.passes.join(",");
+        let mut pm = tir::parse_pipeline(&pipeline).map_err(|e| {
+            format!(
+                "{e} (available passes: {})",
+                tir::registered_passes().join(", ")
+            )
+        })?;
+        pm.run(&context, context.get_op(module.id()))
+            .map_err(|e| format!("pass pipeline failed: {e}"))?;
+    }
 
     let mut rendered = String::new();
     let mut fmt = IRFormatter::new(&mut rendered);

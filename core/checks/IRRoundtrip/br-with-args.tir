@@ -1,0 +1,19 @@
+// RUN: tir opt %s | filecheck %s
+
+module {
+  func @fwd(%0: !i32) -> !i32 {
+    br ^bb2(%0 : !i32)
+  ^bb2(%1: !i32):
+    return %1
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: func @fwd(%{{[0-9]+}}: !i32) -> !i32 {
+// CHECK-NEXT: br ^bb2(%{{[0-9]+}} : !i32)
+// CHECK-NEXT: ^bb2(%{{[0-9]+}}: !i32):
+// CHECK-NEXT: return %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }
