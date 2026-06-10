@@ -13,14 +13,15 @@ use tir_be_common::sched::{InstrSchedClass, MachineModel};
 use tir_be_common::{ControlFlow, MachineInstruction};
 
 use crate::predictor::BranchPredictor;
-use crate::scoreboard::{self, BranchOutcome, Prf, ScoreboardInstr, phys_regs};
+use crate::scoreboard::{self, BranchOutcome, EventHandler, Prf, ScoreboardInstr, phys_regs};
 
 pub use crate::scoreboard::{TimingConfig, TimingResult};
 
 /// Replay `trace` (a `(op, pc)` stream) against `model` and return the cycle
 /// count. `predictor` supplies branch-direction guesses; mispredictions stall
 /// the front end by `config.mispredict_penalty` cycles. `prf` enables
-/// register-file pressure on a renaming core.
+/// register-file pressure on a renaming core. `handler` receives the pipeline
+/// events for report rendering.
 ///
 /// Only [`ControlFlow::Conditional`] instructions are predictor-scored: an
 /// unconditional transfer's target is known at decode, so it flows through the
@@ -32,6 +33,7 @@ pub fn simulate(
     config: &TimingConfig,
     predictor: &mut dyn BranchPredictor,
     prf: Option<&Prf>,
+    handler: Option<&mut dyn EventHandler>,
 ) -> TimingResult {
     // Pre-resolve each trace entry to its scheduling class, registers, and
     // (for conditional branches) PC and width — branch outcomes need the next
@@ -91,7 +93,7 @@ pub fn simulate(
         slots[i].branch = Some(BranchOutcome { pc, target, taken });
     }
 
-    scoreboard::run(model, &slots, 1, config, Some(predictor), prf, None)
+    scoreboard::run(model, &slots, 1, config, Some(predictor), prf, handler)
 }
 
 #[cfg(test)]
@@ -207,6 +209,7 @@ mod tests {
             config,
             &mut AlwaysNotTaken,
             None,
+            None,
         )
     }
 
@@ -288,8 +291,24 @@ mod tests {
         let model = tir_riscv::out_of_order_core_model();
         let config = TimingConfig::for_model(&model);
 
-        let ant = simulate(&model, &context, &trace, &config, &mut AlwaysNotTaken, None);
-        let btfn = simulate(&model, &context, &trace, &config, &mut BackwardTaken, None);
+        let ant = simulate(
+            &model,
+            &context,
+            &trace,
+            &config,
+            &mut AlwaysNotTaken,
+            None,
+            None,
+        );
+        let btfn = simulate(
+            &model,
+            &context,
+            &trace,
+            &config,
+            &mut BackwardTaken,
+            None,
+            None,
+        );
 
         assert_eq!(
             ant.mispredicts, 1,
@@ -363,8 +382,24 @@ mod tests {
 
         let model = tir_riscv::out_of_order_core_model();
         let config = TimingConfig::for_model(&model);
-        let ant = simulate(&model, &context, &trace, &config, &mut AlwaysNotTaken, None);
-        let btfn = simulate(&model, &context, &trace, &config, &mut BackwardTaken, None);
+        let ant = simulate(
+            &model,
+            &context,
+            &trace,
+            &config,
+            &mut AlwaysNotTaken,
+            None,
+            None,
+        );
+        let btfn = simulate(
+            &model,
+            &context,
+            &trace,
+            &config,
+            &mut BackwardTaken,
+            None,
+            None,
+        );
 
         assert_eq!(
             ant.mispredicts, 2,

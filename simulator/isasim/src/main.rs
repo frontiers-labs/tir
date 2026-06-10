@@ -4,11 +4,12 @@
 //! report. See `docs/design/simulator.md`.
 
 use clap::Parser;
-use tir_sim::scoreboard::Prf;
+use tir_sim::scoreboard::{EventHandler, Prf};
 use tir_sim::timing::{self, TimingConfig};
 use tir_sim::{Executor, ProgramImage, TraceOptions};
 
 mod dump;
+mod konata;
 mod memory;
 
 #[derive(Parser)]
@@ -50,6 +51,10 @@ struct Cli {
     /// Branch predictor for `--timing`: `not-taken` or `btfn`.
     #[arg(long, default_value = "btfn")]
     predictor: String,
+    /// Write a Konata/Kanata pipeline log of the `--timing` run to this path
+    /// (`-` for stdout). View it with <https://github.com/shioyadan/Konata>.
+    #[arg(long, requires = "timing")]
+    konata: Option<String>,
     /// Write a structured JSON snapshot of architectural state (PC, GPRs, and any
     /// requested memory windows) to this path after the run. Used by the
     /// differential ISA test suite to compare against a golden oracle.
@@ -160,6 +165,22 @@ fn main() {
         });
         let config = TimingConfig::for_model(&model);
         let prf = Prf::for_target(&register_info, &model);
+        let mut konata_view = args.konata.as_ref().map(|_| {
+            let printer = target.asm_printer(&context);
+            let labels = executor
+                .trace()
+                .iter()
+                .map(|(id, pc)| {
+                    let op = context.get_op(*id);
+                    let text = printer
+                        .print_instruction(&op)
+                        .expect("failed to print instruction")
+                        .unwrap_or_else(|| op.name().to_string());
+                    format!("{pc:#x}: {text}")
+                })
+                .collect();
+            konata::KonataView::new(labels)
+        });
         let result = timing::simulate(
             &model,
             &context,
@@ -167,7 +188,16 @@ fn main() {
             &config,
             predictor.as_mut(),
             Some(&prf),
+            konata_view.as_mut().map(|v| v as &mut dyn EventHandler),
         );
+        if let (Some(path), Some(view)) = (&args.konata, &konata_view) {
+            let log = view.render();
+            if path == "-" {
+                print!("{log}");
+            } else {
+                std::fs::write(path, log).expect("failed to write konata log");
+            }
+        }
         println!(
             "timing[{} / {}]: {} instructions, {} cycles, IPC {:.3}, {} mispredicts",
             model.name,
