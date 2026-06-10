@@ -1,24 +1,25 @@
 //! `tir sched` is a static instruction throughput analyzer, similar to
 //! `llvm-mca` or Intel's `IACA`. It prints a rough approximation of a code
-//! region's behavior on a device pipeline without executing it: data
-//! dependencies are reconstructed on the fly from each instruction's read/written
-//! registers, then dispatch/issue/retire cycles are assigned against a
-//! TMDL-generated [`MachineModel`].
+//! region's behavior on a device pipeline without executing it: the region is
+//! repeated `--iterations` times and fed to the shared scoreboard engine in
+//! `tir-sim`, which reconstructs data dependencies from each instruction's
+//! read/written registers and assigns dispatch/issue/retire cycles against a
+//! TMDL-generated [`MachineModel`](tir_be_common::sched::MachineModel). The
+//! engine is the same one `isasim --timing` replays executed traces through,
+//! so the two views can never disagree about an instruction's cost.
 
-use std::collections::{HashMap, HashSet};
 use std::{error::Error, ffi::OsString};
 
 use clap::Args;
 use tir::Context;
-use tir_be_common::liveness::{RegRef, op_regs};
+use tir_be_common::liveness::op_regs;
 use tir_be_common::{MachineInstruction, SectionOp, SymbolOp};
+use tir_sim::scoreboard::{self, Prf, ScoreboardInstr, TimingConfig, phys_regs};
 
 use crate::common::{InputKind, parse_module};
 use crate::sched::event::View;
-use crate::sched::pipeline::{BaseInstr, Prf};
 
 mod event;
-mod pipeline;
 
 /// The scheduling fallback when no `--model` is selected: a generic single-issue
 /// core with no functional units, so every instruction resolves to the
@@ -105,11 +106,12 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         let text = asm_printer
             .print_instruction(&op)?
             .ok_or_else(|| format!("no assembly printer registered for '{}'", op.name()))?;
-        base.push(BaseInstr {
+        base.push(ScoreboardInstr {
             text,
             class: model.sched_class(mnemonic),
             defs: phys_regs(&regs.defs),
             uses: phys_regs(&regs.uses),
+            branch: None,
         });
     }
 
@@ -117,14 +119,16 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         return Err("no machine instructions found in input".into());
     }
 
-    let prf = build_prf(&target.register_info(), &model);
+    let prf = Prf::for_target(&target.register_info(), &model);
     let mut handler = event::make(args.view);
-    pipeline::simulate(
+    scoreboard::run(
         &model,
         &base,
         args.iterations.max(1),
+        &TimingConfig::for_model(&model),
+        None,
         Some(&prf),
-        handler.as_mut(),
+        Some(handler.as_mut()),
     );
     print!("{}", handler.render());
 
@@ -147,61 +151,5 @@ fn collect_instructions(
         } else if op.as_interface::<dyn MachineInstruction>().is_some() {
             out.push(op_id);
         }
-    }
-}
-
-fn phys_regs(refs: &[RegRef]) -> Vec<(String, u16)> {
-    refs.iter()
-        .filter_map(|r| match r {
-            RegRef::Physical { class, index } => Some((class.clone(), *index)),
-            RegRef::Virtual { .. } => None,
-        })
-        .collect()
-}
-
-/// Build the register-file pressure model: map each register class to its physical
-/// file and give each file a capacity (the machine's declared `reg_file` count, or
-/// the architectural register count of that file as a fallback).
-fn build_prf(
-    info: &tir_be_common::regalloc::RegisterInfo,
-    model: &tir_be_common::sched::MachineModel,
-) -> Prf {
-    let class_to_file = info
-        .classes
-        .iter()
-        .map(|c| (c.name.to_string(), c.file.to_string()))
-        .collect();
-
-    // Architectural register count per file: the number of distinct encoding
-    // indices the file's classes name.
-    let mut indices: HashMap<&str, HashSet<u16>> = HashMap::new();
-    for c in info.classes {
-        let set = indices.entry(c.file).or_default();
-        for &i in c
-            .allocation_order
-            .iter()
-            .chain(c.reserved)
-            .chain(c.caller_saved)
-            .chain(c.callee_saved)
-            .chain(c.arguments)
-            .chain(c.return_values)
-        {
-            set.insert(i);
-        }
-    }
-
-    let capacity = indices
-        .into_iter()
-        .map(|(file, idxs)| {
-            let cap = model
-                .reg_file(file)
-                .unwrap_or_else(|| idxs.len().min(u16::MAX as usize) as u16);
-            (file.to_string(), cap)
-        })
-        .collect();
-
-    Prf {
-        class_to_file,
-        capacity,
     }
 }

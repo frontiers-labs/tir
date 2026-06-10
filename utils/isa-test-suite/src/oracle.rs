@@ -13,7 +13,7 @@ pub struct Program {
     /// Canonical assembly source (`_start` block then the `done` stop label),
     /// laid out the way a normal assembler expects. Used by golden oracles.
     pub source: String,
-    /// Same program for isasim. isasim's `ProgramBuilder` assigns label-block
+    /// Same program for isasim. isasim's `ProgramImage` builder assigns label-block
     /// addresses in reverse source order, so the `done` block is written first
     /// here to land at the same address (immediately after the body).
     pub isasim_source: String,

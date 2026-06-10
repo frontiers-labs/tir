@@ -65,6 +65,19 @@ pub trait MachineContext {
     fn write_pc(&mut self, value: u64);
 }
 
+/// How an instruction affects control flow, derived at TMDL-compile time from
+/// whether (and on which paths) its `behavior` assigns the `PC` register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlFlow {
+    /// Never writes PC: a sequential instruction.
+    None,
+    /// Writes PC only on some paths: a conditional branch, subject to
+    /// direction prediction.
+    Conditional,
+    /// Writes PC on every path: a jump/call/return.
+    Unconditional,
+}
+
 pub trait MachineInstruction {
     fn verify_interface(
         &self,
@@ -76,8 +89,8 @@ pub trait MachineInstruction {
     fn mnemonic(&self) -> &'static str;
     fn width_bytes(&self) -> u8;
     fn execute(&self, machine: &mut dyn MachineContext) -> Result<(), SimTrap>;
-    fn explicit_pc_write(&self) -> bool {
-        false
+    fn control_flow(&self) -> ControlFlow {
+        ControlFlow::None
     }
 }
 

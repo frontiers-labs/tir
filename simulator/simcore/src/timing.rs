@@ -1,282 +1,182 @@
-//! A small trace-driven, cycle-stepped timing model — the first piece of the
-//! dynamic ("gem5-lite") engine. It does not execute anything itself: it replays a
-//! dynamic instruction stream recorded by the functional [`crate::Executor`] (the
-//! oracle) and assigns cycles using a TMDL-generated [`MachineModel`].
-//!
-//! The scoreboard models data dependencies (forwarding-aware), functional-unit
-//! contention, issue width, an instruction window (ROB), and in-order vs.
-//! out-of-order issue. Branch prediction and caches are intentionally absent here;
-//! they arrive later as swappable Rust policies. Because the trace already encodes
-//! every taken branch and resolved address, loops and control flow are handled for
-//! free.
+//! Trace-driven timing: replay the dynamic instruction stream recorded by the
+//! functional [`crate::Executor`] (the oracle) against a TMDL-generated
+//! [`MachineModel`] and assign cycles with the shared [`crate::scoreboard`]
+//! engine. Nothing is executed here — the trace already encodes every taken
+//! branch and resolved address, so loops and control flow come for free, and
+//! branch outcomes can be scored against a [`BranchPredictor`].
 
 use std::collections::HashMap;
 
 use tir::{Context, OpId};
-use tir_be_common::MachineInstruction;
-use tir_be_common::liveness::{RegRef, op_regs};
+use tir_be_common::liveness::op_regs;
 use tir_be_common::sched::{InstrSchedClass, MachineModel};
+use tir_be_common::{ControlFlow, MachineInstruction};
 
 use crate::predictor::BranchPredictor;
+use crate::scoreboard::{self, BranchOutcome, Prf, ScoreboardInstr, phys_regs};
 
-/// Whether a mnemonic is a conditional branch (RISC-V B-type). The predictor only
-/// applies to these. (Belongs on the instruction as a control-flow property
-/// eventually; a mnemonic table is fine while RISC-V is the only backend.)
-fn is_conditional_branch(mnemonic: &str) -> bool {
-    matches!(mnemonic, "beq" | "bne" | "blt" | "bge" | "bltu" | "bgeu")
-}
+pub use crate::scoreboard::{TimingConfig, TimingResult};
 
-/// Knobs the microarchitecture model exposes for experimentation. These are *not*
-/// in TMDL by design — sweeping them is the whole point of the Rust engine.
-#[derive(Debug, Clone, Copy)]
-pub struct TimingConfig {
-    /// Issue instructions strictly in program order (in-order core) vs. allow
-    /// out-of-order issue bounded only by dependencies, resources, and the window.
-    pub in_order: bool,
-    /// Maximum in-flight instructions (reorder-buffer size). `0` means unbounded.
-    pub window: usize,
-    /// Front-end refetch penalty, in cycles, charged on a branch misprediction.
-    pub mispredict_penalty: u64,
-}
-
-impl TimingConfig {
-    /// A reasonable default derived from the model: a core that declares a `rob`
-    /// buffer is treated as out-of-order with that window; otherwise in-order with
-    /// an unbounded window (the in-order issue constraint is what serializes it).
-    /// The mispredict penalty approximates the front-end refill depth.
-    pub fn for_model(model: &MachineModel) -> Self {
-        let penalty = if model.pipeline.is_empty() {
-            8 // deep out-of-order front end
-        } else {
-            model.pipeline.len() as u64
-        };
-        match model.buffer("rob") {
-            Some(rob) => Self {
-                in_order: false,
-                window: rob as usize,
-                mispredict_penalty: penalty,
-            },
-            None => Self {
-                in_order: true,
-                window: 0,
-                mispredict_penalty: penalty,
-            },
-        }
-    }
-}
-
-/// The outcome of a timing run.
-#[derive(Debug, Clone, Copy)]
-pub struct TimingResult {
-    pub cycles: u64,
-    pub instructions: u64,
-    /// Conditional branches whose direction was mispredicted.
-    pub mispredicts: u64,
-}
-
-impl TimingResult {
-    /// Instructions retired per cycle.
-    pub fn ipc(&self) -> f64 {
-        if self.cycles == 0 {
-            0.0
-        } else {
-            self.instructions as f64 / self.cycles as f64
-        }
-    }
-}
-
-/// One instruction in the trace, pre-resolved to its scheduling class, address,
-/// width, branch-ness, and the physical registers it reads/writes.
-struct Slot {
-    class: InstrSchedClass,
-    pc: u64,
-    width: u64,
-    is_branch: bool,
-    defs: Vec<(String, u16)>,
-    uses: Vec<(String, u16)>,
-}
-
-fn phys_regs(refs: &[RegRef]) -> Vec<(String, u16)> {
-    refs.iter()
-        .filter_map(|r| match r {
-            RegRef::Physical { class, index } => Some((class.clone(), *index)),
-            RegRef::Virtual { .. } => None,
-        })
-        .collect()
-}
-
-/// The producer→consumer latency between two dependent instructions, honoring the
-/// machine's forwarding network and falling back to the producer's latency.
-fn edge_latency(model: &MachineModel, producer: &Slot, consumer: &Slot) -> u64 {
-    let p = producer.class.resources.first().copied();
-    let c = consumer.class.resources.first().copied();
-    if let (Some(p), Some(c)) = (p, c)
-        && let Some(f) = model.forward_latency(p, c)
-    {
-        return u64::from(f);
-    }
-    u64::from(producer.class.latency)
-}
-
-/// Replay `trace` (a `(op, pc)` stream) against `model` and return the cycle count.
-/// `predictor` supplies branch-direction guesses; mispredictions stall the front
-/// end by `config.mispredict_penalty` cycles.
+/// Replay `trace` (a `(op, pc)` stream) against `model` and return the cycle
+/// count. `predictor` supplies branch-direction guesses; mispredictions stall
+/// the front end by `config.mispredict_penalty` cycles. `prf` enables
+/// register-file pressure on a renaming core.
+///
+/// Only [`ControlFlow::Conditional`] instructions are predictor-scored: an
+/// unconditional transfer's target is known at decode, so it flows through the
+/// scoreboard as an ordinary instruction with its scheduled cost.
 pub fn simulate(
     model: &MachineModel,
     context: &Context,
     trace: &[(OpId, u64)],
     config: &TimingConfig,
     predictor: &mut dyn BranchPredictor,
+    prf: Option<&Prf>,
 ) -> TimingResult {
-    let slots: Vec<Slot> = trace
-        .iter()
-        .map(|(id, pc)| {
-            let op = context.get_op(*id);
-            let mi = op.clone().as_interface::<dyn MachineInstruction>();
-            let (class, width, is_branch) = match &mi {
-                Some(mi) => (
-                    model.sched_class(mi.mnemonic()),
-                    u64::from(mi.width_bytes()),
-                    is_conditional_branch(mi.mnemonic()),
-                ),
-                None => (InstrSchedClass::DEFAULT, 4, false),
-            };
-            let regs = op_regs(&op);
-            Slot {
-                class,
-                pc: *pc,
-                width,
-                is_branch,
-                defs: phys_regs(&regs.defs),
-                uses: phys_regs(&regs.uses),
-            }
-        })
-        .collect();
+    // Pre-resolve each trace entry to its scheduling class, registers, and
+    // (for conditional branches) PC and width — branch outcomes need the next
+    // entry's PC, so they are filled in a second pass below.
+    struct Pre {
+        pc: u64,
+        width: u64,
+        is_branch: bool,
+    }
+    let mut pre = Vec::with_capacity(trace.len());
+    let mut slots: Vec<ScoreboardInstr> = Vec::with_capacity(trace.len());
+    for (id, pc) in trace {
+        let op = context.get_op(*id);
+        let mi = op.clone().as_interface::<dyn MachineInstruction>();
+        let (class, width, is_branch) = match &mi {
+            Some(mi) => (
+                model.sched_class(mi.mnemonic()),
+                u64::from(mi.width_bytes()),
+                mi.control_flow() == ControlFlow::Conditional,
+            ),
+            None => (InstrSchedClass::DEFAULT, 4, false),
+        };
+        let regs = op_regs(&op);
+        pre.push(Pre {
+            pc: *pc,
+            width,
+            is_branch,
+        });
+        slots.push(ScoreboardInstr {
+            text: String::new(),
+            class,
+            defs: phys_regs(&regs.defs),
+            uses: phys_regs(&regs.uses),
+            branch: None,
+        });
+    }
 
-    let n = slots.len();
-    let width = model.issue_width.max(1) as usize;
-    let window = if config.window == 0 {
-        usize::MAX
-    } else {
-        config.window
-    };
-
-    // Per-resource "lanes": one free-at-cycle per parallel unit.
-    let mut lanes: HashMap<&str, Vec<u64>> = model
-        .resources
-        .iter()
-        .map(|r| (r.name, vec![0u64; r.units.max(1) as usize]))
-        .collect();
-
-    let mut dispatch = vec![0u64; n];
-    let mut issue = vec![0u64; n];
-    let mut retire = vec![0u64; n];
-    let mut reg_writer: HashMap<(String, u16), usize> = HashMap::new();
-    // Learned branch targets (a minimal BTB), so a not-taken branch still has a
-    // direction to predict against.
+    // Resolve branch outcomes from consecutive PCs. Learned branch targets (a
+    // minimal BTB) give a not-taken branch a target to predict against. The
+    // final trace entry has no successor, so its outcome is unknowable and it
+    // is not scored.
     let mut btb: HashMap<u64, u64> = HashMap::new();
-    // Earliest cycle the front end may resume after a misprediction redirect.
-    let mut redirect: u64 = 0;
-    let mut mispredicts: u64 = 0;
-
-    for i in 0..n {
-        // Front end: in-order dispatch, at most `width` per cycle, bounded by the
-        // window (can't dispatch until the instruction `window` slots back retires)
-        // and by any outstanding misprediction redirect.
-        let mut d = if i > 0 { dispatch[i - 1] } else { 0 };
-        if i >= width {
-            d = d.max(dispatch[i - width] + 1);
+    for i in 0..pre.len().saturating_sub(1) {
+        if !pre[i].is_branch {
+            continue;
         }
-        if i >= window {
-            d = d.max(retire[i - window]);
-        }
-        d = d.max(redirect);
-        dispatch[i] = d;
-
-        // Operands ready: the latest forwarding-aware producer result.
-        let mut operands_ready = 0u64;
-        for u in &slots[i].uses {
-            if let Some(&j) = reg_writer.get(u) {
-                operands_ready =
-                    operands_ready.max(issue[j] + edge_latency(model, &slots[j], &slots[i]));
-            }
-        }
-
-        let mut t = d.max(operands_ready);
-        if config.in_order && i > 0 {
-            t = t.max(issue[i - 1]);
-        }
-
-        // Functional-unit contention: an instruction can't issue until a lane in
-        // each resource it needs is free.
-        for r in slots[i].class.resources {
-            if let Some(lane_set) = lanes.get(*r) {
-                t = t.max(lane_set.iter().copied().min().unwrap_or(0));
-            }
-        }
-        issue[i] = t;
-
-        // Reserve the earliest-free lane in each used resource for `rthroughput`.
-        let busy_until = t + u64::from(slots[i].class.rthroughput.max(1));
-        for r in slots[i].class.resources {
-            if let Some(lane_set) = lanes.get_mut(*r)
-                && let Some(lane) = lane_set.iter_mut().min_by_key(|c| **c)
-            {
-                *lane = busy_until;
-            }
-        }
-
-        for d in &slots[i].defs {
-            reg_writer.insert(d.clone(), i);
-        }
-
-        // Branch resolution: compare the predicted direction to the actual outcome
-        // (recovered from the trace), and stall the front end on a mispredict.
-        if slots[i].is_branch && i + 1 < n {
-            let pc = slots[i].pc;
-            let fallthrough = pc.wrapping_add(slots[i].width);
-            let next_pc = slots[i + 1].pc;
-            let taken = next_pc != fallthrough;
-            let target = if taken {
-                next_pc
-            } else {
-                btb.get(&pc).copied().unwrap_or(fallthrough)
-            };
-
-            let predicted = predictor.predict(pc, target);
-            if predicted != taken {
-                mispredicts += 1;
-                let resolved = issue[i] + u64::from(slots[i].class.latency);
-                redirect = redirect.max(resolved + config.mispredict_penalty);
-            }
-            if taken {
-                btb.insert(pc, next_pc);
-            }
-            predictor.update(pc, target, taken);
-        }
-
-        // In-order retire: completes at issue + latency, no earlier than its
-        // predecessor retires.
-        let complete = issue[i] + u64::from(slots[i].class.latency);
-        retire[i] = complete.max(if i > 0 { retire[i - 1] } else { 0 });
+        let pc = pre[i].pc;
+        let fallthrough = pc.wrapping_add(pre[i].width);
+        let next_pc = pre[i + 1].pc;
+        let taken = next_pc != fallthrough;
+        let target = if taken {
+            btb.insert(pc, next_pc);
+            next_pc
+        } else {
+            btb.get(&pc).copied().unwrap_or(fallthrough)
+        };
+        slots[i].branch = Some(BranchOutcome { pc, target, taken });
     }
 
-    let cycles = retire.last().map(|c| c + 1).unwrap_or(0);
-    TimingResult {
-        cycles,
-        instructions: n as u64,
-        mispredicts,
-    }
+    scoreboard::run(model, &slots, 1, config, Some(predictor), prf, None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Executor, ProgramBuilder, TraceOptions};
+    use crate::{Executor, ProgramImage, TraceOptions};
     use tir_be_common::AsmDialect;
     use tir_riscv::RiscvDialect;
 
     use crate::predictor::AlwaysNotTaken;
+
+    /// Control flow is derived from the behavior's `PC::pc` writes at
+    /// TMDL-compile time: a guarded write is a conditional branch, an
+    /// unguarded one an unconditional transfer, none a sequential instruction.
+    /// PC *reads* (auipc) must not count.
+    #[test]
+    fn control_flow_derived_from_pc_writes() {
+        use tir::Operation;
+        use tir::attributes::{AttributeValue, RegisterAttr};
+        use tir_be_common::ControlFlow;
+
+        let context = tir::Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+        context.register_dialect::<arm64::Arm64Dialect>();
+
+        let gpr = |index: u16| {
+            AttributeValue::Register(RegisterAttr::Physical {
+                class: "GPR".to_string(),
+                index,
+            })
+        };
+        let imm = AttributeValue::Int(0);
+        let cf = |op: &dyn Operation| {
+            context
+                .get_op(op.id())
+                .as_interface::<dyn MachineInstruction>()
+                .expect("machine instruction")
+                .control_flow()
+        };
+
+        let beq = tir_riscv::BranchEqOpBuilder::new(&context)
+            .attr("rs1", gpr(1))
+            .attr("rs2", gpr(2))
+            .attr("imm", imm.clone())
+            .build();
+        assert_eq!(cf(&beq), ControlFlow::Conditional);
+        // jal writes PC unconditionally (and the link register).
+        let jal = tir_riscv::JumpAndLinkOpBuilder::new(&context)
+            .attr("rd", gpr(1))
+            .attr("imm", imm.clone())
+            .build();
+        assert_eq!(cf(&jal), ControlFlow::Unconditional);
+        let jalr = tir_riscv::JumpAndLinkRegOpBuilder::new(&context)
+            .attr("rd", gpr(1))
+            .attr("rs1", gpr(2))
+            .attr("imm", imm.clone())
+            .build();
+        assert_eq!(cf(&jalr), ControlFlow::Unconditional);
+        let add = tir_riscv::AddOpBuilder::new(&context)
+            .attr("rd", gpr(1))
+            .attr("rs1", gpr(2))
+            .attr("rs2", gpr(3))
+            .build();
+        assert_eq!(cf(&add), ControlFlow::None);
+        // auipc reads PC but never writes it.
+        let auipc = tir_riscv::AddUpperImmToPCOpBuilder::new(&context)
+            .attr("rd", gpr(1))
+            .attr("imm", imm.clone())
+            .build();
+        assert_eq!(cf(&auipc), ControlFlow::None);
+
+        let b_eq = arm64::BranchEqOpBuilder::new(&context)
+            .attr("imm", imm.clone())
+            .build();
+        assert_eq!(cf(&b_eq), ControlFlow::Conditional);
+        let ret = arm64::ReturnOpBuilder::new(&context)
+            .attr("rn", gpr(30))
+            .build();
+        assert_eq!(cf(&ret), ControlFlow::Unconditional);
+        let bl = arm64::BranchLinkOpBuilder::new(&context)
+            .attr("imm", imm)
+            .build();
+        assert_eq!(cf(&bl), ControlFlow::Unconditional);
+    }
 
     /// Run `asm` functionally, recording the dynamic trace, then time it.
     fn time_asm(asm: &str, model: &MachineModel, config: &TimingConfig) -> TimingResult {
@@ -285,7 +185,7 @@ mod tests {
         context.register_dialect::<RiscvDialect>();
         let dialect = context.find_dialect::<RiscvDialect>().unwrap();
         let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
-        let program = ProgramBuilder::from_module(&context, module, 0x8000_0000, Some("first"))
+        let program = ProgramImage::from_module(&context, module, 0x8000_0000, Some("first"))
             .expect("program builder");
         let until_pc = *program.symbols.get("done").unwrap();
 
@@ -300,7 +200,14 @@ mod tests {
         )
         .unwrap();
 
-        simulate(model, &context, exec.trace(), config, &mut AlwaysNotTaken)
+        simulate(
+            model,
+            &context,
+            exec.trace(),
+            config,
+            &mut AlwaysNotTaken,
+            None,
+        )
     }
 
     /// Five independent ALU ops: an out-of-order core overlaps them (wide issue),
@@ -368,7 +275,7 @@ mod tests {
         ";
         let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
         let program =
-            ProgramBuilder::from_module(&context, module, 0x8000_0000, Some("blk")).unwrap();
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("blk")).unwrap();
         let ops: Vec<OpId> = program
             .blocks
             .iter()
@@ -381,8 +288,8 @@ mod tests {
         let model = tir_riscv::out_of_order_core_model();
         let config = TimingConfig::for_model(&model);
 
-        let ant = simulate(&model, &context, &trace, &config, &mut AlwaysNotTaken);
-        let btfn = simulate(&model, &context, &trace, &config, &mut BackwardTaken);
+        let ant = simulate(&model, &context, &trace, &config, &mut AlwaysNotTaken, None);
+        let btfn = simulate(&model, &context, &trace, &config, &mut BackwardTaken, None);
 
         assert_eq!(
             ant.mispredicts, 1,
@@ -431,7 +338,7 @@ mod tests {
         let dialect = context.find_dialect::<RiscvDialect>().unwrap();
         let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
         let program =
-            ProgramBuilder::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
         let until_pc = *program.symbols.get("done").unwrap();
 
         let mut exec = Executor::new(4096);
@@ -456,8 +363,8 @@ mod tests {
 
         let model = tir_riscv::out_of_order_core_model();
         let config = TimingConfig::for_model(&model);
-        let ant = simulate(&model, &context, &trace, &config, &mut AlwaysNotTaken);
-        let btfn = simulate(&model, &context, &trace, &config, &mut BackwardTaken);
+        let ant = simulate(&model, &context, &trace, &config, &mut AlwaysNotTaken, None);
+        let btfn = simulate(&model, &context, &trace, &config, &mut BackwardTaken, None);
 
         assert_eq!(
             ant.mispredicts, 2,

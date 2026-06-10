@@ -25,6 +25,7 @@ members = [
 tir-targets = { path = "backends/targets" }
 tir = { path = "core" }
 tir-be-common = { path = "backends/common" }
+tir-sim = { path = "simulator/simcore" }
 
 clap = "4.6.1"
 criterion = "0.8.2"

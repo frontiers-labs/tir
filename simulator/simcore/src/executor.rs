@@ -1,135 +1,30 @@
-use std::collections::{BTreeMap, HashMap};
+//! The functional executor: the architectural oracle of the simulator. It
+//! interprets TMDL-generated instruction semantics block by block, maintaining
+//! only architectural state (registers, memory, PC). It knows nothing about
+//! cycles — timing is recovered later by replaying the recorded trace against
+//! a machine model (see [`crate::timing`]).
+
+use std::collections::HashMap;
 use std::io::Write;
+use std::rc::Rc;
 
-use tir::attributes::AttributeValue;
-use tir::builtin::ModuleOp;
-use tir::{Context, Operation};
-use tir_be_common::{MachineContext, MachineInstruction, SectionOp, SimTrap, SymbolOp};
+use tir::Context;
+use tir_be_common::{MachineContext, MachineInstruction, SimTrap};
 
-use crate::{MachineBlock, error::Error};
+use crate::error::Error;
+use crate::program::{MachineBlock, ProgramImage};
 
-#[derive(Clone)]
-pub struct ProgramImage {
-    pub context: Context,
-    pub entry_pc: u64,
-    pub symbols: BTreeMap<String, u64>,
-    pub blocks: Vec<MachineBlock>,
-    pub block_map_by_start: HashMap<u64, usize>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ProgramBuilder {
-    pub base_address: u64,
-}
-
-impl ProgramBuilder {
-    pub fn from_module(
-        context: &Context,
-        module: ModuleOp,
-        base_address: u64,
-        entry_symbol: Option<&str>,
-    ) -> Result<ProgramImage, Error> {
-        let mut symbols = BTreeMap::new();
-        let mut blocks = Vec::new();
-        let mut cur_pc = base_address;
-        let mut first_symbol_pc = None;
-
-        let mut blocks_to_visit = vec![module.body()];
-        while let Some(block) = blocks_to_visit.pop() {
-            for op_id in block.op_ids() {
-                let op = context.get_op(op_id);
-
-                if let Some(section) = op.clone().as_op::<SectionOp>() {
-                    blocks_to_visit.push(section.body());
-                    continue;
-                }
-
-                let symbol = op.as_op::<SymbolOp>();
-
-                if symbol.is_none() {
-                    continue;
-                }
-
-                let symbol = symbol.unwrap();
-
-                let symbol_name = symbol
-                    .attributes()
-                    .iter()
-                    .find_map(|attr| {
-                        if attr.name != "name" {
-                            return None;
-                        }
-                        match &attr.value {
-                            AttributeValue::Str(s) => Some(s.clone()),
-                            _ => None,
-                        }
-                    })
-                    .ok_or(Error::MissingSymbolName)?;
-                symbols.insert(symbol_name, cur_pc);
-                if first_symbol_pc.is_none() {
-                    first_symbol_pc = Some(cur_pc);
-                }
-
-                let symbol_block = symbol.body();
-                let mut instruction_ops = Vec::new();
-                let mut block_len = 0u64;
-
-                for inner_id in symbol_block.op_ids() {
-                    let inner_op = context.get_op(inner_id);
-                    if let Some(machine_inst) = inner_op.as_interface::<dyn MachineInstruction>() {
-                        instruction_ops.push(inner_id);
-                        block_len += u64::from(machine_inst.width_bytes());
-                    }
-                }
-
-                blocks.push(MachineBlock {
-                    block: symbol_block.id(),
-                    instructions: instruction_ops,
-                    start_address: cur_pc,
-                    byte_len: block_len,
-                    fallthrough_pc: None,
-                });
-                cur_pc += block_len.max(4);
-            }
-        }
-
-        if blocks.is_empty() {
-            return Err(Error::NoSymbolsFound);
-        }
-
-        for i in 0..blocks.len() {
-            if i + 1 < blocks.len() {
-                blocks[i].fallthrough_pc = Some(blocks[i + 1].start_address);
-            }
-        }
-
-        let entry_pc = if let Some(entry_name) = entry_symbol {
-            *symbols
-                .get(entry_name)
-                .ok_or_else(|| Error::EntrySymbolNotFound(entry_name.to_string()))?
-        } else {
-            first_symbol_pc.ok_or(Error::NoSymbolsFound)?
-        };
-
-        let block_map_by_start = blocks
-            .iter()
-            .enumerate()
-            .map(|(idx, block)| (block.start_address, idx))
-            .collect();
-
-        Ok(ProgramImage {
-            context: context.clone(),
-            entry_pc,
-            symbols,
-            blocks,
-            block_map_by_start,
-        })
-    }
+/// How a block's execution ended.
+enum BlockExit {
+    /// `until_pc` was reached mid-block; `pc` points at it.
+    Until,
+    /// PC moved to the next block (control transfer or fallthrough).
+    Next,
 }
 
 #[derive(Default)]
 pub struct Executor {
-    program: Option<ProgramImage>,
+    program: Option<Rc<ProgramImage>>,
     registers: HashMap<(String, u16), tir::utils::APInt>,
     /// Map from register class name to its physical register file. Classes that
     /// share a file (e.g. AArch64 `GPR` and `GPRsp`) alias index-for-index, so
@@ -169,7 +64,7 @@ impl Executor {
             return Err(Error::ProgramAlreadyLoaded);
         }
         self.pc = program.entry_pc;
-        self.program = Some(program);
+        self.program = Some(Rc::new(program));
         Ok(())
     }
 
@@ -213,92 +108,100 @@ impl Executor {
         trace: TraceOptions,
         out: &mut dyn Write,
     ) -> Result<(), Error> {
-        for _cycle in 0..max_cycles {
-            if self.pc == until_pc {
-                if trace.registers_at_end {
-                    self.emit_register_dump(out, "final registers");
-                }
-                return Ok(());
-            }
-
-            let (instructions, fallthrough_pc, context) = {
-                let program = self.program.as_ref().ok_or(Error::ProgramNotLoaded)?;
-                let idx = *program
-                    .block_map_by_start
-                    .get(&self.pc)
-                    .ok_or(SimTrap::PcNotMapped { pc: self.pc })?;
-                let block = &program.blocks[idx];
-                (
-                    block.instructions.clone(),
-                    block.fallthrough_pc,
-                    program.context.clone(),
-                )
-            };
-
-            self.pc_explicitly_written = false;
-            let mut inst_pc = self.pc;
-            for op_id in instructions {
-                if inst_pc == until_pc {
-                    self.pc = inst_pc;
-                    if trace.registers_at_end {
-                        self.emit_register_dump(out, "final registers");
-                    }
-                    return Ok(());
-                }
-                let op = context.get_op(op_id);
-                let machine_inst = op
-                    .clone()
-                    .as_interface::<dyn MachineInstruction>()
-                    .ok_or_else(|| SimTrap::InvalidInstruction {
-                        op: op.name,
-                        reason: "operation does not implement MachineInstruction".to_string(),
-                    })?;
-                if trace.instructions {
-                    let line = format!(
-                        "pc=0x{inst_pc:016x}  {}",
-                        Self::format_instruction_line(&context, &op, machine_inst.as_ref())
-                    );
-                    Self::emit_trace_line(out, &line);
-                }
-                if self.record_trace {
-                    self.trace.push((op_id, inst_pc));
-                }
-                // Expose this instruction's own address so PC-relative semantics
-                // (`PC::pc`) resolve correctly even mid-block.
-                self.pc = inst_pc;
-                self.pc_explicitly_written = false;
-                machine_inst.execute(self)?;
-                if trace.registers_after_each_instruction {
-                    self.emit_register_dump(out, "registers");
-                }
-                if self.pc_explicitly_written {
-                    // A control transfer wrote PC: `self.pc` holds the target, and
-                    // the next block is resolved at the top of the outer loop.
-                    break;
-                }
-                inst_pc = inst_pc.wrapping_add(u64::from(machine_inst.width_bytes()));
-            }
-
-            if !self.pc_explicitly_written {
-                if let Some(next_pc) = fallthrough_pc {
-                    self.pc = next_pc;
-                } else {
-                    if trace.registers_at_end {
-                        self.emit_register_dump(out, "final registers");
-                    }
-                    return Err(Error::MissingFallthrough { pc: inst_pc });
-                }
-            }
-        }
-
+        let result = self.run_inner(until_pc, max_cycles, trace, out);
         if trace.registers_at_end {
             self.emit_register_dump(out, "final registers");
+        }
+        result
+    }
+
+    /// The fetch loop: resolve PC to a block, execute it, repeat. `max_cycles`
+    /// bounds the number of executed *blocks* — a runaway-loop fuse, not a
+    /// timing statement.
+    fn run_inner(
+        &mut self,
+        until_pc: u64,
+        max_cycles: u64,
+        trace: TraceOptions,
+        out: &mut dyn Write,
+    ) -> Result<(), Error> {
+        let program = self.program.clone().ok_or(Error::ProgramNotLoaded)?;
+        for _ in 0..max_cycles {
+            if self.pc == until_pc {
+                return Ok(());
+            }
+            let block = program
+                .block_at(self.pc)
+                .ok_or(SimTrap::PcNotMapped { pc: self.pc })?;
+            match self.exec_block(&program.context, block, until_pc, trace, out)? {
+                BlockExit::Until => return Ok(()),
+                BlockExit::Next => {}
+            }
         }
         Err(SimTrap::MaxCyclesExceeded {
             max_cycles,
             until_pc,
         }
         .into())
+    }
+
+    /// Execute one block straight-line, stopping early on `until_pc` or an
+    /// explicit PC write (control transfer). On normal exit, PC advances to the
+    /// fallthrough block.
+    fn exec_block(
+        &mut self,
+        context: &Context,
+        block: &MachineBlock,
+        until_pc: u64,
+        trace: TraceOptions,
+        out: &mut dyn Write,
+    ) -> Result<BlockExit, Error> {
+        let mut inst_pc = block.start_address;
+        for &op_id in &block.instructions {
+            if inst_pc == until_pc {
+                self.pc = inst_pc;
+                return Ok(BlockExit::Until);
+            }
+            let op = context.get_op(op_id);
+            let machine_inst = op
+                .clone()
+                .as_interface::<dyn MachineInstruction>()
+                .ok_or_else(|| SimTrap::InvalidInstruction {
+                    op: op.name,
+                    reason: "operation does not implement MachineInstruction".to_string(),
+                })?;
+            if trace.instructions {
+                let line = format!(
+                    "pc=0x{inst_pc:016x}  {}",
+                    Self::format_instruction_line(context, &op, machine_inst.as_ref())
+                );
+                Self::emit_trace_line(out, &line);
+            }
+            if self.record_trace {
+                self.trace.push((op_id, inst_pc));
+            }
+            // Expose this instruction's own address so PC-relative semantics
+            // (`PC::pc`) resolve correctly even mid-block.
+            self.pc = inst_pc;
+            self.pc_explicitly_written = false;
+            machine_inst.execute(self)?;
+            if trace.registers_after_each_instruction {
+                self.emit_register_dump(out, "registers");
+            }
+            if self.pc_explicitly_written {
+                // A control transfer wrote PC: `self.pc` holds the target, and
+                // the next block is resolved by the fetch loop.
+                return Ok(BlockExit::Next);
+            }
+            inst_pc = inst_pc.wrapping_add(u64::from(machine_inst.width_bytes()));
+        }
+        match block.fallthrough_pc {
+            Some(next_pc) => {
+                self.pc = next_pc;
+                Ok(BlockExit::Next)
+            }
+            None => Err(Error::MissingFallthrough { pc: inst_pc }),
+        }
     }
 
     pub fn register_snapshot(&self) -> Vec<(String, u16, tir::utils::APInt)> {
@@ -440,7 +343,7 @@ mod tests {
     use tir_be_common::{AsmDialect, MachineInstruction};
     use tir_riscv::RiscvDialect;
 
-    use crate::{Executor, ProgramBuilder, TraceOptions, error::Error};
+    use crate::{Executor, ProgramImage, TraceOptions, error::Error};
 
     #[test]
     fn run_stops_before_until_pc() {
@@ -458,7 +361,7 @@ mod tests {
               add x2, x2, x2
         ";
         let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
-        let program = ProgramBuilder::from_module(&context, module, 0x8000_0000, Some("first"))
+        let program = ProgramImage::from_module(&context, module, 0x8000_0000, Some("first"))
             .expect("program builder must succeed");
 
         let until_pc = program.entry_pc;
@@ -489,7 +392,7 @@ mod tests {
         ";
         let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
         let program =
-            ProgramBuilder::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
         let mut executor = Executor::new(4096);
         executor.load(program).unwrap();
 
@@ -513,7 +416,7 @@ mod tests {
               add x0, x1, x1
         ";
         let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
-        let program = ProgramBuilder::from_module(&context, module, 0x8000_0000, Some("first"))
+        let program = ProgramImage::from_module(&context, module, 0x8000_0000, Some("first"))
             .expect("program builder must succeed");
         let mut executor = Executor::new(4096);
         tir_be_common::MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, 7))
@@ -551,7 +454,7 @@ mod tests {
               add x2, x2, x2
         ";
         let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
-        let program = ProgramBuilder::from_module(&context, module, 0x8000_0000, Some("first"))
+        let program = ProgramImage::from_module(&context, module, 0x8000_0000, Some("first"))
             .expect("program builder must succeed");
         let mut executor = Executor::new(4096);
         tir_be_common::MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, 2))

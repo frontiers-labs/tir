@@ -6,7 +6,7 @@ use std::fmt::Write;
 
 use clap::ValueEnum;
 
-use crate::sched::pipeline::{EventHandler, SimContext};
+use tir_sim::scoreboard::{EventHandler, SimContext};
 
 /// The selectable report formats.
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]

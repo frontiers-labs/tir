@@ -535,6 +535,23 @@ fn emit_instructions<'a>(
             }
         };
 
+        // Control-flow kind, derived from the behavior's `PC::pc` writes: every
+        // path writes PC → unconditional transfer; some paths → conditional
+        // branch. The trait default covers sequential instructions.
+        let control_flow_method = match pc_writes(&inst.behavior) {
+            (true, _) => quote! {
+                fn control_flow(&self) -> tir_be_common::ControlFlow {
+                    tir_be_common::ControlFlow::Unconditional
+                }
+            },
+            (false, true) => quote! {
+                fn control_flow(&self) -> tir_be_common::ControlFlow {
+                    tir_be_common::ControlFlow::Conditional
+                }
+            },
+            (false, false) => quote! {},
+        };
+
         machine_instruction_impls.push(quote! {
             impl tir_be_common::MachineInstruction for #name_ident {
                 fn mnemonic(&self) -> &'static str {
@@ -551,6 +568,8 @@ fn emit_instructions<'a>(
                 ) -> Result<(), tir_be_common::SimTrap> {
                     #execute_body
                 }
+
+                #control_flow_method
             }
         });
 
@@ -1730,6 +1749,32 @@ fn extract_pc_assignment_target(then: &ast::Expr) -> Option<&ast::Expr> {
 
 fn is_pc_dest(dest: &ast::Expr) -> bool {
     matches!(dest, ast::Expr::Path(p) if p.base == "PC" && p.remainder == ["pc"])
+}
+
+/// Whether `(every, any)` path through `e` assigns `PC::pc`. Reads of PC (e.g.
+/// `auipc`'s `rd = PC::pc + …`) do not count — only assignment destinations.
+fn pc_writes(e: &ast::Expr) -> (bool, bool) {
+    match e {
+        ast::Expr::Assign(a) => {
+            let w = is_pc_dest(&a.dest);
+            (w, w)
+        }
+        ast::Expr::Block(b) => b
+            .stmts
+            .iter()
+            .map(pc_writes)
+            .fold((false, false), |acc, w| (acc.0 || w.0, acc.1 || w.1)),
+        ast::Expr::If(i) => {
+            let (then_every, then_any) = pc_writes(&i.then);
+            let (else_every, else_any) = i
+                .else_
+                .as_ref()
+                .map(|e| pc_writes(e))
+                .unwrap_or((false, false));
+            (then_every && else_every, then_any || else_any)
+        }
+        _ => (false, false),
+    }
 }
 
 fn emit_as_sem_expr_impl(

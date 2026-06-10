@@ -12,3 +12,4 @@ clap = { workspace = true, features = ["derive"] }
 tir-targets.workspace = true
 tir.workspace = true
 tir-be-common.workspace = true
+tir-sim.workspace = true
