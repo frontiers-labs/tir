@@ -16,6 +16,9 @@ pub struct ToolArgs {
     /// Target architecture
     #[arg(long)]
     march: String,
+    /// Target feature toggles (e.g. `+m,-zmmul`), applied on top of `--march`.
+    #[arg(long)]
+    mattr: Option<String>,
     /// Optional stage after which pipeline is stopped
     #[arg(value_enum, long)]
     stage: Option<Stage>,
@@ -35,13 +38,7 @@ pub enum Stage {
 }
 
 pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
-    let target = tir_targets::select(&args.march, args.mcpu.as_deref()).ok_or_else(|| {
-        format!(
-            "unknown target '{}' (supported: {})",
-            args.march,
-            tir_targets::supported_targets().join(", ")
-        )
-    })?;
+    let target = tir_targets::select(&args.march, args.mcpu.as_deref(), args.mattr.as_deref())?;
 
     let context = Context::with_default_dialects();
     target.register_dialects(&context);

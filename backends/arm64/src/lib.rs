@@ -3,49 +3,107 @@ use tir::{Any, Operation};
 
 include!(concat!(env!("OUT_DIR"), "/arm64.rs"));
 
-/// Parsed AArch64 target selection from `--march`/`--mcpu`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TargetConfig;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CpuModel {
-    Generic,
-    InOrder,
-    OutOfOrder,
+/// Parsed AArch64 target selection from `--march`/`--mcpu`/`--mattr`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TargetConfig {
+    features: Vec<Feature>,
+    /// Machine model implied by `--mcpu`, when it names one.
+    machine: Option<String>,
 }
 
 impl TargetConfig {
-    /// Parse an AArch64 `--march`/`--mcpu` pair.
-    pub fn parse(march: &str, mcpu: Option<&str>) -> Option<Self> {
+    /// Parse an AArch64 `--march`/`--mcpu`/`--mattr` triple.
+    pub fn parse(march: &str, mcpu: Option<&str>, mattr: Option<&str>) -> Result<Self, String> {
         parse_march(march)?;
-        if let Some(mcpu) = mcpu {
-            parse_mcpu(mcpu)?;
+        let mut config = TargetConfig {
+            features: vec![Feature::ARMv8A64],
+            machine: None,
+        };
+        if let Some(mattr) = mattr {
+            apply_mattr(&mut config.features, mattr)?;
         }
-        Some(TargetConfig)
+        validate_features(&config.features)?;
+        if !config.features.contains(&Feature::ARMv8A64) {
+            return Err("--mattr must not disable the base ISA 'ARMv8A64'".to_string());
+        }
+        if let Some(mcpu) = mcpu {
+            config.machine = parse_mcpu(mcpu, &config)?;
+        }
+        Ok(config)
     }
 
     /// Canonical architecture name for diagnostics and target-specific behavior.
     pub fn canonical_name(&self) -> &'static str {
         "arm64"
     }
-}
 
-fn parse_march(march: &str) -> Option<()> {
-    match normalize(march).as_str() {
-        "arm64" | "aarch64" | "armv8" | "armv8a" | "armv8-a" => Some(()),
-        _ => None,
+    /// The enabled ISA/extension set.
+    pub fn features(&self) -> &[Feature] {
+        &self.features
     }
 }
 
-fn parse_mcpu(mcpu: &str) -> Option<CpuModel> {
-    match normalize(mcpu).as_str() {
-        "generic" | "generic-arm64" | "generic-aarch64" => Some(CpuModel::Generic),
-        "generic-in-order" | "generic-inorder" | "in-order" | "inorder" => Some(CpuModel::InOrder),
+fn parse_march(march: &str) -> Result<(), String> {
+    match normalize(march).as_str() {
+        "arm64" | "aarch64" | "armv8" | "armv8a" | "armv8-a" => Ok(()),
+        other => Err(format!("unknown AArch64 architecture '{other}'")),
+    }
+}
+
+/// Resolve `--mcpu` to an optional default machine model. Generic CPU names map
+/// onto the generic cores; any other name must be a TMDL machine (by name or
+/// alias) compatible with the enabled features.
+fn parse_mcpu(mcpu: &str, config: &TargetConfig) -> Result<Option<String>, String> {
+    let name = normalize(mcpu);
+    let generic = match name.as_str() {
+        "generic" | "generic-arm64" | "generic-aarch64" => Some(None),
+        "generic-in-order" | "generic-inorder" | "in-order" | "inorder" => {
+            Some(Some("arm64-in-order".to_string()))
+        }
         "generic-ooo" | "generic-out-of-order" | "ooo" | "out-of-order" => {
-            Some(CpuModel::OutOfOrder)
+            Some(Some("arm64-ooo".to_string()))
         }
         _ => None,
+    };
+    if let Some(machine) = generic {
+        return Ok(machine);
     }
+
+    if machine_model(&name, &config.features).is_some() {
+        return Ok(Some(name));
+    }
+    if machine_model(&name, Feature::ALL).is_some() {
+        return Err(format!(
+            "cpu '{name}' is incompatible with the selected architecture"
+        ));
+    }
+    Err(format!(
+        "unknown AArch64 cpu '{name}' (expected 'generic', 'generic-in-order', 'generic-ooo' or one of: {})",
+        machines(Feature::ALL).join(", ")
+    ))
+}
+
+/// Apply an LLVM-style `--mattr` list (`+feat`/`-feat`, comma-separated).
+fn apply_mattr(features: &mut Vec<Feature>, mattr: &str) -> Result<(), String> {
+    for item in mattr.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let (add, name) = if let Some(name) = item.strip_prefix('+') {
+            (true, name)
+        } else if let Some(name) = item.strip_prefix('-') {
+            (false, name)
+        } else {
+            return Err(format!(
+                "invalid --mattr entry '{item}' (expected '+feature' or '-feature')"
+            ));
+        };
+        let feature = Feature::from_name(&normalize(name))
+            .ok_or_else(|| format!("unknown AArch64 feature '{name}' in --mattr"))?;
+        if add && !features.contains(&feature) {
+            features.push(feature);
+        } else if !add {
+            features.retain(|f| *f != feature);
+        }
+    }
+    Ok(())
 }
 
 fn normalize(s: &str) -> String {
@@ -232,7 +290,7 @@ fn lower_func_and_return_to_asm_symbol(
 
 impl Arm64Dialect {
     pub fn get_asm_parser(&self) -> tir_be_common::AsmParser {
-        tir_be_common::AsmParser::new(get_instruction_parsers())
+        tir_be_common::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
     }
 
     pub fn get_asm_printer(&self) -> tir_be_common::AsmPrinter {
@@ -275,7 +333,14 @@ fn lower_branches(
 }
 
 pub fn create_isel_pass(context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
-    tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context))
+    create_isel_pass_for(context, Feature::ALL)
+}
+
+fn create_isel_pass_for(
+    context: &tir::Context,
+    features: &[Feature],
+) -> tir_be_common::isel::InstructionSelectPass {
+    tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context, features))
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
         .with_op_lowering(lower_branches)
 }
@@ -386,7 +451,7 @@ impl tir_be_common::TargetMachine for Arm64Target {
     }
 
     fn isel_pass(&self, context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
-        create_isel_pass(context)
+        create_isel_pass_for(context, &self.config.features)
     }
 
     fn regalloc_pass(&self) -> tir_be_common::regalloc::RegisterAllocationPass {
@@ -398,11 +463,9 @@ impl tir_be_common::TargetMachine for Arm64Target {
         Arm64RegAlloc.register_info()
     }
 
-    fn asm_parser(&self, context: &tir::Context) -> tir_be_common::AsmParser {
-        context
-            .find_dialect::<Arm64Dialect>()
-            .expect("arm64 dialect must be registered before building an asm parser")
-            .get_asm_parser()
+    fn asm_parser(&self, _context: &tir::Context) -> tir_be_common::AsmParser {
+        let (parsers, disabled) = get_instruction_parsers(&self.config.features);
+        tir_be_common::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
     }
 
     fn asm_printer(&self, context: &tir::Context) -> tir_be_common::AsmPrinter {
@@ -413,11 +476,15 @@ impl tir_be_common::TargetMachine for Arm64Target {
     }
 
     fn machine_model(&self, name: &str) -> Option<tir_be_common::sched::MachineModel> {
-        crate::machine_model(name)
+        crate::machine_model(name, &self.config.features)
     }
 
-    fn machines(&self) -> &'static [&'static str] {
-        crate::MACHINES
+    fn machines(&self) -> Vec<&'static str> {
+        crate::machines(&self.config.features)
+    }
+
+    fn default_machine(&self) -> Option<&str> {
+        self.config.machine.as_deref()
     }
 
     fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String> {
@@ -425,9 +492,19 @@ impl tir_be_common::TargetMachine for Arm64Target {
     }
 }
 
-fn select_arm64(march: &str, mcpu: Option<&str>) -> Option<Box<dyn tir_be_common::TargetMachine>> {
-    let config = TargetConfig::parse(march, mcpu)?;
-    Some(Box::new(Arm64Target { config }))
+fn select_arm64(
+    march: &str,
+    mcpu: Option<&str>,
+    mattr: Option<&str>,
+) -> Result<Option<Box<dyn tir_be_common::TargetMachine>>, String> {
+    let owned = ["arm", "aarch64"]
+        .iter()
+        .any(|prefix| normalize(march).starts_with(prefix));
+    if !owned {
+        return Ok(None);
+    }
+    let config = TargetConfig::parse(march, mcpu, mattr)?;
+    Ok(Some(Box::new(Arm64Target { config })))
 }
 
 tir_be_common::register_target!(select_arm64, ["arm64"]);
@@ -863,20 +940,36 @@ mod tests {
 
 #[cfg(test)]
 mod target_parser_tests {
-    use super::TargetConfig;
+    use super::{Feature, TargetConfig};
 
     #[test]
     fn accepts_arm64_aliases_and_generic_cpus() {
         assert_eq!(
-            TargetConfig::parse("aarch64", Some("generic-in-order")).map(|c| c.canonical_name()),
-            Some("arm64")
+            TargetConfig::parse("aarch64", Some("generic-in-order"), None)
+                .map(|c| c.canonical_name()),
+            Ok("arm64")
         );
-        assert!(TargetConfig::parse("armv8-a", Some("generic-aarch64")).is_some());
+        assert!(TargetConfig::parse("armv8-a", Some("generic-aarch64"), None).is_ok());
+    }
+
+    #[test]
+    fn generic_cpu_names_resolve_machine_models() {
+        let config = TargetConfig::parse("arm64", Some("generic-ooo"), None).unwrap();
+        assert_eq!(config.machine.as_deref(), Some("arm64-ooo"));
+        let config = TargetConfig::parse("arm64", Some("arm64-in-order"), None).unwrap();
+        assert_eq!(config.machine.as_deref(), Some("arm64-in-order"));
+    }
+
+    #[test]
+    fn march_enables_the_base_isa() {
+        let config = TargetConfig::parse("arm64", None, None).unwrap();
+        assert_eq!(config.features(), &[Feature::ARMv8A64]);
+        assert!(TargetConfig::parse("arm64", None, Some("-armv8a64")).is_err());
     }
 
     #[test]
     fn rejects_unknown_march_or_cpu() {
-        assert!(TargetConfig::parse("rv64im", None).is_none());
-        assert!(TargetConfig::parse("arm64", Some("cortex-a710")).is_none());
+        assert!(TargetConfig::parse("rv64im", None, None).is_err());
+        assert!(TargetConfig::parse("arm64", Some("cortex-a710"), None).is_err());
     }
 }

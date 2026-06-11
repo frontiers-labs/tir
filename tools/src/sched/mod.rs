@@ -43,9 +43,12 @@ pub struct ToolArgs {
     /// Target architecture
     #[arg(long)]
     march: String,
+    /// Target feature toggles (e.g. `+m,-zmmul`), applied on top of `--march`.
+    #[arg(long)]
+    mattr: Option<String>,
     /// Performance model / machine to analyze against (e.g. `ooo`, `in-order`).
-    /// Omitted: a generic single-issue core that costs every instruction one
-    /// cycle (the scheduling fallback when no machine is selected).
+    /// Omitted: the machine implied by `--mcpu` when it names one, otherwise a
+    /// generic single-issue core that costs every instruction one cycle.
     #[arg(long)]
     model: Option<String>,
     /// Number of times the region is repeated through the pipeline.
@@ -59,18 +62,12 @@ pub struct ToolArgs {
 }
 
 pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
-    let target = tir_targets::select(&args.march, args.mcpu.as_deref()).ok_or_else(|| {
-        format!(
-            "unknown target '{}' (supported: {})",
-            args.march,
-            tir_targets::supported_targets().join(", ")
-        )
-    })?;
+    let target = tir_targets::select(&args.march, args.mcpu.as_deref(), args.mattr.as_deref())?;
 
     let context = Context::with_default_dialects();
     target.register_dialects(&context);
 
-    let model = match &args.model {
+    let model = match args.model.as_deref().or_else(|| target.default_machine()) {
         Some(name) => target.machine_model(name).ok_or_else(|| {
             format!(
                 "unknown machine '{}' for target '{}' (one of: {})",

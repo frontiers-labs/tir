@@ -347,7 +347,22 @@ fn eval_node<M: Memory>(
             let value = as_int!(c(0), "extract");
             let high = as_int!(c(1), "extract").to_u64() as u32;
             let low = as_int!(c(2), "extract").to_u64() as u32;
-            Value::Int(value.extract_bits(high, low))
+            // `extract(a * b, 2N-1, N)` is the TMDL idiom for the high half of a
+            // full multiply (e.g. RISC-V `mulh`). The `Mul` node itself only
+            // keeps the low N bits, so when the slice lies entirely past the
+            // product's width, recompute it from the multiply's operands as a
+            // signed full-width product.
+            let mul = graph.children(node).next().expect("extract has children");
+            if low >= value.width() && matches!(graph.get_kind(mul), ExprKind::Mul) {
+                let (a, b) = coerce_ints(
+                    as_int!(child_val(graph, mul, 0, cache), "extract"),
+                    as_int!(child_val(graph, mul, 1, cache), "extract"),
+                );
+                let product_high = a.with_signed(true).mulh(&b.with_signed(true));
+                Value::Int(product_high.extract_bits(high - a.width(), low - a.width()))
+            } else {
+                Value::Int(value.extract_bits(high, low))
+            }
         }
         ExprKind::ZExt => {
             let value = as_int!(c(0), "zext");
@@ -538,6 +553,33 @@ mod tests {
         let b = sym(&mut g, 1);
         inner(&mut g, ExprKind::Mul, &[a, b]);
         assert_eq!(as_i64(execute(&g, &[iv(6), iv(7)])), 42);
+    }
+
+    #[test]
+    fn extract_above_mul_yields_signed_high_product() {
+        // The RISC-V `mulh` semantics expressed the TMDL way:
+        // extract(rs1 * rs2, 127, 64) on 64-bit operands.
+        let mut g = ExprPostGraph::new();
+        let a = sym(&mut g, 0);
+        let b = sym(&mut g, 1);
+        let mul = inner(&mut g, ExprKind::Mul, &[a, b]);
+        let hi = int_con(&mut g, 127);
+        let lo = int_con(&mut g, 64);
+        inner(&mut g, ExprKind::Extract, &[mul, hi, lo]);
+
+        // -3 * 7 = -21: the high half of the signed 128-bit product is -1.
+        let inputs = [
+            Value::Int(APInt::new(64, (-3i64) as u64)),
+            Value::Int(APInt::new(64, 7)),
+        ];
+        assert_eq!(as_i64(execute(&g, &inputs)), -1);
+
+        // 2^62 * 4 = 2^64: high half is 1.
+        let inputs = [
+            Value::Int(APInt::new(64, 1u64 << 62)),
+            Value::Int(APInt::new(64, 4)),
+        ];
+        assert_eq!(as_i64(execute(&g, &inputs)), 1);
     }
 
     #[test]

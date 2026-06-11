@@ -1,5 +1,5 @@
-// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
-// RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s --check-prefixes=CHECK,RV64
+// RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s --check-prefixes=CHECK,RV32
 
 module {
   func @add(%0: !i32, %1: !i32) -> !i32 {
@@ -9,4 +9,7 @@ module {
   module_end
 }
 
-// CHECK: riscv.addw {rd = %virt2:GPR, rs1 = %virt0:GPR, rs2 = %virt1:GPR}
+// On RV64 an i32 add selects the word op; on RV32 the word ops do not exist
+// and plain add is the 32-bit add.
+// RV64: riscv.addw {rd = %virt2:GPR, rs1 = %virt0:GPR, rs2 = %virt1:GPR}
+// RV32: riscv.add {rd = %virt2:GPR, rs1 = %virt0:GPR, rs2 = %virt1:GPR}

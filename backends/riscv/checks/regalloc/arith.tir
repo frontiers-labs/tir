@@ -1,5 +1,5 @@
-// RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
-// RUN: tir mc --march=rv32i --stage=regalloc %s | filecheck %s
+// RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s --check-prefixes=CHECK,RV64
+// RUN: tir mc --march=rv32i --stage=regalloc %s | filecheck %s --check-prefixes=CHECK,RV32
 
 module {
   func @chain(%0: !i32, %1: !i32) -> !i32 {
@@ -12,8 +12,10 @@ module {
   module_end
 }
 
-// CHECK: riscv.addw {rd = {{x[0-9]+}}, rs1 = x10, rs2 = x11}
-// CHECK: riscv.subw
+// RV64: riscv.addw {rd = {{x[0-9]+}}, rs1 = x10, rs2 = x11}
+// RV64: riscv.subw
+// RV32: riscv.add {rd = {{x[0-9]+}}, rs1 = x10, rs2 = x11}
+// RV32: riscv.sub
 // CHECK: riscv.and
 // CHECK: riscv.or {rd = x10,
 // CHECK: riscv.vret

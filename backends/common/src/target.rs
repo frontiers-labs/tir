@@ -50,11 +50,19 @@ pub trait TargetMachine {
     fn asm_printer(&self, context: &Context) -> AsmPrinter;
 
     /// A cycle-approximate machine model by name, or `None` if this target has no
-    /// model under that name. Names are globally unique (e.g. `rv64-ooo`).
+    /// model under that name compatible with the selected features. Names are
+    /// globally unique (e.g. `rv64-ooo`).
     fn machine_model(&self, name: &str) -> Option<MachineModel>;
 
-    /// The selectable machine names of this target (for help text / diagnostics).
-    fn machines(&self) -> &'static [&'static str];
+    /// The selectable machine names compatible with the selected features (for
+    /// help text / diagnostics).
+    fn machines(&self) -> Vec<&'static str>;
+
+    /// The machine implied by `--mcpu`, used as the default model when a tool
+    /// needs one and no explicit machine was selected.
+    fn default_machine(&self) -> Option<&str> {
+        None
+    }
 
     /// The ISA (or ABI, when `prefer_abi`) name of a register given its class and
     /// encoding index — the inverse of the asm parser, for printing `x1`/`ra`
@@ -70,20 +78,40 @@ pub trait TargetMachine {
 pub struct TargetInfo {
     /// Canonical names this backend answers to, for help text and diagnostics.
     pub canonical_names: &'static [&'static str],
-    /// Parse a `--march`/`--mcpu` pair, returning a target if this backend owns it.
+    /// Parse a `--march`/`--mcpu`/`--mattr` triple, returning a target if this
+    /// backend owns it.
     pub select: SelectFn,
 }
 
-/// Parses a `--march`/`--mcpu` pair into a target, if the backend owns it.
-pub type SelectFn = fn(march: &str, mcpu: Option<&str>) -> Option<Box<dyn TargetMachine>>;
+/// Parses a `--march`/`--mcpu`/`--mattr` triple into a target. `Ok(None)` means
+/// the march string belongs to another backend; `Err` means this backend owns
+/// the march but the combination is invalid (unknown extension, incompatible
+/// CPU, ...).
+pub type SelectFn = fn(
+    march: &str,
+    mcpu: Option<&str>,
+    mattr: Option<&str>,
+) -> Result<Option<Box<dyn TargetMachine>>, String>;
 
 /// Link-time registry of every target reachable in the final binary.
 #[distributed_slice]
 pub static TARGETS: [TargetInfo];
 
-/// Resolve a `--march`/`--mcpu` pair to a target, or `None` if no backend accepts it.
-pub fn select_target(march: &str, mcpu: Option<&str>) -> Option<Box<dyn TargetMachine>> {
-    TARGETS.iter().find_map(|t| (t.select)(march, mcpu))
+/// Resolve a `--march`/`--mcpu`/`--mattr` triple to a target.
+pub fn select_target(
+    march: &str,
+    mcpu: Option<&str>,
+    mattr: Option<&str>,
+) -> Result<Box<dyn TargetMachine>, String> {
+    for t in TARGETS.iter() {
+        if let Some(target) = (t.select)(march, mcpu, mattr)? {
+            return Ok(target);
+        }
+    }
+    Err(format!(
+        "unknown target '{march}' (supported: {})",
+        supported_targets().join(", ")
+    ))
 }
 
 /// Canonical names accepted by [`select_target`], sorted and de-duplicated.
@@ -99,8 +127,8 @@ pub fn supported_targets() -> Vec<&'static str> {
 
 /// Register a target backend so the tools can select it.
 ///
-/// `select` is a `fn(&str, Option<&str>) -> Option<Box<dyn TargetMachine>>`;
-/// `names` lists the canonical spellings shown in help and error text.
+/// `select` is a [`SelectFn`]; `names` lists the canonical spellings shown in
+/// help and error text.
 #[macro_export]
 macro_rules! register_target {
     ($select:path, [$($name:expr),+ $(,)?]) => {

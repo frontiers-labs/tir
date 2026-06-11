@@ -1,5 +1,5 @@
-// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
-// RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s --check-prefixes=CHECK,RV64
+// RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s --check-prefixes=CHECK,RV32
 
 module {
   func @a(%0: !i32, %1: !i32) -> !i32 {
@@ -14,6 +14,8 @@ module {
 }
 
 // CHECK: asm.symbol {name = "a"
-// CHECK: riscv.addw
+// RV64: riscv.addw
+// RV32: riscv.add
 // CHECK: asm.symbol {name = "b"
-// CHECK: riscv.subw
+// RV64: riscv.subw
+// RV32: riscv.sub

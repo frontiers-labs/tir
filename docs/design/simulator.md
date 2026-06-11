@@ -52,7 +52,7 @@ simulator/isasim    (tir-isasim) the dynamic CLI
 └── dump.rs         --dump-state JSON snapshots (differential ISA testing)
 
 tools/src/sched     `tir sched`: static analysis front-end + report views
-backends/targets    --march/--mcpu registry (TargetMachine per backend)
+backends/targets    --march/--mcpu/--mattr registry (TargetMachine per backend)
 ```
 
 ## Execution model: functional-first, timing-directed

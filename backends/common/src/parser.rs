@@ -16,13 +16,26 @@ pub struct AsmParser {
     /// can name several instruction forms (register vs. immediate), so each key
     /// maps to a list tried in turn with backtracking.
     instruction_parsers: HashMap<String, Vec<AsmInstructionParser>>,
+    /// Mnemonics the target defines but the selected ISA/extension set disables.
+    /// These are parse errors, unlike genuinely unknown identifiers which are
+    /// still skipped.
+    disabled_mnemonics: std::collections::HashSet<String>,
 }
 
 impl AsmParser {
     pub fn new(instruction_parsers: HashMap<String, Vec<AsmInstructionParser>>) -> Self {
         AsmParser {
             instruction_parsers,
+            disabled_mnemonics: Default::default(),
         }
+    }
+
+    pub fn with_disabled_mnemonics(
+        mut self,
+        disabled_mnemonics: std::collections::HashSet<String>,
+    ) -> Self {
+        self.disabled_mnemonics = disabled_mnemonics;
+        self
     }
 
     #[allow(clippy::result_unit_err)]
@@ -93,6 +106,10 @@ impl AsmParser {
                         if !parsed {
                             return Err(());
                         }
+                    } else if self.disabled_mnemonics.contains(&key) {
+                        // The instruction exists but the selected ISA/extension
+                        // set does not include it.
+                        return Err(());
                     } else {
                         // Unknown ident in text section; skip it for now
                         let _ = parser.bump();

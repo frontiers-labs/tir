@@ -3,27 +3,34 @@ use tir::{Any, Operation};
 
 include!(concat!(env!("OUT_DIR"), "/riscv.rs"));
 
-/// Parsed RISC-V target selection from `--march`/`--mcpu`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Parsed RISC-V target selection from `--march`/`--mcpu`/`--mattr`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TargetConfig {
     xlen: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CpuModel {
-    Generic,
-    InOrder,
-    OutOfOrder,
+    features: Vec<Feature>,
+    /// Machine model implied by `--mcpu`, when it names one.
+    machine: Option<String>,
 }
 
 impl TargetConfig {
-    /// Parse a RISC-V `--march`/`--mcpu` pair.
-    pub fn parse(march: &str, mcpu: Option<&str>) -> Option<Self> {
-        let config = parse_march(march)?;
-        if let Some(mcpu) = mcpu {
-            parse_mcpu(mcpu, config)?;
+    /// Parse a RISC-V `--march`/`--mcpu`/`--mattr` triple.
+    pub fn parse(march: &str, mcpu: Option<&str>, mattr: Option<&str>) -> Result<Self, String> {
+        let mut config = parse_march(march)?;
+        if let Some(mattr) = mattr {
+            apply_mattr(&mut config.features, mattr)?;
         }
-        Some(config)
+        validate_features(&config.features)?;
+        let base = config.base_feature();
+        if !config.features.contains(&base) {
+            return Err(format!(
+                "--mattr must not disable the base ISA '{}'",
+                base.name()
+            ));
+        }
+        if let Some(mcpu) = mcpu {
+            config.machine = parse_mcpu(mcpu, &config)?;
+        }
+        Ok(config)
     }
 
     /// Canonical architecture name for diagnostics and target-specific behavior.
@@ -33,37 +40,133 @@ impl TargetConfig {
             _ => "riscv64",
         }
     }
+
+    /// The enabled ISA/extension set.
+    pub fn features(&self) -> &[Feature] {
+        &self.features
+    }
+
+    fn base_feature(&self) -> Feature {
+        match self.xlen {
+            32 => Feature::RV32I,
+            _ => Feature::RV64I,
+        }
+    }
+
+    /// The generic profile for an XLEN: every extension modeled in TMDL.
+    fn generic(xlen: u32) -> Self {
+        let mut config = TargetConfig {
+            xlen,
+            features: vec![],
+            machine: None,
+        };
+        config.features = Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| match f {
+                Feature::RV32I => xlen == 32,
+                Feature::RV64I => xlen == 64,
+                _ => true,
+            })
+            .collect();
+        config
+    }
 }
 
-fn parse_march(march: &str) -> Option<TargetConfig> {
+fn parse_march(march: &str) -> Result<TargetConfig, String> {
     let march = normalize(march);
     match march.as_str() {
-        "riscv" => Some(TargetConfig { xlen: 64 }),
-        "riscv32" => Some(TargetConfig { xlen: 32 }),
-        "riscv64" => Some(TargetConfig { xlen: 64 }),
+        // Bare architecture names select the generic profile with every
+        // modeled extension, mirroring how toolchains treat a bare triple.
+        "riscv" | "riscv64" => Ok(TargetConfig::generic(64)),
+        "riscv32" => Ok(TargetConfig::generic(32)),
         _ => parse_riscv_isa_string(&march),
     }
 }
 
-fn parse_mcpu(mcpu: &str, march_config: TargetConfig) -> Option<CpuModel> {
+/// Resolve `--mcpu` to an optional default machine model. Generic CPU names
+/// map onto the generic cores when one exists for the configured XLEN; any
+/// other name must be a TMDL machine (by name or alias) compatible with the
+/// enabled features.
+fn parse_mcpu(mcpu: &str, config: &TargetConfig) -> Result<Option<String>, String> {
     let mcpu = normalize(mcpu);
-    for (prefix, xlen) in [("riscv32-", 32), ("riscv64-", 64)] {
-        if let Some(model) = mcpu.strip_prefix(prefix).and_then(parse_cpu_model) {
-            return (march_config.xlen == xlen).then_some(model);
+    let name = match (
+        mcpu.strip_prefix("riscv32-"),
+        mcpu.strip_prefix("riscv64-"),
+        config.xlen,
+    ) {
+        (Some(name), _, 32) | (_, Some(name), 64) => name,
+        (Some(_), _, _) | (_, Some(_), _) => {
+            return Err(format!(
+                "cpu '{mcpu}' does not match the '{}' architecture",
+                config.canonical_name()
+            ));
         }
-    }
+        _ => mcpu.as_str(),
+    };
 
-    parse_cpu_model(&mcpu)
-}
-
-fn parse_cpu_model(name: &str) -> Option<CpuModel> {
-    match name {
-        "generic" => Some(CpuModel::Generic),
-        "generic-in-order" | "generic-inorder" | "in-order" | "inorder" => Some(CpuModel::InOrder),
+    let generic = match name {
+        "generic" => Some(None),
+        "generic-in-order" | "generic-inorder" | "in-order" | "inorder" => {
+            Some((config.xlen == 64).then(|| "rv64-in-order".to_string()))
+        }
         "generic-ooo" | "generic-out-of-order" | "ooo" | "out-of-order" => {
-            Some(CpuModel::OutOfOrder)
+            Some((config.xlen == 64).then(|| "rv64-ooo".to_string()))
         }
         _ => None,
+    };
+    if let Some(machine) = generic {
+        return Ok(machine);
+    }
+
+    if machine_model(name, &config.features).is_some() {
+        return Ok(Some(name.to_string()));
+    }
+    if machine_model(name, Feature::ALL).is_some() {
+        return Err(format!(
+            "cpu '{name}' is incompatible with the selected architecture"
+        ));
+    }
+    Err(format!(
+        "unknown RISC-V cpu '{name}' (expected 'generic', 'generic-in-order', 'generic-ooo' or one of: {})",
+        machines(Feature::ALL).join(", ")
+    ))
+}
+
+/// Apply an LLVM-style `--mattr` list (`+feat`/`-feat`, comma-separated) on top
+/// of the march-derived feature set.
+fn apply_mattr(features: &mut Vec<Feature>, mattr: &str) -> Result<(), String> {
+    for item in mattr.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let (add, name) = if let Some(name) = item.strip_prefix('+') {
+            (true, name)
+        } else if let Some(name) = item.strip_prefix('-') {
+            (false, name)
+        } else {
+            return Err(format!(
+                "invalid --mattr entry '{item}' (expected '+feature' or '-feature')"
+            ));
+        };
+        let toggled = attr_features(name)
+            .ok_or_else(|| format!("unknown RISC-V feature '{name}' in --mattr"))?;
+        for feature in toggled {
+            if add && !features.contains(&feature) {
+                features.push(feature);
+            } else if !add {
+                features.retain(|f| *f != feature);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Features named by a `--mattr` entry: the march extension letter spellings
+/// plus the TMDL feature names.
+fn attr_features(name: &str) -> Option<Vec<Feature>> {
+    let name = normalize(name);
+    match name.as_str() {
+        // The M extension implies Zmmul.
+        "m" => Some(vec![Feature::RVM, Feature::Zmmul]),
+        _ => Feature::from_name(&name).map(|f| vec![f]),
     }
 }
 
@@ -71,66 +174,109 @@ fn normalize(s: &str) -> String {
     s.trim().to_ascii_lowercase().replace('_', "-")
 }
 
-fn parse_riscv_isa_string(march: &str) -> Option<TargetConfig> {
-    let rest = march.strip_prefix("rv")?;
+fn parse_riscv_isa_string(march: &str) -> Result<TargetConfig, String> {
+    let err = || format!("invalid RISC-V ISA string '{march}'");
+    let rest = march.strip_prefix("rv").ok_or_else(err)?;
     let (xlen, rest) = if let Some(rest) = rest.strip_prefix("32") {
         (32, rest)
     } else {
-        (64, rest.strip_prefix("64")?)
+        (64, rest.strip_prefix("64").ok_or_else(err)?)
+    };
+
+    let base_feature = if xlen == 32 {
+        Feature::RV32I
+    } else {
+        Feature::RV64I
+    };
+    let mut features = vec![];
+    let mut enable = |feature: Feature| {
+        if !features.contains(&feature) {
+            features.push(feature);
+        }
     };
 
     let mut chars = rest.chars().peekable();
-    let base = chars.next()?;
+    let base = chars.next().ok_or_else(err)?;
     match base {
-        'i' | 'e' | 'g' => skip_extension_version(&mut chars),
-        _ => return None,
+        'i' => {
+            enable(base_feature);
+            skip_extension_version(&mut chars);
+        }
+        // G abbreviates IMAFD_Zicsr_Zifencei; the parts TMDL does not model
+        // yet contribute nothing.
+        'g' => {
+            enable(base_feature);
+            enable(Feature::RVM);
+            enable(Feature::Zmmul);
+            skip_extension_version(&mut chars);
+        }
+        'e' => return Err(format!("unsupported RISC-V base ISA 'e' in '{march}'")),
+        _ => return Err(err()),
     }
 
     while chars.peek().is_some() {
         if chars.peek() == Some(&'-') {
             chars.next();
-            chars.peek()?;
+            chars.peek().ok_or_else(err)?;
             continue;
         }
 
-        let ext = chars.next()?;
+        let ext = chars.next().ok_or_else(err)?;
         if ext.is_ascii_digit() {
-            return None;
+            return Err(err());
         }
 
         match ext {
-            'm' | 'a' | 'f' | 'd' | 'q' | 'l' | 'c' | 'b' | 'j' | 't' | 'p' | 'v' | 'h' => {
+            'm' => {
+                enable(Feature::RVM);
+                enable(Feature::Zmmul);
+                skip_extension_version(&mut chars);
+            }
+            // Standard single-letter extensions TMDL does not model yet are
+            // accepted so common GNU march strings (e.g. rv64gc) keep working;
+            // they contribute no instructions.
+            'a' | 'f' | 'd' | 'q' | 'l' | 'c' | 'b' | 'j' | 't' | 'p' | 'v' | 'h' => {
                 skip_extension_version(&mut chars);
             }
             'z' | 's' | 'x' => {
-                if !consume_multi_letter_extension(&mut chars) {
-                    return None;
+                let name = consume_multi_letter_extension(ext, &mut chars).ok_or_else(err)?;
+                // Same policy for multi-letter extensions: enable the modeled
+                // ones, accept and ignore the rest.
+                if let Some(feature) = Feature::from_name(&name) {
+                    enable(feature);
                 }
             }
-            _ => return None,
+            _ => return Err(err()),
         }
     }
 
-    Some(TargetConfig { xlen })
+    Ok(TargetConfig {
+        xlen,
+        features,
+        machine: None,
+    })
 }
 
-fn consume_multi_letter_extension<I>(chars: &mut std::iter::Peekable<I>) -> bool
+fn consume_multi_letter_extension<I>(
+    first: char,
+    chars: &mut std::iter::Peekable<I>,
+) -> Option<String>
 where
     I: Iterator<Item = char>,
 {
-    let mut consumed_name_char = false;
+    let mut name = String::from(first);
     while let Some(&c) = chars.peek() {
         if c == '-' {
             break;
         }
         if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            consumed_name_char = true;
+            name.push(c);
             chars.next();
         } else {
-            return false;
+            return None;
         }
     }
-    consumed_name_char
+    (name.len() > 1).then_some(name)
 }
 
 fn skip_extension_version<I>(chars: &mut std::iter::Peekable<I>)
@@ -255,6 +401,9 @@ dialect! {
             ShiftLeftLogicalImmWordOp,
             ShiftRightLogicalImmWordOp,
             ShiftRightArithmeticImmWordOp,
+            // M extension (Zmmul subset)
+            MulOp,
+            MulHOp,
             // Loads / stores
             LoadByteOp,
             LoadByteUnsignedOp,
@@ -289,7 +438,7 @@ pub mod ops {
 
 impl RiscvDialect {
     pub fn get_asm_parser(&self) -> tir_be_common::AsmParser {
-        tir_be_common::AsmParser::new(get_instruction_parsers())
+        tir_be_common::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
     }
 
     pub fn get_asm_printer(&self) -> tir_be_common::AsmPrinter {
@@ -398,7 +547,14 @@ fn lower_branches(
 }
 
 pub fn create_isel_pass(context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
-    tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context))
+    create_isel_pass_for(context, Feature::ALL)
+}
+
+fn create_isel_pass_for(
+    context: &tir::Context,
+    features: &[Feature],
+) -> tir_be_common::isel::InstructionSelectPass {
+    tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context, features))
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
         .with_op_lowering(lower_branches)
 }
@@ -508,7 +664,7 @@ impl tir_be_common::TargetMachine for RiscvTarget {
     }
 
     fn isel_pass(&self, context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
-        create_isel_pass(context)
+        create_isel_pass_for(context, &self.config.features)
     }
 
     fn regalloc_pass(&self) -> tir_be_common::regalloc::RegisterAllocationPass {
@@ -520,11 +676,9 @@ impl tir_be_common::TargetMachine for RiscvTarget {
         RiscvRegAlloc.register_info()
     }
 
-    fn asm_parser(&self, context: &tir::Context) -> tir_be_common::AsmParser {
-        context
-            .find_dialect::<RiscvDialect>()
-            .expect("riscv dialect must be registered before building an asm parser")
-            .get_asm_parser()
+    fn asm_parser(&self, _context: &tir::Context) -> tir_be_common::AsmParser {
+        let (parsers, disabled) = get_instruction_parsers(&self.config.features);
+        tir_be_common::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
     }
 
     fn asm_printer(&self, context: &tir::Context) -> tir_be_common::AsmPrinter {
@@ -535,11 +689,15 @@ impl tir_be_common::TargetMachine for RiscvTarget {
     }
 
     fn machine_model(&self, name: &str) -> Option<tir_be_common::sched::MachineModel> {
-        crate::machine_model(name)
+        crate::machine_model(name, &self.config.features)
     }
 
-    fn machines(&self) -> &'static [&'static str] {
-        crate::MACHINES
+    fn machines(&self) -> Vec<&'static str> {
+        crate::machines(&self.config.features)
+    }
+
+    fn default_machine(&self) -> Option<&str> {
+        self.config.machine.as_deref()
     }
 
     fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String> {
@@ -547,9 +705,19 @@ impl tir_be_common::TargetMachine for RiscvTarget {
     }
 }
 
-fn select_riscv(march: &str, mcpu: Option<&str>) -> Option<Box<dyn tir_be_common::TargetMachine>> {
-    let config = TargetConfig::parse(march, mcpu)?;
-    Some(Box::new(RiscvTarget { config }))
+fn select_riscv(
+    march: &str,
+    mcpu: Option<&str>,
+    mattr: Option<&str>,
+) -> Result<Option<Box<dyn tir_be_common::TargetMachine>>, String> {
+    let owned = ["riscv", "rv32", "rv64"]
+        .iter()
+        .any(|prefix| normalize(march).starts_with(prefix));
+    if !owned {
+        return Ok(None);
+    }
+    let config = TargetConfig::parse(march, mcpu, mattr)?;
+    Ok(Some(Box::new(RiscvTarget { config })))
 }
 
 tir_be_common::register_target!(select_riscv, ["riscv32", "riscv64"]);
@@ -760,6 +928,92 @@ mod tests {
         assert_eq!(ooo.issue_width, 4);
         assert_eq!(ooo.buffer("rob"), Some(128));
         assert_eq!(ooo.resource("ALU").map(|r| r.units), Some(4));
+    }
+
+    fn target_for(march: &str) -> crate::RiscvTarget {
+        crate::RiscvTarget {
+            config: crate::TargetConfig::parse(march, None, None).expect("march should parse"),
+        }
+    }
+
+    #[test]
+    fn asm_parser_gates_extensions() {
+        use tir_be_common::TargetMachine;
+
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        // M-extension instructions need RVM (or Zmmul) enabled.
+        let mul = ".global f\nf:\n    mul a0, a1, a2\n";
+        assert!(
+            target_for("rv64i")
+                .asm_parser(&context)
+                .parse_asm(&context, mul)
+                .is_err()
+        );
+        for march in ["rv64im", "rv64i_zmmul", "riscv64"] {
+            assert!(
+                target_for(march)
+                    .asm_parser(&context)
+                    .parse_asm(&context, mul)
+                    .is_ok(),
+                "mul should parse with --march={march}"
+            );
+        }
+
+        // RV64-only instructions are rejected on rv32.
+        let word_ops = ".global f\nf:\n    addw a0, a1, a2\n    ld a1, 0(sp)\n";
+        assert!(
+            target_for("rv32im")
+                .asm_parser(&context)
+                .parse_asm(&context, word_ops)
+                .is_err()
+        );
+        assert!(
+            target_for("rv64i")
+                .asm_parser(&context)
+                .parse_asm(&context, word_ops)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn machines_filter_by_feature_set() {
+        use tir_be_common::TargetMachine;
+
+        let rv64 = target_for("rv64im");
+        assert_eq!(rv64.machines(), vec!["rv64-in-order", "rv64-ooo"]);
+        assert!(rv64.machine_model("rv64-ooo").is_some());
+        assert!(rv64.machine_model("scr1-3stage").is_none());
+
+        let rv32 = target_for("rv32i");
+        assert_eq!(rv32.machines(), vec!["scr1-3stage"]);
+        assert!(rv32.machine_model("scr1-3stage").is_some());
+        assert!(rv32.machine_model("rv64-ooo").is_none());
+    }
+
+    #[test]
+    fn isel_rules_filter_by_feature_set() {
+        let context = Context::with_default_dialects();
+        let rule_names = |features: &[crate::Feature]| -> Vec<&'static str> {
+            crate::get_isel_rules(&context, features)
+                .iter()
+                .map(|r| r.name)
+                .collect()
+        };
+
+        let rv64i = rule_names(&[crate::Feature::RV64I]);
+        assert!(rv64i.contains(&"addword"));
+        assert!(!rv64i.contains(&"mul"));
+
+        let rv64im = rule_names(&[crate::Feature::RV64I, crate::Feature::RVM]);
+        assert!(rv64im.contains(&"mul"));
+
+        let rv32i = rule_names(&[crate::Feature::RV32I]);
+        assert!(rv32i.contains(&"add"));
+        assert!(!rv32i.contains(&"addword"));
+        assert!(!rv32i.contains(&"loaddoubleword"));
     }
 
     #[test]
@@ -1408,36 +1662,92 @@ mod tests {
 
 #[cfg(test)]
 mod target_parser_tests {
-    use super::TargetConfig;
+    use super::{Feature, TargetConfig};
+
+    fn features(march: &str, mattr: Option<&str>) -> Vec<Feature> {
+        TargetConfig::parse(march, None, mattr)
+            .expect("march should parse")
+            .features
+    }
 
     #[test]
     fn march_accepts_gcc_style_isa_strings() {
         assert_eq!(
-            TargetConfig::parse("rv64im", None).map(|c| c.canonical_name()),
-            Some("riscv64")
+            TargetConfig::parse("rv64im", None, None).map(|c| c.canonical_name()),
+            Ok("riscv64")
         );
         assert_eq!(
-            TargetConfig::parse("rv32imac", None).map(|c| c.canonical_name()),
-            Some("riscv32")
+            TargetConfig::parse("rv32imac", None, None).map(|c| c.canonical_name()),
+            Ok("riscv32")
         );
         assert_eq!(
-            TargetConfig::parse("rv64gc_zba_zbb", None).map(|c| c.canonical_name()),
-            Some("riscv64")
+            TargetConfig::parse("rv64gc_zba_zbb", None, None).map(|c| c.canonical_name()),
+            Ok("riscv64")
         );
+    }
+
+    #[test]
+    fn march_selects_extension_features() {
+        assert_eq!(features("rv64i", None), vec![Feature::RV64I]);
+        assert_eq!(
+            features("rv64im", None),
+            vec![Feature::RV64I, Feature::RVM, Feature::Zmmul]
+        );
+        assert_eq!(
+            features("rv32imac", None),
+            vec![Feature::RV32I, Feature::RVM, Feature::Zmmul]
+        );
+        assert_eq!(
+            features("rv32i_zmmul", None),
+            vec![Feature::RV32I, Feature::Zmmul]
+        );
+        // G abbreviates IMAFD...; M is the modeled part.
+        assert!(features("rv64gc_zba_zbb", None).contains(&Feature::RVM));
+        // Bare architecture names select the generic, everything-on profile.
+        assert_eq!(
+            features("riscv64", None),
+            vec![Feature::RV64I, Feature::Zmmul, Feature::RVM]
+        );
+        assert!(!features("riscv32", None).contains(&Feature::RV64I));
+    }
+
+    #[test]
+    fn mattr_toggles_features() {
+        assert_eq!(
+            features("rv64i", Some("+m")),
+            vec![Feature::RV64I, Feature::RVM, Feature::Zmmul]
+        );
+        assert_eq!(
+            features("rv64im", Some("-m,+zmmul")),
+            vec![Feature::RV64I, Feature::Zmmul]
+        );
+        assert!(TargetConfig::parse("rv64i", None, Some("+vector")).is_err());
+        assert!(TargetConfig::parse("rv64i", None, Some("m")).is_err());
+        assert!(TargetConfig::parse("rv64i", None, Some("-rv64i")).is_err());
     }
 
     #[test]
     fn mcpu_accepts_target_prefixed_generic_names() {
-        assert!(TargetConfig::parse("rv32im", Some("riscv32-generic-in-order")).is_some());
-        assert!(TargetConfig::parse("rv64im", Some("riscv32-generic-in-order")).is_none());
-        assert!(TargetConfig::parse("rv64im", Some("generic-in-order")).is_some());
+        assert!(TargetConfig::parse("rv32im", Some("riscv32-generic-in-order"), None).is_ok());
+        assert!(TargetConfig::parse("rv64im", Some("riscv32-generic-in-order"), None).is_err());
+        assert!(TargetConfig::parse("rv64im", Some("generic-in-order"), None).is_ok());
+    }
+
+    #[test]
+    fn mcpu_resolves_machine_models() {
+        let config = TargetConfig::parse("rv64im", Some("generic-ooo"), None).unwrap();
+        assert_eq!(config.machine.as_deref(), Some("rv64-ooo"));
+        let config = TargetConfig::parse("rv32i", Some("scr1-3stage"), None).unwrap();
+        assert_eq!(config.machine.as_deref(), Some("scr1-3stage"));
+        // The SCR1 model is declared `for [RV32I]`; rv64 must reject it.
+        assert!(TargetConfig::parse("rv64i", Some("scr1-3stage"), None).is_err());
     }
 
     #[test]
     fn unknown_or_malformed_march_is_rejected() {
-        assert!(TargetConfig::parse("rv64", None).is_none());
-        assert!(TargetConfig::parse("rv64zm", None).is_none());
-        assert!(TargetConfig::parse("mips", None).is_none());
-        assert!(TargetConfig::parse("rv64im", Some("riscv64-unknown-cpu")).is_none());
+        assert!(TargetConfig::parse("rv64", None, None).is_err());
+        assert!(TargetConfig::parse("rv64zm", None, None).is_err());
+        assert!(TargetConfig::parse("mips", None, None).is_err());
+        assert!(TargetConfig::parse("rv64im", Some("riscv64-unknown-cpu"), None).is_err());
     }
 }
