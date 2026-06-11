@@ -64,6 +64,15 @@ pub trait TargetMachine {
         None
     }
 
+    /// TMDL ISA parameter values (e.g. RISC-V `XLEN`) resolved from the selected
+    /// features. Simulators install these so instruction behaviors referencing
+    /// `self.PARAM` execute with the selected ISA's value.
+    fn isa_params(&self) -> Vec<(&'static str, i64)>;
+
+    /// Architectural width in bits of each register class under the selected
+    /// features (e.g. RISC-V `GPR` is 32 bits wide on rv32, 64 on rv64).
+    fn register_widths(&self) -> Vec<(&'static str, u32)>;
+
     /// The ISA (or ABI, when `prefer_abi`) name of a register given its class and
     /// encoding index — the inverse of the asm parser, for printing `x1`/`ra`
     /// instead of the raw `(class, index)`. `None` if the class/index is unknown.

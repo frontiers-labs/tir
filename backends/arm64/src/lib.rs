@@ -487,6 +487,14 @@ impl tir_be_common::TargetMachine for Arm64Target {
         self.config.machine.as_deref()
     }
 
+    fn isa_params(&self) -> Vec<(&'static str, i64)> {
+        crate::isa_params(&self.config.features)
+    }
+
+    fn register_widths(&self) -> Vec<(&'static str, u32)> {
+        crate::register_widths(&self.config.features)
+    }
+
     fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String> {
         crate::register_name(class, index, prefer_abi)
     }

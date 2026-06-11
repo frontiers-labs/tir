@@ -31,6 +31,15 @@ pub struct Executor {
     /// register storage is keyed by file rather than by class. Classes absent
     /// from the map are their own file.
     register_files: HashMap<String, String>,
+    /// Architectural width in bits per register class (e.g. RISC-V `GPR` is 32
+    /// on rv32). Values are normalized to this width on write and produced at
+    /// it on read, so e.g. rv32 arithmetic wraps at 32 bits. Classes absent
+    /// from the map keep whatever width the behavior produced.
+    register_widths: HashMap<String, u32>,
+    /// TMDL ISA parameter values (e.g. `XLEN`) under the selected target
+    /// configuration, consulted by instruction behaviors via
+    /// [`MachineContext::isa_param`].
+    isa_params: HashMap<String, i64>,
     memory: Vec<u8>,
     memory_base: u64,
     pc: u64,
@@ -80,6 +89,33 @@ impl Executor {
     /// `GPR`/`GPRsp`). Without it, each class is its own independent file.
     pub fn set_register_files(&mut self, register_files: HashMap<String, String>) {
         self.register_files = register_files;
+    }
+
+    /// Configure architectural register widths per class (from
+    /// `TargetMachine::register_widths`).
+    pub fn set_register_widths(&mut self, widths: impl IntoIterator<Item = (&'static str, u32)>) {
+        self.register_widths = widths
+            .into_iter()
+            .map(|(class, width)| (class.to_string(), width))
+            .collect();
+    }
+
+    /// Configure TMDL ISA parameter values (from `TargetMachine::isa_params`).
+    pub fn set_isa_params(&mut self, params: impl IntoIterator<Item = (&'static str, i64)>) {
+        self.isa_params = params
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect();
+    }
+
+    /// Resize `value` to a class's architectural width: truncate wider values,
+    /// zero-extend narrower ones. Identity for unconfigured classes.
+    fn resize_to_class_width(&self, class: &str, value: tir::utils::APInt) -> tir::utils::APInt {
+        match self.register_widths.get(class) {
+            Some(&width) if value.width() > width => value.truncate(width),
+            Some(&width) if value.width() < width => value.zero_extend(width),
+            _ => value,
+        }
     }
 
     /// Canonicalize a register class to the physical file it draws from.
@@ -267,13 +303,13 @@ impl MachineContext for Executor {
         // The program counter is held specially (it drives instruction fetch), but
         // semantics reference it as the `PC` register class (e.g. `PC::pc`).
         if class == "PC" {
-            return Ok(tir::utils::APInt::new(64, self.pc));
+            return Ok(self.resize_to_class_width(class, tir::utils::APInt::new(64, self.pc)));
         }
         let key = (self.register_file(class).to_string(), index);
         if let Some(value) = self.registers.get(&key) {
-            return Ok(value.clone());
+            return Ok(self.resize_to_class_width(class, value.clone()));
         }
-        Ok(tir::utils::APInt::new(64, 0))
+        Ok(self.resize_to_class_width(class, tir::utils::APInt::new(64, 0)))
     }
 
     fn write_register(
@@ -282,6 +318,7 @@ impl MachineContext for Executor {
         index: u16,
         value: tir::utils::APInt,
     ) -> Result<(), SimTrap> {
+        let value = self.resize_to_class_width(class, value);
         if class == "PC" {
             self.write_pc(value.to_u64());
             return Ok(());
@@ -289,6 +326,10 @@ impl MachineContext for Executor {
         let file = self.register_file(class).to_string();
         self.registers.insert((file, index), value);
         Ok(())
+    }
+
+    fn isa_param(&self, name: &str) -> Option<i64> {
+        self.isa_params.get(name).copied()
     }
 
     fn read_memory(&self, address: u64, size: usize) -> Result<u64, SimTrap> {
@@ -376,6 +417,45 @@ mod tests {
         assert_eq!(x1.to_u64(), 3);
         assert_eq!(x2.to_u64(), 0);
         assert_eq!(tir_be_common::MachineContext::read_pc(&executor), until_pc);
+    }
+
+    #[test]
+    fn rv32_configuration_wraps_arithmetic_at_32_bits() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let dialect = context.find_dialect::<RiscvDialect>().unwrap();
+        // Symbols are laid out in reverse declaration order: `first` executes at
+        // 0x8000_0000 and falls through to `last` at 0x8000_000c.
+        let asm = "
+            .global last
+            last:
+              add x0, x0, x0
+            .global first
+            first:
+              lui  x1, 524288
+              add  x3, x1, x1
+              addi x4, x0, -1
+        ";
+        let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
+        let program =
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
+
+        let rv32 = [tir_riscv::Feature::RV32I];
+        let mut executor = Executor::new_at(4096, 0x8000_0000);
+        executor.set_isa_params(tir_riscv::isa_params(&rv32));
+        executor.set_register_widths(tir_riscv::register_widths(&rv32));
+        executor.load(program).unwrap();
+        executor.run(0x8000_000c, 10).unwrap();
+
+        let reg =
+            |idx| tir_be_common::MachineContext::read_register(&executor, "GPR", idx).unwrap();
+        // lui keeps 32-bit values (no sign extension into a 64-bit register),
+        // the doubled value wraps to zero, and -1 is the 32-bit all-ones.
+        assert_eq!((reg(1).to_u64(), reg(1).width()), (0x8000_0000, 32));
+        assert_eq!(reg(3).to_u64(), 0);
+        assert_eq!(reg(4).to_u64(), 0xFFFF_FFFF);
     }
 
     #[test]

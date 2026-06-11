@@ -27,6 +27,10 @@ impl TargetConfig {
                 base.name()
             ));
         }
+        // Exactly one base ISA: parameters like XLEN resolve from it.
+        if config.features.contains(&Feature::RV32I) && config.features.contains(&Feature::RV64I) {
+            return Err("RV32I and RV64I are mutually exclusive".to_string());
+        }
         if let Some(mcpu) = mcpu {
             config.machine = parse_mcpu(mcpu, &config)?;
         }
@@ -698,6 +702,14 @@ impl tir_be_common::TargetMachine for RiscvTarget {
 
     fn default_machine(&self) -> Option<&str> {
         self.config.machine.as_deref()
+    }
+
+    fn isa_params(&self) -> Vec<(&'static str, i64)> {
+        crate::isa_params(&self.config.features)
+    }
+
+    fn register_widths(&self) -> Vec<(&'static str, u32)> {
+        crate::register_widths(&self.config.features)
     }
 
     fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String> {
@@ -1741,6 +1753,30 @@ mod target_parser_tests {
         assert_eq!(config.machine.as_deref(), Some("scr1-3stage"));
         // The SCR1 model is declared `for [RV32I]`; rv64 must reject it.
         assert!(TargetConfig::parse("rv64i", Some("scr1-3stage"), None).is_err());
+    }
+
+    #[test]
+    fn isa_params_resolve_from_the_selected_base() {
+        assert_eq!(crate::isa_params(&[Feature::RV32I]), vec![("XLEN", 32)]);
+        assert_eq!(
+            crate::isa_params(&[Feature::RV64I, Feature::RVM]),
+            vec![("XLEN", 64)]
+        );
+        assert_eq!(
+            crate::register_widths(&[Feature::RV32I]),
+            vec![("PC", 32), ("GPR", 32)]
+        );
+        assert_eq!(
+            crate::register_widths(&[Feature::RV64I]),
+            vec![("PC", 64), ("GPR", 64)]
+        );
+        // Extensions alone resolve nothing; the base supplies XLEN.
+        assert_eq!(crate::isa_params(&[Feature::RVM]), vec![]);
+    }
+
+    #[test]
+    fn base_isas_are_mutually_exclusive() {
+        assert!(TargetConfig::parse("rv32i", None, Some("+rv64i")).is_err());
     }
 
     #[test]

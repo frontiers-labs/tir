@@ -63,6 +63,13 @@ pub trait MachineContext {
     fn write_memory(&mut self, address: u64, size: usize, value: u64) -> Result<(), SimTrap>;
     fn read_pc(&self) -> u64;
     fn write_pc(&mut self, value: u64);
+    /// The value of a TMDL ISA parameter (e.g. RISC-V `XLEN`) under the selected
+    /// target configuration, or `None` when unconfigured (behaviors then fall
+    /// back to the widest TMDL value).
+    fn isa_param(&self, name: &str) -> Option<i64> {
+        let _ = name;
+        None
+    }
 }
 
 /// How an instruction affects control flow, derived at TMDL-compile time from

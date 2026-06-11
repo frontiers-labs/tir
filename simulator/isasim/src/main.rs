@@ -95,6 +95,21 @@ fn main() {
     // can stop at a label without hand-computing its address.
     let until_pc = resolve_pc(&args.until_pc, &program.symbols);
     let mut executor = Executor::new_at(args.mem_size, args.mem_start_address);
+    // Teach the executor which register classes share a physical file so, e.g.,
+    // a value written via AArch64 `GPRsp` reads back through `GPR`.
+    let register_info = target.register_info();
+    let register_files = register_info
+        .classes
+        .iter()
+        .map(|c| (c.name.to_string(), c.file.to_string()))
+        .collect();
+    executor.set_register_files(register_files);
+
+    // Install the selected ISA's parameters and register widths so behaviors
+    // execute with the configured XLEN (e.g. rv32 arithmetic wraps at 32 bits).
+    executor.set_isa_params(target.isa_params());
+    executor.set_register_widths(target.register_widths());
+
     if let Some(path) = &args.memory_config {
         memory::load_memory_config(&mut executor, path);
     } else if !args.no_default_memory {
@@ -105,16 +120,6 @@ fn main() {
             args.mem_size,
         );
     }
-
-    // Teach the executor which register classes share a physical file so, e.g.,
-    // a value written via AArch64 `GPRsp` reads back through `GPR`.
-    let register_info = target.register_info();
-    let register_files = register_info
-        .classes
-        .iter()
-        .map(|c| (c.name.to_string(), c.file.to_string()))
-        .collect();
-    executor.set_register_files(register_files);
 
     // Pick the timing model up front so a bad `--machine` fails before running.
     let model = if args.timing {
