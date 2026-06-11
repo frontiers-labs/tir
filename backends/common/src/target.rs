@@ -77,6 +77,13 @@ pub trait TargetMachine {
     /// encoding index — the inverse of the asm parser, for printing `x1`/`ra`
     /// instead of the raw `(class, index)`. `None` if the class/index is unknown.
     fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String>;
+
+    /// Registers backed by hardware performance counters under the selected
+    /// features, as `(class, index, counter)`. Simulators route reads of these
+    /// registers to their counters instead of the register file.
+    fn counter_registers(&self) -> Vec<(&'static str, u16, crate::PerfCounter)> {
+        vec![]
+    }
 }
 
 /// A target made selectable by `--march`/`--mcpu`.

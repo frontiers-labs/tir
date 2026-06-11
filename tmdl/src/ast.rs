@@ -27,10 +27,21 @@ pub enum RegisterTrait {
 pub struct Register {
     pub name: String,
     pub alias: Option<String>,
+    /// Explicit encoding index (`index = 0xC00`), for registers whose
+    /// architectural number is not derivable from the name (e.g. CSRs).
+    pub index: Option<u16>,
     pub traits: Vec<RegisterTrait>,
     pub subregisters: Vec<Register>,
     #[serde(skip_serializing)]
     pub span: Span,
+}
+
+impl Register {
+    /// The register's canonical encoding index: the explicit `index` when
+    /// declared, otherwise the trailing number in the name (`x5` -> 5).
+    pub fn encoding_index(&self) -> Option<u16> {
+        self.index.or_else(|| parse_trailing_index(&self.name))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -402,6 +413,9 @@ pub enum BuiltinFunction {
     ZExt,
     Load,
     Store,
+    /// `trap(cause)`: raise a synchronous exception (e.g. ecall/ebreak). An
+    /// effect-only builtin handled directly by codegen; it produces no value.
+    Trap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -1053,6 +1067,13 @@ impl Call {
                     &[address, bytes, value, address_space],
                 )
             }
+            // trap has no semantic-expression form; codegen intercepts trap
+            // calls before lowering, so reaching here means the behavior used
+            // it in a value position.
+            BuiltinFunction::Trap => {
+                ctx.had_error = true;
+                ctx.add_int_const(tir::utils::APInt::new(64, 0))
+            }
         }
     }
 }
@@ -1131,7 +1152,7 @@ impl RegisterClass {
             .resolve_registers()
             .map(|reg| {
                 (
-                    parse_trailing_index(&reg.name).unwrap_or(u16::MAX),
+                    reg.encoding_index().unwrap_or(u16::MAX),
                     reg.name,
                     reg.alias,
                 )
@@ -1176,7 +1197,7 @@ impl RegisterClass {
             reg.traits
                 .iter()
                 .any(|t| matches!(t, RegisterTrait::HardwiredZero))
-                .then(|| parse_trailing_index(&reg.name).unwrap_or(u16::MAX))
+                .then(|| reg.encoding_index().unwrap_or(u16::MAX))
         })
     }
 
@@ -1189,7 +1210,7 @@ impl RegisterClass {
     pub fn register_indices(&self) -> Vec<(String, u16)> {
         let mut out = Vec::new();
         for (position, reg) in self.resolve_registers().enumerate() {
-            let index = parse_trailing_index(&reg.name).unwrap_or(position as u16);
+            let index = reg.encoding_index().unwrap_or(position as u16);
             out.push((reg.name.clone(), index));
             if let Some(alias) = &reg.alias
                 && !alias.contains("{}")
@@ -1207,7 +1228,7 @@ impl RegisterClass {
     pub fn indexed_registers(&self) -> Vec<(u16, Vec<RegisterTrait>)> {
         let mut regs = self
             .resolve_registers()
-            .filter_map(|reg| parse_trailing_index(&reg.name).map(|idx| (idx, reg.traits)))
+            .filter_map(|reg| reg.encoding_index().map(|idx| (idx, reg.traits)))
             .collect::<Vec<_>>();
         regs.sort_by_key(|(idx, _)| *idx);
         regs
@@ -1316,6 +1337,7 @@ impl RegisterClass {
                         registers.push(Register {
                             name: format!("{prefix}{idx}"),
                             alias: range.alias_pattern.clone(),
+                            index: None,
                             traits: range.traits.clone(),
                             subregisters: Vec::new(),
                             span: range.span,
@@ -1369,9 +1391,9 @@ pub fn resolve_register_class_inheritance(files: &mut [File]) {
 
                 let mut registers: Vec<Register> = base.resolve_registers().collect();
                 for own in rc.resolve_registers() {
-                    let key = parse_trailing_index(&own.name);
+                    let key = own.encoding_index();
                     let existing = registers.iter().position(|r| match key {
-                        Some(idx) => parse_trailing_index(&r.name) == Some(idx),
+                        Some(idx) => r.encoding_index() == Some(idx),
                         None => r.name == own.name,
                     });
                     match existing {

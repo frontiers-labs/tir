@@ -114,6 +114,15 @@ fn main() {
     // execute with the configured XLEN (e.g. rv32 arithmetic wraps at 32 bits).
     executor.set_isa_params(target.isa_params());
     executor.set_register_widths(target.register_widths());
+    // Route reads of counter-backed registers (e.g. the RISC-V cycle/instret
+    // CSRs) to the executor's performance counters.
+    executor.set_counter_registers(target.counter_registers());
+    // Bare-metal snippets have no exception environment: report ecall/ebreak
+    // and stop the run cleanly instead of failing it.
+    executor.set_exception_handler(Box::new(|_executor, cause, pc| {
+        println!("trap: cause={cause} pc={pc:#x}");
+        tir_sim::ExceptionAction::Halt
+    }));
 
     if let Some(path) = &args.memory_config {
         memory::load_memory_config(&mut executor, path);

@@ -449,8 +449,17 @@ fn emit_instructions<'a>(
             acc
         };
 
-        if let Some(semantics) =
-            analyze_instruction_semantics(inst, &ops, &defined_register_operands, &numeric_params)
+        // Instructions defining several register operands (e.g. CSR ops writing
+        // both `rd` and `csr`) cannot be modeled by a single-value DAG pattern;
+        // emitting one for the last assignment would let isel match an
+        // unrelated expression, so they get no selection rule.
+        if defined_register_operands.len() <= 1
+            && let Some(semantics) = analyze_instruction_semantics(
+                inst,
+                &ops,
+                &defined_register_operands,
+                &numeric_params,
+            )
         {
             let emit_fn_ident = format_ident!("emit_isel_{}", inst.name.to_lowercase());
             let pattern_fn_ident = format_ident!("isel_pattern_{}", inst.name.to_lowercase());
@@ -734,6 +743,17 @@ fn emit_instructions<'a>(
         // Emit parser implementations based on asm template (simple template support)
         if let Some(template) = resolve_asm_template_for_instruction(inst, item_cache) {
             let actions = compile_asm_template(&template);
+            // Operand-less instructions (e.g. ecall) consume no tokens beyond
+            // the mnemonic and set no attributes.
+            let parses_operands = actions.iter().any(|a| {
+                matches!(
+                    a,
+                    AsmAction::Comma
+                        | AsmAction::LParen
+                        | AsmAction::RParen
+                        | AsmAction::Operand(_)
+                )
+            });
 
             let mut parse_steps: Vec<proc_macro2::TokenStream> = Vec::new();
             for act in actions {
@@ -829,6 +849,9 @@ fn emit_instructions<'a>(
             }
 
             let print_parts = compile_asm_printer_template(&template, mnemonic_name);
+            let prints_operands = print_parts
+                .iter()
+                .any(|p| matches!(p, AsmPrintPart::Operand(_)));
             let mut print_steps: Vec<proc_macro2::TokenStream> = Vec::new();
             for part in print_parts {
                 match part {
@@ -903,9 +926,15 @@ fn emit_instructions<'a>(
             }
 
             let print_fn_ident = format_ident!("print_{}_inst", &inst.name.to_lowercase());
+            // Operand-less instructions (e.g. ecall) never consult the attributes.
+            let (op_param, attrs_binding) = if prints_operands {
+                (quote! { op }, quote! { let attrs = &op.attributes; })
+            } else {
+                (quote! { _op }, quote! {})
+            };
             instruction_printers_impls.push(quote! {
-                fn #print_fn_ident(op: &tir::OpInstance) -> Option<String> {
-                    let attrs = &op.attributes;
+                fn #print_fn_ident(#op_param: &tir::OpInstance) -> Option<String> {
+                    #attrs_binding
                     let mut out = String::new();
                     #(#print_steps)*
                     Some(out)
@@ -919,13 +948,18 @@ fn emit_instructions<'a>(
             });
 
             let parse_fn_ident = format_ident!("parse_{}_inst", &inst.name.to_lowercase());
+            let (parser_param, builder_binding) = if parses_operands {
+                (quote! { parser }, quote! { let mut op_builder })
+            } else {
+                (quote! { _parser }, quote! { let op_builder })
+            };
             instruction_parsers_impls.push(quote! {
                 fn #parse_fn_ident<'src>(
                     context: &tir::Context,
                     builder: &mut tir::IRBuilder,
-                    parser: &mut tir::parse::tokens::Parser<'src, tir_be_common::Token<'src>>,
+                    #parser_param: &mut tir::parse::tokens::Parser<'src, tir_be_common::Token<'src>>,
                 ) -> Result<(), ()> {
-                    let mut op_builder = #builder_ident::new(context);
+                    #builder_binding = #builder_ident::new(context);
                     #(#parse_steps)*
                     let op = op_builder.build();
                     builder.insert(op);
@@ -2037,6 +2071,28 @@ fn is_store_call(expr: &ast::Expr) -> bool {
     )
 }
 
+fn is_trap_call(expr: &ast::Expr) -> bool {
+    matches!(
+        expr,
+        ast::Expr::Call(ast::Call {
+            callee,
+            ..
+        }) if matches!(callee.as_ref(), ast::Expr::BuiltinFunction(ast::BuiltinFunction::Trap))
+    )
+}
+
+/// The constant cause code of a `trap(cause)` call. `None` when the argument is
+/// not a single integer literal.
+fn trap_call_cause(expr: &ast::Expr) -> Option<u64> {
+    let ast::Expr::Call(call) = expr else {
+        return None;
+    };
+    match call.arguments.as_slice() {
+        [ast::Expr::Lit(ast::Lit::Int(li))] => Some(parse_literal_value(li)),
+        _ => None,
+    }
+}
+
 fn emit_behavior_exec(
     expr: &ast::Expr,
     ops: &[(String, Type)],
@@ -2063,6 +2119,13 @@ fn emit_behavior_exec(
             mnemonic_lit,
             register_index_map,
         ),
+        ast::Expr::Call(_) if is_trap_call(expr) => {
+            let cause = trap_call_cause(expr)?;
+            let cause_lit = proc_macro2::Literal::u64_unsuffixed(cause);
+            Some(quote! {
+                machine.raise_exception(#cause_lit)?;
+            })
+        }
         ast::Expr::Block(b) => {
             let mut steps = Vec::new();
             for stmt in &b.stmts {
@@ -2079,6 +2142,7 @@ fn emit_behavior_exec(
                     stmt,
                     ast::Expr::Assign(_) | ast::Expr::Block(_) | ast::Expr::If(_)
                 ) || is_store_call(stmt)
+                    || is_trap_call(stmt)
                 {
                     return None;
                 }

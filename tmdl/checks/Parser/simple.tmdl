@@ -121,6 +121,7 @@
 // CHECK-NEXT:                             alias: Some(
 // CHECK-NEXT:                                 "zero",
 // CHECK-NEXT:                             ),
+// CHECK-NEXT:                             index: None,
 // CHECK-NEXT:                             traits: [
 // CHECK-NEXT:                                 HardwiredZero,
 // CHECK-NEXT:                             ],
@@ -134,6 +135,7 @@
 // CHECK-NEXT:                             alias: Some(
 // CHECK-NEXT:                                 "ra",
 // CHECK-NEXT:                             ),
+// CHECK-NEXT:                             index: None,
 // CHECK-NEXT:                             traits: [
 // CHECK-NEXT:                                 ReturnAddress,
 // CHECK-NEXT:                                 CallerSaved,

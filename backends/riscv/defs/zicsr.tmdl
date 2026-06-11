@@ -1,0 +1,131 @@
+// Zicsr extension: control and status register instructions, plus the
+// user-level counter CSRs backing basic performance monitoring.
+
+isa Zicsr requires [RV32I | RV64I] {}
+
+// CSRs are a register file addressed by the 12-bit csr field; each register's
+// explicit index is its architectural CSR address. Only the CSRs the simulator
+// models are listed; counters are read-only and provided by the simulator,
+// mscratch is an ordinary read-write register.
+register_class CSR for [Zicsr] {
+    param ENCODING_LEN: Integer = 12;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        cycle => { index = 0xC00 },
+        time => { index = 0xC01 },
+        instret => { index = 0xC02 },
+        mscratch => { index = 0x340 },
+    }
+}
+
+template CSRType for [Zicsr] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7> = 0b1110011;
+
+    operands {
+        rd: GPR,
+        csr: CSR,
+        rs1: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => FUNCT3,
+        15..19 => rs1,
+        20..31 => csr,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {csr}, {rs1}"
+    }
+}
+
+template CSRImmType for [Zicsr] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param OPCODE: bits<7> = 0b1110011;
+
+    operands {
+        rd: GPR,
+        csr: CSR,
+        zimm: bits<5>,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => FUNCT3,
+        15..19 => zimm,
+        20..31 => csr,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {csr}, {zimm}"
+    }
+}
+
+// Behaviors assign rd first so it observes the pre-write CSR value, matching
+// the spec's read-then-modify ordering.
+
+instruction CSRReadWrite for [Zicsr] : CSRType {
+    param MNEMONIC: String = "csrrw";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        rd = csr;
+        csr = rs1;
+    }
+}
+
+instruction CSRReadSet for [Zicsr] : CSRType {
+    param MNEMONIC: String = "csrrs";
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        rd = csr;
+        csr = csr | rs1;
+    }
+}
+
+instruction CSRReadClear for [Zicsr] : CSRType {
+    param MNEMONIC: String = "csrrc";
+    param FUNCT3: bits<3> = 0b011;
+
+    behavior {
+        rd = csr;
+        csr = csr & (rs1 ^ sext(0b1, self.XLEN));
+    }
+}
+
+instruction CSRReadWriteImm for [Zicsr] : CSRImmType {
+    param MNEMONIC: String = "csrrwi";
+    param FUNCT3: bits<3> = 0b101;
+
+    behavior {
+        rd = csr;
+        csr = zext(zimm, self.XLEN);
+    }
+}
+
+instruction CSRReadSetImm for [Zicsr] : CSRImmType {
+    param MNEMONIC: String = "csrrsi";
+    param FUNCT3: bits<3> = 0b110;
+
+    behavior {
+        rd = csr;
+        csr = csr | zext(zimm, self.XLEN);
+    }
+}
+
+instruction CSRReadClearImm for [Zicsr] : CSRImmType {
+    param MNEMONIC: String = "csrrci";
+    param FUNCT3: bits<3> = 0b111;
+
+    behavior {
+        rd = csr;
+        csr = csr & (zext(zimm, self.XLEN) ^ sext(0b1, self.XLEN));
+    }
+}

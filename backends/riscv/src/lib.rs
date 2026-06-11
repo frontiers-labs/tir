@@ -212,6 +212,7 @@ fn parse_riscv_isa_string(march: &str) -> Result<TargetConfig, String> {
             enable(base_feature);
             enable(Feature::RVM);
             enable(Feature::Zmmul);
+            enable(Feature::Zicsr);
             skip_extension_version(&mut chars);
         }
         'e' => return Err(format!("unsupported RISC-V base ISA 'e' in '{march}'")),
@@ -408,6 +409,16 @@ dialect! {
             // M extension (Zmmul subset)
             MulOp,
             MulHOp,
+            // Zicsr
+            CSRReadWriteOp,
+            CSRReadSetOp,
+            CSRReadClearOp,
+            CSRReadWriteImmOp,
+            CSRReadSetImmOp,
+            CSRReadClearImmOp,
+            // System
+            EnvCallOp,
+            EnvBreakOp,
             // Loads / stores
             LoadByteOp,
             LoadByteUnsignedOp,
@@ -714,6 +725,20 @@ impl tir_be_common::TargetMachine for RiscvTarget {
 
     fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String> {
         crate::register_name(class, index, prefer_abi)
+    }
+
+    fn counter_registers(&self) -> Vec<(&'static str, u16, tir_be_common::PerfCounter)> {
+        use tir_be_common::PerfCounter;
+        if !self.config.features.contains(&Feature::Zicsr) {
+            return vec![];
+        }
+        // The user-level counter CSRs at their architectural addresses (the
+        // indices declared in zicsr.tmdl).
+        vec![
+            ("CSR", 0xC00, PerfCounter::Cycles),
+            ("CSR", 0xC01, PerfCounter::Time),
+            ("CSR", 0xC02, PerfCounter::InstructionsRetired),
+        ]
     }
 }
 
@@ -1718,7 +1743,7 @@ mod target_parser_tests {
         // Bare architecture names select the generic, everything-on profile.
         assert_eq!(
             features("riscv64", None),
-            vec![Feature::RV64I, Feature::Zmmul, Feature::RVM]
+            vec![Feature::RV64I, Feature::Zmmul, Feature::RVM, Feature::Zicsr]
         );
         assert!(!features("riscv32", None).contains(&Feature::RV64I));
     }
@@ -1764,11 +1789,11 @@ mod target_parser_tests {
         );
         assert_eq!(
             crate::register_widths(&[Feature::RV32I]),
-            vec![("PC", 32), ("GPR", 32)]
+            vec![("PC", 32), ("GPR", 32), ("CSR", 32)]
         );
         assert_eq!(
             crate::register_widths(&[Feature::RV64I]),
-            vec![("PC", 64), ("GPR", 64)]
+            vec![("PC", 64), ("GPR", 64), ("CSR", 64)]
         );
         // Extensions alone resolve nothing; the base supplies XLEN.
         assert_eq!(crate::isa_params(&[Feature::RVM]), vec![]);

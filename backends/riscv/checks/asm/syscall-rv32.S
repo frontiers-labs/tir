@@ -1,5 +1,4 @@
 # RUN: tir mc --march=rv32i --stage=regalloc %s | filecheck %s
-# XFAIL: *
 
     .section .text
     .global _exit

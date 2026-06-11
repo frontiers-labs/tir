@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .add_input("./defs/main.tmdl")
         .add_input("./defs/base.tmdl")
         .add_input("./defs/multiplication.tmdl")
+        .add_input("./defs/zicsr.tmdl")
         .add_input("./defs/perf.tmdl")
         .add_input("./defs/syntacore_scr1.tmdl")
         .output(OutputKind::File(format!(

@@ -528,6 +528,43 @@ instruction ShiftRightArithmeticImmWord for [RV64I] : ShiftImmWord64 {
     }
 }
 
+// SYSTEM instructions without operands; the whole encoding is fixed.
+template SystemNoOperand for [RV32I, RV64I] {
+    param MNEMONIC: String;
+    param IMM12: bits<12>;
+    param OPCODE: bits<7> = 0b1110011;
+
+    encoding {
+        0..6 => OPCODE,
+        7..19 => 0,
+        20..31 => IMM12,
+    }
+
+    asm {
+        "{self.MNEMONIC}"
+    }
+}
+
+instruction EnvCall for [RV32I, RV64I] : SystemNoOperand {
+    param MNEMONIC: String = "ecall";
+    param IMM12: bits<12> = 0b000000000000;
+
+    behavior {
+        // mcause 11: environment call from M-mode (the simulator's only mode).
+        trap(11);
+    }
+}
+
+instruction EnvBreak for [RV32I, RV64I] : SystemNoOperand {
+    param MNEMONIC: String = "ebreak";
+    param IMM12: bits<12> = 0b000000000001;
+
+    behavior {
+        // mcause 3: breakpoint.
+        trap(3);
+    }
+}
+
 instruction AddWord for [RV64I] : ALUOpWord {
     param MNEMONIC: String = "addw";
     param FUNCT3: bits<3> = 0b000;

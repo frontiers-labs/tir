@@ -93,6 +93,11 @@ register_class GPR for [RV32I, RV64I] {
 - `for [...]` — attach the class to multiple ISAs.
 - Single register: `name("alias") => { traits = [..] }`
 - Range: `start..end("alias{}") => { traits = [..] }` uses `{}` placeholder to number aliases sequentially.
+- Explicit encoding index: `name => { index = 0xC00 }` for registers whose
+  architectural number is not derivable from the name (e.g. RISC-V CSRs).
+  Without it, the index is the trailing number in the name (`x5` -> 5), or the
+  declaration position for index-less registers. Both `index` and `traits` are
+  optional inside the braces.
 - Known traits currently recognized by tools: `hardwired_zero`, `return_address`, `caller_saved`, `callee_saved`, `stack_pointer`. Other identifiers parse but may be ignored by current tooling.
 
 #### Inheritance
@@ -176,6 +181,10 @@ instruction Add for [RV32I, RV64I] : RType {
 
 - Same structure as `template` with optional inheritance and `for [...]`.
 - `behavior` — required; describes semantics using the expression language. Basic assignments and arithmetic/bitwise ops are supported.
+- Builtin functions usable in behaviors: `sext`/`zext` (width extension),
+  `extract`, `clamp`, `log2Ceil`, `load`/`store` (memory), and `trap(cause)` —
+  raise a synchronous exception with a constant cause code (e.g. RISC-V
+  `ecall`/`ebreak`); the simulator routes it to its exception callback.
 - Optional `asm`/`encoding` sections can be provided or inherited.
 
 ## Encoding Section Details

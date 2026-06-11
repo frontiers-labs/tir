@@ -943,17 +943,28 @@ where
 
     let reg_traits = register_traits();
 
+    // Optional explicit encoding index: `index = 0xC00`, before any traits.
+    let reg_index = just(Token::Identifier("index"))
+        .then_ignore(just(Token::Equals))
+        .ignore_then(select! { Token::Number(n) => n.to_string() })
+        .then_ignore(just(Token::Comma).or_not())
+        .or_not();
+
     let single = ident
         .then(alias)
         .then_ignore(just(Token::FatArrow))
         .then_ignore(just(Token::LBrace))
-        .then(reg_traits)
+        .then(reg_index)
+        .then(reg_traits.or_not())
         .then_ignore(just(Token::RBrace))
-        .map_with(|((name, alias), traits), e| {
+        .map_with(|(((name, alias), index), traits), e| {
+            let index = index
+                .map(|n| crate::utils::parse_literal_value(&ast::LitInt::new(n, e.span())) as u16);
             RegisterDef::Single(Register {
                 name,
                 alias,
-                traits,
+                index,
+                traits: traits.unwrap_or_default(),
                 subregisters: Vec::new(),
                 span: e.span(),
             })
@@ -1056,6 +1067,7 @@ where
                 "zext" => Some(BuiltinFunction::ZExt),
                 "load" => Some(BuiltinFunction::Load),
                 "store" => Some(BuiltinFunction::Store),
+                "trap" => Some(BuiltinFunction::Trap),
                 _ => None,
             }
         }

@@ -9,7 +9,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use tir::Context;
-use tir_be_common::{MachineContext, MachineInstruction, SimTrap};
+use tir_be_common::{MachineContext, MachineInstruction, PerfCounter, SimTrap};
 
 use crate::error::Error;
 use crate::program::{MachineBlock, ProgramImage};
@@ -20,7 +20,24 @@ enum BlockExit {
     Until,
     /// PC moved to the next block (control transfer or fallthrough).
     Next,
+    /// An exception handler requested a halt; `pc` points at the trapping
+    /// instruction.
+    Halted,
 }
+
+/// What the simulation should do after an exception handler ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExceptionAction {
+    /// Resume at the next instruction.
+    Continue,
+    /// Stop the run cleanly; [`Executor::halted`] reports `true`.
+    Halt,
+}
+
+/// Callback invoked when instruction semantics raise an exception (TMDL
+/// `trap`, e.g. ecall/ebreak). Receives the executor (so it can inspect or
+/// update architectural state), the cause code and the trapping PC.
+pub type ExceptionHandler = Box<dyn FnMut(&mut Executor, u64, u64) -> ExceptionAction>;
 
 #[derive(Default)]
 pub struct Executor {
@@ -46,6 +63,15 @@ pub struct Executor {
     pc_explicitly_written: bool,
     record_trace: bool,
     trace: Vec<(tir::OpId, u64)>,
+    /// Registers backed by performance counters (e.g. the RISC-V `cycle` CSR):
+    /// reads return the counter value, writes are ignored.
+    counter_registers: HashMap<(String, u16), PerfCounter>,
+    /// Instructions retired so far. Drives every performance counter: the
+    /// functional model retires one instruction per cycle, and time ticks with
+    /// the cycle counter.
+    retired_instructions: u64,
+    exception_handler: Option<ExceptionHandler>,
+    halted: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -106,6 +132,43 @@ impl Executor {
             .into_iter()
             .map(|(name, value)| (name.to_string(), value))
             .collect();
+    }
+
+    /// Configure which registers are backed by performance counters (from
+    /// `TargetMachine::counter_registers`).
+    pub fn set_counter_registers(
+        &mut self,
+        counters: impl IntoIterator<Item = (&'static str, u16, PerfCounter)>,
+    ) {
+        self.counter_registers = counters
+            .into_iter()
+            .map(|(class, index, counter)| ((class.to_string(), index), counter))
+            .collect();
+    }
+
+    /// Install the callback invoked when instruction semantics raise an
+    /// exception (ecall/ebreak). Without one, exceptions surface as
+    /// [`SimTrap::Exception`] errors from [`Executor::run`].
+    pub fn set_exception_handler(&mut self, handler: ExceptionHandler) {
+        self.exception_handler = Some(handler);
+    }
+
+    /// Instructions retired by this executor so far.
+    pub fn retired_instructions(&self) -> u64 {
+        self.retired_instructions
+    }
+
+    /// Whether an exception handler stopped the run.
+    pub fn halted(&self) -> bool {
+        self.halted
+    }
+
+    fn counter_value(&self, counter: PerfCounter) -> u64 {
+        match counter {
+            PerfCounter::Cycles | PerfCounter::Time | PerfCounter::InstructionsRetired => {
+                self.retired_instructions
+            }
+        }
     }
 
     /// Resize `value` to a class's architectural width: truncate wider values,
@@ -170,7 +233,7 @@ impl Executor {
                 .block_at(self.pc)
                 .ok_or(SimTrap::PcNotMapped { pc: self.pc })?;
             match self.exec_block(&program.context, block, until_pc, trace, out)? {
-                BlockExit::Until => return Ok(()),
+                BlockExit::Until | BlockExit::Halted => return Ok(()),
                 BlockExit::Next => {}
             }
         }
@@ -221,8 +284,12 @@ impl Executor {
             self.pc = inst_pc;
             self.pc_explicitly_written = false;
             machine_inst.execute(self)?;
+            self.retired_instructions += 1;
             if trace.registers_after_each_instruction {
                 self.emit_register_dump(out, "registers");
+            }
+            if self.halted {
+                return Ok(BlockExit::Halted);
             }
             if self.pc_explicitly_written {
                 // A control transfer wrote PC: `self.pc` holds the target, and
@@ -305,6 +372,10 @@ impl MachineContext for Executor {
         if class == "PC" {
             return Ok(self.resize_to_class_width(class, tir::utils::APInt::new(64, self.pc)));
         }
+        if let Some(&counter) = self.counter_registers.get(&(class.to_string(), index)) {
+            let value = self.counter_value(counter);
+            return Ok(self.resize_to_class_width(class, tir::utils::APInt::new(64, value)));
+        }
         let key = (self.register_file(class).to_string(), index);
         if let Some(value) = self.registers.get(&key) {
             return Ok(self.resize_to_class_width(class, value.clone()));
@@ -321,6 +392,14 @@ impl MachineContext for Executor {
         let value = self.resize_to_class_width(class, value);
         if class == "PC" {
             self.write_pc(value.to_u64());
+            return Ok(());
+        }
+        // Counter-backed registers are read-only; writes (e.g. the write-back a
+        // csrrs with rs1=x0 performs) are ignored.
+        if self
+            .counter_registers
+            .contains_key(&(class.to_string(), index))
+        {
             return Ok(());
         }
         let file = self.register_file(class).to_string();
@@ -374,6 +453,24 @@ impl MachineContext for Executor {
     fn write_pc(&mut self, value: u64) {
         self.pc = value;
         self.pc_explicitly_written = true;
+    }
+
+    fn raise_exception(&mut self, cause: u64) -> Result<(), SimTrap> {
+        let pc = self.pc;
+        let Some(mut handler) = self.exception_handler.take() else {
+            return Err(SimTrap::Exception { cause, pc });
+        };
+        let action = handler(self, cause, pc);
+        if self.exception_handler.is_none() {
+            self.exception_handler = Some(handler);
+        }
+        match action {
+            ExceptionAction::Continue => Ok(()),
+            ExceptionAction::Halt => {
+                self.halted = true;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -621,6 +718,182 @@ mod tests {
             MachineContext::read_memory(&executor, data + 4, 4).unwrap(),
             0x1234_5678
         );
+    }
+
+    #[test]
+    fn zicsr_csr_instructions_read_then_modify() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let dialect = context.find_dialect::<RiscvDialect>().unwrap();
+        // Symbols are laid out in reverse declaration order: `first` executes
+        // at 0x8000_0000 and falls through to `last` at 0x8000_0010.
+        let asm = "
+            .global last
+            last:
+              add x0, x0, x0
+            .global first
+            first:
+              csrrw x2, mscratch, x1
+              csrrs x3, mscratch, x4
+              csrrc x5, mscratch, x6
+              csrrwi x7, mscratch, 9
+        ";
+        let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
+        let program =
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
+
+        let mut executor = Executor::new(4096);
+        let mut write = |idx, v| {
+            tir_be_common::MachineContext::write_register(
+                &mut executor,
+                "GPR",
+                idx,
+                APInt::new(64, v),
+            )
+            .unwrap()
+        };
+        write(1, 0b0011);
+        write(4, 0b0100);
+        write(6, 0b0010);
+        executor.load(program).unwrap();
+        executor.run(0x8000_0010, 10).unwrap();
+
+        let reg = |class, idx| {
+            tir_be_common::MachineContext::read_register(&executor, class, idx)
+                .unwrap()
+                .to_u64()
+        };
+        // Every form returns the pre-write CSR value in rd, then applies its
+        // modification: write, set bits, clear bits, write immediate.
+        assert_eq!(reg("GPR", 2), 0, "csrrw reads the initial mscratch");
+        assert_eq!(reg("GPR", 3), 0b0011, "csrrs reads the csrrw result");
+        assert_eq!(reg("GPR", 5), 0b0111, "csrrc reads the csrrs result");
+        assert_eq!(reg("GPR", 7), 0b0101, "csrrwi reads the csrrc result");
+        // CSRs live in the register file at their architectural address.
+        assert_eq!(reg("CSR", 0x340), 9, "csrrwi wrote its immediate");
+    }
+
+    #[test]
+    fn counter_registers_track_retired_instructions_and_ignore_writes() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let dialect = context.find_dialect::<RiscvDialect>().unwrap();
+        let asm = "
+            .global last
+            last:
+              add x0, x0, x0
+            .global first
+            first:
+              add x1, x1, x1
+              add x1, x1, x1
+              csrrw x0, instret, x1
+              csrrs x2, instret, x0
+        ";
+        let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
+        let program =
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
+
+        let mut executor = Executor::new(4096);
+        executor.set_counter_registers([(
+            "CSR",
+            0xC02,
+            tir_be_common::PerfCounter::InstructionsRetired,
+        )]);
+        executor.load(program).unwrap();
+        executor.run(0x8000_0010, 10).unwrap();
+
+        // The csrrw write to the read-only counter is ignored; the csrrs read
+        // sees the three instructions retired before it.
+        let x2 = tir_be_common::MachineContext::read_register(&executor, "GPR", 2).unwrap();
+        assert_eq!(x2.to_u64(), 3);
+        assert_eq!(executor.retired_instructions(), 4);
+    }
+
+    #[test]
+    fn ecall_without_handler_surfaces_an_exception_trap() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let dialect = context.find_dialect::<RiscvDialect>().unwrap();
+        let asm = "
+            .global first
+            first:
+              ecall
+        ";
+        let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
+        let program =
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
+        let mut executor = Executor::new(4096);
+        executor.load(program).unwrap();
+
+        let err = executor.run(0xFFFF_FFFF, 10).unwrap_err();
+        match err {
+            Error::Trap(tir_be_common::SimTrap::Exception { cause, pc }) => {
+                assert_eq!(cause, 11, "ecall raises environment-call-from-M-mode");
+                assert_eq!(pc, 0x8000_0000);
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn exception_handler_controls_run_outcome() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let dialect = context.find_dialect::<RiscvDialect>().unwrap();
+        let asm = "
+            .global last
+            last:
+              add x0, x0, x0
+            .global first
+            first:
+              ecall
+              addi x1, x0, 7
+              ebreak
+              addi x2, x0, 9
+        ";
+        let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
+        let program =
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
+
+        let traps = Rc::new(RefCell::new(Vec::new()));
+        let seen = traps.clone();
+        let mut executor = Executor::new(4096);
+        executor.set_exception_handler(Box::new(move |_executor, cause, pc| {
+            seen.borrow_mut().push((cause, pc));
+            // Resume after the ecall, stop at the ebreak.
+            if cause == 11 {
+                crate::ExceptionAction::Continue
+            } else {
+                crate::ExceptionAction::Halt
+            }
+        }));
+        executor.load(program).unwrap();
+        executor.run(0x8000_0010, 10).unwrap();
+
+        assert!(executor.halted());
+        assert_eq!(
+            *traps.borrow(),
+            vec![(11, 0x8000_0000), (3, 0x8000_0008)],
+            "handler saw the ecall and the ebreak with their PCs"
+        );
+        let reg = |idx| {
+            tir_be_common::MachineContext::read_register(&executor, "GPR", idx)
+                .unwrap()
+                .to_u64()
+        };
+        assert_eq!(reg(1), 7, "execution resumed after the ecall");
+        assert_eq!(reg(2), 0, "the halt stopped execution at the ebreak");
     }
 
     /// `cmp` writes all four AArch64 condition flags (`PSTATE` n/z/c/v), and a
