@@ -734,11 +734,21 @@ impl tir_be_common::TargetMachine for RiscvTarget {
         }
         // The user-level counter CSRs at their architectural addresses (the
         // indices declared in zicsr.tmdl).
-        vec![
+        let mut counters = vec![
             ("CSR", 0xC00, PerfCounter::Cycles),
             ("CSR", 0xC01, PerfCounter::Time),
             ("CSR", 0xC02, PerfCounter::InstructionsRetired),
-        ]
+        ];
+        // RV32 reads counters as XLEN-wide halves: cycleh/timeh/instreth
+        // deliver the upper 32 bits. RV64 reads the full counter directly.
+        if self.config.features.contains(&Feature::RV32I) {
+            counters.extend([
+                ("CSR", 0xC80, PerfCounter::CyclesHigh),
+                ("CSR", 0xC81, PerfCounter::TimeHigh),
+                ("CSR", 0xC82, PerfCounter::InstructionsRetiredHigh),
+            ]);
+        }
+        counters
     }
 }
 
@@ -1797,6 +1807,22 @@ mod target_parser_tests {
         );
         // Extensions alone resolve nothing; the base supplies XLEN.
         assert_eq!(crate::isa_params(&[Feature::RVM]), vec![]);
+    }
+
+    #[test]
+    fn counter_registers_follow_the_feature_set() {
+        use tir_be_common::{PerfCounter, TargetMachine};
+
+        let target = |march| crate::RiscvTarget {
+            config: TargetConfig::parse(march, None, None).expect("march should parse"),
+        };
+        assert!(target("rv64i").counter_registers().is_empty());
+        // RV64 reads the full 64-bit counters; RV32 adds the high-half CSRs.
+        assert_eq!(target("rv64i_zicsr").counter_registers().len(), 3);
+        let rv32 = target("rv32i_zicsr").counter_registers();
+        assert_eq!(rv32.len(), 6);
+        assert!(rv32.contains(&("CSR", 0xC80, PerfCounter::CyclesHigh)));
+        assert!(rv32.contains(&("CSR", 0xC82, PerfCounter::InstructionsRetiredHigh)));
     }
 
     #[test]

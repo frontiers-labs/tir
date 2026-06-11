@@ -168,6 +168,9 @@ impl Executor {
             PerfCounter::Cycles | PerfCounter::Time | PerfCounter::InstructionsRetired => {
                 self.retired_instructions
             }
+            PerfCounter::CyclesHigh
+            | PerfCounter::TimeHigh
+            | PerfCounter::InstructionsRetiredHigh => self.retired_instructions >> 32,
         }
     }
 
@@ -811,6 +814,25 @@ mod tests {
         let x2 = tir_be_common::MachineContext::read_register(&executor, "GPR", 2).unwrap();
         assert_eq!(x2.to_u64(), 3);
         assert_eq!(executor.retired_instructions(), 4);
+    }
+
+    #[test]
+    fn rv32_counter_high_half_reads_upper_bits() {
+        let rv32 = [tir_riscv::Feature::RV32I, tir_riscv::Feature::Zicsr];
+        let mut executor = Executor::new(64);
+        executor.set_register_widths(tir_riscv::register_widths(&rv32));
+        executor.set_counter_registers([
+            ("CSR", 0xC00, tir_be_common::PerfCounter::Cycles),
+            ("CSR", 0xC80, tir_be_common::PerfCounter::CyclesHigh),
+        ]);
+        executor.retired_instructions = 0x0000_0005_8000_0001;
+
+        let reg =
+            |idx| tir_be_common::MachineContext::read_register(&executor, "CSR", idx).unwrap();
+        // cycle returns the low word (the CSR class is 32 bits wide on rv32),
+        // cycleh the upper word of the same 64-bit counter.
+        assert_eq!((reg(0xC00).to_u64(), reg(0xC00).width()), (0x8000_0001, 32));
+        assert_eq!(reg(0xC80).to_u64(), 5);
     }
 
     #[test]

@@ -89,12 +89,17 @@ pub trait MachineContext {
 }
 
 /// A hardware performance counter a target maps onto one of its registers
-/// (e.g. the RISC-V `cycle`/`time`/`instret` CSRs).
+/// (e.g. the RISC-V `cycle`/`time`/`instret` CSRs). The `High` variants
+/// deliver the upper 32 bits of the 64-bit counter, for targets that split
+/// counters across two registers (RV32 `cycleh`/`timeh`/`instreth`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PerfCounter {
     Cycles,
     Time,
     InstructionsRetired,
+    CyclesHigh,
+    TimeHigh,
+    InstructionsRetiredHigh,
 }
 
 /// How an instruction affects control flow, derived at TMDL-compile time from

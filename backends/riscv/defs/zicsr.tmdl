@@ -15,6 +15,11 @@ register_class CSR for [Zicsr] {
         cycle => { index = 0xC00 },
         time => { index = 0xC01 },
         instret => { index = 0xC02 },
+        // Upper halves of the 64-bit counters. Architecturally RV32-only;
+        // the simulator backs them with counters only on RV32.
+        cycleh => { index = 0xC80 },
+        timeh => { index = 0xC81 },
+        instreth => { index = 0xC82 },
         mscratch => { index = 0x340 },
     }
 }
