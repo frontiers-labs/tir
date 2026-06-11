@@ -159,6 +159,6 @@ pub mod ops {
 dialect! {
     AsmDialect {
         name: "asm",
-        operations: [SectionOp, SectionEndOp, SymbolOp, SymbolEndOp, BlockEndOp],
+        operations: [SectionOp, SectionEndOp, SymbolOp, SymbolEndOp, LiteralOp, BlockEndOp],
     }
 }

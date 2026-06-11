@@ -41,6 +41,18 @@ operation! {
 
 impl Terminator for SymbolEndOp {}
 
+// A data definition directive (`.dword 42`, `.string "hi"`, `.space 16`).
+// `kind` names the directive, `value` holds the literal (Int or Str).
+operation! {
+    LiteralOp {
+        name: "literal",
+        dialect: "asm",
+        attributes: A {
+            kind: "Str",
+        }
+    }
+}
+
 operation! {
     BlockEndOp {
         name: "block_end",

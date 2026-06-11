@@ -6,7 +6,9 @@ use tir::{
     parse::tokens::Parser,
 };
 
-use crate::{SectionOpBuilder, SymbolEndOpBuilder, SymbolOpBuilder, lex, lexer::Token};
+use crate::{
+    LiteralOpBuilder, SectionOpBuilder, SymbolEndOpBuilder, SymbolOpBuilder, lex, lexer::Token,
+};
 
 pub type AsmInstructionParser =
     for<'src> fn(&tir::Context, &mut IRBuilder, &mut Parser<'src, Token<'src>>) -> Result<(), ()>;
@@ -83,6 +85,49 @@ impl AsmParser {
                     // FIXME set insertion point to end of text section
                     let _ = parser.bump();
                 }
+                Token::Directive(directive) => {
+                    let directive = *directive;
+                    let _ = parser.bump();
+                    let kind = &directive[1..];
+                    match kind {
+                        "byte" | "half" | "word" | "dword" | "space" => {
+                            let value = match parser.bump() {
+                                Some(Token::DecNumber(n)) => n.parse::<i64>().map_err(|_| ())?,
+                                Some(Token::HexNumber(n)) => parse_hex(n)?,
+                                _ => return Err(()),
+                            };
+                            builder.insert(
+                                LiteralOpBuilder::new(context)
+                                    .attr(
+                                        "kind",
+                                        tir::attributes::AttributeValue::Str(kind.to_string()),
+                                    )
+                                    .attr("value", tir::attributes::AttributeValue::Int(value))
+                                    .build(),
+                            );
+                        }
+                        "string" | "ascii" | "asciz" => {
+                            let Some(Token::StringLit(value)) = parser.bump() else {
+                                return Err(());
+                            };
+                            builder.insert(
+                                LiteralOpBuilder::new(context)
+                                    .attr(
+                                        "kind",
+                                        tir::attributes::AttributeValue::Str(kind.to_string()),
+                                    )
+                                    .attr(
+                                        "value",
+                                        tir::attributes::AttributeValue::Str((*value).to_string()),
+                                    )
+                                    .build(),
+                            );
+                        }
+                        // Layout/section directives (`.rodata`, `.align`, ...)
+                        // carry no data; skip them like unknown idents.
+                        _ => {}
+                    }
+                }
                 Token::Ident(ident) => {
                     // Try to dispatch to an instruction parser by mnemonic.
                     let key = ident.to_string();
@@ -123,4 +168,15 @@ impl AsmParser {
 
         Ok(module)
     }
+}
+
+fn parse_hex(text: &str) -> Result<i64, ()> {
+    let (neg, text) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let digits = text.trim_start_matches("0x").trim_start_matches("0X");
+    let value = i128::from_str_radix(digits, 16).map_err(|_| ())?;
+    let value = if neg { -value } else { value };
+    i64::try_from(value).map_err(|_| ())
 }

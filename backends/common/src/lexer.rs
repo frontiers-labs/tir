@@ -24,6 +24,14 @@ pub enum Token<'src> {
     #[token(".global")]
     Global,
 
+    // Catch-all for directives without a dedicated token (`.dword`, `.string`,
+    // `.rodata`, ...). Specific tokens above win on priority.
+    #[regex("\\.[a-zA-Z_][a-zA-Z0-9_\\.]*", |d| d.slice())]
+    Directive(&'src str),
+
+    #[regex("\"[^\"]*\"", |s| { let s = s.slice(); &s[1..s.len() - 1] })]
+    StringLit(&'src str),
+
     #[regex("[a-zA-Z_][a-zA-Z0-9_\\.]*:", |n| { let n = n.slice(); &n[0..n.len() - 1] })]
     Label(&'src str),
 
@@ -81,6 +89,26 @@ mod tests {
     #[test]
     fn asm_accepts_single_character_identifiers_and_labels() {
         assert_eq!(lex("a b:"), Ok(vec![Token::Ident("a"), Token::Label("b")]));
+    }
+
+    #[test]
+    fn asm_lexes_directives_and_string_literals() {
+        assert_eq!(
+            lex(".dword 0x100000000"),
+            Ok(vec![
+                Token::Directive(".dword"),
+                Token::HexNumber("0x100000000")
+            ])
+        );
+        assert_eq!(
+            lex(".string \"Hello, RISC-V!\""),
+            Ok(vec![
+                Token::Directive(".string"),
+                Token::StringLit("Hello, RISC-V!")
+            ])
+        );
+        // Dedicated tokens still win over the directive catch-all.
+        assert_eq!(lex(".text .data"), Ok(vec![Token::Text, Token::Data]));
     }
 
     #[test]
