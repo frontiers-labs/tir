@@ -7,8 +7,9 @@ use tir::attributes::AttributeValue;
 use tir_be_common::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
 
 use crate::{
-    BranchImmediateOpBuilder, BranchNotEqOpBuilder, CompareOpBuilder, MoveWideZeroOpBuilder,
-    ReturnOpBuilder, VirtualBranchOp, VirtualCondBranchOp, VirtualReturnOp, phys, virt,
+    BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder, BranchNotEqOpBuilder,
+    CompareOpBuilder, MoveWideZeroOpBuilder, ReturnOpBuilder, VirtualBranchOp, VirtualCallOp,
+    VirtualCondBranchOp, VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
 };
 
 const R_AARCH64_CONDBR19: u32 = 280;
@@ -148,5 +149,48 @@ pub(crate) fn finalize_virtual_ops(
         return Ok(true);
     }
 
+    // `vcall callee` becomes `bl callee`: the symbol operand survives into the
+    // encoder as a fixup and is emitted as an R_AARCH64_CALL26 relocation, since
+    // the callee's address is unknown until link time.
+    if let Some(call) = op.as_op::<VirtualCallOp>() {
+        let callee = string_attr(&call, "callee")?;
+        let bl = BranchLinkOpBuilder::new(context)
+            .attr("imm", AttributeValue::Str(callee))
+            .build();
+        rewriter.replace_op(op, &bl)?;
+        return Ok(true);
+    }
+
+    // `vcall_indirect` becomes `blr target`; the target register was colored by
+    // the allocator through the op's `callee_reg` attribute.
+    if let Some(call) = op.as_op::<VirtualIndirectCallOp>() {
+        let target = register_attr(&call, "callee_reg")?;
+        let blr = BranchLinkRegOpBuilder::new(context)
+            .attr("rn", target)
+            .build();
+        rewriter.replace_op(op, &blr)?;
+        return Ok(true);
+    }
+
     Ok(false)
+}
+
+fn string_attr(op: &dyn tir::Operation, name: &str) -> Result<String, tir::PassError> {
+    op.attributes()
+        .iter()
+        .find_map(|attr| match (&attr.value, attr.name == name) {
+            (AttributeValue::Str(s), true) => Some(s.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| tir::PassError::InvalidRuleSet(format!("call is missing its '{name}'")))
+}
+
+fn register_attr(op: &dyn tir::Operation, name: &str) -> Result<AttributeValue, tir::PassError> {
+    op.attributes()
+        .iter()
+        .find_map(|attr| match (&attr.value, attr.name == name) {
+            (value @ AttributeValue::Register(_), true) => Some(value.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| tir::PassError::InvalidRuleSet(format!("call is missing its '{name}'")))
 }

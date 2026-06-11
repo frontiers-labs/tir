@@ -1,4 +1,5 @@
 mod arith;
+mod call;
 mod control;
 mod func;
 mod module;
@@ -12,12 +13,14 @@ use crate::{Context, Error, IRFormatter, Type, TypeId, dialect, parse::Span};
 use crate as tir;
 
 pub use arith::*;
+pub use call::*;
 pub use control::*;
 pub use func::*;
 pub use module::*;
 
 pub mod ops {
     pub use super::arith::*;
+    pub use super::call::*;
     pub use super::control::*;
     pub use super::func::*;
     pub use super::module::*;
@@ -47,6 +50,8 @@ dialect! {
             TruncIOp,
             BranchOp,
             CondBranchOp,
+            CallOp,
+            IndirectCallOp,
         ],
         types: [IntegerType, IndexType, UnitType],
     }

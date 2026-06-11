@@ -68,9 +68,19 @@ pub fn op_regs(op: &OpInstance) -> OpRegs {
     }
 
     // Machine ops carry their register operands in attributes, with a def/use role.
+    // An array of registers (e.g. a call's caller-saved clobber list) applies the
+    // attribute's role to every element.
     for attr in &op.attributes {
-        let AttributeValue::Register(reg) = &attr.value else {
-            continue;
+        let attr_regs: Vec<&RegisterAttr> = match &attr.value {
+            AttributeValue::Register(reg) => vec![reg],
+            AttributeValue::Array(items) => items
+                .iter()
+                .filter_map(|item| match item {
+                    AttributeValue::Register(reg) => Some(reg),
+                    _ => None,
+                })
+                .collect(),
+            _ => continue,
         };
         let role = op
             .attribute_roles
@@ -79,21 +89,23 @@ pub fn op_regs(op: &OpInstance) -> OpRegs {
             .map(|(_, role)| *role)
             .unwrap_or(AttributeRole::None);
 
-        let reg_ref = match reg {
-            RegisterAttr::Virtual { id, class } => RegRef::Virtual {
-                id: *id,
-                class: class.clone(),
-            },
-            RegisterAttr::Physical { class, index } => RegRef::Physical {
-                class: class.clone(),
-                index: *index,
-            },
-        };
-        if role_writes(role) {
-            regs.defs.push(reg_ref.clone());
-        }
-        if role_reads(role) {
-            regs.uses.push(reg_ref);
+        for reg in attr_regs {
+            let reg_ref = match reg {
+                RegisterAttr::Virtual { id, class } => RegRef::Virtual {
+                    id: *id,
+                    class: class.clone(),
+                },
+                RegisterAttr::Physical { class, index } => RegRef::Physical {
+                    class: class.clone(),
+                    index: *index,
+                },
+            };
+            if role_writes(role) {
+                regs.defs.push(reg_ref.clone());
+            }
+            if role_reads(role) {
+                regs.uses.push(reg_ref);
+            }
         }
     }
 

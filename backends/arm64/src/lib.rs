@@ -181,6 +181,38 @@ impl VirtualCondBranchOp {
     }
 }
 
+// Virtual call ops: the lowered form of `builtin.call`/`builtin.indirect_call`.
+// Arguments and results travel through the ABI registers via copies emitted by
+// `lower_calls`; the ops only carry the callee (a symbol whose address is
+// resolved at link time, or an already-colored register) plus the caller-saved
+// clobber list, deferring the actual `bl`/`blr` encoding to a post-RA pass.
+operation! {
+    VirtualCallOp {
+        name: "vcall",
+        dialect: "arm64",
+        attributes: A {
+            callee: "Str",
+        },
+        roles: R {
+            clobbers: Clobber,
+        },
+    }
+}
+
+operation! {
+    VirtualIndirectCallOp {
+        name: "vcall_indirect",
+        dialect: "arm64",
+        attributes: A {
+            callee_reg: "Register",
+        },
+        roles: R {
+            callee_reg: Use,
+            clobbers: Clobber,
+        },
+    }
+}
+
 dialect! {
     Arm64Dialect {
         name: "arm64",
@@ -188,6 +220,8 @@ dialect! {
             VirtualReturnOp,
             VirtualBranchOp,
             VirtualCondBranchOp,
+            VirtualCallOp,
+            VirtualIndirectCallOp,
             AddOp,
             SubOp,
             AddImmediateOp,
@@ -335,6 +369,137 @@ fn lower_branches(
     Ok(false)
 }
 
+/// The AArch64 link register (`lr` = `x30`) and zero register (`xzr` = slot 31).
+const LR: u16 = 30;
+const XZR: u16 = 31;
+
+/// Build a register-register move (`orr rd, xzr, rm`).
+fn mv(
+    context: &tir::Context,
+    rd: tir::attributes::AttributeValue,
+    rm: tir::attributes::AttributeValue,
+) -> Box<dyn Operation> {
+    Box::new(
+        OrOpBuilder::new(context)
+            .attr("rd", rd)
+            .attr("rn", phys(&("GPR".to_string(), XZR)))
+            .attr("rm", rm)
+            .build(),
+    )
+}
+
+/// Lower the builtin call ops to AArch64 virtual calls. Arguments are moved
+/// into the ABI argument registers and the result is copied out of the first
+/// return register, so the allocator never has to pin long live ranges. The
+/// call clobbers every caller-saved register — including `lr`, which also holds
+/// this function's own return address, so it is saved into a fresh virtual
+/// register across the call.
+fn lower_calls(
+    context: &tir::Context,
+    op: &tir::OperationRef,
+    rewriter: &mut tir::Rewriter,
+) -> Result<bool, tir::PassError> {
+    use tir::attributes::AttributeValue;
+    use tir::builtin::{CallOp, IndirectCallOp, UnitType};
+
+    let (callee_value, args, result) = if let Some(call) = op.as_op::<CallOp>() {
+        (None, call.args(), call.result())
+    } else if let Some(call) = op.as_op::<IndirectCallOp>() {
+        (Some(call.callee()), call.args(), call.result())
+    } else {
+        return Ok(false);
+    };
+
+    let info = register_info();
+    let class = info
+        .class("GPR")
+        .expect("arm64 register info must define GPR");
+    if args.len() > class.arguments.len() {
+        return Err(tir::PassError::InvalidRuleSet(
+            "stack-passed call arguments are not supported by codegen yet".to_string(),
+        ));
+    }
+
+    // Detach the callee and every argument into fresh virtual registers before
+    // any argument register is written: an operand may itself live in an
+    // argument register (e.g. this function's own incoming arguments), so it
+    // must be read before the moves below clobber them, whatever the argument
+    // permutation.
+    let detach = |rewriter: &mut tir::Rewriter, value: tir::ValueId| {
+        let ty = context.get_value(value).ty();
+        let fresh = context.create_value(ty, None).id().number();
+        let copy = mv(context, virt(fresh, "GPR"), virt(value.number(), "GPR"));
+        rewriter.insert_op_before(op, copy.as_ref()).map(|()| fresh)
+    };
+    let fresh_callee = callee_value
+        .map(|value| detach(rewriter, value))
+        .transpose()?;
+    let mut fresh_args = Vec::with_capacity(args.len());
+    for arg in &args {
+        fresh_args.push(detach(rewriter, *arg)?);
+    }
+    for (&fresh, &reg) in fresh_args.iter().zip(class.arguments.iter()) {
+        let copy = mv(context, phys(&("GPR".to_string(), reg)), virt(fresh, "GPR"));
+        rewriter.insert_op_before(op, copy.as_ref())?;
+    }
+
+    let virtual_call: Box<dyn Operation> = match fresh_callee {
+        None => {
+            let name = op.as_op::<CallOp>().expect("matched above").callee();
+            Box::new(
+                VirtualCallOpBuilder::new(context)
+                    .attr("callee", AttributeValue::Str(name))
+                    .attr("clobbers", caller_saved_clobbers())
+                    .build(),
+            )
+        }
+        Some(fresh) => Box::new(
+            VirtualIndirectCallOpBuilder::new(context)
+                .attr("callee_reg", virt(fresh, "GPR"))
+                .attr("clobbers", caller_saved_clobbers())
+                .build(),
+        ),
+    };
+
+    let lr = ("GPR".to_string(), LR);
+    let saved_lr = context
+        .create_value(tir::builtin::IntegerType::new(context, 64), None)
+        .id();
+    let save = mv(context, virt(saved_lr.number(), "GPR"), phys(&lr));
+    rewriter.insert_op_before(op, save.as_ref())?;
+    rewriter.insert_op_before(op, virtual_call.as_ref())?;
+    let restore = mv(context, phys(&lr), virt(saved_lr.number(), "GPR"));
+
+    let ret_reg = class.return_values[0];
+    if context.get_value(result).ty() == UnitType::new(context) {
+        rewriter.replace_op(op, restore.as_ref())?;
+    } else {
+        rewriter.insert_op_before(op, restore.as_ref())?;
+        let copy = mv(
+            context,
+            virt(result.number(), "GPR"),
+            phys(&("GPR".to_string(), ret_reg)),
+        );
+        rewriter.replace_op(op, copy.as_ref())?;
+    }
+    Ok(true)
+}
+
+/// The caller-saved registers a call clobbers, as a register-array attribute.
+fn caller_saved_clobbers() -> tir::attributes::AttributeValue {
+    let info = register_info();
+    let class = info
+        .class("GPR")
+        .expect("arm64 register info must define GPR");
+    tir::attributes::AttributeValue::Array(
+        class
+            .caller_saved
+            .iter()
+            .map(|&index| phys(&("GPR".to_string(), index)))
+            .collect(),
+    )
+}
+
 pub fn create_isel_pass(context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
     create_isel_pass_for(context, Feature::ALL)
 }
@@ -346,6 +511,7 @@ fn create_isel_pass_for(
     tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context, features))
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
         .with_op_lowering(lower_branches)
+        .with_op_lowering(lower_calls)
 }
 
 /// The AArch64 frame base register (`x29`/`fp`), reserved from allocation and used
@@ -1092,6 +1258,225 @@ mod tests {
         assert_eq!(bytes, 0x94000002u32.to_le_bytes(), "bl +8");
 
         assert!(patchers["bl"](&mut enc.bytes.clone(), 1 << 25).is_none());
+    }
+
+    #[test]
+    fn builtin_call_lowers_to_vcall_with_abi_copies() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<Arm64Dialect>();
+
+        let i64 = IntegerType::new(&context, 64);
+        let module = ops::module(&context, None).build();
+
+        let a = context.create_value(i64, None);
+        let b = context.create_value(i64, None);
+        let region = context.create_region();
+        let block = context.create_block(vec![a, b]);
+        region.add_block(block.id());
+
+        let func = ops::func(&context, "caller", i64, Some(region.id())).build();
+        let fbody = func.body();
+        let args = fbody.arguments();
+        let (a, b) = (args[0].id(), args[1].id());
+
+        let mut fb = IRBuilder::new(func.body());
+        let call = tir::builtin::CallOpBuilder::new(&context)
+            .args(vec![a, b])
+            .attr(
+                "callee",
+                tir::attributes::AttributeValue::Str("foo".to_string()),
+            )
+            .result_type(i64)
+            .build();
+        let call_r = call.result();
+        fb.insert(call);
+        fb.insert(ops::r#return(&context, call_r).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let mut pm = PassManager::new();
+        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.run(&context, context.get_op(module.id()))
+            .expect("isel should lower the call");
+
+        // Two detach copies, two argument copies into x0/x1, the lr save, the
+        // virtual call, the lr restore, and the result copy out of x0.
+        let body: Vec<_> = context
+            .get_region(region.id())
+            .iter(context.clone())
+            .next()
+            .unwrap()
+            .op_ids()
+            .into_iter()
+            .map(|id| context.get_op(id).name)
+            .collect();
+        assert_eq!(
+            body,
+            vec![
+                "orr",
+                "orr",
+                "orr",
+                "orr",
+                "orr",
+                "vcall",
+                "orr",
+                "orr",
+                "vret",
+                "symbol_end"
+            ]
+        );
+    }
+
+    #[test]
+    fn call_finalizes_to_bl_with_symbol_target() {
+        use tir_be_common::TargetMachine;
+        use tir_be_common::pipeline::{StopAfter, build_pipeline};
+
+        let context = Context::with_default_dialects();
+        let target = crate::Arm64Target {
+            config: crate::TargetConfig::parse("arm64", None, None).expect("march should parse"),
+        };
+        target.register_dialects(&context);
+
+        let i64 = IntegerType::new(&context, 64);
+        let module = ops::module(&context, None).build();
+
+        let a = context.create_value(i64, None);
+        let region = context.create_region();
+        let block = context.create_block(vec![a]);
+        region.add_block(block.id());
+
+        let func = ops::func(&context, "caller", i64, Some(region.id())).build();
+        let a = func.body().arguments()[0].id();
+
+        let mut fb = IRBuilder::new(func.body());
+        let call = tir::builtin::CallOpBuilder::new(&context)
+            .args(vec![a])
+            .attr(
+                "callee",
+                tir::attributes::AttributeValue::Str("foo".to_string()),
+            )
+            .result_type(i64)
+            .build();
+        let call_r = call.result();
+        fb.insert(call);
+        fb.insert(ops::r#return(&context, call_r).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let mut pm = build_pipeline(&target, &context, StopAfter::Finalize);
+        pm.run(&context, context.get_op(module.id()))
+            .expect("pipeline should lower the call");
+
+        let block = context
+            .get_region(region.id())
+            .iter(context.clone())
+            .next()
+            .unwrap();
+        let names: Vec<_> = block
+            .op_ids()
+            .into_iter()
+            .map(|id| context.get_op(id).name)
+            .collect();
+        // The lr save has no callee-saved register to live in (the modeled
+        // register file marks x0..x28 and x30 caller-saved), so it spills: a
+        // frame is opened, lr is stored before the call and reloaded after.
+        assert_eq!(
+            names,
+            vec![
+                "sub_imm",
+                "orr",
+                "orr",
+                "orr",
+                "store_doubleword",
+                "bl",
+                "load_doubleword",
+                "orr",
+                "orr",
+                "ret",
+                "add_imm",
+                "symbol_end"
+            ]
+        );
+
+        let bl = block
+            .op_ids()
+            .into_iter()
+            .map(|id| context.get_op(id))
+            .find(|op| op.name == "bl")
+            .expect("the call must finalize to bl");
+        // bl targets the callee symbol (a link-time fixup).
+        assert!(bl.attributes.iter().any(|a| a.name == "imm"
+            && matches!(&a.value, tir::attributes::AttributeValue::Str(s) if s == "foo")));
+
+        body_blocks_have_no_virtual(&context, region.id());
+    }
+
+    #[test]
+    fn indirect_call_finalizes_to_blr() {
+        use tir_be_common::TargetMachine;
+        use tir_be_common::pipeline::{StopAfter, build_pipeline};
+
+        let context = Context::with_default_dialects();
+        let target = crate::Arm64Target {
+            config: crate::TargetConfig::parse("arm64", None, None).expect("march should parse"),
+        };
+        target.register_dialects(&context);
+
+        let i64 = IntegerType::new(&context, 64);
+        let module = ops::module(&context, None).build();
+
+        let callee = context.create_value(i64, None);
+        let x = context.create_value(i64, None);
+        let region = context.create_region();
+        let block = context.create_block(vec![callee, x]);
+        region.add_block(block.id());
+
+        let func = ops::func(&context, "caller", i64, Some(region.id())).build();
+        let fbody = func.body();
+        let args = fbody.arguments();
+        let (callee, x) = (args[0].id(), args[1].id());
+
+        let mut fb = IRBuilder::new(func.body());
+        let call = tir::builtin::IndirectCallOpBuilder::new(&context)
+            .callee(callee)
+            .args(vec![x])
+            .result_type(i64)
+            .build();
+        let call_r = call.result();
+        fb.insert(call);
+        fb.insert(ops::r#return(&context, call_r).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let mut pm = build_pipeline(&target, &context, StopAfter::Finalize);
+        pm.run(&context, context.get_op(module.id()))
+            .expect("pipeline should lower the indirect call");
+
+        let block = context
+            .get_region(region.id())
+            .iter(context.clone())
+            .next()
+            .unwrap();
+        let blr = block
+            .op_ids()
+            .into_iter()
+            .map(|id| context.get_op(id))
+            .find(|op| op.name == "blr")
+            .expect("the indirect call must finalize to blr");
+        // The callee register was colored to a real register distinct from the
+        // argument being passed in x0.
+        let target_reg = phys_of(&blr, "rn").expect("blr target must be physical");
+        assert_ne!(target_reg.1, 0);
+
+        body_blocks_have_no_virtual(&context, region.id());
     }
 }
 

@@ -1,0 +1,21 @@
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s --check-prefix=ISEL
+// RUN: tir mc --march=arm64 --filetype=obj -o - %s | tir readobj - | filecheck %s
+
+module {
+  func @caller(%0: !i64) -> !i64 {
+    %1 = call @foo(%0 : !i64) -> !i64
+    return %1
+  }
+  module_end
+}
+
+// The call lowers to a virtual call carrying the callee symbol; the argument
+// and result travel through x0 via copies and lr is saved across the call.
+// ISEL: arm64.vcall {callee = "foo"
+
+// The callee's address is unknown until link time: the bl immediate stays
+// zero and an R_AARCH64_CALL26 relocation against the undefined symbol is
+// emitted.
+// CHECK: Symbol caller: value=0x0 size={{.*}} bind=GLOBAL type=FUNC section=.text
+// CHECK: Symbol foo: value=0x0 size=0x0 bind=GLOBAL type=NOTYPE section=UND
+// CHECK: Reloc .text+{{.*}}: R_AARCH64_CALL26 foo + 0

@@ -272,8 +272,16 @@ fn node_costs(
                     // Pinned vregs accept only their target register. Compare by
                     // physical identity so a precolor reached through one class
                     // (e.g. an ABI `GPR` arg) matches an alternative in an aliasing
-                    // class (`GPRsp`).
-                    return if info.phys_key(p) == info.phys_key(target) {
+                    // class (`GPRsp`). A pin on a register the vreg is also live
+                    // across a clobber of (e.g. an incoming argument that survives
+                    // a call) is unsatisfiable: every alternative goes infinite so
+                    // allocation fails loudly instead of silently producing a
+                    // clobbered value.
+                    let conflict = forbidden.is_some_and(|set| {
+                        set.iter()
+                            .any(|f| info.phys_key(f) == info.phys_key(target))
+                    });
+                    return if !conflict && info.phys_key(p) == info.phys_key(target) {
                         0
                     } else {
                         INF_COST
