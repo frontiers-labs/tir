@@ -121,3 +121,12 @@ instruction TStore for [TestIsa] : RType {
         store(rs1, 8, rs2);
     }
 }
+
+instruction TAlign for [TestIsa] : RType {
+    param MNEMONIC: String = "talign";
+    param OPCODE: bits<7> = 0b0000110;
+
+    behavior {
+        rd = (rs1 & ~rs2) & ~1;
+    }
+}

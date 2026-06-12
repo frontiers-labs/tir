@@ -58,6 +58,7 @@ pub fn infer_widths(
             | ExprKind::ShiftLeft
             | ExprKind::ShiftRightLogic
             | ExprKind::ShiftRightArithmetic
+            | ExprKind::Not
             | ExprKind::Clamp
             | ExprKind::Log2Ceil
             | ExprKind::Sqrt

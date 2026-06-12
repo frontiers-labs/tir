@@ -784,6 +784,7 @@ fn check_behavior(
                 }
             }
             ast::Expr::Field(f) => walk_paths(&f.base, out),
+            ast::Expr::Unary(u) => walk_paths(&u.x, out),
             ast::Expr::If(i) => {
                 walk_paths(&i.cond, out);
                 walk_paths(&i.then, out);

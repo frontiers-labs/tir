@@ -1173,13 +1173,25 @@ where
                 }),
             });
 
+        let unary = just(Token::Tilde)
+            .to(UnOp::BitwiseNot)
+            .repeated()
+            .foldr_with(basic.clone(), |op, x, e| {
+                Expr::Unary(Unary {
+                    x: Box::new(x),
+                    op,
+                    span: e.span(),
+                })
+            })
+            .boxed();
+
         let op = just(Token::Asterisk)
             .to(BinOp::Mul)
             .or(just(Token::Tilde)
                 .then(just(Token::ForwardSlash))
                 .to(BinOp::UnsignedDiv))
             .or(just(Token::ForwardSlash).to(BinOp::Div));
-        let product = basic
+        let product = unary
             .clone()
             .foldl_with(op.then(expr).repeated(), |a, (op, b), e| {
                 let sp = e.span();
@@ -1388,7 +1400,7 @@ mod tests {
     use chumsky::prelude::*;
 
     use crate::{
-        ast::{BinOp, Expr},
+        ast::{BinOp, Expr, UnOp},
         lexer::lexer,
     };
 
@@ -1531,6 +1543,29 @@ mod tests {
         let expr = parsed.output().unwrap().0.clone();
         match expr {
             Expr::Binary(bin) => assert_eq!(bin.op, BinOp::NotEqual),
+            _ => panic!("Expected binary expression"),
+        }
+    }
+
+    #[test]
+    fn inline_expr_parses_bitwise_not() {
+        let code = "a & ~1";
+        let (tokens, mut _errors) = lexer().parse(code).into_output_errors();
+        let tokens = tokens.unwrap();
+        let parsed = inline_expr().then(end()).parse(
+            tokens
+                .as_slice()
+                .map((code.len()..code.len()).into(), |(t, s)| (t, s)),
+        );
+        let expr = parsed.output().unwrap().0.clone();
+        match expr {
+            Expr::Binary(bin) => {
+                assert_eq!(bin.op, BinOp::BitwiseAnd);
+                match *bin.rhs {
+                    Expr::Unary(un) => assert_eq!(un.op, UnOp::BitwiseNot),
+                    _ => panic!("Expected unary expression"),
+                }
+            }
             _ => panic!("Expected binary expression"),
         }
     }

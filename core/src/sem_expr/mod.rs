@@ -57,6 +57,7 @@ pub enum ExprKind {
     Or,
     And,
     Xor,
+    Not,
     /// Arguments are condition, then branch, else branch
     #[arity = 3]
     If,

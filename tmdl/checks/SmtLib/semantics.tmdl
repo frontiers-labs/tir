@@ -29,3 +29,8 @@
 // CHECK: ; UNSUPPORTED-BEHAVIOR: tstore
 // CHECK: (define-fun execute_tstore
 // CHECK-NEXT: st)
+
+// `~register` is a width-preserving bvnot; `~literal` folds to a signed
+// constant (~1 = -2 = (_ bv6 3)) that sign-extends to all-ones-but-low-bit.
+// CHECK: (define-fun execute_talign
+// CHECK-NEXT: (write_gpr st rd (bvand (bvand (read_gpr st rs1) (bvnot (read_gpr st rs2))) ((_ sign_extend 61) (_ bv6 3)))))

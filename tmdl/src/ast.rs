@@ -405,6 +405,19 @@ pub struct Binary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub enum UnOp {
+    BitwiseNot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct Unary {
+    pub x: Box<Expr>,
+    pub op: UnOp,
+    #[serde(skip_serializing)]
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub enum BuiltinFunction {
     Clamp,
     Extract,
@@ -447,6 +460,7 @@ pub struct IndexAccess {
 pub enum Expr {
     Assign(Assign),
     Binary(Binary),
+    Unary(Unary),
     Block(Block),
     Call(Call),
     Field(Field),
@@ -603,6 +617,16 @@ impl LitInt {
     pub fn value(&self) -> &str {
         &self.value
     }
+
+    fn parse_u64(&self) -> u64 {
+        if self.value.starts_with("0x") || self.value.starts_with("0X") {
+            u64::from_str_radix(&self.value[2..], 16).expect("invalid hex literal")
+        } else if self.value.starts_with("0b") || self.value.starts_with("0B") {
+            u64::from_str_radix(&self.value[2..], 2).expect("invalid binary literal")
+        } else {
+            self.value.parse::<u64>().expect("invalid integer literal")
+        }
+    }
 }
 
 impl LitStr {
@@ -661,6 +685,7 @@ impl Expr {
         match self {
             Expr::Assign(x) => x.as_sema_expr(ctx),
             Expr::Binary(x) => x.as_sema_expr(ctx),
+            Expr::Unary(x) => x.as_sema_expr(ctx),
             Expr::Block(x) => x.as_sema_expr(ctx),
             Expr::Call(x) => x.as_sema_expr(ctx),
             Expr::Field(x) => x.as_sema_expr(ctx),
@@ -767,14 +792,7 @@ impl Lit {
     ) -> tir::graph::NodeId {
         match self {
             Lit::Int(lit_int) => {
-                let value_str = lit_int.value();
-                let value = if value_str.starts_with("0x") || value_str.starts_with("0X") {
-                    u64::from_str_radix(&value_str[2..], 16).expect("invalid hex literal")
-                } else if value_str.starts_with("0b") || value_str.starts_with("0B") {
-                    u64::from_str_radix(&value_str[2..], 2).expect("invalid binary literal")
-                } else {
-                    value_str.parse::<u64>().expect("invalid integer literal")
-                };
+                let value = lit_int.parse_u64();
 
                 let width = if value == 0 {
                     1
@@ -935,6 +953,43 @@ impl Binary {
             BinOp::ShiftLeftLogical => ctx.add_node(K::ShiftLeft, &[lhs, rhs]),
             BinOp::ShiftRightLogical => ctx.add_node(K::ShiftRightLogic, &[lhs, rhs]),
             BinOp::ShiftRightArithmetic => ctx.add_node(K::ShiftRightArithmetic, &[lhs, rhs]),
+        }
+    }
+}
+
+impl Unary {
+    fn as_sema_expr<
+        G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_expr::ExprPayload>,
+    >(
+        &self,
+        ctx: &mut SemaExprLoweringCtx<'_, G>,
+    ) -> tir::graph::NodeId {
+        use tir::sem_expr::ExprKind as K;
+
+        match self.op {
+            UnOp::BitwiseNot => {
+                // `~literal` must take its width from the surrounding
+                // expression, but a literal lowers at its own minimal width,
+                // where the inversion would lose the high bits (`~1` at width
+                // 1 is 0). Fold it to a signed constant instead: `~v` is
+                // `-v - 1`, and sign-extension during width coercion then
+                // yields the right bit pattern at any width (`~1` -> -2 ->
+                // 0b11..10).
+                if let Expr::Lit(Lit::Int(lit)) = &*self.x {
+                    let value = !(lit.parse_u64()) as i64;
+                    return if value < 0 {
+                        let width = 64 - value.unsigned_abs().leading_zeros() + 1;
+                        ctx.add_int_const(tir::utils::APInt::new_signed(width, value))
+                    } else {
+                        let v = value as u64;
+                        let width = if v == 0 { 1 } else { 64 - v.leading_zeros() };
+                        ctx.add_int_const(tir::utils::APInt::new(width, v))
+                    };
+                }
+
+                let x = self.x.lower_with_ctx(ctx);
+                ctx.add_node(K::Not, &[x])
+            }
         }
     }
 }

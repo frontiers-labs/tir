@@ -361,6 +361,17 @@ fn infer<'a>(
             then_ty.apply(subst)
         }
 
+        ast::Expr::Unary(u) => {
+            let ty = infer(&u.x, env, tvg, subst, cache, diags, file_name);
+            // A literal operand like `~1` takes its width from context, so it
+            // must not pin the result to Integer.
+            if ty == Type::Integer {
+                Type::Var(tvg.fresh())
+            } else {
+                ty
+            }
+        }
+
         ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => Type::Var(tvg.fresh()),
     };
 

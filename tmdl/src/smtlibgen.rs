@@ -774,6 +774,10 @@ fn emit_sem_expr(
         ExprKind::Or => arith("bvor"),
         ExprKind::And => arith("bvand"),
         ExprKind::Xor => arith("bvxor"),
+        ExprKind::Not => {
+            let (e, w, s) = child(0)?.as_bv();
+            Some(SmtVal::bv(format!("(bvnot {})", e), w, s))
+        }
         ExprKind::If => {
             let cond = child(0)?.as_bool();
             let (t, e, w, st, se) = coerce_smt(&child(1)?, &child(2)?);

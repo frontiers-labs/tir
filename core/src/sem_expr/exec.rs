@@ -219,6 +219,7 @@ fn eval_node<M: Memory>(
             value.set_signed(true);
             Value::Int(value.ashr(as_int!(c(1), "ashr").to_u64() as u32))
         }
+        ExprKind::Not => Value::Int(as_int!(c(0), "not").not()),
 
         // ── Comparisons ────────────────────────────────────────────────────
         ExprKind::Eq => {
@@ -612,6 +613,26 @@ mod tests {
         let b = sym(&mut g, 1);
         inner(&mut g, ExprKind::And, &[a, b]);
         assert_eq!(as_i64(execute(&g, &[uv(0b1100), uv(0b1010)])), 0b1000);
+    }
+
+    #[test]
+    fn int_not() {
+        let mut g = ExprPostGraph::new();
+        let a = sym(&mut g, 0);
+        inner(&mut g, ExprKind::Not, &[a]);
+        assert_eq!(as_i64(execute(&g, &[uv(0b1010)])), 0xFFFF_FFF5);
+    }
+
+    #[test]
+    fn int_and_folded_not_literal() {
+        // The shape TMDL lowers `x & ~1` to: a narrow signed -2 constant that
+        // sign-extends to 0b11..10 at the other operand's width.
+        let mut g = ExprPostGraph::new();
+        let a = sym(&mut g, 0);
+        let c = g.add_node(ExprKind::Constant);
+        g.set_leaf_data(c, ExprPayload::Int(APInt::new_signed(3, -2)));
+        inner(&mut g, ExprKind::And, &[a, c]);
+        assert_eq!(as_i64(execute(&g, &[uv(0b1011)])), 0b1010);
     }
 
     #[test]

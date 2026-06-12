@@ -2535,6 +2535,7 @@ fn emit_expr_kind_ts(kind: &tir::sem_expr::ExprKind) -> proc_macro2::TokenStream
         ExprKind::Or => quote! { tir::sem_expr::ExprKind::Or },
         ExprKind::And => quote! { tir::sem_expr::ExprKind::And },
         ExprKind::Xor => quote! { tir::sem_expr::ExprKind::Xor },
+        ExprKind::Not => quote! { tir::sem_expr::ExprKind::Not },
         ExprKind::If => quote! { tir::sem_expr::ExprKind::If },
         ExprKind::Clamp => quote! { tir::sem_expr::ExprKind::Clamp },
         ExprKind::LoadMemory => quote! { tir::sem_expr::ExprKind::LoadMemory },
