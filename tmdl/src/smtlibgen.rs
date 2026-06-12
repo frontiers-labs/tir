@@ -181,7 +181,7 @@ fn build_instructions<'a>(
             .iter()
             .map(|(op_name, ty)| {
                 let kind = match ty {
-                    Type::Struct(_) => "reg".to_string(),
+                    Type::Struct(rc) => format!("reg:{}", rc.to_lowercase()),
                     Type::Bits(n) => format!("bits:{}", n),
                     _ => "int".to_string(),
                 };

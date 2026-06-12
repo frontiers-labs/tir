@@ -62,6 +62,18 @@ pub fn verify_smt(sh: &Shell) -> anyhow::Result<()> {
             report.unsupported.push(instr.name.clone());
             continue;
         }
+        // Only GPRs are mapped onto Sail state; e.g. the abstract TMDL `csr`
+        // register file has no per-CSR correspondence yet.
+        if let Some(class) = instr.operands.iter().find_map(|(_, k)| match k {
+            OperandKind::Reg(class) if class != "gpr" => Some(class),
+            _ => None,
+        }) {
+            report.unsupported.push(format!(
+                "{} (unmapped register class {})",
+                instr.name, class
+            ));
+            continue;
+        }
         verify_instruction(&tools, &out_dir, &smt, instr, &mut report)?;
     }
 
@@ -125,7 +137,7 @@ fn generate_tmdl_smt(sh: &Shell, root: &Path, out: &Path) -> anyhow::Result<()> 
 
 #[derive(Clone, Debug)]
 enum OperandKind {
-    Reg,
+    Reg(String),
     Bits(u32),
     Int,
 }
@@ -153,10 +165,11 @@ fn parse_inventory(smt: &str) -> Vec<Instruction> {
             let operands = parts
                 .map(|op| {
                     let (op_name, kind) = op.split_once(':')?;
-                    let kind = match kind {
-                        "reg" => OperandKind::Reg,
-                        "int" => OperandKind::Int,
-                        bits => OperandKind::Bits(bits.strip_prefix("bits:")?.parse().ok()?),
+                    let kind = match kind.split_once(':') {
+                        Some(("reg", class)) => OperandKind::Reg(class.to_string()),
+                        Some(("bits", w)) => OperandKind::Bits(w.parse().ok()?),
+                        _ if kind == "int" => OperandKind::Int,
+                        _ => return None,
                     };
                     Some((op_name.to_string(), kind))
                 })
@@ -185,7 +198,7 @@ fn operand_cases(instr: &Instruction) -> Vec<Vec<u64>> {
         .operands
         .iter()
         .enumerate()
-        .filter(|(_, (_, k))| matches!(k, OperandKind::Reg))
+        .filter(|(_, (_, k))| matches!(k, OperandKind::Reg(_)))
         .map(|(i, _)| i)
         .collect();
     let reg_patterns: Vec<Vec<u64>> = match reg_positions.len() {
@@ -211,7 +224,7 @@ fn operand_cases(instr: &Instruction) -> Vec<Vec<u64>> {
             .find_map(|(i, (_, k))| match k {
                 OperandKind::Bits(w) => Some((i, *w)),
                 OperandKind::Int => Some((i, 64)),
-                OperandKind::Reg => None,
+                OperandKind::Reg(_) => None,
             });
     let imm_values: Vec<u64> = match imm_position {
         None => vec![0],
@@ -260,7 +273,7 @@ fn operand_smt_args(instr: &Instruction, case: &[u64]) -> String {
         .iter()
         .zip(case)
         .map(|((_, kind), value)| match kind {
-            OperandKind::Reg => format!("(_ bv{} 5)", value),
+            OperandKind::Reg(_) => format!("(_ bv{} 5)", value),
             _ => format!("(_ bv{} 64)", value),
         })
         .collect::<Vec<_>>()
