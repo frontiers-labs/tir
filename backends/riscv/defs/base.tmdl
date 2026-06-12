@@ -67,7 +67,7 @@ instruction JumpAndLinkReg for [RV32I, RV64I] : IType {
 
     behavior {
         rd = PC::pc + zext(0b100, self.XLEN);
-        PC::pc = rs1 + sext(imm, self.XLEN);
+        PC::pc = (rs1 + sext(imm, self.XLEN)) & ~1;
     }
 
     schedule { units = [WriteIALU]; }
