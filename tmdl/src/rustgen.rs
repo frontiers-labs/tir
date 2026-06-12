@@ -9,7 +9,8 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::utils::{
     get_encoding_arms, parse_literal_value, resolve_effective_asm_for_instruction,
-    resolve_isa_param_values, resolve_operands_for_instruction, resolve_params_for_instruction,
+    resolve_isa_param_values, resolve_operand_widths, resolve_operands_for_instruction,
+    resolve_params_for_instruction,
 };
 
 pub fn generate_rust<'a>(
@@ -277,7 +278,12 @@ fn emit_instructions<'a>(
 
         let mnemonic_name = mnemonic.as_deref().unwrap_or(op_name);
         let op_name_lit = proc_macro2::Literal::string(op_name);
-        let ops = resolve_operands_for_instruction(inst, item_cache);
+        // Width expressions resolve against the same cross-ISA parameter view
+        // `execute()` uses (the per-ISA maximum, e.g. XLEN=64 for RV32+RV64).
+        let ops = resolve_operand_widths(
+            resolve_operands_for_instruction(inst, item_cache),
+            &resolve_isa_param_values(inst, item_cache),
+        );
         let ops_map = ops.clone().into_iter().collect::<HashMap<_, _>>();
         let defined_register_operands = infer_defined_register_operands(&inst.behavior, &ops);
 

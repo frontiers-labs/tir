@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use chumsky::error::Rich;
 
 use crate::utils::{
-    resolve_effective_asm_for_instruction, resolve_effective_encoding_for_instruction,
+    eval_bits_width, resolve_effective_asm_for_instruction,
+    resolve_effective_encoding_for_instruction, resolve_isa_param_values,
     resolve_params_for_instruction, resolve_template_chain,
 };
 use crate::{Span, Type, ast};
@@ -647,6 +648,25 @@ fn check_instruction_consistent(
         operands_cache.insert(name.as_str(), ty.clone());
     }
 
+    // `bits<expr>` widths must constant-fold against the ISA parameters.
+    let isa_params = resolve_isa_param_values(instruction, item_cache);
+    for (name, ty) in &operands_cache {
+        if let Type::BitsExpr(expr) = ty
+            && eval_bits_width(expr, &isa_params).is_none()
+        {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!(
+                        "width of operand '{}' in instruction '{}' does not evaluate to a constant",
+                        name, instruction.name
+                    ),
+                ),
+            ));
+        }
+    }
+
     for (name, (_ty, value)) in &params_cache {
         if value.is_none() {
             diags.push((
@@ -1276,6 +1296,45 @@ mod encoding_tests {
             diags
                 .iter()
                 .any(|d| d.contains("'imm' is bits<13> but the arm covers 20 bits")),
+            "diags: {diags:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod operand_width_tests {
+    use super::perf_model_tests::diagnose;
+
+    #[test]
+    fn isa_dependent_operand_width_resolves() {
+        let src = "
+            isa TestIsa { param XLEN: Integer = 32; }
+            instruction Foo for [TestIsa] {
+                operands { imm: bits<log2Ceil(self.XLEN)>, }
+                behavior { rd = imm; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            !diags.iter().any(|d| d.contains("does not evaluate")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn non_constant_operand_width_is_reported() {
+        let src = "
+            isa TestIsa { param XLEN: Integer = 32; }
+            instruction Foo for [TestIsa] {
+                operands { imm: bits<log2Ceil(self.UNDEFINED)>, }
+                behavior { rd = imm; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags.iter().any(|d| d.contains(
+                "width of operand 'imm' in instruction 'Foo' does not evaluate to a constant"
+            )),
             "diags: {diags:?}"
         );
     }

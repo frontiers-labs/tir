@@ -1191,6 +1191,10 @@ impl Serialize for Type {
                 state.serialize_field("name", "Bits")?;
                 state.serialize_field("width", width)?;
             }
+            Type::BitsExpr(expr) => {
+                state.serialize_field("name", "BitsExpr")?;
+                state.serialize_field("width", expr)?;
+            }
             Type::Struct(name) => {
                 state.serialize_field("name", "Struct")?;
                 state.serialize_field("struct", name)?;

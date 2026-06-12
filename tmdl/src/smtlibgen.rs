@@ -7,7 +7,8 @@ use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
     get_encoding_arms, isa_param_values, item_supports_isa, parse_literal_value,
-    resolve_isa_param_values, resolve_operands_for_instruction, resolve_params_for_instruction,
+    resolve_isa_param_values, resolve_operand_widths, resolve_operands_for_instruction,
+    resolve_params_for_instruction,
 };
 use tir::graph::{Dag, NodeId};
 
@@ -39,6 +40,19 @@ struct SmtCtx<'a> {
     classes: BTreeMap<String, ClassInfo>,
     pc_classes: std::collections::HashSet<String>,
     isa_params: HashMap<String, i64>,
+}
+
+/// Instruction operands with `bits<expr>` widths resolved for the target ISA
+/// (the ISA's own parameter values win over the cross-ISA maximum, so an
+/// instruction shared by RV32I and RV64I sees XLEN=32 on RV32I).
+fn resolved_operands<'a>(
+    ctx: &SmtCtx<'_>,
+    inst: &'a ast::Instruction,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> Vec<(String, Type)> {
+    let mut params = resolve_isa_param_values(inst, item_cache);
+    params.extend(ctx.isa_params.iter().map(|(k, v)| (k.clone(), *v)));
+    resolve_operand_widths(resolve_operands_for_instruction(inst, item_cache), &params)
 }
 
 impl SmtCtx<'_> {
@@ -261,7 +275,7 @@ fn build_instructions<'a>(
         let name = i.name.to_lowercase();
         let uppercase_name = name.to_uppercase();
 
-        let operands = resolve_operands_for_instruction(i, item_cache);
+        let operands = resolved_operands(ctx, i, item_cache);
         let smt_operands = build_smt_operands(ctx, &operands);
         let smt_operands_joined = smt_operands.join(" ");
         let operand_params = if smt_operands_joined.is_empty() {
@@ -1050,7 +1064,7 @@ fn build_decoder<'a>(
 
     for i in &instructions {
         let name_upper = i.name.to_uppercase();
-        let operand_list = resolve_operands_for_instruction(i, item_cache);
+        let operand_list = resolved_operands(ctx, i, item_cache);
         let operands: HashMap<String, Type> = operand_list.iter().cloned().collect();
         let params = resolve_params_for_instruction(i, item_cache);
         let encoding_arms = get_encoding_arms(i, item_cache);
@@ -1184,7 +1198,7 @@ fn build_decoder<'a>(
 
     // Build a fallback: the first instruction with all-zero operands.
     let first = &instructions[0];
-    let first_ops = resolve_operands_for_instruction(first, item_cache);
+    let first_ops = resolved_operands(ctx, first, item_cache);
     let fallback = {
         let zeros: Vec<String> = first_ops
             .iter()

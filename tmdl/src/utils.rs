@@ -98,6 +98,42 @@ impl<'a, K: Eq + Hash, V: PartialEq> IntoIterator for &'a mut StableHashMap<K, V
     }
 }
 
+/// Evaluate a `bits<expr>` width expression by lowering it to a semantic
+/// expression and constant-folding it under `params` (the ISA parameter
+/// values). `None` when the expression does not converge to a constant —
+/// e.g. it references an unknown parameter or a register.
+pub fn eval_bits_width(expr: &ast::Expr, params: &HashMap<String, i64>) -> Option<u16> {
+    let mut graph = tir::sem_expr::ExprPostGraph::new();
+    let lowering = expr.lower_to_sema(&mut graph, params)?;
+    if !lowering.variable_symbols.is_empty() || !lowering.register_symbols.is_empty() {
+        return None;
+    }
+    match tir::sem_expr::execute(&graph, &[]) {
+        tir::sem_expr::Value::Int(v) => u16::try_from(v.to_u64()).ok(),
+        tir::sem_expr::Value::Float(_) => None,
+    }
+}
+
+/// Resolve `Type::BitsExpr` operand types to concrete `Type::Bits` widths
+/// under `params`. Panics on non-constant widths: sema rejects those first.
+pub fn resolve_operand_widths(
+    operands: Vec<(String, Type)>,
+    params: &HashMap<String, i64>,
+) -> Vec<(String, Type)> {
+    operands
+        .into_iter()
+        .map(|(name, ty)| match ty {
+            Type::BitsExpr(expr) => {
+                let width = eval_bits_width(&expr, params).unwrap_or_else(|| {
+                    panic!("width of operand '{name}' does not evaluate to a constant")
+                });
+                (name, Type::Bits(width))
+            }
+            other => (name, other),
+        })
+        .collect()
+}
+
 pub fn resolve_operands_for_instruction<'a>(
     inst: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,

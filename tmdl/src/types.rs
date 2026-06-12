@@ -10,6 +10,10 @@ pub enum Type {
     String,
     Integer,
     Bits(u16),
+    /// `bits<expr>` whose width is a constant expression over ISA parameters
+    /// (e.g. `bits<log2Ceil(self.XLEN)>`); resolved to `Bits` per ISA before
+    /// type checking and code generation.
+    BitsExpr(Box<crate::ast::Expr>),
     Struct(String),
 
     // HM types

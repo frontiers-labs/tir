@@ -32,7 +32,7 @@ pub fn check<'a>(files: &'a [ast::File]) -> (TypeCache<'a>, Vec<(String, Diag)>)
 
     for file in files {
         for instr in file.instructions() {
-            let env = build_instr_env(instr, &item_cache, &synonyms, &isa_param_vars);
+            let env = build_instr_env(instr, &item_cache, &synonyms, &isa_param_vars, &mut tvg);
             let mut subst = Substitution::new();
             infer(
                 &instr.behavior,
@@ -103,9 +103,16 @@ fn build_instr_env<'a>(
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     synonyms: &SynonymTable,
     isa_param_vars: &HashMap<String, TypeVar>,
+    tvg: &mut TypeVarGen,
 ) -> TypeEnv {
     let mut env = TypeEnv::new();
     for (name, ty) in utils::resolve_operands_for_instruction(instr, item_cache) {
+        // A `bits<expr>` width is ISA-dependent, so across ISAs the operand is
+        // "bits of some width", like a register class with symbolic WIDTH.
+        let ty = match ty {
+            Type::BitsExpr(_) => Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]),
+            other => other,
+        };
         env.bind(name, TypeScheme::mono(normalize(&ty, synonyms)));
     }
     for (name, ty) in synonyms {

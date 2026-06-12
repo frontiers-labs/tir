@@ -1373,15 +1373,21 @@ where
 
     let ident = select! { Token::Identifier(i) => i.to_string() };
 
+    let width = num
+        .try_map_with(|n, e| {
+            n.parse::<u16>()
+                .map_err(|_| Rich::custom(e.span(), "Expected unsigned integer"))
+        })
+        .then_ignore(just(Token::RAngle))
+        .map(Type::Bits)
+        .or(inline_expr()
+            .then_ignore(just(Token::RAngle))
+            .map(|e| Type::BitsExpr(Box::new(e))));
     let bits = just(Token::Identifier("bits"))
         .ignored()
         .then_ignore(just(Token::LAngle))
-        .then(num.try_map_with(|n, e| {
-            n.parse::<u16>()
-                .map_err(|_| Rich::custom(e.span(), "Expected unsigned integer"))
-        }))
-        .then_ignore(just(Token::RAngle))
-        .map(|((), bits)| Type::Bits(bits));
+        .then(width)
+        .map(|((), bits)| bits);
     choice((
         just(Token::Identifier("String")).to(Type::String),
         just(Token::Identifier("Integer")).to(Type::Integer),
@@ -1753,6 +1759,24 @@ mod tests {
         );
         let inst = parsed.output().expect("instruction should parse").0.clone();
         assert!(inst.schedule.is_none());
+    }
+
+    #[test]
+    fn operand_width_expression_parses() {
+        let code = "instruction Foo : Bar {
+            operands { a: bits<6>, b: bits<log2Ceil(self.XLEN)>, }
+            behavior { rd = rs1; }
+        }";
+        let (tokens, _e) = lexer().parse(code).into_output_errors();
+        let tokens = tokens.unwrap();
+        let parsed = instruction_def().then(end()).parse(
+            tokens
+                .as_slice()
+                .map((code.len()..code.len()).into(), |(t, s)| (t, s)),
+        );
+        let inst = parsed.output().expect("instruction should parse").0.clone();
+        assert_eq!(inst.operands[0].1, crate::Type::Bits(6));
+        assert!(matches!(inst.operands[1].1, crate::Type::BitsExpr(_)));
     }
 
     #[test]
