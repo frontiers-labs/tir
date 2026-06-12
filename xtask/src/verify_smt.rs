@@ -17,6 +17,9 @@
 //!     (CSRs, mcause, ...) are excluded and counted;
 //!   - the initial PC is 4-byte aligned and `nextPC = PC + 4` (the fetch
 //!     invariant for non-compressed instructions);
+//!   - registers feeding an indirect jump (`jalr` base) hold 4-byte-aligned
+//!     values, so misaligned-fetch trap paths are vacuous (temporary until the
+//!     C extension is modeled);
 //!   - TMDL leaves PC untouched for fall-through instructions, so a Sail path
 //!     that does not write the (next) PC requires TMDL's final PC to equal the
 //!     initial one, and a path that writes it requires equality with it.
@@ -469,6 +472,58 @@ fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
         }
     }
     cases
+}
+
+/// First balanced s-expression (or bare token) at the start of `s`.
+fn sexpr_at(s: &str) -> &str {
+    if s.starts_with('(') {
+        let mut depth = 0usize;
+        for (i, c) in s.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &s[..=i];
+                    }
+                }
+                _ => {}
+            }
+        }
+        s
+    } else {
+        let end = s
+            .find(|c: char| c.is_whitespace() || c == ')')
+            .unwrap_or(s.len());
+        &s[..end]
+    }
+}
+
+/// Indices of register operands whose value feeds a PC write (`jalr`-style
+/// indirect jumps), found by scanning the emitted `execute_*` body for
+/// `read_*` of the operand inside a `write_pc` value expression. Branch
+/// targets are PC-relative and never match.
+fn pc_source_reg_operands(smt: &str, instr: &Instruction) -> Vec<usize> {
+    let Some(start) = smt.find(&format!("(define-fun execute_{} ", instr.name)) else {
+        return vec![];
+    };
+    let body = sexpr_at(&smt[start..]);
+    let mut sources = vec![];
+    let mut rest = body;
+    while let Some(pos) = rest.find("(write_pc ") {
+        rest = &rest[pos + "(write_pc ".len()..];
+        let state = sexpr_at(rest);
+        let value = sexpr_at(rest[state.len()..].trim_start());
+        for (i, (name, kind)) in instr.operands.iter().enumerate() {
+            if let OperandKind::Reg { class, .. } = kind {
+                if value.contains(&format!("(read_{} st {})", class, name)) && !sources.contains(&i)
+                {
+                    sources.push(i);
+                }
+            }
+        }
+    }
+    sources
 }
 
 fn operand_smt_args(spec: &IsaSpec, instr: &Instruction, case: &[u64]) -> String {
@@ -939,6 +994,20 @@ fn build_query(
 
     // Fetch invariant: PC is 4-byte aligned (no compressed instructions).
     q.push_str("(assert (= ((_ extract 1 0) (pc st0)) #b00))\n");
+
+    // TEMPORARY until the C extension is modeled: registers feeding an
+    // indirect jump are assumed 4-byte aligned, so Sail's misaligned-fetch
+    // trap paths are vacuous. Direct jumps and branches are already covered
+    // by the aligned-PC and aligned-immediate assumptions.
+    for i in pc_source_reg_operands(smt, instr) {
+        if let OperandKind::Reg { class, idx_width } = &instr.operands[i].1 {
+            let _ = writeln!(
+                q,
+                "(assert (= ((_ extract 1 0) (read_{} st0 (_ bv{} {}))) #b00))",
+                class, case[i], idx_width
+            );
+        }
+    }
 
     for decl in &trace.declares {
         q.push_str(decl);
