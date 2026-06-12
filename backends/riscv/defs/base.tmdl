@@ -416,7 +416,9 @@ template ShiftImm for [RV32I, RV64I] {
     operands {
         rd: GPR,
         rs1: GPR,
-        imm: bits<6>,
+        // 5-bit shamt on RV32, 6-bit on RV64; the spare encoding bit on RV32
+        // stays zero (shamt[5]=1 is a reserved encoding).
+        imm: bits<log2Ceil(self.XLEN)>,
     }
 
     encoding {
