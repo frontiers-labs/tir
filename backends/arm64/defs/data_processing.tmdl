@@ -107,7 +107,9 @@ instruction Compare for [ARMv8A64] : CmpRegTemplate {
         } else {
             zext(0b0, 1)
         };
-        PSTATE::v = zext(0b0, 1);
+        // Signed overflow of rn - rm: operands differ in sign and the result's
+        // sign differs from rn's.
+        PSTATE::v = extract((rn ^ rm) & (rn ^ (rn - rm)), self.XLEN - 1, self.XLEN - 1);
     }
 }
 
