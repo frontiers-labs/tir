@@ -370,7 +370,7 @@ instruction SetLessThanUnsignedImm for [RV32I, RV64I] : IALUOp {
     param FUNCT3: bits<3> = 0b011;
 
     behavior {
-        rd = if rs1 ~< zext(imm, self.XLEN) {
+        rd = if rs1 ~< sext(imm, self.XLEN) {
             zext(0b1, self.XLEN)
         } else {
             zext(0b0, self.XLEN)
