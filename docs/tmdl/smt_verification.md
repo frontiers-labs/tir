@@ -78,4 +78,5 @@ used, so stubs are sufficient.
 One line per instruction, one character per checked path: `.` proven
 equivalent, `X` divergence (counterexample printed below the summary), `-`
 excluded trap/system path, `E` no Sail execution path (the word is likely
-illegal — an encoding bug), `?` solver timeout.
+illegal — an encoding bug), `I` isla failed or timed out on the word, `?`
+solver timeout.

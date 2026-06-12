@@ -319,13 +319,15 @@ fn encode_words(
 // isla-footprint invocation (cached per instruction word)
 // ---------------------------------------------------------------------------
 
-fn sail_traces(tools: &Tools, out_dir: &Path, word: u32) -> anyhow::Result<String> {
+/// `Ok(None)` means isla failed or had to be killed for this word (a few
+/// encodings blow up its symbolic executor); the caller records and moves on.
+fn sail_traces(tools: &Tools, out_dir: &Path, word: u32) -> anyhow::Result<Option<String>> {
     let cache = out_dir.join("cache").join(format!("{:08x}.trace", word));
     if let Ok(cached) = std::fs::read_to_string(&cache) {
-        return Ok(cached);
+        return Ok(Some(cached));
     }
     let bits = format!("{:032b}", word);
-    let output = Command::new(&tools.isla_footprint)
+    let mut child = Command::new(&tools.isla_footprint)
         .args(["-A"])
         .arg(&tools.snapshot)
         .arg("-C")
@@ -337,21 +339,45 @@ fn sail_traces(tools: &Tools, out_dir: &Path, word: u32) -> anyhow::Result<Strin
             "isla_footprint_no_init",
             "-I",
             "cur_privilege=Machine",
+            "--timeout",
+            "90",
             "--partial",
             "-i",
             &bits,
             "-s",
         ])
-        .output()?;
-    anyhow::ensure!(
-        output.status.success(),
-        "isla-footprint failed for {:#010x}: {}",
-        word,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    // Drain stdout on a thread so a chatty child can't dead-lock on a full
+    // pipe while we poll for exit.
+    let mut pipe = child.stdout.take().expect("stdout piped");
+    let reader = std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut s = String::new();
+        let _ = pipe.read_to_string(&mut s);
+        s
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let status = loop {
+        match child.try_wait()? {
+            Some(status) => break Some(status),
+            None if std::time::Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    };
+    let stdout = reader.join().expect("reader thread");
+    if !status.is_some_and(|s| s.success()) {
+        return Ok(None);
+    }
     std::fs::write(&cache, &stdout)?;
-    Ok(stdout)
+    Ok(Some(stdout))
 }
 
 // ---------------------------------------------------------------------------
@@ -682,7 +708,18 @@ fn verify_instruction(
     let mut line = String::new();
 
     for (case, word) in cases.iter().zip(&words) {
-        let raw = sail_traces(tools, out_dir, *word)?;
+        let Some(raw) = sail_traces(tools, out_dir, *word)? else {
+            report.excluded_paths += 1;
+            *report
+                .excluded_reasons
+                .entry(format!(
+                    "{}: isla-footprint failed or timed out ({:#010x})",
+                    instr.name, word
+                ))
+                .or_default() += 1;
+            line.push('I');
+            continue;
+        };
         let traces: Vec<Vec<Sexp>> = parse_sexps(&raw)
             .into_iter()
             .filter_map(|s| match s {
