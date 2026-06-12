@@ -6,7 +6,8 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    get_encoding_arms, resolve_operands_for_instruction, resolve_params_for_instruction,
+    get_encoding_arms, resolve_isa_param_values, resolve_operands_for_instruction,
+    resolve_params_for_instruction,
 };
 use tir::graph::{Dag, NodeId};
 
@@ -123,6 +124,25 @@ fn build_instructions<'a>(
     let mut encode_arms = vec![];
     let mut execute_arms = vec![];
 
+    // `(class, register-name) -> encoding index` so register paths without a
+    // numeric index (e.g. `PC::pc`) lower to a stable slot.
+    let register_index_map: HashMap<(String, String), u32> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .flat_map(|rc| {
+            let class = rc.name.clone();
+            rc.register_indices()
+                .into_iter()
+                .map(move |(name, idx)| ((class.clone(), name), u32::from(idx)))
+        })
+        .collect();
+    let pc_classes: std::collections::HashSet<String> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .filter(|rc| is_pc_class(rc))
+        .map(|rc| rc.name.to_lowercase())
+        .collect();
+
     for i in files.iter().flat_map(|f| f.instructions()) {
         let name = i.name.to_lowercase();
         let uppercase_name = name.to_uppercase();
@@ -141,7 +161,19 @@ fn build_instructions<'a>(
             format!("((st TMDLState) {smt_operands_joined})")
         };
         let smt_encoding = build_smt_encoding(item_cache, i, &operands);
-        let smt_behavior = build_smt_behavior(item_cache, i, &operands);
+        let smt_behavior =
+            build_smt_behavior(item_cache, i, &operands, &register_index_map, &pc_classes);
+        // Untranslatable behaviors (e.g. memory accesses) get an identity body
+        // plus a machine-readable marker so verification tooling can tell
+        // "proven unchanged" apart from "not modeled".
+        let (smt_behavior, marker) = match smt_behavior {
+            Some(b) => (b, String::new()),
+            None => (
+                "st".to_string(),
+                format!("\n; UNSUPPORTED-BEHAVIOR: {}", name),
+            ),
+        };
+        write!(output, "{}", marker)?;
 
         let operand_names = operands
             .iter()
@@ -180,7 +212,8 @@ fn build_instructions<'a>(
             .join(" ");
 
         if operand_list.is_empty() {
-            encode_arms.push(format!("((_ is {uppercase_name}) instr) (encode_{name})"));
+            // Nullary functions and constructors are referenced bare in SMT-LIB.
+            encode_arms.push(format!("((_ is {uppercase_name}) instr) encode_{name}"));
             execute_arms.push(format!(
                 "((_ is {uppercase_name}) instr) (execute_{name} state)"
             ));
@@ -319,6 +352,83 @@ fn build_smt_encoding<'a>(
 // Behavior (execution semantics)
 // ---------------------------------------------------------------------------
 
+/// Sort of an emitted SMT expression. Mirrors the width/signedness tracking of
+/// the sem-expr interpreter (`tir::sem_expr::exec`), which evaluates behaviors
+/// over `APInt`s of varying width: every value is a bitvector of the
+/// interpreter's width, except comparisons which stay `Bool` until they cross
+/// back into arithmetic.
+#[derive(Clone, Copy, PartialEq)]
+enum SmtSort {
+    Bool,
+    Bv { width: u32, signed: bool },
+}
+
+#[derive(Clone)]
+struct SmtVal {
+    expr: String,
+    sort: SmtSort,
+}
+
+impl SmtVal {
+    fn bv(expr: String, width: u32, signed: bool) -> Self {
+        SmtVal {
+            expr,
+            sort: SmtSort::Bv { width, signed },
+        }
+    }
+
+    fn boolean(expr: String) -> Self {
+        SmtVal {
+            expr,
+            sort: SmtSort::Bool,
+        }
+    }
+
+    /// Comparison results materialize as width-1 integers, matching the
+    /// interpreter's `APInt::new(1, ...)`.
+    fn as_bv(&self) -> (String, u32, bool) {
+        match &self.sort {
+            SmtSort::Bool => (format!("(ite {} (_ bv1 1) (_ bv0 1))", self.expr), 1, false),
+            SmtSort::Bv { width, signed } => (self.expr.clone(), *width, *signed),
+        }
+    }
+
+    fn as_bool(&self) -> String {
+        match &self.sort {
+            SmtSort::Bool => self.expr.clone(),
+            SmtSort::Bv { width, .. } => {
+                format!("(distinct {} (_ bv0 {}))", self.expr, width)
+            }
+        }
+    }
+}
+
+/// Mirror of `exec::widen`: sign-extend signed values, zero-extend unsigned
+/// ones, no-op when already at least `target` wide.
+fn widen_smt(expr: &str, width: u32, signed: bool, target: u32) -> String {
+    if width >= target {
+        expr.to_string()
+    } else if signed {
+        format!("((_ sign_extend {}) {})", target - width, expr)
+    } else {
+        format!("((_ zero_extend {}) {})", target - width, expr)
+    }
+}
+
+/// Widen both operands to a common width, mirroring `exec::coerce_ints`.
+fn coerce_smt(a: &SmtVal, b: &SmtVal) -> (String, String, u32, bool, bool) {
+    let (ea, wa, sa) = a.as_bv();
+    let (eb, wb, sb) = b.as_bv();
+    let w = wa.max(wb);
+    (
+        widen_smt(&ea, wa, sa, w),
+        widen_smt(&eb, wb, sb, w),
+        w,
+        sa,
+        sb,
+    )
+}
+
 enum SmtSymbolInfo {
     Register { class: String, number: u32 },
     Variable { name: String },
@@ -328,33 +438,109 @@ struct SmtSymbolResolver<'a> {
     symbols: HashMap<u32, SmtSymbolInfo>,
     operands: &'a HashMap<String, Type>,
     state_name: &'a str,
+    pc_classes: &'a std::collections::HashSet<String>,
 }
 
 impl SmtSymbolResolver<'_> {
-    fn resolve(&self, symbol_id: u32) -> Option<String> {
+    fn resolve(&self, symbol_id: u32) -> Option<SmtVal> {
         let symbol = self.symbols.get(&symbol_id)?;
 
         match symbol {
-            SmtSymbolInfo::Register { class, number } => Some(format!(
-                "(read_{} {} (_ bv{} {}))",
-                class.to_lowercase(),
-                self.state_name,
-                number,
-                REG_INDEX_WIDTH
-            )),
-            SmtSymbolInfo::Variable { name } => {
-                if let Some(Type::Struct(rc)) = self.operands.get(name) {
-                    Some(format!(
-                        "(read_{} {} {})",
-                        rc.to_lowercase(),
-                        self.state_name,
-                        name.to_lowercase()
+            SmtSymbolInfo::Register { class, number } => {
+                let class = class.to_lowercase();
+                if self.pc_classes.contains(&class) {
+                    Some(SmtVal::bv(
+                        format!("(pc {})", self.state_name),
+                        REG_VALUE_WIDTH as u32,
+                        false,
                     ))
                 } else {
-                    Some(name.to_lowercase())
+                    Some(SmtVal::bv(
+                        format!(
+                            "(read_{} {} (_ bv{} {}))",
+                            class, self.state_name, number, REG_INDEX_WIDTH
+                        ),
+                        REG_VALUE_WIDTH as u32,
+                        false,
+                    ))
                 }
             }
+            SmtSymbolInfo::Variable { name } => match self.operands.get(name)? {
+                Type::Struct(rc) => {
+                    let rc = rc.to_lowercase();
+                    if self.pc_classes.contains(&rc) {
+                        Some(SmtVal::bv(
+                            format!("(pc {})", self.state_name),
+                            REG_VALUE_WIDTH as u32,
+                            false,
+                        ))
+                    } else {
+                        Some(SmtVal::bv(
+                            format!("(read_{} {} {})", rc, self.state_name, name.to_lowercase()),
+                            REG_VALUE_WIDTH as u32,
+                            false,
+                        ))
+                    }
+                }
+                // Immediate operands are passed as zero-extended 64-bit
+                // function parameters; their semantic width is the declared
+                // field width, which `sext`/`zext` in behaviors rely on.
+                Type::Bits(n) => {
+                    let n = (*n as u32).min(REG_VALUE_WIDTH as u32);
+                    if n == REG_VALUE_WIDTH as u32 {
+                        Some(SmtVal::bv(name.to_lowercase(), n, false))
+                    } else {
+                        Some(SmtVal::bv(
+                            format!("((_ extract {} 0) {})", n - 1, name.to_lowercase()),
+                            n,
+                            false,
+                        ))
+                    }
+                }
+                Type::Integer => Some(SmtVal::bv(
+                    name.to_lowercase(),
+                    REG_VALUE_WIDTH as u32,
+                    false,
+                )),
+                _ => None,
+            },
         }
+    }
+}
+
+/// Evaluate a symbol-free subtree to a constant, mirroring the interpreter's
+/// width rules. Width expressions like `log2Ceil(self.XLEN) - 1` reach the
+/// emitter unfolded, so structural `Constant` matching is not enough.
+fn eval_const_subtree(graph: &tir::sem_expr::ExprPostGraph, node: NodeId) -> Option<(u64, u32)> {
+    use tir::sem_expr::{ExprKind, ExprPayload};
+
+    let child = |idx: usize| eval_const_subtree(graph, graph.children(node).nth(idx)?);
+    let arith = |f: fn(u64, u64) -> u64| -> Option<(u64, u32)> {
+        let (a, wa) = child(0)?;
+        let (b, wb) = child(1)?;
+        let w = wa.max(wb);
+        let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
+        Some((f(a, b) & mask, w))
+    };
+
+    match graph.get_node(node) {
+        ExprKind::Constant => match graph.get_leaf_data(node)? {
+            ExprPayload::Int(i) => Some((i.to_u64(), i.width())),
+            _ => None,
+        },
+        ExprKind::Add => arith(u64::wrapping_add),
+        ExprKind::Sub => arith(u64::wrapping_sub),
+        ExprKind::Mul => arith(u64::wrapping_mul),
+        ExprKind::Log2Ceil => {
+            let (v, w) = child(0)?;
+            let result = if v <= 1 {
+                0u64
+            } else {
+                64 - (v - 1).leading_zeros() as u64
+            };
+            Some((result, w))
+        }
+        _ => None,
     }
 }
 
@@ -362,14 +548,38 @@ fn emit_sem_expr(
     graph: &tir::sem_expr::ExprPostGraph,
     node: NodeId,
     resolver: &SmtSymbolResolver<'_>,
-) -> Option<String> {
+) -> Option<SmtVal> {
     use tir::sem_expr::{ExprKind, ExprPayload};
 
-    let child = |idx: usize| {
-        let child = graph.children(node).nth(idx)?;
-        emit_sem_expr(graph, child, resolver)
+    let child_node = |idx: usize| graph.children(node).nth(idx);
+    let child = |idx: usize| emit_sem_expr(graph, child_node(idx)?, resolver);
+    let const_child =
+        |idx: usize| -> Option<u64> { Some(eval_const_subtree(graph, child_node(idx)?)?.0) };
+    // Result signedness `signed && signed` mirrors `APInt` binary ops.
+    let arith = |op: &str| -> Option<SmtVal> {
+        let (a, b, w, sa, sb) = coerce_smt(&child(0)?, &child(1)?);
+        Some(SmtVal::bv(format!("({} {} {})", op, a, b), w, sa && sb))
     };
-    let binary = |op: &str| Some(format!("({} {} {})", op, child(0)?, child(1)?));
+    let cmp = |op: &str| -> Option<SmtVal> {
+        let (a, b, _, _, _) = coerce_smt(&child(0)?, &child(1)?);
+        Some(SmtVal::boolean(format!("({} {} {})", op, a, b)))
+    };
+    // Result width is the left operand's width; the amount is reinterpreted at
+    // that width, matching the interpreter's `amount.to_u64()`.
+    let shift = |op: &str, signed: fn(bool) -> bool| -> Option<SmtVal> {
+        let (lhs, wl, sl) = child(0)?.as_bv();
+        let (amt, wamt, samt) = child(1)?.as_bv();
+        let amt = if wamt > wl {
+            format!("((_ extract {} 0) {})", wl - 1, amt)
+        } else {
+            widen_smt(&amt, wamt, samt, wl)
+        };
+        Some(SmtVal::bv(
+            format!("({} {} {})", op, lhs, amt),
+            wl,
+            signed(sl),
+        ))
+    };
 
     match graph.get_node(node) {
         ExprKind::Symbol => match graph.get_leaf_data(node)? {
@@ -377,71 +587,178 @@ fn emit_sem_expr(
             _ => None,
         },
         ExprKind::Constant => match graph.get_leaf_data(node)? {
-            ExprPayload::Int(i) => Some(format!("(_ bv{} {})", i.to_u64(), i.width())),
+            ExprPayload::Int(i) => {
+                let w = i.width();
+                let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
+                Some(SmtVal::bv(
+                    format!("(_ bv{} {})", i.to_u64() & mask, w),
+                    w,
+                    i.is_signed(),
+                ))
+            }
             _ => None,
         },
-        ExprKind::Add => binary("bvadd"),
-        ExprKind::Sub => binary("bvsub"),
-        ExprKind::Mul => binary("bvmul"),
-        ExprKind::Div => binary("bvsdiv"),
-        ExprKind::UDiv => binary("bvudiv"),
-        ExprKind::Eq => binary("="),
-        ExprKind::Ne => binary("distinct"),
-        ExprKind::Lt => binary("bvslt"),
-        ExprKind::Gt => binary("bvsgt"),
-        ExprKind::Ge => binary("bvsge"),
-        ExprKind::ULt => binary("bvult"),
-        ExprKind::ULe => binary("bvule"),
-        ExprKind::UGt => binary("bvugt"),
-        ExprKind::UGe => binary("bvuge"),
-        ExprKind::ShiftLeft => binary("bvshl"),
-        ExprKind::ShiftRightArithmetic => binary("bvashr"),
-        ExprKind::ShiftRightLogic => binary("bvlshr"),
-        ExprKind::Or => binary("bvor"),
-        ExprKind::And => binary("bvand"),
-        ExprKind::Xor => binary("bvxor"),
-        ExprKind::If => Some(format!(
-            "(ite (not (= {} (_ bv0 64))) {} {})",
-            child(0)?,
-            child(1)?,
-            child(2)?
-        )),
-        ExprKind::Clamp
-        | ExprKind::LoadMemory
-        | ExprKind::StoreMemory
-        | ExprKind::ZExt
-        | ExprKind::SExt
-        | ExprKind::Extract
-        | ExprKind::Log2Ceil
-        | ExprKind::Sqrt
-        | ExprKind::Fma => None,
+        ExprKind::Add => arith("bvadd"),
+        ExprKind::Sub => arith("bvsub"),
+        ExprKind::Mul => arith("bvmul"),
+        ExprKind::Div => arith("bvsdiv"),
+        ExprKind::UDiv => arith("bvudiv"),
+        ExprKind::Eq => cmp("="),
+        ExprKind::Ne => cmp("distinct"),
+        ExprKind::Lt => cmp("bvslt"),
+        ExprKind::Gt => cmp("bvsgt"),
+        ExprKind::Ge => cmp("bvsge"),
+        ExprKind::ULt => cmp("bvult"),
+        ExprKind::ULe => cmp("bvule"),
+        ExprKind::UGt => cmp("bvugt"),
+        ExprKind::UGe => cmp("bvuge"),
+        ExprKind::ShiftLeft => shift("bvshl", |s| s),
+        ExprKind::ShiftRightLogic => shift("bvlshr", |_| false),
+        // An arithmetic shift always treats its operand as signed, like the
+        // interpreter, which forces the signedness flag before shifting.
+        ExprKind::ShiftRightArithmetic => shift("bvashr", |_| true),
+        ExprKind::Or => arith("bvor"),
+        ExprKind::And => arith("bvand"),
+        ExprKind::Xor => arith("bvxor"),
+        ExprKind::If => {
+            let cond = child(0)?.as_bool();
+            let (t, e, w, st, se) = coerce_smt(&child(1)?, &child(2)?);
+            Some(SmtVal::bv(
+                format!("(ite {} {} {})", cond, t, e),
+                w,
+                st || se,
+            ))
+        }
+        ExprKind::ZExt => {
+            let (e, w, _) = child(0)?.as_bv();
+            let target = const_child(1)? as u32;
+            if target < w {
+                return None;
+            }
+            Some(SmtVal::bv(
+                widen_smt(&e, w, false, target),
+                target.max(w),
+                false,
+            ))
+        }
+        ExprKind::SExt => {
+            let (e, w, _) = child(0)?.as_bv();
+            let target = const_child(1)? as u32;
+            if target < w {
+                return None;
+            }
+            Some(SmtVal::bv(
+                widen_smt(&e, w, true, target),
+                target.max(w),
+                true,
+            ))
+        }
+        ExprKind::Extract => {
+            let (e, w, _) = child(0)?.as_bv();
+            let high = const_child(1)? as u32;
+            let low = const_child(2)? as u32;
+            if high < low {
+                return None;
+            }
+            let mul = child_node(0)?;
+            if low >= w && matches!(graph.get_node(mul), ExprKind::Mul) {
+                // `extract(a * b, 2N-1, N)` is the TMDL idiom for the high half
+                // of a full multiply (e.g. RISC-V `mulh`); the interpreter
+                // recomputes it as a signed full-width product.
+                let m0 = emit_sem_expr(graph, graph.children(mul).next()?, resolver)?;
+                let m1 = emit_sem_expr(graph, graph.children(mul).nth(1)?, resolver)?;
+                let (a, b, wm, _, _) = coerce_smt(&m0, &m1);
+                if high >= 2 * wm {
+                    return None;
+                }
+                Some(SmtVal::bv(
+                    format!(
+                        "((_ extract {} {}) (bvmul ((_ sign_extend {}) {}) ((_ sign_extend {}) {})))",
+                        high, low, wm, a, wm, b
+                    ),
+                    high - low + 1,
+                    false,
+                ))
+            } else if high < w {
+                Some(SmtVal::bv(
+                    format!("((_ extract {} {}) {})", high, low, e),
+                    high - low + 1,
+                    false,
+                ))
+            } else {
+                None
+            }
+        }
+        ExprKind::Log2Ceil => {
+            let (v, w) = eval_const_subtree(graph, node)?;
+            Some(SmtVal::bv(format!("(_ bv{} {})", v, w), w, false))
+        }
+        ExprKind::Clamp => {
+            let input = child(0)?;
+            let (_, _, signed) = input.as_bv();
+            let (lt, gt) = if signed {
+                ("bvslt", "bvsgt")
+            } else {
+                ("bvult", "bvugt")
+            };
+            let (i1, min, w1, _, _) = coerce_smt(&input, &child(1)?);
+            let (i2, max, w2, _, _) = coerce_smt(&input, &child(2)?);
+            let w = w1.max(w2);
+            let (i1, min, i2, max) = (
+                widen_smt(&i1, w1, signed, w),
+                widen_smt(&min, w1, false, w),
+                widen_smt(&i2, w2, signed, w),
+                widen_smt(&max, w2, false, w),
+            );
+            Some(SmtVal::bv(
+                format!(
+                    "(ite ({} {} {}) {} (ite ({} {} {}) {} {}))",
+                    lt, i1, min, min, gt, i2, max, max, i1
+                ),
+                w,
+                signed,
+            ))
+        }
+        ExprKind::LoadMemory | ExprKind::StoreMemory | ExprKind::Sqrt | ExprKind::Fma => None,
     }
 }
 
+/// Translate an instruction behavior into an SMT state-transition expression.
+/// Returns `None` when the behavior uses constructs the SMT model cannot
+/// express (e.g. memory accesses); callers must not pretend such instructions
+/// have identity semantics.
 fn build_smt_behavior<'a>(
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     instruction: &'a ast::Instruction,
     operands: &[(String, Type)],
-) -> String {
+    register_index_map: &HashMap<(String, String), u32>,
+    pc_classes: &std::collections::HashSet<String>,
+) -> Option<String> {
     let operands = operands.iter().cloned().collect::<HashMap<_, _>>();
-    let numeric_params: HashMap<_, _> = resolve_params_for_instruction(instruction, item_cache)
-        .into_iter()
-        .filter_map(|(name, (_ty, val))| match val {
-            Some(ast::Expr::Lit(ast::Lit::Int(li))) => {
-                Some((name, parse_literal_value_u128(&li) as i64))
-            }
-            _ => None,
-        })
-        .collect();
+    let mut numeric_params: HashMap<String, i64> =
+        resolve_isa_param_values(instruction, item_cache);
+    numeric_params.extend(
+        resolve_params_for_instruction(instruction, item_cache)
+            .into_iter()
+            .filter_map(|(name, (_ty, val))| match val {
+                Some(ast::Expr::Lit(ast::Lit::Int(li))) => {
+                    Some((name, parse_literal_value_u128(&li) as i64))
+                }
+                _ => None,
+            }),
+    );
 
     fn try_emit_sem_expr(
         e: &ast::Expr,
         operands: &HashMap<String, Type>,
         numeric_params: &HashMap<String, i64>,
+        register_index_map: &HashMap<(String, String), u32>,
+        pc_classes: &std::collections::HashSet<String>,
         state_name: &str,
-    ) -> Option<String> {
+    ) -> Option<SmtVal> {
         let mut graph = tir::sem_expr::ExprPostGraph::new();
-        let lowering = e.lower_to_sema(&mut graph, numeric_params)?;
+        let lowering =
+            e.lower_to_sema_with_registers(&mut graph, numeric_params, register_index_map)?;
         let mut symbols = HashMap::new();
         for (name, id) in &lowering.variable_symbols {
             symbols.insert(*id, SmtSymbolInfo::Variable { name: name.clone() });
@@ -459,116 +776,36 @@ fn build_smt_behavior<'a>(
             symbols,
             operands,
             state_name,
+            pc_classes,
         };
         emit_sem_expr(&graph, lowering.root, &resolver)
     }
 
-    fn eval_expr_legacy(e: &ast::Expr, operands: &HashMap<String, Type>) -> String {
-        match e {
-            ast::Expr::Lit(ast::Lit::Int(li)) => render_bv64_literal(li),
-            ast::Expr::Lit(ast::Lit::Str(ls)) => format!("\"{}\"", ls.value()),
-            ast::Expr::Ident(id) => {
-                let name = id.name.to_lowercase();
-                if let Some(ty) = operands.get(&id.name) {
-                    match ty {
-                        Type::Struct(rc) => {
-                            format!("(read_{} st {})", rc.to_lowercase(), name)
-                        }
-                        _ => name,
-                    }
-                } else {
-                    name
-                }
-            }
-            ast::Expr::Path(p) => {
-                if p.remainder.len() == 1 {
-                    let reg = p.remainder[0].to_lowercase();
-                    format!("(read_{} st {})", p.base.to_lowercase(), reg)
-                } else {
-                    "(_ bv0 64)".to_string()
-                }
-            }
-            ast::Expr::Binary(b) => {
-                let lhs = eval_expr_legacy(&b.lhs, operands);
-                let rhs = eval_expr_legacy(&b.rhs, operands);
-                let op = match b.op {
-                    ast::BinOp::Add => "bvadd",
-                    ast::BinOp::Sub => "bvsub",
-                    ast::BinOp::Mul => "bvmul",
-                    ast::BinOp::Div => "bvsdiv",
-                    ast::BinOp::UnsignedDiv => "bvudiv",
-                    ast::BinOp::Equal => "=",
-                    ast::BinOp::NotEqual => "distinct",
-                    ast::BinOp::LessThan => "bvslt",
-                    ast::BinOp::GreaterThan => "bvsgt",
-                    ast::BinOp::LessThenEqual => "bvsle",
-                    ast::BinOp::GreaterThanEqual => "bvsge",
-                    ast::BinOp::UnsignedLessThan => "bvult",
-                    ast::BinOp::UnsignedGreaterThan => "bvugt",
-                    ast::BinOp::UnsignedLessThenEqual => "bvule",
-                    ast::BinOp::UnsignedGreaterThanEqual => "bvuge",
-                    ast::BinOp::BitwiseAnd => "bvand",
-                    ast::BinOp::BitwiseOr => "bvor",
-                    ast::BinOp::BitwiseXor => "bvxor",
-                    ast::BinOp::ShiftLeftLogical => "bvshl",
-                    ast::BinOp::ShiftRightLogical => "bvlshr",
-                    ast::BinOp::ShiftRightArithmetic => "bvashr",
-                };
-                format!("({} {} {})", op, lhs, rhs)
-            }
-            ast::Expr::Slice(s) => eval_expr_legacy(&s.base, operands),
-            ast::Expr::IndexAccess(s) => eval_expr_legacy(&s.base, operands),
-            ast::Expr::Field(f) => {
-                if let ast::Expr::Ident(id) = &*f.base
-                    && id.name == "self"
-                {
-                    return f.member.to_lowercase();
-                }
-                "(_ bv0 64)".to_string()
-            }
-            ast::Expr::Block(b) => {
-                if b.last_expr_return {
-                    if let Some(last) = b.stmts.last() {
-                        eval_expr_legacy(last, operands)
-                    } else {
-                        "(_ bv0 64)".to_string()
-                    }
-                } else {
-                    "(_ bv0 64)".to_string()
-                }
-            }
-            ast::Expr::Assign(_) => "(_ bv0 64)".to_string(),
-            ast::Expr::If(i) => {
-                let c = eval_expr_legacy(&i.cond, operands);
-                let t = eval_expr_legacy(&i.then, operands);
-                let e = if let Some(e) = &i.else_ {
-                    eval_expr_legacy(e, operands)
-                } else {
-                    "(_ bv0 64)".to_string()
-                };
-                format!("(ite (not (= {} (_ bv0 64))) {} {})", c, t, e)
-            }
-            ast::Expr::BuiltinFunction(_) | ast::Expr::Call(_) | ast::Expr::Invalid => {
-                "(_ bv0 64)".to_string()
-            }
-        }
-    }
-
-    fn eval_expr(
-        e: &ast::Expr,
-        operands: &HashMap<String, Type>,
-        numeric_params: &HashMap<String, i64>,
-    ) -> String {
-        if let Some(rendered) = try_emit_sem_expr(e, operands, numeric_params, "st") {
-            rendered
-        } else {
-            eval_expr_legacy(e, operands)
-        }
-    }
-
-    let emit_expr = |e: &ast::Expr| eval_expr(e, &operands, &numeric_params);
+    let failed = std::cell::Cell::new(false);
+    let emit_val = |e: &ast::Expr| {
+        try_emit_sem_expr(
+            e,
+            &operands,
+            &numeric_params,
+            register_index_map,
+            pc_classes,
+            "st",
+        )
+        .or_else(|| {
+            failed.set(true);
+            None
+        })
+    };
+    // `compile_to_state` only evaluates `if` conditions through this closure.
+    let emit_cond = |e: &ast::Expr| {
+        emit_val(e)
+            .map(|v| v.as_bool())
+            .unwrap_or_else(|| "false".to_string())
+    };
     let emit_assign = |a: &ast::Assign, st_name: &str| {
-        let rhs = emit_expr(&a.value);
+        let rhs = emit_val(&a.value)?;
+        let (expr, width, signed) = rhs.as_bv();
+        let rhs = widen_smt(&expr, width, signed, REG_VALUE_WIDTH as u32);
         let dest_name = match &*a.dest {
             ast::Expr::Ident(id) => Some(id.name.as_str()),
             ast::Expr::Path(p) if p.remainder.len() == 1 => Some(p.remainder[0].as_str()),
@@ -577,34 +814,36 @@ fn build_smt_behavior<'a>(
         if dest_name == Some("pc") {
             Some(format!("(write_pc {} {})", st_name, rhs))
         } else if let Some(name) = dest_name {
-            if let Some(Type::Struct(rc)) = operands.get(name) {
-                Some(format!(
+            match operands.get(name) {
+                Some(Type::Struct(rc)) if pc_classes.contains(&rc.to_lowercase()) => {
+                    Some(format!("(write_pc {} {})", st_name, rhs))
+                }
+                Some(Type::Struct(rc)) => Some(format!(
                     "(write_{} {} {} {})",
                     rc.to_lowercase(),
                     st_name,
                     name.to_lowercase(),
                     rhs
-                ))
-            } else {
-                None
+                )),
+                _ => None,
             }
         } else {
             None
         }
     };
     let emit_if = |cond: &str, then_state: &str, else_state: &str| {
-        format!(
-            "(ite (not (= {} (_ bv0 64))) {} {})",
-            cond, then_state, else_state
-        )
+        format!("(ite {} {} {})", cond, then_state, else_state)
     };
-    sem_expr_state::compile_to_state(
+    let on_unsupported = |_: &ast::Expr| failed.set(true);
+    let body = sem_expr_state::compile_to_state(
         &instruction.behavior,
         "st",
-        &emit_expr,
+        &emit_cond,
         &emit_assign,
         &emit_if,
-    )
+        &on_unsupported,
+    );
+    if failed.get() { None } else { Some(body) }
 }
 
 // ---------------------------------------------------------------------------
@@ -752,7 +991,7 @@ fn build_decoder<'a>(
             .collect();
 
         let constructor = if constructor_args.is_empty() {
-            format!("({name_upper})")
+            name_upper.clone()
         } else {
             format!("({name_upper} {})", constructor_args.join(" "))
         };
@@ -773,7 +1012,7 @@ fn build_decoder<'a>(
             })
             .collect();
         if zeros.is_empty() {
-            format!("({})", first.name.to_uppercase())
+            first.name.to_uppercase()
         } else {
             format!("({} {})", first.name.to_uppercase(), zeros.join(" "))
         }
@@ -812,11 +1051,6 @@ fn render_lit_bitvec(width: u16, lit: &ast::LitInt) -> String {
 
 fn zero_bv(width: u16) -> String {
     format!("(_ bv0 {})", width)
-}
-
-fn render_bv64_literal(lit: &ast::LitInt) -> String {
-    let value = parse_literal_value_u128(lit);
-    format!("(_ bv{} 64)", value)
 }
 
 /// SMT-lib needs the full u128 range for large bitvector literals.

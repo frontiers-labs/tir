@@ -9,7 +9,7 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::utils::{
     get_encoding_arms, parse_literal_value, resolve_effective_asm_for_instruction,
-    resolve_operands_for_instruction, resolve_params_for_instruction,
+    resolve_isa_param_values, resolve_operands_for_instruction, resolve_params_for_instruction,
 };
 
 pub fn generate_rust<'a>(
@@ -414,43 +414,8 @@ fn emit_instructions<'a>(
             })
             .collect();
 
-        // ISA parameters referenced via `self.PARAM` (e.g. `XLEN`). They are not
-        // instruction/template params, so they survive lowering as unbound symbols;
-        // `execute()` binds them from here. Extension ISAs (e.g. `RVM`) inherit
-        // parameters from the base ISAs in their `requires` closure. An
-        // instruction may span ISAs that define the same parameter with different
-        // values (RV32I/RV64I `XLEN`); pick the widest so 64-bit execution is
-        // correct.
-        let isa_param_values: HashMap<String, i64> = {
-            let mut acc: HashMap<String, i64> = HashMap::new();
-            let mut pending: Vec<&str> = inst.for_isas.iter().map(String::as_str).collect();
-            let mut visited: HashSet<&str> = HashSet::new();
-            while let Some(isa_name) = pending.pop() {
-                if !visited.insert(isa_name) {
-                    continue;
-                }
-                let Some(ast::Item::Isa(isa)) = item_cache.get(isa_name) else {
-                    continue;
-                };
-                for (name, (_ty, value)) in isa.parameters.iter() {
-                    if let Some(ast::Expr::Lit(ast::Lit::Int(li))) = value {
-                        let v = parse_literal_value(li) as i64;
-                        acc.entry(name.clone())
-                            .and_modify(|e| *e = (*e).max(v))
-                            .or_insert(v);
-                    }
-                }
-                match &isa.requires {
-                    None => {}
-                    Some(ast::IsaRequirement::Single(parent)) => pending.push(parent),
-                    Some(ast::IsaRequirement::Any(parents))
-                    | Some(ast::IsaRequirement::All(parents)) => {
-                        pending.extend(parents.iter().map(String::as_str));
-                    }
-                }
-            }
-            acc
-        };
+        // `execute()` binds ISA parameters (e.g. `XLEN`) from here at runtime.
+        let isa_param_values: HashMap<String, i64> = resolve_isa_param_values(inst, item_cache);
 
         // Instructions defining several register operands (e.g. CSR ops writing
         // both `rd` and `csr`) cannot be modeled by a single-value DAG pattern;

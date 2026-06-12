@@ -204,6 +204,45 @@ pub fn resolve_params_for_instruction<'a>(
         .collect()
 }
 
+/// ISA parameters referenced via `self.PARAM` (e.g. `XLEN`). They are not
+/// instruction/template params, so they survive lowering as unbound symbols.
+/// Extension ISAs (e.g. `RVM`) inherit parameters from the base ISAs in their
+/// `requires` closure. An instruction may span ISAs that define the same
+/// parameter with different values (RV32I/RV64I `XLEN`); pick the widest so
+/// 64-bit execution is correct.
+pub fn resolve_isa_param_values<'a>(
+    inst: &'a ast::Instruction,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> HashMap<String, i64> {
+    let mut acc: HashMap<String, i64> = HashMap::new();
+    let mut pending: Vec<&str> = inst.for_isas.iter().map(String::as_str).collect();
+    let mut visited: HashSet<&str> = HashSet::new();
+    while let Some(isa_name) = pending.pop() {
+        if !visited.insert(isa_name) {
+            continue;
+        }
+        let Some(ast::Item::Isa(isa)) = item_cache.get(isa_name) else {
+            continue;
+        };
+        for (name, (_ty, value)) in isa.parameters.iter() {
+            if let Some(ast::Expr::Lit(ast::Lit::Int(li))) = value {
+                let v = parse_literal_value(li) as i64;
+                acc.entry(name.clone())
+                    .and_modify(|e| *e = (*e).max(v))
+                    .or_insert(v);
+            }
+        }
+        match &isa.requires {
+            None => {}
+            Some(ast::IsaRequirement::Single(parent)) => pending.push(parent),
+            Some(ast::IsaRequirement::Any(parents)) | Some(ast::IsaRequirement::All(parents)) => {
+                pending.extend(parents.iter().map(String::as_str));
+            }
+        }
+    }
+    acc
+}
+
 pub fn parse_literal_value(lit: &ast::LitInt) -> u64 {
     let v = lit.value();
     if let Some(stripped) = v.strip_prefix("0b") {
