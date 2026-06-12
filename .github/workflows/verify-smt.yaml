@@ -49,7 +49,6 @@ jobs:
         run: |
           export TIR_ISLA_FOOTPRINT="$HOME/isla/target/release/isla-footprint"
           export TIR_ISLA_SNAPSHOT="$HOME/isla/rv64d.ir"
-          export TIR_ISLA_CONFIG="$HOME/isla/configs/riscv64.toml"
           cargo xtask verify-smt
       - name: Upload counterexample queries
         if: failure()

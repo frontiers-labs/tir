@@ -26,8 +26,9 @@ set (x0 corner cases, register aliasing, immediate extremes):
    expose the divergence. The query files are left in
    `target/verify/smt/queries/` for inspection.
 
-Sail traces are cached in `target/verify/smt/cache/` keyed by instruction
-word; delete the directory after updating the Sail snapshot.
+Sail traces are cached in `target/verify/smt/cache/`, keyed by instruction
+word plus a fingerprint of the snapshot and isla config, so swapping either
+invalidates the cache automatically.
 
 ## Modeling assumptions
 
@@ -54,16 +55,17 @@ Three external pieces are required:
 - `z3` (the binary; `apt install z3`),
 - `isla-footprint` ≥ the current `rems-project/isla` master, built with
   `cargo build --release` (needs `libz3-dev` or `Z3_SYS_Z3_HEADER`),
-- a Sail RISC-V snapshot and isla config, e.g. `rv64d.ir` from
-  [isla-snapshots](https://github.com/rems-project/isla-snapshots) and
-  `configs/riscv64.toml` from the isla repository.
+- a Sail RISC-V snapshot, e.g. `rv64d.ir` from
+  [isla-snapshots](https://github.com/rems-project/isla-snapshots).
 
-Point the harness at them:
+The isla configuration lives in the repository
+(`xtask/verify-smt-riscv64.toml`); it pins machine mode and a `misa` with I
+and M enabled and C disabled, which the harness assumptions rely on. Point
+the harness at the tools:
 
 ```sh
 export TIR_ISLA_FOOTPRINT=/path/to/isla/target/release/isla-footprint
 export TIR_ISLA_SNAPSHOT=/path/to/isla-snapshots/rv64d.ir
-export TIR_ISLA_CONFIG=/path/to/isla/configs/riscv64.toml
 export TIR_Z3=z3
 cargo xtask verify-smt
 ```

@@ -97,12 +97,8 @@ impl Tools {
                 })?
                 .into(),
             isla_config: std::env::var("TIR_ISLA_CONFIG")
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "TIR_ISLA_CONFIG must point to an isla riscv64 .toml configuration"
-                    )
-                })?
-                .into(),
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| project_root().join("xtask/verify-smt-riscv64.toml")),
             z3: var("TIR_Z3", "z3").into(),
         };
         Ok(tools)
@@ -319,10 +315,30 @@ fn encode_words(
 // isla-footprint invocation (cached per instruction word)
 // ---------------------------------------------------------------------------
 
+/// Traces depend on the Sail snapshot and isla config; fingerprint both so a
+/// swap invalidates the cache.
+fn cache_fingerprint(tools: &Tools) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::fs::read(&tools.isla_config)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    tools.snapshot.hash(&mut hasher);
+    std::fs::metadata(&tools.snapshot)
+        .map(|m| m.len())
+        .unwrap_or(0)
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
 /// `Ok(None)` means isla failed or had to be killed for this word (a few
 /// encodings blow up its symbolic executor); the caller records and moves on.
 fn sail_traces(tools: &Tools, out_dir: &Path, word: u32) -> anyhow::Result<Option<String>> {
-    let cache = out_dir.join("cache").join(format!("{:08x}.trace", word));
+    let cache = out_dir.join("cache").join(format!(
+        "{:08x}-{:016x}.trace",
+        word,
+        cache_fingerprint(tools)
+    ));
     if let Ok(cached) = std::fs::read_to_string(&cache) {
         return Ok(Some(cached));
     }
