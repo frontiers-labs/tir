@@ -1,4 +1,4 @@
-# This is a config for Sail RISC-V in 64-bit mode
+# This is a config for Sail RISC-V in 32-bit mode
 
 pc = "PC"
 
@@ -8,6 +8,7 @@ zero_announce_exit = true
 
 default_sizeof = 4
 
+in_program_order = ["sail_barrier"]
 
 [[toolchain]]
 name = "macos-riscv64"
@@ -20,7 +21,7 @@ linker = "riscv64-elf-ld"
 
 [[toolchain]]
 name = "default"
-assembler = "riscv64-linux-gnu-as -march=rv64imac"
+assembler = "riscv64-linux-gnu-as -march=rv32imac"
 objdump = "riscv64-linux-gnu-objdump"
 linker = "riscv64-linux-gnu-ld"
 nm = "riscv64-linux-gnu-nm"
@@ -43,16 +44,17 @@ top = "0x80410000"
 stride = "0x10"
 
 [registers.defaults]
-satp = "0x0000000000000000"
-# RV64 (MXL=2) with I and M enabled; C stays off so the 4-byte PC alignment
+satp = "0x00000000"
+# RV32 (MXL=1) with I and M enabled; C stays off so the 4-byte PC alignment
 # assumption in xtask verify-smt holds.
-misa = "{ bits = 0x8000000000001100 }"
-mstatus = "{ bits = 0x0000000000000000 }"
-# Direct mode, base 0: trap paths must reach the architectural state writes
-# (mcause, mepc, ...) instead of asserting on a symbolic tvec mode.
-mtvec = "{ bits = 0x0000000000000000 }"
+misa = "{ bits = 0x40001100 }"
+mstatus = "{ bits = 0x00000000 }"
 mcountinhibit = " { bits = 0x00000000 }"
+mcyclecfg = "{ bits = 0x0000000000000000 }"
+minstretcfg = "{ bits = 0x0000000000000000 }"
 mtimecmp = "0x0000000000000000"
+stimecmp = "0x0000000000000000"
+__isla_always_aligned = "true"
 
 [const_primops]
 get_config_print_reg = false
@@ -73,13 +75,13 @@ plat_enable_dirty_update = false
 plat_enable_misaligned_access = false
 plat_mtval_has_illegal_inst_bits = false
 plat_insns_per_tick = 10
-plat_ram_base = "0x0000000080000000"
-plat_ram_size = "0x0000000004000000"
-plat_rom_base = "0x0000000000001000"
-plat_rom_size = "0x0000000000000100"
-plat_clint_base = "0x0000000002000000"
-plat_clint_size = "0x00000000000c0000"
-plat_htif_tohost = "0x0000000040001000"
+plat_ram_base = "0x80000000"
+plat_ram_size = "0x04000000"
+plat_rom_base = "0x00001000"
+plat_rom_size = "0x00000100"
+plat_clint_base = "0x02000000"
+plat_clint_size = "0x000c0000"
+plat_htif_tohost = "0x40001000"
 plat_get_16_random_bits = "undefined : %bv16"
 plat_term_write = "()"
 print_reg = "()"

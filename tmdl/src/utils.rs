@@ -243,6 +243,72 @@ pub fn resolve_isa_param_values<'a>(
     acc
 }
 
+/// True when an item declared `for [for_isas]` is part of the `target` ISA:
+/// either `target` is listed directly, or a listed extension ISA reaches
+/// `target` through its `requires` closure (e.g. `RVM requires [RV32I | RV64I]`
+/// makes RVM instructions part of both RV32I and RV64I targets).
+pub fn item_supports_isa<'a>(
+    for_isas: &[String],
+    target: &str,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> bool {
+    let mut pending: Vec<&str> = for_isas.iter().map(String::as_str).collect();
+    let mut visited: HashSet<&str> = HashSet::new();
+    while let Some(isa_name) = pending.pop() {
+        if isa_name == target {
+            return true;
+        }
+        if !visited.insert(isa_name) {
+            continue;
+        }
+        let Some(ast::Item::Isa(isa)) = item_cache.get(isa_name) else {
+            continue;
+        };
+        match &isa.requires {
+            None => {}
+            Some(ast::IsaRequirement::Single(parent)) => pending.push(parent),
+            Some(ast::IsaRequirement::Any(parents)) | Some(ast::IsaRequirement::All(parents)) => {
+                pending.extend(parents.iter().map(String::as_str));
+            }
+        }
+    }
+    false
+}
+
+/// Parameter values visible from `target`: its own parameters and those
+/// inherited through its `requires` closure, nearest definition winning.
+pub fn isa_param_values<'a>(
+    target: &str,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> HashMap<String, i64> {
+    let mut acc: HashMap<String, i64> = HashMap::new();
+    let mut pending: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
+    pending.push_back(target);
+    let mut visited: HashSet<&str> = HashSet::new();
+    while let Some(isa_name) = pending.pop_front() {
+        if !visited.insert(isa_name) {
+            continue;
+        }
+        let Some(ast::Item::Isa(isa)) = item_cache.get(isa_name) else {
+            continue;
+        };
+        for (name, (_ty, value)) in isa.parameters.iter() {
+            if let Some(ast::Expr::Lit(ast::Lit::Int(li))) = value {
+                acc.entry(name.clone())
+                    .or_insert(parse_literal_value(li) as i64);
+            }
+        }
+        match &isa.requires {
+            None => {}
+            Some(ast::IsaRequirement::Single(parent)) => pending.push_back(parent),
+            Some(ast::IsaRequirement::Any(parents)) | Some(ast::IsaRequirement::All(parents)) => {
+                pending.extend(parents.iter().map(String::as_str));
+            }
+        }
+    }
+    acc
+}
+
 pub fn parse_literal_value(lit: &ast::LitInt) -> u64 {
     let v = lit.value();
     if let Some(stripped) = v.strip_prefix("0b") {

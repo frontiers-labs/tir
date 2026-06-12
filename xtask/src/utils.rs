@@ -28,43 +28,17 @@ pub fn git_checkout(sh: &Shell, url: &str, tag: &str, dest: &str) -> anyhow::Res
     Ok(())
 }
 
-pub fn cmake_configure(sh: &Shell, source_dir: &Path, build_dir: &Path) -> anyhow::Result<()> {
-    if !build_dir.exists() {
-        std::fs::create_dir_all(build_dir)?;
+/// Download `url` to `dest` unless it already exists. Downloads go through a
+/// `.part` file so an interrupted run never leaves a truncated artifact.
+pub fn download_file(sh: &Shell, url: &str, dest: &Path) -> anyhow::Result<()> {
+    if dest.exists() {
+        return Ok(());
     }
-    cmd!(
-        sh,
-        "cmake -S {source_dir} -B {build_dir} -DCMAKE_BUILD_TYPE=Release"
-    )
-    .run()?;
-    Ok(())
-}
-
-pub fn cmake_build(sh: &Shell, build_dir: &Path, target: &str) -> anyhow::Result<()> {
-    cmd!(
-        sh,
-        "cmake --build {build_dir} --target {target} --config Release -- -j"
-    )
-    .run()?;
-    Ok(())
-}
-
-pub fn emit_rocq_riscv(sh: &Shell, out_path: &Path) -> anyhow::Result<()> {
-    let root = project_root();
-    let input1 = root.join("backends/riscv/defs/main.tmdl");
-    let input2 = root.join("backends/riscv/defs/base.tmdl");
-
-    if let Some(parent) = out_path.parent() {
+    if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
-
-    // Use cargo to run tmdlc to emit Rocq
-    let out_str = out_path.to_string_lossy().to_string();
-    cmd!(
-        sh,
-        "cargo run -p tmdl --bin tmdlc -- --action emit-rocq --output {out_str} {input1} {input2}"
-    )
-    .run()?;
-
+    let part = dest.with_extension("part");
+    cmd!(sh, "curl -fsSL --retry 3 -o {part} {url}").run()?;
+    std::fs::rename(&part, dest)?;
     Ok(())
 }

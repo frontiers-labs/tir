@@ -1,5 +1,5 @@
 //! SMT equivalence checking of TMDL instruction semantics against the Sail
-//! RISC-V model (the architecture's golden model).
+//! model of the target architecture (the architecture's golden model).
 //!
 //! For every supported TMDL instruction and a set of concrete operand
 //! assignments:
@@ -10,7 +10,7 @@
 //!      execution path;
 //!   3. for each path, z3 is asked for a register state where TMDL and Sail
 //!      disagree on the final GPRs or PC. `unsat` proves agreement for ALL
-//!      2^64 values of every register; `sat` yields a counterexample.
+//!      2^XLEN values of every register; `sat` yields a counterexample.
 //!
 //! Modeling assumptions, reported with the results:
 //!   - machine mode, no traps: paths that touch unmapped architectural state
@@ -18,33 +18,122 @@
 //!   - the initial PC is 4-byte aligned and `nextPC = PC + 4` (the fetch
 //!     invariant for non-compressed instructions);
 //!   - TMDL leaves PC untouched for fall-through instructions, so a Sail path
-//!     that does not write `nextPC` requires TMDL's final PC to equal the
-//!     initial one, and a path that writes `nextPC` requires equality with it.
+//!     that does not write the (next) PC requires TMDL's final PC to equal the
+//!     initial one, and a path that writes it requires equality with it.
 //!
-//! External tools: `isla-footprint` (with a Sail RISC-V snapshot + isla config)
-//! and `z3`. Override locations with `TIR_ISLA_FOOTPRINT`, `TIR_ISLA_SNAPSHOT`,
-//! `TIR_ISLA_CONFIG`, `TIR_Z3`. `TIR_VERIFY_SMT_FILTER=add,sub` restricts the
-//! instruction set.
+//! External tools: `isla-footprint` and `z3`, plus a Sail model snapshot and
+//! an isla config per ISA. isla is cloned and built and the snapshot is
+//! downloaded automatically; override locations with `TIR_ISLA_FOOTPRINT`,
+//! `TIR_ISLA_SNAPSHOT`, `TIR_ISLA_CONFIG`, `TIR_Z3`. `TIR_ISLA_REF` pins the
+//! isla checkout and `TIR_ISLA_SNAPSHOTS_REF` the snapshot ref (both default
+//! to master). `TIR_VERIFY_SMT_FILTER=add,sub` restricts the instruction set.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::utils::project_root;
+use crate::utils::{download_file, git_checkout, project_root};
+use anyhow::anyhow;
 use xshell::{cmd, Shell};
 
-const REG_COUNT: u32 = 32;
+pub struct IsaSpec {
+    name: &'static str,
+    tmdl_isa: &'static str,
+    dialect: &'static str,
+    defs_dir: &'static str,
+    /// Snapshot file name in the isla-snapshots repository.
+    snapshot: &'static str,
+    /// isla config file name under `xtask/`.
+    config: &'static str,
+    xlen: u32,
+    /// Sail GPR names are `{reg_prefix}{n}` for `n < reg_count`.
+    reg_prefix: &'static str,
+    reg_count: u32,
+    /// Encoding index that names the hardwired-zero register, if it is not a
+    /// real Sail register (RISC-V `x0`; AArch64 has no `R31`).
+    zero_reg: Option<u32>,
+    pc: &'static str,
+    /// Sail's delayed PC register written by branches, when the model has one
+    /// (RISC-V `nextPC`); the ARM model writes the PC directly.
+    next_pc: Option<&'static str>,
+    /// Model bookkeeping registers with no architectural meaning; reads and
+    /// writes of them never exclude a path.
+    ignore_regs: &'static [&'static str],
+    isla_args: &'static [&'static str],
+}
 
-pub fn verify_smt(sh: &Shell) -> anyhow::Result<()> {
-    let tools = Tools::from_env()?;
+const ISA_SPECS: &[IsaSpec] = &[
+    IsaSpec {
+        name: "riscv64",
+        tmdl_isa: "RV64I",
+        dialect: "riscv",
+        defs_dir: "backends/riscv/defs",
+        snapshot: "riscv64.ir",
+        config: "verify-smt-riscv64.toml",
+        xlen: 64,
+        reg_prefix: "x",
+        reg_count: 32,
+        zero_reg: Some(0),
+        pc: "PC",
+        next_pc: Some("nextPC"),
+        ignore_regs: &[],
+        isla_args: &["-I", "cur_privilege=Machine"],
+    },
+    IsaSpec {
+        name: "riscv32",
+        tmdl_isa: "RV32I",
+        dialect: "riscv",
+        defs_dir: "backends/riscv/defs",
+        snapshot: "rv32d.ir",
+        config: "verify-smt-riscv32.toml",
+        xlen: 32,
+        reg_prefix: "x",
+        reg_count: 32,
+        zero_reg: Some(0),
+        pc: "PC",
+        next_pc: Some("nextPC"),
+        ignore_regs: &[],
+        isla_args: &["-I", "cur_privilege=Machine"],
+    },
+    IsaSpec {
+        name: "armv8",
+        tmdl_isa: "ARMv8A64",
+        dialect: "arm64",
+        defs_dir: "backends/arm64/defs",
+        snapshot: "armv8p5.ir",
+        config: "verify-smt-armv8.toml",
+        xlen: 64,
+        reg_prefix: "R",
+        reg_count: 31,
+        zero_reg: None,
+        pc: "_PC",
+        next_pc: None,
+        ignore_regs: &[
+            "SEE",
+            "__unconditional",
+            "__PC_changed",
+            "__currentInstrLength",
+            "BTypeNext",
+            "BTypeCompatible",
+        ],
+        isla_args: &[],
+    },
+];
+
+pub fn verify_smt(sh: &Shell, isa: &str) -> anyhow::Result<()> {
+    let spec = ISA_SPECS
+        .iter()
+        .find(|s| s.name == isa)
+        .ok_or_else(|| anyhow!("unsupported ISA {isa}; available: riscv64, riscv32, armv8"))?;
+    let tools = Tools::ensure(sh, spec)?;
     let root = project_root();
-    let out_dir = root.join("target/verify/smt");
+    let out_dir = root.join("target/verify/smt").join(spec.name);
     std::fs::create_dir_all(out_dir.join("cache"))?;
     std::fs::create_dir_all(out_dir.join("queries"))?;
 
-    let smt_path = out_dir.join("riscv.smt2");
-    generate_tmdl_smt(sh, &root, &smt_path)?;
+    let smt_path = out_dir.join(format!("{}.smt2", spec.name));
+    generate_tmdl_smt(sh, spec, &root, &smt_path)?;
     let smt = std::fs::read_to_string(&smt_path)?;
 
     let instructions = parse_inventory(&smt);
@@ -74,7 +163,7 @@ pub fn verify_smt(sh: &Shell) -> anyhow::Result<()> {
             ));
             continue;
         }
-        verify_instruction(&tools, &out_dir, &smt, instr, &mut report)?;
+        verify_instruction(&tools, spec, &out_dir, &smt, instr, &mut report)?;
     }
 
     report.print();
@@ -95,37 +184,75 @@ struct Tools {
 }
 
 impl Tools {
-    fn from_env() -> anyhow::Result<Self> {
-        let var =
-            |name: &str, default: &str| std::env::var(name).unwrap_or_else(|_| default.to_string());
-        let tools = Tools {
-            isla_footprint: var("TIR_ISLA_FOOTPRINT", "isla-footprint").into(),
-            snapshot: std::env::var("TIR_ISLA_SNAPSHOT")
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "TIR_ISLA_SNAPSHOT must point to a Sail RISC-V isla snapshot (.ir), \
-                         e.g. rv64d.ir from https://github.com/rems-project/isla-snapshots"
-                    )
-                })?
-                .into(),
+    /// Resolve the external tools, fetching anything that is not overridden
+    /// by an environment variable.
+    fn ensure(sh: &Shell, spec: &IsaSpec) -> anyhow::Result<Self> {
+        let isla_footprint = match std::env::var("TIR_ISLA_FOOTPRINT") {
+            Ok(path) => path.into(),
+            Err(_) => ensure_isla_footprint(sh)?,
+        };
+        let snapshot = match std::env::var("TIR_ISLA_SNAPSHOT") {
+            Ok(path) => path.into(),
+            Err(_) => ensure_snapshot(sh, spec.snapshot)?,
+        };
+        Ok(Tools {
+            isla_footprint,
+            snapshot,
             isla_config: std::env::var("TIR_ISLA_CONFIG")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| project_root().join("xtask/verify-smt-riscv64.toml")),
-            z3: var("TIR_Z3", "z3").into(),
-        };
-        Ok(tools)
+                .unwrap_or_else(|_| project_root().join("xtask").join(spec.config)),
+            z3: std::env::var("TIR_Z3")
+                .unwrap_or_else(|_| "z3".to_string())
+                .into(),
+        })
     }
 }
 
-fn generate_tmdl_smt(sh: &Shell, root: &Path, out: &Path) -> anyhow::Result<()> {
-    let defs: Vec<PathBuf> = std::fs::read_dir(root.join("backends/riscv/defs"))?
+fn ensure_isla_footprint(sh: &Shell) -> anyhow::Result<PathBuf> {
+    let isla_dir = project_root().join("target/isla");
+    let bin = isla_dir.join("target/release/isla-footprint");
+    if bin.exists() {
+        return Ok(bin);
+    }
+    let isla_ref = std::env::var("TIR_ISLA_REF").unwrap_or_else(|_| "master".to_string());
+    git_checkout(
+        sh,
+        "https://github.com/rems-project/isla",
+        &isla_ref,
+        "isla",
+    )?;
+    let manifest = isla_dir.join("Cargo.toml");
+    cmd!(
+        sh,
+        "cargo build --release --manifest-path {manifest} --bin isla-footprint"
+    )
+    .run()?;
+    Ok(bin)
+}
+
+fn ensure_snapshot(sh: &Shell, file: &str) -> anyhow::Result<PathBuf> {
+    let snap_ref =
+        std::env::var("TIR_ISLA_SNAPSHOTS_REF").unwrap_or_else(|_| "refs/heads/master".to_string());
+    let dest = project_root()
+        .join("target/verify/snapshots")
+        .join(snap_ref.replace('/', "-"))
+        .join(file);
+    let url = format!("https://github.com/rems-project/isla-snapshots/raw/{snap_ref}/{file}");
+    download_file(sh, &url, &dest)?;
+    Ok(dest)
+}
+
+fn generate_tmdl_smt(sh: &Shell, spec: &IsaSpec, root: &Path, out: &Path) -> anyhow::Result<()> {
+    let defs: Vec<PathBuf> = std::fs::read_dir(root.join(spec.defs_dir))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "tmdl"))
         .collect();
     let out_str = out.to_string_lossy().to_string();
+    let dialect = spec.dialect;
+    let tmdl_isa = spec.tmdl_isa;
     cmd!(
         sh,
-        "cargo run -p tmdl --bin tmdlc -- --action emit-smtlib --dialect riscv --output {out_str} {defs...}"
+        "cargo run -p tmdl --bin tmdlc -- --action emit-smtlib --dialect {dialect} --isa {tmdl_isa} --output {out_str} {defs...}"
     )
     .run()?;
     Ok(())
@@ -189,8 +316,8 @@ fn parse_inventory(smt: &str) -> Vec<Instruction> {
 // Operand assignments
 // ---------------------------------------------------------------------------
 
-/// Concrete operand tuples for one instruction. Registers cover x0 corner
-/// cases and aliasing; immediates cover boundary patterns. PC-writing
+/// Concrete operand tuples for one instruction. Registers cover zero-register
+/// corner cases and aliasing; immediates cover boundary patterns. PC-writing
 /// instructions get 4-byte aligned immediates so that, together with the
 /// aligned-PC assumption, Sail's misaligned-fetch trap paths are vacuous.
 fn operand_cases(instr: &Instruction) -> Vec<Vec<u64>> {
@@ -267,14 +394,14 @@ fn operand_cases(instr: &Instruction) -> Vec<Vec<u64>> {
     cases
 }
 
-fn operand_smt_args(instr: &Instruction, case: &[u64]) -> String {
+fn operand_smt_args(spec: &IsaSpec, instr: &Instruction, case: &[u64]) -> String {
     instr
         .operands
         .iter()
         .zip(case)
         .map(|((_, kind), value)| match kind {
             OperandKind::Reg(_) => format!("(_ bv{} 5)", value),
-            _ => format!("(_ bv{} 64)", value),
+            _ => format!("(_ bv{} {})", value, spec.xlen),
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -286,6 +413,7 @@ fn operand_smt_args(instr: &Instruction, case: &[u64]) -> String {
 
 fn encode_words(
     tools: &Tools,
+    spec: &IsaSpec,
     out_dir: &Path,
     smt: &str,
     instr: &Instruction,
@@ -294,7 +422,7 @@ fn encode_words(
     let mut query = String::from(smt);
     query.push_str("\n(check-sat)\n");
     for case in cases {
-        let args = operand_smt_args(instr, case);
+        let args = operand_smt_args(spec, instr, case);
         let call = if args.is_empty() {
             format!("encode_{}", instr.name)
         } else {
@@ -346,7 +474,12 @@ fn cache_fingerprint(tools: &Tools) -> u64 {
 
 /// `Ok(None)` means isla failed or had to be killed for this word (a few
 /// encodings blow up its symbolic executor); the caller records and moves on.
-fn sail_traces(tools: &Tools, out_dir: &Path, word: u32) -> anyhow::Result<Option<String>> {
+fn sail_traces(
+    tools: &Tools,
+    spec: &IsaSpec,
+    out_dir: &Path,
+    word: u32,
+) -> anyhow::Result<Option<String>> {
     let cache = out_dir.join("cache").join(format!(
         "{:08x}-{:016x}.trace",
         word,
@@ -366,8 +499,6 @@ fn sail_traces(tools: &Tools, out_dir: &Path, word: u32) -> anyhow::Result<Optio
             "1",
             "--function",
             "isla_footprint_no_init",
-            "-I",
-            "cur_privilege=Machine",
             "--timeout",
             "90",
             "--partial",
@@ -375,6 +506,7 @@ fn sail_traces(tools: &Tools, out_dir: &Path, word: u32) -> anyhow::Result<Optio
             &bits,
             "-s",
         ])
+        .args(spec.isla_args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()?;
@@ -502,17 +634,18 @@ enum MappedReg {
     NextPc,
 }
 
-fn map_register(name: &str) -> Option<MappedReg> {
+fn map_register(spec: &IsaSpec, name: &str) -> Option<MappedReg> {
     let name = name.trim_matches('|');
-    match name {
-        "PC" => Some(MappedReg::Pc),
-        "nextPC" => Some(MappedReg::NextPc),
-        _ => name
-            .strip_prefix('x')
-            .and_then(|n| n.parse::<u32>().ok())
-            .filter(|n| *n < REG_COUNT)
-            .map(MappedReg::X),
+    if name == spec.pc {
+        return Some(MappedReg::Pc);
     }
+    if spec.next_pc == Some(name) {
+        return Some(MappedReg::NextPc);
+    }
+    name.strip_prefix(spec.reg_prefix)
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|n| *n < spec.reg_count)
+        .map(MappedReg::X)
 }
 
 #[derive(Default)]
@@ -531,8 +664,12 @@ struct TraceInfo {
     excluded: Option<String>,
 }
 
-fn analyze_trace(events: &[Sexp]) -> TraceInfo {
+fn analyze_trace(spec: &IsaSpec, events: &[Sexp]) -> TraceInfo {
     let mut info = TraceInfo::default();
+    // Variables bound by `define-const`: reads returning them are read-backs
+    // of values the model computed (e.g. Sail writes `nextPC = PC + 4` and
+    // reads it back later), not symbolic initial state.
+    let mut defined_vars = std::collections::HashSet::new();
     let exclude = |info: &mut TraceInfo, reason: String| {
         if info.excluded.is_none() {
             info.excluded = Some(reason);
@@ -549,11 +686,16 @@ fn analyze_trace(events: &[Sexp]) -> TraceInfo {
                 let (Some(Sexp::Atom(name)), Some(value)) = (items.get(1), items.last()) else {
                     continue;
                 };
+                if spec.ignore_regs.contains(&name.trim_matches('|')) {
+                    continue;
+                }
                 let symbolic = matches!(value, Sexp::Atom(a) if a.starts_with('v'));
-                match map_register(name) {
+                match map_register(spec, name) {
                     Some(reg) => {
                         if let Sexp::Atom(var) = value {
-                            info.reads.push((reg, var.clone()));
+                            if !info.writes.contains_key(&reg) && !defined_vars.contains(var) {
+                                info.reads.push((reg, var.clone()));
+                            }
                         }
                     }
                     None if symbolic => {
@@ -566,8 +708,11 @@ fn analyze_trace(events: &[Sexp]) -> TraceInfo {
                 let (Some(Sexp::Atom(name)), Some(value)) = (items.get(1), items.last()) else {
                     continue;
                 };
-                match map_register(name) {
-                    Some(MappedReg::X(0)) => {}
+                if spec.ignore_regs.contains(&name.trim_matches('|')) {
+                    continue;
+                }
+                match map_register(spec, name) {
+                    Some(MappedReg::X(n)) if Some(n) == spec.zero_reg => {}
                     Some(reg) => {
                         info.writes.insert(reg, value.to_string());
                     }
@@ -596,6 +741,7 @@ fn analyze_trace(events: &[Sexp]) -> TraceInfo {
                 let (Some(Sexp::Atom(var)), Some(expr)) = (items.get(1), items.get(2)) else {
                     continue;
                 };
+                defined_vars.insert(var.clone());
                 info.defines.push((var.clone(), expr.to_string()));
             }
             "assert" => {
@@ -616,10 +762,17 @@ fn analyze_trace(events: &[Sexp]) -> TraceInfo {
 // Equivalence query construction
 // ---------------------------------------------------------------------------
 
-fn build_query(smt: &str, instr: &Instruction, case: &[u64], trace: &TraceInfo) -> String {
+fn build_query(
+    spec: &IsaSpec,
+    smt: &str,
+    instr: &Instruction,
+    case: &[u64],
+    trace: &TraceInfo,
+) -> String {
+    let xlen = spec.xlen;
     let mut q = String::from(smt);
     q.push_str("\n(declare-const st0 TMDLState)\n");
-    let args = operand_smt_args(instr, case);
+    let args = operand_smt_args(spec, instr, case);
     let call = if args.is_empty() {
         format!("(execute_{} st0)", instr.name)
     } else {
@@ -638,12 +791,13 @@ fn build_query(smt: &str, instr: &Instruction, case: &[u64], trace: &TraceInfo) 
         let init = match reg {
             MappedReg::X(n) => format!("(read_gpr st0 (_ bv{} 5))", n),
             MappedReg::Pc => "(pc st0)".to_string(),
-            MappedReg::NextPc => "(bvadd (pc st0) (_ bv4 64))".to_string(),
+            MappedReg::NextPc => format!("(bvadd (pc st0) (_ bv4 {xlen}))"),
         };
         let _ = writeln!(q, "(assert (= {} {}))", var, init);
     }
 
-    let mut final_eq: Vec<String> = (1..REG_COUNT)
+    let mut final_eq: Vec<String> = (0..spec.reg_count)
+        .filter(|n| Some(*n) != spec.zero_reg)
         .map(|n| {
             let sail = trace
                 .writes
@@ -653,17 +807,35 @@ fn build_query(smt: &str, instr: &Instruction, case: &[u64], trace: &TraceInfo) 
             format!("(= (read_gpr st1 (_ bv{} 5)) {})", n, sail)
         })
         .collect();
-    final_eq.push(match trace.writes.get(&MappedReg::NextPc) {
-        Some(target) => format!("(= (pc st1) {})", target),
-        None => "(= (pc st1) (pc st0))".to_string(),
-    });
+    // Models with a delayed PC (RISC-V `nextPC`) announce taken branches
+    // there; the ARM model writes the PC register directly.
+    let sail_pc = trace
+        .writes
+        .get(&MappedReg::NextPc)
+        .or_else(|| trace.writes.get(&MappedReg::Pc));
+    let mut asserts = trace.asserts.clone();
+    match sail_pc {
+        Some(target) => {
+            // TMDL encodes fall-through as "PC untouched", while current Sail
+            // models write the next PC unconditionally, so compare against
+            // TMDL's effective next PC. A self-jump (target == initial PC) is
+            // indistinguishable from fall-through under this convention;
+            // assume it away rather than reporting a fake divergence.
+            asserts.push(format!("(distinct {} (pc st0))", target));
+            final_eq.push(format!(
+                "(= (ite (= (pc st1) (pc st0)) (bvadd (pc st0) (_ bv4 {xlen})) (pc st1)) {})",
+                target
+            ));
+        }
+        None => final_eq.push("(= (pc st1) (pc st0))".to_string()),
+    }
 
     let mut body = format!(
         "(and {} (not (and {})))",
-        if trace.asserts.is_empty() {
+        if asserts.is_empty() {
             "true".to_string()
         } else {
-            trace.asserts.join(" ")
+            asserts.join(" ")
         },
         final_eq.join("\n  ")
     );
@@ -675,7 +847,7 @@ fn build_query(smt: &str, instr: &Instruction, case: &[u64], trace: &TraceInfo) 
 
     // Counterexample probes, only evaluated on `sat`.
     let mut probes: Vec<String> = vec!["(pc st0)".into(), "(pc st1)".into()];
-    for n in 1..REG_COUNT {
+    for n in (0..spec.reg_count).filter(|n| Some(*n) != spec.zero_reg) {
         probes.push(format!("(read_gpr st0 (_ bv{} 5))", n));
     }
     let _ = writeln!(q, "(get-value ({}))", probes.join(" "));
@@ -726,18 +898,19 @@ impl Report {
 
 fn verify_instruction(
     tools: &Tools,
+    spec: &IsaSpec,
     out_dir: &Path,
     smt: &str,
     instr: &Instruction,
     report: &mut Report,
 ) -> anyhow::Result<()> {
     let cases = operand_cases(instr);
-    let words = encode_words(tools, out_dir, smt, instr, &cases)?;
+    let words = encode_words(tools, spec, out_dir, smt, instr, &cases)?;
     print!("{:24}", instr.name);
     let mut line = String::new();
 
     for (case, word) in cases.iter().zip(&words) {
-        let Some(raw) = sail_traces(tools, out_dir, *word)? else {
+        let Some(raw) = sail_traces(tools, spec, out_dir, *word)? else {
             report.excluded_paths += 1;
             *report
                 .excluded_reasons
@@ -769,7 +942,7 @@ fn verify_instruction(
         }
 
         for (path_idx, events) in traces.iter().enumerate() {
-            let info = analyze_trace(events);
+            let info = analyze_trace(spec, events);
             if let Some(reason) = &info.excluded {
                 report.excluded_paths += 1;
                 *report
@@ -779,7 +952,7 @@ fn verify_instruction(
                 line.push('-');
                 continue;
             }
-            let query = build_query(smt, instr, case, &info);
+            let query = build_query(spec, smt, instr, case, &info);
             let query_path = out_dir
                 .join("queries")
                 .join(format!("{}_{:08x}_p{}.smt2", instr.name, word, path_idx));
@@ -799,7 +972,7 @@ fn verify_instruction(
                 let model = stdout.lines().skip(1).collect::<Vec<_>>().join("\n");
                 report.failures.push(format!(
                     "DIVERGENCE {} operands {:?} word {:#010x} path {} (query: {})\n\
-                     counterexample (initial pc, final pc, x1..x31):\n{}",
+                     counterexample (initial pc, final pc, gprs):\n{}",
                     instr.name,
                     case,
                     word,

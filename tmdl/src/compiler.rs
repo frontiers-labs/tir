@@ -21,6 +21,7 @@ pub struct Compiler {
     inputs: Vec<String>,
     output: OutputKind,
     dialect: Option<String>,
+    isa: Option<String>,
 }
 
 pub struct CompilerBuilder {
@@ -28,6 +29,7 @@ pub struct CompilerBuilder {
     inputs: Vec<String>,
     output: Option<OutputKind>,
     dialect: Option<String>,
+    isa: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +63,9 @@ pub struct Cli {
     pub output: String,
     #[arg(short, long)]
     pub dialect: Option<String>,
+    /// Target ISA name (e.g. RV64I) for ISA-parameterized outputs.
+    #[arg(long)]
+    pub isa: Option<String>,
 }
 
 impl Compiler {
@@ -70,6 +75,7 @@ impl Compiler {
             inputs: vec![],
             output: None,
             dialect: None,
+            isa: None,
         }
     }
 
@@ -180,6 +186,14 @@ impl Compiler {
             )
             .exit();
         }
+        if matches!(self.action, Action::EmitSmtlib) && self.isa.is_none() {
+            let mut cmd = Cli::command();
+            cmd.error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--isa must be specified with --action=emit-smtlib",
+            )
+            .exit();
+        }
 
         let mut parsed_files = Vec::new();
         for input in &self.inputs {
@@ -254,6 +268,7 @@ impl Compiler {
                 let writer: Box<dyn Write> = self.create_output_writer()?;
                 generate_smtlib(
                     self.dialect.as_ref().unwrap(),
+                    self.isa.as_ref().unwrap(),
                     &parsed_files,
                     &item_cache,
                     writer,
@@ -300,9 +315,7 @@ impl CompilerBuilder {
     pub fn action(self, action: Action) -> Self {
         Self {
             action: Some(action),
-            inputs: self.inputs,
-            output: self.output,
-            dialect: self.dialect,
+            ..self
         }
     }
 
@@ -310,30 +323,22 @@ impl CompilerBuilder {
         let mut inputs = self.inputs;
         inputs.push(path.to_string());
 
-        Self {
-            action: self.action,
-            inputs,
-            output: self.output,
-            dialect: self.dialect,
-        }
+        Self { inputs, ..self }
     }
 
     pub fn output(self, output: OutputKind) -> Self {
         Self {
-            action: self.action,
-            inputs: self.inputs,
             output: Some(output),
-            dialect: self.dialect,
+            ..self
         }
     }
 
     pub fn dialect(self, dialect: Option<String>) -> Self {
-        Self {
-            action: self.action,
-            inputs: self.inputs,
-            output: self.output,
-            dialect,
-        }
+        Self { dialect, ..self }
+    }
+
+    pub fn isa(self, isa: Option<String>) -> Self {
+        Self { isa, ..self }
     }
 
     pub fn build(self) -> Compiler {
@@ -342,6 +347,7 @@ impl CompilerBuilder {
             inputs: self.inputs,
             output: self.output.unwrap(),
             dialect: self.dialect,
+            isa: self.isa,
         }
     }
 }
@@ -359,6 +365,7 @@ pub fn compiler_main(args: Option<&ArgMatches>) -> Result<(), Box<dyn std::error
     let mut compiler_builder = Compiler::builder()
         .action(args.action)
         .dialect(args.dialect.clone())
+        .isa(args.isa.clone())
         .output(output);
 
     for input in &args.inputs {

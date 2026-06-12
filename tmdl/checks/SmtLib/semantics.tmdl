@@ -2,7 +2,7 @@
 // tracking, sign/zero extension, comparisons, PC access, and the
 // UNSUPPORTED-BEHAVIOR marker. Do not regenerate with update_checks.py.
 
-// RUN: tmdlc --action=emit-smtlib --dialect=test --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
+// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=TestIsa --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
 
 // State: one register-file array plus the program counter.
 // CHECK: (declare-datatypes () ((TMDLState (mk-TMDLState (gpr (Array (_ BitVec 5) (_ BitVec 64))) (pc (_ BitVec 64))))))

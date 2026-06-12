@@ -1,5 +1,4 @@
 pub mod utils;
-mod verify_riscv;
 mod verify_smt;
 
 use std::{env, path::PathBuf};
@@ -20,11 +19,10 @@ fn main() -> anyhow::Result<()> {
         Some("verify") => {
             let isa = env::args().nth(2);
             match isa.as_deref() {
-                Some(isa) => verify_isa(isa, &sh)?,
+                Some(isa) => verify_smt::verify_smt(&sh, isa)?,
                 _ => print_help(),
             }
         }
-        Some("verify-smt") => verify_smt::verify_smt(&sh)?,
         Some("isa-test-suite") => isa_test_suite(&sh)?,
         _ => print_help(),
     }
@@ -88,16 +86,6 @@ fn isa_test_suite(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn verify_isa(isa: &str, sh: &Shell) -> anyhow::Result<()> {
-    match isa {
-        "riscv" => verify_riscv::verify_riscv(sh),
-        _ => {
-            print_help();
-            Ok(())
-        }
-    }
-}
-
 fn print_help() {
     eprintln!(
         "Tasks:
@@ -105,8 +93,7 @@ fn print_help() {
 build            builds TIR project
 check            builds project and runs check tests
 check-only       only runs check tests without building the project
-verify <isa>     run formal ISA verification. Available ISAs: riscv
-verify-smt       check TMDL RISC-V semantics against the Sail model with SMT
+verify <isa>     run formal ISA verification. Available ISAs: riscv64, riscv32, armv8
 isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
 docs             builds project documentation
 help             shows this message

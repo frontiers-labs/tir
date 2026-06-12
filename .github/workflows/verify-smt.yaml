@@ -10,12 +10,17 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Pin the Sail model snapshot and isla revision together; bump them in sync.
-  ISLA_REV: master
-  SNAPSHOT_REV: d8b3101393b6b1eee0e6cd474b78c2349e1be1d9
+  # Pin the isla revision and the Sail model snapshot ref together; bump them
+  # in sync. `cargo xtask verify` clones/downloads them on demand.
+  TIR_ISLA_REF: master
+  TIR_ISLA_SNAPSHOTS_REF: refs/heads/master
 
 jobs:
   verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        isa: [riscv64, riscv32, armv8]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,31 +33,24 @@ jobs:
           # The isla config only checks for the toolchain's presence; raw
           # opcodes never invoke it.
           mkdir -p "$HOME/bin"
-          for tool in as objdump ld nm; do
-            ln -sf /usr/bin/false "$HOME/bin/riscv64-linux-gnu-$tool"
+          for triple in riscv64-linux-gnu aarch64-linux-gnu; do
+            for tool in as objdump ld nm; do
+              ln -sf /usr/bin/false "$HOME/bin/$triple-$tool"
+            done
           done
           echo "$HOME/bin" >> "$GITHUB_PATH"
-      - name: Cache isla
-        id: cache-isla
+      - name: Cache isla and the Sail model snapshot
         uses: actions/cache@v4
         with:
-          path: ~/isla
-          key: isla-${{ env.ISLA_REV }}-${{ env.SNAPSHOT_REV }}
-      - name: Build isla and fetch the Sail RISC-V snapshot
-        if: steps.cache-isla.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch "$ISLA_REV" https://github.com/rems-project/isla "$HOME/isla"
-          cargo build --release --manifest-path "$HOME/isla/Cargo.toml" --bin isla-footprint
-          curl -fsSL -o "$HOME/isla/rv64d.ir" \
-            "https://raw.githubusercontent.com/rems-project/isla-snapshots/$SNAPSHOT_REV/rv64d.ir"
+          path: |
+            target/isla
+            target/verify/snapshots
+          key: isla-${{ matrix.isa }}-${{ env.TIR_ISLA_REF }}-${{ env.TIR_ISLA_SNAPSHOTS_REF }}
       - name: Verify
-        run: |
-          export TIR_ISLA_FOOTPRINT="$HOME/isla/target/release/isla-footprint"
-          export TIR_ISLA_SNAPSHOT="$HOME/isla/rv64d.ir"
-          cargo xtask verify-smt
+        run: cargo xtask verify ${{ matrix.isa }}
       - name: Upload counterexample queries
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: smt-queries
-          path: target/verify/smt/queries/
+          name: smt-queries-${{ matrix.isa }}
+          path: target/verify/smt/${{ matrix.isa }}/queries/

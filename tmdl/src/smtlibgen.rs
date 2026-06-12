@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 
 use crate::Type;
@@ -6,28 +6,110 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    get_encoding_arms, resolve_isa_param_values, resolve_operands_for_instruction,
-    resolve_params_for_instruction,
+    get_encoding_arms, isa_param_values, item_supports_isa, parse_literal_value,
+    resolve_isa_param_values, resolve_operands_for_instruction, resolve_params_for_instruction,
 };
 use tir::graph::{Dag, NodeId};
-
-const REG_INDEX_WIDTH: u16 = 5;
-const REG_VALUE_WIDTH: u16 = 64;
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// Register-file layout of one (non-PC) register class, resolved against the
+/// target ISA's parameters.
+struct ClassInfo {
+    idx_width: u16,
+    val_width: u16,
+    /// Encoding index of a hardwired-zero register (RISC-V `x0`, AArch64
+    /// `xzr`), if the class has one: reads yield 0 and writes are dropped.
+    zero_index: Option<u16>,
+}
+
+struct SmtCtx<'a> {
+    isa: &'a str,
+    /// Register value width of the target ISA; immediates and the PC use it.
+    xlen: u16,
+    /// Lowercase class name -> layout. BTreeMap so the emitted state datatype
+    /// has a deterministic field order.
+    classes: BTreeMap<String, ClassInfo>,
+    pc_classes: std::collections::HashSet<String>,
+    isa_params: HashMap<String, i64>,
+}
+
+impl SmtCtx<'_> {
+    fn idx_width(&self, class: &str) -> u16 {
+        self.classes
+            .get(&class.to_lowercase())
+            .map_or(5, |c| c.idx_width)
+    }
+
+    fn val_width(&self, class: &str) -> u16 {
+        let class = class.to_lowercase();
+        if self.pc_classes.contains(&class) {
+            return self.xlen;
+        }
+        self.classes.get(&class).map_or(self.xlen, |c| c.val_width)
+    }
+}
+
+/// Resolve a register-class parameter (`ENCODING_LEN`, `WIDTH`) to a number:
+/// either a literal or a `self.PARAM` reference into the target ISA.
+fn eval_class_param(
+    rc: &ast::RegisterClass,
+    name: &str,
+    isa_params: &HashMap<String, i64>,
+) -> Option<i64> {
+    match rc.parameters.get(name)? {
+        (_, Some(ast::Expr::Lit(ast::Lit::Int(li)))) => Some(parse_literal_value(li) as i64),
+        (_, Some(ast::Expr::Field(f))) if matches!(&*f.base, ast::Expr::Ident(id) if id.name == "self") => {
+            isa_params.get(f.member.as_str()).copied()
+        }
+        _ => None,
+    }
+}
+
 pub fn generate_smtlib<'a>(
     dialect: &str,
+    isa: &str,
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     mut output: Box<dyn Write>,
 ) -> Result<(), TMDLError> {
+    let isa_params = isa_param_values(isa, item_cache);
+    let xlen = isa_params.get("XLEN").copied().unwrap_or(64) as u16;
+
+    let mut classes = BTreeMap::new();
+    let mut pc_classes = std::collections::HashSet::new();
+    for rc in files.iter().flat_map(|f| f.register_classes()) {
+        if !item_supports_isa(&rc.for_isas, isa, item_cache) {
+            continue;
+        }
+        let name = rc.name.to_lowercase();
+        if is_pc_class(rc) {
+            pc_classes.insert(name);
+            continue;
+        }
+        classes.insert(
+            name,
+            ClassInfo {
+                idx_width: eval_class_param(rc, "ENCODING_LEN", &isa_params).unwrap_or(5) as u16,
+                val_width: eval_class_param(rc, "WIDTH", &isa_params).unwrap_or(xlen as i64) as u16,
+                zero_index: rc.hardwired_zero_register_index(),
+            },
+        );
+    }
+    let ctx = SmtCtx {
+        isa,
+        xlen,
+        classes,
+        pc_classes,
+        isa_params,
+    };
+
     writeln!(output, "{}", HEADER)?;
-    build_state(files, &mut output)?;
-    build_instructions(dialect, item_cache, files, &mut output)?;
-    build_decoder(dialect, item_cache, files, &mut output)?;
+    build_state(&ctx, &mut output)?;
+    build_instructions(dialect, &ctx, item_cache, files, &mut output)?;
+    build_decoder(dialect, &ctx, item_cache, files, &mut output)?;
     Ok(())
 }
 
@@ -40,28 +122,18 @@ fn is_pc_class(rc: &ast::RegisterClass) -> bool {
         .any(|r| r.traits.contains(&ast::RegisterTrait::ProgramCounter))
 }
 
-fn build_state(files: &[ast::File], output: &mut Box<dyn Write>) -> Result<(), TMDLError> {
-    let all_classes = files
+fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDLError> {
+    let mut fields = ctx
+        .classes
         .iter()
-        .flat_map(|f| f.register_classes())
-        .collect::<Vec<_>>();
-
-    let array_class_names = all_classes
-        .iter()
-        .filter(|rc| !is_pc_class(rc))
-        .map(|rc| rc.name.to_lowercase())
-        .collect::<Vec<_>>();
-
-    let mut fields = array_class_names
-        .iter()
-        .map(|name| {
+        .map(|(name, info)| {
             format!(
                 "({} (Array (_ BitVec {}) (_ BitVec {})))",
-                name, REG_INDEX_WIDTH, REG_VALUE_WIDTH
+                name, info.idx_width, info.val_width
             )
         })
         .collect::<Vec<_>>();
-    fields.push(format!("(pc (_ BitVec {}))", REG_VALUE_WIDTH));
+    fields.push(format!("(pc (_ BitVec {}))", ctx.xlen));
 
     writeln!(
         output,
@@ -69,16 +141,23 @@ fn build_state(files: &[ast::File], output: &mut Box<dyn Write>) -> Result<(), T
         fields.join(" ")
     )?;
 
-    for name in &array_class_names {
+    for (name, info) in &ctx.classes {
+        let idx_width = info.idx_width;
+        let val_width = info.val_width;
+        let select = format!("(select ({name} st) r)");
+        let read_body = match info.zero_index {
+            Some(z) => {
+                format!("(ite (= r (_ bv{z} {idx_width}))\n    (_ bv0 {val_width})\n    {select})")
+            }
+            None => select,
+        };
         writeln!(
             output,
-            "\n(define-fun read_{name} ((st TMDLState) (r (_ BitVec {idx_width}))) (_ BitVec {val_width})\n  (ite (= r (_ bv0 {idx_width}))\n    (_ bv0 {val_width})\n    (select ({name} st) r)))",
-            idx_width = REG_INDEX_WIDTH,
-            val_width = REG_VALUE_WIDTH
+            "\n(define-fun read_{name} ((st TMDLState) (r (_ BitVec {idx_width}))) (_ BitVec {val_width})\n  {read_body})",
         )?;
 
         let mut fields = Vec::new();
-        for n2 in &array_class_names {
+        for n2 in ctx.classes.keys() {
             if n2 == name {
                 fields.push(format!("(store ({} st) r val)", n2));
             } else {
@@ -86,24 +165,27 @@ fn build_state(files: &[ast::File], output: &mut Box<dyn Write>) -> Result<(), T
             }
         }
         fields.push("(pc st)".to_string());
+        let store = format!("(mk-TMDLState {})", fields.join(" "));
+        let write_body = match info.zero_index {
+            Some(z) => format!("(ite (= r (_ bv{z} {idx_width}))\n    st\n    {store})"),
+            None => store,
+        };
         writeln!(
             output,
-            "\n(define-fun write_{name} ((st TMDLState) (r (_ BitVec {idx_width})) (val (_ BitVec {val_width}))) TMDLState\n  (ite (= r (_ bv0 {idx_width}))\n    st\n    (mk-TMDLState {fields})))",
-            idx_width = REG_INDEX_WIDTH,
-            val_width = REG_VALUE_WIDTH,
-            fields = fields.join(" ")
+            "\n(define-fun write_{name} ((st TMDLState) (r (_ BitVec {idx_width})) (val (_ BitVec {val_width}))) TMDLState\n  {write_body})",
         )?;
     }
 
-    let mut fields = array_class_names
-        .iter()
+    let mut fields = ctx
+        .classes
+        .keys()
         .map(|name| format!("({} st)", name))
         .collect::<Vec<_>>();
     fields.push("val".to_string());
     writeln!(
         output,
         "\n(define-fun write_pc ((st TMDLState) (val (_ BitVec {val_width}))) TMDLState\n  (mk-TMDLState {fields}))",
-        val_width = REG_VALUE_WIDTH,
+        val_width = ctx.xlen,
         fields = fields.join(" ")
     )?;
 
@@ -116,6 +198,7 @@ fn build_state(files: &[ast::File], output: &mut Box<dyn Write>) -> Result<(), T
 
 fn build_instructions<'a>(
     dialect: &str,
+    ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     files: &'a [ast::File],
     output: &mut Box<dyn Write>,
@@ -136,19 +219,16 @@ fn build_instructions<'a>(
                 .map(move |(name, idx)| ((class.clone(), name), u32::from(idx)))
         })
         .collect();
-    let pc_classes: std::collections::HashSet<String> = files
-        .iter()
-        .flat_map(|f| f.register_classes())
-        .filter(|rc| is_pc_class(rc))
-        .map(|rc| rc.name.to_lowercase())
-        .collect();
 
     for i in files.iter().flat_map(|f| f.instructions()) {
+        if !item_supports_isa(&i.for_isas, ctx.isa, item_cache) {
+            continue;
+        }
         let name = i.name.to_lowercase();
         let uppercase_name = name.to_uppercase();
 
         let operands = resolve_operands_for_instruction(i, item_cache);
-        let smt_operands = build_smt_operands(&operands);
+        let smt_operands = build_smt_operands(ctx, &operands);
         let smt_operands_joined = smt_operands.join(" ");
         let operand_params = if smt_operands_joined.is_empty() {
             "()".to_string()
@@ -160,9 +240,8 @@ fn build_instructions<'a>(
         } else {
             format!("((st TMDLState) {smt_operands_joined})")
         };
-        let smt_encoding = build_smt_encoding(item_cache, i, &operands);
-        let smt_behavior =
-            build_smt_behavior(item_cache, i, &operands, &register_index_map, &pc_classes);
+        let smt_encoding = build_smt_encoding(ctx, item_cache, i, &operands);
+        let smt_behavior = build_smt_behavior(ctx, item_cache, i, &operands, &register_index_map);
         // Untranslatable behaviors (e.g. memory accesses) get an identity body
         // plus a machine-readable marker so verification tooling can tell
         // "proven unchanged" apart from "not modeled".
@@ -212,7 +291,14 @@ fn build_instructions<'a>(
         // pattern binding, so they are unaffected by this renaming.
         let variant_operands = operands
             .iter()
-            .map(|(op_name, ty)| format!("({}_{} {})", name, op_name.to_lowercase(), smt_ty_of(ty)))
+            .map(|(op_name, ty)| {
+                format!(
+                    "({}_{} {})",
+                    name,
+                    op_name.to_lowercase(),
+                    smt_ty_of(ctx, ty)
+                )
+            })
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -284,23 +370,24 @@ fn build_instructions<'a>(
 // Encoding helpers
 // ---------------------------------------------------------------------------
 
-fn build_smt_operands(operands: &[(String, Type)]) -> Vec<String> {
+fn build_smt_operands(ctx: &SmtCtx<'_>, operands: &[(String, Type)]) -> Vec<String> {
     operands
         .iter()
-        .map(|(name, ty)| format!("({} {})", name.to_lowercase(), smt_ty_of(ty)))
+        .map(|(name, ty)| format!("({} {})", name.to_lowercase(), smt_ty_of(ctx, ty)))
         .collect()
 }
 
-fn smt_ty_of(ty: &Type) -> String {
+fn smt_ty_of(ctx: &SmtCtx<'_>, ty: &Type) -> String {
     match ty {
-        Type::Struct(_) => format!("(_ BitVec {REG_INDEX_WIDTH})"),
-        Type::Bits(_) | Type::Integer => format!("(_ BitVec {REG_VALUE_WIDTH})"),
+        Type::Struct(rc) => format!("(_ BitVec {})", ctx.idx_width(rc)),
+        Type::Bits(_) | Type::Integer => format!("(_ BitVec {})", ctx.xlen),
         Type::String => "String".to_string(),
         _ => unreachable!("HM type vars should not appear as operand types"),
     }
 }
 
 fn build_smt_encoding<'a>(
+    ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     instruction: &'a ast::Instruction,
     operands: &[(String, Type)],
@@ -323,8 +410,8 @@ fn build_smt_encoding<'a>(
                 if let Some(ty) = operands.get(name) {
                     let vname = name.to_lowercase();
                     match ty {
-                        Type::Struct(_) => cast_bv(&vname, REG_INDEX_WIDTH, width),
-                        Type::Bits(_) | Type::Integer => cast_bv(&vname, REG_VALUE_WIDTH, width),
+                        Type::Struct(rc) => cast_bv(&vname, ctx.idx_width(rc), width),
+                        Type::Bits(_) | Type::Integer => cast_bv(&vname, ctx.xlen, width),
                         Type::String => zero_bv(width),
                         _ => unreachable!("HM type vars should not appear as operand types"),
                     }
@@ -423,6 +510,17 @@ impl SmtVal {
     }
 }
 
+/// Coerce an expression to exactly `target` bits: widen when narrower,
+/// truncate when wider. Register writes use it so a value computed at a wider
+/// width still fits a narrow destination (e.g. a 1-bit PSTATE flag).
+fn fit_smt(expr: &str, width: u32, signed: bool, target: u32) -> String {
+    if width > target {
+        format!("((_ extract {} 0) {})", target - 1, expr)
+    } else {
+        widen_smt(expr, width, signed, target)
+    }
+}
+
 /// Mirror of `exec::widen`: sign-extend signed values, zero-extend unsigned
 /// ones, no-op when already at least `target` wide.
 fn widen_smt(expr: &str, width: u32, signed: bool, target: u32) -> String {
@@ -458,29 +556,33 @@ struct SmtSymbolResolver<'a> {
     symbols: HashMap<u32, SmtSymbolInfo>,
     operands: &'a HashMap<String, Type>,
     state_name: &'a str,
-    pc_classes: &'a std::collections::HashSet<String>,
+    ctx: &'a SmtCtx<'a>,
 }
 
 impl SmtSymbolResolver<'_> {
     fn resolve(&self, symbol_id: u32) -> Option<SmtVal> {
         let symbol = self.symbols.get(&symbol_id)?;
+        let ctx = self.ctx;
 
         match symbol {
             SmtSymbolInfo::Register { class, number } => {
                 let class = class.to_lowercase();
-                if self.pc_classes.contains(&class) {
+                if ctx.pc_classes.contains(&class) {
                     Some(SmtVal::bv(
                         format!("(pc {})", self.state_name),
-                        REG_VALUE_WIDTH as u32,
+                        ctx.xlen as u32,
                         false,
                     ))
                 } else {
                     Some(SmtVal::bv(
                         format!(
                             "(read_{} {} (_ bv{} {}))",
-                            class, self.state_name, number, REG_INDEX_WIDTH
+                            class,
+                            self.state_name,
+                            number,
+                            ctx.idx_width(&class)
                         ),
-                        REG_VALUE_WIDTH as u32,
+                        ctx.val_width(&class) as u32,
                         false,
                     ))
                 }
@@ -488,26 +590,26 @@ impl SmtSymbolResolver<'_> {
             SmtSymbolInfo::Variable { name } => match self.operands.get(name)? {
                 Type::Struct(rc) => {
                     let rc = rc.to_lowercase();
-                    if self.pc_classes.contains(&rc) {
+                    if ctx.pc_classes.contains(&rc) {
                         Some(SmtVal::bv(
                             format!("(pc {})", self.state_name),
-                            REG_VALUE_WIDTH as u32,
+                            ctx.xlen as u32,
                             false,
                         ))
                     } else {
                         Some(SmtVal::bv(
                             format!("(read_{} {} {})", rc, self.state_name, name.to_lowercase()),
-                            REG_VALUE_WIDTH as u32,
+                            ctx.val_width(&rc) as u32,
                             false,
                         ))
                     }
                 }
-                // Immediate operands are passed as zero-extended 64-bit
+                // Immediate operands are passed as zero-extended XLEN-wide
                 // function parameters; their semantic width is the declared
                 // field width, which `sext`/`zext` in behaviors rely on.
                 Type::Bits(n) => {
-                    let n = (*n as u32).min(REG_VALUE_WIDTH as u32);
-                    if n == REG_VALUE_WIDTH as u32 {
+                    let n = (*n as u32).min(ctx.xlen as u32);
+                    if n == ctx.xlen as u32 {
                         Some(SmtVal::bv(name.to_lowercase(), n, false))
                     } else {
                         Some(SmtVal::bv(
@@ -517,11 +619,7 @@ impl SmtSymbolResolver<'_> {
                         ))
                     }
                 }
-                Type::Integer => Some(SmtVal::bv(
-                    name.to_lowercase(),
-                    REG_VALUE_WIDTH as u32,
-                    false,
-                )),
+                Type::Integer => Some(SmtVal::bv(name.to_lowercase(), ctx.xlen as u32, false)),
                 _ => None,
             },
         }
@@ -748,15 +846,18 @@ fn emit_sem_expr(
 /// express (e.g. memory accesses); callers must not pretend such instructions
 /// have identity semantics.
 fn build_smt_behavior<'a>(
+    ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     instruction: &'a ast::Instruction,
     operands: &[(String, Type)],
     register_index_map: &HashMap<(String, String), u32>,
-    pc_classes: &std::collections::HashSet<String>,
 ) -> Option<(String, bool)> {
     let operands = operands.iter().cloned().collect::<HashMap<_, _>>();
     let mut numeric_params: HashMap<String, i64> =
         resolve_isa_param_values(instruction, item_cache);
+    // The target ISA's own values win over the cross-ISA maximum (an
+    // instruction shared by RV32I and RV64I must see XLEN=32 on RV32I).
+    numeric_params.extend(ctx.isa_params.iter().map(|(k, v)| (k.clone(), *v)));
     numeric_params.extend(
         resolve_params_for_instruction(instruction, item_cache)
             .into_iter()
@@ -773,7 +874,7 @@ fn build_smt_behavior<'a>(
         operands: &HashMap<String, Type>,
         numeric_params: &HashMap<String, i64>,
         register_index_map: &HashMap<(String, String), u32>,
-        pc_classes: &std::collections::HashSet<String>,
+        ctx: &SmtCtx<'_>,
         state_name: &str,
     ) -> Option<SmtVal> {
         let mut graph = tir::sem_expr::ExprPostGraph::new();
@@ -796,7 +897,7 @@ fn build_smt_behavior<'a>(
             symbols,
             operands,
             state_name,
-            pc_classes,
+            ctx,
         };
         emit_sem_expr(&graph, lowering.root, &resolver)
     }
@@ -804,18 +905,12 @@ fn build_smt_behavior<'a>(
     let failed = std::cell::Cell::new(false);
     let writes_pc = std::cell::Cell::new(false);
     let emit_val = |e: &ast::Expr| {
-        try_emit_sem_expr(
-            e,
-            &operands,
-            &numeric_params,
-            register_index_map,
-            pc_classes,
-            "st",
+        try_emit_sem_expr(e, &operands, &numeric_params, register_index_map, ctx, "st").or_else(
+            || {
+                failed.set(true);
+                None
+            },
         )
-        .or_else(|| {
-            failed.set(true);
-            None
-        })
     };
     // `compile_to_state` only evaluates `if` conditions through this closure.
     let emit_cond = |e: &ast::Expr| {
@@ -826,7 +921,7 @@ fn build_smt_behavior<'a>(
     let emit_assign = |a: &ast::Assign, st_name: &str| {
         let rhs = emit_val(&a.value)?;
         let (expr, width, signed) = rhs.as_bv();
-        let rhs = widen_smt(&expr, width, signed, REG_VALUE_WIDTH as u32);
+        let fit = |target: u16| fit_smt(&expr, width, signed, target as u32);
         let dest_name = match &*a.dest {
             ast::Expr::Ident(id) => Some(id.name.as_str()),
             ast::Expr::Path(p) if p.remainder.len() == 1 => Some(p.remainder[0].as_str()),
@@ -834,25 +929,43 @@ fn build_smt_behavior<'a>(
         };
         if dest_name == Some("pc") {
             writes_pc.set(true);
-            Some(format!("(write_pc {} {})", st_name, rhs))
-        } else if let Some(name) = dest_name {
-            match operands.get(name) {
-                Some(Type::Struct(rc)) if pc_classes.contains(&rc.to_lowercase()) => {
-                    writes_pc.set(true);
-                    Some(format!("(write_pc {} {})", st_name, rhs))
-                }
-                Some(Type::Struct(rc)) => Some(format!(
-                    "(write_{} {} {} {})",
-                    rc.to_lowercase(),
-                    st_name,
-                    name.to_lowercase(),
-                    rhs
-                )),
-                _ => None,
-            }
-        } else {
-            None
+            return Some(format!("(write_pc {} {})", st_name, fit(ctx.xlen)));
         }
+        if let Some(name) = dest_name {
+            match operands.get(name) {
+                Some(Type::Struct(rc)) if ctx.pc_classes.contains(&rc.to_lowercase()) => {
+                    writes_pc.set(true);
+                    return Some(format!("(write_pc {} {})", st_name, fit(ctx.xlen)));
+                }
+                Some(Type::Struct(rc)) => {
+                    return Some(format!(
+                        "(write_{} {} {} {})",
+                        rc.to_lowercase(),
+                        st_name,
+                        name.to_lowercase(),
+                        fit(ctx.val_width(rc))
+                    ));
+                }
+                _ => {}
+            }
+        }
+        // Writes to a fixed register named by class path (`GPR::x30`,
+        // `PSTATE::n`).
+        if let ast::Expr::Path(p) = &*a.dest
+            && p.remainder.len() == 1
+            && let Some(idx) = register_index_map.get(&(p.base.clone(), p.remainder[0].clone()))
+        {
+            let class = p.base.to_lowercase();
+            return Some(format!(
+                "(write_{} {} (_ bv{} {}) {})",
+                class,
+                st_name,
+                idx,
+                ctx.idx_width(&class),
+                fit(ctx.val_width(&class))
+            ));
+        }
+        None
     };
     let emit_if = |cond: &str, then_state: &str, else_state: &str| {
         format!("(ite {} {} {})", cond, then_state, else_state)
@@ -879,12 +992,16 @@ fn build_smt_behavior<'a>(
 
 fn build_decoder<'a>(
     dialect: &str,
+    ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     files: &'a [ast::File],
     output: &mut Box<dyn Write>,
 ) -> Result<(), TMDLError> {
-    let instructions: Vec<&ast::Instruction> =
-        files.iter().flat_map(|f| f.instructions()).collect();
+    let instructions: Vec<&ast::Instruction> = files
+        .iter()
+        .flat_map(|f| f.instructions())
+        .filter(|i| item_supports_isa(&i.for_isas, ctx.isa, item_cache))
+        .collect();
     if instructions.is_empty() {
         return Ok(());
     }
@@ -971,8 +1088,8 @@ fn build_decoder<'a>(
             .iter()
             .map(|(op_name, op_ty)| {
                 let target_width = match op_ty {
-                    Type::Struct(_) => REG_INDEX_WIDTH,
-                    _ => REG_VALUE_WIDTH,
+                    Type::Struct(rc) => ctx.idx_width(rc),
+                    _ => ctx.xlen,
                 };
 
                 let Some(mut pieces) = operand_pieces.remove(op_name) else {
@@ -1033,8 +1150,8 @@ fn build_decoder<'a>(
             .iter()
             .map(|(_, ty)| {
                 zero_bv(match ty {
-                    Type::Struct(_) => REG_INDEX_WIDTH,
-                    _ => REG_VALUE_WIDTH,
+                    Type::Struct(rc) => ctx.idx_width(rc),
+                    _ => ctx.xlen,
                 })
             })
             .collect();
