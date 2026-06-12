@@ -7,7 +7,7 @@
 // State: one register-file array plus the program counter.
 // CHECK: (declare-datatypes () ((TMDLState (mk-TMDLState (gpr (Array (_ BitVec 5) (_ BitVec 64))) (pc (_ BitVec 64))))))
 
-// CHECK: ; INSTRUCTION: tadd writes-pc=false rd:reg:gpr rs1:reg:gpr rs2:reg:gpr
+// CHECK: ; INSTRUCTION: tadd writes-pc=false rd:reg:gpr:5 rs1:reg:gpr:5 rs2:reg:gpr:5
 // CHECK: (define-fun execute_tadd ((st TMDLState) (rd (_ BitVec 5)) (rs1 (_ BitVec 5)) (rs2 (_ BitVec 5))) TMDLState
 // CHECK-NEXT: (write_gpr st rd (bvadd (read_gpr st rs1) (read_gpr st rs2))))
 
@@ -21,7 +21,7 @@
 
 // The 13-bit immediate is sign-extended from its declared width; the program
 // counter reads and writes through the dedicated state accessor.
-// CHECK: ; INSTRUCTION: tbeq writes-pc=true rs1:reg:gpr rs2:reg:gpr imm:bits:13
+// CHECK: ; INSTRUCTION: tbeq writes-pc=true rs1:reg:gpr:5 rs2:reg:gpr:5 imm:bits:13
 // CHECK: (define-fun execute_tbeq
 // CHECK-NEXT: (ite (= (read_gpr st rs1) (read_gpr st rs2)) (write_pc st (bvadd (pc st) ((_ sign_extend 51) ((_ extract 12 0) imm)))) st))
 

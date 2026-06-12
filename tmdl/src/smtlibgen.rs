@@ -23,6 +23,11 @@ struct ClassInfo {
     /// Encoding index of a hardwired-zero register (RISC-V `x0`, AArch64
     /// `xzr`), if the class has one: reads yield 0 and writes are dropped.
     zero_index: Option<u16>,
+    /// State field holding this class's registers. A derived class (AArch64
+    /// `GPRsp : GPR`) aliases its base's physical file, so both classes
+    /// read and write one array; only its accessors differ (`GPRsp` has no
+    /// hardwired zero at slot 31, `GPR` does).
+    storage: String,
 }
 
 struct SmtCtx<'a> {
@@ -80,6 +85,25 @@ pub fn generate_smtlib<'a>(
 
     let mut classes = BTreeMap::new();
     let mut pc_classes = std::collections::HashSet::new();
+    let base_of: HashMap<String, String> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .filter_map(|rc| {
+            rc.base
+                .as_ref()
+                .map(|b| (rc.name.to_lowercase(), b.to_lowercase()))
+        })
+        .collect();
+    let storage_of = |name: &str| {
+        let mut current = name.to_string();
+        while let Some(base) = base_of.get(&current) {
+            if *base == current {
+                break;
+            }
+            current = base.clone();
+        }
+        current
+    };
     for rc in files.iter().flat_map(|f| f.register_classes()) {
         if !item_supports_isa(&rc.for_isas, isa, item_cache) {
             continue;
@@ -90,11 +114,12 @@ pub fn generate_smtlib<'a>(
             continue;
         }
         classes.insert(
-            name,
+            name.clone(),
             ClassInfo {
                 idx_width: eval_class_param(rc, "ENCODING_LEN", &isa_params).unwrap_or(5) as u16,
                 val_width: eval_class_param(rc, "WIDTH", &isa_params).unwrap_or(xlen as i64) as u16,
                 zero_index: rc.hardwired_zero_register_index(),
+                storage: storage_of(&name),
             },
         );
     }
@@ -123,10 +148,19 @@ fn is_pc_class(rc: &ast::RegisterClass) -> bool {
 }
 
 fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDLError> {
-    let mut fields = ctx
+    // Derived classes alias their base's array, so only storage-owning
+    // classes contribute a state field.
+    let arrays: Vec<&String> = ctx
         .classes
         .iter()
-        .map(|(name, info)| {
+        .filter(|(name, info)| info.storage == **name)
+        .map(|(name, _)| name)
+        .collect();
+
+    let mut fields = arrays
+        .iter()
+        .map(|name| {
+            let info = &ctx.classes[*name];
             format!(
                 "({} (Array (_ BitVec {}) (_ BitVec {})))",
                 name, info.idx_width, info.val_width
@@ -144,7 +178,8 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
     for (name, info) in &ctx.classes {
         let idx_width = info.idx_width;
         let val_width = info.val_width;
-        let select = format!("(select ({name} st) r)");
+        let storage = &info.storage;
+        let select = format!("(select ({storage} st) r)");
         let read_body = match info.zero_index {
             Some(z) => {
                 format!("(ite (= r (_ bv{z} {idx_width}))\n    (_ bv0 {val_width})\n    {select})")
@@ -157,8 +192,8 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
         )?;
 
         let mut fields = Vec::new();
-        for n2 in ctx.classes.keys() {
-            if n2 == name {
+        for n2 in &arrays {
+            if *n2 == storage {
                 fields.push(format!("(store ({} st) r val)", n2));
             } else {
                 fields.push(format!("({} st)", n2));
@@ -176,9 +211,8 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
         )?;
     }
 
-    let mut fields = ctx
-        .classes
-        .keys()
+    let mut fields = arrays
+        .iter()
         .map(|name| format!("({} st)", name))
         .collect::<Vec<_>>();
     fields.push("val".to_string());
@@ -260,7 +294,9 @@ fn build_instructions<'a>(
             .iter()
             .map(|(op_name, ty)| {
                 let kind = match ty {
-                    Type::Struct(rc) => format!("reg:{}", rc.to_lowercase()),
+                    Type::Struct(rc) => {
+                        format!("reg:{}:{}", rc.to_lowercase(), ctx.idx_width(rc))
+                    }
                     Type::Bits(n) => format!("bits:{}", n),
                     _ => "int".to_string(),
                 };
