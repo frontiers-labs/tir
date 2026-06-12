@@ -516,7 +516,7 @@ instruction ShiftRightLogicalImmWord for [RV64I] : ShiftImmWord64 {
     param FUNCT7: bits<7> = 0b0000000;
 
     behavior {
-        rd = sext(extract(rs1 >> imm, 31, 0), self.XLEN);
+        rd = sext(extract(rs1, 31, 0) >> imm, self.XLEN);
     }
 }
 
@@ -526,7 +526,7 @@ instruction ShiftRightArithmeticImmWord for [RV64I] : ShiftImmWord64 {
     param FUNCT7: bits<7> = 0b0100000;
 
     behavior {
-        rd = sext(extract(rs1 >>> imm, 31, 0), self.XLEN);
+        rd = sext(extract(rs1, 31, 0) >>> imm, self.XLEN);
     }
 }
 
@@ -591,7 +591,7 @@ instruction ShiftLeftLogicalWord for [RV64I] : ALUOpWord {
     param FUNCT3: bits<3> = 0b001;
 
     behavior {
-        rd = sext(extract(rs1 << clamp(rs2, 0, 31), 31, 0), self.XLEN);
+        rd = sext(extract(rs1 << extract(rs2, 4, 0), 31, 0), self.XLEN);
     }
 }
 
@@ -600,7 +600,7 @@ instruction ShiftRightLogicalWord for [RV64I] : ALUOpWord {
     param FUNCT3: bits<3> = 0b101;
 
     behavior {
-        rd = sext(extract(rs1 >> clamp(rs2, 0, 31), 31, 0), self.XLEN);
+        rd = sext(extract(rs1, 31, 0) >> extract(rs2, 4, 0), self.XLEN);
     }
 }
 
@@ -610,6 +610,6 @@ instruction ShiftRightArithmeticWord for [RV64I] : ALUOpWord {
     param FUNCT7: bits<7> = 0b0100000;
 
     behavior {
-        rd = sext(extract(rs1 >>> clamp(rs2, 0, 31), 31, 0), self.XLEN);
+        rd = sext(extract(rs1, 31, 0) >>> extract(rs2, 4, 0), self.XLEN);
     }
 }
