@@ -1,0 +1,59 @@
+name: SMT equivalence (TMDL vs Sail)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pin the Sail model snapshot and isla revision together; bump them in sync.
+  ISLA_REV: master
+  SNAPSHOT_REV: d8b3101393b6b1eee0e6cd474b78c2349e1be1d9
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install z3 and binutils stubs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y z3 libz3-dev
+          # The isla config only checks for the toolchain's presence; raw
+          # opcodes never invoke it.
+          mkdir -p "$HOME/bin"
+          for tool in as objdump ld nm; do
+            ln -sf /usr/bin/false "$HOME/bin/riscv64-linux-gnu-$tool"
+          done
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+      - name: Cache isla
+        id: cache-isla
+        uses: actions/cache@v4
+        with:
+          path: ~/isla
+          key: isla-${{ env.ISLA_REV }}-${{ env.SNAPSHOT_REV }}
+      - name: Build isla and fetch the Sail RISC-V snapshot
+        if: steps.cache-isla.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$ISLA_REV" https://github.com/rems-project/isla "$HOME/isla"
+          cargo build --release --manifest-path "$HOME/isla/Cargo.toml" --bin isla-footprint
+          curl -fsSL -o "$HOME/isla/rv64d.ir" \
+            "https://raw.githubusercontent.com/rems-project/isla-snapshots/$SNAPSHOT_REV/rv64d.ir"
+      - name: Verify
+        run: |
+          export TIR_ISLA_FOOTPRINT="$HOME/isla/target/release/isla-footprint"
+          export TIR_ISLA_SNAPSHOT="$HOME/isla/rv64d.ir"
+          export TIR_ISLA_CONFIG="$HOME/isla/configs/riscv64.toml"
+          cargo xtask verify-smt
+      - name: Upload counterexample queries
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smt-queries
+          path: target/verify/smt/queries/

@@ -166,14 +166,34 @@ fn build_instructions<'a>(
         // Untranslatable behaviors (e.g. memory accesses) get an identity body
         // plus a machine-readable marker so verification tooling can tell
         // "proven unchanged" apart from "not modeled".
-        let (smt_behavior, marker) = match smt_behavior {
-            Some(b) => (b, String::new()),
+        let (smt_behavior, marker, writes_pc) = match smt_behavior {
+            Some((b, writes_pc)) => (b, String::new(), writes_pc),
             None => (
                 "st".to_string(),
                 format!("\n; UNSUPPORTED-BEHAVIOR: {}", name),
+                false,
             ),
         };
         write!(output, "{}", marker)?;
+
+        // Machine-readable operand inventory for verification tooling.
+        let operand_meta = operands
+            .iter()
+            .map(|(op_name, ty)| {
+                let kind = match ty {
+                    Type::Struct(_) => "reg".to_string(),
+                    Type::Bits(n) => format!("bits:{}", n),
+                    _ => "int".to_string(),
+                };
+                format!("{}:{}", op_name.to_lowercase(), kind)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        writeln!(
+            output,
+            "\n; INSTRUCTION: {} writes-pc={} {}",
+            name, writes_pc, operand_meta
+        )?;
 
         let operand_names = operands
             .iter()
@@ -733,7 +753,7 @@ fn build_smt_behavior<'a>(
     operands: &[(String, Type)],
     register_index_map: &HashMap<(String, String), u32>,
     pc_classes: &std::collections::HashSet<String>,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     let operands = operands.iter().cloned().collect::<HashMap<_, _>>();
     let mut numeric_params: HashMap<String, i64> =
         resolve_isa_param_values(instruction, item_cache);
@@ -782,6 +802,7 @@ fn build_smt_behavior<'a>(
     }
 
     let failed = std::cell::Cell::new(false);
+    let writes_pc = std::cell::Cell::new(false);
     let emit_val = |e: &ast::Expr| {
         try_emit_sem_expr(
             e,
@@ -812,10 +833,12 @@ fn build_smt_behavior<'a>(
             _ => None,
         };
         if dest_name == Some("pc") {
+            writes_pc.set(true);
             Some(format!("(write_pc {} {})", st_name, rhs))
         } else if let Some(name) = dest_name {
             match operands.get(name) {
                 Some(Type::Struct(rc)) if pc_classes.contains(&rc.to_lowercase()) => {
+                    writes_pc.set(true);
                     Some(format!("(write_pc {} {})", st_name, rhs))
                 }
                 Some(Type::Struct(rc)) => Some(format!(
@@ -843,7 +866,11 @@ fn build_smt_behavior<'a>(
         &emit_if,
         &on_unsupported,
     );
-    if failed.get() { None } else { Some(body) }
+    if failed.get() {
+        None
+    } else {
+        Some((body, writes_pc.get()))
+    }
 }
 
 // ---------------------------------------------------------------------------

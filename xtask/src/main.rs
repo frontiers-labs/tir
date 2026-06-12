@@ -1,5 +1,6 @@
 pub mod utils;
 mod verify_riscv;
+mod verify_smt;
 
 use std::{env, path::PathBuf};
 use xshell::{cmd, Shell};
@@ -23,6 +24,7 @@ fn main() -> anyhow::Result<()> {
                 _ => print_help(),
             }
         }
+        Some("verify-smt") => verify_smt::verify_smt(&sh)?,
         Some("isa-test-suite") => isa_test_suite(&sh)?,
         _ => print_help(),
     }
@@ -104,6 +106,7 @@ build            builds TIR project
 check            builds project and runs check tests
 check-only       only runs check tests without building the project
 verify <isa>     run formal ISA verification. Available ISAs: riscv
+verify-smt       check TMDL RISC-V semantics against the Sail model with SMT
 isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
 docs             builds project documentation
 help             shows this message

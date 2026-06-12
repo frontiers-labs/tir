@@ -1,0 +1,123 @@
+isa TestIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [TestIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [TestIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => { traits = [callee_saved] },
+    }
+}
+
+template RType for [TestIsa] {
+    param MNEMONIC: String;
+    param OPCODE: bits<7>;
+    param FUNCT3: bits<3> = 0b000;
+    param FUNCT7: bits<7> = 0b0000000;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => FUNCT3,
+        15..19 => rs1,
+        20..24 => rs2,
+        25..31 => FUNCT7,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {rs2}"
+    }
+}
+
+template BType for [TestIsa] {
+    param MNEMONIC: String;
+    param OPCODE: bits<7>;
+    param FUNCT2: bits<2> = 0b00;
+
+    operands {
+        rs1: GPR,
+        rs2: GPR,
+        imm: bits<13>,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..19 => imm,
+        20..24 => rs1,
+        25..29 => rs2,
+        30..31 => FUNCT2,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs1}, {rs2}, {imm}"
+    }
+}
+
+instruction TAdd for [TestIsa] : RType {
+    param MNEMONIC: String = "tadd";
+    param OPCODE: bits<7> = 0b0000001;
+
+    behavior {
+        rd = rs1 + rs2;
+    }
+}
+
+instruction TShift for [TestIsa] : RType {
+    param MNEMONIC: String = "tshift";
+    param OPCODE: bits<7> = 0b0000010;
+
+    behavior {
+        rd = rs1 << extract(rs2, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction TSlt for [TestIsa] : RType {
+    param MNEMONIC: String = "tslt";
+    param OPCODE: bits<7> = 0b0000011;
+
+    behavior {
+        rd = if rs1 < rs2 {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        }
+    }
+}
+
+instruction TBeq for [TestIsa] : BType {
+    param MNEMONIC: String = "tbeq";
+    param OPCODE: bits<7> = 0b0000100;
+
+    behavior {
+        if rs1 == rs2 {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction TStore for [TestIsa] : RType {
+    param MNEMONIC: String = "tstore";
+    param OPCODE: bits<7> = 0b0000101;
+
+    behavior {
+        store(rs1, 8, rs2);
+    }
+}
