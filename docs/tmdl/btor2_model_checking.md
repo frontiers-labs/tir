@@ -63,9 +63,10 @@ falsely flagged.
    ./mill svarog.runMain svarog.formal.FormalGenerator \
        --config=configs/svg-micro.yaml --target-dir=out/formal
 
-   # Verilog -> BTOR2 (the writer is `write_btor`, which emits BTOR2)
+   # Verilog -> BTOR2 (the writer is `write_btor`, which emits BTOR2;
+   # `memory_collect` keeps the memory as a BTOR2 array rather than bit-blasting it)
    yosys -p 'read_verilog -sv out/formal/FormalTop.sv; prep -top FormalTop; \
-            flatten; setundef -zero; write_btor impl.btor2'
+            flatten; memory_collect; setundef -zero; write_btor impl.btor2'
    ```
 
    The generator passes the firtool lowering options
@@ -104,16 +105,23 @@ state at step 0 cannot raise a spurious counterexample.
 
 ## Constraining the memory interface
 
-`FormalTop` leaves the instruction/data memory responses as free inputs. That
-suffices to explore every fetched word, but with no protocol constraint the
-fetch unit can ingest phantom responses (a `resp.valid` with no outstanding
-request), which produce retirements that no real memory would and so spurious
-counterexamples. Before trusting a `sat`, constrain the memory to follow the
-request/response handshake and return a stable word per address (the
-riscv-formal "memory abstraction"). As a sanity check, forcing the
-instruction-response valid bits low makes the model `unsat`: no instruction
-retires, confirming such counterexamples are interface artifacts, not core
-bugs.
+Leaving the memory responses as free inputs lets the fetch unit ingest phantom
+responses (a `resp.valid` with no outstanding request), producing retirements
+no real memory would and so spurious counterexamples. Svarog's `FormalMemory`
+avoids this: it honors the request/response handshake (one outstanding request)
+and backs reads with a free, uninitialized array, so each address holds an
+arbitrary-but-stable word and BMC still explores every program. A response can
+never appear without a prior request.
+
+## A found discrepancy (worked example)
+
+Running this flow against Svarog surfaced a real decode-strictness gap. The TMDL
+`ShiftImm` template encodes the RV32 `shamt` in a 6-bit field (`20..25`) but
+declares it 5 bits, leaving bit 25 unconstrained — so the checker accepted
+illegal shift-immediate encodings (`shamt[5]=1`, reserved) that the hardware
+correctly rejects. `verify-smt` cannot see this (it only *encodes* legal words);
+exploring all 32-bit words does. The BTOR2 checker now constrains the spare
+high bits of any over-wide operand field to zero, matching the hardware.
 
 ## Limitations
 

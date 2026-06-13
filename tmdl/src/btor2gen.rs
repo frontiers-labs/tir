@@ -742,15 +742,19 @@ fn decode_layout(
 }
 
 /// Reconstruct one operand from its word pieces, zero-filling gaps, then fit to
-/// `target_width`.
+/// `target_width`. When the encoding field is wider than the operand (e.g. the
+/// RV32 shift-immediate `shamt` occupies a 6-bit field but is 5 bits), the
+/// spare high bits are reserved-zero in the architecture; the returned guard
+/// (1-bit, true when they are zero) constrains decode to reject the otherwise
+/// illegal encodings the hardware rejects.
 fn decode_operand(
     b: &mut Btor2,
     insn: Bv,
     mut pieces: Vec<(u16, u16, u16, u16)>,
     target_width: u16,
-) -> Bv {
+) -> (Bv, Option<Bv>) {
     if pieces.is_empty() {
-        return b.konst(target_width as u32, 0);
+        return (b.konst(target_width as u32, 0), None);
     }
     pieces.sort_by_key(|p| std::cmp::Reverse(p.1));
     let mut acc: Option<Bv> = None;
@@ -777,7 +781,15 @@ fn decode_operand(
         push(b, &mut acc, pad);
     }
     let raw = acc.unwrap();
-    b.fit(raw, target_width as u32)
+    let target = target_width as u32;
+    let guard = if raw.width > target {
+        let spare = b.slice(raw, raw.width - 1, target);
+        let zero = b.konst(spare.width, 0);
+        Some(b.cmp("eq", spare, zero))
+    } else {
+        None
+    };
+    (b.fit(raw, target), guard)
 }
 
 fn build_guard(b: &mut Btor2, insn: Bv, guards: &[(u16, u16, u128)]) -> Bv {
@@ -897,17 +909,19 @@ pub fn generate_btor2<'a>(
         // decoded for the `rd_addr` check.
         let mut operand_vals = HashMap::new();
         let mut operand_addrs = HashMap::new();
+        let mut spare_guards: Vec<Bv> = Vec::new();
         for (name, ty) in &operand_list {
             let lname = name.to_lowercase();
             match ty {
                 Type::Struct(rc) if ctx.pc_classes.contains(&rc.to_lowercase()) => {}
                 Type::Struct(rc) => {
-                    let addr = decode_operand(
+                    let (addr, guard) = decode_operand(
                         &mut b,
                         insn,
                         pieces.get(name).cloned().unwrap_or_default(),
                         ctx.idx_width(rc),
                     );
+                    spare_guards.extend(guard);
                     operand_addrs.insert(lname.clone(), (addr, rc.clone()));
                     operand_vals.insert(
                         lname,
@@ -919,19 +933,23 @@ pub fn generate_btor2<'a>(
                     );
                 }
                 Type::Bits(n) => {
-                    let v = decode_operand(
+                    let (v, guard) = decode_operand(
                         &mut b,
                         insn,
                         pieces.get(name).cloned().unwrap_or_default(),
                         *n,
                     );
+                    spare_guards.extend(guard);
                     operand_vals.insert(lname, v);
                 }
                 _ => {}
             }
         }
 
-        let guard = build_guard(&mut b, insn, &guards);
+        let mut guard = build_guard(&mut b, insn, &guards);
+        for sg in spare_guards {
+            guard = b.bin("and", guard, sg, false);
+        }
 
         let init = PostState {
             rd_we: b.konst(1, 0),
@@ -990,8 +1008,15 @@ pub fn generate_btor2<'a>(
         legal = b.bin("or", legal, *guard, false);
     }
 
-    // Mismatch: the implementation's report diverges from the spec.
-    let we_bad = b.cmp("neq", rd_we_impl, spec.rd_we);
+    // Mismatch: the implementation's report diverges from the spec. A write to
+    // the hardwired-zero register is architecturally a no-op, so mask the
+    // implementation's write-enable with `rd_addr != 0` before comparing — an
+    // implementation may legitimately assert it while the register file drops
+    // the write.
+    let zero_addr2 = b.konst(idx_w, 0);
+    let rd_nonzero = b.cmp("neq", rd_addr_impl, zero_addr2);
+    let impl_we_eff = b.bin("and", rd_we_impl, rd_nonzero, false);
+    let we_bad = b.cmp("neq", impl_we_eff, spec.rd_we);
     let val_ne = b.cmp("neq", rd_val_impl, spec.rd_val);
     let val_bad = b.bin("and", spec.rd_we, val_ne, false);
     let addr_ne = b.cmp("neq", rd_addr_impl, spec.rd_addr);
