@@ -10,5 +10,6 @@
 - [TIR Machine Description Language](./tmdl/index.md)
   - [TMDL Syntax Guide](./tmdl/syntax.md)
   - [SMT Equivalence Checking](./tmdl/smt_verification.md)
+  - [BTOR2 Hardware Model Checking](./tmdl/btor2_model_checking.md)
 - [TMDL Parser Design](./tmdl/parser.md)
 - [API Docs](./api_docs.md)
