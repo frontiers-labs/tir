@@ -1,0 +1,29 @@
+// Hand-written checks for the BTOR2 backend's RVFI-style instruction checker.
+// Node ids are positional, so matches use regex captures rather than literal
+// ids. Do not regenerate with update_checks.py.
+
+// RUN: tmdlc --action=emit-btor2 --isa=TestIsa --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
+
+// CHECK: ; TMDL RVFI-style instruction checker
+
+// The retirement interface: the implementation reports these per committed
+// instruction, and the checker computes the golden post-state from them.
+// CHECK: {{[0-9]+}} input {{[0-9]+}} insn
+// CHECK: {{[0-9]+}} input {{[0-9]+}} pc
+// CHECK: {{[0-9]+}} input {{[0-9]+}} rs1_val
+// CHECK: {{[0-9]+}} input {{[0-9]+}} rs2_val
+// CHECK: {{[0-9]+}} input {{[0-9]+}} rd_addr
+// CHECK: {{[0-9]+}} input {{[0-9]+}} rd_we
+// CHECK: {{[0-9]+}} input {{[0-9]+}} rd_val
+// CHECK: {{[0-9]+}} input {{[0-9]+}} next_pc
+// CHECK: {{[0-9]+}} input {{[0-9]+}} valid
+
+// Fall-through next-pc is pc + 4.
+// CHECK: {{[0-9]+}} constd {{[0-9]+}} 4
+// CHECK: {{[0-9]+}} add {{[0-9]+}} {{[0-9]+}} {{[0-9]+}}
+
+// `tadd` computes rs1_val + rs2_val with the result written to rd.
+// CHECK: {{[0-9]+}} add {{[0-9]+}} {{[0-9]+}} {{[0-9]+}}
+
+// The model terminates in a single bad property (the mismatch).
+// CHECK: {{[0-9]+}} bad {{[0-9]+}}
