@@ -1292,10 +1292,8 @@ fn sem_node_to_dag_stmts(
                 let (mut stmts, start_var) =
                     sem_node_to_dag_stmts(start, operand_symbols, counter)?;
                 let (end_stmts, end_var) = sem_node_to_dag_stmts(end, operand_symbols, counter)?;
-                let (init_stmts, init_var) =
-                    sem_node_to_dag_stmts(init, operand_symbols, counter)?;
-                let (step_stmts, step_var) =
-                    sem_node_to_dag_stmts(step, operand_symbols, counter)?;
+                let (init_stmts, init_var) = sem_node_to_dag_stmts(init, operand_symbols, counter)?;
+                let (step_stmts, step_var) = sem_node_to_dag_stmts(step, operand_symbols, counter)?;
                 stmts.extend(end_stmts);
                 stmts.extend(init_stmts);
                 stmts.extend(step_stmts);

@@ -1,0 +1,102 @@
+// A small slice of the RISC-V Vector extension (RVV). To stay within what the
+// loop-aware behavior language can express without a dynamic vtype CSR, these
+// instructions model a fixed 32-bit element width over a VLEN-bit vector
+// register: a VLEN=128 register therefore holds four 32-bit lanes. The lane loop
+// is written with the Rust-style `for` accumulator form, which lowers to the
+// IR's first-class `Loop` node.
+
+isa RVV requires [RV32I | RV64I] {
+    param VLEN: Integer = 128;
+    param SEW: Integer = 32;
+}
+
+// The 32 architectural vector registers v0..v31, each VLEN bits wide.
+register_class VR for [RVV] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.VLEN;
+
+    registers {
+        v0..v31 => { traits = [vector] },
+    }
+}
+
+// OP-V, vector-vector (OPIVV) form: `op.vv vd, vs2, vs1`.
+template VArithVV for [RVV] {
+    param MNEMONIC: String;
+    param FUNCT6: bits<6>;
+    param FUNCT3: bits<3> = 0b000;
+    param VM: bits<1> = 0b1;
+    param OPCODE: bits<7> = 0b1010111;
+
+    operands {
+        vd: VR,
+        vs2: VR,
+        vs1: VR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => vd,
+        12..14 => FUNCT3,
+        15..19 => vs1,
+        20..24 => vs2,
+        25 => VM,
+        26..31 => FUNCT6,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vs2}, {vs1}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction VAdd for [RVV] : VArithVV {
+    param MNEMONIC: String = "vadd.vv";
+    param FUNCT6: bits<6> = 0b000000;
+
+    // For each lane i in [0, VLEN/SEW): vd[i] = vs2[i] + vs1[i]. Each lane sum is
+    // zero-extended to the full register width before being shifted into place.
+    behavior {
+        vd = zext(0b0, self.VLEN);
+        for i in 0..(self.VLEN / self.SEW) {
+            vd = vd | (zext(
+                extract(vs2, i * self.SEW + self.SEW - 1, i * self.SEW)
+                    + extract(vs1, i * self.SEW + self.SEW - 1, i * self.SEW),
+                self.VLEN) << (i * self.SEW));
+        }
+    }
+}
+
+instruction VSub for [RVV] : VArithVV {
+    param MNEMONIC: String = "vsub.vv";
+    param FUNCT6: bits<6> = 0b000010;
+
+    behavior {
+        vd = zext(0b0, self.VLEN);
+        for i in 0..(self.VLEN / self.SEW) {
+            vd = vd | (zext(
+                extract(vs2, i * self.SEW + self.SEW - 1, i * self.SEW)
+                    - extract(vs1, i * self.SEW + self.SEW - 1, i * self.SEW),
+                self.VLEN) << (i * self.SEW));
+        }
+    }
+}
+
+instruction VMul for [RVV] : VArithVV {
+    param MNEMONIC: String = "vmul.vv";
+    param FUNCT6: bits<6> = 0b100101;
+
+    // The low SEW bits of each lane product are kept.
+    behavior {
+        vd = zext(0b0, self.VLEN);
+        for i in 0..(self.VLEN / self.SEW) {
+            vd = vd | (zext(
+                extract(
+                    extract(vs2, i * self.SEW + self.SEW - 1, i * self.SEW)
+                        * extract(vs1, i * self.SEW + self.SEW - 1, i * self.SEW),
+                    self.SEW - 1, 0),
+                self.VLEN) << (i * self.SEW));
+        }
+    }
+}
