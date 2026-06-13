@@ -1194,6 +1194,17 @@ fn sem_node_to_dag_stmts(
                     g.set_leaf_data(#var, tir::sem_expr::ExprPayload::SymbolId(#idx_lit));
                 };
                 Some((vec![stmt], var))
+            } else if name == "acc" || name == "indvar" {
+                // The accumulator and induction value of the innermost `(loop ...)`.
+                let kind = if name == "acc" {
+                    quote! { tir::sem_expr::ExprKind::Acc }
+                } else {
+                    quote! { tir::sem_expr::ExprKind::IndVar }
+                };
+                let var = format_ident!("__sem_node_{}", *counter);
+                *counter += 1;
+                let stmt = quote! { let #var = g.add_node(#kind); };
+                Some((vec![stmt], var))
             } else if let Ok(i) = name.parse::<i64>() {
                 let var = format_ident!("__sem_node_{}", *counter);
                 *counter += 1;
@@ -1268,6 +1279,35 @@ fn sem_node_to_dag_stmts(
                         g.add_edge(#var, #low_var);
                     });
                 }
+                return Some((stmts, var));
+            }
+
+            // `(loop start end init step)` lowers to the IR's first-class `Loop`
+            // node: `init` is the accumulator at entry, `step` is folded over the
+            // half-open range `[start, end)`, reading `acc`/`indvar` for the running
+            // accumulator and induction value.
+            if let [SemNode::Atom(op), start, end, init, step] = items.as_slice()
+                && op == "loop"
+            {
+                let (mut stmts, start_var) =
+                    sem_node_to_dag_stmts(start, operand_symbols, counter)?;
+                let (end_stmts, end_var) = sem_node_to_dag_stmts(end, operand_symbols, counter)?;
+                let (init_stmts, init_var) =
+                    sem_node_to_dag_stmts(init, operand_symbols, counter)?;
+                let (step_stmts, step_var) =
+                    sem_node_to_dag_stmts(step, operand_symbols, counter)?;
+                stmts.extend(end_stmts);
+                stmts.extend(init_stmts);
+                stmts.extend(step_stmts);
+                let var = format_ident!("__sem_node_{}", *counter);
+                *counter += 1;
+                stmts.push(quote! {
+                    let #var = g.add_node(tir::sem_expr::ExprKind::Loop);
+                    g.add_edge(#var, #start_var);
+                    g.add_edge(#var, #end_var);
+                    g.add_edge(#var, #init_var);
+                    g.add_edge(#var, #step_var);
+                });
                 return Some((stmts, var));
             }
 

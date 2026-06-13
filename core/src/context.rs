@@ -20,6 +20,7 @@ use crate::{
     region::RegionId,
     ty::{Type, TypeParser},
     value::{Value, ValueId},
+    vector::VectorDialect,
 };
 
 /// Central hub for managing all IR entities and state.
@@ -123,6 +124,7 @@ impl Context {
         context.register_dialect::<BuiltinDialect>();
         context.register_dialect::<PtrDialect>();
         context.register_dialect::<ScfDialect>();
+        context.register_dialect::<VectorDialect>();
 
         context
     }
