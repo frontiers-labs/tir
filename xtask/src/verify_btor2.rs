@@ -53,7 +53,8 @@ fn ref_positions(op: &str) -> (bool, &'static [usize]) {
     match op {
         "sort" => (false, &[]),
         "input" | "constd" | "const" | "one" | "zero" | "ones" => (true, &[]),
-        "bad" => (false, &[2]),
+        // `output <node> <name>` carries no sort; the node is at position 2.
+        "output" | "bad" => (false, &[2]),
         "not" | "sext" | "uext" | "slice" => (true, &[3]),
         "ite" => (true, &[3, 4, 5]),
         // binops, comparisons, concat
@@ -117,7 +118,7 @@ pub fn stitch(implementation: &str, checker: &str, signals: &[&str]) -> Result<S
     out.push_str(implementation.trim_end());
     out.push_str("\n; --- TMDL checker (stitched) ---\n");
     let mut last = offset;
-    let mut bad_operand: Option<u32> = None;
+    let mut bads: Vec<(u32, String)> = Vec::new();
     for line in non_blank(checker) {
         let mut t: Vec<String> = line.split_whitespace().map(String::from).collect();
         last = last.max(remap(t[0].parse()?));
@@ -129,9 +130,10 @@ pub fn stitch(implementation: &str, checker: &str, signals: &[&str]) -> Result<S
         {
             continue;
         }
-        // Hold the property aside so it can be gated on the reset pulse below.
+        // Hold each property aside so it can be gated on the reset pulse below.
         if t[1] == "bad" {
-            bad_operand = Some(remap(t[2].parse()?));
+            let name = t.get(3).cloned().unwrap_or_default();
+            bads.push((remap(t[2].parse()?), name));
             continue;
         }
         let (has_sort, positions) = ref_positions(&t[1]);
@@ -148,16 +150,18 @@ pub fn stitch(implementation: &str, checker: &str, signals: &[&str]) -> Result<S
         out.push('\n');
     }
 
-    let bad = bad_operand.ok_or_else(|| anyhow!("checker has no `bad` property"))?;
-    emit_property(&mut out, last, bad, reset_node);
+    if bads.is_empty() {
+        bail!("checker has no `bad` property");
+    }
+    emit_property(&mut out, last, &bads, reset_node);
     Ok(out)
 }
 
-/// Emit the miter property. When the implementation has a `reset` input, drive
-/// a one-cycle reset pulse and gate the mismatch until reset has deasserted, so
+/// Emit the miter properties. When the implementation has a `reset` input, drive
+/// a one-cycle reset pulse and gate each mismatch until reset has deasserted, so
 /// uninitialized pipeline state at step 0 cannot raise a spurious counterexample.
-fn emit_property(out: &mut String, last: u32, bad: u32, reset_node: Option<u32>) {
-    out.push_str("; --- reset-gated property ---\n");
+fn emit_property(out: &mut String, last: u32, bads: &[(u32, String)], reset_node: Option<u32>) {
+    out.push_str("; --- reset-gated properties ---\n");
     let mut nid = last;
     let mut node = |body: String| -> u32 {
         nid += 1;
@@ -165,7 +169,9 @@ fn emit_property(out: &mut String, last: u32, bad: u32, reset_node: Option<u32>)
         nid
     };
     let Some(reset) = reset_node else {
-        node(format!("bad {bad}"));
+        for (bad, name) in bads {
+            node(format!("bad {bad} {name}"));
+        }
         return;
     };
     let s1 = node("sort bitvec 1".into());
@@ -179,8 +185,10 @@ fn emit_property(out: &mut String, last: u32, bad: u32, reset_node: Option<u32>)
     let not_started = node(format!("not {s1} {started}"));
     let reset_ok = node(format!("eq {s1} {reset} {not_started}"));
     node(format!("constraint {reset_ok}"));
-    let gated = node(format!("and {s1} {bad} {started}"));
-    node(format!("bad {gated}"));
+    for (bad, name) in bads {
+        let gated = node(format!("and {s1} {bad} {started}"));
+        node(format!("bad {gated} {name}"));
+    }
 }
 
 fn non_blank(s: &str) -> impl Iterator<Item = &str> {

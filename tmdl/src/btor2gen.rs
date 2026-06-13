@@ -1008,11 +1008,9 @@ pub fn generate_btor2<'a>(
         legal = b.bin("or", legal, *guard, false);
     }
 
-    // Mismatch: the implementation's report diverges from the spec. A write to
-    // the hardwired-zero register is architecturally a no-op, so mask the
-    // implementation's write-enable with `rd_addr != 0` before comparing — an
-    // implementation may legitimately assert it while the register file drops
-    // the write.
+    // Mismatch, split per field so a model checker reports which one diverged.
+    // A write to the hardwired-zero register is architecturally a no-op, so mask
+    // the implementation's write-enable with `rd_addr != 0` before comparing.
     let zero_addr2 = b.konst(idx_w, 0);
     let rd_nonzero = b.cmp("neq", rd_addr_impl, zero_addr2);
     let impl_we_eff = b.bin("and", rd_we_impl, rd_nonzero, false);
@@ -1022,12 +1020,25 @@ pub fn generate_btor2<'a>(
     let addr_ne = b.cmp("neq", rd_addr_impl, spec.rd_addr);
     let addr_bad = b.bin("and", spec.rd_we, addr_ne, false);
     let pc_bad = b.cmp("neq", next_pc_impl, spec.next_pc);
-    let any1 = b.bin("or", we_bad, val_bad, false);
-    let any2 = b.bin("or", addr_bad, pc_bad, false);
-    let any = b.bin("or", any1, any2, false);
+
+    // Observable spec/impl values for counterexample triage (ignored by BMC).
+    b.line(&format!("output {} decode_legal", legal.nid));
+    b.line(&format!("output {} impl_rd_we_eff", impl_we_eff.nid));
+    b.line(&format!("output {} spec_rd_we", spec.rd_we.nid));
+    b.line(&format!("output {} spec_rd_val", spec.rd_val.nid));
+    b.line(&format!("output {} spec_rd_addr", spec.rd_addr.nid));
+    b.line(&format!("output {} spec_next_pc", spec.next_pc.nid));
+
     let gated = b.bin("and", valid, legal, false);
-    let bad = b.bin("and", gated, any, false);
-    b.line(&format!("bad {}", bad.nid));
+    for (cond, name) in [
+        (we_bad, "rd_we_mismatch"),
+        (val_bad, "rd_val_mismatch"),
+        (addr_bad, "rd_addr_mismatch"),
+        (pc_bad, "next_pc_mismatch"),
+    ] {
+        let g = b.bin("and", gated, cond, false);
+        b.line(&format!("bad {} {}", g.nid, name));
+    }
 
     output.write_all(b.out.as_bytes())?;
     Ok(())
@@ -1092,6 +1103,7 @@ mod tests {
                     &[]
                 }
                 "input" | "constd" | "const" | "one" | "zero" | "ones" => &[],
+                "output" => &[2],
                 "bad" => {
                     bads += 1;
                     &[2]
@@ -1100,7 +1112,7 @@ mod tests {
                 "ite" => &[3, 4, 5],
                 _ => &[3, 4],
             };
-            if op != "sort" && op != "bad" {
+            if !matches!(op, "sort" | "bad" | "output") {
                 assert!(
                     sorts.contains(&p[2].parse().unwrap()),
                     "sort ref at: {line}"
@@ -1112,7 +1124,7 @@ mod tests {
             }
             defined.insert(nid);
         }
-        assert_eq!(bads, 1, "exactly one bad property expected");
+        assert!(bads >= 1, "at least one bad property expected");
     }
 
     const SPEC: &str = include_str!("../checks/Inputs/smtlib.tmdl");
