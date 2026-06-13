@@ -1468,62 +1468,84 @@ fn build_decoder<'a>(
             }
         }
 
+        // Build the constructor arguments in operand declaration order. When an
+        // operand's encoding field is wider than the operand (e.g. the RV32
+        // shift-immediate `shamt` sits in a 6-bit field but is 5 bits), the
+        // encoder zero-fills the spare high bits, so a faithful decoder must
+        // require them zero — otherwise it accepts the reserved encodings the
+        // hardware rejects.
+        let mut constructor_args: Vec<String> = Vec::with_capacity(operand_list.len());
+        for (op_name, op_ty) in &operand_list {
+            // Immediates are reconstructed at XLEN, but the reserved-zero check
+            // is against the operand's *declared* width (e.g. a 5-bit RV32
+            // `shamt`), so an over-wide field is rejected even though the value
+            // is later XLEN-extended.
+            let target_width = match op_ty {
+                Type::Struct(rc) => ctx.idx_width(rc),
+                _ => ctx.xlen,
+            };
+            let declared_width = match op_ty {
+                Type::Struct(rc) => ctx.idx_width(rc),
+                Type::Bits(n) => *n,
+                _ => ctx.xlen,
+            };
+
+            let Some(mut pieces) = operand_pieces.remove(op_name) else {
+                constructor_args.push(zero_bv(target_width));
+                continue;
+            };
+
+            // Sort pieces by op_hi descending so the concat builds high→low.
+            pieces.sort_by_key(|piece| std::cmp::Reverse(piece.1));
+
+            // Reconstruct the operand from its pieces, filling any gaps
+            // between non-contiguous slices with zero bits.
+            // `expected_hi` tracks the next op bit we expect; it starts at
+            // the top bit of the highest piece and steps downward.
+            let mut fragments: Vec<String> = vec![];
+            let mut raw_width: u16 = 0;
+            let mut expected_hi = pieces[0].1;
+
+            for (op_lo, op_hi, word_lo, word_hi) in &pieces {
+                // Fill any gap between the previous piece and this one.
+                if *op_hi < expected_hi {
+                    let gap = expected_hi - op_hi; // bits [expected_hi..op_hi+1]
+                    fragments.push(zero_bv(gap));
+                    raw_width += gap;
+                }
+                fragments.push(format!("((_ extract {} {}) word)", word_hi, word_lo));
+                raw_width += op_hi - op_lo + 1;
+                expected_hi = op_lo.saturating_sub(1);
+            }
+            // Fill any gap below the lowest piece (bits [op_lo-1..0]).
+            let lowest_op_lo = pieces.last().map(|(lo, _, _, _)| *lo).unwrap_or(0);
+            if lowest_op_lo > 0 {
+                fragments.push(zero_bv(lowest_op_lo));
+                raw_width += lowest_op_lo;
+            }
+
+            let raw = fragments
+                .into_iter()
+                .reduce(|acc, f| format!("(concat {} {})", acc, f))
+                .unwrap_or_else(|| zero_bv(target_width));
+
+            if raw_width > declared_width {
+                guards.push(format!(
+                    "(= ((_ extract {} {}) {}) (_ bv0 {}))",
+                    raw_width - 1,
+                    declared_width,
+                    raw,
+                    raw_width - declared_width
+                ));
+            }
+            constructor_args.push(cast_bv_smt(&raw, raw_width, target_width));
+        }
+
         let guard = match guards.len() {
             0 => "true".to_string(),
             1 => guards.remove(0),
             _ => format!("(and {})", guards.join(" ")),
         };
-
-        // Build the constructor arguments in operand declaration order.
-        let constructor_args: Vec<String> = operand_list
-            .iter()
-            .map(|(op_name, op_ty)| {
-                let target_width = match op_ty {
-                    Type::Struct(rc) => ctx.idx_width(rc),
-                    _ => ctx.xlen,
-                };
-
-                let Some(mut pieces) = operand_pieces.remove(op_name) else {
-                    return zero_bv(target_width);
-                };
-
-                // Sort pieces by op_hi descending so the concat builds high→low.
-                pieces.sort_by_key(|piece| std::cmp::Reverse(piece.1));
-
-                // Reconstruct the operand from its pieces, filling any gaps
-                // between non-contiguous slices with zero bits.
-                // `expected_hi` tracks the next op bit we expect; it starts at
-                // the top bit of the highest piece and steps downward.
-                let mut fragments: Vec<String> = vec![];
-                let mut raw_width: u16 = 0;
-                let mut expected_hi = pieces[0].1;
-
-                for (op_lo, op_hi, word_lo, word_hi) in &pieces {
-                    // Fill any gap between the previous piece and this one.
-                    if *op_hi < expected_hi {
-                        let gap = expected_hi - op_hi; // bits [expected_hi..op_hi+1]
-                        fragments.push(zero_bv(gap));
-                        raw_width += gap;
-                    }
-                    fragments.push(format!("((_ extract {} {}) word)", word_hi, word_lo));
-                    raw_width += op_hi - op_lo + 1;
-                    expected_hi = op_lo.saturating_sub(1);
-                }
-                // Fill any gap below the lowest piece (bits [op_lo-1..0]).
-                let lowest_op_lo = pieces.last().map(|(lo, _, _, _)| *lo).unwrap_or(0);
-                if lowest_op_lo > 0 {
-                    fragments.push(zero_bv(lowest_op_lo));
-                    raw_width += lowest_op_lo;
-                }
-
-                let raw = fragments
-                    .into_iter()
-                    .reduce(|acc, f| format!("(concat {} {})", acc, f))
-                    .unwrap_or_else(|| zero_bv(target_width));
-
-                cast_bv_smt(&raw, raw_width, target_width)
-            })
-            .collect();
 
         let constructor = if constructor_args.is_empty() {
             name_upper.clone()
