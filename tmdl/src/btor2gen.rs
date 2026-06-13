@@ -493,7 +493,13 @@ fn emit(graph: &ExprPostGraph, node: NodeId, r: &Resolver<'_>, b: &mut Btor2) ->
             let hi = b.ite(above, max, input, input.signed);
             Some(b.ite(below, min, hi, input.signed))
         }
-        ExprKind::LoadMemory | ExprKind::StoreMemory | ExprKind::Sqrt | ExprKind::Fma => None,
+        ExprKind::LoadMemory
+        | ExprKind::StoreMemory
+        | ExprKind::Sqrt
+        | ExprKind::Fma
+        | ExprKind::Loop
+        | ExprKind::IndVar
+        | ExprKind::Acc => None,
     }
 }
 
