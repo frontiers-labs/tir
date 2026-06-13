@@ -56,18 +56,23 @@ falsely flagged.
 ## End-to-end run
 
 1. **Lower the implementation to BTOR2.** From a Chisel design (e.g. Svarog),
-   elaborate a formal top exposing the retirement outputs, then:
+   elaborate a formal top exposing the retirement outputs, then run Yosys:
 
    ```sh
-   # Chisel -> Verilog
-   firtool FormalTop.fir --format=mlir -o FormalTop.sv
-   # Verilog -> BTOR2
-   yosys -p 'read_verilog -sv FormalTop.sv; prep -top FormalTop; \
-            flatten; setundef -zero; write_btor2 impl.btor2'
+   # Chisel -> Verilog (Svarog ships this generator; firtool is fetched by Chisel)
+   ./mill svarog.runMain svarog.formal.FormalGenerator \
+       --config=configs/svg-micro.yaml --target-dir=out/formal
+
+   # Verilog -> BTOR2 (the writer is `write_btor`, which emits BTOR2)
+   yosys -p 'read_verilog -sv out/formal/FormalTop.sv; prep -top FormalTop; \
+            flatten; setundef -zero; write_btor impl.btor2'
    ```
 
-   Svarog ships such a top (`testbench/formal/FormalTop.scala`) and a wrapper
-   that names the outputs to match the table above.
+   The generator passes the firtool lowering options
+   `disallowLocalVariables,disallowPackedArrays` and
+   `--default-layer-specialization=enable` so the emitted SystemVerilog stays
+   within the Yosys Verilog frontend. Svarog's `FormalTop` names the outputs to
+   match the table above.
 
 2. **Generate, stitch and check.**
 
