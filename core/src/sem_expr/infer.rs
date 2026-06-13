@@ -100,6 +100,14 @@ pub fn infer_widths(
                 .and_then(|&c| const_value(c))
                 .map(|bytes| (bytes as u32) * 8),
             ExprKind::StoreMemory => None,
+
+            // A loop is as wide as its accumulator, which starts at `init`.
+            ExprKind::Loop => child_width(2),
+            // The accumulator's width is the loop's, fixed up when the `Loop`
+            // node is processed; the induction value is a plain counter. Neither
+            // can be resolved structurally from a lower-indexed leaf, so they stay
+            // unknown and propagate.
+            ExprKind::IndVar | ExprKind::Acc => None,
         };
 
         widths[index] = width;

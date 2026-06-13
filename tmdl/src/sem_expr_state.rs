@@ -73,6 +73,7 @@ pub fn compile_to_state(expr: &ast::Expr, st_name: &str, em: &dyn StateEmitter) 
                         | ast::Expr::Block(_)
                         | ast::Expr::If(_)
                         | ast::Expr::Try(_)
+                        | ast::Expr::For(_)
                 ) || is_store_call(stmt)
                     || is_trap_call(stmt)
                 {
@@ -99,6 +100,23 @@ pub fn compile_to_state(expr: &ast::Expr, st_name: &str, em: &dyn StateEmitter) 
                 compile_to_state(e, st, em)
             }))
         }
+        // An accumulator loop `for i in s..e { dest = step }` is a single state
+        // update writing the loop's folded value to `dest`; the value lowers to a
+        // `Loop` node. Other loop shapes are unrolled before reaching here.
+        ast::Expr::For(f) => match f.accumulator() {
+            Some((dest, _)) => {
+                let assign = ast::Assign {
+                    dest: Box::new(dest.clone()),
+                    value: Box::new(expr.clone()),
+                    span: f.span,
+                };
+                or_unsupported(em.assign(&assign, st_name))
+            }
+            None => {
+                em.unsupported(expr);
+                st_name.to_string()
+            }
+        },
         _ => {
             em.unsupported(expr);
             st_name.to_string()

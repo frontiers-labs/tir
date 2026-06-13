@@ -1001,6 +1001,9 @@ fn emit_sem_expr(
         }
         // Stores are effect statements, handled by `BehaviorEmitter::store`.
         ExprKind::StoreMemory | ExprKind::Sqrt | ExprKind::Fma => None,
+        // Loops are eliminated by `unroll_loops` before emission; a surviving one
+        // has symbolic bounds, which SMT-LIB cannot express, so it is unsupported.
+        ExprKind::Loop | ExprKind::IndVar | ExprKind::Acc => None,
     }
 }
 
@@ -1105,6 +1108,9 @@ impl BehaviorEmitter<'_> {
                 self.failed.set(true);
                 None
             })?;
+        // SMT-LIB has no iteration: unroll constant-bound loops to plain
+        // expressions. Symbolic-bound loops survive and fail emission below.
+        let (graph, root) = tir::sem_expr::unroll_loops(&graph, lowering.root);
         let mut symbols = HashMap::new();
         for (name, id) in &lowering.variable_symbols {
             symbols.insert(*id, SmtSymbolInfo::Variable { name: name.clone() });
@@ -1126,7 +1132,7 @@ impl BehaviorEmitter<'_> {
             state_name: "st",
             ctx: self.ctx,
         };
-        emit_sem_expr(&graph, lowering.root, &resolver).or_else(|| {
+        emit_sem_expr(&graph, root, &resolver).or_else(|| {
             self.failed.set(true);
             None
         })

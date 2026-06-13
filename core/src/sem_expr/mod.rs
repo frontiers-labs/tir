@@ -8,10 +8,12 @@ use crate::{
 mod discover;
 mod exec;
 mod infer;
+mod unroll;
 
 pub use discover::{EquivalenceOracle, FuzzOracle, confirm_extension_via_shifts};
 pub use exec::{Memory, execute, execute_with_memory};
 pub use infer::{canonicalize_for_selection, infer_widths};
+pub use unroll::unroll_loops;
 
 pub type ExprPostGraph = PostOrderDag<ExprKind, ExprPayload>;
 
@@ -85,6 +87,24 @@ pub enum ExprKind {
     Sqrt,
     #[arity = 3]
     Fma,
+    /// Bounded fold/reduce, the IR's first-class loop. Arguments are
+    /// `[start, end, init, step]`: the accumulator begins at `init` and, for each
+    /// integer `i` in the half-open range `[start, end)`, is replaced by `step`.
+    /// Inside `step`, the current induction value is read with `IndVar` and the
+    /// running accumulator with `Acc`. The node's value is the final accumulator.
+    /// Bounds may be arbitrary subexpressions (the interpreter evaluates them at
+    /// run time); backends without native iteration unroll it when the bounds are
+    /// constant.
+    #[arity = 4]
+    Loop,
+    /// The induction variable of the innermost enclosing `Loop`. Only meaningful
+    /// inside that loop's `step` subexpression.
+    #[leaf]
+    IndVar,
+    /// The running accumulator of the innermost enclosing `Loop`. Only meaningful
+    /// inside that loop's `step` subexpression.
+    #[leaf]
+    Acc,
 }
 
 impl ExprKind {

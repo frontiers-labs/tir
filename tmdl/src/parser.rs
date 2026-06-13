@@ -1621,40 +1621,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn expr_parses_for_loop() {
-        use std::collections::HashMap;
-
-        let code = "for i in 0..4 { rd = rd + i; }";
+    fn parse_expr(code: &str) -> Expr {
         let (tokens, _e) = lexer().parse(code).into_output_errors();
         let tokens = tokens.unwrap();
-        let parsed = expr().then(end()).parse(
-            tokens
-                .as_slice()
-                .map((code.len()..code.len()).into(), |(t, s)| (t, s)),
-        );
-        let parsed = parsed.output().unwrap().0.clone();
-        let Expr::For(for_) = &parsed else {
-            panic!("expected for loop, got {parsed:?}");
-        };
-        assert_eq!(for_.var, "i");
-
-        // Unrolling replaces the loop with one body copy per iteration, the loop
-        // variable substituted by a literal each time.
-        let Expr::Block(block) = parsed.expand_loops(&HashMap::new()) else {
-            panic!("unrolled loop must be a block");
-        };
-        assert_eq!(block.stmts.len(), 4);
-    }
-
-    #[test]
-    fn expr_parses_for_loop_parametric_bound() {
-        use std::collections::HashMap;
-
-        let code = "for i in 0..XLEN { rd = rd + i; }";
-        let (tokens, _e) = lexer().parse(code).into_output_errors();
-        let tokens = tokens.unwrap();
-        let parsed = expr()
+        expr()
             .then(end())
             .parse(
                 tokens
@@ -1664,9 +1634,49 @@ mod tests {
             .output()
             .unwrap()
             .0
-            .clone();
-        let consts = HashMap::from([("XLEN".to_string(), 3i64)]);
-        let Expr::Block(block) = parsed.expand_loops(&consts) else {
+            .clone()
+    }
+
+    #[test]
+    fn expr_parses_for_loop_as_accumulator() {
+        let parsed = parse_expr("for i in 0..4 { rd = rd + i; }");
+        let Expr::For(for_) = &parsed else {
+            panic!("expected for loop, got {parsed:?}");
+        };
+        assert_eq!(for_.var, "i");
+        // A single accumulating assignment is recognized as the fold form.
+        assert!(for_.accumulator().is_some());
+    }
+
+    #[test]
+    fn accumulator_loop_lowers_to_loop_node() {
+        use tir::graph::Dag;
+        use tir::sem_expr::{ExprKind, ExprPostGraph};
+
+        // Symbolic bound `n`: the loop survives as a first-class `Loop` node
+        // rather than being unrolled.
+        let parsed = parse_expr("for i in 0..n { acc = acc + i }");
+        let mut graph = ExprPostGraph::new();
+        let lowering = parsed
+            .lower_to_sema(&mut graph, &std::collections::HashMap::new())
+            .expect("loop should lower");
+        assert_eq!(*graph.get_node(lowering.root), ExprKind::Loop);
+        let has_indvar = (0..graph.len())
+            .any(|i| *graph.get_node(tir::graph::NodeId::from_index(i)) == ExprKind::IndVar);
+        let has_acc = (0..graph.len())
+            .any(|i| *graph.get_node(tir::graph::NodeId::from_index(i)) == ExprKind::Acc);
+        assert!(
+            has_indvar && has_acc,
+            "loop body must reference IndVar and Acc"
+        );
+    }
+
+    #[test]
+    fn non_accumulator_loop_unrolls() {
+        // A body that is not a single accumulating assignment falls back to
+        // compile-time unrolling.
+        let parsed = parse_expr("for i in 0..3 { store(i, 4, i); }");
+        let Expr::Block(block) = parsed.expand_loops(&std::collections::HashMap::new()) else {
             panic!("unrolled loop must be a block");
         };
         assert_eq!(block.stmts.len(), 3);

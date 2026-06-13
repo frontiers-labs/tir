@@ -637,6 +637,68 @@ pub(crate) fn unroll_for(f: &For, consts: &HashMap<String, i64>) -> Option<Expr>
     }))
 }
 
+/// Whether two expressions name the same assignment target (register operand,
+/// register path, or status-flag field), ignoring spans.
+fn same_target(a: &Expr, b: &Expr) -> bool {
+    match (a, b) {
+        (Expr::Ident(x), Expr::Ident(y)) => x.name == y.name,
+        (Expr::Path(x), Expr::Path(y)) => x.base == y.base && x.remainder == y.remainder,
+        (Expr::Field(x), Expr::Field(y)) => x.member == y.member && same_target(&x.base, &y.base),
+        _ => false,
+    }
+}
+
+impl For {
+    /// If the body is a single assignment `dest = step` (optionally wrapped in a
+    /// one-statement block), return `(dest, step)`. This accumulator form is what
+    /// lowers to a first-class `Loop` node; other shapes fall back to unrolling.
+    pub(crate) fn accumulator(&self) -> Option<(&Expr, &Expr)> {
+        let body = match &*self.body {
+            Expr::Block(b) if b.stmts.len() == 1 => &b.stmts[0],
+            other => other,
+        };
+        match body {
+            Expr::Assign(a) => Some((&a.dest, &a.value)),
+            _ => None,
+        }
+    }
+
+    fn as_sema_expr<
+        G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_expr::ExprPayload>,
+    >(
+        &self,
+        ctx: &mut SemaExprLoweringCtx<'_, G>,
+    ) -> tir::graph::NodeId {
+        let Some((dest, step)) = self.accumulator() else {
+            // Non-accumulator loops are not first-class values: unroll constant
+            // bounds, otherwise the lowering cannot represent them.
+            return match unroll_for(self, ctx.params) {
+                Some(block) => block.lower_with_ctx(ctx),
+                None => {
+                    ctx.had_error = true;
+                    ctx.add_int_const(tir::utils::APInt::new(64, 0))
+                }
+            };
+        };
+
+        let start = self.start.lower_with_ctx(ctx);
+        let end = self.end.lower_with_ctx(ctx);
+        // `init` is the accumulator's value at loop entry, lowered outside the
+        // loop context so the destination reads its surrounding value.
+        let init = dest.lower_with_ctx(ctx);
+
+        let prev = ctx.loop_ctx.take();
+        ctx.loop_ctx = Some((self.var.clone(), dest.clone()));
+        let step_node = step.lower_with_ctx(ctx);
+        ctx.loop_ctx = prev;
+
+        ctx.add_node(
+            tir::sem_expr::ExprKind::Loop,
+            &[start, end, init, step_node],
+        )
+    }
+}
+
 impl Expr {
     /// Return a clone of this expression with every `for` loop fully unrolled
     /// (recursively). Loops whose bounds are not constant under `consts` are left
@@ -654,7 +716,11 @@ fn expand_loops_inplace(expr: &mut Expr, consts: &HashMap<String, i64>) {
             expand_loops_inplace(&mut f.start, consts);
             expand_loops_inplace(&mut f.end, consts);
             expand_loops_inplace(&mut f.body, consts);
-            if let Some(block) = unroll_for(f, consts) {
+            // Accumulator loops lower to a first-class `Loop` node, so leave them
+            // intact; only non-accumulator loops are unrolled here.
+            if f.accumulator().is_none()
+                && let Some(block) = unroll_for(f, consts)
+            {
                 *expr = block;
             }
         }
@@ -723,6 +789,10 @@ struct SemaExprLoweringCtx<
     register_symbols: HashMap<(String, u32), u32>,
     variable_symbols: HashMap<String, u32>,
     had_error: bool,
+    /// Active while lowering a loop's `step`: `(induction-variable name, dest)`.
+    /// References to `dest` lower to the loop accumulator and references to the
+    /// induction variable to the loop counter, so the body becomes a `Loop` node.
+    loop_ctx: Option<(String, Expr)>,
 }
 
 impl<'a, G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_expr::ExprPayload>>
@@ -737,6 +807,7 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_e
             register_symbols: HashMap::new(),
             variable_symbols: HashMap::new(),
             had_error: false,
+            loop_ctx: None,
         }
     }
 
@@ -753,6 +824,7 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_e
             register_symbols: HashMap::new(),
             variable_symbols: HashMap::new(),
             had_error: false,
+            loop_ctx: None,
         }
     }
 
@@ -910,6 +982,26 @@ impl Expr {
         &self,
         ctx: &mut SemaExprLoweringCtx<'_, G>,
     ) -> tir::graph::NodeId {
+        // Inside a loop's `step`, references to the accumulator and induction
+        // variable become the dedicated leaf nodes the `Loop` reads.
+        let loop_leaf = ctx
+            .loop_ctx
+            .as_ref()
+            .map(|(var, dest)| {
+                if same_target(self, dest) {
+                    1u8
+                } else if matches!(self, Expr::Ident(id) if &id.name == var) {
+                    2
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0);
+        match loop_leaf {
+            1 => return ctx.graph.add_node(tir::sem_expr::ExprKind::Acc),
+            2 => return ctx.graph.add_node(tir::sem_expr::ExprKind::IndVar),
+            _ => {}
+        }
         match self {
             Expr::Assign(x) => x.as_sema_expr(ctx),
             Expr::Binary(x) => x.as_sema_expr(ctx),
@@ -919,13 +1011,7 @@ impl Expr {
             Expr::Field(x) => x.as_sema_expr(ctx),
             Expr::Ident(x) => x.as_sema_expr(ctx),
             Expr::If(x) => x.as_sema_expr(ctx),
-            Expr::For(f) => match unroll_for(f, ctx.params) {
-                Some(block) => block.lower_with_ctx(ctx),
-                None => {
-                    ctx.had_error = true;
-                    ctx.add_int_const(tir::utils::APInt::new(64, 0))
-                }
-            },
+            Expr::For(f) => f.as_sema_expr(ctx),
             Expr::IndexAccess(x) => x.as_sema_expr(ctx),
             Expr::Path(x) => x.as_sema_expr(ctx),
             Expr::Lit(x) => x.as_sema_expr(ctx),

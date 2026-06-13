@@ -47,11 +47,12 @@
 // CHECK: (define-fun execute_tload
 // CHECK-NEXT: (let ((exc_addr0 (bvadd (read_gpr st rs1) (read_gpr st rs2)))) (ite (distinct (bvand exc_addr0 (_ bv3 64)) (_ bv0 64)) (write_pc (write_csr (write_csr (write_csr st (_ bv833 12) (pc st)) (_ bv834 12) ((_ zero_extend 61) (_ bv4 3))) (_ bv835 12) exc_addr0) (bvshl (bvlshr (read_csr st (_ bv773 12)) ((_ zero_extend 62) (_ bv2 2))) ((_ zero_extend 62) (_ bv2 2)))) (write_gpr st rd ((_ sign_extend 32) (read_mem_4 st (bvadd (read_gpr st rs1) (read_gpr st rs2))))))))
 
-// A `for` loop is unrolled at compile time: the body's effect (adding rs2 to
-// rd) is replayed once per iteration as a chain of state transitions.
+// A `for` loop lowers to a first-class `Loop` node in the semantic graph; the
+// SMT backend, which has no iteration, unrolls its constant bounds into the
+// accumulator fold: rd becomes its entry value plus rs2 added four times.
 // CHECK: ; INSTRUCTION: taccum writes-pc=false rd:reg:gpr:5 rs1:reg:gpr:5 rs2:reg:gpr:5
 // CHECK: (define-fun execute_taccum
-// CHECK-NEXT: (write_gpr (write_gpr (write_gpr (write_gpr (write_gpr st rd (read_gpr st rs1)) rd (bvadd (read_gpr st rd) (read_gpr st rs2))) rd (bvadd (read_gpr st rd) (read_gpr st rs2))) rd (bvadd (read_gpr st rd) (read_gpr st rs2))) rd (bvadd (read_gpr st rd) (read_gpr st rs2))))
+// CHECK-NEXT: (write_gpr (write_gpr st rd (read_gpr st rs1)) rd (bvadd (bvadd (bvadd (bvadd (read_gpr st rd) (read_gpr st rs2)) (read_gpr st rs2)) (read_gpr st rs2)) (read_gpr st rs2))))
 
 // `trap()` delegates to the machine and stays out of the SMT model: marked,
 // with identity semantics.

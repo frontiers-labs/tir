@@ -57,7 +57,8 @@ pub fn execute_with_memory<M: Memory>(
 ) -> Result<Value, M::Error> {
     let root = graph.root().expect("cannot execute empty graph");
     let mut cache = vec![None::<Value>; graph.len()];
-    eval_node(graph, root, symbols, &mut cache, memory)
+    let mut frames: Vec<(Value, Value)> = Vec::new();
+    eval_node(graph, root, symbols, &mut cache, &mut frames, memory)
 }
 
 fn child_val(
@@ -124,20 +125,62 @@ fn ints_equal(a: APInt, b: APInt) -> bool {
     a.with_signed(false) == b.with_signed(false)
 }
 
+/// Evaluate a `Loop` node: fold `step` over `[start, end)`, threading the
+/// accumulator and exposing the induction value through the frame stack.
+fn eval_loop<M: Memory>(
+    graph: &impl Dag<Node = ExprKind, Leaf = ExprPayload>,
+    node: NodeId,
+    symbols: &[Value],
+    cache: &mut Vec<Option<Value>>,
+    frames: &mut Vec<(Value, Value)>,
+    memory: &mut M,
+) -> Result<Value, M::Error> {
+    let children: Vec<NodeId> = graph.children(node).collect();
+    let (start_n, end_n, init_n, step_n) = (children[0], children[1], children[2], children[3]);
+
+    let start = eval_node(graph, start_n, symbols, cache, frames, memory)?;
+    let end = eval_node(graph, end_n, symbols, cache, frames, memory)?;
+    let mut acc = eval_node(graph, init_n, symbols, cache, frames, memory)?;
+
+    let start = as_int!(start, "loop bound").to_i64();
+    let end = as_int!(end, "loop bound").to_i64();
+
+    for i in start..end {
+        frames.push((Value::Int(APInt::new_signed(64, i)), acc.clone()));
+        // `step` depends on the induction/accumulator values, which change each
+        // iteration, so it cannot share the surrounding cache: evaluate it fresh.
+        let mut step_cache = vec![None::<Value>; graph.len()];
+        let next = eval_node(graph, step_n, symbols, &mut step_cache, frames, memory);
+        frames.pop();
+        acc = next?;
+    }
+    Ok(acc)
+}
+
 fn eval_node<M: Memory>(
     graph: &impl Dag<Node = ExprKind, Leaf = ExprPayload>,
     node: NodeId,
     symbols: &[Value],
     cache: &mut Vec<Option<Value>>,
+    frames: &mut Vec<(Value, Value)>,
     memory: &mut M,
 ) -> Result<Value, M::Error> {
     if let Some(ref v) = cache[node.index()] {
         return Ok(v.clone());
     }
 
+    // A `Loop` must not have its `step` child pre-evaluated: `step` depends on the
+    // per-iteration induction/accumulator values, so it is evaluated repeatedly,
+    // by hand, below. Intercept before the generic child pre-evaluation.
+    if *graph.get_kind(node) == ExprKind::Loop {
+        let result = eval_loop(graph, node, symbols, cache, frames, memory)?;
+        cache[node.index()] = Some(result.clone());
+        return Ok(result);
+    }
+
     for child_id in graph.children(node) {
         if cache[child_id.index()].is_none() {
-            let v = eval_node(graph, child_id, symbols, cache, memory)?;
+            let v = eval_node(graph, child_id, symbols, cache, frames, memory)?;
             cache[child_id.index()] = Some(v);
         }
     }
@@ -145,6 +188,17 @@ fn eval_node<M: Memory>(
     let c = |idx: usize| child_val(graph, node, idx, cache);
 
     let result = match graph.get_kind(node) {
+        ExprKind::IndVar => frames
+            .last()
+            .expect("IndVar evaluated outside a loop")
+            .0
+            .clone(),
+        ExprKind::Acc => frames
+            .last()
+            .expect("Acc evaluated outside a loop")
+            .1
+            .clone(),
+        ExprKind::Loop => unreachable!("Loop handled before child pre-evaluation"),
         ExprKind::Symbol => {
             let ExprPayload::SymbolId(id) = graph.get_leaf_data(node).unwrap() else {
                 panic!("Symbol node must have SymbolId payload");
@@ -816,6 +870,54 @@ mod tests {
         let b = sym(&mut g, 1);
         inner(&mut g, ExprKind::Lt, &[a, b]);
         assert_eq!(as_i64(execute(&g, &[fv(1.0), fv(2.0)])), 1);
+    }
+
+    #[test]
+    fn loop_sums_induction_variable_with_symbolic_bound() {
+        // acc = 0; for i in 0..n { acc = acc + i }  ==>  0+1+...+(n-1).
+        let mut g = ExprPostGraph::new();
+        let start = int_con(&mut g, 0);
+        let end = sym(&mut g, 0); // n, a symbolic (runtime) bound
+        let init = int_con(&mut g, 0);
+        let ind = g.add_node(ExprKind::IndVar);
+        let acc = g.add_node(ExprKind::Acc);
+        let step = inner(&mut g, ExprKind::Add, &[acc, ind]);
+        inner(&mut g, ExprKind::Loop, &[start, end, init, step]);
+
+        assert_eq!(as_i64(execute(&g, &[iv(5)])), 0 + 1 + 2 + 3 + 4);
+        assert_eq!(as_i64(execute(&g, &[iv(1)])), 0);
+        assert_eq!(as_i64(execute(&g, &[iv(0)])), 0);
+    }
+
+    #[test]
+    fn loop_accumulates_from_nonzero_init() {
+        // acc = base; for i in 0..3 { acc = acc + step }  with step a symbol.
+        let mut g = ExprPostGraph::new();
+        let start = int_con(&mut g, 0);
+        let end = int_con(&mut g, 3);
+        let base = sym(&mut g, 0);
+        let acc = g.add_node(ExprKind::Acc);
+        let addend = sym(&mut g, 1);
+        let step = inner(&mut g, ExprKind::Add, &[acc, addend]);
+        inner(&mut g, ExprKind::Loop, &[start, end, base, step]);
+
+        // 10 + 4 + 4 + 4 = 22.
+        assert_eq!(as_i64(execute(&g, &[iv(10), iv(4)])), 22);
+    }
+
+    #[test]
+    fn nested_loop_multiplies_via_repeated_addition() {
+        // acc = 0; for i in 0..a { acc = acc + b }  ==> a*b, with b symbolic.
+        let mut g = ExprPostGraph::new();
+        let start = int_con(&mut g, 0);
+        let a = sym(&mut g, 0);
+        let init = int_con(&mut g, 0);
+        let acc = g.add_node(ExprKind::Acc);
+        let b = sym(&mut g, 1);
+        let step = inner(&mut g, ExprKind::Add, &[acc, b]);
+        inner(&mut g, ExprKind::Loop, &[start, a, init, step]);
+
+        assert_eq!(as_i64(execute(&g, &[iv(6), iv(7)])), 42);
     }
 
     #[test]
