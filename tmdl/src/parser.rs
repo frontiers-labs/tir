@@ -1101,6 +1101,7 @@ where
                 "clamp" => Some(BuiltinFunction::Clamp),
                 "extract" => Some(BuiltinFunction::Extract),
                 "log2Ceil" => Some(BuiltinFunction::Log2Ceil),
+                "lane" => Some(BuiltinFunction::Lane),
                 "sext" => Some(BuiltinFunction::SExt),
                 "zext" => Some(BuiltinFunction::ZExt),
                 "load" => Some(BuiltinFunction::Load),

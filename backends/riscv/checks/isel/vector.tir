@@ -1,0 +1,17 @@
+// RUN: tir mc --march=rv64iv --stage=isel %s | filecheck %s
+
+// A target-independent vector.add lowers to the RVV vadd.vv: both the dialect op
+// and the instruction's behavior produce the same map-over-lanes semantic DAG, so
+// instruction selection matches them structurally.
+
+module {
+  func @vadd(%0: !vector.vec<4xi32>, %1: !vector.vec<4xi32>) -> !vector.vec<4xi32> {
+    %2 = vector.add %0, %1 : !vector.vec<4xi32>
+    return %2
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "vadd"
+// CHECK: riscv.vadd.vv {vd = %virt2:VR, vs2 = %virt0:VR, vs1 = %virt1:VR}
+// CHECK: riscv.vret

@@ -433,6 +433,7 @@ fn emit_instructions<'a>(
                 &ops,
                 &defined_register_operands,
                 &numeric_params,
+                &isa_param_values,
             )
         {
             let emit_fn_ident = format_ident!("emit_isel_{}", inst.name.to_lowercase());
@@ -1708,10 +1709,11 @@ fn analyze_instruction_semantics(
     operands: &[(String, Type)],
     defined_register_operands: &[String],
     numeric_params: &HashMap<String, i64>,
+    isa_param_values: &HashMap<String, i64>,
 ) -> Option<InstructionSemantics> {
     let rhs = resolve_behavior_rhs(inst, operands, defined_register_operands)?;
     let mut pattern = tir::sem_expr::ExprPostGraph::new();
-    let lowering = rhs.lower_to_sema(&mut pattern, numeric_params)?;
+    let lowering = rhs.lower_to_sema_with_isa(&mut pattern, numeric_params, isa_param_values)?;
     let base_cost = pattern.len().try_into().unwrap_or(u32::MAX).max(1);
     let fixed_register_by_class = split_fixed_registers(&lowering.register_symbols);
 

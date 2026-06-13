@@ -447,6 +447,10 @@ dialect! {
             // M extension (Zmmul subset)
             MulOp,
             MulHOp,
+            // V extension (vector-vector arithmetic)
+            VAddOp,
+            VSubOp,
+            VMulOp,
             // Zicsr
             CSRReadWriteOp,
             CSRReadSetOp,
