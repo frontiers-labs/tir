@@ -77,6 +77,8 @@ pub enum Token<'a> {
     KwRegClass,
     /// `for`
     KwFor,
+    /// `in`
+    KwIn,
     /// `registers`
     KwRegisters,
     /// `parameters`
@@ -191,6 +193,7 @@ pub(crate) fn lexer<'src>()
         "isa" => Token::KwIsa,
         "requires" => Token::KwRequires,
         "for" => Token::KwFor,
+        "in" => Token::KwIn,
         "registers" => Token::KwRegisters,
         "register_class" => Token::KwRegClass,
         "parameters" => Token::KwParameters,
@@ -270,6 +273,7 @@ impl<'a> fmt::Display for Token<'a> {
             Token::KwRequires => f.write_str("requires"),
             Token::KwRegClass => f.write_str("register_class"),
             Token::KwFor => f.write_str("for"),
+            Token::KwIn => f.write_str("in"),
             Token::KwRegisters => f.write_str("registers"),
             Token::KwTemplate => f.write_str("template"),
             Token::KwInstruction => f.write_str("instruction"),

@@ -1064,6 +1064,11 @@ fn collect_mem_ops<'a>(e: &'a ast::Expr, out: &mut Vec<MemOp<'a>>) -> Option<()>
         ast::Expr::Slice(s) => collect_mem_ops(&s.base, out)?,
         ast::Expr::IndexAccess(i) => collect_mem_ops(&i.base, out)?,
         ast::Expr::Field(f) => collect_mem_ops(&f.base, out)?,
+        ast::Expr::For(f) => {
+            collect_mem_ops(&f.start, out)?;
+            collect_mem_ops(&f.end, out)?;
+            collect_mem_ops(&f.body, out)?;
+        }
         ast::Expr::Try(_)
         | ast::Expr::Ident(_)
         | ast::Expr::Path(_)
@@ -1357,7 +1362,8 @@ fn build_smt_behavior<'a>(
         failed: Default::default(),
         writes_pc: Default::default(),
     };
-    let body = sem_expr_state::compile_to_state(&instruction.behavior, "st", &emitter);
+    let behavior = instruction.behavior.expand_loops(&numeric_params);
+    let body = sem_expr_state::compile_to_state(&behavior, "st", &emitter);
     if emitter.failed.get() {
         None
     } else {

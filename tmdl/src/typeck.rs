@@ -434,6 +434,15 @@ fn infer<'a>(
             Type::Integer
         }
 
+        ast::Expr::For(f) => {
+            infer(&f.start, env, tvg, subst, cache, diags, file_name);
+            infer(&f.end, env, tvg, subst, cache, diags, file_name);
+            let mut body_env = env.clone();
+            body_env.bind(f.var.clone(), TypeScheme::mono(Type::Integer));
+            infer(&f.body, &body_env, tvg, subst, cache, diags, file_name);
+            Type::Integer
+        }
+
         ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => Type::Var(tvg.fresh()),
     };
 

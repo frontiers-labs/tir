@@ -159,6 +159,19 @@ instruction TLoad for [TestIsa] : RType {
     }
 }
 
+instruction TAccum for [TestIsa] : RType {
+    param MNEMONIC: String = "taccum";
+    param OPCODE: bits<7> = 0b0001001;
+
+    // The loop is unrolled at compile time: rd accumulates rs2 four times.
+    behavior {
+        rd = rs1;
+        for i in 0..4 {
+            rd = rd + rs2;
+        }
+    }
+}
+
 instruction TTrap for [TestIsa] : RType {
     param MNEMONIC: String = "ttrap";
     param OPCODE: bits<7> = 0b0001000;

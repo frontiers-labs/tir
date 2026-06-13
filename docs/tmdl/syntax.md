@@ -49,6 +49,20 @@ Blocks and if‑expressions are supported for richer constructs:
 if cond { { ... } } else { { ... } }
 ```
 
+`for` loops repeat a block over a half‑open integer range, binding the loop
+variable to each value:
+
+```
+for i in 0..4 {
+  rd = rd + i;
+}
+```
+
+The bounds must be compile‑time constants (literals, ISA/instruction
+parameters such as `self.XLEN`, or arithmetic over them). Loops are fully
+unrolled before lowering, so they carry no runtime iteration and the loop
+variable behaves as a constant inside each copy of the body.
+
 ## Top‑Level Items
 
 TMDL files contain a sequence of items in any order:

@@ -352,6 +352,20 @@ pub struct If {
     pub span: Span,
 }
 
+/// `for VAR in START..END { body }`: a statement that runs `body` once for each
+/// integer in the half-open range `[START, END)`, with `VAR` bound to the current
+/// value. Bounds must be compile-time constants; the loop is unrolled before
+/// lowering, so it carries no runtime iteration.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct For {
+    pub var: String,
+    pub start: Box<Expr>,
+    pub end: Box<Expr>,
+    pub body: Box<Expr>,
+    #[serde(skip_serializing)]
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Block {
     pub stmts: Vec<Expr>,
@@ -507,6 +521,7 @@ pub enum Expr {
     Field(Field),
     Ident(Ident),
     If(If),
+    For(For),
     IndexAccess(IndexAccess),
     Path(Path),
     Lit(Lit),
@@ -514,6 +529,177 @@ pub enum Expr {
     Try(TryExcept),
     BuiltinFunction(BuiltinFunction),
     Invalid,
+}
+
+/// Evaluate a compile-time integer expression used as a `for` loop bound.
+/// Supports literals, known constants (`consts`: ISA/instruction parameters and
+/// enclosing loop variables), `self.PARAM`, and basic integer arithmetic.
+pub(crate) fn eval_const_int(expr: &Expr, consts: &HashMap<String, i64>) -> Option<i64> {
+    match expr {
+        Expr::Lit(Lit::Int(li)) => Some(li.parse_u64() as i64),
+        Expr::Ident(id) => consts.get(&id.name).copied(),
+        Expr::Field(f) => match &*f.base {
+            Expr::Ident(b) if b.name == "self" => consts.get(&f.member).copied(),
+            _ => None,
+        },
+        Expr::Unary(u) => match u.op {
+            UnOp::BitwiseNot => Some(!eval_const_int(&u.x, consts)?),
+        },
+        Expr::Binary(b) => {
+            let l = eval_const_int(&b.lhs, consts)?;
+            let r = eval_const_int(&b.rhs, consts)?;
+            Some(match b.op {
+                BinOp::Add => l + r,
+                BinOp::Sub => l - r,
+                BinOp::Mul => l * r,
+                BinOp::Div | BinOp::UnsignedDiv if r != 0 => l / r,
+                _ => return None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Replace every `Ident` named `var` with the integer literal `value`.
+fn subst_ident(expr: &mut Expr, var: &str, value: i64) {
+    match expr {
+        Expr::Ident(id) if id.name == var => {
+            *expr = Expr::Lit(Lit::Int(LitInt::new(value.to_string(), id.span)));
+        }
+        Expr::Ident(_)
+        | Expr::Lit(_)
+        | Expr::Path(_)
+        | Expr::BuiltinFunction(_)
+        | Expr::Invalid => {}
+        Expr::Assign(a) => {
+            subst_ident(&mut a.dest, var, value);
+            subst_ident(&mut a.value, var, value);
+        }
+        Expr::Binary(b) => {
+            subst_ident(&mut b.lhs, var, value);
+            subst_ident(&mut b.rhs, var, value);
+        }
+        Expr::Unary(u) => subst_ident(&mut u.x, var, value),
+        Expr::Block(b) => {
+            for stmt in &mut b.stmts {
+                subst_ident(stmt, var, value);
+            }
+        }
+        Expr::Call(c) => {
+            subst_ident(&mut c.callee, var, value);
+            for arg in &mut c.arguments {
+                subst_ident(arg, var, value);
+            }
+        }
+        Expr::Field(f) => subst_ident(&mut f.base, var, value),
+        Expr::If(i) => {
+            subst_ident(&mut i.cond, var, value);
+            subst_ident(&mut i.then, var, value);
+            if let Some(e) = &mut i.else_ {
+                subst_ident(e, var, value);
+            }
+        }
+        Expr::For(f) => {
+            subst_ident(&mut f.start, var, value);
+            subst_ident(&mut f.end, var, value);
+            // A nested loop reusing the same variable name shadows the outer one.
+            if f.var != var {
+                subst_ident(&mut f.body, var, value);
+            }
+        }
+        Expr::IndexAccess(i) => subst_ident(&mut i.base, var, value),
+        Expr::Slice(s) => subst_ident(&mut s.base, var, value),
+        Expr::Try(t) => {
+            subst_ident(&mut t.body, var, value);
+            for h in &mut t.handlers {
+                subst_ident(&mut h.body, var, value);
+            }
+        }
+    }
+}
+
+/// Unroll a `for` loop into a `Block` of its body repeated once per iteration,
+/// each copy binding the loop variable to its concrete value. Returns `None`
+/// when the bounds are not compile-time constants.
+pub(crate) fn unroll_for(f: &For, consts: &HashMap<String, i64>) -> Option<Expr> {
+    let start = eval_const_int(&f.start, consts)?;
+    let end = eval_const_int(&f.end, consts)?;
+    let mut stmts = Vec::new();
+    for i in start..end {
+        let mut body = (*f.body).clone();
+        subst_ident(&mut body, &f.var, i);
+        stmts.push(body);
+    }
+    Some(Expr::Block(Block {
+        stmts,
+        last_expr_return: false,
+        span: f.span,
+    }))
+}
+
+impl Expr {
+    /// Return a clone of this expression with every `for` loop fully unrolled
+    /// (recursively). Loops whose bounds are not constant under `consts` are left
+    /// in place.
+    pub(crate) fn expand_loops(&self, consts: &HashMap<String, i64>) -> Expr {
+        let mut out = self.clone();
+        expand_loops_inplace(&mut out, consts);
+        out
+    }
+}
+
+fn expand_loops_inplace(expr: &mut Expr, consts: &HashMap<String, i64>) {
+    match expr {
+        Expr::For(f) => {
+            expand_loops_inplace(&mut f.start, consts);
+            expand_loops_inplace(&mut f.end, consts);
+            expand_loops_inplace(&mut f.body, consts);
+            if let Some(block) = unroll_for(f, consts) {
+                *expr = block;
+            }
+        }
+        Expr::Ident(_)
+        | Expr::Lit(_)
+        | Expr::Path(_)
+        | Expr::BuiltinFunction(_)
+        | Expr::Invalid => {}
+        Expr::Assign(a) => {
+            expand_loops_inplace(&mut a.dest, consts);
+            expand_loops_inplace(&mut a.value, consts);
+        }
+        Expr::Binary(b) => {
+            expand_loops_inplace(&mut b.lhs, consts);
+            expand_loops_inplace(&mut b.rhs, consts);
+        }
+        Expr::Unary(u) => expand_loops_inplace(&mut u.x, consts),
+        Expr::Block(b) => {
+            for stmt in &mut b.stmts {
+                expand_loops_inplace(stmt, consts);
+            }
+        }
+        Expr::Call(c) => {
+            expand_loops_inplace(&mut c.callee, consts);
+            for arg in &mut c.arguments {
+                expand_loops_inplace(arg, consts);
+            }
+        }
+        Expr::Field(f) => expand_loops_inplace(&mut f.base, consts),
+        Expr::If(i) => {
+            expand_loops_inplace(&mut i.cond, consts);
+            expand_loops_inplace(&mut i.then, consts);
+            if let Some(e) = &mut i.else_ {
+                expand_loops_inplace(e, consts);
+            }
+        }
+        Expr::IndexAccess(i) => expand_loops_inplace(&mut i.base, consts),
+        Expr::Slice(s) => expand_loops_inplace(&mut s.base, consts),
+        Expr::Try(t) => {
+            expand_loops_inplace(&mut t.body, consts);
+            for h in &mut t.handlers {
+                expand_loops_inplace(&mut h.body, consts);
+            }
+        }
+    }
 }
 
 pub struct SemaLowering {
@@ -733,6 +919,13 @@ impl Expr {
             Expr::Field(x) => x.as_sema_expr(ctx),
             Expr::Ident(x) => x.as_sema_expr(ctx),
             Expr::If(x) => x.as_sema_expr(ctx),
+            Expr::For(f) => match unroll_for(f, ctx.params) {
+                Some(block) => block.lower_with_ctx(ctx),
+                None => {
+                    ctx.had_error = true;
+                    ctx.add_int_const(tir::utils::APInt::new(64, 0))
+                }
+            },
             Expr::IndexAccess(x) => x.as_sema_expr(ctx),
             Expr::Path(x) => x.as_sema_expr(ctx),
             Expr::Lit(x) => x.as_sema_expr(ctx),

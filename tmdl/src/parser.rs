@@ -1399,6 +1399,25 @@ where
                 .boxed()
         });
 
+        let loop_var = select! { Token::Identifier(i) => i.to_string() };
+        let for_ = just(Token::KwFor)
+            .ignore_then(loop_var)
+            .then_ignore(just(Token::KwIn))
+            .then(inline_expr())
+            .then_ignore(just(Token::Range))
+            .then(inline_expr())
+            .then(block.clone())
+            .map_with(|(((var, start), end), body), e| {
+                Expr::For(For {
+                    var,
+                    start: Box::new(start),
+                    end: Box::new(end),
+                    body: Box::new(body),
+                    span: e.span(),
+                })
+            })
+            .boxed();
+
         let except = just(Token::KwExcept)
             .ignore_then(ident)
             .then(
@@ -1425,7 +1444,7 @@ where
             })
             .boxed();
 
-        choice((block.clone(), if_, try_))
+        choice((block.clone(), if_, for_, try_))
     })
 }
 
@@ -1474,7 +1493,9 @@ mod tests {
         lexer::lexer,
     };
 
-    use super::{inline_expr, instruction_def, isa_def, machine_def, register_class_def, unit_def};
+    use super::{
+        expr, inline_expr, instruction_def, isa_def, machine_def, register_class_def, unit_def,
+    };
 
     #[test]
     fn register_class_parses_inheritance() {
@@ -1598,6 +1619,57 @@ mod tests {
             Expr::Binary(bin) => assert_eq!(bin.op, BinOp::LessThenEqual),
             _ => panic!("Expected binary expression"),
         }
+    }
+
+    #[test]
+    fn expr_parses_for_loop() {
+        use std::collections::HashMap;
+
+        let code = "for i in 0..4 { rd = rd + i; }";
+        let (tokens, _e) = lexer().parse(code).into_output_errors();
+        let tokens = tokens.unwrap();
+        let parsed = expr().then(end()).parse(
+            tokens
+                .as_slice()
+                .map((code.len()..code.len()).into(), |(t, s)| (t, s)),
+        );
+        let parsed = parsed.output().unwrap().0.clone();
+        let Expr::For(for_) = &parsed else {
+            panic!("expected for loop, got {parsed:?}");
+        };
+        assert_eq!(for_.var, "i");
+
+        // Unrolling replaces the loop with one body copy per iteration, the loop
+        // variable substituted by a literal each time.
+        let Expr::Block(block) = parsed.expand_loops(&HashMap::new()) else {
+            panic!("unrolled loop must be a block");
+        };
+        assert_eq!(block.stmts.len(), 4);
+    }
+
+    #[test]
+    fn expr_parses_for_loop_parametric_bound() {
+        use std::collections::HashMap;
+
+        let code = "for i in 0..XLEN { rd = rd + i; }";
+        let (tokens, _e) = lexer().parse(code).into_output_errors();
+        let tokens = tokens.unwrap();
+        let parsed = expr()
+            .then(end())
+            .parse(
+                tokens
+                    .as_slice()
+                    .map((code.len()..code.len()).into(), |(t, s)| (t, s)),
+            )
+            .output()
+            .unwrap()
+            .0
+            .clone();
+        let consts = HashMap::from([("XLEN".to_string(), 3i64)]);
+        let Expr::Block(block) = parsed.expand_loops(&consts) else {
+            panic!("unrolled loop must be a block");
+        };
+        assert_eq!(block.stmts.len(), 3);
     }
 
     #[test]
