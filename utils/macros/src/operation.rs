@@ -1205,6 +1205,28 @@ fn sem_node_to_dag_stmts(
                 *counter += 1;
                 let stmt = quote! { let #var = g.add_node(#kind); };
                 Some((vec![stmt], var))
+            } else if name == "vlen" {
+                // The lane count of the op's result vector type, read from the
+                // owning context at convert time — the `(map vlen ...)` counterpart
+                // of how the ext ops read their result width.
+                let var = format_ident!("__sem_node_{}", *counter);
+                *counter += 1;
+                let stmt = quote! {
+                    let __tir_vlen = {
+                        let __ctx = self.0.context.upgrade();
+                        let __ty = __ctx.get_value(self.0.results[0]).ty();
+                        (__ctx.get_type_data(__ty).as_ref() as &dyn std::any::Any)
+                            .downcast_ref::<tir::vector::VectorType>()
+                            .and_then(|t| t.length())
+                            .unwrap_or(0) as u64
+                    };
+                    let #var = g.add_node(tir::sem_expr::ExprKind::Constant);
+                    g.set_leaf_data(
+                        #var,
+                        tir::sem_expr::ExprPayload::Int(tir::utils::APInt::new(32, __tir_vlen)),
+                    );
+                };
+                Some((vec![stmt], var))
             } else if let Ok(i) = name.parse::<i64>() {
                 let var = format_ident!("__sem_node_{}", *counter);
                 *counter += 1;
@@ -1323,6 +1345,10 @@ fn sem_node_to_dag_stmts(
                 "shl" => quote! { tir::sem_expr::ExprKind::ShiftLeft },
                 "lshr" => quote! { tir::sem_expr::ExprKind::ShiftRightLogic },
                 "ashr" => quote! { tir::sem_expr::ExprKind::ShiftRightArithmetic },
+                // `(map count elem)` builds a vector lane-by-lane; `(lane vec i)`
+                // reads one lane. Both are two-child nodes like the binary ops.
+                "map" => quote! { tir::sem_expr::ExprKind::VectorMap },
+                "lane" => quote! { tir::sem_expr::ExprKind::Lane },
                 _ => return None,
             };
             let (mut stmts, lhs_var) = sem_node_to_dag_stmts(lhs, operand_symbols, counter)?;

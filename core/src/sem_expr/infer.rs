@@ -108,6 +108,12 @@ pub fn infer_widths(
             // can be resolved structurally from a lower-indexed leaf, so they stay
             // unknown and propagate.
             ExprKind::IndVar | ExprKind::Acc => None,
+
+            // A vector map is as wide as one lane (its `elem`); a lane read's
+            // width is the vector's element width, not resolvable structurally
+            // from a lower-indexed leaf, so it stays unknown.
+            ExprKind::VectorMap => child_width(1),
+            ExprKind::Lane => None,
         };
 
         widths[index] = width;

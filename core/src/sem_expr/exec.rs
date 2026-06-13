@@ -82,6 +82,7 @@ macro_rules! as_int {
         match $v {
             Value::Int(i) => i,
             Value::Float(_) => panic!("{} requires integer operands", $op),
+            Value::Vector(_) => panic!("{} requires scalar operands", $op),
         }
     };
 }
@@ -91,6 +92,7 @@ macro_rules! as_float {
         match $v {
             Value::Float(f) => f,
             Value::Int(_) => panic!("{} requires float operands", $op),
+            Value::Vector(_) => panic!("{} requires scalar operands", $op),
         }
     };
 }
@@ -157,6 +159,40 @@ fn eval_loop<M: Memory>(
     Ok(acc)
 }
 
+/// Evaluate a `VectorMap` node: build a vector by evaluating `elem` over each
+/// lane index `[0, count)`, exposing the index through the frame stack the same
+/// way `Loop` exposes its induction value.
+fn eval_vector_map<M: Memory>(
+    graph: &impl Dag<Node = ExprKind, Leaf = ExprPayload>,
+    node: NodeId,
+    symbols: &[Value],
+    cache: &mut Vec<Option<Value>>,
+    frames: &mut Vec<(Value, Value)>,
+    memory: &mut M,
+) -> Result<Value, M::Error> {
+    let children: Vec<NodeId> = graph.children(node).collect();
+    let (count_n, elem_n) = (children[0], children[1]);
+
+    let count = eval_node(graph, count_n, symbols, cache, frames, memory)?;
+    let count = as_int!(count, "vector length").to_i64();
+
+    let mut lanes = Vec::with_capacity(count.max(0) as usize);
+    for i in 0..count {
+        // The accumulator slot is unused by a map; the induction value is read by
+        // `IndVar` and by `Lane` indices, and changes each lane, so `elem` cannot
+        // share the surrounding cache.
+        frames.push((
+            Value::Int(APInt::new_signed(64, i)),
+            Value::Int(APInt::new(1, 0)),
+        ));
+        let mut lane_cache = vec![None::<Value>; graph.len()];
+        let lane = eval_node(graph, elem_n, symbols, &mut lane_cache, frames, memory);
+        frames.pop();
+        lanes.push(lane?);
+    }
+    Ok(Value::Vector(lanes))
+}
+
 fn eval_node<M: Memory>(
     graph: &impl Dag<Node = ExprKind, Leaf = ExprPayload>,
     node: NodeId,
@@ -174,6 +210,14 @@ fn eval_node<M: Memory>(
     // by hand, below. Intercept before the generic child pre-evaluation.
     if *graph.get_kind(node) == ExprKind::Loop {
         let result = eval_loop(graph, node, symbols, cache, frames, memory)?;
+        cache[node.index()] = Some(result.clone());
+        return Ok(result);
+    }
+
+    // A `VectorMap`, like `Loop`, evaluates its `elem` child fresh per lane with
+    // the induction value bound, so intercept it before generic child pre-eval.
+    if *graph.get_kind(node) == ExprKind::VectorMap {
+        let result = eval_vector_map(graph, node, symbols, cache, frames, memory)?;
         cache[node.index()] = Some(result.clone());
         return Ok(result);
     }
@@ -199,6 +243,16 @@ fn eval_node<M: Memory>(
             .1
             .clone(),
         ExprKind::Loop => unreachable!("Loop handled before child pre-evaluation"),
+        ExprKind::VectorMap => {
+            unreachable!("VectorMap handled before child pre-evaluation")
+        }
+        ExprKind::Lane => {
+            let Value::Vector(lanes) = c(0) else {
+                panic!("Lane requires a vector operand");
+            };
+            let index = as_int!(c(1), "lane").to_u64() as usize;
+            lanes[index].clone()
+        }
         ExprKind::Symbol => {
             let ExprPayload::SymbolId(id) = graph.get_leaf_data(node).unwrap() else {
                 panic!("Symbol node must have SymbolId payload");
@@ -218,6 +272,7 @@ fn eval_node<M: Memory>(
                 Value::Int(a.add(&b))
             }
             Value::Float(a) => Value::Float(a.add(&as_float!(c(1), "add"))),
+            Value::Vector(_) => panic!("add requires scalar operands"),
         },
         ExprKind::Sub => match c(0) {
             Value::Int(a) => {
@@ -225,6 +280,7 @@ fn eval_node<M: Memory>(
                 Value::Int(a.sub(&b))
             }
             Value::Float(a) => Value::Float(a.sub(&as_float!(c(1), "sub"))),
+            Value::Vector(_) => panic!("sub requires scalar operands"),
         },
         ExprKind::Mul => match c(0) {
             Value::Int(a) => {
@@ -232,6 +288,7 @@ fn eval_node<M: Memory>(
                 Value::Int(a.mul(&b))
             }
             Value::Float(a) => Value::Float(a.mul(&as_float!(c(1), "mul"))),
+            Value::Vector(_) => panic!("mul requires scalar operands"),
         },
         ExprKind::Div => match c(0) {
             Value::Int(a) => {
@@ -239,6 +296,7 @@ fn eval_node<M: Memory>(
                 Value::Int(a.sdiv(&b))
             }
             Value::Float(a) => Value::Float(a.div(&as_float!(c(1), "div"))),
+            Value::Vector(_) => panic!("div requires scalar operands"),
         },
         ExprKind::UDiv => {
             let (a, b) = coerce_ints(as_int!(c(0), "udiv"), as_int!(c(1), "udiv"));
@@ -298,6 +356,7 @@ fn eval_node<M: Memory>(
                     bool_result(a.slt(&b))
                 }
                 Value::Float(a) => bool_result(a.lt(&as_float!(c(1), "lt"))),
+                Value::Vector(_) => panic!("lt requires scalar operands"),
             },
         )),
         ExprKind::Gt => Value::Int(APInt::new(
@@ -308,6 +367,7 @@ fn eval_node<M: Memory>(
                     bool_result(a.sgt(&b))
                 }
                 Value::Float(a) => bool_result(a.gt(&as_float!(c(1), "gt"))),
+                Value::Vector(_) => panic!("gt requires scalar operands"),
             },
         )),
         ExprKind::Ge => Value::Int(APInt::new(
@@ -318,6 +378,7 @@ fn eval_node<M: Memory>(
                     bool_result(a.sge(&b))
                 }
                 Value::Float(a) => bool_result(a.ge(&as_float!(c(1), "ge"))),
+                Value::Vector(_) => panic!("ge requires scalar operands"),
             },
         )),
         ExprKind::ULt => {
@@ -342,6 +403,7 @@ fn eval_node<M: Memory>(
             let cond_zero = match c(0) {
                 Value::Int(i) => i.is_zero(),
                 Value::Float(f) => f.is_zero(),
+                Value::Vector(_) => panic!("if condition must be scalar"),
             };
             if cond_zero { c(2) } else { c(1) }
         }
@@ -379,6 +441,7 @@ fn eval_node<M: Memory>(
             Value::Float(a) => {
                 Value::Float(a.fma(&as_float!(c(1), "fma"), &as_float!(c(2), "fma")))
             }
+            Value::Vector(_) => panic!("fma requires scalar operands"),
         },
         ExprKind::Sqrt => match c(0) {
             Value::Int(a) => {
@@ -386,6 +449,7 @@ fn eval_node<M: Memory>(
                 Value::Int(APInt::new(a.width(), (v as f64).sqrt() as u64))
             }
             Value::Float(a) => Value::Float(a.sqrt()),
+            Value::Vector(_) => panic!("sqrt requires a scalar operand"),
         },
         ExprKind::Log2Ceil => {
             let a = as_int!(c(0), "log2ceil");
@@ -462,6 +526,7 @@ impl PartialEq for Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Vector(a), Value::Vector(b)) => a == b,
             _ => false,
         }
     }
@@ -544,13 +609,13 @@ mod tests {
     fn as_i64(v: Value) -> i64 {
         match v {
             Value::Int(i) => i.to_i64(),
-            Value::Float(_) => panic!(),
+            _ => panic!(),
         }
     }
     fn as_f64(v: Value) -> f64 {
         match v {
             Value::Float(f) => f.to_f64(),
-            Value::Int(_) => panic!(),
+            _ => panic!(),
         }
     }
 

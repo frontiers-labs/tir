@@ -130,6 +130,7 @@ operation! {
         results: R {
             result: "crate::vector::VectorType",
         },
+        sem: "(set result (map vlen (add (lane lhs indvar) (lane rhs indvar))))",
     }
 }
 
@@ -145,6 +146,7 @@ operation! {
         results: R {
             result: "crate::vector::VectorType",
         },
+        sem: "(set result (map vlen (sub (lane lhs indvar) (lane rhs indvar))))",
     }
 }
 
@@ -160,6 +162,7 @@ operation! {
         results: R {
             result: "crate::vector::VectorType",
         },
+        sem: "(set result (map vlen (mul (lane lhs indvar) (lane rhs indvar))))",
     }
 }
 
@@ -357,6 +360,82 @@ mod tests {
             Value::Int(v) => assert_eq!(v.to_i64(), 28),
             other => panic!("expected int, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn vector_add_sem_is_a_lanewise_map() {
+        use crate::graph::{Dag, MutDag, NodeId};
+        use crate::sem_expr::{AsSemExpr, ExprKind, ExprPayload, ExprPostGraph, Value, execute};
+        use crate::utils::APInt;
+
+        let context = Context::with_default_dialects();
+        let i32_ty = IntegerType::new(&context, 32);
+        let vec_ty = VectorType::fixed(&context, i32_ty, 4);
+        let lhs = context.create_value(vec_ty, None);
+        let rhs = context.create_value(vec_ty, None);
+        let op = ops::add(&context, lhs.id(), rhs.id(), tir::Operand::none(), vec_ty).build();
+
+        // The op lowers to `(map 4 (add (lane s0 i) (lane s1 i)))`.
+        let mut g = ExprPostGraph::new();
+        let root = op.convert(&mut g);
+        assert_eq!(g.get_kind(root), &ExprKind::VectorMap);
+        let count = g.children(root).next().unwrap();
+        assert!(matches!(
+            g.get_leaf_data(count),
+            Some(ExprPayload::Int(v)) if v.to_i64() == 4
+        ));
+
+        let lanes = |xs: [i64; 4]| {
+            Value::Vector(
+                xs.iter()
+                    .map(|&x| Value::Int(APInt::new_signed(32, x)))
+                    .collect(),
+            )
+        };
+        let a = lanes([1, 2, 3, 4]);
+        let b = lanes([10, 20, 30, 40]);
+        let Value::Vector(out) = execute(&g, &[a.clone(), b.clone()]) else {
+            panic!("vector op must produce a vector");
+        };
+        let out: Vec<i64> = out
+            .iter()
+            .map(|v| match v {
+                Value::Int(i) => i.to_i64(),
+                other => panic!("lane must be an int, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(out, vec![11, 22, 33, 44]);
+
+        // The premise behind instruction selection: a target instruction that
+        // independently lowers to the same map/lane DAG computes the same result,
+        // so it can match this op. Build that DAG by hand and compare.
+        let mut t = ExprPostGraph::new();
+        let s0 = t.add_node(ExprKind::Symbol);
+        t.set_leaf_data(s0, ExprPayload::SymbolId(0));
+        let s1 = t.add_node(ExprKind::Symbol);
+        t.set_leaf_data(s1, ExprPayload::SymbolId(1));
+        let count = t.add_node(ExprKind::Constant);
+        t.set_leaf_data(count, ExprPayload::Int(APInt::new(32, 4)));
+        let iv0 = t.add_node(ExprKind::IndVar);
+        let l0 = t.add_node(ExprKind::Lane);
+        t.add_edge(l0, s0);
+        t.add_edge(l0, iv0);
+        let iv1 = t.add_node(ExprKind::IndVar);
+        let l1 = t.add_node(ExprKind::Lane);
+        t.add_edge(l1, s1);
+        t.add_edge(l1, iv1);
+        let add = t.add_node(ExprKind::Add);
+        t.add_edge(add, l0);
+        t.add_edge(add, l1);
+        let map = t.add_node(ExprKind::VectorMap);
+        t.add_edge(map, count);
+        t.add_edge(map, add);
+        let _ = NodeId::from_index(0);
+
+        assert_eq!(
+            execute(&t, &[a, b]),
+            execute(&g, &[lanes([1, 2, 3, 4]), lanes([10, 20, 30, 40])])
+        );
     }
 
     #[test]

@@ -2378,7 +2378,7 @@ fn emit_value_eval(
             let mut __memory = __TmdlMachineMemory(machine);
             match tir::sem_expr::execute_with_memory(&__g, &__syms, &mut __memory)? {
                 tir::sem_expr::Value::Int(i) => i,
-                tir::sem_expr::Value::Float(_) => {
+                tir::sem_expr::Value::Float(_) | tir::sem_expr::Value::Vector(_) => {
                     return Err(tir_be_common::SimTrap::InvalidInstruction {
                         op: #mnemonic_lit,
                         reason: "instruction semantic expression did not evaluate to integer".to_string(),
@@ -2611,6 +2611,8 @@ fn emit_expr_kind_ts(kind: &tir::sem_expr::ExprKind) -> proc_macro2::TokenStream
         ExprKind::Loop => quote! { tir::sem_expr::ExprKind::Loop },
         ExprKind::IndVar => quote! { tir::sem_expr::ExprKind::IndVar },
         ExprKind::Acc => quote! { tir::sem_expr::ExprKind::Acc },
+        ExprKind::VectorMap => quote! { tir::sem_expr::ExprKind::VectorMap },
+        ExprKind::Lane => quote! { tir::sem_expr::ExprKind::Lane },
     }
 }
 

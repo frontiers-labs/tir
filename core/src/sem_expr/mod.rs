@@ -105,6 +105,18 @@ pub enum ExprKind {
     /// inside that loop's `step` subexpression.
     #[leaf]
     Acc,
+    /// Build a vector value by mapping over lanes. Arguments are `[count, elem]`:
+    /// `elem` is evaluated once per lane index `i` in `[0, count)` with `IndVar`
+    /// bound to `i`, and the node's value is the vector of those `count` elements.
+    /// This is the vector counterpart of `Loop` — a map rather than a fold — and
+    /// lets an elementwise vector operation and the target instruction that
+    /// implements it lower to the same DAG. `elem` reads the induction value via
+    /// `IndVar` and operand lanes via `Lane`.
+    #[arity = 2]
+    VectorMap,
+    /// Read one lane of a vector value. Arguments are `[vector, index]`.
+    #[arity = 2]
+    Lane,
 }
 
 impl ExprKind {
@@ -133,4 +145,6 @@ pub enum ExprPayload {
 pub enum Value {
     Int(APInt),
     Float(APFloat),
+    /// A vector of lane values, produced by `VectorMap` and indexed by `Lane`.
+    Vector(Vec<Value>),
 }
