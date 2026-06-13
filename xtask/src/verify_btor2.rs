@@ -70,6 +70,7 @@ fn ref_positions(op: &str) -> (bool, &'static [usize]) {
 pub fn stitch(implementation: &str, checker: &str, signals: &[&str]) -> Result<String> {
     let mut max_id = 0u32;
     let mut name_to_node: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    let mut reset_node: Option<u32> = None;
     for line in non_blank(implementation) {
         let t: Vec<&str> = line.split_whitespace().collect();
         let id: u32 = t[0]
@@ -80,6 +81,9 @@ pub fn stitch(implementation: &str, checker: &str, signals: &[&str]) -> Result<S
         if t.get(1) == Some(&"output") && t.len() >= 4 {
             let node: u32 = t[2].parse()?;
             name_to_node.insert(t[3], node);
+        }
+        if t.get(1) == Some(&"input") && t.get(3) == Some(&"reset") {
+            reset_node = Some(id);
         }
     }
 
@@ -112,14 +116,22 @@ pub fn stitch(implementation: &str, checker: &str, signals: &[&str]) -> Result<S
     let mut out = String::new();
     out.push_str(implementation.trim_end());
     out.push_str("\n; --- TMDL checker (stitched) ---\n");
+    let mut last = offset;
+    let mut bad_operand: Option<u32> = None;
     for line in non_blank(checker) {
         let mut t: Vec<String> = line.split_whitespace().map(String::from).collect();
+        last = last.max(remap(t[0].parse()?));
         // Drop the rewired retirement inputs; their uses point at the
         // implementation instead.
         if t.get(1).map(String::as_str) == Some("input")
             && t.len() >= 4
             && wired_names.contains(t[3].as_str())
         {
+            continue;
+        }
+        // Hold the property aside so it can be gated on the reset pulse below.
+        if t[1] == "bad" {
+            bad_operand = Some(remap(t[2].parse()?));
             continue;
         }
         let (has_sort, positions) = ref_positions(&t[1]);
@@ -135,7 +147,40 @@ pub fn stitch(implementation: &str, checker: &str, signals: &[&str]) -> Result<S
         out.push_str(&t.join(" "));
         out.push('\n');
     }
+
+    let bad = bad_operand.ok_or_else(|| anyhow!("checker has no `bad` property"))?;
+    emit_property(&mut out, last, bad, reset_node);
     Ok(out)
+}
+
+/// Emit the miter property. When the implementation has a `reset` input, drive
+/// a one-cycle reset pulse and gate the mismatch until reset has deasserted, so
+/// uninitialized pipeline state at step 0 cannot raise a spurious counterexample.
+fn emit_property(out: &mut String, last: u32, bad: u32, reset_node: Option<u32>) {
+    out.push_str("; --- reset-gated property ---\n");
+    let mut nid = last;
+    let mut node = |body: String| -> u32 {
+        nid += 1;
+        out.push_str(&format!("{nid} {body}\n"));
+        nid
+    };
+    let Some(reset) = reset_node else {
+        node(format!("bad {bad}"));
+        return;
+    };
+    let s1 = node("sort bitvec 1".into());
+    let one = node(format!("one {s1}"));
+    let zero = node(format!("zero {s1}"));
+    // `started` is 0 at step 0 and 1 thereafter.
+    let started = node(format!("state {s1} started"));
+    node(format!("init {s1} {started} {zero}"));
+    node(format!("next {s1} {started} {one}"));
+    // Force a one-cycle reset pulse: reset high at step 0, low afterwards.
+    let not_started = node(format!("not {s1} {started}"));
+    let reset_ok = node(format!("eq {s1} {reset} {not_started}"));
+    node(format!("constraint {reset_ok}"));
+    let gated = node(format!("and {s1} {bad} {started}"));
+    node(format!("bad {gated}"));
 }
 
 fn non_blank(s: &str) -> impl Iterator<Item = &str> {
@@ -224,12 +269,35 @@ mod tests {
         let m = stitch(IMPL, CHECKER, &["x", "y"]).unwrap();
         // Implementation kept verbatim.
         assert!(m.contains("3 state 1 reg"));
-        // Checker offset by max impl id (6): its sort 1 -> 7, neq 4 -> 10, bad -> 11.
+        // Checker offset by max impl id (6): its sort 1 -> 7, neq 4 -> 10.
         // The neq operands are rewired to impl nodes 3 (x) and 5 (y).
         assert!(m.contains("10 neq 7 3 5"), "neq not rewired: {m}");
-        assert!(m.contains("11 bad 10"), "bad not shifted: {m}");
+        // IMPL has no `reset` input, so the property is emitted ungated.
+        assert!(m.contains("bad 10"), "bad not preserved: {m}");
         // The checker's own input lines are dropped.
         assert!(!m.contains("input 7 x"));
+    }
+
+    #[test]
+    fn reset_gates_property_when_reset_present() {
+        let impl_with_reset = format!("{IMPL}7 input 1 reset\n");
+        let m = stitch(&impl_with_reset, CHECKER, &["x", "y"]).unwrap();
+        // A started-state machine, a reset constraint, and a gated bad appear.
+        assert!(
+            m.lines().any(|l| l.ends_with(" started")),
+            "no started state: {m}"
+        );
+        assert!(
+            m.lines().any(|l| l.contains(" constraint ")),
+            "no reset constraint: {m}"
+        );
+        // The final bad references an `and` node (mismatch gated by started).
+        let bad_line = m.lines().rev().find(|l| l.contains(" bad ")).unwrap();
+        let gated = bad_line.split_whitespace().last().unwrap();
+        assert!(
+            m.lines().any(|l| l.starts_with(&format!("{gated} and "))),
+            "bad not gated: {m}"
+        );
     }
 
     #[test]

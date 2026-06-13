@@ -98,6 +98,23 @@ expose the bug, and the implementation outputs that disagree with the spec.
 Decode `insn` to identify the instruction and compare `rd_val`/`next_pc`
 against the spec to see which field is wrong.
 
+The stitcher drives a one-cycle reset pulse (constraining the design's `reset`
+input) and gates the property until reset deasserts, so uninitialized pipeline
+state at step 0 cannot raise a spurious counterexample.
+
+## Constraining the memory interface
+
+`FormalTop` leaves the instruction/data memory responses as free inputs. That
+suffices to explore every fetched word, but with no protocol constraint the
+fetch unit can ingest phantom responses (a `resp.valid` with no outstanding
+request), which produce retirements that no real memory would and so spurious
+counterexamples. Before trusting a `sat`, constrain the memory to follow the
+request/response handshake and return a stable word per address (the
+riscv-formal "memory abstraction"). As a sanity check, forcing the
+instruction-response valid bits low makes the model `unsat`: no instruction
+retires, confirming such counterexamples are interface artifacts, not core
+bugs.
+
 ## Limitations
 
 - **Bounded.** BMC finds bugs up to depth *k*; it is not a proof of correctness.
