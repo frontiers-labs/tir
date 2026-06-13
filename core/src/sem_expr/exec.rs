@@ -884,7 +884,7 @@ mod tests {
         let step = inner(&mut g, ExprKind::Add, &[acc, ind]);
         inner(&mut g, ExprKind::Loop, &[start, end, init, step]);
 
-        assert_eq!(as_i64(execute(&g, &[iv(5)])), 0 + 1 + 2 + 3 + 4);
+        assert_eq!(as_i64(execute(&g, &[iv(5)])), 1 + 2 + 3 + 4);
         assert_eq!(as_i64(execute(&g, &[iv(1)])), 0);
         assert_eq!(as_i64(execute(&g, &[iv(0)])), 0);
     }
