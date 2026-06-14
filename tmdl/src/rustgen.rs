@@ -2615,9 +2615,12 @@ fn emit_expr_kind_ts(kind: &tir::sem_expr::ExprKind) -> proc_macro2::TokenStream
         ExprKind::Acc => quote! { tir::sem_expr::ExprKind::Acc },
         ExprKind::VectorMap => quote! { tir::sem_expr::ExprKind::VectorMap },
         ExprKind::Lane => quote! { tir::sem_expr::ExprKind::Lane },
-        ExprKind::Map => todo!(),
-        ExprKind::Zip => todo!(),
-        ExprKind::IterConcat => todo!(),
+        ExprKind::Map => quote! { tir::sem_expr::ExprKind::Map },
+        ExprKind::Zip => quote! { tir::sem_expr::ExprKind::Zip },
+        ExprKind::IterConcat => quote! { tir::sem_expr::ExprKind::IterConcat },
+        ExprKind::Split => quote! { tir::sem_expr::ExprKind::Split },
+        ExprKind::Reduce => quote! { tir::sem_expr::ExprKind::Reduce },
+        ExprKind::Arg => quote! { tir::sem_expr::ExprKind::Arg },
     }
 }
 

@@ -354,6 +354,114 @@ fn infer<'a>(
                 }
                 Type::Integer
             }
+            // `split(bits, n)` -> vec<bits<_>>: the input is some bitvector; each
+            // lane is a bitvector whose width (input / n) is not tracked here.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Split) => {
+                let bits_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+                for arg in &call.arguments[1..] {
+                    infer(arg, env, tvg, subst, cache, diags, file_name);
+                }
+                constrain(
+                    &bits_ty,
+                    &Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]),
+                    subst,
+                    call.span,
+                    diags,
+                    file_name,
+                );
+                vec_ty(Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]))
+            }
+            // `concat(iter)` -> bits<_>: joins an iterator's lanes into a bitvector
+            // whose width is the sum of the lane widths, not tracked here.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Concat) => {
+                let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+                constrain(
+                    &iter_ty,
+                    &vec_ty(Type::Var(tvg.fresh())),
+                    subst,
+                    call.span,
+                    diags,
+                    file_name,
+                );
+                Type::Con("bits".into(), vec![Type::Var(tvg.fresh())])
+            }
+            // `zip(a, b)` -> vec<pair<A, B>>: pairs two iterators lane-wise.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Zip) => {
+                let lhs_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+                let rhs_ty = infer(&call.arguments[1], env, tvg, subst, cache, diags, file_name);
+                let a = Type::Var(tvg.fresh());
+                let b = Type::Var(tvg.fresh());
+                constrain(
+                    &lhs_ty,
+                    &vec_ty(a.clone()),
+                    subst,
+                    call.span,
+                    diags,
+                    file_name,
+                );
+                constrain(
+                    &rhs_ty,
+                    &vec_ty(b.clone()),
+                    subst,
+                    call.span,
+                    diags,
+                    file_name,
+                );
+                vec_ty(Type::Con("pair".into(), vec![a, b]))
+            }
+            // `map(iter, |x| ...)` -> vec<R>: applies the lambda to each lane. A
+            // two-parameter lambda destructures a zipped pair element.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Map) => {
+                let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+                let elem = Type::Var(tvg.fresh());
+                constrain(
+                    &iter_ty,
+                    &vec_ty(elem.clone()),
+                    subst,
+                    call.span,
+                    diags,
+                    file_name,
+                );
+                let param_tys = map_param_tys(&elem.apply(subst), &call.arguments[1], tvg, subst);
+                let ret = infer_lambda(
+                    &call.arguments[1],
+                    &param_tys,
+                    env,
+                    tvg,
+                    subst,
+                    cache,
+                    diags,
+                    file_name,
+                );
+                vec_ty(ret)
+            }
+            // `reduce(iter, |acc, x| ...)` -> R: left-folds the lambda over the
+            // lanes; the accumulator, each lane and the result share one type.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Reduce) => {
+                let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+                let elem = Type::Var(tvg.fresh());
+                constrain(
+                    &iter_ty,
+                    &vec_ty(elem.clone()),
+                    subst,
+                    call.span,
+                    diags,
+                    file_name,
+                );
+                let elem = elem.apply(subst);
+                let ret = infer_lambda(
+                    &call.arguments[1],
+                    &[elem.clone(), elem.clone()],
+                    env,
+                    tvg,
+                    subst,
+                    cache,
+                    diags,
+                    file_name,
+                );
+                constrain(&ret, &elem, subst, call.span, diags, file_name);
+                elem.apply(subst)
+            }
             callee => {
                 let callee_ty = infer(callee, env, tvg, subst, cache, diags, file_name);
                 for arg in &call.arguments {
@@ -454,9 +562,152 @@ fn infer<'a>(
             Type::Var(tvg.fresh())
         }
 
+        // A bare lambda outside `map`/`reduce` is invalid, but inferring it (with
+        // fresh parameter types) keeps the checker total and reports no spurious
+        // error; the lowering rejects it.
+        ast::Expr::Lambda(lambda) => {
+            let param_tys: Vec<Type> = lambda
+                .params
+                .iter()
+                .map(|_| Type::Var(tvg.fresh()))
+                .collect();
+            let ret = infer_lambda(expr, &param_tys, env, tvg, subst, cache, diags, file_name);
+            let mut fields = param_tys;
+            fields.push(ret);
+            Type::Con("fn".into(), fields)
+        }
+
         ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => Type::Var(tvg.fresh()),
     };
 
     cache.insert(expr, ty.clone());
     ty
+}
+
+/// An iterator (vector) type carrying elements of `elem`.
+fn vec_ty(elem: Type) -> Type {
+    Type::Con("vec".into(), vec![elem])
+}
+
+/// Parameter types for a `map` lambda over elements of type `elem`. A unary
+/// lambda takes the element; a binary lambda destructures a zipped `pair`
+/// element into its two components (best-effort, leaving them free if `elem` is
+/// not yet known to be a pair).
+fn map_param_tys(
+    elem: &Type,
+    lambda_arg: &ast::Expr,
+    tvg: &mut TypeVarGen,
+    subst: &mut Substitution,
+) -> Vec<Type> {
+    let arity = match lambda_arg {
+        ast::Expr::Lambda(l) => l.params.len(),
+        _ => 1,
+    };
+    match arity {
+        2 => {
+            let a = Type::Var(tvg.fresh());
+            let b = Type::Var(tvg.fresh());
+            let pair = Type::Con("pair".into(), vec![a.clone(), b.clone()]);
+            if let Ok(s) = unify(&elem.apply(subst), &pair) {
+                let old = mem::take(subst);
+                *subst = old.compose(&s);
+                vec![a.apply(subst), b.apply(subst)]
+            } else {
+                vec![a, b]
+            }
+        }
+        n => {
+            let mut tys = vec![elem.clone()];
+            tys.extend((1..n).map(|_| Type::Var(tvg.fresh())));
+            tys
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check;
+
+    fn type_check_source(src: &str) -> Vec<(String, String)> {
+        let (tokens, _lex_errs) = crate::lexer::lex(src);
+        let (file, parse_errs) = crate::parser::parse(src, &tokens, "test.tmdl");
+        assert!(parse_errs.is_empty(), "parse errors: {parse_errs:?}");
+        let files = vec![file.expect("file parses")];
+        let (_cache, diags) = check(&files);
+        diags.into_iter().map(|(f, d)| (f, d.to_string())).collect()
+    }
+
+    const VECTOR_PRELUDE: &str = "
+        isa RV32I { param XLEN: Integer = 32; }
+        isa RVV requires [RV32I] {
+            param VLEN: Integer = 128;
+            param SEW: Integer = 32;
+        }
+        register_class VR for [RVV] {
+            param ENCODING_LEN: Integer = 5;
+            param WIDTH: Integer = self.VLEN;
+            registers { v0..v31 => { traits = [vector] }, }
+        }
+        template VArithVV for [RVV] {
+            param MNEMONIC: String;
+            operands { vd: VR, vs2: VR, vs1: VR, }
+        }
+    ";
+
+    #[test]
+    fn functional_vector_add_type_checks() {
+        let src = format!(
+            "{VECTOR_PRELUDE}
+            instruction VAdd for [RVV] : VArithVV {{
+                param MNEMONIC: String = \"vadd.vv\";
+                behavior {{
+                    vd = concat(map(zip(split(vs2, 4), split(vs1, 4)), |a, b| a + b));
+                }}
+            }}"
+        );
+        assert!(type_check_source(&src).is_empty());
+    }
+
+    #[test]
+    fn functional_reduce_type_checks() {
+        let src = format!(
+            "{VECTOR_PRELUDE}
+            instruction VRedSum for [RVV] : VArithVV {{
+                param MNEMONIC: String = \"vredsum.vs\";
+                behavior {{
+                    vd = reduce(split(vs2, 4), |acc, x| acc + x);
+                }}
+            }}"
+        );
+        assert!(type_check_source(&src).is_empty());
+    }
+}
+
+/// Infer a `map`/`reduce` lambda's body with its parameters bound to `param_tys`,
+/// returning the body's (result) type and recording the lambda's `fn` type.
+#[allow(clippy::too_many_arguments)]
+fn infer_lambda<'a>(
+    lambda_arg: &'a ast::Expr,
+    param_tys: &[Type],
+    env: &TypeEnv,
+    tvg: &mut TypeVarGen,
+    subst: &mut Substitution,
+    cache: &mut TypeCache<'a>,
+    diags: &mut Vec<(String, Diag)>,
+    file_name: &str,
+) -> Type {
+    let ast::Expr::Lambda(lambda) = lambda_arg else {
+        // Not a lambda where one is required; infer generically so the body is
+        // still checked. The lowering reports the misuse.
+        return infer(lambda_arg, env, tvg, subst, cache, diags, file_name);
+    };
+    let mut body_env = env.clone();
+    for (name, ty) in lambda.params.iter().zip(param_tys) {
+        body_env.bind(name.clone(), TypeScheme::mono(ty.clone()));
+    }
+    let ret = infer(&lambda.body, &body_env, tvg, subst, cache, diags, file_name);
+    let mut fields: Vec<Type> = param_tys.to_vec();
+    fields.push(ret.clone());
+    cache.insert(lambda_arg, Type::Con("fn".into(), fields));
+    ret
 }

@@ -487,12 +487,37 @@ pub enum BuiltinFunction {
     /// `trap(cause)`: raise a synchronous exception (e.g. ecall/ebreak). An
     /// effect-only builtin handled directly by codegen; it produces no value.
     Trap,
+    /// `split(bits, n)`: cut a bit value into `n` equal-width lanes (an iterator),
+    /// lane 0 from the low bits.
+    Split,
+    /// `concat(iter)`: join an iterator's lanes into one bit value, lane 0 in the
+    /// low bits. The inverse of `split`.
+    Concat,
+    /// `map(iter, |x| ...)`: apply a lambda to each lane of an iterator.
+    Map,
+    /// `reduce(iter, |acc, x| ...)`: left-fold a binary lambda over an iterator's
+    /// lanes (e.g. a horizontal add).
+    Reduce,
+    /// `zip(a, b)`: pair two iterators lane-wise so a `map` lambda can read both
+    /// sides as separate parameters.
+    Zip,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Call {
     pub callee: Box<Expr>,
     pub arguments: Vec<Expr>,
+    #[serde(skip_serializing)]
+    pub span: Span,
+}
+
+/// A Rust-style anonymous function `|params| body`. Only valid as an argument to
+/// the `map`/`reduce` builtins; the lowering inlines its body, binding each
+/// parameter to the corresponding lambda argument.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct Lambda {
+    pub params: Vec<String>,
+    pub body: Box<Expr>,
     #[serde(skip_serializing)]
     pub span: Span,
 }
@@ -531,6 +556,7 @@ pub enum Expr {
     Slice(Slice),
     Try(TryExcept),
     BuiltinFunction(BuiltinFunction),
+    Lambda(Lambda),
     Invalid,
 }
 
@@ -616,6 +642,12 @@ fn subst_ident(expr: &mut Expr, var: &str, value: i64) {
             subst_ident(&mut t.body, var, value);
             for h in &mut t.handlers {
                 subst_ident(&mut h.body, var, value);
+            }
+        }
+        Expr::Lambda(l) => {
+            // A parameter sharing the substituted name shadows it inside the body.
+            if !l.params.iter().any(|p| p == var) {
+                subst_ident(&mut l.body, var, value);
             }
         }
     }
@@ -824,6 +856,7 @@ fn expand_loops_inplace(expr: &mut Expr, consts: &HashMap<String, i64>) {
                 expand_loops_inplace(&mut h.body, consts);
             }
         }
+        Expr::Lambda(l) => expand_loops_inplace(&mut l.body, consts),
     }
 }
 
@@ -857,6 +890,10 @@ struct SemaExprLoweringCtx<
     /// References to `dest` lower to the loop accumulator and references to the
     /// induction variable to the loop counter, so the body becomes a `Loop` node.
     loop_ctx: Option<(String, Expr)>,
+    /// Stack of `map`/`reduce` lambda parameter names, innermost last. An `Ident`
+    /// matching a parameter of the innermost lambda lowers to an `Arg` node whose
+    /// index is the parameter's position.
+    lambda_params: Vec<Vec<String>>,
 }
 
 impl<'a, G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_expr::ExprPayload>>
@@ -873,6 +910,7 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_e
             variable_symbols: HashMap::new(),
             had_error: false,
             loop_ctx: None,
+            lambda_params: Vec::new(),
         }
     }
 
@@ -891,6 +929,7 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_e
             variable_symbols: HashMap::new(),
             had_error: false,
             loop_ctx: None,
+            lambda_params: Vec::new(),
         }
     }
 
@@ -950,6 +989,20 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_e
         let id = self.alloc_variable_symbol();
         self.register_symbols.insert((class, number), id);
         id
+    }
+
+    /// Lower a `map`/`reduce` lambda's body, binding its parameters so that
+    /// references to them become `Arg` nodes. Non-lambda arguments are an error
+    /// (caught by the type checker); lowering them directly keeps the graph valid.
+    fn lower_lambda_body(&mut self, arg: &Expr) -> tir::graph::NodeId {
+        let Expr::Lambda(lambda) = arg else {
+            self.had_error = true;
+            return arg.lower_with_ctx(self);
+        };
+        self.lambda_params.push(lambda.params.clone());
+        let body = lambda.body.lower_with_ctx(self);
+        self.lambda_params.pop();
+        body
     }
 
     fn build_extract(
@@ -1068,6 +1121,17 @@ impl Expr {
             2 => return ctx.graph.add_node(tir::sem_expr::ExprKind::IndVar),
             _ => {}
         }
+        // Inside a `map`/`reduce` lambda, a reference to one of its parameters
+        // lowers to an `Arg` leaf carrying the parameter's position.
+        if let Expr::Ident(id) = self
+            && let Some(params) = ctx.lambda_params.last()
+            && let Some(idx) = params.iter().position(|p| p == &id.name)
+        {
+            return ctx.add_leaf(
+                tir::sem_expr::ExprKind::Arg,
+                tir::sem_expr::ExprPayload::Int(tir::utils::APInt::new(32, idx as u64)),
+            );
+        }
         match self {
             Expr::Assign(x) => x.as_sema_expr(ctx),
             Expr::Binary(x) => x.as_sema_expr(ctx),
@@ -1086,6 +1150,9 @@ impl Expr {
             // backend gives the handlers meaning.
             Expr::Try(x) => x.body.lower_with_ctx(ctx),
             Expr::BuiltinFunction(_) => panic!("builtin functions must be called"),
+            // Lambdas are lowered by the `map`/`reduce` builtins that consume them,
+            // which push their parameters and lower the body directly.
+            Expr::Lambda(_) => panic!("lambda only valid as a map/reduce argument"),
             Expr::Invalid => panic!("cannot convert invalid expression"),
         }
     }
@@ -1549,6 +1616,35 @@ impl Call {
             BuiltinFunction::Trap => {
                 ctx.had_error = true;
                 ctx.add_int_const(tir::utils::APInt::new(64, 0))
+            }
+            BuiltinFunction::Split => {
+                assert!(self.arguments.len() == 2, "split requires 2 arguments");
+                let bits = self.arguments[0].lower_with_ctx(ctx);
+                let n = self.arguments[1].lower_with_ctx(ctx);
+                ctx.add_node(tir::sem_expr::ExprKind::Split, &[bits, n])
+            }
+            BuiltinFunction::Concat => {
+                assert!(self.arguments.len() == 1, "concat requires 1 argument");
+                let iter = self.arguments[0].lower_with_ctx(ctx);
+                ctx.add_node(tir::sem_expr::ExprKind::IterConcat, &[iter])
+            }
+            BuiltinFunction::Zip => {
+                assert!(self.arguments.len() == 2, "zip requires 2 arguments");
+                let lhs = self.arguments[0].lower_with_ctx(ctx);
+                let rhs = self.arguments[1].lower_with_ctx(ctx);
+                ctx.add_node(tir::sem_expr::ExprKind::Zip, &[lhs, rhs])
+            }
+            BuiltinFunction::Map => {
+                assert!(self.arguments.len() == 2, "map requires 2 arguments");
+                let iter = self.arguments[0].lower_with_ctx(ctx);
+                let body = ctx.lower_lambda_body(&self.arguments[1]);
+                ctx.add_node(tir::sem_expr::ExprKind::Map, &[iter, body])
+            }
+            BuiltinFunction::Reduce => {
+                assert!(self.arguments.len() == 2, "reduce requires 2 arguments");
+                let iter = self.arguments[0].lower_with_ctx(ctx);
+                let body = ctx.lower_lambda_body(&self.arguments[1]);
+                ctx.add_node(tir::sem_expr::ExprKind::Reduce, &[iter, body])
             }
         }
     }

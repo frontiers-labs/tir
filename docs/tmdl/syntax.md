@@ -206,6 +206,18 @@ instruction Add for [RV32I, RV64I] : RType {
   `extract`, `clamp`, `log2Ceil`, `load`/`store` (memory), and `trap(cause)` —
   raise a synchronous exception with a constant cause code (e.g. RISC-V
   `ecall`/`ebreak`); the simulator routes it to its exception callback.
+- Functional vector builtins operate on iterators (a value split into lanes):
+  - `split(bits, n)` — cut a bit value into `n` equal-width lanes, lane 0 from
+    the low bits.
+  - `concat(iter)` — the inverse: join an iterator's lanes into one bit value.
+  - `map(iter, |x| ...)` — apply a lambda to each lane.
+  - `zip(a, b)` — pair two iterators lane-wise, so a binary `map` lambda
+    (`map(zip(a, b), |x, y| ...)`) reads both sides as separate parameters.
+  - `reduce(iter, |acc, x| ...)` — left-fold a binary lambda over the lanes
+    (e.g. a horizontal add).
+  - Lambdas use Rust syntax — `|x| body` or `|a, b| body` — and are valid only
+    as the function argument of `map`/`reduce`. A lane-wise vector add is
+    `concat(map(zip(split(vs2, n), split(vs1, n)), |a, b| a + b))`.
 - Optional `asm`/`encoding` sections can be provided or inherited.
 
 ## Encoding Section Details

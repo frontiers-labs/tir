@@ -87,11 +87,38 @@ pub enum ExprKind {
     Sqrt,
     #[arity = 3]
     Fma,
+    /// Apply a function to each lane of an iterator. Arguments are `[iter, body]`:
+    /// `body` is evaluated once per element with the element bound as the lambda's
+    /// argument, read via `Arg(0)` (or `Arg(0)`/`Arg(1)` when the element is a pair
+    /// produced by `Zip`). The node's value is the iterator of results.
     #[arity = 2]
     Map,
+    /// Pair two iterators lane-wise. Arguments are `[lhs, rhs]`; the value is an
+    /// iterator whose element `i` is the two-element iterator `[lhs[i], rhs[i]]`.
+    /// Feeding a `Zip` into a `Map` lets a binary lambda read both sides via
+    /// `Arg(0)`/`Arg(1)`.
     #[arity = 2]
     Zip,
+    /// Concatenate the lanes of an iterator into a single bit value, lane 0 in the
+    /// low bits. The inverse of `Split`. One argument: the iterator.
+    #[arity = 1]
     IterConcat,
+    /// Split a bit value into `n` equal-width lanes. Arguments are `[bits, n]`;
+    /// the value is an iterator of `n` elements, lane 0 taken from the low bits.
+    /// The inverse of `IterConcat`.
+    #[arity = 2]
+    Split,
+    /// Left-fold a function over an iterator's lanes. Arguments are `[iter, body]`:
+    /// the accumulator starts at lane 0 and, for each later lane, is replaced by
+    /// `body` evaluated with `Arg(0)` bound to the accumulator and `Arg(1)` to the
+    /// lane. The node's value is the final accumulator (e.g. a horizontal add).
+    #[arity = 2]
+    Reduce,
+    /// The k-th parameter of the innermost enclosing `Map`/`Reduce` lambda. A leaf
+    /// carrying its index as an `Int` payload; only meaningful inside that lambda's
+    /// `body` subexpression.
+    #[leaf]
+    Arg,
     /// Bounded fold/reduce, the IR's first-class loop. Arguments are
     /// `[start, end, init, step]`: the accumulator begins at `init` and, for each
     /// integer `i` in the half-open range `[start, end)`, is replaced by `step`.

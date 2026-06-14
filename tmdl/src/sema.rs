@@ -839,6 +839,7 @@ fn check_behavior(
                     walk_paths(&handler.body, out);
                 }
             }
+            ast::Expr::Lambda(l) => walk_paths(&l.body, out),
             ast::Expr::Ident(_)
             | ast::Expr::Lit(_)
             | ast::Expr::BuiltinFunction(_)

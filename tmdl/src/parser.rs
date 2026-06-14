@@ -1107,6 +1107,11 @@ where
                 "load" => Some(BuiltinFunction::Load),
                 "store" => Some(BuiltinFunction::Store),
                 "trap" => Some(BuiltinFunction::Trap),
+                "split" => Some(BuiltinFunction::Split),
+                "concat" => Some(BuiltinFunction::Concat),
+                "map" => Some(BuiltinFunction::Map),
+                "reduce" => Some(BuiltinFunction::Reduce),
+                "zip" => Some(BuiltinFunction::Zip),
                 _ => None,
             }
         }
@@ -1146,7 +1151,28 @@ where
 
         let ident = select! { Token::Identifier(i) => i.to_string() };
 
-        let atom = literal_or_ident
+        // Rust-style lambda `|a, b| body`, valid only as a map/reduce argument.
+        // Parsed at atom position so a leading `|` is unambiguously a lambda
+        // (bitwise-or is infix, never starts an expression).
+        let lambda = just(Token::Pipe)
+            .ignore_then(
+                ident
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>(),
+            )
+            .then_ignore(just(Token::Pipe))
+            .then(expr.clone())
+            .map_with(|(params, body), e| {
+                Expr::Lambda(Lambda {
+                    params,
+                    body: Box::new(body),
+                    span: e.span(),
+                })
+            });
+
+        let atom = lambda
+            .or(literal_or_ident)
             .or(expr
                 .clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen)))
@@ -1490,7 +1516,7 @@ mod tests {
     use chumsky::prelude::*;
 
     use crate::{
-        ast::{BinOp, Expr, UnOp},
+        ast::{BinOp, BuiltinFunction, Expr, UnOp},
         lexer::lexer,
     };
 
@@ -1670,6 +1696,74 @@ mod tests {
             has_indvar && has_acc,
             "loop body must reference IndVar and Acc"
         );
+    }
+
+    fn parse_inline(code: &str) -> Expr {
+        let (tokens, _e) = lexer().parse(code).into_output_errors();
+        let tokens = tokens.unwrap();
+        inline_expr()
+            .then(end())
+            .parse(
+                tokens
+                    .as_slice()
+                    .map((code.len()..code.len()).into(), |(t, s)| (t, s)),
+            )
+            .output()
+            .unwrap()
+            .0
+            .clone()
+    }
+
+    #[test]
+    fn expr_parses_map_with_lambda() {
+        let parsed = parse_inline("map(split(rs1, 4), |x| x + 1)");
+        let Expr::Call(call) = &parsed else {
+            panic!("expected call, got {parsed:?}");
+        };
+        assert!(matches!(
+            &*call.callee,
+            Expr::BuiltinFunction(BuiltinFunction::Map)
+        ));
+        let Expr::Lambda(lambda) = &call.arguments[1] else {
+            panic!("second argument must be a lambda");
+        };
+        assert_eq!(lambda.params, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn expr_parses_binary_lambda() {
+        let parsed = parse_inline("reduce(rs1, |acc, x| acc + x)");
+        let Expr::Call(call) = &parsed else {
+            panic!("expected call, got {parsed:?}");
+        };
+        let Expr::Lambda(lambda) = &call.arguments[1] else {
+            panic!("second argument must be a lambda");
+        };
+        assert_eq!(lambda.params, vec!["acc".to_string(), "x".to_string()]);
+    }
+
+    #[test]
+    fn functional_pipeline_lowers_and_executes() {
+        use std::collections::HashMap;
+        use tir::sem_expr::{ExprPostGraph, Value, execute};
+        use tir::utils::{APInt, RawBits};
+
+        // split a 32-bit raw value into four bytes and horizontally sum them:
+        // bytes [1, 2, 3, 4] -> 10.
+        let parsed = parse_inline("reduce(split(rs1, 4), |acc, x| acc + x)");
+        let mut graph = ExprPostGraph::new();
+        let lowering = parsed
+            .lower_to_sema(&mut graph, &HashMap::new())
+            .expect("functional pipeline lowers");
+
+        let mut symbols = vec![Value::Int(APInt::new(1, 0)); lowering.variable_symbols.len()];
+        symbols[lowering.variable_symbols["rs1"] as usize] =
+            Value::RawBits(RawBits::from_bytes(vec![1, 2, 3, 4]));
+
+        match execute(&graph, &symbols) {
+            Value::Int(v) => assert_eq!(v.to_i64(), 10),
+            other => panic!("expected scalar result, got {other:?}"),
+        }
     }
 
     #[test]
