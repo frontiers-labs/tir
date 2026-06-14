@@ -2380,7 +2380,7 @@ fn emit_value_eval(
             let mut __memory = __TmdlMachineMemory(machine);
             match tir::sem_expr::execute_with_memory(&__g, &__syms, &mut __memory)? {
                 tir::sem_expr::Value::Int(i) => i,
-                tir::sem_expr::Value::Float(_) | tir::sem_expr::Value::Iterator(_) => {
+                tir::sem_expr::Value::Float(_) | tir::sem_expr::Value::Iterator(_) | tir::sem_expr::Value::RawBits(_) => {
                     return Err(tir_be_common::SimTrap::InvalidInstruction {
                         op: #mnemonic_lit,
                         reason: "instruction semantic expression did not evaluate to integer".to_string(),

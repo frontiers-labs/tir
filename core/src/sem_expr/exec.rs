@@ -83,6 +83,7 @@ macro_rules! as_int {
             Value::Int(i) => i,
             Value::Float(_) => panic!("{} requires integer operands", $op),
             Value::Iterator(_) => panic!("{} requires scalar operands", $op),
+            Value::RawBits(_) => panic!("{} requires integer operands", $op),
         }
     };
 }
@@ -93,6 +94,7 @@ macro_rules! as_float {
             Value::Float(f) => f,
             Value::Int(_) => panic!("{} requires float operands", $op),
             Value::Iterator(_) => panic!("{} requires scalar operands", $op),
+            Value::RawBits(_) => panic!("{} requires float operands", $op),
         }
     };
 }
@@ -272,7 +274,7 @@ fn eval_node<M: Memory>(
                 Value::Int(a.add(&b))
             }
             Value::Float(a) => Value::Float(a.add(&as_float!(c(1), "add"))),
-            Value::Iterator(_) => panic!("add requires scalar operands"),
+            Value::Iterator(_) | Value::RawBits(_) => panic!("add requires scalar operands"),
         },
         ExprKind::Sub => match c(0) {
             Value::Int(a) => {
@@ -280,7 +282,7 @@ fn eval_node<M: Memory>(
                 Value::Int(a.sub(&b))
             }
             Value::Float(a) => Value::Float(a.sub(&as_float!(c(1), "sub"))),
-            Value::Iterator(_) => panic!("sub requires scalar operands"),
+            Value::Iterator(_) | Value::RawBits(_) => panic!("sub requires scalar operands"),
         },
         ExprKind::Mul => match c(0) {
             Value::Int(a) => {
@@ -288,7 +290,7 @@ fn eval_node<M: Memory>(
                 Value::Int(a.mul(&b))
             }
             Value::Float(a) => Value::Float(a.mul(&as_float!(c(1), "mul"))),
-            Value::Iterator(_) => panic!("mul requires scalar operands"),
+            Value::Iterator(_) | Value::RawBits(_) => panic!("mul requires scalar operands"),
         },
         ExprKind::Div => match c(0) {
             Value::Int(a) => {
@@ -296,7 +298,7 @@ fn eval_node<M: Memory>(
                 Value::Int(a.sdiv(&b))
             }
             Value::Float(a) => Value::Float(a.div(&as_float!(c(1), "div"))),
-            Value::Iterator(_) => panic!("div requires scalar operands"),
+            Value::Iterator(_) | Value::RawBits(_) => panic!("div requires scalar operands"),
         },
         ExprKind::UDiv => {
             let (a, b) = coerce_ints(as_int!(c(0), "udiv"), as_int!(c(1), "udiv"));
@@ -356,7 +358,7 @@ fn eval_node<M: Memory>(
                     bool_result(a.slt(&b))
                 }
                 Value::Float(a) => bool_result(a.lt(&as_float!(c(1), "lt"))),
-                Value::Iterator(_) => panic!("lt requires scalar operands"),
+                Value::Iterator(_) | Value::RawBits(_) => panic!("lt requires scalar operands"),
             },
         )),
         ExprKind::Gt => Value::Int(APInt::new(
@@ -367,7 +369,7 @@ fn eval_node<M: Memory>(
                     bool_result(a.sgt(&b))
                 }
                 Value::Float(a) => bool_result(a.gt(&as_float!(c(1), "gt"))),
-                Value::Iterator(_) => panic!("gt requires scalar operands"),
+                Value::Iterator(_) | Value::RawBits(_) => panic!("gt requires scalar operands"),
             },
         )),
         ExprKind::Ge => Value::Int(APInt::new(
@@ -378,7 +380,7 @@ fn eval_node<M: Memory>(
                     bool_result(a.sge(&b))
                 }
                 Value::Float(a) => bool_result(a.ge(&as_float!(c(1), "ge"))),
-                Value::Iterator(_) => panic!("ge requires scalar operands"),
+                Value::Iterator(_) | Value::RawBits(_) => panic!("ge requires scalar operands"),
             },
         )),
         ExprKind::ULt => {
@@ -403,7 +405,7 @@ fn eval_node<M: Memory>(
             let cond_zero = match c(0) {
                 Value::Int(i) => i.is_zero(),
                 Value::Float(f) => f.is_zero(),
-                Value::Iterator(_) => panic!("if condition must be scalar"),
+                Value::Iterator(_) | Value::RawBits(_) => panic!("if condition must be scalar"),
             };
             if cond_zero { c(2) } else { c(1) }
         }
@@ -441,7 +443,7 @@ fn eval_node<M: Memory>(
             Value::Float(a) => {
                 Value::Float(a.fma(&as_float!(c(1), "fma"), &as_float!(c(2), "fma")))
             }
-            Value::Iterator(_) => panic!("fma requires scalar operands"),
+            Value::Iterator(_) | Value::RawBits(_) => panic!("fma requires scalar operands"),
         },
         ExprKind::Sqrt => match c(0) {
             Value::Int(a) => {
@@ -449,7 +451,7 @@ fn eval_node<M: Memory>(
                 Value::Int(APInt::new(a.width(), (v as f64).sqrt() as u64))
             }
             Value::Float(a) => Value::Float(a.sqrt()),
-            Value::Iterator(_) => panic!("sqrt requires a scalar operand"),
+            Value::Iterator(_) | Value::RawBits(_) => panic!("sqrt requires a scalar operand"),
         },
         ExprKind::Log2Ceil => {
             let a = as_int!(c(0), "log2ceil");

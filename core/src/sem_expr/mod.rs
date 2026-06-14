@@ -2,7 +2,7 @@ use crate::{
     Operation, ValueId,
     graph::{MutDag, NodeId, PostOrderDag},
     helpers::SimpleNode,
-    utils::{APFloat, APInt},
+    utils::{APFloat, APInt, RawBits},
 };
 
 mod discover;
@@ -148,8 +148,12 @@ pub enum ExprPayload {
 /// A runtime value produced by the expression interpreter.
 #[derive(Clone, Debug)]
 pub enum Value {
+    /// Arbitrary-precision integers
     Int(APInt),
+    /// Arbitrary-precision floats
     Float(APFloat),
-    /// A vector of lane values, produced by `VectorMap` and indexed by `Lane`.
+    /// A fixed-size array of other types, like a vector
     Iterator(Vec<Value>),
+    /// An untyped bag of bits
+    RawBits(RawBits),
 }
