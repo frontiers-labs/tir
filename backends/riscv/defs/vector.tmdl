@@ -1,19 +1,39 @@
-// A small slice of the RISC-V Vector extension (RVV). To stay within what the
-// loop-aware behavior language can express without a dynamic vtype CSR, these
-// instructions model a fixed 32-bit element width over a VLEN-bit vector
-// register: a VLEN=128 register therefore holds four 32-bit lanes. The lane loop
-// is written with the Rust-style `for` accumulator form, which lowers to the
-// IR's first-class `Loop` node.
+// A slice of the RISC-V Vector extension (RVV). The vector unit's shape is
+// architectural state, not spec-time constants: `vtype` holds the selected
+// element width (SEW) and register-group multiplier (LMUL), `vl` holds the
+// active element count, and `vlenb` exposes the implementation's VLEN (the
+// physical width of a vector register, in bytes). Instruction behavior reads
+// these control registers rather than baking VLEN/SEW in, so an OPIVV op is
+// genuinely parametric over the configured element width and length.
 
-isa RVV requires [RV32I | RV64I] {
-    param VLEN: Integer = 128;
-    param SEW: Integer = 32;
+isa RVV requires [RV32I | RV64I] {}
+
+// Vector control and status registers (addressed by their architectural CSR
+// numbers). `vlenb` is read-only and reports VLEN/8; `vtype`/`vl`/`vstart` are
+// written by `vsetvl{i}` and the vector unit.
+register_class VCSR for [RVV] {
+    param ENCODING_LEN: Integer = 12;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        vstart => { index = 0x008 },
+        vl     => { index = 0xC20 },
+        vtype  => { index = 0xC21 },
+        vlenb  => { index = 0xC22 },
+    }
 }
 
-// The 32 architectural vector registers v0..v31, each VLEN bits wide.
+// The 32 architectural vector registers v0..v31. Their physical width is the
+// implementation's VLEN, the same fixed quantity `vlenb` reports; how those bits
+// are partitioned into elements is governed dynamically by `vtype`.
 register_class VR for [RVV] {
     param ENCODING_LEN: Integer = 5;
-    param WIDTH: Integer = self.VLEN;
+    // Dynamically sized: a vector register's width is the implementation's VLEN,
+    // not a compile-time constant. It is reported at runtime by `vlenb`, so the
+    // operand type is `bits<?>` — bits of unknown width. How those bits split
+    // into elements is decided by each instruction's behavior (via `vtype`), not
+    // by the register, the same way one physical file is reused across SEWs.
+    param WIDTH: Integer = VCSR::vlenb;
 
     registers {
         v0..v31 => { traits = [vector] },
@@ -51,18 +71,20 @@ template VArithVV for [RVV] {
     schedule { units = [WriteIALU]; }
 }
 
-// Each instruction's behavior is a vector map over the VLEN/SEW lanes: the
-// value-producing `for` loop lowers to a first-class `VectorMap` whose lane
-// expression reads operand lanes with the `lane` builtin. This is the same
-// map/lane shape the target-independent `vector` dialect ops produce, so
-// instruction selection can match a `vector.add` against `vadd.vv`.
+// Each OPIVV instruction maps over the `vl` active elements: the value-producing
+// `for` loop lowers to a first-class `VectorMap` whose lane count is the dynamic
+// `vl` read, and whose lane expression reads operand elements with `lane`. The
+// element width is not named here; it is whatever `vtype` selects, so the same
+// description serves every SEW. This is the same map/lane shape the
+// target-independent `vector` dialect ops produce, so instruction selection can
+// match a `vector.add` against `vadd.vv`.
 
 instruction VAdd for [RVV] : VArithVV {
     param MNEMONIC: String = "vadd.vv";
     param FUNCT6: bits<6> = 0b000000;
 
     behavior {
-        vd = for i in 0..(self.VLEN / self.SEW) {
+        vd = for i in 0..VCSR::vl {
             lane(vs2, i) + lane(vs1, i)
         };
     }
@@ -73,7 +95,7 @@ instruction VSub for [RVV] : VArithVV {
     param FUNCT6: bits<6> = 0b000010;
 
     behavior {
-        vd = for i in 0..(self.VLEN / self.SEW) {
+        vd = for i in 0..VCSR::vl {
             lane(vs2, i) - lane(vs1, i)
         };
     }
@@ -84,7 +106,7 @@ instruction VMul for [RVV] : VArithVV {
     param FUNCT6: bits<6> = 0b100101;
 
     behavior {
-        vd = for i in 0..(self.VLEN / self.SEW) {
+        vd = for i in 0..VCSR::vl {
             lane(vs2, i) * lane(vs1, i)
         };
     }

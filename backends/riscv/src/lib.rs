@@ -2373,13 +2373,15 @@ mod target_parser_tests {
             crate::isa_params(&[Feature::RV64I, Feature::RVM]),
             vec![("XLEN", 64)]
         );
+        // VR is dynamically sized (width = vlenb, an architectural runtime value),
+        // so it carries no static width here; its size is supplied by the machine.
         assert_eq!(
             crate::register_widths(&[Feature::RV32I]),
-            vec![("PC", 32), ("GPR", 32), ("CSR", 32), ("VR", 128)]
+            vec![("PC", 32), ("GPR", 32), ("CSR", 32), ("VCSR", 32)]
         );
         assert_eq!(
             crate::register_widths(&[Feature::RV64I]),
-            vec![("PC", 64), ("GPR", 64), ("CSR", 64), ("VR", 128)]
+            vec![("PC", 64), ("GPR", 64), ("CSR", 64), ("VCSR", 64)]
         );
         // Extensions alone resolve nothing; the base supplies XLEN.
         assert_eq!(crate::isa_params(&[Feature::RVM]), vec![]);

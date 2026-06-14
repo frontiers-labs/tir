@@ -23,7 +23,7 @@ pub fn check<'a>(files: &'a [ast::File]) -> (TypeCache<'a>, Vec<(String, Diag)>)
     let mut cache = TypeCache::new();
 
     let isa_param_vars = build_isa_param_vars(files, &mut tvg);
-    let synonyms = build_synonym_table(files, &isa_param_vars);
+    let synonyms = build_synonym_table(files, &isa_param_vars, &mut tvg);
 
     let item_cache: HashMap<&str, &ast::Item> = files
         .iter()
@@ -98,24 +98,37 @@ fn build_isa_param_vars(files: &[ast::File], tvg: &mut TypeVarGen) -> HashMap<St
     vars
 }
 
-fn reg_class_type(rc: &ast::RegisterClass, isa_param_vars: &HashMap<String, TypeVar>) -> Type {
+fn reg_class_type(
+    rc: &ast::RegisterClass,
+    isa_param_vars: &HashMap<String, TypeVar>,
+    tvg: &mut TypeVarGen,
+) -> Type {
+    // A static-width class fixes its width to an ISA parameter (e.g. `XLEN`); the
+    // operand is `bits<XLEN>`. A class whose `WIDTH` is any other expression is
+    // dynamically sized: its width is an architectural quantity not known at
+    // spec time (RVV's `VLEN`, reported at runtime by `vlenb`), so the operand is
+    // `bits<?>` — a bitvector of unknown width. The element structure such a
+    // register carries is imposed by the instructions that read it, not by the
+    // register type, matching hardware where one physical file is reused across
+    // element widths.
     if let Some((_ty, Some(default))) = rc.parameters.get("WIDTH")
         && let ast::Expr::Field(field) = default
         && let Some(&tv) = isa_param_vars.get(&field.member)
     {
         return Type::Con("bits".into(), vec![Type::Var(tv)]);
     }
-    unreachable!("All register classes must have WIDTH parameter")
+    Type::Con("bits".into(), vec![Type::Var(tvg.fresh())])
 }
 
 fn build_synonym_table(
     files: &[ast::File],
     isa_param_vars: &HashMap<String, TypeVar>,
+    tvg: &mut TypeVarGen,
 ) -> SynonymTable {
     let mut synonyms = SynonymTable::new();
     for file in files {
         for rc in file.register_classes() {
-            synonyms.insert(rc.name.clone(), reg_class_type(rc, isa_param_vars));
+            synonyms.insert(rc.name.clone(), reg_class_type(rc, isa_param_vars, tvg));
         }
     }
     synonyms
