@@ -1,7 +1,8 @@
 //! The `vector` dialect: a small, target-independent vocabulary for SIMD-style
 //! arithmetic. A [`VectorType`] is either statically sized (`vec<8xi32>`) or
-//! dynamically sized (`vec<i32>`), and the elementwise arithmetic operations take
-//! an optional vector-length operand that bounds how many lanes are active.
+//! dynamically sized (`vec<i32>`); a dynamic vector's elementwise operation takes
+//! a vector-length (`vl`) operand bounding the active lanes, while a static one
+//! reads its lane count straight from the type.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -166,10 +167,9 @@ operation! {
     }
 }
 
-/// The active lane count for `$get_vlen` in the elementwise ops' semantics: the
-/// dynamic `vl` operand (index 2) when present, otherwise the static lane count
-/// of the result vector type as a constant. This is the `n` each `split` cuts the
-/// operand bits into.
+/// The active lane count for `$get_vlen`, the `n` each `split` cuts the operand
+/// bits into: a fixed vector takes it from the result type's static length (a
+/// constant); a scalable vector takes it from the dynamic `vl` operand (index 2).
 fn vlen_node(
     op: &tir::OpInstance,
     g: &mut impl tir::graph::MutDag<Node = tir::sem_expr::ExprKind, Leaf = tir::sem_expr::ExprPayload>,
@@ -177,21 +177,20 @@ fn vlen_node(
     if op.operands.len() > 2 {
         let n = g.add_node(tir::sem_expr::ExprKind::Symbol);
         g.set_leaf_data(n, tir::sem_expr::ExprPayload::SymbolId(2));
-        n
-    } else {
-        let context = op.context.upgrade();
-        let ty = context.get_value(op.results[0]).ty();
-        let length = (context.get_type_data(ty).as_ref() as &dyn Any)
-            .downcast_ref::<VectorType>()
-            .and_then(|t| t.length())
-            .unwrap_or(0) as u64;
-        let n = g.add_node(tir::sem_expr::ExprKind::Constant);
-        g.set_leaf_data(
-            n,
-            tir::sem_expr::ExprPayload::Int(tir::utils::APInt::new(32, length)),
-        );
-        n
+        return n;
     }
+    let context = op.context.upgrade();
+    let ty = context.get_value(op.results[0]).ty();
+    let length = (context.get_type_data(ty).as_ref() as &dyn Any)
+        .downcast_ref::<VectorType>()
+        .and_then(|t| t.length())
+        .unwrap_or(0) as u64;
+    let n = g.add_node(tir::sem_expr::ExprKind::Constant);
+    g.set_leaf_data(
+        n,
+        tir::sem_expr::ExprPayload::Int(tir::utils::APInt::new(32, length)),
+    );
+    n
 }
 
 macro_rules! impl_get_vlen {

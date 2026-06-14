@@ -12,6 +12,9 @@ module {
   module_end
 }
 
+// The vector.add reads VCSR::vl implicitly, so selection introduces its definer
+// vsetivli (lane count 4 as the immediate AVL) ahead of the vadd.vv.
 // CHECK: asm.symbol {name = "vadd"
+// CHECK: riscv.vsetivli {rd = x0, avl = 4}
 // CHECK: riscv.vadd.vv {vd = %virt2:VR, vs2 = %virt0:VR, vs1 = %virt1:VR}
 // CHECK: riscv.vret

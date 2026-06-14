@@ -1213,8 +1213,9 @@ impl Expr {
         >,
         params: &HashMap<String, i64>,
         isa_consts: &HashMap<String, i64>,
+        register_indices: &HashMap<(String, String), u32>,
     ) -> Option<SemaLowering> {
-        let mut ctx = SemaExprLoweringCtx::new(g, params);
+        let mut ctx = SemaExprLoweringCtx::new_with_registers(g, params, register_indices);
         ctx.isa_consts = isa_consts.clone();
         let root = self.lower_with_ctx(&mut ctx);
         if ctx.had_error {

@@ -33,7 +33,8 @@ use cover::{
     CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative, PbqpIselMatch,
     build_eclass_cover, completeness_error, prune_dominated_matches,
 };
-use emit::{BlockDecision, BlockPlan, EmissionBuilder};
+use emit::{BlockDecision, BlockPlan, DefinerEmit, EmissionBuilder};
+use node::{Binding, class_binding};
 use pattern::{CompiledIselPattern, compile_isel_pattern};
 use rewrites::discover_rewrites;
 #[cfg(test)]
@@ -122,6 +123,32 @@ impl IselCostModel for DefaultIselCostModel {}
 pub type RuleEmitFn =
     fn(&Context, &EmitRequest, &RuleMatch) -> Result<Box<dyn Operation>, PassError>;
 
+/// A register an instruction reads implicitly — declared in its behavior but not
+/// among its encoded operands (e.g. `vadd` reading `VCSR::vl`). The read is a real
+/// dependency: selection introduces the register's definer ahead of the reader,
+/// passing the value bound to `symbol`.
+#[derive(Clone, Debug)]
+pub struct ImplicitUse {
+    pub symbol: u32,
+    pub register_class: &'static str,
+    pub register_index: u32,
+}
+
+/// An instruction that defines a register implicitly (writes it in its behavior
+/// with no encoded result, e.g. `vsetvli`/`vsetivli` defining `VCSR::vl`). It is
+/// never selected by value matching; selection introduces it ahead of a reader of
+/// `register_index`, binding `value_symbol` to the value that read bound to (an
+/// immediate when `value_is_immediate`, else a register value). Its `emit_fn`
+/// hardwires the destination to `x0`. Nothing here is target-specific: the
+/// definer's input is exactly the value flowing across the register def/use.
+pub struct RegisterDefiner {
+    pub register_class: &'static str,
+    pub register_index: u32,
+    pub value_is_immediate: bool,
+    pub value_symbol: u32,
+    pub emit_fn: RuleEmitFn,
+}
+
 pub struct Rule {
     pub name: &'static str,
     pub pattern: ExprPostGraph,
@@ -130,6 +157,9 @@ pub struct Rule {
     /// are unconstrained, so hand-written and synthesized rules keep matching any
     /// value.
     pub operand_constraints: Vec<(u32, OperandConstraint)>,
+    /// Registers this instruction reads implicitly (from its behavior, not its
+    /// encoded operands); selection introduces each one's definer ahead of this op.
+    pub implicit_uses: Vec<ImplicitUse>,
     pub emit_fn: RuleEmitFn,
 }
 
@@ -145,6 +175,7 @@ impl Rule {
             pattern,
             base_cost,
             operand_constraints: Vec::new(),
+            implicit_uses: Vec::new(),
             emit_fn,
         }
     }
@@ -153,6 +184,13 @@ impl Rule {
     /// immediate-shift pattern only matches a constant shift amount.
     pub fn with_operand_constraints(mut self, constraints: Vec<(u32, OperandConstraint)>) -> Self {
         self.operand_constraints = constraints;
+        self
+    }
+
+    /// Declare the registers this instruction reads implicitly, so selection
+    /// introduces their definers ahead of it.
+    pub fn with_implicit_uses(mut self, uses: Vec<ImplicitUse>) -> Self {
+        self.implicit_uses = uses;
         self
     }
 }
@@ -187,6 +225,9 @@ pub struct InstructionSelectPass {
     /// with before covering (e.g. discovered `sext`/shift bridges). Populated by
     /// rewrite discovery; empty means selection is purely syntactic tiling.
     rewrites: Vec<Rewrite<SemNode, ()>>,
+    /// Instructions that define a register implicitly; selection introduces one
+    /// ahead of any op whose `implicit_uses` name a matching register.
+    definers: Vec<RegisterDefiner>,
     cost_model: Box<dyn IselCostModel>,
     op_lowerings: Vec<OpLowering>,
     block_cache: HashMap<BlockId, BlockSelectionCache>,
@@ -209,11 +250,19 @@ impl InstructionSelectPass {
             rules,
             compiled_patterns,
             rewrites,
+            definers: Vec::new(),
             cost_model: Box::new(DefaultIselCostModel),
             op_lowerings: vec![],
             block_cache: HashMap::new(),
             emitted_blocks: HashSet::new(),
         }
+    }
+
+    /// Install the instructions that define registers implicitly (e.g.
+    /// `vsetvli`/`vsetivli`), introduced ahead of ops that read those registers.
+    pub fn with_register_definers(mut self, definers: Vec<RegisterDefiner>) -> Self {
+        self.definers = definers;
+        self
     }
 
     /// Install the algebraic identities used to saturate the program e-graph before
@@ -414,6 +463,24 @@ impl InstructionSelectPass {
             rewriter.insert_op_before(&anchor, new_op.as_ref())?;
         }
 
+        // Insert the definer of each implicit register use just before the op that
+        // reads it. The definer has no destination value (its emitter hardwires one).
+        for definer in &plan.definers {
+            let request = EmitRequest {
+                op: None,
+                results: &[],
+                result_ty: None,
+            };
+            let emit_fn = self.definers[definer.definer_index].emit_fn;
+            let new_op = emit_fn(context, &request, &definer.m)?;
+            let anchor = OperationRef::new(
+                context.get_op(definer.anchor),
+                Some(block_arc.clone()),
+                None,
+            );
+            rewriter.insert_op_before(&anchor, new_op.as_ref())?;
+        }
+
         // Rewrite the original ops in reverse block order — consumers before
         // defs — so when a def's replacement remaps SSA uses of its results
         // (`replace_op`), every already-emitted consumer is visible. Positions
@@ -545,9 +612,66 @@ impl InstructionSelectPass {
             }
         }
 
+        // Honor each selected op's implicit register reads: introduce the register's
+        // definer ahead of it, passing exactly the value that read bound to. This is
+        // the register def/use edge declared in the instruction's behavior; the
+        // value crossing it is the only thing threaded — nothing here inspects the
+        // operands' types.
+        let mut definers = Vec::new();
+        for op_id in block.op_ids() {
+            let Some(BlockDecision::Emit { rule_index, .. }) = op_decisions.get(&op_id) else {
+                continue;
+            };
+            let rule = &self.rules[*rule_index];
+            if rule.implicit_uses.is_empty() {
+                continue;
+            }
+            let Some(class) = cache.op_root.get(&op_id).map(|c| cache.egraph.find(*c)) else {
+                continue;
+            };
+            let Some(&match_id) = root_match.get(&class) else {
+                continue;
+            };
+            for implicit_use in &rule.implicit_uses {
+                let Some((_, bound)) = matches[match_id]
+                    .bindings
+                    .captures
+                    .entries
+                    .iter()
+                    .find(|(sym, _)| *sym == implicit_use.symbol)
+                else {
+                    continue;
+                };
+                let bound = cache.egraph.find(*bound);
+                let Some(binding) = class_binding(&cache.egraph, &cache.class_value, bound) else {
+                    continue;
+                };
+                let value_immediate = matches!(binding, Binding::Int(_));
+                let Some((definer_index, definer)) =
+                    self.definers.iter().enumerate().find(|(_, d)| {
+                        d.register_class == implicit_use.register_class
+                            && d.register_index == implicit_use.register_index
+                            && d.value_is_immediate == value_immediate
+                    })
+                else {
+                    continue;
+                };
+                let m = match binding {
+                    Binding::Int(v) => RuleMatch::new(vec![(definer.value_symbol, v)], vec![]),
+                    Binding::Value(v) => RuleMatch::new(vec![], vec![(definer.value_symbol, v)]),
+                };
+                definers.push(DefinerEmit {
+                    definer_index,
+                    m,
+                    anchor: op_id,
+                });
+            }
+        }
+
         Ok(BlockPlan {
             op_decisions,
             introduced: emit.introduced,
+            definers,
         })
     }
 

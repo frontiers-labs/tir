@@ -40,6 +40,80 @@ register_class VR for [RVV] {
     }
 }
 
+// `vset{i}vli` define `VCSR::vl`, the active element count every OPIVV
+// instruction reads in its behavior. They are never selected by value matching —
+// their behavior assigns only `VCSR::vl`, not an encoded result operand, so
+// rustgen emits no matching rule. Instead instruction selection honors the OPIVV
+// ops' implicit read of `VCSR::vl` by introducing the definer ahead of them, with
+// `rd` hardwired to `x0` (the granted `vl` is discarded). The element width is
+// `total / vl` in this functional model, so no SEW operand is needed; the packed
+// `vtype` encoding is a fixed placeholder, left as a follow-up.
+//
+// `vsetvli` takes the requested length (AVL) from a register; `vsetivli` from a
+// 5-bit immediate. Selection picks between them by whether the lane count is a
+// constant (fixed vector) or a value (scalable vector).
+instruction VSetVli for [RVV] {
+    param MNEMONIC: String = "vsetvli";
+    param OPCODE: bits<7> = 0b1010111;
+    param FUNCT3: bits<3> = 0b111;
+    param VTYPEI: bits<11> = 0;
+
+    operands {
+        rd: GPR,
+        avl: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => FUNCT3,
+        15..19 => avl,
+        20..30 => VTYPEI,
+        31 => 0b0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {avl}"
+    }
+
+    behavior {
+        VCSR::vl = avl;
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction VSetIVli for [RVV] {
+    param MNEMONIC: String = "vsetivli";
+    param OPCODE: bits<7> = 0b1010111;
+    param FUNCT3: bits<3> = 0b111;
+    param VTYPEI: bits<10> = 0;
+
+    operands {
+        rd: GPR,
+        avl: bits<5>,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => FUNCT3,
+        15..19 => avl,
+        20..29 => VTYPEI,
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {avl}"
+    }
+
+    behavior {
+        VCSR::vl = zext(avl, self.XLEN);
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
 // OP-V, vector-vector (OPIVV) form: `op.vv vd, vs2, vs1`.
 template VArithVV for [RVV] {
     param MNEMONIC: String;
@@ -71,22 +145,21 @@ template VArithVV for [RVV] {
     schedule { units = [WriteIALU]; }
 }
 
-// Each OPIVV instruction maps over the `vl` active elements: the value-producing
-// `for` loop lowers to a first-class `VectorMap` whose lane count is the dynamic
-// `vl` read, and whose lane expression reads operand elements with `lane`. The
-// element width is not named here; it is whatever `vtype` selects, so the same
-// description serves every SEW. This is the same map/lane shape the
+// Each OPIVV instruction maps over the `vl` active elements: it splits each
+// source register into `VCSR::vl` lanes, pairs them, applies the elementwise
+// operation, and concatenates the results back into the destination register.
+// The lane width is not named here; it is whatever `vtype` selects, so the same
+// description serves every SEW. This is the same split/map/concat shape the
 // target-independent `vector` dialect ops produce, so instruction selection can
-// match a `vector.add` against `vadd.vv`.
+// match a `vector.add` against `vadd.vv`, the `VCSR::vl` read binding to the
+// dialect op's `vl` operand.
 
 instruction VAdd for [RVV] : VArithVV {
     param MNEMONIC: String = "vadd.vv";
     param FUNCT6: bits<6> = 0b000000;
 
     behavior {
-        vd = for i in 0..VCSR::vl {
-            lane(vs2, i) + lane(vs1, i)
-        };
+        vd = concat(map(zip(split(vs2, VCSR::vl), split(vs1, VCSR::vl)), |a, b| a + b));
     }
 }
 
@@ -95,9 +168,7 @@ instruction VSub for [RVV] : VArithVV {
     param FUNCT6: bits<6> = 0b000010;
 
     behavior {
-        vd = for i in 0..VCSR::vl {
-            lane(vs2, i) - lane(vs1, i)
-        };
+        vd = concat(map(zip(split(vs2, VCSR::vl), split(vs1, VCSR::vl)), |a, b| a - b));
     }
 }
 
@@ -106,8 +177,6 @@ instruction VMul for [RVV] : VArithVV {
     param FUNCT6: bits<6> = 0b100101;
 
     behavior {
-        vd = for i in 0..VCSR::vl {
-            lane(vs2, i) * lane(vs1, i)
-        };
+        vd = concat(map(zip(split(vs2, VCSR::vl), split(vs1, VCSR::vl)), |a, b| a * b));
     }
 }

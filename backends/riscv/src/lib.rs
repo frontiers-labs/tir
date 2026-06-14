@@ -451,6 +451,8 @@ dialect! {
             VAddOp,
             VSubOp,
             VMulOp,
+            VSetVliOp,
+            VSetIVliOp,
             // Zicsr
             CSRReadWriteOp,
             CSRReadSetOp,
@@ -745,6 +747,7 @@ fn create_isel_pass_for(
     features: &[Feature],
 ) -> tir_be_common::isel::InstructionSelectPass {
     tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context, features))
+        .with_register_definers(get_register_definers(context, features))
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
         .with_op_lowering(lower_branches)
         .with_op_lowering(lower_calls)
