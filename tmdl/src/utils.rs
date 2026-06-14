@@ -98,7 +98,7 @@ pub fn eval_bits_width(expr: &ast::Expr, params: &HashMap<String, i64>) -> Optio
     }
     match tir::sem_expr::execute(&graph, &[]) {
         tir::sem_expr::Value::Int(v) => u16::try_from(v.to_u64()).ok(),
-        tir::sem_expr::Value::Float(_) | tir::sem_expr::Value::Vector(_) => None,
+        tir::sem_expr::Value::Float(_) | tir::sem_expr::Value::Iterator(_) => None,
     }
 }
 

@@ -114,6 +114,9 @@ pub fn infer_widths(
             // from a lower-indexed leaf, so it stays unknown.
             ExprKind::VectorMap => child_width(1),
             ExprKind::Lane => None,
+
+            ExprKind::Map | ExprKind::Zip => None,
+            ExprKind::IterConcat => None,
         };
 
         widths[index] = width;

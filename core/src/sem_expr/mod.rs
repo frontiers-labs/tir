@@ -87,6 +87,11 @@ pub enum ExprKind {
     Sqrt,
     #[arity = 3]
     Fma,
+    #[arity = 2]
+    Map,
+    #[arity = 2]
+    Zip,
+    IterConcat,
     /// Bounded fold/reduce, the IR's first-class loop. Arguments are
     /// `[start, end, init, step]`: the accumulator begins at `init` and, for each
     /// integer `i` in the half-open range `[start, end)`, is replaced by `step`.
@@ -146,5 +151,5 @@ pub enum Value {
     Int(APInt),
     Float(APFloat),
     /// A vector of lane values, produced by `VectorMap` and indexed by `Lane`.
-    Vector(Vec<Value>),
+    Iterator(Vec<Value>),
 }

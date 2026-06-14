@@ -1007,6 +1007,7 @@ fn emit_sem_expr(
         // Vector values have no scalar SMT-LIB encoding, so a vector map or lane
         // read is unsupported by the bit-vector backend.
         ExprKind::VectorMap | ExprKind::Lane => None,
+        ExprKind::Map | ExprKind::Zip | ExprKind::IterConcat => None,
     }
 }
 

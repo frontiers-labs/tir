@@ -386,7 +386,7 @@ mod tests {
         ));
 
         let lanes = |xs: [i64; 4]| {
-            Value::Vector(
+            Value::Iterator(
                 xs.iter()
                     .map(|&x| Value::Int(APInt::new_signed(32, x)))
                     .collect(),
@@ -394,7 +394,7 @@ mod tests {
         };
         let a = lanes([1, 2, 3, 4]);
         let b = lanes([10, 20, 30, 40]);
-        let Value::Vector(out) = execute(&g, &[a.clone(), b.clone()]) else {
+        let Value::Iterator(out) = execute(&g, &[a.clone(), b.clone()]) else {
             panic!("vector op must produce a vector");
         };
         let out: Vec<i64> = out
