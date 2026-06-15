@@ -25,6 +25,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some("isa-test-suite") => isa_test_suite(&sh)?,
         Some("capi-smoke") => capi_smoke(&sh)?,
+        Some("python-smoke") => python_smoke(&sh)?,
         _ => print_help(),
     }
     Ok(())
@@ -118,6 +119,28 @@ fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build the C ABI cdylib, regenerate the generated Python op bindings and
+/// assert they are current, then run the Python test suite against the library.
+fn python_smoke(sh: &Shell) -> anyhow::Result<()> {
+    let root = project_root();
+    sh.change_dir(&root);
+
+    cmd!(sh, "cargo build -p tir-capi").run()?;
+
+    let ops = "utils/python/tir/_ops.py";
+    cmd!(
+        sh,
+        "cargo run -q -p tir-bindgen -- --lang python --output {ops}"
+    )
+    .run()?;
+    if cmd!(sh, "git diff --quiet -- {ops}").quiet().run().is_err() {
+        anyhow::bail!("{ops} is stale; regenerate with tir-bindgen and commit it");
+    }
+
+    cmd!(sh, "python3 -m unittest discover -s utils/python/tests").run()?;
+    Ok(())
+}
+
 fn print_help() {
     eprintln!(
         "Tasks:
@@ -128,6 +151,7 @@ check-only       only runs check tests without building the project
 verify <isa>     run formal ISA verification. Available ISAs: riscv64, riscv32, armv8
 isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
 capi-smoke       check the C ABI header is current and run the C smoke test
+python-smoke     regenerate Python op bindings and run the Python test suite
 docs             builds project documentation
 help             shows this message
 "
