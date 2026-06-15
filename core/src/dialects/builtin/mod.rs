@@ -53,7 +53,7 @@ dialect! {
             CallOp,
             IndirectCallOp,
         ],
-        types: [IntegerType, IndexType, UnitType],
+        types: [IntegerType, IndexType, UnitType, TokenType],
     }
 }
 
@@ -181,6 +181,50 @@ impl Type for UnitType {
     }
 }
 
+/// Opaque, parameterless type with no runtime representation.
+///
+/// A `!token` value carries no data; it exists purely to encode a static
+/// def-use relationship between operations. Given a use of a token, its
+/// definition is the semantic producer of that token, which lets passes thread
+/// ordering, dependency or async-completion edges through the IR without
+/// inventing dummy data values.
+pub struct TokenType;
+
+impl TokenType {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(context: &Context) -> TypeId {
+        context.get_type_id(Arc::new(Self))
+    }
+}
+
+impl TypeConstraint for TokenType {}
+
+impl Type for TokenType {
+    fn dialect(&self) -> &'static str {
+        "builtin"
+    }
+
+    fn parse_key() -> &'static str {
+        "token"
+    }
+
+    fn parse<'src>(
+        _mnemonic: &str,
+        _parser: &mut tir::parse::text::Parser<'src>,
+        context: &Context,
+    ) -> Result<TypeId, (Span, Error)> {
+        Ok(Self::new(context))
+    }
+
+    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
+        fmt.write("token")
+    }
+
+    fn eq(&self, other: &dyn Type) -> bool {
+        (other as &dyn Any).downcast_ref::<TokenType>().is_some()
+    }
+}
+
 pub struct Integer<const N: usize>;
 
 impl<const N: usize> TypeConstraint for Integer<N> {
@@ -194,5 +238,25 @@ impl<const N: usize> TypeConstraint for Integer<N> {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_type_roundtrip() {
+        let context = Context::with_default_dialects();
+
+        let token = TokenType::new(&context);
+        assert_eq!(context.type_to_string(token), "!token");
+
+        // Tokens are opaque and interned: every `!token` is the same type.
+        assert_eq!(TokenType::new(&context), token);
+        assert_eq!(context.parse_type_spec("token").unwrap(), token);
+
+        // A token is distinct from the unit type despite both being empty.
+        assert_ne!(UnitType::new(&context), token);
     }
 }
