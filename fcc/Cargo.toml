@@ -13,6 +13,7 @@ clap = { version = "4.6.0", features = ["derive"] }
 
 [dev-dependencies]
 tir-lit = { path = "../utils/lit" }
+criterion = { workspace = true }
 
 [[bin]]
 name = "fcc"
@@ -20,4 +21,8 @@ path = "bin.rs"
 
 [[test]]
 name = "lit"
+harness = false
+
+[[bench]]
+name = "codegen"
 harness = false

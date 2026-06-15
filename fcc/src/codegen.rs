@@ -27,6 +27,10 @@ struct FnCodegen<'a> {
     ast: &'a Ast,
     builder: IRBuilder,
     locals: HashMap<String, Slot>,
+    /// Scratch holding the lowered SSA value of each node in the expression
+    /// subtree currently being lowered, indexed by `node.index() - base`. Reused
+    /// across expressions to avoid reallocating.
+    values: Vec<ValueId>,
 }
 
 /// Lower a translation unit into a `builtin.module` in `context`.
@@ -56,14 +60,13 @@ fn lower_function(context: &Context, ast: &Ast, func: NodeId) -> Result<impl Ope
     };
     let ret_ty = lower_ctype(context, ret);
 
-    let params: Vec<NodeId> = ast
+    // Entry block arguments carry the incoming parameter values; parameters are
+    // the function node's leading children.
+    let mut param_values = Vec::new();
+    for param in ast
         .children(func)
         .take_while(|&c| matches!(ast.get_node(c), AstKind::Param))
-        .collect();
-
-    // Entry block arguments carry the incoming parameter values.
-    let mut param_values = Vec::new();
-    for &param in &params {
+    {
         let AstLeaf::Param { ty, .. } = ast.get_leaf_data(param).unwrap() else {
             unreachable!("param node carries a param payload");
         };
@@ -82,23 +85,9 @@ fn lower_function(context: &Context, ast: &Ast, func: NodeId) -> Result<impl Ope
         ast,
         builder: IRBuilder::new(func_op.body()),
         locals: HashMap::new(),
+        values: Vec::new(),
     };
-
-    // Spill each parameter into its own stack slot, mirroring -O0 codegen.
-    for (&param, value) in params.iter().zip(param_ids) {
-        let AstLeaf::Param { name, ty } = ast.get_leaf_data(param).unwrap() else {
-            unreachable!("param node carries a param payload");
-        };
-        let elem = lower_ctype(context, ty);
-        let slot = cg.alloca(elem);
-        cg.builder
-            .insert(p::store(context, value, slot.ptr).build());
-        cg.locals.insert(name.clone(), slot);
-    }
-
-    for stmt in ast.children(func).skip(params.len()) {
-        cg.lower_stmt(stmt)?;
-    }
+    cg.lower_body(func, &param_ids)?;
 
     Ok(func_op)
 }
@@ -111,6 +100,35 @@ impl FnCodegen<'_> {
             ptr: op.result(),
             elem,
         }
+    }
+
+    /// Lower a function: spill parameters into stack slots, then lower each body
+    /// statement in source order (statement order is a side-effect ordering, so it
+    /// stays top-down; only the expressions within use the post-order iterator).
+    fn lower_body(&mut self, func: NodeId, param_ids: &[ValueId]) -> Result<(), String> {
+        let ast = self.ast;
+
+        let mut idx = 0;
+        for param in ast
+            .children(func)
+            .take_while(|&c| matches!(ast.get_node(c), AstKind::Param))
+        {
+            let AstLeaf::Param { name, ty } = ast.get_leaf_data(param).unwrap() else {
+                unreachable!("param node carries a param payload");
+            };
+            let elem = lower_ctype(self.context, ty);
+            let slot = self.alloca(elem);
+            self.builder
+                .insert(p::store(self.context, param_ids[idx], slot.ptr).build());
+            idx += 1;
+            self.locals.insert(name.clone(), slot);
+        }
+
+        for stmt in ast.children(func).skip(idx) {
+            self.lower_stmt(stmt)?;
+        }
+
+        Ok(())
     }
 
     fn lower_stmt(&mut self, stmt: NodeId) -> Result<(), String> {
@@ -157,56 +175,73 @@ impl FnCodegen<'_> {
         }
     }
 
-    fn lower_expr(&mut self, expr: NodeId) -> Result<ValueId, String> {
+    /// Lower an expression subtree in one post-order pass: operands precede their
+    /// operator, so each node's value is ready when its parent is reached. The
+    /// AST is a tree, so the subtree is a contiguous index range `[base, root]`;
+    /// values are pushed in index order, letting children be read by offset
+    /// without hashing.
+    fn lower_expr(&mut self, root: NodeId) -> Result<ValueId, String> {
         let ast = self.ast;
         let i32_ty = IntegerType::new(self.context, 32);
-        match ast.get_node(expr) {
-            AstKind::Int => {
-                let AstLeaf::Int(n) = ast.get_leaf_data(expr).unwrap() else {
-                    unreachable!("int node carries an int payload");
-                };
-                let op = self
-                    .builder
-                    .insert(b::constant(self.context, *n, i32_ty).build());
-                Ok(op.result())
+        self.values.clear();
+        let mut base = root.index();
+
+        for node in ast.postorder_from(root) {
+            if self.values.is_empty() {
+                base = node.index();
             }
-            AstKind::Var => {
-                let AstLeaf::Var(name) = ast.get_leaf_data(expr).unwrap() else {
-                    unreachable!("var node carries a var payload");
-                };
-                let slot = *self
-                    .locals
-                    .get(name)
-                    .ok_or_else(|| format!("use of unknown variable '{name}'"))?;
-                let op = self
-                    .builder
-                    .insert(p::load(self.context, slot.ptr, slot.elem).build());
-                Ok(op.result())
-            }
-            kind @ (AstKind::Add | AstKind::Sub | AstKind::Mul) => {
-                let kind = *kind;
-                let mut children = ast.children(expr);
-                let lhs = children.next().unwrap();
-                let rhs = children.next().unwrap();
-                let l = self.lower_expr(lhs)?;
-                let r = self.lower_expr(rhs)?;
-                let result = match kind {
-                    AstKind::Add => self
-                        .builder
-                        .insert(b::addi(self.context, l, r, i32_ty).build())
-                        .result(),
-                    AstKind::Sub => self
-                        .builder
-                        .insert(b::subi(self.context, l, r, i32_ty).build())
-                        .result(),
-                    _ => self
-                        .builder
-                        .insert(b::muli(self.context, l, r, i32_ty).build())
-                        .result(),
-                };
-                Ok(result)
-            }
-            kind => unreachable!("not an expression: {kind:?}"),
+            debug_assert_eq!(
+                node.index(),
+                base + self.values.len(),
+                "subtree not contiguous"
+            );
+
+            let value = match ast.get_node(node) {
+                AstKind::Int => {
+                    let AstLeaf::Int(n) = ast.get_leaf_data(node).unwrap() else {
+                        unreachable!("int node carries an int payload");
+                    };
+                    self.builder
+                        .insert(b::constant(self.context, *n, i32_ty).build())
+                        .result()
+                }
+                AstKind::Var => {
+                    let AstLeaf::Var(name) = ast.get_leaf_data(node).unwrap() else {
+                        unreachable!("var node carries a var payload");
+                    };
+                    let slot = *self
+                        .locals
+                        .get(name)
+                        .ok_or_else(|| format!("use of unknown variable '{name}'"))?;
+                    self.builder
+                        .insert(p::load(self.context, slot.ptr, slot.elem).build())
+                        .result()
+                }
+                kind @ (AstKind::Add | AstKind::Sub | AstKind::Mul) => {
+                    let kind = *kind;
+                    let mut children = ast.children(node);
+                    let l = self.values[children.next().unwrap().index() - base];
+                    let r = self.values[children.next().unwrap().index() - base];
+                    match kind {
+                        AstKind::Add => self
+                            .builder
+                            .insert(b::addi(self.context, l, r, i32_ty).build())
+                            .result(),
+                        AstKind::Sub => self
+                            .builder
+                            .insert(b::subi(self.context, l, r, i32_ty).build())
+                            .result(),
+                        _ => self
+                            .builder
+                            .insert(b::muli(self.context, l, r, i32_ty).build())
+                            .result(),
+                    }
+                }
+                kind => unreachable!("not an expression: {kind:?}"),
+            };
+            self.values.push(value);
         }
+
+        Ok(*self.values.last().unwrap())
     }
 }

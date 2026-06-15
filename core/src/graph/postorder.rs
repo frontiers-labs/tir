@@ -70,6 +70,32 @@ impl<N, L> PostOrderDag<N, L> {
         }
     }
 
+    /// Post-order traversal of the subtree reachable from `root`, like
+    /// [`Dag::postorder`] but starting the scan at `root`'s lowest-indexed
+    /// descendant instead of node 0. For a tree (every node has one parent) a
+    /// subtree occupies a contiguous index range, so this visits exactly the
+    /// subtree — `O(subtree)` rather than `O(root index)`.
+    pub fn postorder_from(&self, root: NodeId) -> PostOrderDagIter<'_, N, L> {
+        PostOrderDagIter {
+            dag: self,
+            root,
+            next_index: self.first_descendant(root),
+            end_index: root.index(),
+        }
+    }
+
+    /// The smallest index reachable from `root`. `root` always marks itself, so
+    /// the result never exceeds `root.index()`.
+    fn first_descendant(&self, root: NodeId) -> usize {
+        let bits = &self.descendants[root.index()];
+        for (word, &mask) in bits.iter().enumerate() {
+            if mask != 0 {
+                return word * 64 + mask.trailing_zeros() as usize;
+            }
+        }
+        root.index()
+    }
+
     fn nth_preorder(&self, node: NodeId, remaining: &mut usize) -> Option<NodeId> {
         if *remaining == 0 {
             return Some(node);
@@ -230,5 +256,56 @@ impl<N, L> MutDag for PostOrderDag<N, L> {
 
     fn set_actual_type(&mut self, n: NodeId, ty: TypeId) {
         self.actual_types.insert(n, ty);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::Dag;
+
+    /// Build the tree `(0+1) + (3+4)` laid out in post order: leaves first, then
+    /// each `Add`, then the root. Returns the dag and its root.
+    fn sample() -> (PostOrderDag<&'static str, ()>, NodeId) {
+        let mut dag = PostOrderDag::new();
+        let a = dag.add_node("0");
+        let b = dag.add_node("1");
+        let left = dag.add_node("+");
+        dag.add_edge(left, a);
+        dag.add_edge(left, b);
+        let c = dag.add_node("3");
+        let d = dag.add_node("4");
+        let right = dag.add_node("+");
+        dag.add_edge(right, c);
+        dag.add_edge(right, d);
+        let root = dag.add_node("+");
+        dag.add_edge(root, left);
+        dag.add_edge(root, right);
+        (dag, root)
+    }
+
+    #[test]
+    fn postorder_from_matches_global_postorder_at_root() {
+        let (dag, root) = sample();
+        let global: Vec<_> = dag.postorder(root).collect();
+        let from: Vec<_> = dag.postorder_from(root).collect();
+        assert_eq!(global, from);
+        assert_eq!(from.len(), dag.len());
+    }
+
+    #[test]
+    fn postorder_from_visits_only_the_subtree() {
+        let (dag, _root) = sample();
+        // The right `Add` is node 5; its subtree is nodes 3, 4, 5.
+        let right = NodeId::from_index(5);
+        let nodes: Vec<_> = dag.postorder_from(right).collect();
+        assert_eq!(
+            nodes,
+            vec![
+                NodeId::from_index(3),
+                NodeId::from_index(4),
+                NodeId::from_index(5),
+            ]
+        );
     }
 }
