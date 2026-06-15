@@ -25,7 +25,7 @@ fn gen_source(funcs: usize, stmts: usize) -> String {
         for s in 1..stmts {
             write!(src, "int t{s} = t{} * a - b + t{} * c; ", s - 1, s / 2).unwrap();
         }
-        write!(src, "return t{} + t0 * a; }}\n", stmts - 1).unwrap();
+        writeln!(src, "return t{} + t0 * a; }}", stmts - 1).unwrap();
     }
     src
 }
