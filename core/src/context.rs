@@ -76,21 +76,37 @@ pub trait GetFromContext {
     fn get_from_context(&self, context: &Context) -> Self::Item;
 }
 
+/// Read an entry from a slab arena indexed by a dense id, or `None` if the id was
+/// never inserted or has been removed.
+fn slab_get<T>(slab: &[Option<T>], idx: usize) -> Option<&T> {
+    slab.get(idx).and_then(Option::as_ref)
+}
+
+/// Insert into a slab arena at a dense id, growing the backing vector as needed.
+/// Ids come from per-context monotonic counters, so the vector stays dense.
+fn slab_put<T>(slab: &mut Vec<Option<T>>, idx: usize, val: T) {
+    if idx >= slab.len() {
+        slab.resize_with(idx + 1, || None);
+    }
+    slab[idx] = Some(val);
+}
+
 struct ContextInstance {
     // None for root context itself, reference to a root context if this is a forked Region.
     root_context: Option<Context>,
-    operations: HashMap<OpId, Arc<OpInstance>>,
+    // Arenas are slabs indexed by the dense, monotonic id counters below; see `slab_get`.
+    operations: Vec<Option<Arc<OpInstance>>>,
     last_op_id: AtomicU32,
-    values: HashMap<ValueId, Arc<Value>>,
+    values: Vec<Option<Arc<Value>>>,
     last_value_id: AtomicU32,
-    regions: HashMap<RegionId, Arc<Region>>,
+    regions: Vec<Option<Arc<Region>>>,
     last_region_id: AtomicU32,
-    blocks: HashMap<BlockId, Arc<Block>>,
+    blocks: Vec<Option<Arc<Block>>>,
     last_block_id: AtomicU32,
     /// Reverse index from an operation to the block that holds it, maintained by
     /// `Block`'s membership mutators. Lets `parent_block` answer in O(1) instead of
     /// scanning every block's operation list.
-    op_parent: HashMap<OpId, BlockId>,
+    op_parent: Vec<Option<BlockId>>,
     dialects: HashMap<&'static str, Arc<dyn Dialect>>,
     op_interface_converters:
         HashMap<(&'static str, &'static str, std::any::TypeId), OpInterfaceConverter>,
@@ -102,15 +118,15 @@ impl Context {
     pub fn new() -> Self {
         Context(Arc::new(RwLock::new(ContextInstance {
             root_context: None,
-            operations: HashMap::new(),
+            operations: Vec::new(),
             last_op_id: AtomicU32::new(0),
-            values: HashMap::new(),
+            values: Vec::new(),
             last_value_id: AtomicU32::new(0),
-            regions: HashMap::new(),
+            regions: Vec::new(),
             last_region_id: AtomicU32::new(0),
-            blocks: HashMap::new(),
+            blocks: Vec::new(),
             last_block_id: AtomicU32::new(0),
-            op_parent: HashMap::new(),
+            op_parent: Vec::new(),
             dialects: HashMap::new(),
             op_interface_converters: HashMap::new(),
             type_cache: vec![],
@@ -174,9 +190,10 @@ impl Context {
 
         // Results are created before op id assignment in builders; patch their def-site now.
         for result_id in &instance.results {
-            if let Some(value) = inner.values.get(result_id).cloned() {
-                inner.values.insert(
-                    *result_id,
+            if let Some(value) = slab_get(&inner.values, result_id.index()).cloned() {
+                slab_put(
+                    &mut inner.values,
+                    result_id.index(),
                     Arc::new((*value).clone().with_defining_op(op_id)),
                 );
             }
@@ -185,10 +202,10 @@ impl Context {
         // Register this op as a use of each operand value, so `Value::uses` is a live
         // def-use chain. Detached again when the op is erased or replaced.
         for (index, operand) in instance.operands.iter().enumerate() {
-            if let Some(value) = inner.values.get(operand).cloned() {
+            if let Some(value) = slab_get(&inner.values, operand.index()).cloned() {
                 let mut value = (*value).clone();
                 value.add_use(op_id, crate::UseSite::Operand(index));
-                inner.values.insert(*operand, Arc::new(value));
+                slab_put(&mut inner.values, operand.index(), Arc::new(value));
             }
         }
 
@@ -206,7 +223,7 @@ impl Context {
                 continue;
             };
             let value_id = ValueId::from_number(*id);
-            let Some(value) = inner.values.get(&value_id).cloned() else {
+            let Some(value) = slab_get(&inner.values, value_id.index()).cloned() else {
                 continue;
             };
             let mut value = (*value).clone();
@@ -216,22 +233,24 @@ impl Context {
             if matches!(role, AttributeRole::Def | AttributeRole::ReadWrite) {
                 value = value.with_defining_op(op_id);
             }
-            inner.values.insert(value_id, Arc::new(value));
+            slab_put(&mut inner.values, value_id.index(), Arc::new(value));
         }
 
         for r in &instance.regions {
-            inner.regions.get(r).unwrap().set_parent_op(op_id);
+            slab_get(&inner.regions, r.index())
+                .unwrap()
+                .set_parent_op(op_id);
         }
 
         let instance = Arc::new(instance);
 
-        inner.operations.insert(op_id, instance.clone());
+        slab_put(&mut inner.operations, op_id.index(), instance.clone());
 
         instance
     }
 
     pub fn has_operation(&self, id: OpId) -> bool {
-        self.0.read().operations.contains_key(&id)
+        slab_get(&self.0.read().operations, id.index()).is_some()
     }
 
     /// Replace an operation's attributes in place, keeping its id, position, and
@@ -240,10 +259,10 @@ impl Context {
     /// does not update `Value::uses`, since physical registers are not SSA values.
     pub fn set_op_attributes(&self, id: OpId, attributes: Vec<crate::attributes::NamedAttribute>) {
         let mut inner = self.0.write();
-        if let Some(existing) = inner.operations.get(&id).cloned() {
+        if let Some(existing) = slab_get(&inner.operations, id.index()).cloned() {
             let mut updated = (*existing).clone();
             updated.attributes = attributes;
-            inner.operations.insert(id, Arc::new(updated));
+            slab_put(&mut inner.operations, id.index(), Arc::new(updated));
         }
     }
 
@@ -253,7 +272,10 @@ impl Context {
     /// references to any whole-program scan). Existing `Arc<OpInstance>` handles
     /// (e.g. inside an `OperationRef`) keep the instance alive after removal.
     pub(crate) fn remove_operation(&self, id: OpId) {
-        self.0.write().operations.remove(&id);
+        let mut inner = self.0.write();
+        if let Some(slot) = inner.operations.get_mut(id.index()) {
+            *slot = None;
+        }
     }
 
     pub fn create_value(&self, ty: TypeId, defining_op: Option<OpId>) -> Value {
@@ -266,23 +288,21 @@ impl Context {
         );
 
         let value = Value::new(value_id, ty, defining_op);
-        inner.values.insert(value_id, Arc::new(value.clone()));
+        slab_put(&mut inner.values, value_id.index(), Arc::new(value.clone()));
 
         value
     }
 
     pub fn get_value(&self, id: ValueId) -> Arc<Value> {
         let inner = self.0.read();
-        inner.values.get(&id).unwrap().clone()
+        slab_get(&inner.values, id.index()).unwrap().clone()
     }
 
     /// The operands that reference `id`, as `(op, operand-index)` pairs. See
     /// [`Value::uses`] for what is and isn't tracked.
     pub fn value_uses(&self, id: ValueId) -> Vec<crate::Use> {
         let inner = self.0.read();
-        inner
-            .values
-            .get(&id)
+        slab_get(&inner.values, id.index())
             .map(|v| v.uses().to_vec())
             .unwrap_or_default()
     }
@@ -290,7 +310,7 @@ impl Context {
     /// Whether any operand references `id`.
     pub fn is_value_used(&self, id: ValueId) -> bool {
         let inner = self.0.read();
-        inner.values.get(&id).is_some_and(|v| v.is_used())
+        slab_get(&inner.values, id.index()).is_some_and(|v| v.is_used())
     }
 
     /// Drop every use contributed by `op` from the values it referenced. Called when
@@ -311,10 +331,10 @@ impl Context {
 
         let mut inner = self.0.write();
         for value_id in touched {
-            if let Some(value) = inner.values.get(&value_id).cloned() {
+            if let Some(value) = slab_get(&inner.values, value_id.index()).cloned() {
                 let mut value = (*value).clone();
                 value.remove_uses_of(op.id);
-                inner.values.insert(value_id, Arc::new(value));
+                slab_put(&mut inner.values, value_id.index(), Arc::new(value));
             }
         }
     }
@@ -331,9 +351,7 @@ impl Context {
         }
 
         let mut inner = self.0.write();
-        let uses = inner
-            .values
-            .get(&old)
+        let uses = slab_get(&inner.values, old.index())
             .map(|v| v.uses().to_vec())
             .unwrap_or_default();
 
@@ -342,7 +360,7 @@ impl Context {
                 continue;
             };
 
-            let Some(op) = inner.operations.get(&use_site.op()).cloned() else {
+            let Some(op) = slab_get(&inner.operations, use_site.op().index()).cloned() else {
                 continue;
             };
             if op.operands.get(index).copied() != Some(old) {
@@ -351,32 +369,35 @@ impl Context {
 
             let mut new_instance = (*op).clone();
             new_instance.operands[index] = new;
-            inner
-                .operations
-                .insert(use_site.op(), Arc::new(new_instance));
+            slab_put(
+                &mut inner.operations,
+                use_site.op().index(),
+                Arc::new(new_instance),
+            );
 
-            if let Some(old_value) = inner.values.get(&old).cloned() {
+            if let Some(old_value) = slab_get(&inner.values, old.index()).cloned() {
                 let mut old_value = (*old_value).clone();
                 old_value.remove_use(use_site.op(), use_site.site());
-                inner.values.insert(old, Arc::new(old_value));
+                slab_put(&mut inner.values, old.index(), Arc::new(old_value));
             }
-            if let Some(new_value) = inner.values.get(&new).cloned() {
+            if let Some(new_value) = slab_get(&inner.values, new.index()).cloned() {
                 let mut new_value = (*new_value).clone();
                 new_value.add_use(use_site.op(), use_site.site());
-                inner.values.insert(new, Arc::new(new_value));
+                slab_put(&mut inner.values, new.index(), Arc::new(new_value));
             }
         }
     }
 
     pub fn has_value(&self, id: ValueId) -> bool {
-        self.0.read().values.contains_key(&id)
+        slab_get(&self.0.read().values, id.index()).is_some()
     }
 
     pub fn is_block_argument(&self, id: ValueId) -> bool {
         let inner = self.0.read();
         inner
             .blocks
-            .values()
+            .iter()
+            .flatten()
             .any(|block| block.arguments().iter().any(|arg| arg.id() == id))
     }
 
@@ -390,7 +411,7 @@ impl Context {
         );
 
         let region = Arc::new(Region::new(region_id));
-        inner.regions.insert(region_id, region.clone());
+        slab_put(&mut inner.regions, region_id.index(), region.clone());
 
         region
     }
@@ -406,7 +427,7 @@ impl Context {
         );
 
         let block = Arc::new(Block::new(block_id, arguments, context));
-        inner.blocks.insert(block_id, block.clone());
+        slab_put(&mut inner.blocks, block_id.index(), block.clone());
 
         block
     }
@@ -415,33 +436,36 @@ impl Context {
     /// root op, or one detached by a rewrite). Maintained by `Block`'s membership
     /// mutators; see [`ContextInstance::op_parent`].
     pub fn parent_block(&self, op: OpId) -> Option<BlockId> {
-        self.0.read().op_parent.get(&op).copied()
+        slab_get(&self.0.read().op_parent, op.index()).copied()
     }
 
     pub(crate) fn set_op_parent(&self, op: OpId, block: BlockId) {
-        self.0.write().op_parent.insert(op, block);
+        slab_put(&mut self.0.write().op_parent, op.index(), block);
     }
 
     pub(crate) fn clear_op_parent(&self, op: OpId) {
-        self.0.write().op_parent.remove(&op);
+        let mut inner = self.0.write();
+        if let Some(slot) = inner.op_parent.get_mut(op.index()) {
+            *slot = None;
+        }
     }
 
     pub fn get_block(&self, id: BlockId) -> Arc<Block> {
         let inner = self.0.read();
 
-        inner.blocks.get(&id).unwrap().clone()
+        slab_get(&inner.blocks, id.index()).unwrap().clone()
     }
 
     pub fn get_region(&self, id: RegionId) -> Arc<Region> {
         let inner = self.0.read();
 
-        inner.regions.get(&id).unwrap().clone()
+        slab_get(&inner.regions, id.index()).unwrap().clone()
     }
 
     pub fn get_op(&self, id: OpId) -> Arc<OpInstance> {
         let inner = self.0.read();
 
-        inner.operations.get(&id).unwrap().clone()
+        slab_get(&inner.operations, id.index()).unwrap().clone()
     }
 
     pub fn register_op_interface<I: ?Sized + 'static>(

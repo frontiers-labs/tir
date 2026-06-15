@@ -69,6 +69,10 @@ impl RegionId {
     pub(crate) fn new(id: u32) -> Self {
         Self(id)
     }
+
+    pub(crate) fn index(self) -> usize {
+        self.0 as usize
+    }
 }
 
 impl GetFromContext for RegionId {

@@ -16,6 +16,10 @@ impl ValueId {
     pub fn from_number(n: u32) -> Self {
         Self(n)
     }
+
+    pub(crate) fn index(self) -> usize {
+        self.0 as usize
+    }
 }
 
 #[derive(Debug, Clone)]
