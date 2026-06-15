@@ -1,13 +1,18 @@
 #[cfg(test)]
 mod tests {
     use crate::codegen::codegen;
+    use crate::diagnostics::{Span, intern_file};
     use crate::parser::parse;
     use logos::Logos;
 
     use crate::lexer::Token;
 
     fn compile(src: &str) -> String {
-        let tokens: Vec<Token> = Token::lexer(src).map(|r| r.unwrap()).collect();
+        let file = intern_file("<test>", src);
+        let tokens: Vec<_> = Token::lexer(src)
+            .spanned()
+            .map(|(r, span)| (r.unwrap(), Span::new(file, span.start)))
+            .collect();
         let unit = parse(&tokens).expect("parse");
         let context = tir::Context::with_default_dialects();
         let module = codegen(&context, &unit).expect("codegen");

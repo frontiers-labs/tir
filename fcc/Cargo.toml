@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 logos = "0.16.1"
 chumsky = "0.10.1"
+ariadne = { workspace = true }
 tir = { path = "../core" }
 tir-be-common.workspace = true
 tir-targets.workspace = true

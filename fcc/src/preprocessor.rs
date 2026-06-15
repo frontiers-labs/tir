@@ -1,10 +1,12 @@
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use logos::{Lexer, Logos};
 
+use crate::diagnostics::{
+    Diagnostic, FileId, PreprocError, PreprocWarning, Span, file_source, intern_file,
+};
 use crate::lexer::Token;
 
 // ---------------------------------------------------------------------------
@@ -442,9 +444,18 @@ fn is_skipping(stack: &[CondState]) -> bool {
 /// only `Rc<str>` + `usize` offset and reconstructing a short-lived lexer on
 /// each call to `next()`.  Lexer initialisation is O(1) (pointer + state
 /// setup), so this is negligible.
+/// One source being lexed. Included files push new frames; the bottom frame is
+/// the primary translation unit. Each frame knows its interned [`FileId`], so a
+/// token's span points into the file it actually came from.
+struct Frame {
+    source: Arc<str>,
+    offset: usize,
+    file: FileId,
+}
+
 pub struct TokenStream {
-    /// Stack of (owned source, current byte offset).  Top = active frame.
-    source_stack: Vec<(Rc<str>, usize)>,
+    /// Stack of source frames.  Top = active frame.
+    frames: Vec<Frame>,
     /// Maps macro names to their single-token replacement value.
     ///
     /// `Token::Hash` is used as a sentinel meaning "defined but no replacement
@@ -453,6 +464,7 @@ pub struct TokenStream {
     defines: HashMap<String, Token>,
     include_paths: Vec<PathBuf>,
     cond_stack: Vec<CondState>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl TokenStream {
@@ -466,12 +478,22 @@ impl TokenStream {
             Some(i) => source_len - remainder.len() + i + 1,
             None => source_len,
         };
-        if let Some(frame) = self.source_stack.last_mut() {
-            frame.1 = new_offset;
+        if let Some(frame) = self.frames.last_mut() {
+            frame.offset = new_offset;
         }
     }
 
-    fn process_directive(&mut self, source: &str, mut pp: Lexer<'_, PreprocToken>) {
+    /// The currently active file, for spanning directives.
+    fn current_file(&self) -> FileId {
+        self.frames.last().unwrap().file
+    }
+
+    fn process_directive(
+        &mut self,
+        source: &str,
+        directive_start: usize,
+        mut pp: Lexer<'_, PreprocToken>,
+    ) {
         let skipping = is_skipping(&self.cond_stack);
 
         match pp.next() {
@@ -523,7 +545,12 @@ impl TokenStream {
                     .iter()
                     .find_map(|dir| std::fs::read_to_string(dir.join(&path)).ok());
                 if let Some(content) = content {
-                    self.source_stack.push((Rc::from(content.as_str()), 0));
+                    let file = intern_file(&path, &content);
+                    self.frames.push(Frame {
+                        source: file_source(file),
+                        offset: 0,
+                        file,
+                    });
                 }
             }
 
@@ -652,68 +679,89 @@ impl TokenStream {
                 self.skip_line(source.len(), pp.remainder());
             }
 
+            Some(Ok(directive @ (PreprocToken::Error | PreprocToken::Warning))) if !skipping => {
+                let remainder = pp.remainder();
+                let line_end = remainder.find('\n').unwrap_or(remainder.len());
+                let text = remainder[..line_end].trim().to_string();
+                let span = Span::new(self.current_file(), directive_start);
+                let diag: Diagnostic = if directive == PreprocToken::Error {
+                    PreprocError::new(span, text).into()
+                } else {
+                    PreprocWarning::new(span, text).into()
+                };
+                self.diagnostics.push(diag);
+                self.skip_line(source.len(), remainder);
+            }
+
             _ => self.skip_line(source.len(), pp.remainder()),
         }
     }
 }
 
 impl Iterator for TokenStream {
-    type Item = Token;
+    type Item = (Token, Span);
 
-    fn next(&mut self) -> Option<Token> {
+    fn next(&mut self) -> Option<(Token, Span)> {
         loop {
             // Drop exhausted frames.
-            while self.source_stack.last().is_some_and(|(s, o)| *o >= s.len()) {
-                self.source_stack.pop();
+            while self
+                .frames
+                .last()
+                .is_some_and(|f| f.offset >= f.source.len())
+            {
+                self.frames.pop();
             }
 
-            // Clone Rc (cheap) + copy offset so we release the shared borrow
-            // on source_stack before taking &mut self below.
-            let (source_rc, offset) = {
-                let top = self.source_stack.last()?;
-                (Rc::clone(&top.0), top.1)
+            // Clone Arc (cheap) + copy offset/file so we release the shared
+            // borrow on frames before taking &mut self below.
+            let (source_rc, offset, file) = {
+                let top = self.frames.last()?;
+                (Arc::clone(&top.source), top.offset, top.file)
             };
+
+            // Every emitted token is spanned at its start position in its file.
+            let span = Span::new(file, offset);
 
             let mut lexer = Token::lexer(&source_rc[offset..]);
             let tok = lexer.next();
 
             match tok {
                 None => {
-                    self.source_stack.pop();
+                    self.frames.pop();
                 }
 
                 Some(Err(_)) => {
                     // Unrecognised character — skip it.
                     let new = source_rc.len() - lexer.remainder().len();
-                    self.source_stack.last_mut().unwrap().1 = new;
+                    self.frames.last_mut().unwrap().offset = new;
                 }
 
                 Some(Ok(Token::Hash)) => {
                     // morph hands the same source position to the directive lexer.
                     let pp = lexer.morph::<PreprocToken>();
-                    self.process_directive(&source_rc, pp);
+                    self.process_directive(&source_rc, offset, pp);
                     // process_directive always calls skip_line, which sets the offset.
                 }
 
                 Some(Ok(Token::Identifier(name))) => {
                     let new = source_rc.len() - lexer.remainder().len();
-                    self.source_stack.last_mut().unwrap().1 = new;
+                    self.frames.last_mut().unwrap().offset = new;
                     if !is_skipping(&self.cond_stack) {
                         match self.defines.get(&name).cloned() {
                             Some(Token::Hash) => {
                                 // Empty define — expands to nothing; continue.
                             }
-                            Some(tok) => return Some(tok),
-                            None => return Some(Token::Identifier(name)),
+                            Some(tok) => return Some((tok, span)),
+                            None => return Some((Token::Identifier(name), span)),
                         }
                     }
                 }
 
                 Some(Ok(c_tok)) => {
                     let new = source_rc.len() - lexer.remainder().len();
-                    self.source_stack.last_mut().unwrap().1 = new;
+                    self.frames.last_mut().unwrap().offset = new;
                     if !is_skipping(&self.cond_stack) {
-                        return Some(c_tok);
+                        return Some((c_tok, span));
                     }
                 }
             }
@@ -725,22 +773,72 @@ impl Iterator for TokenStream {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Preprocess C source code and return a lazy iterator over C tokens.
+impl TokenStream {
+    /// Drain the stream into the full token list. Diagnostics raised during
+    /// preprocessing (`#error`, `#warning`) are available via [`Self::diagnostics`]
+    /// afterwards.
+    pub fn collect_tokens(&mut self) -> Vec<(Token, Span)> {
+        self.by_ref().collect()
+    }
+
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+}
+
+/// Build a lazy preprocessed token stream over a source file.
 ///
-/// * `reader`        — source to preprocess
+/// * `name`          — file name shown in diagnostics (e.g. a path or `<stdin>`)
+/// * `source`        — primary translation unit text
 /// * `defines`       — predefined macros (name → single-token replacement)
 /// * `include_paths` — directories searched for `#include` files
 pub fn preprocessed(
-    mut reader: impl Read,
+    name: &str,
+    source: &str,
     defines: HashMap<String, Token>,
     include_paths: &[PathBuf],
-) -> impl Iterator<Item = Token> {
-    let mut source = String::new();
-    reader.read_to_string(&mut source).unwrap_or_default();
+) -> TokenStream {
+    let file = intern_file(name, source);
     TokenStream {
-        source_stack: vec![(Rc::from(source.as_str()), 0)],
+        frames: vec![Frame {
+            source: file_source(file),
+            offset: 0,
+            file,
+        }],
         defines,
         include_paths: include_paths.to_vec(),
         cond_stack: Vec::new(),
+        diagnostics: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preprocessed;
+    use crate::diagnostics::Code;
+    use std::collections::HashMap;
+
+    fn diagnostics(source: &str) -> Vec<Code> {
+        let mut stream = preprocessed("<pp-test>", source, HashMap::new(), &[]);
+        stream.collect_tokens();
+        stream.diagnostics().iter().map(|d| d.code()).collect()
+    }
+
+    #[test]
+    fn error_directive_raises_an_error() {
+        let codes = diagnostics("#error broken\nint main(void){return 0;}\n");
+        assert_eq!(codes, vec![Code::PreprocError]);
+    }
+
+    #[test]
+    fn warning_directive_raises_a_warning() {
+        let codes = diagnostics("#warning heads up\nint main(void){return 0;}\n");
+        assert_eq!(codes, vec![Code::PreprocWarning]);
+    }
+
+    #[test]
+    fn skipped_error_directive_is_silent() {
+        let codes = diagnostics("#if 0\n#error never\n#endif\n");
+        assert!(codes.is_empty());
     }
 }

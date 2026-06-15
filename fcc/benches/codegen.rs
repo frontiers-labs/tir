@@ -11,6 +11,7 @@ use logos::Logos;
 
 use fcc::ast::Ast;
 use fcc::codegen::codegen;
+use fcc::diagnostics::{Span, intern_file};
 use fcc::lexer::Token;
 use fcc::parser::parse;
 use tir::Context;
@@ -58,7 +59,11 @@ fn gen_expr_heavy(funcs: usize, depth: usize) -> String {
 }
 
 fn parse_src(src: &str) -> Ast {
-    let tokens: Vec<Token> = Token::lexer(src).map(|r| r.unwrap()).collect();
+    let file = intern_file("<bench>", src);
+    let tokens: Vec<_> = Token::lexer(src)
+        .spanned()
+        .map(|(r, span)| (r.unwrap(), Span::new(file, span.start)))
+        .collect();
     parse(&tokens).expect("parse")
 }
 

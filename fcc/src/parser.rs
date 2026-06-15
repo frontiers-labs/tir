@@ -19,6 +19,7 @@ use chumsky::prelude::*;
 use tir::graph::{MutDag, NodeId};
 
 use crate::ast::*;
+use crate::diagnostics::{Diagnostic, UnexpectedEof, UnexpectedToken};
 use crate::lexer::Token;
 
 /// Index-based span over the token slice (we parse already-lexed tokens, so
@@ -26,14 +27,18 @@ use crate::lexer::Token;
 type Span = SimpleSpan<usize>;
 type Extra<'src> = extra::Full<Rich<'src, Token, Span>, SimpleState<Ast>, ()>;
 
-/// Parse a token stream into a translation unit. Whitespace tokens are dropped
-/// first; on failure the collected diagnostics are returned as strings.
-pub fn parse(tokens: &[Token]) -> Result<Ast, Vec<String>> {
-    let filtered: Vec<Token> = tokens
-        .iter()
-        .filter(|t| !matches!(t, Token::Whitespace(_)))
-        .cloned()
-        .collect();
+/// Parse a stream of tokens, each paired with its byte [`crate::diagnostics::Span`]
+/// in the source. Whitespace tokens are dropped first; on failure each parser
+/// error is turned into a [`Diagnostic`] whose label points back at the source.
+pub fn parse(tokens: &[(Token, crate::diagnostics::Span)]) -> Result<Ast, Vec<Diagnostic>> {
+    let mut filtered = Vec::with_capacity(tokens.len());
+    let mut byte_spans = Vec::with_capacity(tokens.len());
+    for (tok, span) in tokens {
+        if !matches!(tok, Token::Whitespace(_)) {
+            filtered.push(tok.clone());
+            byte_spans.push(*span);
+        }
+    }
 
     let mut state = SimpleState(Ast::new());
     let (out, errors) = translation_unit()
@@ -42,7 +47,35 @@ pub fn parse(tokens: &[Token]) -> Result<Ast, Vec<String>> {
 
     match out {
         Some(_) if errors.is_empty() => Ok(state.0),
-        _ => Err(errors.into_iter().map(|e| e.to_string()).collect()),
+        _ => Err(errors
+            .into_iter()
+            .map(|e| rich_to_diagnostic(&e, &byte_spans))
+            .collect()),
+    }
+}
+
+/// Convert a chumsky [`Rich`] error (spanned over token indices) into a
+/// [`Diagnostic`] spanned at the offending token's source position. An error
+/// past the final token (`found` is `None`) is reported at the last token.
+fn rich_to_diagnostic(
+    err: &Rich<'_, Token, Span>,
+    byte_spans: &[crate::diagnostics::Span],
+) -> Diagnostic {
+    let index = err.span().into_range().start;
+    let span = byte_spans
+        .get(index)
+        .or_else(|| byte_spans.last())
+        .copied()
+        .unwrap_or(crate::diagnostics::Span::new(
+            crate::diagnostics::FileId::default(),
+            0,
+        ));
+    let reason = err.reason().to_string();
+
+    if err.found().is_none() {
+        UnexpectedEof::new(span, reason).into()
+    } else {
+        UnexpectedToken::new(span, reason).into()
     }
 }
 
@@ -458,4 +491,46 @@ where
             }
             id
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use logos::Logos;
+
+    use super::parse;
+    use crate::diagnostics::{Code, Span as ByteSpan, intern_file};
+    use crate::lexer::Token;
+
+    fn lex(src: &str) -> Vec<(Token, ByteSpan)> {
+        let file = intern_file("<parser-test>", src);
+        Token::lexer(src)
+            .spanned()
+            .map(|(r, span)| (r.unwrap(), ByteSpan::new(file, span.start)))
+            .collect()
+    }
+
+    #[test]
+    fn accepts_a_well_formed_function() {
+        assert!(parse(&lex("int main(void) { return 0; }")).is_ok());
+    }
+
+    fn errors(src: &str) -> Vec<Code> {
+        match parse(&lex(src)) {
+            Ok(_) => panic!("expected parse to fail for {src:?}"),
+            Err(diags) => diags.iter().map(|d| d.code()).collect(),
+        }
+    }
+
+    #[test]
+    fn missing_semicolon_is_unexpected_token() {
+        assert_eq!(
+            errors("int main(void) { return 0 }"),
+            vec![Code::UnexpectedToken]
+        );
+    }
+
+    #[test]
+    fn missing_closing_brace_is_unexpected_eof() {
+        assert!(errors("int main(void) { return 0;").contains(&Code::UnexpectedEof));
+    }
 }
