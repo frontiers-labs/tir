@@ -151,6 +151,17 @@ pub extern "C" fn tir_last_error() -> *const c_char {
     })
 }
 
+/// The schema of every registered operation as a JSON array (dialect, name,
+/// operands, results, attributes, interfaces). Enables generating typed
+/// language bindings without per-op code. Free with [`tir_string_free`].
+#[unsafe(no_mangle)]
+pub extern "C" fn tir_schema_json() -> *mut c_char {
+    guard(ptr::null_mut(), || {
+        clear_error();
+        into_cstring(tir::schema_json())
+    })
+}
+
 /// Free a string returned by the TIR FFI. Null is ignored.
 ///
 /// # Safety

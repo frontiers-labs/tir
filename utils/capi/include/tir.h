@@ -52,6 +52,13 @@ void tir_context_destroy(TirContext *ctx);
 const char *tir_last_error(void);
 
 /**
+ * The schema of every registered operation as a JSON array (dialect, name,
+ * operands, results, attributes, interfaces). Enables generating typed
+ * language bindings without per-op code. Free with [`tir_string_free`].
+ */
+char *tir_schema_json(void);
+
+/**
  * Free a string returned by the TIR FFI. Null is ignored.
  *
  * # Safety

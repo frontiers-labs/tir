@@ -613,8 +613,41 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         }
     };
 
+    let operand_schema_entries = operands.iter().map(|o| {
+        let (n, t, v) = (&o.name, &o.ty, o.variadic);
+        quote! { tir::FieldSchema { name: #n, ty: #t, variadic: #v } }
+    });
+    let result_schema_entries = results.iter().map(|r| {
+        let (n, t, v) = (&r.name, &r.ty, r.variadic);
+        quote! { tir::FieldSchema { name: #n, ty: #t, variadic: #v } }
+    });
+    let attr_schema_entries = attributes.iter().map(|a| {
+        let (n, t) = (&a.name, &a.ty);
+        quote! { tir::AttrSchema { name: #n, ty: #t } }
+    });
+    let interface_schema_entries = interfaces
+        .iter()
+        .map(|p| p.segments.last().unwrap().ident.to_string());
+
+    let schema_registration = quote! {
+        const _: () = {
+            #[tir::linkme::distributed_slice(tir::OP_SCHEMAS)]
+            #[linkme(crate = tir::linkme)]
+            static __TIR_OP_SCHEMA: tir::OpSchema = tir::OpSchema {
+                dialect: #dialect,
+                name: #name,
+                operands: &[#(#operand_schema_entries),*],
+                results: &[#(#result_schema_entries),*],
+                attributes: &[#(#attr_schema_entries),*],
+                interfaces: &[#(#interface_schema_entries),*],
+            };
+        };
+    };
+
     quote! {
         pub struct #struct_name(std::sync::Arc<tir::OpInstance>);
+
+        #schema_registration
 
         #(#interface_impls)*
         #verifiable_impl

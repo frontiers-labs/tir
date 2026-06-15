@@ -24,6 +24,7 @@ pub mod passes;
 pub mod pbqp;
 mod region;
 pub mod region_format;
+pub mod schema;
 pub mod sem_expr;
 mod ty;
 pub mod utils;
@@ -56,6 +57,7 @@ pub use pass::{
     parse_pipeline, registered_passes,
 };
 pub use region::{Region, RegionId};
+pub use schema::{AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, schema_json};
 pub use ty::{Any, Type, TypeConstraint, TypeId, TypeParser};
 pub use value::{Use, UseSite, Value, ValueId};
 

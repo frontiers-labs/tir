@@ -12,6 +12,7 @@ tir.workspace = true
 
 [dev-dependencies]
 tir.workspace = true
+serde_json = "1"
 
 [build-dependencies]
 cbindgen = "0.28"
