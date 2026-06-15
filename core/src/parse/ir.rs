@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::block::BlockId;
-use crate::value::{Value, ValueId};
+use crate::value::Value;
 use crate::{Block, Context, Error, Operation, Region};
 
 use super::common::{Cursor, Span};
@@ -74,26 +74,6 @@ pub(crate) fn parse_single_op<'src>(
         Ok(op)
     } else {
         Err((parser.span(), Error::ExpectedOpName))
-    }
-}
-
-/// Maps value names (e.g. "0", "1", "arg") to ValueIds during parsing.
-#[derive(Default, Clone)]
-pub struct ValueScope {
-    values: HashMap<String, ValueId>,
-}
-
-impl ValueScope {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn insert(&mut self, name: String, id: ValueId) {
-        self.values.insert(name, id);
-    }
-
-    pub fn get(&self, name: &str) -> Option<ValueId> {
-        self.values.get(name).copied()
     }
 }
 
