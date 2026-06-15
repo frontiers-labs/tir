@@ -1857,8 +1857,8 @@ fn make_parser(
             quote! {
                 #comma
                 if let Some(ref_name) = parser.parse_value_ref() {
-                    if let Ok(num) = ref_name.parse::<u32>() {
-                        builder = builder.#field(tir::ValueId::from_number(num));
+                    if let Some(id) = parser.resolve_value(ref_name) {
+                        builder = builder.#field(id);
                     }
                 }
             }

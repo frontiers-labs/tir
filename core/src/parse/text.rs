@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::Region;
 use crate::block::BlockId;
 use crate::parse::common::{Cursor, Span};
+use crate::value::ValueId;
 
 pub(crate) struct RegionParseState {
     pub region: Arc<Region>,
@@ -14,6 +15,11 @@ pub struct Parser<'src> {
     src: &'src str,
     position: u32,
     pub(crate) region_parse: Option<RegionParseState>,
+    /// Maps textual SSA names (the text after `%`) to the value ids actually
+    /// allocated for them, so names need not match internal ids and need not be
+    /// contiguous. Stays flat across nested regions: the printer emits globally
+    /// unique value numbers, so a single namespace is enough.
+    value_names: HashMap<String, ValueId>,
 }
 
 impl<'src> Parser<'src> {
@@ -22,7 +28,23 @@ impl<'src> Parser<'src> {
             src,
             position: 0,
             region_parse: None,
+            value_names: HashMap::new(),
         }
+    }
+
+    /// Bind a textual SSA name to the value id allocated for it.
+    pub fn define_value(&mut self, name: &str, id: ValueId) {
+        self.value_names.insert(name.to_string(), id);
+    }
+
+    /// Resolve a textual SSA name to its value id. Names bound during this parse
+    /// win; a purely numeric name otherwise falls back to its literal id, so
+    /// single-op parses can still wire operands to pre-existing values.
+    pub fn resolve_value(&self, name: &str) -> Option<ValueId> {
+        self.value_names
+            .get(name)
+            .copied()
+            .or_else(|| name.parse::<u32>().ok().map(ValueId::from_number))
     }
 
     pub fn peek_char(&self) -> Option<char> {

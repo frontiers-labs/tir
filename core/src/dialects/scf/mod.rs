@@ -220,10 +220,9 @@ fn parse_value_id(
     let value_ref = parser
         .parse_value_ref()
         .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
-    let id = value_ref
-        .parse::<u32>()
-        .map_err(|_| (parser.span(), Error::UnknownValueRef(value_ref.to_string())))?;
-    Ok(ValueId::from_number(id))
+    parser
+        .resolve_value(value_ref)
+        .ok_or_else(|| (parser.span(), Error::UnknownValueRef(value_ref.to_string())))
 }
 
 fn expect_token(

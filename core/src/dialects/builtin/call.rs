@@ -94,11 +94,15 @@ impl IndirectCallOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         use tir::parse::common::Cursor;
-        let callee = parser
+        let callee_ref = parser
             .parse_value_ref()
-            .and_then(|name| name.parse::<u32>().ok())
-            .map(ValueId::from_number)
             .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
+        let callee = parser.resolve_value(callee_ref).ok_or_else(|| {
+            (
+                parser.span(),
+                Error::UnknownValueRef(callee_ref.to_string()),
+            )
+        })?;
         let args = parse_arg_list(parser, context)?;
         let ret_type = parse_ret_type(parser, context)?;
 
@@ -168,11 +172,12 @@ fn parse_arg_list(
         return Ok(args);
     }
     loop {
-        let arg = parser
+        let arg_ref = parser
             .parse_value_ref()
-            .and_then(|name| name.parse::<u32>().ok())
-            .map(ValueId::from_number)
             .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
+        let arg = parser
+            .resolve_value(arg_ref)
+            .ok_or_else(|| (parser.span(), Error::UnknownValueRef(arg_ref.to_string())))?;
         args.push(arg);
         if !parser.parse_token(",") {
             break;

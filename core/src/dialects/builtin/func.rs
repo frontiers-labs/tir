@@ -112,7 +112,7 @@ impl FuncOp {
 
         if !parser.parse_token(")") {
             loop {
-                let _val_name = parser
+                let val_name = parser
                     .parse_value_ref()
                     .ok_or_else(|| (parser.span(), tir::Error::ExpectedValueRef))?
                     .to_string();
@@ -127,6 +127,7 @@ impl FuncOp {
 
                 // Create a value in context with the parsed type
                 let value = context.create_value(ty, None);
+                parser.define_value(&val_name, value.id());
                 block_args.push(value);
 
                 if parser.parse_token(")") {
@@ -214,6 +215,25 @@ mod tests {
 
     // Func roundtrip coverage (single-block, multi-block, block args, void)
     // lives in the FileCheck suite under core/checks/IRRoundtrip.
+
+    #[test]
+    fn parse_non_contiguous_and_named_values() {
+        let context = Context::with_default_dialects();
+        // Names are neither contiguous nor numeric; they must still resolve to the
+        // actual allocated value ids rather than being read as literal ids.
+        let src = r#"func @nc(%100: !i32) -> !i32 {
+    %sum = addi %100, %100 : !i32
+    return %sum
+  }"#;
+        let func = parse_ir::<FuncOp>(&context, src).expect("parse");
+        assert!(func.verify(&context).is_ok());
+
+        let arg_id = func.body().arguments()[0].id();
+        let ops: Vec<_> = func.body().iter(context.clone()).collect();
+        assert_eq!(ops[0].operands, vec![arg_id, arg_id]);
+        let sum_id = ops[0].results[0];
+        assert_eq!(ops[1].operands, vec![sum_id]);
+    }
 
     #[test]
     fn parse_text_labeled_blocks() {
