@@ -26,6 +26,7 @@ fn main() -> anyhow::Result<()> {
         Some("isa-test-suite") => isa_test_suite(&sh)?,
         Some("capi-smoke") => capi_smoke(&sh)?,
         Some("python-smoke") => python_smoke(&sh)?,
+        Some("haskell-smoke") => haskell_smoke(&sh)?,
         _ => print_help(),
     }
     Ok(())
@@ -122,6 +123,30 @@ fn python_smoke(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build the C ABI cdylib, then compile and run the Haskell bindings smoke test
+/// against it. Requires `ghc` on PATH.
+fn haskell_smoke(sh: &Shell) -> anyhow::Result<()> {
+    let root = project_root();
+    sh.change_dir(&root);
+
+    cmd!(sh, "cargo build -p tir-capi").run()?;
+
+    let lib_dir = root.join("target/debug");
+    let out = root.join("target/haskell");
+    std::fs::create_dir_all(&out)?;
+    let bin = out.join("tir_hs_smoke");
+    let lib_flag = format!("-L{}", lib_dir.display());
+    let rpath = format!("-optl-Wl,-rpath,{}", lib_dir.display());
+    cmd!(
+        sh,
+        "ghc -O0 -outputdir {out} -iutils/haskell/src utils/haskell/test/Main.hs
+         {lib_flag} -ltir_capi {rpath} -o {bin}"
+    )
+    .run()?;
+    cmd!(sh, "{bin}").run()?;
+    Ok(())
+}
+
 fn print_help() {
     eprintln!(
         "Tasks:
@@ -133,6 +158,7 @@ verify <isa>     run formal ISA verification. Available ISAs: riscv64, riscv32, 
 isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
 capi-smoke       check the C ABI header is current and run the C smoke test
 python-smoke     build the C ABI and run the Python test suite
+haskell-smoke    build the C ABI and run the Haskell bindings smoke test (needs ghc)
 docs             builds project documentation
 help             shows this message
 "
