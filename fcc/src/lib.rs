@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod cir;
 pub mod codegen;
 pub mod diagnostics;
 pub mod driver;

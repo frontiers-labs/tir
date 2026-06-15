@@ -136,6 +136,7 @@ fn run_compile(args: CompileArgs) {
             CompileStage::Ir => {
                 let unit = parse_source(&name, &source);
                 let context = tir::Context::with_default_dialects();
+                crate::cir::register(&context);
                 let module = lower_to_ir(&context, &unit);
                 let mut ir = String::new();
                 let mut fmt = tir::IRFormatter::new(&mut ir);
@@ -194,6 +195,7 @@ fn emit_machine_code(args: &CompileArgs, name: &str, source: &str) -> Vec<u8> {
     let unit = parse_source(name, source);
     let context = tir::Context::with_default_dialects();
     target.register_dialects(&context);
+    crate::cir::register(&context);
     let module = lower_to_ir(&context, &unit);
 
     let mut pm = tir::PassManager::new();
