@@ -118,7 +118,7 @@ fn run_compile(args: CompileArgs) {
             }
             CompileStage::Ast => {
                 let unit = parse_source(reader);
-                writeln!(out, "{unit:#?}").unwrap();
+                write!(out, "{}", crate::ast::render(&unit)).unwrap();
             }
             CompileStage::Ir => {
                 let unit = parse_source(reader);
@@ -141,10 +141,7 @@ fn run_compile(args: CompileArgs) {
     }
 }
 
-fn lower_to_ir(
-    context: &tir::Context,
-    unit: &crate::ast::TranslationUnit,
-) -> tir::builtin::ModuleOp {
+fn lower_to_ir(context: &tir::Context, unit: &crate::ast::Ast) -> tir::builtin::ModuleOp {
     crate::codegen::codegen(context, unit).unwrap_or_else(|e| {
         eprintln!("fcc: codegen error: {e}");
         std::process::exit(1);
@@ -211,7 +208,7 @@ fn emit_machine_code(args: &CompileArgs, reader: Box<dyn io::Read>) -> Vec<u8> {
     tir_be_common::binary::write_elf(&object, &format)
 }
 
-fn parse_source(reader: Box<dyn io::Read>) -> crate::ast::TranslationUnit {
+fn parse_source(reader: Box<dyn io::Read>) -> crate::ast::Ast {
     let tokens: Vec<Token> = preprocessed(reader, HashMap::new(), &[]).collect();
     crate::parser::parse(&tokens).unwrap_or_else(|errors| {
         for e in errors {
