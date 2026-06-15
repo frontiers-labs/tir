@@ -375,6 +375,14 @@ impl Context {
         slab_get(&self.0.read().values, id.index()).is_some()
     }
 
+    pub fn has_region(&self, id: RegionId) -> bool {
+        slab_get(&self.0.read().regions, id.index()).is_some()
+    }
+
+    pub fn has_block(&self, id: BlockId) -> bool {
+        slab_get(&self.0.read().blocks, id.index()).is_some()
+    }
+
     pub fn is_block_argument(&self, id: ValueId) -> bool {
         let inner = self.0.read();
         inner

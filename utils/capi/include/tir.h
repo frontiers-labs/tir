@@ -14,6 +14,19 @@ typedef struct TirContext TirContext;
 typedef struct TirPassManager TirPassManager;
 #define TIR_INVALID_ID UINT32_MAX
 
+/* Attribute kind codes returned by tir_op_attribute_kind. */
+#define TIR_ATTR_STR 0
+#define TIR_ATTR_INT 1
+#define TIR_ATTR_UINT 2
+#define TIR_ATTR_F32 3
+#define TIR_ATTR_F64 4
+#define TIR_ATTR_BOOL 5
+#define TIR_ATTR_ARRAY 6
+#define TIR_ATTR_DICT 7
+#define TIR_ATTR_REGISTER 8
+#define TIR_ATTR_TYPE 9
+#define TIR_ATTR_BLOCK 10
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -89,6 +102,230 @@ bool tir_pipeline_run(TirPassManager *pm, const TirContext *ctx, uint32_t root);
  * `pm` must be null or a pipeline from [`tir_pipeline_parse`] not yet destroyed.
  */
 void tir_pipeline_destroy(TirPassManager *pm);
+
+/**
+ * Name of op `op` as an owned C string, or null on error. Free with `tir_string_free`.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+char *tir_op_name(const TirContext *ctx, uint32_t op);
+
+/**
+ * Dialect of op `op` as an owned C string, or null on error. Free with `tir_string_free`.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+char *tir_op_dialect(const TirContext *ctx, uint32_t op);
+
+/**
+ * Number of operands of op `op`, or `usize::MAX` on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uintptr_t tir_op_num_operands(const TirContext *ctx, uint32_t op);
+
+/**
+ * The `i`-th operand value id of op `op`, or [`TIR_INVALID_ID`] on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_op_operand(const TirContext *ctx, uint32_t op, uintptr_t i);
+
+/**
+ * Number of results of op `op`, or `usize::MAX` on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uintptr_t tir_op_num_results(const TirContext *ctx, uint32_t op);
+
+/**
+ * The `i`-th result value id of op `op`, or [`TIR_INVALID_ID`] on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_op_result(const TirContext *ctx, uint32_t op, uintptr_t i);
+
+/**
+ * Number of regions of op `op`, or `usize::MAX` on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uintptr_t tir_op_num_regions(const TirContext *ctx, uint32_t op);
+
+/**
+ * The `i`-th region id of op `op`, or [`TIR_INVALID_ID`] on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_op_region(const TirContext *ctx, uint32_t op, uintptr_t i);
+
+/**
+ * Type id of value `value`, or [`TIR_INVALID_ID`] on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_value_type(const TirContext *ctx, uint32_t value);
+
+/**
+ * Number of blocks in region `region`, or `usize::MAX` on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uintptr_t tir_region_num_blocks(const TirContext *ctx, uint32_t region);
+
+/**
+ * The `i`-th block id of region `region`, or [`TIR_INVALID_ID`] on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_region_block(const TirContext *ctx, uint32_t region, uintptr_t i);
+
+/**
+ * Number of operations in block `block`, or `usize::MAX` on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uintptr_t tir_block_num_ops(const TirContext *ctx, uint32_t block);
+
+/**
+ * The `i`-th operation id of block `block`, or [`TIR_INVALID_ID`] on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_block_op(const TirContext *ctx, uint32_t block, uintptr_t i);
+
+/**
+ * Number of block arguments of block `block`, or `usize::MAX` on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uintptr_t tir_block_num_args(const TirContext *ctx, uint32_t block);
+
+/**
+ * The `i`-th block-argument value id of block `block`, or [`TIR_INVALID_ID`] on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_block_arg(const TirContext *ctx, uint32_t block, uintptr_t i);
+
+/**
+ * Parse a type from a null-terminated spec (e.g. `!i32`). Returns its id, or
+ * [`TIR_INVALID_ID`] on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle; `spec` must be null or a valid
+ * NUL-terminated C string.
+ */
+uint32_t tir_type_parse(const TirContext *ctx, const char *spec);
+
+/**
+ * Render type `ty` to an owned C string, or null on error. Free with `tir_string_free`.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+char *tir_type_to_string(const TirContext *ctx, uint32_t ty);
+
+/**
+ * Number of attributes of op `op`, or `usize::MAX` on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uintptr_t tir_op_num_attributes(const TirContext *ctx, uint32_t op);
+
+/**
+ * Name of the `i`-th attribute of op `op` as an owned C string, or null on
+ * error. Free with `tir_string_free`.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+char *tir_op_attribute_name(const TirContext *ctx, uint32_t op, uintptr_t i);
+
+/**
+ * Kind code of the `i`-th attribute of op `op` (see the `TIR_ATTR_*` macros),
+ * or `-1` on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+int32_t tir_op_attribute_kind(const TirContext *ctx, uint32_t op, uintptr_t i);
+
+/**
+ * Read a signed-int attribute into `*out`. Returns false if the attribute is a
+ * different kind or on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle; `out` must be null or a writable `int64_t`.
+ */
+bool tir_op_attribute_int(const TirContext *ctx, uint32_t op, uintptr_t i, int64_t *out);
+
+/**
+ * Read an unsigned-int attribute into `*out`. Returns false on kind mismatch or error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle; `out` must be null or a writable `uint64_t`.
+ */
+bool tir_op_attribute_uint(const TirContext *ctx, uint32_t op, uintptr_t i, uint64_t *out);
+
+/**
+ * Read a floating-point attribute (`F32` or `F64`) into `*out`. Returns false
+ * on kind mismatch or error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle; `out` must be null or a writable `double`.
+ */
+bool tir_op_attribute_float(const TirContext *ctx, uint32_t op, uintptr_t i, double *out);
+
+/**
+ * Read a boolean attribute into `*out`. Returns false on kind mismatch or error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle; `out` must be null or a writable `bool`.
+ */
+bool tir_op_attribute_bool(const TirContext *ctx, uint32_t op, uintptr_t i, bool *out);
+
+/**
+ * Value of a string attribute as an owned C string, or null on kind mismatch or
+ * error. Free with `tir_string_free`.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+char *tir_op_attribute_string(const TirContext *ctx, uint32_t op, uintptr_t i);
+
+/**
+ * Type id of a type attribute, or [`TIR_INVALID_ID`] on kind mismatch or error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_op_attribute_type(const TirContext *ctx, uint32_t op, uintptr_t i);
+
+/**
+ * Block id of a block-reference attribute, or [`TIR_INVALID_ID`] on kind
+ * mismatch or error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_op_attribute_block(const TirContext *ctx, uint32_t op, uintptr_t i);
 
 #ifdef __cplusplus
 }  // extern "C"

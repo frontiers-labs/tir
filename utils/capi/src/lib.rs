@@ -6,17 +6,21 @@
 //! their `*_destroy` functions. IR entities are addressed by their dense `u32`
 //! ids (here `TirOpId`) relative to a context and need no freeing. Strings
 //! returned as `char*` are owned by the caller and freed with
-//! [`tir_string_free`]; `const char*` returns alias static data and must not be
-//! freed. Fallible calls return a sentinel (`u32::MAX`, null, or `false`) and
-//! set a thread-local message readable via [`tir_last_error`].
+//! [`tir_string_free`] (except [`tir_last_error`], which the library owns).
+//! Fallible calls return a sentinel ([`TIR_INVALID_ID`], `usize::MAX`, null, or
+//! `false`) and set a thread-local message readable via [`tir_last_error`].
+
+mod inspect;
+pub use inspect::*;
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
+use std::sync::Arc;
 
 use tir::builtin::ModuleOp;
-use tir::{Context, IRFormatter, OpId, Operation, PassManager};
+use tir::{Context, IRFormatter, OpId, OpInstance, Operation, PassManager};
 
 /// Sentinel returned by id-producing functions on failure.
 pub const TIR_INVALID_ID: u32 = u32::MAX;
@@ -25,7 +29,7 @@ thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
 
-fn set_error(msg: impl Into<Vec<u8>>) {
+pub(crate) fn set_error(msg: impl Into<Vec<u8>>) {
     let c = CString::new(msg)
         .unwrap_or_else(|_| CString::new("TIR error message contained a NUL byte").unwrap());
     LAST_ERROR.with(|e| *e.borrow_mut() = Some(c));
@@ -36,7 +40,7 @@ fn clear_error() {
 }
 
 /// Run `f`, converting any panic into a last-error and returning `default`.
-fn guard<T>(default: T, f: impl FnOnce() -> T) -> T {
+pub(crate) fn guard<T>(default: T, f: impl FnOnce() -> T) -> T {
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(v) => v,
         Err(_) => {
@@ -47,12 +51,53 @@ fn guard<T>(default: T, f: impl FnOnce() -> T) -> T {
 }
 
 /// Borrow a context handle, or set an error and return `default` if null.
-unsafe fn ctx_ref<'a, T>(ctx: *const Context, default: T, f: impl FnOnce(&'a Context) -> T) -> T {
+pub(crate) unsafe fn ctx_ref<'a, T>(
+    ctx: *const Context,
+    default: T,
+    f: impl FnOnce(&'a Context) -> T,
+) -> T {
     let Some(ctx) = (unsafe { ctx.as_ref() }) else {
         set_error("null TirContext passed to TIR FFI");
         return default;
     };
     f(ctx)
+}
+
+/// Common entry wrapper for context-bound calls: catches panics, clears the
+/// last error, and borrows the context, returning `default` on any failure.
+pub(crate) fn with_context<T: Copy>(
+    ctx: *const Context,
+    default: T,
+    f: impl FnOnce(&Context) -> T,
+) -> T {
+    guard(default, || {
+        clear_error();
+        unsafe { ctx_ref(ctx, default, f) }
+    })
+}
+
+/// Look up an operation by raw id, setting an error and returning `None` if the
+/// id is unknown (e.g. erased). Avoids panicking on a dangling id.
+pub(crate) fn op_instance(ctx: &Context, id: u32) -> Option<Arc<OpInstance>> {
+    let op_id = OpId::from_number(id);
+    if ctx.has_operation(op_id) {
+        Some(ctx.get_op(op_id))
+    } else {
+        set_error(format!("no operation with id {id}"));
+        None
+    }
+}
+
+/// Convert an owned string into a heap C string for the caller to free, or null
+/// (with an error set) if it contains an interior NUL.
+pub(crate) fn into_cstring(s: String) -> *mut c_char {
+    match CString::new(s) {
+        Ok(c) => c.into_raw(),
+        Err(_) => {
+            set_error("string contained a NUL byte");
+            ptr::null_mut()
+        }
+    }
 }
 
 /// Read a `(ptr, len)` pair as `&str`, or set an error and return `None`.
@@ -134,7 +179,7 @@ pub unsafe extern "C" fn tir_parse_module(
                     return TIR_INVALID_ID;
                 };
                 match tir::parse::ir::parse_ir::<ModuleOp>(ctx, src) {
-                    Ok(module) => module.id().as_raw(),
+                    Ok(module) => module.id().number(),
                     Err((span, err)) => {
                         set_error(format!("parse failed at byte {}: {err:?}", span.0));
                         TIR_INVALID_ID
@@ -156,24 +201,16 @@ pub unsafe extern "C" fn tir_op_to_string(ctx: *const Context, id: u32) -> *mut 
         clear_error();
         unsafe {
             ctx_ref(ctx, ptr::null_mut(), |ctx| {
-                let op_id = OpId::from_raw(id);
-                if !ctx.has_operation(op_id) {
-                    set_error(format!("no operation with id {id}"));
+                let Some(op) = op_instance(ctx, id) else {
                     return ptr::null_mut();
-                }
+                };
                 let mut rendered = String::new();
                 let mut fmt = IRFormatter::new(&mut rendered);
-                if let Err(e) = ctx.get_op(op_id).as_dyn_op().print(&mut fmt) {
+                if let Err(e) = op.as_dyn_op().print(&mut fmt) {
                     set_error(format!("failed to print op: {e}"));
                     return ptr::null_mut();
                 }
-                match CString::new(rendered) {
-                    Ok(c) => c.into_raw(),
-                    Err(_) => {
-                        set_error("rendered IR contained a NUL byte");
-                        ptr::null_mut()
-                    }
-                }
+                into_cstring(rendered)
             })
         }
     })
@@ -231,12 +268,10 @@ pub unsafe extern "C" fn tir_pipeline_run(
         };
         unsafe {
             ctx_ref(ctx, false, |ctx| {
-                let op_id = OpId::from_raw(root);
-                if !ctx.has_operation(op_id) {
-                    set_error(format!("no operation with id {root}"));
+                let Some(op) = op_instance(ctx, root) else {
                     return false;
-                }
-                match pm.run(ctx, ctx.get_op(op_id)) {
+                };
+                match pm.run(ctx, op) {
                     Ok(()) => true,
                     Err(e) => {
                         set_error(format!("pass pipeline failed: {e}"));

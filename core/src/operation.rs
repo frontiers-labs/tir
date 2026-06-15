@@ -238,12 +238,12 @@ impl OpId {
     }
 
     /// Raw integer id, for stable identification across an FFI boundary.
-    pub fn as_raw(self) -> u32 {
+    pub fn number(self) -> u32 {
         self.0
     }
 
-    /// Reconstruct an id from its raw integer, the inverse of [`OpId::as_raw`].
-    pub fn from_raw(id: u32) -> Self {
+    /// Reconstruct an id from its raw integer, the inverse of [`OpId::number`].
+    pub fn from_number(id: u32) -> Self {
         Self(id)
     }
 }
