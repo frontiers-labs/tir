@@ -14,7 +14,25 @@
 
 use tir::graph::{Dag, NodeId, PostOrderDag};
 
-pub type Ast = PostOrderDag<AstKind, AstLeaf>;
+use crate::diagnostics::Span;
+
+/// The AST: node payloads ([`AstNode`], kind + source span) live in the DAG's
+/// dense vector, while the variable-sized leaf payload sits in its side table.
+pub type Ast = PostOrderDag<AstNode, AstLeaf>;
+
+/// A node's dense payload: its structural [`AstKind`] and the source [`Span`]
+/// where the construct begins, used to point diagnostics at the offending code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AstNode {
+    pub kind: AstKind,
+    pub span: Span,
+}
+
+impl AstNode {
+    pub fn new(kind: AstKind, span: Span) -> Self {
+        AstNode { kind, span }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CType {
@@ -102,7 +120,7 @@ pub fn render(ast: &Ast) -> String {
 fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
     use std::fmt::Write;
 
-    let label = match ast.get_node(id) {
+    let label = match ast.get_node(id).kind {
         AstKind::TranslationUnit => "TranslationUnit".to_string(),
         AstKind::Function => match ast.get_leaf_data(id) {
             Some(AstLeaf::Function { name, ret }) => format!("Function {name:?} -> {ret:?}"),

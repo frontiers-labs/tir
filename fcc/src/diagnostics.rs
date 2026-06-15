@@ -404,12 +404,16 @@ impl From<UnexpectedEof> for Diagnostic {
 
 /// `E0200`: a name is used without any declaration in scope.
 pub struct UndeclaredIdentifier {
+    pub span: Span,
     pub name: String,
 }
 
 impl UndeclaredIdentifier {
-    pub fn new(name: impl Into<String>) -> Self {
-        UndeclaredIdentifier { name: name.into() }
+    pub fn new(span: Span, name: impl Into<String>) -> Self {
+        UndeclaredIdentifier {
+            span,
+            name: name.into(),
+        }
     }
 }
 
@@ -419,18 +423,23 @@ impl From<UndeclaredIdentifier> for Diagnostic {
             Code::UndeclaredIdentifier,
             format!("use of undeclared identifier '{}'", d.name),
         )
+        .with_label(d.span, "not declared in this scope")
         .with_help(format!("declare '{}' with a type before using it", d.name))
     }
 }
 
 /// `E0900`: valid C that the code generator does not lower yet.
 pub struct UnsupportedConstruct {
+    pub span: Span,
     pub what: String,
 }
 
 impl UnsupportedConstruct {
-    pub fn new(what: impl Into<String>) -> Self {
-        UnsupportedConstruct { what: what.into() }
+    pub fn new(span: Span, what: impl Into<String>) -> Self {
+        UnsupportedConstruct {
+            span,
+            what: what.into(),
+        }
     }
 }
 
@@ -440,6 +449,7 @@ impl From<UnsupportedConstruct> for Diagnostic {
             Code::UnsupportedConstruct,
             format!("codegen not yet implemented for {}", d.what),
         )
+        .with_label(d.span, "not supported by codegen yet")
     }
 }
 
@@ -601,11 +611,21 @@ mod tests {
 
     #[test]
     fn spanless_diagnostic_renders_compact_header() {
-        let out = render(UndeclaredIdentifier::new("count").into());
-        assert!(out.starts_with("error[E0200]:"), "{out}");
-        assert!(out.contains("undeclared identifier 'count'"), "{out}");
-        assert!(out.contains("= help:"), "{out}");
-        assert!(out.contains("= note:"), "{out}");
+        let out = render(EmptyTranslationUnit.into());
+        assert!(out.starts_with("error[E0901]:"), "{out}");
+        assert!(out.contains("no functions"), "{out}");
+    }
+
+    #[test]
+    fn undeclared_identifier_points_at_its_span() {
+        let src = "int main(void) { return x; }";
+        let file = intern_file("<undeclared-test>", src);
+        let at = src.find('x').unwrap();
+        let out = render(UndeclaredIdentifier::new(Span::new(file, at), "x").into());
+        assert!(out.contains("[E0200]"), "{out}");
+        assert!(out.contains("undeclared identifier 'x'"), "{out}");
+        assert!(out.contains("not declared in this scope"), "{out}");
+        assert!(out.contains("Help"), "{out}");
     }
 
     #[test]

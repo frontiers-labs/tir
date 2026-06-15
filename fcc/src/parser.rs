@@ -19,13 +19,33 @@ use chumsky::prelude::*;
 use tir::graph::{MutDag, NodeId};
 
 use crate::ast::*;
-use crate::diagnostics::{Diagnostic, UnexpectedEof, UnexpectedToken};
+use crate::diagnostics::{Diagnostic, FileId, UnexpectedEof, UnexpectedToken};
 use crate::lexer::Token;
 
 /// Index-based span over the token slice (we parse already-lexed tokens, so
 /// byte offsets are not available — token indices are the natural span).
 type Span = SimpleSpan<usize>;
-type Extra<'src> = extra::Full<Rich<'src, Token, Span>, SimpleState<Ast>, ()>;
+type Extra<'src> = extra::Full<Rich<'src, Token, Span>, SimpleState<ParseState>, ()>;
+
+/// Parser state: the tree under construction plus the byte span of every input
+/// token, so each node can record where its construct starts in the source.
+struct ParseState {
+    ast: Ast,
+    spans: Vec<crate::diagnostics::Span>,
+}
+
+impl ParseState {
+    /// Append a node, spanning it at the byte position of token index `tok`
+    /// (the first token of the construct being reduced).
+    fn add(&mut self, kind: AstKind, tok: usize) -> NodeId {
+        let span = self
+            .spans
+            .get(tok)
+            .copied()
+            .unwrap_or(crate::diagnostics::Span::new(FileId::default(), 0));
+        self.ast.add_node(AstNode::new(kind, span))
+    }
+}
 
 /// Parse a stream of tokens, each paired with its byte [`crate::diagnostics::Span`]
 /// in the source. Whitespace tokens are dropped first; on failure each parser
@@ -40,13 +60,16 @@ pub fn parse(tokens: &[(Token, crate::diagnostics::Span)]) -> Result<Ast, Vec<Di
         }
     }
 
-    let mut state = SimpleState(Ast::new());
+    let mut state = SimpleState(ParseState {
+        ast: Ast::new(),
+        spans: byte_spans.clone(),
+    });
     let (out, errors) = translation_unit()
         .parse_with_state(filtered.as_slice(), &mut state)
         .into_output_errors();
 
     match out {
-        Some(_) if errors.is_empty() => Ok(state.0),
+        Some(_) if errors.is_empty() => Ok(state.0.ast),
         _ => Err(errors
             .into_iter()
             .map(|e| rich_to_diagnostic(&e, &byte_spans))
@@ -103,9 +126,10 @@ where
     recursive(|expr| {
         let literal = select! { Token::IntegerLiteral(n) => n.to_i64() }.map_with(
             |n, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
-                let id = ast.add_node(AstKind::Int);
-                ast.set_leaf_data(id, AstLeaf::Int(n));
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::Int, tok);
+                st.ast.set_leaf_data(id, AstLeaf::Int(n));
                 id
             },
         );
@@ -120,19 +144,21 @@ where
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .map_with(|(name, args), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
-                let id = ast.add_node(AstKind::Call);
-                ast.set_leaf_data(id, AstLeaf::Call(name));
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::Call, tok);
+                st.ast.set_leaf_data(id, AstLeaf::Call(name));
                 for arg in args {
-                    ast.add_edge(id, arg);
+                    st.ast.add_edge(id, arg);
                 }
                 id
             });
 
         let var = ident().map_with(|name, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-            let ast: &mut Ast = &mut e.state().0;
-            let id = ast.add_node(AstKind::Var);
-            ast.set_leaf_data(id, AstLeaf::Var(name));
+            let tok = e.span().start;
+            let st = &mut e.state().0;
+            let id = st.add(AstKind::Var, tok);
+            st.ast.set_leaf_data(id, AstLeaf::Var(name));
             id
         });
 
@@ -154,10 +180,11 @@ where
         .then(primary)
         .map_with(
             |(ops, operand), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
+                let tok = e.span().start;
+                let st = &mut e.state().0;
                 ops.into_iter()
                     .rev()
-                    .fold(operand, |child, op| unary(ast, op, child))
+                    .fold(operand, |child, op| unary(st, op, child, tok))
             },
         );
 
@@ -217,23 +244,24 @@ where
         )
         .map_with(
             |(first, rest), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
+                let tok = e.span().start;
+                let st = &mut e.state().0;
                 rest.into_iter()
-                    .fold(first, |lhs, (op, rhs)| binary(ast, op, lhs, rhs))
+                    .fold(first, |lhs, (op, rhs)| binary(st, op, lhs, rhs, tok))
             },
         )
 }
 
-fn binary(ast: &mut Ast, op: AstKind, lhs: NodeId, rhs: NodeId) -> NodeId {
-    let id = ast.add_node(op);
-    ast.add_edge(id, lhs);
-    ast.add_edge(id, rhs);
+fn binary(st: &mut ParseState, op: AstKind, lhs: NodeId, rhs: NodeId, tok: usize) -> NodeId {
+    let id = st.add(op, tok);
+    st.ast.add_edge(id, lhs);
+    st.ast.add_edge(id, rhs);
     id
 }
 
-fn unary(ast: &mut Ast, op: AstKind, operand: NodeId) -> NodeId {
-    let id = ast.add_node(op);
-    ast.add_edge(id, operand);
+fn unary(st: &mut ParseState, op: AstKind, operand: NodeId, tok: usize) -> NodeId {
+    let id = st.add(op, tok);
+    st.ast.add_edge(id, operand);
     id
 }
 
@@ -246,15 +274,18 @@ where
     ctype()
         .then(ident())
         .then(just(Token::Assign).ignore_then(expr()).or_not())
-        .map_with(|((ty, name), init), e| {
-            let ast: &mut Ast = &mut e.state().0;
-            let id = ast.add_node(AstKind::Decl);
-            ast.set_leaf_data(id, AstLeaf::Decl { name, ty });
-            if let Some(init) = init {
-                ast.add_edge(id, init);
-            }
-            id
-        })
+        .map_with(
+            |((ty, name), init), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::Decl, tok);
+                st.ast.set_leaf_data(id, AstLeaf::Decl { name, ty });
+                if let Some(init) = init {
+                    st.ast.add_edge(id, init);
+                }
+                id
+            },
+        )
 }
 
 /// Build an `x = value` assignment node (without the trailing `;`).
@@ -265,20 +296,24 @@ where
     ident()
         .then_ignore(just(Token::Assign))
         .then(expr())
-        .map_with(|(name, value), e| {
-            let ast: &mut Ast = &mut e.state().0;
-            let id = ast.add_node(AstKind::Assign);
-            ast.set_leaf_data(id, AstLeaf::Assign(name));
-            ast.add_edge(id, value);
-            id
-        })
+        .map_with(
+            |(name, value), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::Assign, tok);
+                st.ast.set_leaf_data(id, AstLeaf::Assign(name));
+                st.ast.add_edge(id, value);
+                id
+            },
+        )
 }
 
 fn empty_node<'src, I>(e: &mut MapExtra<'src, '_, I, Extra<'src>>) -> NodeId
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
-    e.state().0.add_node(AstKind::Empty)
+    let tok = e.span().start;
+    e.state().0.add(AstKind::Empty, tok)
 }
 
 fn stmt<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
@@ -294,10 +329,11 @@ where
             .collect::<Vec<NodeId>>()
             .delimited_by(just(Token::LBrace), just(Token::RBrace))
             .map_with(|stmts, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
-                let id = ast.add_node(AstKind::Block);
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::Block, tok);
                 for s in stmts {
-                    ast.add_edge(id, s);
+                    st.ast.add_edge(id, s);
                 }
                 id
             });
@@ -306,10 +342,11 @@ where
             .ignore_then(expr().or_not())
             .then_ignore(semi.clone())
             .map_with(|value, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
-                let id = ast.add_node(AstKind::Return);
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::Return, tok);
                 if let Some(value) = value {
-                    ast.add_edge(id, value);
+                    st.ast.add_edge(id, value);
                 }
                 id
             });
@@ -325,12 +362,13 @@ where
             .then(just(Token::KwElse).ignore_then(stmt.clone()).or_not())
             .map_with(
                 |((c, then), els), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                    let ast: &mut Ast = &mut e.state().0;
-                    let id = ast.add_node(AstKind::If);
-                    ast.add_edge(id, c);
-                    ast.add_edge(id, then);
+                    let tok = e.span().start;
+                    let st = &mut e.state().0;
+                    let id = st.add(AstKind::If, tok);
+                    st.ast.add_edge(id, c);
+                    st.ast.add_edge(id, then);
                     if let Some(els) = els {
-                        ast.add_edge(id, els);
+                        st.ast.add_edge(id, els);
                     }
                     id
                 },
@@ -340,10 +378,11 @@ where
             .ignore_then(cond.clone())
             .then(stmt.clone())
             .map_with(|(c, body), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
-                let id = ast.add_node(AstKind::While);
-                ast.add_edge(id, c);
-                ast.add_edge(id, body);
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::While, tok);
+                st.ast.add_edge(id, c);
+                st.ast.add_edge(id, body);
                 id
             });
 
@@ -353,10 +392,11 @@ where
             .then(cond.clone())
             .then_ignore(semi.clone())
             .map_with(|(body, c), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
-                let id = ast.add_node(AstKind::DoWhile);
-                ast.add_edge(id, body);
-                ast.add_edge(id, c);
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::DoWhile, tok);
+                st.ast.add_edge(id, body);
+                st.ast.add_edge(id, c);
                 id
             });
 
@@ -384,34 +424,43 @@ where
             .then(stmt.clone())
             .map_with(
                 |(((init, c), step), body), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                    let ast: &mut Ast = &mut e.state().0;
-                    let id = ast.add_node(AstKind::For);
-                    ast.add_edge(id, init);
-                    ast.add_edge(id, c);
-                    ast.add_edge(id, step);
-                    ast.add_edge(id, body);
+                    let tok = e.span().start;
+                    let st = &mut e.state().0;
+                    let id = st.add(AstKind::For, tok);
+                    st.ast.add_edge(id, init);
+                    st.ast.add_edge(id, c);
+                    st.ast.add_edge(id, step);
+                    st.ast.add_edge(id, body);
                     id
                 },
             );
 
         let break_stmt = just(Token::KwBreak).then_ignore(semi.clone()).map_with(
-            |_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| e.state().0.add_node(AstKind::Break),
+            |_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                let tok = e.span().start;
+                e.state().0.add(AstKind::Break, tok)
+            },
         );
         let continue_stmt = just(Token::KwContinue).then_ignore(semi.clone()).map_with(
-            |_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| e.state().0.add_node(AstKind::Continue),
+            |_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                let tok = e.span().start;
+                e.state().0.add(AstKind::Continue, tok)
+            },
         );
 
         let null_stmt = semi
             .clone()
             .map_with(|_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                e.state().0.add_node(AstKind::Empty)
+                let tok = e.span().start;
+                e.state().0.add(AstKind::Empty, tok)
             });
 
         let expr_stmt = expr().then_ignore(semi).map_with(
             |value, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let ast: &mut Ast = &mut e.state().0;
-                let id = ast.add_node(AstKind::ExprStmt);
-                ast.add_edge(id, value);
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::ExprStmt, tok);
+                st.ast.add_edge(id, value);
                 id
             },
         );
@@ -441,12 +490,16 @@ fn function<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
-    let param = ctype().then(ident()).map_with(|(ty, name), e| {
-        let ast: &mut Ast = &mut e.state().0;
-        let id = ast.add_node(AstKind::Param);
-        ast.set_leaf_data(id, AstLeaf::Param { name, ty });
-        id
-    });
+    let param =
+        ctype()
+            .then(ident())
+            .map_with(|(ty, name), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::Param, tok);
+                st.ast.set_leaf_data(id, AstLeaf::Param { name, ty });
+                id
+            });
 
     // `(void)` is an explicit empty parameter list; `()` is also accepted.
     let params = choice((
@@ -460,19 +513,18 @@ where
         .collect::<Vec<_>>()
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
-    ctype()
-        .then(ident())
-        .then(params)
-        .then(body)
-        .map_with(|(((ret, name), params), body), e| {
-            let ast: &mut Ast = &mut e.state().0;
-            let id = ast.add_node(AstKind::Function);
-            ast.set_leaf_data(id, AstLeaf::Function { name, ret });
+    ctype().then(ident()).then(params).then(body).map_with(
+        |(((ret, name), params), body), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+            let tok = e.span().start;
+            let st = &mut e.state().0;
+            let id = st.add(AstKind::Function, tok);
+            st.ast.set_leaf_data(id, AstLeaf::Function { name, ret });
             for child in params.into_iter().chain(body) {
-                ast.add_edge(id, child);
+                st.ast.add_edge(id, child);
             }
             id
-        })
+        },
+    )
 }
 
 fn translation_unit<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>>
@@ -483,11 +535,12 @@ where
         .repeated()
         .collect::<Vec<_>>()
         .then_ignore(end())
-        .map_with(|functions, e| {
-            let ast: &mut Ast = &mut e.state().0;
-            let id = ast.add_node(AstKind::TranslationUnit);
+        .map_with(|functions, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+            let tok = e.span().start;
+            let st = &mut e.state().0;
+            let id = st.add(AstKind::TranslationUnit, tok);
             for func in functions {
-                ast.add_edge(id, func);
+                st.ast.add_edge(id, func);
             }
             id
         })

@@ -50,15 +50,14 @@ pub fn codegen(context: &Context, ast: &Ast) -> Result<ModuleOp, Diagnostic> {
     Ok(module)
 }
 
-/// Use of a name with no declaration in scope. Codegen runs on a span-less AST,
-/// so these diagnostics carry no source label; the message names the identifier.
-fn undeclared(name: &str) -> Diagnostic {
-    UndeclaredIdentifier::new(name).into()
+/// Use of a name with no declaration in scope, spanned at the offending node.
+fn undeclared(ast: &Ast, node: NodeId, name: &str) -> Diagnostic {
+    UndeclaredIdentifier::new(ast.get_node(node).span, name).into()
 }
 
 /// A construct the parser accepts but codegen does not lower yet.
-fn unsupported(what: String) -> Diagnostic {
-    UnsupportedConstruct::new(what).into()
+fn unsupported(ast: &Ast, node: NodeId, what: String) -> Diagnostic {
+    UnsupportedConstruct::new(ast.get_node(node).span, what).into()
 }
 
 fn lower_ctype(context: &Context, ty: &CType) -> TypeId {
@@ -83,7 +82,7 @@ fn lower_function(
     let mut param_values = Vec::new();
     for param in ast
         .children(func)
-        .take_while(|&c| matches!(ast.get_node(c), AstKind::Param))
+        .take_while(|&c| matches!(ast.get_node(c).kind, AstKind::Param))
     {
         let AstLeaf::Param { ty, .. } = ast.get_leaf_data(param).unwrap() else {
             unreachable!("param node carries a param payload");
@@ -129,7 +128,7 @@ impl FnCodegen<'_> {
         let mut idx = 0;
         for param in ast
             .children(func)
-            .take_while(|&c| matches!(ast.get_node(c), AstKind::Param))
+            .take_while(|&c| matches!(ast.get_node(c).kind, AstKind::Param))
         {
             let AstLeaf::Param { name, ty } = ast.get_leaf_data(param).unwrap() else {
                 unreachable!("param node carries a param payload");
@@ -151,7 +150,7 @@ impl FnCodegen<'_> {
 
     fn lower_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
         let ast = self.ast;
-        match ast.get_node(stmt) {
+        match ast.get_node(stmt).kind {
             AstKind::Decl => {
                 let AstLeaf::Decl { name, ty } = ast.get_leaf_data(stmt).unwrap() else {
                     unreachable!("decl node carries a decl payload");
@@ -170,7 +169,10 @@ impl FnCodegen<'_> {
                 let AstLeaf::Assign(name) = ast.get_leaf_data(stmt).unwrap() else {
                     unreachable!("assign node carries an assign payload");
                 };
-                let slot = *self.locals.get(name).ok_or_else(|| undeclared(name))?;
+                let slot = *self
+                    .locals
+                    .get(name)
+                    .ok_or_else(|| undeclared(ast, stmt, name))?;
                 let value = ast.children(stmt).next().unwrap();
                 let v = self.lower_expr(value)?;
                 self.builder
@@ -188,7 +190,7 @@ impl FnCodegen<'_> {
             }
             // Control flow and expression statements are parsed but not yet
             // lowered; codegen for them is stubbed out for now.
-            kind => Err(unsupported(format!("statement {kind:?}"))),
+            kind => Err(unsupported(ast, stmt, format!("statement {kind:?}"))),
         }
     }
 
@@ -213,7 +215,7 @@ impl FnCodegen<'_> {
                 "subtree not contiguous"
             );
 
-            let value = match ast.get_node(node) {
+            let value = match ast.get_node(node).kind {
                 AstKind::Int => {
                     let AstLeaf::Int(n) = ast.get_leaf_data(node).unwrap() else {
                         unreachable!("int node carries an int payload");
@@ -226,13 +228,15 @@ impl FnCodegen<'_> {
                     let AstLeaf::Var(name) = ast.get_leaf_data(node).unwrap() else {
                         unreachable!("var node carries a var payload");
                     };
-                    let slot = *self.locals.get(name).ok_or_else(|| undeclared(name))?;
+                    let slot = *self
+                        .locals
+                        .get(name)
+                        .ok_or_else(|| undeclared(ast, node, name))?;
                     self.builder
                         .insert(p::load(self.context, slot.ptr, slot.elem).build())
                         .result()
                 }
                 kind @ (AstKind::Add | AstKind::Sub | AstKind::Mul) => {
-                    let kind = *kind;
                     let mut children = ast.children(node);
                     let l = self.values[children.next().unwrap().index() - base];
                     let r = self.values[children.next().unwrap().index() - base];
@@ -254,7 +258,7 @@ impl FnCodegen<'_> {
                 // The richer operators (division, comparison, logical, unary,
                 // calls) are parsed but not yet lowered; stub them out for now.
                 kind => {
-                    return Err(unsupported(format!("expression {kind:?}")));
+                    return Err(unsupported(ast, node, format!("expression {kind:?}")));
                 }
             };
             self.values.push(value);
