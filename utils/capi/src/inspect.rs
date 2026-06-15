@@ -3,7 +3,7 @@
 //! and type rendering. Every entity is addressed by its raw `u32` id relative
 //! to the context, so this drives any dialect without per-op code.
 
-use std::ffi::{CStr, c_char};
+use std::ffi::c_char;
 
 use tir::attributes::AttributeValue;
 use tir::{RegionId, TypeId, ValueId};
@@ -282,36 +282,6 @@ pub unsafe extern "C" fn tir_block_arg(ctx: *const tir::Context, block: u32, i: 
             Some(arg) => arg.id().number(),
             None => {
                 set_error(format!("block argument index {i} out of range"));
-                TIR_INVALID_ID
-            }
-        }
-    })
-}
-
-/// Parse a type from a null-terminated spec (e.g. `!i32`). Returns its id, or
-/// [`TIR_INVALID_ID`] on error.
-///
-/// # Safety
-/// `ctx` must be a valid context handle; `spec` must be null or a valid
-/// NUL-terminated C string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tir_type_parse(ctx: *const tir::Context, spec: *const c_char) -> u32 {
-    with_context(ctx, TIR_INVALID_ID, |ctx| {
-        if spec.is_null() {
-            set_error("null type spec passed to TIR FFI");
-            return TIR_INVALID_ID;
-        }
-        let spec = match unsafe { CStr::from_ptr(spec) }.to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                set_error("type spec was not valid UTF-8");
-                return TIR_INVALID_ID;
-            }
-        };
-        match ctx.parse_type_spec(spec) {
-            Ok(ty) => ty.number(),
-            Err(e) => {
-                set_error(format!("failed to parse type: {e}"));
                 TIR_INVALID_ID
             }
         }

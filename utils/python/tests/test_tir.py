@@ -42,20 +42,25 @@ class TirTest(unittest.TestCase):
 
     def test_typed_construction(self):
         with tir.Context() as ctx:
-            i32 = ctx.parse_type("!i32")
+            # Types are built structurally, never from strings.
+            i32 = tir.builtin.i(ctx, 32)
+            self.assertEqual(i32.to_string(), "!i32")
+            ptr_i32 = tir.ptr.p(ctx, i32)
+            self.assertEqual(ptr_i32.to_string(), "!ptr.p<!i32>")
+
             block = ctx.create_block([i32, i32])
             region = ctx.create_region()
             region.append_block(block)
             a, b = block.args
 
-            addi = tir.builtin.addi(ctx, a, b, result_type="!i32")
+            addi = tir.builtin.addi(ctx, a, b, result_type=i32)
             block.append(addi)
             self.assertEqual(len(block.ops), 1)
             self.assertEqual(addi.operands[0].id, a.id)
             self.assertEqual(addi.operands[1].id, b.id)
 
             # A different dialect via the same generated path.
-            alloca = tir.ptr.alloca(ctx, result_type="!ptr.p<!i32>")
+            alloca = tir.ptr.alloca(ctx, result_type=ptr_i32)
             block.insert(0, alloca)
             self.assertEqual(alloca.dialect, "ptr")
             self.assertEqual(len(block.ops), 2)

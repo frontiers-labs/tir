@@ -22,8 +22,11 @@ fn render(ctx: Ctx, op: u32) -> String {
 #[test]
 fn build_block_from_scratch_wires_operands() {
     let ctx = tir_context_create();
-    let i32_spec = CString::new("!i32").unwrap();
-    let i32_ty = unsafe { tir_type_parse(ctx, i32_spec.as_ptr()) };
+    let builtin = CString::new("builtin").unwrap();
+    let i = CString::new("i").unwrap();
+    let args = [TirTypeArg { kind: 0, value: 32 }];
+    let i32_ty =
+        unsafe { tir_type_build(ctx, builtin.as_ptr(), i.as_ptr(), args.as_ptr(), args.len()) };
     assert_ne!(i32_ty, TIR_INVALID_ID);
 
     let region = unsafe { tir_region_create(ctx) };

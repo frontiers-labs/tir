@@ -28,6 +28,20 @@ def _locate():
 
 lib = ctypes.CDLL(_locate())
 
+
+class TirTypeArg(ctypes.Structure):
+    """A structured argument to tir_type_build (mirrors the C struct)."""
+
+    _fields_ = [("kind", ctypes.c_int32), ("value", ctypes.c_uint64)]
+
+
+# TirTypeArg.kind codes.
+TYPEARG_U32 = 0
+TYPEARG_U64 = 1
+TYPEARG_I64 = 2
+TYPEARG_BOOL = 3
+TYPEARG_TYPE = 4
+
 _u32 = ctypes.c_uint32
 _usize = ctypes.c_size_t
 _cstr = ctypes.c_char_p
@@ -67,8 +81,9 @@ _SPEC = {
     "tir_block_op": (_u32, [_ptr, _u32, _usize]),
     "tir_block_num_args": (_usize, [_ptr, _u32]),
     "tir_block_arg": (_u32, [_ptr, _u32, _usize]),
-    "tir_type_parse": (_u32, [_ptr, _cstr]),
     "tir_type_to_string": (_owned, [_ptr, _u32]),
+    "tir_type_schema_json": (_owned, []),
+    "tir_type_build": (_u32, [_ptr, _cstr, _cstr, ctypes.POINTER(TirTypeArg), _usize]),
     "tir_op_num_attributes": (_usize, [_ptr, _u32]),
     "tir_op_attribute_name": (_owned, [_ptr, _u32, _usize]),
     "tir_op_attribute_kind": (_i32, [_ptr, _u32, _usize]),

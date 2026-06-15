@@ -61,6 +61,25 @@ impl PtrType {
     }
 }
 
+// PtrType stores its pointee as an `Arc<dyn Type>`, which `#[derive(TirType)]`
+// cannot map, so its schema is registered by hand. The builder accepts zero
+// arguments (opaque) or one pointee type (typed).
+#[crate::linkme::distributed_slice(crate::TYPE_SCHEMAS)]
+#[linkme(crate = crate::linkme)]
+static PTR_TYPE_SCHEMA: crate::TypeSchema = crate::TypeSchema {
+    dialect: "ptr",
+    name: "p",
+    params: &[crate::TypeParam {
+        name: "pointee",
+        kind: crate::TypeParamKind::Type,
+    }],
+    build: |context, args| match args {
+        [] => Ok(PtrType::opaque(context)),
+        [crate::TypeArg::Type(pointee)] => Ok(PtrType::typed(context, *pointee)),
+        _ => Err("type 'ptr.p' expects an optional pointee type".to_string()),
+    },
+};
+
 impl TypeConstraint for PtrType {}
 
 impl Type for PtrType {

@@ -31,7 +31,7 @@ pub mod utils;
 mod value;
 
 pub mod helpers {
-    pub use tir_macros::{SimpleNode, dialect, operation};
+    pub use tir_macros::{SimpleNode, TirType, dialect, operation};
 }
 pub mod parse;
 
@@ -57,7 +57,10 @@ pub use pass::{
     parse_pipeline, registered_passes,
 };
 pub use region::{Region, RegionId};
-pub use schema::{AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, schema_json};
+pub use schema::{
+    AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, TYPE_SCHEMAS, TypeArg, TypeParam, TypeParamKind,
+    TypeSchema, build_type, schema_json, type_schema_json,
+};
 pub use ty::{Any, Type, TypeConstraint, TypeId, TypeParser};
 pub use value::{Use, UseSite, Value, ValueId};
 
@@ -67,4 +70,4 @@ pub use dialects::ptr;
 pub use dialects::scf;
 pub use dialects::vector;
 
-pub use tir_macros::{dialect, operation};
+pub use tir_macros::{TirType, dialect, operation};

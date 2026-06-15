@@ -26,11 +26,11 @@ with tir.Context() as ctx:
     for op in module.walk():
         print(op.dialect, op.name)
 
-    # Typed constructors, derived from the schema:
-    i32 = ctx.parse_type("!i32")
+    # Types and ops are both built structurally from the schema — no strings:
+    i32 = tir.builtin.i(ctx, 32)
     block = ctx.create_block([i32, i32])
     a, b = block.args
-    block.append(tir.builtin.addi(ctx, a, b, result_type="!i32"))
+    block.append(tir.builtin.addi(ctx, a, b, result_type=i32))
     print(module.to_string())
 
     # Backend target dialects (RISC-V/ARM64) on demand:

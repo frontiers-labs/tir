@@ -1,6 +1,6 @@
 //! Exercises the read-only inspection surface by traversing a parsed module.
 
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, c_char};
 
 use tir_capi::*;
 
@@ -116,19 +116,6 @@ fn reads_attributes() {
     let mut b = false;
     assert!(!unsafe { tir_op_attribute_bool(ctx, constant, idx, &mut b) });
 
-    unsafe { tir_context_destroy(ctx) };
-}
-
-#[test]
-fn type_parse_roundtrip() {
-    let ctx = tir_context_create();
-    let spec = CString::new("!i32").unwrap();
-    let ty = unsafe { tir_type_parse(ctx, spec.as_ptr()) };
-    assert_ne!(ty, TIR_INVALID_ID);
-    assert_eq!(
-        owned(unsafe { tir_type_to_string(ctx, ty) }).unwrap(),
-        "!i32"
-    );
     unsafe { tir_context_destroy(ctx) };
 }
 

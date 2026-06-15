@@ -7,6 +7,8 @@ use std::fmt::Write;
 
 use linkme::distributed_slice;
 
+use crate::{Context, TypeId};
+
 /// An operand or result: its name, type-constraint name, and whether it is a
 /// variadic segment.
 pub struct FieldSchema {
@@ -102,6 +104,99 @@ pub fn schema_json() -> String {
                 out.push(',');
             }
             escape(n, &mut out);
+        }
+        out.push_str("]}");
+    }
+    out.push(']');
+    out
+}
+
+/// Kind of a type-constructor parameter, as captured by `#[derive(TirType)]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeParamKind {
+    U32,
+    U64,
+    I64,
+    Bool,
+    Type,
+}
+
+/// A named parameter of a type constructor.
+pub struct TypeParam {
+    pub name: &'static str,
+    pub kind: TypeParamKind,
+}
+
+/// A concrete argument passed to a type constructor through [`build_type`].
+#[derive(Debug, Clone, Copy)]
+pub enum TypeArg {
+    U32(u32),
+    U64(u64),
+    I64(i64),
+    Bool(bool),
+    Type(TypeId),
+}
+
+/// The declarative shape of one type, plus a builder that constructs it from
+/// arguments. Contributed by `#[derive(TirType)]`.
+pub struct TypeSchema {
+    pub dialect: &'static str,
+    pub name: &'static str,
+    pub params: &'static [TypeParam],
+    pub build: fn(&Context, &[TypeArg]) -> Result<TypeId, String>,
+}
+
+/// Link-time registry of every type schema reachable in the final binary.
+#[distributed_slice]
+pub static TYPE_SCHEMAS: [TypeSchema];
+
+/// Build a type by dialect-qualified name from structured arguments, without any
+/// textual form. Returns an error if no such type is registered or the
+/// arguments do not match.
+pub fn build_type(
+    context: &Context,
+    dialect: &str,
+    name: &str,
+    args: &[TypeArg],
+) -> Result<TypeId, String> {
+    let schema = TYPE_SCHEMAS
+        .iter()
+        .find(|s| s.dialect == dialect && s.name == name)
+        .ok_or_else(|| format!("unknown type '{dialect}.{name}'"))?;
+    (schema.build)(context, args)
+}
+
+fn param_kind_str(kind: TypeParamKind) -> &'static str {
+    match kind {
+        TypeParamKind::U32 => "u32",
+        TypeParamKind::U64 => "u64",
+        TypeParamKind::I64 => "i64",
+        TypeParamKind::Bool => "bool",
+        TypeParamKind::Type => "type",
+    }
+}
+
+/// Serialize all registered type schemas as a JSON array.
+pub fn type_schema_json() -> String {
+    let mut out = String::from("[");
+    for (i, ty) in TYPE_SCHEMAS.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"dialect\":");
+        escape(ty.dialect, &mut out);
+        out.push_str(",\"name\":");
+        escape(ty.name, &mut out);
+        out.push_str(",\"params\":[");
+        for (j, p) in ty.params.iter().enumerate() {
+            if j > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"name\":");
+            escape(p.name, &mut out);
+            out.push_str(",\"kind\":");
+            escape(param_kind_str(p.kind), &mut out);
+            out.push('}');
         }
         out.push_str("]}");
     }

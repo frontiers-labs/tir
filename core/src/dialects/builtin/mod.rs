@@ -8,7 +8,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, Type, TypeId, dialect, parse::Span};
+use crate::{Context, Error, IRFormatter, TirType, Type, TypeId, dialect, parse::Span};
 
 use crate as tir;
 
@@ -57,6 +57,8 @@ dialect! {
     }
 }
 
+#[derive(TirType)]
+#[tir_type(dialect = "builtin", name = "i")]
 pub struct IntegerType {
     width: u32,
 }
@@ -107,6 +109,8 @@ impl Type for IntegerType {
     }
 }
 
+#[derive(TirType)]
+#[tir_type(dialect = "builtin", name = "index")]
 pub struct IndexType;
 
 impl IndexType {
@@ -144,6 +148,8 @@ impl Type for IndexType {
     }
 }
 
+#[derive(TirType)]
+#[tir_type(dialect = "builtin", name = "unit")]
 pub struct UnitType;
 
 impl UnitType {
@@ -188,6 +194,8 @@ impl Type for UnitType {
 /// definition is the semantic producer of that token, which lets passes thread
 /// ordering, dependency or async-completion edges through the IR without
 /// inventing dummy data values.
+#[derive(TirType)]
+#[tir_type(dialect = "builtin", name = "token")]
 pub struct TokenType;
 
 impl TokenType {

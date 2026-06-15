@@ -10,9 +10,18 @@ import ctypes
 import json
 import keyword
 
-from ._capi import INVALID, lib
+from ._capi import (
+    INVALID,
+    TYPEARG_BOOL,
+    TYPEARG_I64,
+    TYPEARG_TYPE,
+    TYPEARG_U32,
+    TYPEARG_U64,
+    TirTypeArg,
+    lib,
+)
 
-__all__ = ["Context", "Op", "Value", "Region", "Block", "TirError"]
+__all__ = ["Context", "Op", "Value", "Type", "Region", "Block", "TirError"]
 
 
 class TirError(Exception):
@@ -37,6 +46,19 @@ def _vid(value):
     return value.id if isinstance(value, Value) else int(value)
 
 
+def _tid(value):
+    return value.id if isinstance(value, Type) else int(value)
+
+
+_TYPE_KINDS = {
+    "u32": TYPEARG_U32,
+    "u64": TYPEARG_U64,
+    "i64": TYPEARG_I64,
+    "bool": TYPEARG_BOOL,
+    "type": TYPEARG_TYPE,
+}
+
+
 def _attr_literal(value):
     if isinstance(value, bool):
         raise TirError("boolean attributes are not supported by the textual builder")
@@ -59,6 +81,18 @@ class Value:
 
     def __repr__(self):
         return "%%%d" % self.id
+
+
+class Type:
+    def __init__(self, ctx, id):
+        self._ctx = ctx
+        self.id = id
+
+    def to_string(self):
+        return _take_str(lib.tir_type_to_string(self._ctx._p, self.id))
+
+    def __repr__(self):
+        return self.to_string() or "<type #%d>" % self.id
 
 
 class Op:
@@ -207,25 +241,30 @@ class Context:
         finally:
             lib.tir_pipeline_destroy(pm)
 
-    def parse_type(self, spec):
-        ty = lib.tir_type_parse(self._p, spec.encode())
-        if ty == INVALID:
-            raise TirError(_last_error())
-        return ty
-
     def create_region(self):
         rid = lib.tir_region_create(self._p)
         if rid == INVALID:
             raise TirError(_last_error())
         return Region(self, rid)
 
-    def create_block(self, arg_type_ids=()):
-        ids = list(arg_type_ids)
+    def create_block(self, arg_types=()):
+        ids = [_tid(t) for t in arg_types]
         arr = (ctypes.c_uint32 * len(ids))(*ids) if ids else None
         bid = lib.tir_block_create(self._p, arr, len(ids))
         if bid == INVALID:
             raise TirError(_last_error())
         return Block(self, bid)
+
+    def _build_type(self, dialect, name, args):
+        """Build a type from ``(kind_code, value)`` pairs."""
+        arr = (TirTypeArg * len(args))(*(TirTypeArg(k, v) for k, v in args)) if args else None
+        ty = lib.tir_type_build(self._p, dialect.encode(), name.encode(), arr, len(args))
+        if ty == INVALID:
+            raise TirError(_last_error())
+        return Type(self, ty)
+
+    def _type_text(self, ty):
+        return _take_str(lib.tir_type_to_string(self._p, _tid(ty)))
 
     def _build_op(self, dialect, name, operands, result_type, attrs):
         parts = ["%s.%s" % (dialect, name)]
@@ -235,7 +274,7 @@ class Context:
             body = ", ".join("%s = %s" % (k, _attr_literal(v)) for k, v in attrs.items())
             parts.append("{%s}" % body)
         if result_type is not None:
-            parts.append(": %s" % result_type)
+            parts.append(": %s" % self._type_text(result_type))
         return self.parse_op(" ".join(parts))
 
     def register_target(self, march, mcpu=None, mattr=None):
@@ -258,6 +297,10 @@ class Context:
     @staticmethod
     def schema_json():
         return _take_str(lib.tir_schema_json())
+
+    @staticmethod
+    def type_schema_json():
+        return _take_str(lib.tir_type_schema_json())
 
 
 _STAGES = {"isel": 0, "regalloc": 1, "finalize": 2}
@@ -311,18 +354,42 @@ def _make_constructor(spec):
     return staticmethod(constructor)
 
 
-def _install_op_constructors():
-    """Build one class per dialect, each with a static constructor per op, from
-    the schema. Exposed as ``tir.<dialect>.<op>``."""
-    by_dialect = {}
+def _make_type_constructor(spec):
+    dialect, name = spec["dialect"], spec["name"]
+    kinds = [_TYPE_KINDS[p["kind"]] for p in spec["params"]]
+
+    def constructor(ctx, *args):
+        if len(args) != len(kinds):
+            raise TirError(
+                "type %s.%s expects %d arg(s), got %d" % (dialect, name, len(kinds), len(args))
+            )
+        encoded = [
+            (kind, _tid(arg) if kind == TYPEARG_TYPE else int(arg))
+            for kind, arg in zip(kinds, args)
+        ]
+        return ctx._build_type(dialect, name, encoded)
+
+    constructor.__name__ = _identifier(name)
+    constructor.__doc__ = "Construct the `%s.%s` type." % (dialect, name)
+    return staticmethod(constructor)
+
+
+def _install_constructors():
+    """Build one class per dialect from the op and type schemas, exposing
+    ``tir.<dialect>.<op>`` and ``tir.<dialect>.<type>``. Op names win on the rare
+    op/type name collision."""
+    methods_by_dialect = {}
     for spec in json.loads(Context.schema_json()):
-        by_dialect.setdefault(spec["dialect"], []).append(spec)
-    for dialect, specs in by_dialect.items():
-        methods = {_identifier(s["name"]): _make_constructor(s) for s in specs}
+        methods = methods_by_dialect.setdefault(spec["dialect"], {})
+        methods[_identifier(spec["name"])] = _make_constructor(spec)
+    for spec in json.loads(Context.type_schema_json()):
+        methods = methods_by_dialect.setdefault(spec["dialect"], {})
+        methods.setdefault(_identifier(spec["name"]), _make_type_constructor(spec))
+    for dialect, methods in methods_by_dialect.items():
         cls = type(_identifier(dialect), (), methods)
         cls.__doc__ = "Constructors for the `%s` dialect." % dialect
         globals()[_identifier(dialect)] = cls
         __all__.append(_identifier(dialect))
 
 
-_install_op_constructors()
+_install_constructors()
