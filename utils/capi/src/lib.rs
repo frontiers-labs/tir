@@ -11,7 +11,9 @@
 //! `false`) and set a thread-local message readable via [`tir_last_error`].
 
 mod inspect;
+mod mutate;
 pub use inspect::*;
+pub use mutate::*;
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
@@ -101,7 +103,7 @@ pub(crate) fn into_cstring(s: String) -> *mut c_char {
 }
 
 /// Read a `(ptr, len)` pair as `&str`, or set an error and return `None`.
-unsafe fn str_from_raw<'a>(ptr: *const c_char, len: usize) -> Option<&'a str> {
+pub(crate) unsafe fn str_from_raw<'a>(ptr: *const c_char, len: usize) -> Option<&'a str> {
     if ptr.is_null() {
         set_error("null string passed to TIR FFI");
         return None;

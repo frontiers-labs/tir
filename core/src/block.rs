@@ -73,7 +73,7 @@ impl Block {
         self.predecessors.read().clone()
     }
 
-    pub(crate) fn insert(&self, index: usize, id: OpId) {
+    pub fn insert(&self, index: usize, id: OpId) {
         self.operations.write().insert(index, id);
         self.context.upgrade().set_op_parent(id, self.id);
     }

@@ -22,6 +22,15 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
         .map_err(|_| (Span(0), Error::ExpectedOperation(T::dialect(), T::name())))
 }
 
+/// Parse a single operation from `src`, returning it detached from any block.
+/// Operand value references resolve by numeric id (e.g. `%5` is `ValueId(5)`),
+/// so callers can wire operands to existing values. The op is registered in the
+/// context; its results receive fresh value ids.
+pub fn parse_op(context: &Context, src: &str) -> Result<Box<dyn Operation>, (Span, Error)> {
+    let mut parser = TextParser::new(src);
+    parse_single_op(&mut parser, context)
+}
+
 pub(crate) fn parse_single_op<'src>(
     parser: &mut TextParser<'src>,
     context: &Context,

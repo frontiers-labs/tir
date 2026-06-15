@@ -327,6 +327,78 @@ uint32_t tir_op_attribute_type(const TirContext *ctx, uint32_t op, uintptr_t i);
  */
 uint32_t tir_op_attribute_block(const TirContext *ctx, uint32_t op, uintptr_t i);
 
+/**
+ * Parse a single detached operation from `src` (`len` bytes), returning its id
+ * or [`TIR_INVALID_ID`] on error. Operand references resolve by numeric value
+ * id (e.g. `%5` is value 5), so operands can be wired to existing values; the
+ * op's results get fresh value ids (queryable with `tir_op_result`). The op is
+ * not placed in any block until inserted with `tir_block_append_op`.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle; `src` must be null or readable for `len` bytes.
+ */
+uint32_t tir_parse_op(const TirContext *ctx, const char *src, uintptr_t len);
+
+/**
+ * Create an empty region, returning its id.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+uint32_t tir_region_create(const TirContext *ctx);
+
+/**
+ * Create a block with `n` arguments of the given type ids, returning its id.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle; `arg_types` must be null or readable
+ * for `n` `uint32_t`s.
+ */
+uint32_t tir_block_create(const TirContext *ctx, const uint32_t *arg_types, uintptr_t n);
+
+/**
+ * Append block `block` to region `region`. Returns false on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+bool tir_region_append_block(const TirContext *ctx, uint32_t region, uint32_t block);
+
+/**
+ * Append op `op` to the end of block `block`. Returns false on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+bool tir_block_append_op(const TirContext *ctx, uint32_t block, uint32_t op);
+
+/**
+ * Insert op `op` into block `block` at `index`. Returns false on error,
+ * including when `index` exceeds the block length.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+bool tir_block_insert_op(const TirContext *ctx, uint32_t block, uintptr_t index, uint32_t op);
+
+/**
+ * Remove op `op` from block `block`. Returns false if the op was not present
+ * or on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+bool tir_block_remove_op(const TirContext *ctx, uint32_t block, uint32_t op);
+
+/**
+ * Replace op `old` with op `new` in block `block`, preserving position.
+ * Returns false if `old` was not present or on error.
+ *
+ * # Safety
+ * `ctx` must be a valid context handle.
+ */
+bool tir_block_replace_op(const TirContext *ctx, uint32_t block, uint32_t old, uint32_t new_);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
