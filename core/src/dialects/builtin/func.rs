@@ -176,7 +176,7 @@ impl Terminator for ReturnOp {}
 mod tests {
     use crate::{
         Context, IRBuilder, IRFormatter, Operation,
-        builtin::{FuncOp, IntegerType, UnitType, ops},
+        builtin::{FuncOp, IntegerType, ops},
         parse::ir::parse_ir,
     };
 
@@ -212,47 +212,8 @@ mod tests {
         assert_eq!(func.body().iter(context.clone()).len(), 1);
     }
 
-    #[test]
-    fn func_roundtrip() {
-        let context = Context::with_default_dialects();
-
-        // Build function
-        let param0 = context.create_value(IntegerType::new(&context, 32), None);
-        let param1 = context.create_value(IntegerType::new(&context, 32), None);
-        let param0_id = param0.id();
-
-        let region = context.create_region();
-        let block = context.create_block(vec![param0, param1]);
-        region.add_block(block.id());
-
-        let func = ops::func(
-            &context,
-            "add",
-            IntegerType::new(&context, 32),
-            Some(region.id()),
-        )
-        .build();
-
-        let mut builder = IRBuilder::new(func.body());
-        builder.insert(ops::r#return(&context, param0_id).build());
-
-        // Print
-        let mut buf = String::new();
-        let mut f = IRFormatter::new(&mut buf);
-        func.print(&mut f).expect("print ok");
-        assert!(!buf.is_empty());
-
-        // Parse back
-        let new_context = Context::with_default_dialects();
-        let new_func = parse_ir::<FuncOp>(&new_context, &buf).expect("Failed to parse func");
-
-        // Print again
-        let mut new_buf = String::new();
-        let mut f = IRFormatter::new(&mut new_buf);
-        new_func.print(&mut f).expect("print ok");
-
-        assert_eq!(buf, new_buf);
-    }
+    // Func roundtrip coverage (single-block, multi-block, block args, void)
+    // lives in the FileCheck suite under core/checks/IRRoundtrip.
 
     #[test]
     fn parse_text_labeled_blocks() {
@@ -272,109 +233,5 @@ mod tests {
         let mut f = IRFormatter::new(&mut buf);
         func.print(&mut f).expect("print ok");
         assert!(buf.contains("^bb1:") || buf.contains("^bb"), "{buf}");
-    }
-
-    #[test]
-    fn multi_block_func_roundtrip() {
-        let context = Context::with_default_dialects();
-        let i32_ty = IntegerType::new(&context, 32);
-
-        let region = context.create_region();
-        let entry = context.create_block(vec![]);
-        let target = context.create_block(vec![]);
-        region.add_block(entry.id());
-        region.add_block(target.id());
-
-        let func = ops::func(&context, "jump", i32_ty, Some(region.id())).build();
-
-        let mut entry_b = IRBuilder::new(entry.clone());
-        entry_b.insert(ops::br(&context, vec![], target.id()).build());
-
-        let mut target_b = IRBuilder::new(target.clone());
-        let c = ops::constant(&context, 42, i32_ty).build();
-        let c_result = c.result();
-        target_b.insert(c);
-        target_b.insert(ops::r#return(&context, c_result).build());
-
-        let mut buf = String::new();
-        let mut f = IRFormatter::new(&mut buf);
-        func.print(&mut f).expect("print ok");
-        assert!(buf.contains("^bb"));
-        assert!(buf.contains("br ^bb"));
-
-        let new_context = Context::with_default_dialects();
-        let new_func = parse_ir::<FuncOp>(&new_context, &buf).expect("parse multi-block func");
-        assert!(new_func.verify(&new_context).is_ok());
-
-        let mut new_buf = String::new();
-        let mut f = IRFormatter::new(&mut new_buf);
-        new_func.print(&mut f).expect("print ok");
-        assert_eq!(buf, new_buf);
-    }
-
-    #[test]
-    fn multi_block_func_with_block_args_roundtrip() {
-        let context = Context::with_default_dialects();
-        let i32_ty = IntegerType::new(&context, 32);
-        let param = context.create_value(i32_ty, None);
-        let param_id = param.id();
-        let arg = context.create_value(i32_ty, None);
-        let arg_id = arg.id();
-
-        let region = context.create_region();
-        let entry = context.create_block(vec![param]);
-        let target = context.create_block(vec![arg]);
-        region.add_block(entry.id());
-        region.add_block(target.id());
-
-        let func = ops::func(&context, "fwd", i32_ty, Some(region.id())).build();
-
-        let mut entry_b = IRBuilder::new(entry.clone());
-        entry_b.insert(ops::br(&context, vec![param_id], target.id()).build());
-
-        let mut target_b = IRBuilder::new(target.clone());
-        target_b.insert(ops::r#return(&context, arg_id).build());
-
-        let mut buf = String::new();
-        let mut f = IRFormatter::new(&mut buf);
-        func.print(&mut f).expect("print ok");
-        assert!(buf.contains("br ^bb"));
-        assert!(buf.contains("):"));
-
-        let new_context = Context::with_default_dialects();
-        let new_func = parse_ir::<FuncOp>(&new_context, &buf).expect("parse func with block args");
-        assert!(new_func.verify(&new_context).is_ok());
-
-        let mut new_buf = String::new();
-        let mut f = IRFormatter::new(&mut new_buf);
-        new_func.print(&mut f).expect("print ok");
-        assert_eq!(buf, new_buf);
-    }
-
-    #[test]
-    fn void_func() {
-        let context = Context::with_default_dialects();
-
-        // Build void function with no parameters and no return value
-        let func = ops::func(&context, "nop", UnitType::new(&context), None).build();
-
-        // Insert return with no operand
-        let mut builder = IRBuilder::new(func.body());
-        builder.insert(ops::r#return(&context, crate::operand::Operand::none()).build());
-
-        // Print
-        let mut buf = String::new();
-        let mut f = IRFormatter::new(&mut buf);
-        func.print(&mut f).expect("print ok");
-
-        // Parse back
-        let new_context = Context::with_default_dialects();
-        let new_func = parse_ir::<FuncOp>(&new_context, &buf).expect("Failed to parse void func");
-
-        let mut new_buf = String::new();
-        let mut f = IRFormatter::new(&mut new_buf);
-        new_func.print(&mut f).expect("print ok");
-
-        assert_eq!(buf, new_buf);
     }
 }

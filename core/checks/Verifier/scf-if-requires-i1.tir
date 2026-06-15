@@ -1,0 +1,15 @@
+// RUN: not tir opt --verify %s
+
+// An scf.if condition must be i1; an i32 condition fails verification.
+
+module {
+  func @cond(%0: !i32) {
+    scf.if %0 {
+      scf.yield
+    } else {
+      scf.yield
+    }
+    return
+  }
+  module_end
+}

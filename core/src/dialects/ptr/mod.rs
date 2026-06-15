@@ -182,11 +182,7 @@ impl MemoryWrite for StoreOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        IRBuilder, IRFormatter, Operation,
-        builtin::{FuncOp, IntegerType, ops as builtin_ops},
-        parse::ir::parse_ir,
-    };
+    use crate::builtin::IntegerType;
 
     #[test]
     fn opaque_and_typed_pointer_roundtrip() {
@@ -218,39 +214,6 @@ mod tests {
         assert_eq!(PtrType::typed(&context, i32_ty), typed);
     }
 
-    #[test]
-    fn alloca_store_load_in_func_roundtrip() {
-        let context = Context::with_default_dialects();
-        let i32_ty = IntegerType::new(&context, 32);
-
-        let param = context.create_value(i32_ty, None);
-        let param_id = param.id();
-        let region = context.create_region();
-        let block = context.create_block(vec![param]);
-        region.add_block(block.id());
-
-        let func = builtin_ops::func(&context, "id", i32_ty, Some(region.id())).build();
-
-        let mut builder = IRBuilder::new(func.body());
-        let slot = builder.insert(ops::alloca(&context, PtrType::typed(&context, i32_ty)).build());
-        builder.insert(ops::store(&context, param_id, slot.result()).build());
-        let loaded = builder.insert(ops::load(&context, slot.result(), i32_ty).build());
-        builder.insert(builtin_ops::r#return(&context, loaded.result()).build());
-
-        assert!(func.verify(&context).is_ok());
-
-        let mut buf = String::new();
-        let mut f = IRFormatter::new(&mut buf);
-        func.print(&mut f).expect("print ok");
-        assert!(buf.contains("ptr.alloca"));
-        assert!(buf.contains("ptr.store"));
-        assert!(buf.contains("ptr.load"));
-
-        let new_context = Context::with_default_dialects();
-        let new_func = parse_ir::<FuncOp>(&new_context, &buf).expect("parse func");
-        let mut new_buf = String::new();
-        let mut f = IRFormatter::new(&mut new_buf);
-        new_func.print(&mut f).expect("print ok");
-        assert_eq!(buf, new_buf);
-    }
+    // The alloca/store/load roundtrip inside a function is covered by the
+    // FileCheck suite at core/checks/IRRoundtrip/ptr-alloca-store-load.tir.
 }

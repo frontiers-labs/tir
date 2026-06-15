@@ -271,11 +271,7 @@ fn verify_single_block_region_has_terminator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        IRBuilder, IRFormatter, Operation,
-        builtin::{IndexType, ops as builtin_ops},
-        parse::ir::parse_ir,
-    };
+    use crate::{IRBuilder, Operation, builtin::ops as builtin_ops};
 
     fn terminated_region(context: &Context) -> tir::RegionId {
         let region = context.create_region();
@@ -286,105 +282,8 @@ mod tests {
         region.id()
     }
 
-    fn block_arg(context: &Context, ty: tir::TypeId) -> ValueId {
-        let value = context.create_value(ty, None);
-        let id = value.id();
-        let _block = context.create_block(vec![value]);
-        id
-    }
-
-    #[test]
-    fn scf_for_roundtrip() {
-        let context = Context::with_default_dialects();
-        let index_ty = IndexType::new(&context);
-        let lower = block_arg(&context, index_ty);
-        let upper = block_arg(&context, index_ty);
-        let step = block_arg(&context, index_ty);
-
-        let op = ops::r#for(
-            &context,
-            lower,
-            upper,
-            step,
-            Some(terminated_region(&context)),
-        )
-        .build();
-
-        assert!(op.verify(&context).is_ok());
-
-        let mut buf = String::new();
-        let mut formatter = IRFormatter::new(&mut buf);
-        op.print(&mut formatter).expect("print ok");
-        assert!(buf.contains("scf.for"));
-        assert!(buf.contains("scf.yield"));
-
-        let parsed = parse_ir::<ForOp>(&context, &buf).expect("parse scf.for");
-        assert!(parsed.verify(&context).is_ok());
-    }
-
-    #[test]
-    fn scf_if_roundtrip() {
-        let context = Context::with_default_dialects();
-        let condition = block_arg(&context, IntegerType::new(&context, 1));
-
-        let op = ops::r#if(
-            &context,
-            condition,
-            Some(terminated_region(&context)),
-            Some(terminated_region(&context)),
-        )
-        .build();
-
-        assert!(op.verify(&context).is_ok());
-
-        let mut buf = String::new();
-        let mut formatter = IRFormatter::new(&mut buf);
-        op.print(&mut formatter).expect("print ok");
-        assert!(buf.contains("scf.if"));
-        assert!(buf.contains("else"));
-
-        let parsed = parse_ir::<IfOp>(&context, &buf).expect("parse scf.if");
-        assert!(parsed.verify(&context).is_ok());
-    }
-
-    #[test]
-    fn scf_while_roundtrip() {
-        let context = Context::with_default_dialects();
-        let condition = block_arg(&context, IntegerType::new(&context, 1));
-
-        let op = ops::r#while(&context, condition, Some(terminated_region(&context))).build();
-
-        assert!(op.verify(&context).is_ok());
-
-        let mut buf = String::new();
-        let mut formatter = IRFormatter::new(&mut buf);
-        op.print(&mut formatter).expect("print ok");
-        assert!(buf.contains("scf.while"));
-
-        let parsed = parse_ir::<WhileOp>(&context, &buf).expect("parse scf.while");
-        assert!(parsed.verify(&context).is_ok());
-    }
-
-    #[test]
-    fn scf_if_requires_i1_condition() {
-        let context = Context::with_default_dialects();
-        let condition = block_arg(&context, IntegerType::new(&context, 32));
-
-        let op = ops::r#if(
-            &context,
-            condition,
-            Some(terminated_region(&context)),
-            Some(terminated_region(&context)),
-        )
-        .build();
-
-        let error = op.verify(&context).expect_err("condition must be i1");
-        assert!(
-            error
-                .to_string()
-                .contains("expected constraint crate::Integer<1>")
-        );
-    }
+    // Roundtrip and verifier coverage for scf.for/if/while lives in the
+    // FileCheck suite under core/checks (IRRoundtrip and Verifier).
 
     #[test]
     fn scf_ops_nest_in_function() {

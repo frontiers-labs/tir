@@ -1,0 +1,21 @@
+// RUN: tir opt %s | filecheck %s
+
+module {
+  func @loop(%0: !index, %1: !index, %2: !index) {
+    scf.for %0, %1, %2 {
+      scf.yield
+    }
+    return
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: func @loop(%{{[0-9]+}}: !index, %{{[0-9]+}}: !index, %{{[0-9]+}}: !index) {
+// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} {
+// CHECK-NEXT: scf.yield
+// CHECK-NEXT: }
+// CHECK-NEXT: return
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }

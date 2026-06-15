@@ -1,0 +1,21 @@
+// RUN: tir opt %s | filecheck %s
+
+module {
+  func @id(%0: !i32) -> !i32 {
+    %1 = ptr.alloca : !ptr.p<!i32>
+    ptr.store %0, %1
+    %2 = ptr.load %1 : !i32
+    return %2
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: func @id(%{{[0-9]+}}: !i32) -> !i32 {
+// CHECK-NEXT: %{{[0-9]+}} = ptr.alloca : !ptr.p<!i32>
+// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32
+// CHECK-NEXT: return %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }

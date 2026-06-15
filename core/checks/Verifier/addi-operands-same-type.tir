@@ -1,0 +1,13 @@
+// RUN: not tir opt --verify %s
+
+// addi requires both operands to share a type; mixing i32 and i64 fails.
+
+module {
+  func @f() -> !i32 {
+    %0 = constant {value = 1} : !i32
+    %1 = constant {value = 2} : !i64
+    %2 = addi %0, %1 : !i32
+    return %2
+  }
+  module_end
+}

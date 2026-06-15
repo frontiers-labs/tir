@@ -1,0 +1,15 @@
+// RUN: tir opt %s | filecheck %s
+
+module {
+  func @nop() {
+    return
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: func @nop() {
+// CHECK-NEXT: return
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }

@@ -222,29 +222,10 @@ fn callee_attr(op: &impl Operation) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        Context, IRBuilder, IRFormatter, Operation,
-        builtin::{FuncOp, IntegerType},
-        parse::ir::parse_ir,
-    };
+    use crate::{Context, IRBuilder, builtin::IntegerType};
 
-    fn roundtrip(src: &str) -> String {
-        let context = Context::with_default_dialects();
-        let func = parse_ir::<FuncOp>(&context, src).expect("parse func with call");
-        assert!(func.verify(&context).is_ok());
-
-        let mut buf = String::new();
-        let mut fmt = IRFormatter::new(&mut buf);
-        func.print(&mut fmt).expect("print ok");
-
-        let context2 = Context::with_default_dialects();
-        let func2 = parse_ir::<FuncOp>(&context2, &buf).expect("reparse printed call");
-        let mut buf2 = String::new();
-        let mut fmt = IRFormatter::new(&mut buf2);
-        func2.print(&mut fmt).expect("print ok");
-        assert_eq!(buf, buf2);
-        buf
-    }
+    // Call roundtrip coverage (direct, void, indirect) lives in the FileCheck
+    // suite at core/checks/IRRoundtrip/call.tir.
 
     #[test]
     fn call_construction() {
@@ -266,41 +247,6 @@ mod tests {
         assert_eq!(call.callee(), "foo");
         assert_eq!(call.args(), vec![a_id, b_id]);
         assert_eq!(context.get_value(call.result()).ty(), i32_ty);
-    }
-
-    #[test]
-    fn call_roundtrip() {
-        let printed = roundtrip(
-            r#"func @caller(%0: !i32, %1: !i32) -> !i32 {
-    %2 = call @foo(%0, %1 : !i32, !i32) -> !i32
-    return %2
-  }"#,
-        );
-        assert!(printed.contains("call @foo("), "{printed}");
-        assert!(printed.contains("-> !i32"), "{printed}");
-    }
-
-    #[test]
-    fn void_call_roundtrip() {
-        let printed = roundtrip(
-            r#"func @caller() {
-    call @bar()
-    return
-  }"#,
-        );
-        assert!(printed.contains("call @bar()"), "{printed}");
-        assert!(!printed.contains("= call"), "{printed}");
-    }
-
-    #[test]
-    fn indirect_call_roundtrip() {
-        let printed = roundtrip(
-            r#"func @caller(%0: !i64, %1: !i32) -> !i32 {
-    %2 = indirect_call %0(%1 : !i32) -> !i32
-    return %2
-  }"#,
-        );
-        assert!(printed.contains("indirect_call %"), "{printed}");
     }
 
     #[test]

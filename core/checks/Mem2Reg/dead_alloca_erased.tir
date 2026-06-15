@@ -1,0 +1,15 @@
+// RUN: tir opt --pass mem2reg %s | filecheck %s
+
+// An alloca with no loads or stores is dead and is erased outright.
+
+module {
+  func @dead() {
+    %0 = ptr.alloca : !ptr.p<!i32>
+    return
+  }
+  module_end
+}
+
+// CHECK-LABEL: func @dead
+// CHECK-NOT: ptr.alloca
+// CHECK: return

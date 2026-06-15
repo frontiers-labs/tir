@@ -1,0 +1,21 @@
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
+
+// A builtin i32 add lowers to the RISC-V word add, wrapped in an asm.symbol
+// carrying the function's argument registers and terminated by a vret.
+
+module {
+  func @demo(%0: !i32, %1: !i32) -> !i32 {
+    %2 = addi %0, %1 : !i32
+    return %2
+  }
+  module_end
+}
+
+// CHECK:      module {
+// CHECK-NEXT:   asm.symbol {name = "demo", arg_regs = [%virt0:GPR, %virt1:GPR]} {
+// CHECK-NEXT:     riscv.addw {rd = %virt2:GPR, rs1 = %virt0:GPR, rs2 = %virt1:GPR}
+// CHECK-NEXT:     riscv.vret %2
+// CHECK-NEXT:     asm.symbol_end
+// CHECK-NEXT:   }
+// CHECK-NEXT:   module_end
+// CHECK-NEXT: }

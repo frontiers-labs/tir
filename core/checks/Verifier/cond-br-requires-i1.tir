@@ -1,0 +1,14 @@
+// RUN: not tir opt --verify %s
+
+// A cond_br condition must be i1; an i32 condition fails verification.
+
+module {
+  func @select(%0: !i32) {
+    cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    return
+  ^bb2:
+    return
+  }
+  module_end
+}

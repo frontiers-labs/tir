@@ -279,8 +279,8 @@ operation! {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Context, IRBuilder, IRFormatter, Operation,
-        builtin::{AddIOp, FuncOp, IntegerType, ops},
+        Context, Operation,
+        builtin::{AddIOp, IntegerType, ops},
         graph::Dag,
         parse::ir::parse_ir,
         sem_expr::{AsSemExpr, ExprKind, ExprPayload, ExprPostGraph},
@@ -355,69 +355,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn arith_roundtrip_in_func() {
-        let context = Context::with_default_dialects();
-        let param0 = context.create_value(IntegerType::new(&context, 32), None);
-        let param1 = context.create_value(IntegerType::new(&context, 32), None);
-
-        let region = context.create_region();
-        let block = context.create_block(vec![param0, param1]);
-        region.add_block(block.id());
-
-        let func = ops::func(
-            &context,
-            "arith_demo",
-            IntegerType::new(&context, 32),
-            Some(region.id()),
-        )
-        .build();
-
-        let mut builder = IRBuilder::new(func.body());
-
-        let c1 = ops::constant(&context, 7, IntegerType::new(&context, 32)).build();
-        let c2 = ops::constant(&context, 6, IntegerType::new(&context, 32)).build();
-        let mul = ops::muli(
-            &context,
-            c1.result(),
-            c2.result(),
-            IntegerType::new(&context, 32),
-        )
-        .build();
-        let add = ops::addi(
-            &context,
-            mul.result(),
-            block.arguments()[0].id(),
-            IntegerType::new(&context, 32),
-        )
-        .build();
-        let add_result = add.result();
-
-        builder.insert(c1);
-        builder.insert(c2);
-        builder.insert(mul);
-        builder.insert(add);
-        builder.insert(ops::r#return(&context, add_result).build());
-
-        assert!(func.verify(&context).is_ok());
-
-        let mut buf = String::new();
-        let mut f = IRFormatter::new(&mut buf);
-        func.print(&mut f).expect("print ok");
-        assert!(buf.contains("addi"));
-        assert!(buf.contains("muli"));
-        assert!(buf.contains("constant"));
-        assert!(buf.contains("%"));
-        assert!(buf.contains(" = "));
-
-        let new_context = Context::with_default_dialects();
-        let new_func = parse_ir::<FuncOp>(&new_context, &buf).expect("Failed to parse function");
-
-        let mut new_buf = String::new();
-        let mut f = IRFormatter::new(&mut new_buf);
-        new_func.print(&mut f).expect("print ok");
-        assert_eq!(buf, new_buf);
-    }
+    // Arithmetic roundtrip in a function lives in the FileCheck suite at
+    // core/checks/IRRoundtrip/arith.tir.
 
     #[test]
     fn parse_single_addi_with_result_prefix() {
@@ -439,25 +378,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn addi_verify_fails_for_mismatched_operand_types() {
-        let context = Context::with_default_dialects();
-        let lhs = ops::constant(&context, 1, IntegerType::new(&context, 32)).build();
-        let rhs = ops::constant(&context, 2, IntegerType::new(&context, 64)).build();
-
-        let op = ops::addi(
-            &context,
-            lhs.result(),
-            rhs.result(),
-            IntegerType::new(&context, 32),
-        )
-        .build();
-
-        let err = op
-            .verify(&context)
-            .expect_err("expected SameOperandType verification to fail");
-        assert!(err.to_string().contains("operand types must be the same"));
-    }
+    // The SameOperandType verifier failure is covered by the FileCheck suite at
+    // core/checks/Verifier/addi-operands-same-type.tir.
 
     fn make_binary_op_context() -> (Context, crate::ValueId, crate::ValueId) {
         let context = Context::with_default_dialects();

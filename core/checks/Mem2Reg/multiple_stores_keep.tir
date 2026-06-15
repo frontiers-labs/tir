@@ -1,0 +1,19 @@
+// RUN: tir opt --pass mem2reg %s | filecheck %s
+
+// Two stores to the same slot would need a phi to merge the reaching values,
+// which this pass does not build, so the slot is conservatively kept in memory.
+
+module {
+  func @twostores(%0: !i32, %1: !i32) -> !i32 {
+    %2 = ptr.alloca : !ptr.p<!i32>
+    ptr.store %0, %2
+    ptr.store %1, %2
+    %3 = ptr.load %2 : !i32
+    return %3
+  }
+  module_end
+}
+
+// CHECK-LABEL: func @twostores
+// CHECK: ptr.store
+// CHECK: ptr.load

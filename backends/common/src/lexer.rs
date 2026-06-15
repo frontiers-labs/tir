@@ -120,9 +120,21 @@ mod tests {
     ret
 ";
 
-        let tokens = lex(program);
-        assert!(tokens.is_ok());
-
-        insta::assert_debug_snapshot!(tokens.unwrap());
+        assert_eq!(
+            lex(program),
+            Ok(vec![
+                Token::Text,
+                Token::Global,
+                Token::Ident("_start"),
+                Token::Label("_start"),
+                Token::Ident("inst1"),
+                Token::Ident("r1"),
+                Token::Comma,
+                Token::Ident("r2"),
+                Token::Comma,
+                Token::Ident("r3"),
+                Token::Ident("ret"),
+            ])
+        );
     }
 }

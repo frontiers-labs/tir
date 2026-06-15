@@ -425,23 +425,8 @@ mod tests {
         assert!(instance.as_interface::<dyn Terminator>().is_some());
     }
 
-    #[test]
-    fn cond_br_requires_i1_condition() {
-        let context = Context::with_default_dialects();
-        let cond = context.create_value(IntegerType::new(&context, 32), None);
-        let cond_id = cond.id();
-        let _block = context.create_block(vec![cond]);
-        let t = context.create_block(vec![]);
-        let f = context.create_block(vec![]);
-
-        let op = ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build();
-        let error = op.verify(&context).expect_err("condition must be i1");
-        assert!(
-            error
-                .to_string()
-                .contains("expected constraint crate::Integer<1>")
-        );
-    }
+    // The cond_br i1-condition verifier failure is covered by the FileCheck
+    // suite at core/checks/Verifier/cond-br-requires-i1.tir.
 
     #[test]
     fn branch_terminates_function_block() {

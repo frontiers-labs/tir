@@ -228,7 +228,7 @@ fn load_result(context: &Context, load: OpId) -> ValueId {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Context, IRBuilder, IRFormatter, OpId, Operand, Operation, PassManager,
+        Context, IRBuilder, OpId, Operation, PassManager,
         builtin::{IntegerType, ops as b},
         ptr::{PtrType, ops as p},
     };
@@ -241,40 +241,8 @@ mod tests {
         pm.run(context, context.get_op(func)).expect("mem2reg");
     }
 
-    fn print_func(func: &impl Operation) -> String {
-        let mut out = String::new();
-        let mut fmt = IRFormatter::new(&mut out);
-        func.print(&mut fmt).expect("print");
-        out
-    }
-
-    #[test]
-    fn promotes_linear_stack_slot() {
-        let context = Context::with_default_dialects();
-        let i32_ty = IntegerType::new(&context, 32);
-        let param = context.create_value(i32_ty, None);
-        let param_id = param.id();
-        let region = context.create_region();
-        let block = context.create_block(vec![param]);
-        region.add_block(block.id());
-        let func = b::func(&context, "id", i32_ty, Some(region.id())).build();
-
-        let mut builder = IRBuilder::new(func.body());
-        let slot = builder.insert(p::alloca(&context, PtrType::typed(&context, i32_ty)).build());
-        builder.insert(p::store(&context, param_id, slot.result()).build());
-        let loaded = builder
-            .insert(p::load(&context, slot.result(), i32_ty).build())
-            .result();
-        builder.insert(b::r#return(&context, loaded).build());
-
-        run_mem2reg(&context, func.id());
-
-        let out = print_func(&func);
-        assert!(!out.contains("ptr.alloca"));
-        assert!(!out.contains("ptr.store"));
-        assert!(!out.contains("ptr.load"));
-        assert!(out.contains(&format!("return %{}", param_id.number())));
-    }
+    // Linear stack-slot promotion is covered by the FileCheck suite at
+    // core/checks/Mem2Reg/basic.tir.
 
     /// A store in the entry block dominates a load in a successor block, so the
     /// value is forwarded across the branch.
@@ -363,61 +331,7 @@ mod tests {
         assert!(context.has_operation(load_id));
     }
 
-    /// Two stores to the same slot need a merge (a phi) that this pass does not
-    /// build, so the slot is conservatively kept.
-    #[test]
-    fn keeps_slot_with_multiple_stores() {
-        let context = Context::with_default_dialects();
-        let i32_ty = IntegerType::new(&context, 32);
-        let a = context.create_value(i32_ty, None);
-        let bb = context.create_value(i32_ty, None);
-        let a_id = a.id();
-        let b_id = bb.id();
-
-        let region = context.create_region();
-        let block = context.create_block(vec![a, bb]);
-        region.add_block(block.id());
-        let func = b::func(&context, "twostores", i32_ty, Some(region.id())).build();
-
-        let mut builder = IRBuilder::new(func.body());
-        let slot = builder.insert(p::alloca(&context, PtrType::typed(&context, i32_ty)).build());
-        let slot_ptr = slot.result();
-        builder.insert(p::store(&context, a_id, slot_ptr).build());
-        builder.insert(p::store(&context, b_id, slot_ptr).build());
-        let loaded = builder
-            .insert(p::load(&context, slot_ptr, i32_ty).build())
-            .result();
-        builder.insert(b::r#return(&context, loaded).build());
-
-        run_mem2reg(&context, func.id());
-
-        let out = print_func(&func);
-        assert!(out.contains("ptr.store"), "{out}");
-        assert!(out.contains("ptr.load"), "{out}");
-    }
-
-    #[test]
-    fn erases_dead_unused_alloca() {
-        let context = Context::with_default_dialects();
-        let i32_ty = IntegerType::new(&context, 32);
-        let region = context.create_region();
-        let block = context.create_block(vec![]);
-        region.add_block(block.id());
-        let func = b::func(
-            &context,
-            "dead",
-            crate::builtin::UnitType::new(&context),
-            Some(region.id()),
-        )
-        .build();
-
-        let mut builder = IRBuilder::new(func.body());
-        builder.insert(p::alloca(&context, PtrType::typed(&context, i32_ty)).build());
-        builder.insert(b::r#return(&context, Operand::none()).build());
-
-        run_mem2reg(&context, func.id());
-
-        let out = print_func(&func);
-        assert!(!out.contains("ptr.alloca"), "{out}");
-    }
+    // The multiple-stores keep case and the dead-alloca erase case are covered
+    // by the FileCheck suite at core/checks/Mem2Reg/multiple_stores_keep.tir and
+    // core/checks/Mem2Reg/dead_alloca_erased.tir.
 }
