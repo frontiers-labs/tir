@@ -8,7 +8,7 @@
 //! hand.
 
 fn main() {
-    let tir = tir_lit::cargo_test_bin("tir", "tir");
+    let tir = tir_lit::cargo_test_bin("tir-tools", "tir");
     let tir = tir.to_str().expect("tir path must be valid UTF-8");
 
     tir_lit::harness_main(
