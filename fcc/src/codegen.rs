@@ -186,7 +186,7 @@ impl FnCodegen<'_> {
         self.values.clear();
         let mut base = root.index();
 
-        for node in ast.postorder_from(root) {
+        for node in ast.postorder(root) {
             if self.values.is_empty() {
                 base = node.index();
             }

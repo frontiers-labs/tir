@@ -38,11 +38,6 @@ impl<N, L> PostOrderDag<N, L> {
         bits[idx / 64] |= 1u64 << (idx % 64);
     }
 
-    fn contains_reachable(&self, root: NodeId, target: NodeId) -> bool {
-        let idx = target.index();
-        (self.descendants[root.index()][idx / 64] & (1u64 << (idx % 64))) != 0
-    }
-
     fn merge_descendants(&mut self, into: NodeId, from: NodeId) -> bool {
         let src = self.descendants[from.index()].clone();
         self.merge_bits(into, &src)
@@ -70,32 +65,6 @@ impl<N, L> PostOrderDag<N, L> {
         }
     }
 
-    /// Post-order traversal of the subtree reachable from `root`, like
-    /// [`Dag::postorder`] but starting the scan at `root`'s lowest-indexed
-    /// descendant instead of node 0. For a tree (every node has one parent) a
-    /// subtree occupies a contiguous index range, so this visits exactly the
-    /// subtree — `O(subtree)` rather than `O(root index)`.
-    pub fn postorder_from(&self, root: NodeId) -> PostOrderDagIter<'_, N, L> {
-        PostOrderDagIter {
-            dag: self,
-            root,
-            next_index: self.first_descendant(root),
-            end_index: root.index(),
-        }
-    }
-
-    /// The smallest index reachable from `root`. `root` always marks itself, so
-    /// the result never exceeds `root.index()`.
-    fn first_descendant(&self, root: NodeId) -> usize {
-        let bits = &self.descendants[root.index()];
-        for (word, &mask) in bits.iter().enumerate() {
-            if mask != 0 {
-                return word * 64 + mask.trailing_zeros() as usize;
-            }
-        }
-        root.index()
-    }
-
     fn nth_preorder(&self, node: NodeId, remaining: &mut usize) -> Option<NodeId> {
         if *remaining == 0 {
             return Some(node);
@@ -119,27 +88,38 @@ impl<N, L> Default for PostOrderDag<N, L> {
     }
 }
 
-pub struct PostOrderDagIter<'a, N, L> {
-    dag: &'a PostOrderDag<N, L>,
-    root: NodeId,
-    next_index: usize,
-    end_index: usize,
+/// Yields a root's reachable set — its post-order traversal, since nodes are
+/// stored in post order — by walking the descendant bitmask directly: it scans
+/// only set bits (skipping empty words) instead of testing every index.
+pub struct PostOrderDagIter<'a> {
+    bits: &'a [u64],
+    word: usize,
+    current: u64,
 }
 
-impl<N, L> Iterator for PostOrderDagIter<'_, N, L> {
+impl<'a> PostOrderDagIter<'a> {
+    fn new(bits: &'a [u64]) -> Self {
+        Self {
+            bits,
+            word: 0,
+            current: bits.first().copied().unwrap_or(0),
+        }
+    }
+}
+
+impl Iterator for PostOrderDagIter<'_> {
     type Item = NodeId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.next_index <= self.end_index {
-            let candidate = NodeId::from_index(self.next_index);
-            self.next_index += 1;
-
-            if self.dag.contains_reachable(self.root, candidate) {
-                return Some(candidate);
+        loop {
+            if self.current != 0 {
+                let bit = self.current.trailing_zeros() as usize;
+                self.current &= self.current - 1;
+                return Some(NodeId::from_index(self.word * 64 + bit));
             }
+            self.word += 1;
+            self.current = *self.bits.get(self.word)?;
         }
-
-        None
     }
 }
 
@@ -198,12 +178,7 @@ impl<N, L> Dag for PostOrderDag<N, L> {
     }
 
     fn postorder(&self, start: NodeId) -> impl Iterator<Item = NodeId> {
-        PostOrderDagIter {
-            dag: self,
-            root: start,
-            next_index: 0,
-            end_index: start.index(),
-        }
+        PostOrderDagIter::new(&self.descendants[start.index()])
     }
 
     fn preorder(&self, start: NodeId) -> impl Iterator<Item = NodeId> {
@@ -285,20 +260,19 @@ mod tests {
     }
 
     #[test]
-    fn postorder_from_matches_global_postorder_at_root() {
+    fn postorder_at_root_visits_every_node_in_order() {
         let (dag, root) = sample();
-        let global: Vec<_> = dag.postorder(root).collect();
-        let from: Vec<_> = dag.postorder_from(root).collect();
-        assert_eq!(global, from);
-        assert_eq!(from.len(), dag.len());
+        let nodes: Vec<_> = dag.postorder(root).collect();
+        let expected: Vec<_> = (0..dag.len()).map(NodeId::from_index).collect();
+        assert_eq!(nodes, expected);
     }
 
     #[test]
-    fn postorder_from_visits_only_the_subtree() {
+    fn postorder_visits_only_the_subtree() {
         let (dag, _root) = sample();
         // The right `Add` is node 5; its subtree is nodes 3, 4, 5.
         let right = NodeId::from_index(5);
-        let nodes: Vec<_> = dag.postorder_from(right).collect();
+        let nodes: Vec<_> = dag.postorder(right).collect();
         assert_eq!(
             nodes,
             vec![
