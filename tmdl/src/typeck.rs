@@ -637,6 +637,35 @@ fn map_param_tys(
     }
 }
 
+/// Infer a `map`/`reduce` lambda's body with its parameters bound to `param_tys`,
+/// returning the body's (result) type and recording the lambda's `fn` type.
+#[allow(clippy::too_many_arguments)]
+fn infer_lambda<'a>(
+    lambda_arg: &'a ast::Expr,
+    param_tys: &[Type],
+    env: &TypeEnv,
+    tvg: &mut TypeVarGen,
+    subst: &mut Substitution,
+    cache: &mut TypeCache<'a>,
+    diags: &mut Vec<(String, Diag)>,
+    file_name: &str,
+) -> Type {
+    let ast::Expr::Lambda(lambda) = lambda_arg else {
+        // Not a lambda where one is required; infer generically so the body is
+        // still checked. The lowering reports the misuse.
+        return infer(lambda_arg, env, tvg, subst, cache, diags, file_name);
+    };
+    let mut body_env = env.clone();
+    for (name, ty) in lambda.params.iter().zip(param_tys) {
+        body_env.bind(name.clone(), TypeScheme::mono(ty.clone()));
+    }
+    let ret = infer(&lambda.body, &body_env, tvg, subst, cache, diags, file_name);
+    let mut fields: Vec<Type> = param_tys.to_vec();
+    fields.push(ret.clone());
+    cache.insert(lambda_arg, Type::Con("fn".into(), fields));
+    ret
+}
+
 #[cfg(test)]
 mod tests {
     use super::check;
@@ -694,33 +723,4 @@ mod tests {
         );
         assert!(type_check_source(&src).is_empty());
     }
-}
-
-/// Infer a `map`/`reduce` lambda's body with its parameters bound to `param_tys`,
-/// returning the body's (result) type and recording the lambda's `fn` type.
-#[allow(clippy::too_many_arguments)]
-fn infer_lambda<'a>(
-    lambda_arg: &'a ast::Expr,
-    param_tys: &[Type],
-    env: &TypeEnv,
-    tvg: &mut TypeVarGen,
-    subst: &mut Substitution,
-    cache: &mut TypeCache<'a>,
-    diags: &mut Vec<(String, Diag)>,
-    file_name: &str,
-) -> Type {
-    let ast::Expr::Lambda(lambda) = lambda_arg else {
-        // Not a lambda where one is required; infer generically so the body is
-        // still checked. The lowering reports the misuse.
-        return infer(lambda_arg, env, tvg, subst, cache, diags, file_name);
-    };
-    let mut body_env = env.clone();
-    for (name, ty) in lambda.params.iter().zip(param_tys) {
-        body_env.bind(name.clone(), TypeScheme::mono(ty.clone()));
-    }
-    let ret = infer(&lambda.body, &body_env, tvg, subst, cache, diags, file_name);
-    let mut fields: Vec<Type> = param_tys.to_vec();
-    fields.push(ret.clone());
-    cache.insert(lambda_arg, Type::Con("fn".into(), fields));
-    ret
 }
