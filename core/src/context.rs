@@ -82,6 +82,11 @@ fn slab_get<T>(slab: &[Option<T>], idx: usize) -> Option<&T> {
     slab.get(idx).and_then(Option::as_ref)
 }
 
+/// Mutable counterpart of [`slab_get`], for in-place edits via `Arc::make_mut`.
+fn slab_get_mut<T>(slab: &mut [Option<T>], idx: usize) -> Option<&mut T> {
+    slab.get_mut(idx).and_then(Option::as_mut)
+}
+
 /// Insert into a slab arena at a dense id, growing the backing vector as needed.
 /// Ids come from per-context monotonic counters, so the vector stays dense.
 fn slab_put<T>(slab: &mut Vec<Option<T>>, idx: usize, val: T) {
@@ -190,22 +195,16 @@ impl Context {
 
         // Results are created before op id assignment in builders; patch their def-site now.
         for result_id in &instance.results {
-            if let Some(value) = slab_get(&inner.values, result_id.index()).cloned() {
-                slab_put(
-                    &mut inner.values,
-                    result_id.index(),
-                    Arc::new((*value).clone().with_defining_op(op_id)),
-                );
+            if let Some(value) = slab_get_mut(&mut inner.values, result_id.index()) {
+                Arc::make_mut(value).set_defining_op(op_id);
             }
         }
 
         // Register this op as a use of each operand value, so `Value::uses` is a live
         // def-use chain. Detached again when the op is erased or replaced.
         for (index, operand) in instance.operands.iter().enumerate() {
-            if let Some(value) = slab_get(&inner.values, operand.index()).cloned() {
-                let mut value = (*value).clone();
-                value.add_use(op_id, crate::UseSite::Operand(index));
-                slab_put(&mut inner.values, operand.index(), Arc::new(value));
+            if let Some(value) = slab_get_mut(&mut inner.values, operand.index()) {
+                Arc::make_mut(value).add_use(op_id, crate::UseSite::Operand(index));
             }
         }
 
@@ -223,17 +222,16 @@ impl Context {
                 continue;
             };
             let value_id = ValueId::from_number(*id);
-            let Some(value) = slab_get(&inner.values, value_id.index()).cloned() else {
+            let Some(value) = slab_get_mut(&mut inner.values, value_id.index()) else {
                 continue;
             };
-            let mut value = (*value).clone();
+            let value = Arc::make_mut(value);
             if matches!(role, AttributeRole::Use | AttributeRole::ReadWrite) {
                 value.add_use(op_id, crate::UseSite::Attribute(attr_name));
             }
             if matches!(role, AttributeRole::Def | AttributeRole::ReadWrite) {
-                value = value.with_defining_op(op_id);
+                value.set_defining_op(op_id);
             }
-            slab_put(&mut inner.values, value_id.index(), Arc::new(value));
         }
 
         for r in &instance.regions {
@@ -259,10 +257,8 @@ impl Context {
     /// does not update `Value::uses`, since physical registers are not SSA values.
     pub fn set_op_attributes(&self, id: OpId, attributes: Vec<crate::attributes::NamedAttribute>) {
         let mut inner = self.0.write();
-        if let Some(existing) = slab_get(&inner.operations, id.index()).cloned() {
-            let mut updated = (*existing).clone();
-            updated.attributes = attributes;
-            slab_put(&mut inner.operations, id.index(), Arc::new(updated));
+        if let Some(existing) = slab_get_mut(&mut inner.operations, id.index()) {
+            Arc::make_mut(existing).attributes = attributes;
         }
     }
 
@@ -331,10 +327,8 @@ impl Context {
 
         let mut inner = self.0.write();
         for value_id in touched {
-            if let Some(value) = slab_get(&inner.values, value_id.index()).cloned() {
-                let mut value = (*value).clone();
-                value.remove_uses_of(op.id);
-                slab_put(&mut inner.values, value_id.index(), Arc::new(value));
+            if let Some(value) = slab_get_mut(&mut inner.values, value_id.index()) {
+                Arc::make_mut(value).remove_uses_of(op.id);
             }
         }
     }
@@ -360,30 +354,19 @@ impl Context {
                 continue;
             };
 
-            let Some(op) = slab_get(&inner.operations, use_site.op().index()).cloned() else {
+            let Some(op) = slab_get_mut(&mut inner.operations, use_site.op().index()) else {
                 continue;
             };
             if op.operands.get(index).copied() != Some(old) {
                 continue;
             }
+            Arc::make_mut(op).operands[index] = new;
 
-            let mut new_instance = (*op).clone();
-            new_instance.operands[index] = new;
-            slab_put(
-                &mut inner.operations,
-                use_site.op().index(),
-                Arc::new(new_instance),
-            );
-
-            if let Some(old_value) = slab_get(&inner.values, old.index()).cloned() {
-                let mut old_value = (*old_value).clone();
-                old_value.remove_use(use_site.op(), use_site.site());
-                slab_put(&mut inner.values, old.index(), Arc::new(old_value));
+            if let Some(old_value) = slab_get_mut(&mut inner.values, old.index()) {
+                Arc::make_mut(old_value).remove_use(use_site.op(), use_site.site());
             }
-            if let Some(new_value) = slab_get(&inner.values, new.index()).cloned() {
-                let mut new_value = (*new_value).clone();
-                new_value.add_use(use_site.op(), use_site.site());
-                slab_put(&mut inner.values, new.index(), Arc::new(new_value));
+            if let Some(new_value) = slab_get_mut(&mut inner.values, new.index()) {
+                Arc::make_mut(new_value).add_use(use_site.op(), use_site.site());
             }
         }
     }

@@ -6,7 +6,7 @@
 use std::fmt::Write;
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use logos::Logos;
 
 use fcc::ast::Ast;
@@ -14,7 +14,7 @@ use fcc::codegen::codegen;
 use fcc::diagnostics::{Span, intern_file};
 use fcc::lexer::Token;
 use fcc::parser::parse;
-use tir::Context;
+use tir::{Context, Operation};
 
 /// Build a translation unit with `funcs` functions, each declaring `stmts`
 /// locals over progressively deeper expressions before returning one.
@@ -95,6 +95,31 @@ fn bench_codegen_expr_heavy(c: &mut Criterion) {
     group.finish();
 }
 
+/// Run mem2reg over the decl-heavy unit. fcc lowers locals to alloca/load/store,
+/// so promotion is replace-uses heavy; `iter_batched` rebuilds fresh IR per run so
+/// only the pass is timed.
+fn bench_mem2reg(c: &mut Criterion) {
+    let src = gen_source(50, 40);
+    let ast = parse_src(&src);
+
+    let mut group = c.benchmark_group("fcc/mem2reg");
+    group.bench_function("promote", |b| {
+        b.iter_batched(
+            || {
+                let ctx = Context::with_default_dialects();
+                let module = codegen(&ctx, &ast).unwrap();
+                (ctx, module)
+            },
+            |(ctx, module)| {
+                let mut pm = tir::parse_pipeline("builtin.func(mem2reg)").unwrap();
+                pm.run(&ctx, ctx.get_op(module.id())).unwrap();
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 fn bench_pipeline(c: &mut Criterion) {
     let src = gen_source(50, 40);
 
@@ -113,6 +138,7 @@ criterion_group!(
     benches,
     bench_codegen,
     bench_codegen_expr_heavy,
+    bench_mem2reg,
     bench_pipeline
 );
 criterion_main!(benches);

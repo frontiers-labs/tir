@@ -53,8 +53,12 @@ impl Value {
     }
 
     pub fn with_defining_op(mut self, op: OpId) -> Self {
-        self.defining_op = Some(op);
+        self.set_defining_op(op);
         self
+    }
+
+    pub(crate) fn set_defining_op(&mut self, op: OpId) {
+        self.defining_op = Some(op);
     }
 
     /// The operations that reference this value, with where the reference sits (see
