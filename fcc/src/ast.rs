@@ -1,7 +1,10 @@
-//! A tiny C abstract syntax tree — only the constructs needed to drive a
-//! simple integer function (parameters, local `int` variables, arithmetic and
-//! `return`) down to IR. There are no types beyond `int`/`void`, no control
-//! flow, and no pointers at the source level.
+//! A small C abstract syntax tree covering a C89/C99 subset: `int`/`void`
+//! functions, local `int` variables, control flow (`if`/`else`, `while`,
+//! `do`/`while`, `for`, `break`, `continue`), compound blocks, the usual
+//! arithmetic/relational/logical operators and function calls. There are no
+//! types beyond `int`/`void` and no pointers at the source level. Codegen
+//! currently lowers only the original arithmetic subset; the rest is parsed
+//! and stubbed.
 //!
 //! The tree is stored in core's [`PostOrderDag`], the same cache-friendly,
 //! post-order layout the semantic-expression graph uses: node *kinds* live in a
@@ -34,10 +37,41 @@ pub enum AstKind {
     Assign,
     /// Child: the optional returned expression.
     Return,
+    /// Children: the block's statements.
+    Block,
+    /// Child: the wrapped expression (an expression used as a statement).
+    ExprStmt,
+    /// Children: condition, then-branch, and an optional else-branch.
+    If,
+    /// Children: condition, body.
+    While,
+    /// Children: body, condition.
+    DoWhile,
+    /// Children: init, condition, step, body. Omitted clauses are [`AstKind::Empty`].
+    For,
+    Break,
+    Continue,
+    /// A placeholder for an omitted `for` clause or a null statement.
+    Empty,
     /// Children: left-hand side, right-hand side.
     Add,
     Sub,
     Mul,
+    Div,
+    Mod,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
+    LogAnd,
+    LogOr,
+    /// Child: the single operand.
+    Neg,
+    Not,
+    /// Children: the argument expressions. Callee name lives in [`AstLeaf::Call`].
+    Call,
     Var,
     Int,
 }
@@ -51,6 +85,7 @@ pub enum AstLeaf {
     Param { name: String, ty: CType },
     Decl { name: String, ty: CType },
     Assign(String),
+    Call(String),
     Var(String),
     Int(i64),
 }
@@ -86,9 +121,34 @@ fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
             _ => unreachable!(),
         },
         AstKind::Return => "Return".to_string(),
+        AstKind::Block => "Block".to_string(),
+        AstKind::ExprStmt => "ExprStmt".to_string(),
+        AstKind::If => "If".to_string(),
+        AstKind::While => "While".to_string(),
+        AstKind::DoWhile => "DoWhile".to_string(),
+        AstKind::For => "For".to_string(),
+        AstKind::Break => "Break".to_string(),
+        AstKind::Continue => "Continue".to_string(),
+        AstKind::Empty => "Empty".to_string(),
         AstKind::Add => "Add".to_string(),
         AstKind::Sub => "Sub".to_string(),
         AstKind::Mul => "Mul".to_string(),
+        AstKind::Div => "Div".to_string(),
+        AstKind::Mod => "Mod".to_string(),
+        AstKind::Lt => "Lt".to_string(),
+        AstKind::Gt => "Gt".to_string(),
+        AstKind::Le => "Le".to_string(),
+        AstKind::Ge => "Ge".to_string(),
+        AstKind::Eq => "Eq".to_string(),
+        AstKind::Ne => "Ne".to_string(),
+        AstKind::LogAnd => "LogAnd".to_string(),
+        AstKind::LogOr => "LogOr".to_string(),
+        AstKind::Neg => "Neg".to_string(),
+        AstKind::Not => "Not".to_string(),
+        AstKind::Call => match ast.get_leaf_data(id) {
+            Some(AstLeaf::Call(name)) => format!("Call {name:?}"),
+            _ => unreachable!(),
+        },
         AstKind::Var => match ast.get_leaf_data(id) {
             Some(AstLeaf::Var(name)) => format!("Var {name:?}"),
             _ => unreachable!(),

@@ -134,6 +134,28 @@ pub enum Token {
     Minus,
     #[token("*")]
     Star,
+    #[token("/")]
+    Slash,
+    #[token("%")]
+    Percent,
+    #[token("==")]
+    EqEq,
+    #[token("!=")]
+    BangEq,
+    #[token("<")]
+    Lt,
+    #[token(">")]
+    Gt,
+    #[token("<=")]
+    Le,
+    #[token(">=")]
+    Ge,
+    #[token("&&")]
+    AmpAmp,
+    #[token("||")]
+    PipePipe,
+    #[token("!")]
+    Bang,
 }
 
 impl fmt::Display for Token {
@@ -199,6 +221,17 @@ impl fmt::Display for Token {
             Token::Plus => f.write_str("+"),
             Token::Minus => f.write_str("-"),
             Token::Star => f.write_str("*"),
+            Token::Slash => f.write_str("/"),
+            Token::Percent => f.write_str("%"),
+            Token::EqEq => f.write_str("=="),
+            Token::BangEq => f.write_str("!="),
+            Token::Lt => f.write_str("<"),
+            Token::Gt => f.write_str(">"),
+            Token::Le => f.write_str("<="),
+            Token::Ge => f.write_str(">="),
+            Token::AmpAmp => f.write_str("&&"),
+            Token::PipePipe => f.write_str("||"),
+            Token::Bang => f.write_str("!"),
         }
     }
 }

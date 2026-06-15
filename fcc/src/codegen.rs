@@ -171,7 +171,11 @@ impl FnCodegen<'_> {
                     .insert(b::r#return(self.context, operand).build());
                 Ok(())
             }
-            kind => unreachable!("not a statement: {kind:?}"),
+            // Control flow and expression statements are parsed but not yet
+            // lowered; codegen for them is stubbed out for now.
+            kind => Err(format!(
+                "codegen not yet implemented for statement {kind:?}"
+            )),
         }
     }
 
@@ -237,7 +241,13 @@ impl FnCodegen<'_> {
                             .result(),
                     }
                 }
-                kind => unreachable!("not an expression: {kind:?}"),
+                // The richer operators (division, comparison, logical, unary,
+                // calls) are parsed but not yet lowered; stub them out for now.
+                kind => {
+                    return Err(format!(
+                        "codegen not yet implemented for expression {kind:?}"
+                    ));
+                }
             };
             self.values.push(value);
         }
