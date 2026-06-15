@@ -2,16 +2,17 @@
 //! rendered with [`ariadne`], in the spirit of `rustc` and the Microsoft C
 //! compiler.
 //!
-//! Every diagnostic carries a stable [`Code`] (e.g. `E0001`, `W0300`) whose
-//! title, long-form explanation and standard reference live in one catalog, so
-//! `fcc --explain E0001` and the inline report draw from the same source of
-//! truth.
+//! The whole catalog is one [`diagnostics!`] table. Each row declares a stable
+//! [`Code`] (e.g. `E0001`, `W0300`), its title, standard reference and the
+//! long-form text shown by `fcc --explain`, plus a concrete builder type
+//! (`UnexpectedToken`, `UndeclaredIdentifier`, …) constructed with `new` and
+//! converted into a [`Diagnostic`] with `.into()`. Severity is read from the
+//! code's first letter (`W` = warning).
 //!
 //! Source positions are [`Span`]s: a single `u64` packing an interned [`FileId`]
 //! (high 32 bits) with a byte offset (low 32 bits). Because the file is part of
 //! the span, a diagnostic raised inside an `#include`d file resolves to that
-//! file's own text — there is no need to translate offsets back to the primary
-//! translation unit. The interner ([`intern_file`]) owns each file's name and
+//! file's own text. The interner ([`intern_file`]) owns each file's name and
 //! source so a [`Diagnostic`] can render itself without the caller threading
 //! that text around.
 
@@ -72,7 +73,7 @@ fn file_name(file: FileId) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Diagnostic catalog
+// Catalog
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -81,148 +82,215 @@ pub enum Severity {
     Warning,
 }
 
-/// A stable diagnostic identifier. The numeric ranges group related problems:
-/// `E0001..` syntax, `E02xx` name resolution, `E03xx`/`W03xx` preprocessor,
-/// `E09xx` constructs `fcc` does not yet implement.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Code {
-    UnexpectedToken,
-    UnexpectedEof,
-    UndeclaredIdentifier,
-    PreprocError,
-    PreprocWarning,
-    UnsupportedConstruct,
-    EmptyTranslationUnit,
+/// Declare the diagnostic catalog: the [`Code`] enum with its metadata plus one
+/// builder type per row. `build` maps the type's fields (`d`) to a
+/// [`Diagnostic`]; `fields: {}` is allowed for diagnostics without payload.
+macro_rules! diagnostics {
+    ($(
+        $(#[$meta:meta])*
+        $name:ident = $code:literal {
+            title: $title:literal,
+            reference: $reference:expr,
+            explain: $explain:literal,
+            fields: { $($field:ident: $fty:ty),* $(,)? },
+            build: |$d:ident| $build:expr,
+        }
+    )*) => {
+        /// A stable diagnostic identifier. The numeric ranges group related
+        /// problems: `E0001..` syntax, `E02xx` name resolution, `E03xx`/`W03xx`
+        /// preprocessor, `E09xx` constructs `fcc` does not yet implement.
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum Code {
+            $($name),*
+        }
+
+        impl Code {
+            pub const ALL: &'static [Code] = &[$(Code::$name),*];
+
+            /// The printable identifier, e.g. `"E0001"`.
+            pub fn as_str(self) -> &'static str {
+                match self { $(Code::$name => $code),* }
+            }
+
+            /// The one-line summary shown as the report message.
+            pub fn title(self) -> &'static str {
+                match self { $(Code::$name => $title),* }
+            }
+
+            /// A standard reference, printed as a `note:`. Section numbers
+            /// follow ISO/IEC 9899:2018 (C17) unless stated otherwise.
+            pub fn reference(self) -> Option<&'static str> {
+                match self { $(Code::$name => $reference),* }
+            }
+
+            /// The long-form text shown by `fcc --explain <CODE>`.
+            pub fn explanation(self) -> &'static str {
+                match self { $(Code::$name => $explain),* }
+            }
+        }
+
+        $(
+            $(#[$meta])*
+            pub struct $name {
+                $(pub $field: $fty),*
+            }
+
+            impl $name {
+                // Payload-free diagnostics get an argument-less `new`; that is
+                // the intended constructor, not a missing `Default`.
+                #[allow(clippy::new_without_default)]
+                pub fn new($($field: impl Into<$fty>),*) -> Self {
+                    Self { $($field: $field.into()),* }
+                }
+            }
+
+            impl From<$name> for Diagnostic {
+                fn from($d: $name) -> Diagnostic {
+                    $build
+                }
+            }
+        )*
+    };
 }
 
-impl Code {
-    pub fn severity(self) -> Severity {
-        match self {
-            Code::PreprocWarning => Severity::Warning,
-            _ => Severity::Error,
-        }
-    }
-
-    /// The printable identifier, e.g. `"E0001"`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Code::UnexpectedToken => "E0001",
-            Code::UnexpectedEof => "E0002",
-            Code::UndeclaredIdentifier => "E0200",
-            Code::PreprocError => "E0300",
-            Code::PreprocWarning => "W0300",
-            Code::UnsupportedConstruct => "E0900",
-            Code::EmptyTranslationUnit => "E0901",
-        }
-    }
-
-    /// The one-line summary shown as the report message.
-    pub fn title(self) -> &'static str {
-        match self {
-            Code::UnexpectedToken => "unexpected token",
-            Code::UnexpectedEof => "unexpected end of file",
-            Code::UndeclaredIdentifier => "use of undeclared identifier",
-            Code::PreprocError => "#error directive",
-            Code::PreprocWarning => "#warning directive",
-            Code::UnsupportedConstruct => "unsupported construct",
-            Code::EmptyTranslationUnit => "empty translation unit",
-        }
-    }
-
-    /// A standard reference, printed as a `note:` so the user can read the rule
-    /// the diagnostic enforces. Section numbers follow ISO/IEC 9899:2018 (C17).
-    pub fn reference(self) -> Option<&'static str> {
-        match self {
-            Code::UnexpectedToken | Code::UnexpectedEof => Some(
-                "C17 6.9: an external declaration must be a function definition or a declaration",
-            ),
-            Code::UndeclaredIdentifier => {
-                Some("C17 6.5.1: an identifier must be visibly declared before it is used")
-            }
-            Code::PreprocError => {
-                Some("C17 6.10.5: the #error directive renders the program ill-formed")
-            }
-            Code::PreprocWarning => {
-                Some("C23 6.10.6: #warning emits a diagnostic without halting translation")
-            }
-            Code::UnsupportedConstruct | Code::EmptyTranslationUnit => None,
-        }
-    }
-
-    /// The long-form text shown by `fcc --explain <CODE>`.
-    pub fn explanation(self) -> &'static str {
-        match self {
-            Code::UnexpectedToken => {
-                "\
+diagnostics! {
+    /// `E0001`: the parser met a token that cannot continue the current rule.
+    UnexpectedToken = "E0001" {
+        title: "unexpected token",
+        reference: Some("C17 6.9: an external declaration must be a function definition or a declaration"),
+        explain: "\
 The parser reached a token that cannot continue the current grammar rule. This
 usually means a missing or stray token: a forgotten semicolon, an unbalanced
 brace or parenthesis, or an operator without an operand.
 
 Read the label to see what the parser expected at that point, then add the
-missing token or remove the unexpected one."
-            }
-            Code::UnexpectedEof => {
-                "\
+missing token or remove the unexpected one.",
+        fields: { span: Span, reason: String },
+        build: |d| Diagnostic::of(Code::UnexpectedToken)
+            .label(d.span, d.reason)
+            .help("check for a missing or misplaced token near here"),
+    }
+
+    /// `E0002`: input ended while the parser still expected more.
+    UnexpectedEof = "E0002" {
+        title: "unexpected end of file",
+        reference: Some("C17 6.9: an external declaration must be a function definition or a declaration"),
+        explain: "\
 The source ended while the parser was still expecting more input, for example a
 closing brace for a function body or the rest of an unfinished expression.
 
-Make sure every `{`, `(` and statement is closed before the end of the file."
-            }
-            Code::UndeclaredIdentifier => {
-                "\
+Make sure every `{`, `(` and statement is closed before the end of the file.",
+        fields: { span: Span, reason: String },
+        build: |d| Diagnostic::of(Code::UnexpectedEof)
+            .label(d.span, d.reason)
+            .help("a brace, parenthesis or statement is left unclosed"),
+    }
+
+    /// `E0200`: a name is used without any declaration in scope.
+    UndeclaredIdentifier = "E0200" {
+        title: "use of undeclared identifier",
+        reference: Some("C17 6.5.1: an identifier must be visibly declared before it is used"),
+        explain: "\
 A variable was read or assigned before any declaration introduced it into
 scope. C has no implicit declarations: a name must be declared with a type
 before it is used.
 
 Declare the variable before the statement that uses it, e.g. `int total = 0;`,
-and check the spelling of the identifier."
-            }
-            Code::PreprocError => {
-                "\
+and check the spelling of the identifier.",
+        fields: { span: Span, name: String },
+        build: |d| Diagnostic::of(Code::UndeclaredIdentifier)
+            .message(format!("use of undeclared identifier '{}'", d.name))
+            .label(d.span, "not declared in this scope")
+            .help(format!("declare '{}' with a type before using it", d.name)),
+    }
+
+    /// `E0300`: an active `#error` directive.
+    PreprocError = "E0300" {
+        title: "#error directive",
+        reference: Some("C17 6.10.5: the #error directive renders the program ill-formed"),
+        explain: "\
 The translation unit contains an active `#error` directive. The preprocessor
 emits the directive's text and the program is rejected.
 
 Remove the `#error`, or satisfy the `#if` condition that guards it (often a
-missing `-D` define or include path)."
-            }
-            Code::PreprocWarning => {
-                "\
+missing `-D` define or include path).",
+        fields: { span: Span, text: String },
+        build: |d| Diagnostic::of(Code::PreprocError)
+            .message(directive_message(Code::PreprocError, d.text))
+            .label(d.span, "#error directive encountered"),
+    }
+
+    /// `W0300`: an active `#warning` directive.
+    PreprocWarning = "W0300" {
+        title: "#warning directive",
+        reference: Some("C23 6.10.6: #warning emits a diagnostic without halting translation"),
+        explain: "\
 An active `#warning` directive emitted its message. Unlike `#error`, this does
 not stop compilation; it flags a condition the author wanted you to notice.
 
 Address the cause described by the message, or remove the directive once it no
-longer applies."
-            }
-            Code::UnsupportedConstruct => {
-                "\
+longer applies.",
+        fields: { span: Span, text: String },
+        build: |d| Diagnostic::of(Code::PreprocWarning)
+            .message(directive_message(Code::PreprocWarning, d.text))
+            .label(d.span, "#warning directive encountered"),
+    }
+
+    /// `E0900`: valid C that the code generator does not lower yet.
+    UnsupportedConstruct = "E0900" {
+        title: "unsupported construct",
+        reference: None,
+        explain: "\
 The construct is valid C but `fcc` does not lower it to IR yet. The frontend
 parses a wider language than the code generator currently supports.
 
 Rewrite the function using the supported subset, or pick an earlier `--stage`
-(such as `ast`) that does not require code generation."
-            }
-            Code::EmptyTranslationUnit => {
-                "\
+(such as `ast`) that does not require code generation.",
+        fields: { span: Span, what: String },
+        build: |d| Diagnostic::of(Code::UnsupportedConstruct)
+            .message(format!("codegen not yet implemented for {}", d.what))
+            .label(d.span, "not supported by codegen yet"),
+    }
+
+    /// `E0901`: code generation reached a translation unit with no functions.
+    EmptyTranslationUnit = "E0901" {
+        title: "empty translation unit",
+        reference: None,
+        explain: "\
 Code generation was asked to lower a translation unit that contains no
 functions. There is nothing to emit.
 
-Provide at least one function definition in the input."
-            }
+Provide at least one function definition in the input.",
+        fields: {},
+        build: |_d| Diagnostic::of(Code::EmptyTranslationUnit)
+            .message("translation unit contains no functions"),
+    }
+}
+
+impl Code {
+    pub fn severity(self) -> Severity {
+        if self.as_str().as_bytes()[0] == b'W' {
+            Severity::Warning
+        } else {
+            Severity::Error
         }
     }
 
     pub fn from_code(code: &str) -> Option<Code> {
-        const ALL: [Code; 7] = [
-            Code::UnexpectedToken,
-            Code::UnexpectedEof,
-            Code::UndeclaredIdentifier,
-            Code::PreprocError,
-            Code::PreprocWarning,
-            Code::UnsupportedConstruct,
-            Code::EmptyTranslationUnit,
-        ];
-        ALL.into_iter()
+        Code::ALL
+            .iter()
+            .copied()
             .find(|c| c.as_str().eq_ignore_ascii_case(code))
+    }
+}
+
+/// Message for a `#error`/`#warning`: the directive's own text, or the code's
+/// title when the directive carried none.
+fn directive_message(code: Code, text: String) -> String {
+    if text.is_empty() {
+        code.title().to_string()
+    } else {
+        text
     }
 }
 
@@ -230,14 +298,9 @@ Provide at least one function definition in the input."
 // Diagnostic
 // ---------------------------------------------------------------------------
 
-/// The rendered form every diagnostic lowers to. It is rarely built directly:
-/// each problem has its own concrete type (see below) constructed with `new`
-/// and converted with `.into()`, so the message, label and help that belong to
-/// a [`Code`] live in one place.
-///
-/// `label` ties the message to a position in a source file; when absent
-/// (codegen has no source spans yet) the diagnostic renders as a compact header
-/// without a snippet.
+/// The rendered form every diagnostic lowers to, built by the catalog's
+/// `build` closures. `label` ties the message to a position in a source file;
+/// when absent the diagnostic renders as a compact header without a snippet.
 #[derive(Debug)]
 pub struct Diagnostic {
     code: Code,
@@ -247,21 +310,27 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    fn new(code: Code, message: impl Into<String>) -> Self {
+    /// Start a diagnostic for `code`, defaulting the message to its title.
+    fn of(code: Code) -> Self {
         Diagnostic {
             code,
-            message: message.into(),
+            message: code.title().to_string(),
             label: None,
             help: None,
         }
     }
 
-    fn with_label(mut self, span: Span, message: impl Into<String>) -> Self {
+    fn message(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
+    }
+
+    fn label(mut self, span: Span, message: impl Into<String>) -> Self {
         self.label = Some((span, message.into()));
         self
     }
 
-    fn with_help(mut self, help: impl Into<String>) -> Self {
+    fn help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
     }
@@ -347,179 +416,6 @@ impl Diagnostic {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Concrete diagnostics
-//
-// Each problem the compiler can report is its own type, built with `new` and
-// turned into a `Diagnostic` with `.into()`. This keeps the message, span label
-// and fix hint for a given `Code` next to the data they need.
-// ---------------------------------------------------------------------------
-
-/// `E0001`: the parser met a token that cannot continue the current rule.
-pub struct UnexpectedToken {
-    pub span: Span,
-    /// The parser's account of what it expected versus what it found.
-    pub reason: String,
-}
-
-impl UnexpectedToken {
-    pub fn new(span: Span, reason: impl Into<String>) -> Self {
-        UnexpectedToken {
-            span,
-            reason: reason.into(),
-        }
-    }
-}
-
-impl From<UnexpectedToken> for Diagnostic {
-    fn from(d: UnexpectedToken) -> Diagnostic {
-        Diagnostic::new(Code::UnexpectedToken, Code::UnexpectedToken.title())
-            .with_label(d.span, d.reason)
-            .with_help("check for a missing or misplaced token near here")
-    }
-}
-
-/// `E0002`: input ended while the parser still expected more.
-pub struct UnexpectedEof {
-    pub span: Span,
-    pub reason: String,
-}
-
-impl UnexpectedEof {
-    pub fn new(span: Span, reason: impl Into<String>) -> Self {
-        UnexpectedEof {
-            span,
-            reason: reason.into(),
-        }
-    }
-}
-
-impl From<UnexpectedEof> for Diagnostic {
-    fn from(d: UnexpectedEof) -> Diagnostic {
-        Diagnostic::new(Code::UnexpectedEof, Code::UnexpectedEof.title())
-            .with_label(d.span, d.reason)
-            .with_help("a brace, parenthesis or statement is left unclosed")
-    }
-}
-
-/// `E0200`: a name is used without any declaration in scope.
-pub struct UndeclaredIdentifier {
-    pub span: Span,
-    pub name: String,
-}
-
-impl UndeclaredIdentifier {
-    pub fn new(span: Span, name: impl Into<String>) -> Self {
-        UndeclaredIdentifier {
-            span,
-            name: name.into(),
-        }
-    }
-}
-
-impl From<UndeclaredIdentifier> for Diagnostic {
-    fn from(d: UndeclaredIdentifier) -> Diagnostic {
-        Diagnostic::new(
-            Code::UndeclaredIdentifier,
-            format!("use of undeclared identifier '{}'", d.name),
-        )
-        .with_label(d.span, "not declared in this scope")
-        .with_help(format!("declare '{}' with a type before using it", d.name))
-    }
-}
-
-/// `E0900`: valid C that the code generator does not lower yet.
-pub struct UnsupportedConstruct {
-    pub span: Span,
-    pub what: String,
-}
-
-impl UnsupportedConstruct {
-    pub fn new(span: Span, what: impl Into<String>) -> Self {
-        UnsupportedConstruct {
-            span,
-            what: what.into(),
-        }
-    }
-}
-
-impl From<UnsupportedConstruct> for Diagnostic {
-    fn from(d: UnsupportedConstruct) -> Diagnostic {
-        Diagnostic::new(
-            Code::UnsupportedConstruct,
-            format!("codegen not yet implemented for {}", d.what),
-        )
-        .with_label(d.span, "not supported by codegen yet")
-    }
-}
-
-/// `E0901`: code generation reached a translation unit with no functions.
-pub struct EmptyTranslationUnit;
-
-impl From<EmptyTranslationUnit> for Diagnostic {
-    fn from(_: EmptyTranslationUnit) -> Diagnostic {
-        Diagnostic::new(
-            Code::EmptyTranslationUnit,
-            "translation unit contains no functions",
-        )
-    }
-}
-
-/// `E0300`: an active `#error` directive.
-pub struct PreprocError {
-    pub span: Span,
-    /// The directive's text (empty for a bare `#error`).
-    pub text: String,
-}
-
-impl PreprocError {
-    pub fn new(span: Span, text: impl Into<String>) -> Self {
-        PreprocError {
-            span,
-            text: text.into(),
-        }
-    }
-}
-
-impl From<PreprocError> for Diagnostic {
-    fn from(d: PreprocError) -> Diagnostic {
-        let message = if d.text.is_empty() {
-            Code::PreprocError.title().to_string()
-        } else {
-            d.text
-        };
-        Diagnostic::new(Code::PreprocError, message)
-            .with_label(d.span, "#error directive encountered")
-    }
-}
-
-/// `W0300`: an active `#warning` directive.
-pub struct PreprocWarning {
-    pub span: Span,
-    pub text: String,
-}
-
-impl PreprocWarning {
-    pub fn new(span: Span, text: impl Into<String>) -> Self {
-        PreprocWarning {
-            span,
-            text: text.into(),
-        }
-    }
-}
-
-impl From<PreprocWarning> for Diagnostic {
-    fn from(d: PreprocWarning) -> Diagnostic {
-        let message = if d.text.is_empty() {
-            Code::PreprocWarning.title().to_string()
-        } else {
-            d.text
-        };
-        Diagnostic::new(Code::PreprocWarning, message)
-            .with_label(d.span, "#warning directive encountered")
-    }
-}
-
 /// The body of `fcc --explain <CODE>`: the title line followed by the long-form
 /// explanation and, where it exists, the standard reference.
 pub fn explain(code: &str) -> Option<String> {
@@ -551,20 +447,10 @@ mod tests {
         String::from_utf8(buf).unwrap()
     }
 
-    const CODES: [Code; 7] = [
-        Code::UnexpectedToken,
-        Code::UnexpectedEof,
-        Code::UndeclaredIdentifier,
-        Code::PreprocError,
-        Code::PreprocWarning,
-        Code::UnsupportedConstruct,
-        Code::EmptyTranslationUnit,
-    ];
-
     #[test]
     fn codes_round_trip_and_are_unique() {
         let mut seen = Vec::new();
-        for code in CODES {
+        for &code in Code::ALL {
             assert_eq!(Code::from_code(code.as_str()), Some(code));
             assert!(!seen.contains(&code.as_str()), "duplicate code string");
             seen.push(code.as_str());
@@ -575,7 +461,7 @@ mod tests {
 
     #[test]
     fn severity_follows_code_prefix() {
-        for code in CODES {
+        for &code in Code::ALL {
             let expected = if code.as_str().starts_with('W') {
                 Severity::Warning
             } else {
@@ -611,7 +497,7 @@ mod tests {
 
     #[test]
     fn spanless_diagnostic_renders_compact_header() {
-        let out = render(EmptyTranslationUnit.into());
+        let out = render(EmptyTranslationUnit::new().into());
         assert!(out.starts_with("error[E0901]:"), "{out}");
         assert!(out.contains("no functions"), "{out}");
     }

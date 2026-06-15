@@ -41,7 +41,7 @@ pub fn codegen(context: &Context, ast: &Ast) -> Result<ModuleOp, Diagnostic> {
     let module = b::module(context, None).build();
     let mut module_builder = IRBuilder::new(module.body());
 
-    let root = ast.root().ok_or(EmptyTranslationUnit)?;
+    let root = ast.root().ok_or_else(EmptyTranslationUnit::new)?;
     for func in ast.children(root) {
         let func_op = lower_function(context, ast, func)?;
         module_builder.insert(func_op);
