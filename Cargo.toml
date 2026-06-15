@@ -19,7 +19,7 @@ members = [
     "backends/targets",
     "utils/isa-test-suite",
     "tools",
-    "bindings/capi",
+    "utils/capi",
 ]
 
 [workspace.dependencies]

@@ -95,7 +95,7 @@ fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
 
     cmd!(sh, "cargo build -p tir-capi").run()?;
 
-    let header = "bindings/capi/include/tir.h";
+    let header = "utils/capi/include/tir.h";
     if cmd!(sh, "git diff --quiet -- {header}")
         .quiet()
         .run()
@@ -105,12 +105,12 @@ fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
     }
 
     let lib_dir = root.join("target/debug");
-    let smoke = root.join("bindings/capi/tests/smoke.c");
+    let smoke = root.join("utils/capi/tests/smoke.c");
     let bin = lib_dir.join("tir_capi_smoke");
     let rpath = format!("-Wl,-rpath,{}", lib_dir.display());
     cmd!(
         sh,
-        "cc {smoke} -I bindings/capi/include -L {lib_dir} -ltir_capi {rpath} -o {bin}"
+        "cc {smoke} -I utils/capi/include -L {lib_dir} -ltir_capi {rpath} -o {bin}"
     )
     .run()?;
     cmd!(sh, "{bin}").run()?;
