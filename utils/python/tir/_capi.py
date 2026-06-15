@@ -79,6 +79,9 @@ _SPEC = {
     "tir_block_append_op": (_bool, [_ptr, _u32, _u32]),
     "tir_block_insert_op": (_bool, [_ptr, _u32, _usize, _u32]),
     "tir_block_remove_op": (_bool, [_ptr, _u32, _u32]),
+    "tir_supported_targets": (_owned, []),
+    "tir_context_register_target": (_bool, [_ptr, _cstr, _cstr, _cstr]),
+    "tir_context_run_target_pipeline": (_bool, [_ptr, _u32, _cstr, _cstr, _cstr, _i32]),
 }
 
 for _name, (_res, _args) in _SPEC.items():

@@ -48,14 +48,14 @@ class TirTest(unittest.TestCase):
             region.append_block(block)
             a, b = block.args
 
-            addi = tir.builtin.addi(ctx, a, b, "!i32")
+            addi = tir.builtin.addi(ctx, a, b, result_type="!i32")
             block.append(addi)
             self.assertEqual(len(block.ops), 1)
             self.assertEqual(addi.operands[0].id, a.id)
             self.assertEqual(addi.operands[1].id, b.id)
 
             # A different dialect via the same generated path.
-            alloca = tir.ptr.alloca(ctx, "!ptr.p<!i32>")
+            alloca = tir.ptr.alloca(ctx, result_type="!ptr.p<!i32>")
             block.insert(0, alloca)
             self.assertEqual(alloca.dialect, "ptr")
             self.assertEqual(len(block.ops), 2)
@@ -68,6 +68,19 @@ class TirTest(unittest.TestCase):
         with tir.Context() as ctx:
             with self.assertRaises(tir.TirError):
                 ctx.parse_module("this is not valid IR")
+            with self.assertRaises(tir.TirError):
+                ctx.register_target("nonsense")
+
+    def test_target_lowering(self):
+        self.assertIn("riscv64", tir.supported_targets())
+        arith = (
+            "module {\n  func @a(%0: !i32, %1: !i32) -> !i32 {\n"
+            "    %2 = addi %0, %1 : !i32\n    return %2\n  }\n  module_end\n}"
+        )
+        with tir.Context() as ctx:
+            module = ctx.parse_module(arith)
+            ctx.run_target_pipeline(module, "rv64i", stage="isel")
+            self.assertIn("riscv.", module.to_string())
 
 
 if __name__ == "__main__":

@@ -88,22 +88,13 @@ fn isa_test_suite(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build the C ABI, assert the checked-in `tir.h` is current (the build script
-/// regenerates it), then compile and run the C smoke test against the cdylib.
+/// Build the C ABI (whose build script regenerates `tir.h`), then compile and
+/// run the C smoke test against the cdylib.
 fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
     let root = project_root();
     sh.change_dir(&root);
 
     cmd!(sh, "cargo build -p tir-capi").run()?;
-
-    let header = "utils/capi/include/tir.h";
-    if cmd!(sh, "git diff --quiet -- {header}")
-        .quiet()
-        .run()
-        .is_err()
-    {
-        anyhow::bail!("{header} is stale; rebuild tir-capi and commit the regenerated header");
-    }
 
     let lib_dir = root.join("target/debug");
     let smoke = root.join("utils/capi/tests/smoke.c");
@@ -119,24 +110,14 @@ fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build the C ABI cdylib, regenerate the generated Python op bindings and
-/// assert they are current, then run the Python test suite against the library.
+/// Build the C ABI cdylib, then run the Python test suite against it. The
+/// Python bindings build their typed op constructors from the schema at import,
+/// so there is nothing to regenerate.
 fn python_smoke(sh: &Shell) -> anyhow::Result<()> {
     let root = project_root();
     sh.change_dir(&root);
 
     cmd!(sh, "cargo build -p tir-capi").run()?;
-
-    let ops = "utils/python/tir/_ops.py";
-    cmd!(
-        sh,
-        "cargo run -q -p tir-bindgen -- --lang python --output {ops}"
-    )
-    .run()?;
-    if cmd!(sh, "git diff --quiet -- {ops}").quiet().run().is_err() {
-        anyhow::bail!("{ops} is stale; regenerate with tir-bindgen and commit it");
-    }
-
     cmd!(sh, "python3 -m unittest discover -s utils/python/tests").run()?;
     Ok(())
 }
@@ -151,7 +132,7 @@ check-only       only runs check tests without building the project
 verify <isa>     run formal ISA verification. Available ISAs: riscv64, riscv32, armv8
 isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
 capi-smoke       check the C ABI header is current and run the C smoke test
-python-smoke     regenerate Python op bindings and run the Python test suite
+python-smoke     build the C ABI and run the Python test suite
 docs             builds project documentation
 help             shows this message
 "

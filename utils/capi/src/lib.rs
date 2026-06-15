@@ -12,8 +12,10 @@
 
 mod inspect;
 mod mutate;
+mod target;
 pub use inspect::*;
 pub use mutate::*;
+pub use target::*;
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};

@@ -20,7 +20,6 @@ members = [
     "utils/isa-test-suite",
     "tools",
     "utils/capi",
-    "utils/bindgen",
 ]
 
 [workspace.dependencies]

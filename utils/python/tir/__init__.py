@@ -1,13 +1,15 @@
 """Pythonic API for TIR, built on the generic C ABI.
 
 The generic verbs (parse, print, run pipelines, inspect, mutate) are hand-written
-here; the typed per-op constructors in ``_ops`` are generated from the schema, so
-``tir.builtin.addi(...)`` and friends appear automatically as ops are added.
+here. The typed per-op constructors (``tir.builtin.addi(...)`` and friends) are
+built at import time from the operation schema, so they track new ops and
+dialects automatically with nothing generated or committed.
 """
 
 import ctypes
+import json
+import keyword
 
-from . import _ops
 from ._capi import INVALID, lib
 
 __all__ = ["Context", "Op", "Value", "Region", "Block", "TirError"]
@@ -236,14 +238,91 @@ class Context:
             parts.append(": %s" % result_type)
         return self.parse_op(" ".join(parts))
 
+    def register_target(self, march, mcpu=None, mattr=None):
+        """Register a backend target's dialects (e.g. ``"riscv64"``) so the
+        context can parse, build and inspect target-specific IR."""
+        if not lib.tir_context_register_target(self._p, march.encode(), _enc(mcpu), _enc(mattr)):
+            raise TirError(_last_error())
+
+    def run_target_pipeline(self, root, march, stage="isel", mcpu=None, mattr=None):
+        """Lower ``root`` for ``march`` by running the target codegen pipeline up
+        to ``stage`` (``"isel"``, ``"regalloc"`` or ``"finalize"``)."""
+        code = _STAGES.get(stage)
+        if code is None:
+            raise TirError("unknown stage %r (expected one of %s)" % (stage, sorted(_STAGES)))
+        if not lib.tir_context_run_target_pipeline(
+            self._p, root.id, march.encode(), _enc(mcpu), _enc(mattr), code
+        ):
+            raise TirError(_last_error())
+
     @staticmethod
     def schema_json():
         return _take_str(lib.tir_schema_json())
 
 
-# Expose the generated per-dialect constructor classes as `tir.<dialect>`.
-for _name in dir(_ops):
-    _obj = getattr(_ops, _name)
-    if isinstance(_obj, type) and not _name.startswith("_"):
-        globals()[_name] = _obj
-        __all__.append(_name)
+_STAGES = {"isel": 0, "regalloc": 1, "finalize": 2}
+
+
+def _enc(value):
+    return value.encode() if value is not None else None
+
+
+def supported_targets():
+    """Names of the backend targets linked into the library."""
+    listed = _take_str(lib.tir_supported_targets())
+    return listed.split(",") if listed else []
+
+
+__all__.append("supported_targets")
+
+
+def _identifier(name):
+    """Coerce an op or dialect name into a valid, non-keyword Python identifier."""
+    s = "".join(c if (c.isalnum() or c == "_") else "_" for c in name)
+    if not s or s[0].isdigit():
+        s = "_" + s
+    if keyword.iskeyword(s):
+        s += "_"
+    return s
+
+
+def _make_constructor(spec):
+    dialect, name = spec["dialect"], spec["name"]
+    operands = spec["operands"]
+    has_results = bool(spec["results"])
+
+    def constructor(ctx, *args, result_type=None, **attrs):
+        if len(args) != len(operands):
+            raise TirError(
+                "%s.%s expects %d operand(s), got %d" % (dialect, name, len(operands), len(args))
+            )
+        if has_results and result_type is None:
+            raise TirError("%s.%s requires result_type" % (dialect, name))
+        flat = []
+        for field, arg in zip(operands, args):
+            if field["variadic"]:
+                flat.extend(arg)
+            else:
+                flat.append(arg)
+        return ctx._build_op(dialect, name, flat, result_type, attrs)
+
+    constructor.__name__ = _identifier(name)
+    constructor.__doc__ = "Construct a `%s.%s` op." % (dialect, name)
+    return staticmethod(constructor)
+
+
+def _install_op_constructors():
+    """Build one class per dialect, each with a static constructor per op, from
+    the schema. Exposed as ``tir.<dialect>.<op>``."""
+    by_dialect = {}
+    for spec in json.loads(Context.schema_json()):
+        by_dialect.setdefault(spec["dialect"], []).append(spec)
+    for dialect, specs in by_dialect.items():
+        methods = {_identifier(s["name"]): _make_constructor(s) for s in specs}
+        cls = type(_identifier(dialect), (), methods)
+        cls.__doc__ = "Constructors for the `%s` dialect." % dialect
+        globals()[_identifier(dialect)] = cls
+        __all__.append(_identifier(dialect))
+
+
+_install_op_constructors()
