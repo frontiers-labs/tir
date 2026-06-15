@@ -24,6 +24,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some("isa-test-suite") => isa_test_suite(&sh)?,
+        Some("capi-smoke") => capi_smoke(&sh)?,
         _ => print_help(),
     }
     Ok(())
@@ -86,6 +87,37 @@ fn isa_test_suite(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build the C ABI, assert the checked-in `tir.h` is current (the build script
+/// regenerates it), then compile and run the C smoke test against the cdylib.
+fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
+    let root = project_root();
+    sh.change_dir(&root);
+
+    cmd!(sh, "cargo build -p tir-capi").run()?;
+
+    let header = "bindings/capi/include/tir.h";
+    if cmd!(sh, "git diff --quiet -- {header}")
+        .quiet()
+        .run()
+        .is_err()
+    {
+        anyhow::bail!("{header} is stale; rebuild tir-capi and commit the regenerated header");
+    }
+
+    let lib_dir = root.join("target/debug");
+    let smoke = root.join("bindings/capi/tests/smoke.c");
+    let bin = lib_dir.join("tir_capi_smoke");
+    let rpath = format!("-Wl,-rpath,{}", lib_dir.display());
+    cmd!(
+        sh,
+        "cc {smoke} -I bindings/capi/include -L {lib_dir} -ltir_capi {rpath} -o {bin}"
+    )
+    .run()?;
+    cmd!(sh, "{bin}").run()?;
+
+    Ok(())
+}
+
 fn print_help() {
     eprintln!(
         "Tasks:
@@ -95,6 +127,7 @@ check            builds project and runs check tests
 check-only       only runs check tests without building the project
 verify <isa>     run formal ISA verification. Available ISAs: riscv64, riscv32, armv8
 isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
+capi-smoke       check the C ABI header is current and run the C smoke test
 docs             builds project documentation
 help             shows this message
 "

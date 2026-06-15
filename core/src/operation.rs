@@ -236,6 +236,16 @@ impl OpId {
     pub(crate) fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// Raw integer id, for stable identification across an FFI boundary.
+    pub fn as_raw(self) -> u32 {
+        self.0
+    }
+
+    /// Reconstruct an id from its raw integer, the inverse of [`OpId::as_raw`].
+    pub fn from_raw(id: u32) -> Self {
+        Self(id)
+    }
 }
 
 impl GetFromContext for OpId {
