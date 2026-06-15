@@ -1,22 +1,39 @@
-//! Lowers the C [`crate::ast`] to TIR using the `builtin` and `ptr` dialects.
+//! Lowers the C [`crate::ast`] to TIR using the `builtin`, `ptr`, `scf` and
+//! `cir` dialects.
 //!
 //! The lowering is intentionally memory-based (the unoptimised, "no memory
 //! SSA" shape a C frontend emits before any mem2reg pass): every parameter and
 //! local lives in a stack slot produced by `ptr.alloca`, reads become
 //! `ptr.load` and writes become `ptr.store`. Arithmetic uses the `builtin`
-//! integer ops. Only `int` (lowered to `i32`) and `void` are supported.
+//! integer ops. Control flow stays structured: `if` lowers to `scf.if`, loops
+//! to the `cir` loop ops, and `break`/`continue` to the matching `cir` ops
+//! naming the enclosing loop's token. Only `int` (lowered to `i32`) and `void`
+//! are supported.
 
 use std::collections::HashMap;
 
-use tir::builtin::{IntegerType, ModuleOp, UnitType, ops as b};
+use tir::builtin::{IntegerType, ModuleOp, TokenType, UnitType, ops as b};
 use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
-use tir::{Context, IRBuilder, Operand, Operation, TypeId, ValueId};
+use tir::scf::ops as scf;
+use tir::{
+    Block, Context, IRBuilder, Operand, Operation, RegionId, Terminator, TypeId, Value, ValueId,
+};
 
 use crate::ast::*;
+use crate::cir::ops as c;
 use crate::diagnostics::{
     Diagnostic, EmptyTranslationUnit, UndeclaredIdentifier, UnsupportedConstruct,
 };
+
+/// Which terminator closes a region whose body falls off its end: a loop
+/// `body`/`step` re-enters the loop via `cir.yield`, an `scf.if` arm merges
+/// back via `scf.yield`.
+#[derive(Clone, Copy)]
+enum Fallthrough {
+    LoopBack,
+    IfMerge,
+}
 
 /// A local variable: the pointer to its stack slot and the slot's element type.
 #[derive(Clone, Copy)]
@@ -34,6 +51,9 @@ struct FnCodegen<'a> {
     /// subtree currently being lowered, indexed by `node.index() - base`. Reused
     /// across expressions to avoid reallocating.
     values: Vec<ValueId>,
+    /// Tokens of the loops enclosing the statement being lowered, innermost
+    /// last. `break`/`continue` name the top one.
+    loop_tokens: Vec<ValueId>,
 }
 
 /// Lower a translation unit into a `builtin.module` in `context`.
@@ -103,6 +123,7 @@ fn lower_function(
         builder: IRBuilder::new(func_op.body()),
         locals: HashMap::new(),
         values: Vec::new(),
+        loop_tokens: Vec::new(),
     };
     cg.lower_body(func, &param_ids)?;
 
@@ -188,10 +209,246 @@ impl FnCodegen<'_> {
                     .insert(b::r#return(self.context, operand).build());
                 Ok(())
             }
-            // Control flow and expression statements are parsed but not yet
-            // lowered; codegen for them is stubbed out for now.
+            AstKind::Block => {
+                for child in ast.children(stmt) {
+                    self.lower_stmt(child)?;
+                }
+                Ok(())
+            }
+            AstKind::Empty => Ok(()),
+            AstKind::ExprStmt => {
+                let expr = ast.children(stmt).next().unwrap();
+                self.lower_expr(expr)?;
+                Ok(())
+            }
+            AstKind::If => self.lower_if(stmt),
+            AstKind::While => self.lower_while(stmt),
+            AstKind::DoWhile => self.lower_do_while(stmt),
+            AstKind::For => self.lower_for(stmt),
+            kind @ (AstKind::Break | AstKind::Continue) => {
+                let token = *self
+                    .loop_tokens
+                    .last()
+                    .ok_or_else(|| unsupported(ast, stmt, format!("{kind:?} outside a loop")))?;
+                if kind == AstKind::Break {
+                    self.builder.insert(c::r#break(self.context, token).build());
+                } else {
+                    self.builder
+                        .insert(c::r#continue(self.context, token).build());
+                }
+                Ok(())
+            }
             kind => Err(unsupported(ast, stmt, format!("statement {kind:?}"))),
         }
+    }
+
+    /// Run `f` with the builder temporarily inserting into `block`, restoring
+    /// the previous insertion point afterwards.
+    fn with_block<R>(&mut self, block: std::sync::Arc<Block>, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = std::mem::replace(&mut self.builder, IRBuilder::new(block));
+        let result = f(self);
+        self.builder = saved;
+        result
+    }
+
+    /// True if `block` already ends in a terminator (e.g. a trailing `return`,
+    /// `break` or `continue`), so no fall-through terminator is needed.
+    fn is_terminated(&self, block: &Block) -> bool {
+        block.op_ids().last().is_some_and(|id| {
+            self.context
+                .get_op(*id)
+                .as_interface::<dyn Terminator>()
+                .is_some()
+        })
+    }
+
+    /// Build a fresh single-block region, lower `f` into it, and append the
+    /// fall-through terminator unless `f` already terminated the block.
+    fn region(
+        &mut self,
+        args: Vec<Value>,
+        fallthrough: Fallthrough,
+        f: impl FnOnce(&mut Self) -> Result<(), Diagnostic>,
+    ) -> Result<RegionId, Diagnostic> {
+        let region = self.context.create_region();
+        let block = self.context.create_block(args);
+        region.add_block(block.id());
+        self.with_block(block.clone(), f)?;
+        if !self.is_terminated(&block) {
+            let mut builder = IRBuilder::new(block);
+            match fallthrough {
+                Fallthrough::LoopBack => {
+                    builder.insert(c::r#yield(self.context).build());
+                }
+                Fallthrough::IfMerge => {
+                    builder.insert(scf::r#yield(self.context, Operand::none()).build());
+                }
+            }
+        }
+        Ok(region.id())
+    }
+
+    /// Build a loop `cond` region: lower the condition to `i1` and end with
+    /// `cir.condition`.
+    fn cond_region(&mut self, cond: NodeId) -> Result<RegionId, Diagnostic> {
+        let region = self.context.create_region();
+        let block = self.context.create_block(vec![]);
+        region.add_block(block.id());
+        self.with_block(block, |cg| -> Result<(), Diagnostic> {
+            let value = cg.lower_condition(cond)?;
+            cg.builder.insert(c::condition(cg.context, value).build());
+            Ok(())
+        })?;
+        Ok(region.id())
+    }
+
+    /// Create the `!token` value that becomes a loop body's entry argument and
+    /// the loop's handle.
+    fn loop_token(&self) -> Value {
+        self.context
+            .create_value(TokenType::new(self.context), None)
+    }
+
+    fn lower_if(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        let mut children = self.ast.children(stmt);
+        let cond = children.next().unwrap();
+        let then = children.next().unwrap();
+        let els = children.next();
+
+        let condition = self.lower_condition(cond)?;
+        let then_region = self.region(vec![], Fallthrough::IfMerge, |cg| cg.lower_stmt(then))?;
+        let else_region = self.region(vec![], Fallthrough::IfMerge, |cg| match els {
+            Some(e) => cg.lower_stmt(e),
+            None => Ok(()),
+        })?;
+        self.builder.insert(
+            scf::r#if(
+                self.context,
+                condition,
+                Some(then_region),
+                Some(else_region),
+            )
+            .build(),
+        );
+        Ok(())
+    }
+
+    fn lower_while(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        let mut children = self.ast.children(stmt);
+        let cond = children.next().unwrap();
+        let body = children.next().unwrap();
+
+        // Create the token before the regions so its value number precedes
+        // every value defined inside them; the printer surfaces it in the op
+        // header (ahead of the regions), and the parser, which numbers values
+        // by textual position, only round-trips if that order is monotonic.
+        let token = self.loop_token();
+        let cond_region = self.cond_region(cond)?;
+        let body_region = self.lower_loop_body(token, body)?;
+        self.builder
+            .insert(c::r#while(self.context, Some(cond_region), Some(body_region)).build());
+        Ok(())
+    }
+
+    fn lower_do_while(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        let mut children = self.ast.children(stmt);
+        let body = children.next().unwrap();
+        let cond = children.next().unwrap();
+
+        // See `lower_while`: the token's number must precede the regions'.
+        let token = self.loop_token();
+        let body_region = self.lower_loop_body(token, body)?;
+        let cond_region = self.cond_region(cond)?;
+        self.builder
+            .insert(c::r#do(self.context, Some(body_region), Some(cond_region)).build());
+        Ok(())
+    }
+
+    fn lower_for(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        let mut children = self.ast.children(stmt);
+        let init = children.next().unwrap();
+        let cond = children.next().unwrap();
+        let step = children.next().unwrap();
+        let body = children.next().unwrap();
+
+        self.lower_stmt(init)?;
+        // See `lower_while`: the token's number must precede the regions'.
+        let token = self.loop_token();
+        let cond_region = self.cond_region(cond)?;
+        let body_region = self.lower_loop_body(token, body)?;
+        let step_region = self.region(vec![], Fallthrough::LoopBack, |cg| cg.lower_stmt(step))?;
+        self.builder.insert(
+            c::r#for(
+                self.context,
+                Some(cond_region),
+                Some(body_region),
+                Some(step_region),
+            )
+            .build(),
+        );
+        Ok(())
+    }
+
+    /// Lower a loop body into a region whose entry block carries `token`, with
+    /// that token pushed so nested `break`/`continue` resolve to this loop.
+    fn lower_loop_body(&mut self, token: Value, body: NodeId) -> Result<RegionId, Diagnostic> {
+        let token_id = token.id();
+        self.loop_tokens.push(token_id);
+        let region = self.region(vec![token], Fallthrough::LoopBack, |cg| cg.lower_stmt(body));
+        self.loop_tokens.pop();
+        region
+    }
+
+    /// Lower a controlling expression to an `i1`: a relational operator becomes
+    /// the matching `cmpi`, an omitted `for` condition is constant true, and any
+    /// other integer expression is compared against zero (C's "non-zero").
+    fn lower_condition(&mut self, cond: NodeId) -> Result<ValueId, Diagnostic> {
+        let i1 = IntegerType::new(self.context, 1);
+        let kind = self.ast.get_node(cond).kind;
+
+        if kind == AstKind::Empty {
+            return Ok(self
+                .builder
+                .insert(b::constant(self.context, 1, i1).build())
+                .result());
+        }
+
+        let predicate = match kind {
+            AstKind::Lt => "slt",
+            AstKind::Le => "sle",
+            AstKind::Gt => "sgt",
+            AstKind::Ge => "sge",
+            AstKind::Eq => "eq",
+            AstKind::Ne => "ne",
+            _ => {
+                let value = self.lower_expr(cond)?;
+                let i32_ty = IntegerType::new(self.context, 32);
+                let zero = self
+                    .builder
+                    .insert(b::constant(self.context, 0, i32_ty).build())
+                    .result();
+                let cmp = b::CmpIOpBuilder::new(self.context)
+                    .lhs(value)
+                    .rhs(zero)
+                    .result_type(i1)
+                    .predicate("ne")
+                    .build();
+                return Ok(self.builder.insert(cmp).result());
+            }
+        };
+
+        let mut operands = self.ast.children(cond);
+        let lhs = operands.next().unwrap();
+        let rhs = operands.next().unwrap();
+        let lhs = self.lower_expr(lhs)?;
+        let rhs = self.lower_expr(rhs)?;
+        let cmp = b::CmpIOpBuilder::new(self.context)
+            .lhs(lhs)
+            .rhs(rhs)
+            .result_type(i1)
+            .predicate(predicate)
+            .build();
+        Ok(self.builder.insert(cmp).result())
     }
 
     /// Lower an expression subtree in one post-order pass: operands precede their
