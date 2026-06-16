@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
 use quote::{format_ident, quote};
-use tir::graph::Dag;
 
 use crate::Type;
 use crate::ast;
@@ -1140,9 +1139,7 @@ fn emit_instructions<'a>(
 
         #(#instruction_encoder_impls)*
 
-        // Consumed by object-file emission; targets that do not emit objects yet
-        // simply never call these.
-        #[allow(dead_code)]
+        // Consumed by object-file emission.
         fn get_instruction_encoders() -> std::collections::HashMap<String, tir_be_common::binary::InstructionEncoder> {
             let mut map: std::collections::HashMap<String, tir_be_common::binary::InstructionEncoder> = std::collections::HashMap::new();
             #(#instruction_encoder_map_inits)*
@@ -1150,7 +1147,6 @@ fn emit_instructions<'a>(
             map
         }
 
-        #[allow(dead_code)]
         fn get_instruction_patchers() -> std::collections::HashMap<String, tir_be_common::binary::InstructionPatcher> {
             let mut map: std::collections::HashMap<String, tir_be_common::binary::InstructionPatcher> = std::collections::HashMap::new();
             #(#instruction_patcher_map_inits)*
@@ -1824,11 +1820,9 @@ fn emit_register_trait_helpers(files: &[ast::File]) -> Result<proc_macro2::Token
 // Instruction analysis helpers
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 struct InstructionSemantics {
     pattern: tir::sem_expr::ExprPostGraph,
     root: tir::graph::NodeId,
-    base_cost: u32,
     variable_symbols: HashMap<String, u32>,
     fixed_register_by_class: HashMap<String, Option<u16>>,
     /// `(register class, index) -> pattern symbol` for every register the behavior
@@ -1853,13 +1847,11 @@ fn analyze_instruction_semantics(
         isa_param_values,
         register_index_map,
     )?;
-    let base_cost = pattern.len().try_into().unwrap_or(u32::MAX).max(1);
     let fixed_register_by_class = split_fixed_registers(&lowering.register_symbols);
 
     Some(InstructionSemantics {
         pattern,
         root: lowering.root,
-        base_cost,
         variable_symbols: lowering.variable_symbols,
         fixed_register_by_class,
         register_symbols: lowering.register_symbols,
