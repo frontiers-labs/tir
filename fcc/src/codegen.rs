@@ -7,11 +7,14 @@
 //! integer ops. Only `int` (lowered to `i32`) and `void` are supported.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tir::builtin::{IntegerType, ModuleOp, UnitType, ops as b};
 use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
-use tir::{Context, IRBuilder, Operand, Operation, TypeId, ValueId};
+use tir::{
+    Block, BlockId, Context, IRBuilder, Operand, Operation, Region, Terminator, TypeId, ValueId,
+};
 
 use crate::ast::*;
 use crate::diagnostics::{
@@ -28,12 +31,18 @@ struct Slot {
 struct FnCodegen<'a> {
     context: &'a Context,
     ast: &'a Ast,
+    /// The function body region; control flow appends fresh blocks to it.
+    region: Arc<Region>,
     builder: IRBuilder,
+    /// The block the builder currently inserts into.
+    cur_block: Arc<Block>,
     locals: HashMap<String, Slot>,
     /// Scratch holding the lowered SSA value of each node in the expression
     /// subtree currently being lowered, indexed by `node.index() - base`. Reused
     /// across expressions to avoid reallocating.
     values: Vec<ValueId>,
+    /// `(continue target, break target)` for each enclosing loop.
+    loops: Vec<(BlockId, BlockId)>,
 }
 
 /// Lower a translation unit into a `builtin.module` in `context`.
@@ -58,6 +67,32 @@ fn undeclared(ast: &Ast, node: NodeId, name: &str) -> Diagnostic {
 /// A construct the parser accepts but codegen does not lower yet.
 fn unsupported(ast: &Ast, node: NodeId, what: String) -> Diagnostic {
     UnsupportedConstruct::new(ast.get_node(node).span, what).into()
+}
+
+/// Whether `kind` names an expression node (one that produces a value), as
+/// opposed to a statement or structural node.
+fn is_expr_kind(kind: AstKind) -> bool {
+    use AstKind::*;
+    matches!(
+        kind,
+        Add | Sub
+            | Mul
+            | Div
+            | Mod
+            | Lt
+            | Gt
+            | Le
+            | Ge
+            | Eq
+            | Ne
+            | LogAnd
+            | LogOr
+            | Neg
+            | Not
+            | Call
+            | Var
+            | Int
+    )
 }
 
 fn lower_ctype(context: &Context, ty: &CType) -> TypeId {
@@ -97,12 +132,16 @@ fn lower_function(
 
     let func_op = b::func(context, name.as_str(), ret_ty, Some(region.id())).build();
 
+    let entry = func_op.body();
     let mut cg = FnCodegen {
         context,
         ast,
-        builder: IRBuilder::new(func_op.body()),
+        region,
+        builder: IRBuilder::new(entry.clone()),
+        cur_block: entry,
         locals: HashMap::new(),
         values: Vec::new(),
+        loops: Vec::new(),
     };
     cg.lower_body(func, &param_ids)?;
 
@@ -148,9 +187,266 @@ impl FnCodegen<'_> {
         Ok(())
     }
 
+    /// Append a fresh empty block to the function region.
+    fn new_block(&mut self) -> Arc<Block> {
+        let block = self.context.create_block(vec![]);
+        self.region.add_block(block.id());
+        block
+    }
+
+    /// Point the builder at `block`, making it the current insertion target.
+    fn switch_to(&mut self, block: Arc<Block>) {
+        self.builder = IRBuilder::new(block.clone());
+        self.cur_block = block;
+    }
+
+    /// Whether the current block already ends in a terminator.
+    fn terminated(&self) -> bool {
+        self.cur_block.op_ids().last().is_some_and(|id| {
+            self.context
+                .get_op(*id)
+                .as_interface::<dyn Terminator>()
+                .is_some()
+        })
+    }
+
+    /// Emit an unconditional branch to `dest`, unless the block already ends in a
+    /// terminator (the body fell through a `return`/`break`/`continue`).
+    fn branch_to(&mut self, dest: BlockId) {
+        if !self.terminated() {
+            self.builder
+                .insert(b::br(self.context, vec![], dest).build());
+        }
+    }
+
+    /// Lower an expression used as a boolean test into an `i1`. A relational or
+    /// equality operator becomes a single `cmpi`; any other expression is
+    /// compared against zero (C truthiness).
+    fn lower_condition(&mut self, node: NodeId) -> Result<ValueId, Diagnostic> {
+        let ast = self.ast;
+        let i1 = IntegerType::new(self.context, 1);
+        let predicate = match ast.get_node(node).kind {
+            AstKind::Lt => "slt",
+            AstKind::Gt => "sgt",
+            AstKind::Le => "sle",
+            AstKind::Ge => "sge",
+            AstKind::Eq => "eq",
+            AstKind::Ne => "ne",
+            _ => {
+                let value = self.lower_expr(node)?;
+                let i32_ty = IntegerType::new(self.context, 32);
+                let zero = self
+                    .builder
+                    .insert(b::constant(self.context, 0, i32_ty).build())
+                    .result();
+                return Ok(self
+                    .builder
+                    .insert(b::cmpi(self.context, value, zero, "ne", i1).build())
+                    .result());
+            }
+        };
+        let mut children = ast.children(node);
+        let lhs = children.next().unwrap();
+        let rhs = children.next().unwrap();
+        let l = self.lower_expr(lhs)?;
+        let r = self.lower_expr(rhs)?;
+        Ok(self
+            .builder
+            .insert(b::cmpi(self.context, l, r, predicate, i1).build())
+            .result())
+    }
+
+    fn lower_if(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        let ast = self.ast;
+        let mut children = ast.children(stmt);
+        let cond = children.next().unwrap();
+        let then = children.next().unwrap();
+        let els = children.next();
+
+        let cv = self.lower_condition(cond)?;
+        let then_blk = self.new_block();
+        let else_blk = els.map(|_| self.new_block());
+        let join_blk = self.new_block();
+        let false_dest = else_blk.as_ref().unwrap_or(&join_blk).id();
+        self.builder.insert(
+            b::cond_br(self.context, cv, vec![], vec![], then_blk.id(), false_dest).build(),
+        );
+
+        self.switch_to(then_blk);
+        self.lower_stmt(then)?;
+        self.branch_to(join_blk.id());
+
+        if let (Some(els), Some(else_blk)) = (els, else_blk) {
+            self.switch_to(else_blk);
+            self.lower_stmt(els)?;
+            self.branch_to(join_blk.id());
+        }
+
+        self.switch_to(join_blk);
+        Ok(())
+    }
+
+    fn lower_while(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        let ast = self.ast;
+        let mut children = ast.children(stmt);
+        let cond = children.next().unwrap();
+        let body = children.next().unwrap();
+
+        let cond_blk = self.new_block();
+        let body_blk = self.new_block();
+        let join_blk = self.new_block();
+
+        self.branch_to(cond_blk.id());
+        self.switch_to(cond_blk.clone());
+        let cv = self.lower_condition(cond)?;
+        self.builder.insert(
+            b::cond_br(
+                self.context,
+                cv,
+                vec![],
+                vec![],
+                body_blk.id(),
+                join_blk.id(),
+            )
+            .build(),
+        );
+
+        self.switch_to(body_blk);
+        self.loops.push((cond_blk.id(), join_blk.id()));
+        self.lower_stmt(body)?;
+        self.loops.pop();
+        self.branch_to(cond_blk.id());
+
+        self.switch_to(join_blk);
+        Ok(())
+    }
+
+    fn lower_do_while(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        let ast = self.ast;
+        let mut children = ast.children(stmt);
+        let body = children.next().unwrap();
+        let cond = children.next().unwrap();
+
+        let body_blk = self.new_block();
+        let cond_blk = self.new_block();
+        let join_blk = self.new_block();
+
+        self.branch_to(body_blk.id());
+        self.switch_to(body_blk.clone());
+        self.loops.push((cond_blk.id(), join_blk.id()));
+        self.lower_stmt(body)?;
+        self.loops.pop();
+        self.branch_to(cond_blk.id());
+
+        self.switch_to(cond_blk);
+        let cv = self.lower_condition(cond)?;
+        self.builder.insert(
+            b::cond_br(
+                self.context,
+                cv,
+                vec![],
+                vec![],
+                body_blk.id(),
+                join_blk.id(),
+            )
+            .build(),
+        );
+
+        self.switch_to(join_blk);
+        Ok(())
+    }
+
+    fn lower_for(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        let ast = self.ast;
+        let mut children = ast.children(stmt);
+        let init = children.next().unwrap();
+        let cond = children.next().unwrap();
+        let step = children.next().unwrap();
+        let body = children.next().unwrap();
+
+        self.lower_stmt(init)?;
+
+        let cond_blk = self.new_block();
+        let body_blk = self.new_block();
+        let step_blk = self.new_block();
+        let join_blk = self.new_block();
+
+        self.branch_to(cond_blk.id());
+        self.switch_to(cond_blk.clone());
+        if matches!(ast.get_node(cond).kind, AstKind::Empty) {
+            self.branch_to(body_blk.id());
+        } else {
+            let cv = self.lower_condition(cond)?;
+            self.builder.insert(
+                b::cond_br(
+                    self.context,
+                    cv,
+                    vec![],
+                    vec![],
+                    body_blk.id(),
+                    join_blk.id(),
+                )
+                .build(),
+            );
+        }
+
+        self.switch_to(body_blk);
+        self.loops.push((step_blk.id(), join_blk.id()));
+        self.lower_stmt(body)?;
+        self.loops.pop();
+        self.branch_to(step_blk.id());
+
+        self.switch_to(step_blk);
+        self.lower_stmt(step)?;
+        self.branch_to(cond_blk.id());
+
+        self.switch_to(join_blk);
+        Ok(())
+    }
+
     fn lower_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+        // Statements following a `return`/`break`/`continue` are unreachable; the
+        // current block is already closed, so skip them rather than appending past
+        // a terminator.
+        if self.terminated() {
+            return Ok(());
+        }
         let ast = self.ast;
         match ast.get_node(stmt).kind {
+            AstKind::Block => {
+                for child in ast.children(stmt) {
+                    self.lower_stmt(child)?;
+                }
+                Ok(())
+            }
+            AstKind::ExprStmt => {
+                let expr = ast.children(stmt).next().unwrap();
+                self.lower_expr(expr)?;
+                Ok(())
+            }
+            AstKind::If => self.lower_if(stmt),
+            AstKind::While => self.lower_while(stmt),
+            AstKind::DoWhile => self.lower_do_while(stmt),
+            AstKind::For => self.lower_for(stmt),
+            AstKind::Break => {
+                let &(_, brk) = self
+                    .loops
+                    .last()
+                    .ok_or_else(|| unsupported(ast, stmt, "break outside loop".to_string()))?;
+                self.builder
+                    .insert(b::br(self.context, vec![], brk).build());
+                Ok(())
+            }
+            AstKind::Continue => {
+                let &(cont, _) = self
+                    .loops
+                    .last()
+                    .ok_or_else(|| unsupported(ast, stmt, "continue outside loop".to_string()))?;
+                self.builder
+                    .insert(b::br(self.context, vec![], cont).build());
+                Ok(())
+            }
+            AstKind::Empty => Ok(()),
             AstKind::Decl => {
                 let AstLeaf::Decl { name, ty } = ast.get_leaf_data(stmt).unwrap() else {
                     unreachable!("decl node carries a decl payload");
@@ -188,8 +484,12 @@ impl FnCodegen<'_> {
                     .insert(b::r#return(self.context, operand).build());
                 Ok(())
             }
-            // Control flow and expression statements are parsed but not yet
-            // lowered; codegen for them is stubbed out for now.
+            // A bare expression in statement position (e.g. a `for` step clause
+            // that is not an assignment): evaluate it for its side effects.
+            kind if is_expr_kind(kind) => {
+                self.lower_expr(stmt)?;
+                Ok(())
+            }
             kind => Err(unsupported(ast, stmt, format!("statement {kind:?}"))),
         }
     }
@@ -255,8 +555,19 @@ impl FnCodegen<'_> {
                             .result(),
                     }
                 }
-                // The richer operators (division, comparison, logical, unary,
-                // calls) are parsed but not yet lowered; stub them out for now.
+                AstKind::Neg => {
+                    let child = ast.children(node).next().unwrap();
+                    let x = self.values[child.index() - base];
+                    let zero = self
+                        .builder
+                        .insert(b::constant(self.context, 0, i32_ty).build())
+                        .result();
+                    self.builder
+                        .insert(b::subi(self.context, zero, x, i32_ty).build())
+                        .result()
+                }
+                // The remaining operators (division, logical, calls) are parsed
+                // but not yet lowered; stub them out for now.
                 kind => {
                     return Err(unsupported(ast, node, format!("expression {kind:?}")));
                 }

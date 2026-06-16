@@ -436,7 +436,7 @@ impl Pass for RegisterAllocationPass {
 
         let mut frame = FrameState::new(self.target.slot_size());
         let assignment = loop {
-            let liveness = liveness::analyze(context, &blocks, |_| Vec::new());
+            let liveness = liveness::analyze(context, &blocks, |b| block_successors(context, b));
             let use_counts = reference_counts(context, &blocks);
             // Spill the least-used value first. Reload/store temps are unspillable:
             // they have single-instruction ranges and must occupy a register, so
@@ -625,6 +625,24 @@ enum RoleClass {
 
 fn is_vreg(r: &liveness::RegRef, vreg: u32) -> bool {
     matches!(r, liveness::RegRef::Virtual { id, .. } if *id == vreg)
+}
+
+/// The control-flow successors of `block`: the destination of every
+/// `Block`-valued attribute carried by its operations (branch targets). All
+/// branches name their targets explicitly, so this captures the full CFG edge
+/// set without relying on fallthrough.
+fn block_successors(context: &Context, block: BlockId) -> Vec<BlockId> {
+    let mut successors = Vec::new();
+    for op_id in context.get_block(block).op_ids() {
+        for attr in &context.get_op(op_id).attributes {
+            if let AttributeValue::Block(target) = attr.value
+                && !successors.contains(&target)
+            {
+                successors.push(target);
+            }
+        }
+    }
+    successors
 }
 
 /// The blocks of an `asm.symbol` op's body region, in program order.

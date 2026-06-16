@@ -7,9 +7,10 @@ use tir::attributes::AttributeValue;
 use tir_be_common::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
 
 use crate::{
-    BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder, BranchNotEqOpBuilder,
-    CompareOpBuilder, MoveWideZeroOpBuilder, ReturnOpBuilder, VirtualBranchOp, VirtualCallOp,
-    VirtualCondBranchOp, VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
+    BranchEqOpBuilder, BranchGreaterEqOpBuilder, BranchImmediateOpBuilder, BranchLessThanOpBuilder,
+    BranchLinkOpBuilder, BranchLinkRegOpBuilder, BranchNotEqOpBuilder, CompareOpBuilder,
+    MoveWideZeroOpBuilder, ReturnOpBuilder, VirtualBranchOp, VirtualCallOp, VirtualCondBranchOp,
+    VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
 };
 
 const R_AARCH64_CONDBR19: u32 = 280;
@@ -70,8 +71,14 @@ pub(crate) fn lower_constant(
     Ok(true)
 }
 
-/// Pre-RA: `vcond_br cond, t, f` becomes `cmp cond, xzr` + `b.ne t` + `b f`.
-/// Runs before register allocation so the condition register gets colored.
+/// Pre-RA: `vcond_br cond, t, f` becomes a `cmp` + conditional branch to `t` +
+/// `b f`. Runs before register allocation so the condition register gets colored.
+///
+/// When `cond` is produced by a `cmpi`, the comparison is fused: the two compared
+/// values feed the `cmp` directly and a flag-tested branch (`b.lt`/`b.ge`/`b.eq`/
+/// `b.ne`, with operands swapped for the `>`/`<=` predicates AArch64 lacks)
+/// replaces the boolean test, and the dead `cmpi` is erased. Otherwise the
+/// condition register is compared against `xzr` with `b.ne`.
 pub(crate) fn lower_vcond_br(
     context: &tir::Context,
     op: &tir::OperationRef,
@@ -92,21 +99,112 @@ pub(crate) fn lower_vcond_br(
     let true_dest = block_attr(&cond_br, "true_dest")?;
     let false_dest = block_attr(&cond_br, "false_dest")?;
 
-    let cmp = CompareOpBuilder::new(context)
-        .attr("rn", virt(condition.number(), "GPR"))
-        .attr("rm", phys(&("GPR".to_string(), 31))) // xzr
-        .build();
-    rewriter.insert_op_before(op, &cmp)?;
-    let bne = BranchNotEqOpBuilder::new(context)
-        .attr("imm", AttributeValue::Block(true_dest))
-        .build();
-    rewriter.insert_op_before(op, &bne)?;
+    let fused = tir_be_common::cmpi_operands(context, condition);
+    let (cmp, taken) = match &fused {
+        Some((lhs, rhs, predicate)) => compare_branch(context, predicate, *lhs, *rhs, true_dest)?,
+        None => {
+            let cmp = CompareOpBuilder::new(context)
+                .attr("rn", virt(condition.number(), "GPR"))
+                .attr("rm", phys(&("GPR".to_string(), 31))) // xzr
+                .build();
+            let bne = BranchNotEqOpBuilder::new(context)
+                .attr("imm", AttributeValue::Block(true_dest))
+                .build();
+            (
+                Box::new(cmp) as Box<dyn tir::Operation>,
+                Box::new(bne) as Box<dyn tir::Operation>,
+            )
+        }
+    };
+    rewriter.insert_op_before(op, cmp.as_ref())?;
+    rewriter.insert_op_before(op, taken.as_ref())?;
 
     let fallthrough = crate::VirtualBranchOpBuilder::new(context)
         .attr("dest", AttributeValue::Block(false_dest))
         .build();
     rewriter.replace_op(op, &fallthrough)?;
+
+    // The cmpi is dead once its only use (the branch) is gone; erase it last so
+    // no operation transiently references a removed value.
+    if fused.is_some() {
+        tir_be_common::erase_defining_op(context, condition, rewriter)?;
+    }
     Ok(true)
+}
+
+/// Build the `(cmp, conditional branch)` pair taken when `predicate` holds on
+/// `(lhs, rhs)`. AArch64 has only `b.lt`/`b.ge`/`b.eq`/`b.ne` for signed tests,
+/// so `>`/`<=` are realized by swapping the `cmp` operands.
+#[allow(clippy::type_complexity)]
+fn compare_branch(
+    context: &tir::Context,
+    predicate: &str,
+    lhs: tir::ValueId,
+    rhs: tir::ValueId,
+    true_dest: tir::BlockId,
+) -> Result<(Box<dyn tir::Operation>, Box<dyn tir::Operation>), tir::PassError> {
+    let l = virt(lhs.number(), "GPR");
+    let r = virt(rhs.number(), "GPR");
+    let dest = AttributeValue::Block(true_dest);
+    // (rn, rm) for the cmp, then the flag-tested branch.
+    let (rn, rm, branch): (_, _, Box<dyn tir::Operation>) = match predicate {
+        "slt" => (
+            l,
+            r,
+            Box::new(
+                BranchLessThanOpBuilder::new(context)
+                    .attr("imm", dest)
+                    .build(),
+            ),
+        ),
+        "sge" => (
+            l,
+            r,
+            Box::new(
+                BranchGreaterEqOpBuilder::new(context)
+                    .attr("imm", dest)
+                    .build(),
+            ),
+        ),
+        "sgt" => (
+            r,
+            l,
+            Box::new(
+                BranchLessThanOpBuilder::new(context)
+                    .attr("imm", dest)
+                    .build(),
+            ),
+        ),
+        "sle" => (
+            r,
+            l,
+            Box::new(
+                BranchGreaterEqOpBuilder::new(context)
+                    .attr("imm", dest)
+                    .build(),
+            ),
+        ),
+        "eq" => (
+            l,
+            r,
+            Box::new(BranchEqOpBuilder::new(context).attr("imm", dest).build()),
+        ),
+        "ne" => (
+            l,
+            r,
+            Box::new(BranchNotEqOpBuilder::new(context).attr("imm", dest).build()),
+        ),
+        other => {
+            return Err(tir::PassError::InvalidRuleSet(format!(
+                "unsupported cmpi predicate '{other}'"
+            )));
+        }
+    };
+    let cmp = CompareOpBuilder::new(context)
+        .attr("rn", rn)
+        .attr("rm", rm)
+        .build();
+    Ok((Box::new(cmp), branch))
 }
 
 fn block_attr(op: &dyn tir::Operation, name: &str) -> Result<tir::BlockId, tir::PassError> {

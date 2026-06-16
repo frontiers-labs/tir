@@ -40,4 +40,23 @@ mod tests {
         tir::Operation::print(&module, &mut fmt).expect("print");
         assert_eq!(ir, buf);
     }
+
+    /// Control flow lowers to a multi-block CFG; the emitted IR must verify (every
+    /// block ends in a terminator, the `cond_br` condition is `i1`) and round-trip
+    /// through the parser unchanged.
+    #[test]
+    fn control_flow_verifies_and_roundtrips() {
+        let ir =
+            compile("int pick(int a, int b) { if (a < b) { return 10; } else { return 20; } }");
+
+        let context = tir::Context::with_default_dialects();
+        let module = tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(&context, &ir)
+            .expect("emitted IR should parse back");
+        assert!(tir::Operation::verify(&module, &context).is_ok());
+
+        let mut buf = String::new();
+        let mut fmt = tir::IRFormatter::new(&mut buf);
+        tir::Operation::print(&module, &mut fmt).expect("print");
+        assert_eq!(ir, buf);
+    }
 }

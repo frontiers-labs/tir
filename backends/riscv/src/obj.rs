@@ -7,8 +7,9 @@ use tir::attributes::AttributeValue;
 use tir_be_common::binary::{EM_RISCV, ElfClass, ObjectFormatInfo, RelocKind};
 
 use crate::{
-    BranchNotEqOpBuilder, JumpAndLinkOpBuilder, JumpAndLinkRegOpBuilder, VirtualBranchOp,
-    VirtualCallOp, VirtualCondBranchOp, VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
+    BranchEqOpBuilder, BranchGeOpBuilder, BranchLtOpBuilder, BranchNotEqOpBuilder,
+    JumpAndLinkOpBuilder, JumpAndLinkRegOpBuilder, VirtualBranchOp, VirtualCallOp,
+    VirtualCondBranchOp, VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
 };
 
 const R_RISCV_BRANCH: u32 = 16;
@@ -118,8 +119,13 @@ fn lower_constant(
     Ok(true)
 }
 
-/// Pre-RA: `vcond_br cond, t, f` becomes `bne cond, x0, t` + `vbr f`. Runs
-/// before register allocation so the condition register gets colored.
+/// Pre-RA: `vcond_br cond, t, f` becomes a conditional branch to `t` + `vbr f`.
+/// Runs before register allocation so the condition register gets colored.
+///
+/// When `cond` is produced by a `cmpi`, the comparison is fused into a native
+/// two-register branch (`blt`/`bge`/`beq`/`bne`, with operands swapped for the
+/// `>`/`<=` predicates), and the now-dead `cmpi` is erased. Otherwise the
+/// condition is tested against `x0` with `bne`.
 pub(crate) fn lower_vcond_br(
     context: &tir::Context,
     op: &tir::OperationRef,
@@ -140,20 +146,97 @@ pub(crate) fn lower_vcond_br(
     let true_dest = block_attr(&cond_br, "true_dest")?;
     let false_dest = block_attr(&cond_br, "false_dest")?;
 
-    let bne = BranchNotEqOpBuilder::new(context)
-        .attr("rs1", virt(condition.number(), "GPR"))
-        .attr("rs2", phys(&("GPR".to_string(), 0)))
-        .attr("imm", AttributeValue::Block(true_dest))
-        .build();
-    rewriter.insert_op_before(op, &bne)?;
+    let fused = tir_be_common::cmpi_operands(context, condition);
+    let taken: Box<dyn tir::Operation> = match &fused {
+        Some((lhs, rhs, predicate)) => compare_branch(context, predicate, *lhs, *rhs, true_dest)?,
+        None => Box::new(
+            BranchNotEqOpBuilder::new(context)
+                .attr("rs1", virt(condition.number(), "GPR"))
+                .attr("rs2", phys(&("GPR".to_string(), 0)))
+                .attr("imm", AttributeValue::Block(true_dest))
+                .build(),
+        ),
+    };
+    rewriter.insert_op_before(op, taken.as_ref())?;
 
     let fallthrough = crate::VirtualBranchOpBuilder::new(context)
         .attr("dest", AttributeValue::Block(false_dest))
         .build();
     rewriter.replace_op(op, &fallthrough)?;
+
+    // The cmpi is dead once its only use (the branch) is gone; erase it last so
+    // no operation transiently references a removed value.
+    if fused.is_some() {
+        tir_be_common::erase_defining_op(context, condition, rewriter)?;
+    }
     Ok(true)
 }
 
+/// Build the native branch taken when `predicate` holds on `(lhs, rhs)`. RISC-V
+/// has only `<`/`>=`/`==`/`!=`, so `>`/`<=` are realized by swapping operands.
+fn compare_branch(
+    context: &tir::Context,
+    predicate: &str,
+    lhs: tir::ValueId,
+    rhs: tir::ValueId,
+    true_dest: tir::BlockId,
+) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+    let l = virt(lhs.number(), "GPR");
+    let r = virt(rhs.number(), "GPR");
+    let dest = AttributeValue::Block(true_dest);
+    let branch: Box<dyn tir::Operation> = match predicate {
+        "slt" => Box::new(
+            BranchLtOpBuilder::new(context)
+                .attr("rs1", l)
+                .attr("rs2", r)
+                .attr("imm", dest)
+                .build(),
+        ),
+        "sge" => Box::new(
+            BranchGeOpBuilder::new(context)
+                .attr("rs1", l)
+                .attr("rs2", r)
+                .attr("imm", dest)
+                .build(),
+        ),
+        "sgt" => Box::new(
+            BranchLtOpBuilder::new(context)
+                .attr("rs1", r)
+                .attr("rs2", l)
+                .attr("imm", dest)
+                .build(),
+        ),
+        "sle" => Box::new(
+            BranchGeOpBuilder::new(context)
+                .attr("rs1", r)
+                .attr("rs2", l)
+                .attr("imm", dest)
+                .build(),
+        ),
+        "eq" => Box::new(
+            BranchEqOpBuilder::new(context)
+                .attr("rs1", l)
+                .attr("rs2", r)
+                .attr("imm", dest)
+                .build(),
+        ),
+        "ne" => Box::new(
+            BranchNotEqOpBuilder::new(context)
+                .attr("rs1", l)
+                .attr("rs2", r)
+                .attr("imm", dest)
+                .build(),
+        ),
+        other => {
+            return Err(tir::PassError::InvalidRuleSet(format!(
+                "unsupported cmpi predicate '{other}'"
+            )));
+        }
+    };
+    Ok(branch)
+}
+
+/// Erase the operation that defines `value` (here, a fused `cmpi`).
 fn block_attr(op: &dyn tir::Operation, name: &str) -> Result<tir::BlockId, tir::PassError> {
     op.attributes()
         .iter()

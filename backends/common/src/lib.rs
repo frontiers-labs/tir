@@ -172,6 +172,45 @@ pub fn print_branch(
     fmt.write("\n")
 }
 
+/// If `value` is produced by a `builtin.cmpi`, return its operands and predicate
+/// string. Targets use this to fuse a comparison feeding a conditional branch
+/// into a native compare-and-branch instead of materializing the boolean.
+pub fn cmpi_operands(
+    context: &tir::Context,
+    value: tir::ValueId,
+) -> Option<(tir::ValueId, tir::ValueId, String)> {
+    use tir::Operation;
+    use tir::builtin::CmpIOp;
+
+    let def = context.get_value(value).defining_op()?;
+    let cmpi = context.get_op(def).as_op::<CmpIOp>()?;
+    let predicate = cmpi
+        .attributes()
+        .iter()
+        .find_map(|attr| match &attr.value {
+            AttributeValue::Str(s) if attr.name == "predicate" => Some(s.clone()),
+            _ => None,
+        })?;
+    let operands = cmpi.operands();
+    Some((operands[0], operands[1], predicate))
+}
+
+/// Erase the operation that defines `value` (a fused `cmpi` whose only use, the
+/// branch, has already been replaced). A no-op if `value` is a block argument.
+pub fn erase_defining_op(
+    context: &tir::Context,
+    value: tir::ValueId,
+    rewriter: &mut tir::Rewriter,
+) -> Result<(), tir::PassError> {
+    let Some(def) = context.get_value(value).defining_op() else {
+        return Ok(());
+    };
+    let instance = context.get_op(def);
+    let block = instance.parent_block().map(|b| context.get_block(b));
+    let target = tir::OperationRef::new(instance, block, None);
+    rewriter.erase_op(&target)
+}
+
 pub fn int_attr(attrs: &[tir::attributes::NamedAttribute], name: &str) -> Option<i64> {
     attrs.iter().find_map(|attr| {
         if attr.name != name {
