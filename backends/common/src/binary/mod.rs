@@ -152,6 +152,7 @@ mod tests {
             elf_flags: 0,
             reloc_for: |_| None,
             pc_rel_scale: |_| 0,
+            reloc_field_offset: |_| 0,
         }
     }
 

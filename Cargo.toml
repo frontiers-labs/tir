@@ -15,6 +15,7 @@ members = [
     "simulator/isasim",
     "simulator/simcore",
     "backends/arm64",
+    "backends/x86",
     "fcc",
     "backends/targets",
     "utils/isa-test-suite",
@@ -34,6 +35,7 @@ tmdl = { path = "tmdl" }
 # Per-target crates
 tir-riscv = { path = "backends/riscv" }
 tir-arm64 = { path = "backends/arm64" }
+tir-x86 = { path = "backends/x86" }
 
 anyhow = "1.0.102"
 ariadne = "0.6.0"

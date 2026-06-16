@@ -38,6 +38,8 @@ pub(crate) fn object_format() -> ObjectFormatInfo {
         },
         // AArch64 branch immediates are word offsets: byte delta >> 2.
         pc_rel_scale: |_| 2,
+        // Relocations cover the whole 32-bit instruction word.
+        reloc_field_offset: |_| 0,
     }
 }
 

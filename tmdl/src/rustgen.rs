@@ -305,6 +305,20 @@ fn emit_instructions<'a>(
             quote! { #(#items,)* }
         };
 
+        // Operands read on the right-hand side of an assignment. A defined operand
+        // that also appears here is read and written — a two-address (tied) operand
+        // such as x86's `add %src, %dst` — and must carry the `ReadWrite` role so
+        // the allocator keeps its incoming value live.
+        let read_operands: HashSet<String> = {
+            let operand_names: HashSet<&str> = ops.iter().map(|(n, _)| n.as_str()).collect();
+            let mut assignments = Vec::new();
+            collect_behavior_assignment_exprs(&inst.behavior, &mut assignments);
+            assignments
+                .iter()
+                .flat_map(|(_, rhs)| referenced_operands(rhs, &operand_names))
+                .collect()
+        };
+
         // Build roles from behavior assignments so we don't depend on naming conventions.
         let roles_schema = {
             let mut items = vec![];
@@ -312,7 +326,11 @@ fn emit_instructions<'a>(
                 if let Type::Struct(_) = ty {
                     let field_ident = format_ident!("{}", name);
                     let role = if defined_register_operands.contains(name) {
-                        quote! { Def }
+                        if read_operands.contains(name) {
+                            quote! { ReadWrite }
+                        } else {
+                            quote! { Def }
+                        }
                     } else {
                         quote! { Use }
                     };
@@ -429,7 +447,15 @@ fn emit_instructions<'a>(
         // both `rd` and `csr`) cannot be modeled by a single-value DAG pattern;
         // emitting one for the last assignment would let isel match an
         // unrelated expression, so they get no selection rule.
+        // A two-address op (a defined operand also read in its own RHS) cannot be
+        // modeled by a single-result DAG pattern — the matched first source would
+        // be dropped — so it is selected by a hand-written lowering, not a rule.
+        let is_two_address = defined_register_operands
+            .iter()
+            .any(|name| read_operands.contains(name));
         if defined_register_operands.len() <= 1
+            && !is_two_address
+            && !behavior_is_register_copy(inst, &ops, &defined_register_operands)
             && let Some(semantics) = analyze_instruction_semantics(
                 inst,
                 &ops,
@@ -845,6 +871,8 @@ fn emit_instructions<'a>(
                         | AsmAction::LParen
                         | AsmAction::RParen
                         | AsmAction::Operand(_)
+                        | AsmAction::Percent
+                        | AsmAction::Dollar
                 )
             });
 
@@ -938,6 +966,22 @@ fn emit_instructions<'a>(
                         parse_steps.push(quote! {
                             match parser.bump() {
                                 Some(tir_be_common::Token::RParen) => {}
+                                _ => return Err(()),
+                            }
+                        });
+                    }
+                    AsmAction::Percent => {
+                        parse_steps.push(quote! {
+                            match parser.bump() {
+                                Some(tir_be_common::Token::Percent) => {}
+                                _ => return Err(()),
+                            }
+                        });
+                    }
+                    AsmAction::Dollar => {
+                        parse_steps.push(quote! {
+                            match parser.bump() {
+                                Some(tir_be_common::Token::Dollar) => {}
                                 _ => return Err(()),
                             }
                         });
@@ -2105,6 +2149,22 @@ fn infer_defined_register_operands(
     defs
 }
 
+/// Whether the behavior is a bare register-to-register copy (`rd = rs`). Such an
+/// instruction must not contribute a selection rule: its pattern is a single
+/// boundary that matches any value, so it would shadow every real op. Copies are
+/// only ever emitted by hand-written lowerings, never selected.
+fn behavior_is_register_copy(
+    inst: &ast::Instruction,
+    operands: &[(String, Type)],
+    defined_register_operands: &[String],
+) -> bool {
+    let register_operands = register_operand_names(operands);
+    matches!(
+        resolve_behavior_rhs(inst, operands, defined_register_operands),
+        Some(ast::Expr::Ident(id)) if register_operands.contains(id.name.as_str())
+    )
+}
+
 fn resolve_behavior_rhs<'a>(
     inst: &'a ast::Instruction,
     operands: &[(String, Type)],
@@ -2179,6 +2239,8 @@ enum AsmAction {
     Skip,
     LParen,
     RParen,
+    Percent,
+    Dollar,
 }
 
 enum AsmPrintPart {
@@ -2221,6 +2283,14 @@ fn compile_asm_template(template: &str) -> Vec<AsmAction> {
             }
             ')' => {
                 actions.push(AsmAction::RParen);
+                i += 1;
+            }
+            '%' => {
+                actions.push(AsmAction::Percent);
+                i += 1;
+            }
+            '$' => {
+                actions.push(AsmAction::Dollar);
                 i += 1;
             }
             _ => {

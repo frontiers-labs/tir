@@ -1,0 +1,30 @@
+// RUN: tir mc --march=x86-64 --stage=isel %s | filecheck %s --check-prefixes=CHECK,X64
+// RUN: tir mc --march=i386 --stage=isel %s | filecheck %s --check-prefixes=CHECK,X32
+
+// Each builtin ALU op selects to a `mov rd, lhs` followed by the two-address
+// x86 op `rd = rd OP rhs`; `rd` is read-write so the allocator keeps the source
+// out of it. The 64-bit ISA uses the `q` mnemonics, the 32-bit ISA the `l` ones.
+
+module {
+  func @chain(%0: !i64, %1: !i64) -> !i64 {
+    %2 = addi %0, %1 : !i64
+    %3 = subi %2, %1 : !i64
+    %4 = andi %3, %0 : !i64
+    %5 = ori %4, %1 : !i64
+    %6 = xori %5, %0 : !i64
+    return %6
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "chain"
+// X64: x86.movq_rr {rd = %virt2:GPR64, rs = %virt0:GPR64}
+// X64: x86.addq {rd = %virt2:GPR64, rs2 = %virt1:GPR64}
+// X64: x86.subq {rd = %virt3:GPR64, rs2 = %virt1:GPR64}
+// X64: x86.andq {rd = %virt4:GPR64, rs2 = %virt0:GPR64}
+// X64: x86.orq {rd = %virt5:GPR64, rs2 = %virt1:GPR64}
+// X64: x86.xorq {rd = %virt6:GPR64, rs2 = %virt0:GPR64}
+// X32: x86.movl_rr {rd = %virt2:GPR32, rs = %virt0:GPR32}
+// X32: x86.addl {rd = %virt2:GPR32, rs2 = %virt1:GPR32}
+// X32: x86.xorl {rd = %virt6:GPR32, rs2 = %virt0:GPR32}
+// CHECK: x86.vret

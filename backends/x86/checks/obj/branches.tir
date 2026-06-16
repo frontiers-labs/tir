@@ -1,0 +1,32 @@
+// RUN: tir mc --march=x86-64 --filetype=obj-ascii %s | filecheck %s
+
+// A conditional branch lowers to `test %cond, %cond` + `jne true` + `jmp false`.
+// The jcc/jmp displacements are PC-relative to the *next* instruction; the block
+// targets are resolved and patched in the object writer.
+
+module {
+  func @select(%0: !i1) -> !i64 {
+    cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    %1 = constant {value = 7} : !i64
+    return %1
+  ^bb2:
+    %2 = constant {value = 0} : !i64
+    return %2
+  }
+  module_end
+}
+
+// CHECK: select:
+// testq %rcx, %rcx
+// CHECK: [0x48, 0x85, 0xC9]
+// jne +5 (past the following 5-byte jmp, into bb1)
+// CHECK: [0x0F, 0x85, 0x05, 0x00, 0x00, 0x00]
+// jmp +8 (over bb1's 7-byte mov + 1-byte ret, into bb2)
+// CHECK: [0xE9, 0x08, 0x00, 0x00, 0x00]
+// bb1: movq $7, %rax ; ret
+// CHECK: [0x48, 0xC7, 0xC0, 0x07, 0x00, 0x00, 0x00]
+// CHECK: [0xC3]
+// bb2: movq $0, %rax ; ret
+// CHECK: [0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00]
+// CHECK: [0xC3]

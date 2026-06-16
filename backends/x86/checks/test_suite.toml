@@ -1,0 +1,3 @@
+[suite]
+name = "TIR x86 backend checks"
+glob = ["**/*.S", "**/*.s", "**/*.tir", "!**/Inputs/**/*"]

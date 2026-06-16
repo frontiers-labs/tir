@@ -1,0 +1,509 @@
+// x86 scalar instructions for X86_32 and X86_64.
+//
+// The integer ALU operations are two-address on x86: `add %src, %dst` computes
+// `dst += src`. They are modeled as such — `rd` is both read and written (the
+// generated role is `ReadWrite`) — and instruction selection emits a preceding
+// `mov rd, lhs` (see `lower_alu` in lib.rs), so the allocator ties `rd`'s live
+// range across the op and keeps the source out of the destination register.
+//
+// ModRM byte layout (bits, little end first): rm = bits 0..2, reg = bits 3..5,
+// mod = bits 6..7. AT&T order is `op src, dst`.
+
+// --- 32-bit reg/reg ALU (no prefix) -----------------------------------------
+
+template AluRR32 for [X86_32] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        rd: GPR32,
+        rs2: GPR32,
+    }
+
+    encoding {
+        0..7 => OPCODE,
+        8..10 => rd,
+        11..13 => rs2,
+        14..15 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} %{rs2}, %{rd}"
+    }
+}
+
+instruction Add32 for [X86_32] : AluRR32 {
+    param MNEMONIC: String = "addl";
+    param OPCODE: bits<8> = 0b00000001;
+    behavior { rd = rd + rs2; }
+}
+
+instruction Sub32 for [X86_32] : AluRR32 {
+    param MNEMONIC: String = "subl";
+    param OPCODE: bits<8> = 0b00101001;
+    behavior { rd = rd - rs2; }
+}
+
+instruction And32 for [X86_32] : AluRR32 {
+    param MNEMONIC: String = "andl";
+    param OPCODE: bits<8> = 0b00100001;
+    behavior { rd = rd & rs2; }
+}
+
+instruction Or32 for [X86_32] : AluRR32 {
+    param MNEMONIC: String = "orl";
+    param OPCODE: bits<8> = 0b00001001;
+    behavior { rd = rd | rs2; }
+}
+
+instruction Xor32 for [X86_32] : AluRR32 {
+    param MNEMONIC: String = "xorl";
+    param OPCODE: bits<8> = 0b00110001;
+    behavior { rd = rd ^ rs2; }
+}
+
+// --- 64-bit reg/reg ALU (REX.W prefix) --------------------------------------
+
+template AluRR64 for [X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        rd: GPR64,
+        rs2: GPR64,
+    }
+
+    encoding {
+        0..7 => 0b01001000,
+        8..15 => OPCODE,
+        16..18 => rd,
+        19..21 => rs2,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} %{rs2}, %{rd}"
+    }
+}
+
+instruction Add64 for [X86_64] : AluRR64 {
+    param MNEMONIC: String = "addq";
+    param OPCODE: bits<8> = 0b00000001;
+    behavior { rd = rd + rs2; }
+}
+
+instruction Sub64 for [X86_64] : AluRR64 {
+    param MNEMONIC: String = "subq";
+    param OPCODE: bits<8> = 0b00101001;
+    behavior { rd = rd - rs2; }
+}
+
+instruction And64 for [X86_64] : AluRR64 {
+    param MNEMONIC: String = "andq";
+    param OPCODE: bits<8> = 0b00100001;
+    behavior { rd = rd & rs2; }
+}
+
+instruction Or64 for [X86_64] : AluRR64 {
+    param MNEMONIC: String = "orq";
+    param OPCODE: bits<8> = 0b00001001;
+    behavior { rd = rd | rs2; }
+}
+
+instruction Xor64 for [X86_64] : AluRR64 {
+    param MNEMONIC: String = "xorq";
+    param OPCODE: bits<8> = 0b00110001;
+    behavior { rd = rd ^ rs2; }
+}
+
+// --- register-to-register move (0x89 /r) ------------------------------------
+
+instruction MovRR32 for [X86_32] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "movl";
+    param OPNAME: String = "movl_rr";
+
+    operands {
+        rd: GPR32,
+        rs: GPR32,
+    }
+
+    encoding {
+        0..7 => 0b10001001,
+        8..10 => rd,
+        11..13 => rs,
+        14..15 => 0b11,
+    }
+
+    asm { "{self.MNEMONIC} %{rs}, %{rd}" }
+    behavior { rd = rs; }
+}
+
+instruction MovRR64 for [X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "movq";
+    param OPNAME: String = "movq_rr";
+
+    operands {
+        rd: GPR64,
+        rs: GPR64,
+    }
+
+    encoding {
+        0..7 => 0b01001000,
+        8..15 => 0b10001001,
+        16..18 => rd,
+        19..21 => rs,
+        22..23 => 0b11,
+    }
+
+    asm { "{self.MNEMONIC} %{rs}, %{rd}" }
+    behavior { rd = rs; }
+}
+
+// --- move immediate ----------------------------------------------------------
+// 32-bit: 0xB8+rd id. 64-bit: REX.W 0xC7 /0 id (imm32 sign-extended to 64).
+
+instruction MovRI32 for [X86_32] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "movl";
+    param OPNAME: String = "movl_ri";
+
+    operands {
+        rd: GPR32,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..2 => rd,
+        3..7 => 0b10111,
+        8..39 => imm,
+    }
+
+    asm { "{self.MNEMONIC} ${imm}, %{rd}" }
+    behavior { rd = sext(imm, self.XLEN); }
+}
+
+instruction MovRI64 for [X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "movq";
+    param OPNAME: String = "movq_ri";
+
+    operands {
+        rd: GPR64,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b01001000,
+        8..15 => 0b11000111,
+        16..18 => rd,
+        19..21 => 0b000,
+        22..23 => 0b11,
+        24..55 => imm,
+    }
+
+    asm { "{self.MNEMONIC} ${imm}, %{rd}" }
+    behavior { rd = sext(imm, self.XLEN); }
+}
+
+// --- load / store (disp32 base addressing, 0x8B / 0x89 /r, mod=10) -----------
+
+instruction Load32 for [X86_32] {
+    schedule { units = [WriteLoad]; }
+    param MNEMONIC: String = "movl";
+    param OPNAME: String = "movl_load";
+
+    operands {
+        rd: GPR32,
+        base: GPR32,
+        disp: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b10001011,
+        8..10 => base,
+        11..13 => rd,
+        14..15 => 0b10,
+        16..47 => disp,
+    }
+
+    asm { "{self.MNEMONIC} {disp}(%{base}), %{rd}" }
+    behavior { rd = load(base + sext(disp, self.XLEN), 4, 0b1); }
+}
+
+instruction Store32 for [X86_32] {
+    schedule { units = [WriteStore]; }
+    param MNEMONIC: String = "movl";
+    param OPNAME: String = "movl_store";
+
+    operands {
+        base: GPR32,
+        rs: GPR32,
+        disp: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b10001001,
+        8..10 => base,
+        11..13 => rs,
+        14..15 => 0b10,
+        16..47 => disp,
+    }
+
+    asm { "{self.MNEMONIC} %{rs}, {disp}(%{base})" }
+    behavior { store(base + sext(disp, self.XLEN), 4, rs); }
+}
+
+instruction Load64 for [X86_64] {
+    schedule { units = [WriteLoad]; }
+    param MNEMONIC: String = "movq";
+    param OPNAME: String = "movq_load";
+
+    operands {
+        rd: GPR64,
+        base: GPR64,
+        disp: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b01001000,
+        8..15 => 0b10001011,
+        16..18 => base,
+        19..21 => rd,
+        22..23 => 0b10,
+        24..55 => disp,
+    }
+
+    asm { "{self.MNEMONIC} {disp}(%{base}), %{rd}" }
+    behavior { rd = load(base + sext(disp, self.XLEN), 8, 0b1); }
+}
+
+instruction Store64 for [X86_64] {
+    schedule { units = [WriteStore]; }
+    param MNEMONIC: String = "movq";
+    param OPNAME: String = "movq_store";
+
+    operands {
+        base: GPR64,
+        rs: GPR64,
+        disp: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b01001000,
+        8..15 => 0b10001001,
+        16..18 => base,
+        19..21 => rs,
+        22..23 => 0b10,
+        24..55 => disp,
+    }
+
+    asm { "{self.MNEMONIC} %{rs}, {disp}(%{base})" }
+    behavior { store(base + sext(disp, self.XLEN), 8, rs); }
+}
+
+// --- frame adjustment: add/sub imm32 to a register (0x81 /0, /5) -------------
+// Used only by the prologue/epilogue on the reserved frame register, so they
+// carry no behavior and take part in no instruction-selection rule.
+
+instruction SubFrame32 for [X86_32] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "subl";
+    param OPNAME: String = "subl_frame";
+
+    operands {
+        rd: GPR32,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b10000001,
+        8..10 => rd,
+        11..13 => 0b101,
+        14..15 => 0b11,
+        16..47 => imm,
+    }
+
+    asm { "{self.MNEMONIC} ${imm}, %{rd}" }
+    behavior { }
+}
+
+instruction AddFrame32 for [X86_32] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "addl";
+    param OPNAME: String = "addl_frame";
+
+    operands {
+        rd: GPR32,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b10000001,
+        8..10 => rd,
+        11..13 => 0b000,
+        14..15 => 0b11,
+        16..47 => imm,
+    }
+
+    asm { "{self.MNEMONIC} ${imm}, %{rd}" }
+    behavior { }
+}
+
+instruction SubFrame64 for [X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "subq";
+    param OPNAME: String = "subq_frame";
+
+    operands {
+        rd: GPR64,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b01001000,
+        8..15 => 0b10000001,
+        16..18 => rd,
+        19..21 => 0b101,
+        22..23 => 0b11,
+        24..55 => imm,
+    }
+
+    asm { "{self.MNEMONIC} ${imm}, %{rd}" }
+    behavior { }
+}
+
+instruction AddFrame64 for [X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "addq";
+    param OPNAME: String = "addq_frame";
+
+    operands {
+        rd: GPR64,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b01001000,
+        8..15 => 0b10000001,
+        16..18 => rd,
+        19..21 => 0b000,
+        22..23 => 0b11,
+        24..55 => imm,
+    }
+
+    asm { "{self.MNEMONIC} ${imm}, %{rd}" }
+    behavior { }
+}
+
+// --- compare-against-self for the conditional branch lowering (test, 0x85) --
+
+instruction Test32 for [X86_32] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "testl";
+
+    operands {
+        rs1: GPR32,
+        rs2: GPR32,
+    }
+
+    encoding {
+        0..7 => 0b10000101,
+        8..10 => rs1,
+        11..13 => rs2,
+        14..15 => 0b11,
+    }
+
+    asm { "{self.MNEMONIC} %{rs2}, %{rs1}" }
+    behavior { }
+}
+
+instruction Test64 for [X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "testq";
+
+    operands {
+        rs1: GPR64,
+        rs2: GPR64,
+    }
+
+    encoding {
+        0..7 => 0b01001000,
+        8..15 => 0b10000101,
+        16..18 => rs1,
+        19..21 => rs2,
+        22..23 => 0b11,
+    }
+
+    asm { "{self.MNEMONIC} %{rs2}, %{rs1}" }
+    behavior { }
+}
+
+// --- control flow (identical encodings in both modes) -----------------------
+
+instruction Jmp for [X86_32, X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "jmp";
+
+    operands {
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b11101001,
+        8..39 => imm,
+    }
+
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { }
+}
+
+instruction Jne for [X86_32, X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "jne";
+
+    operands {
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b00001111,
+        8..15 => 0b10000101,
+        16..47 => imm,
+    }
+
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { }
+}
+
+instruction CallRel for [X86_32, X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "call";
+
+    operands {
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0b11101000,
+        8..39 => imm,
+    }
+
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { }
+}
+
+instruction Ret for [X86_32, X86_64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String = "ret";
+
+    encoding {
+        0..7 => 0b11000011,
+    }
+
+    asm { "{self.MNEMONIC}" }
+    behavior { }
+}

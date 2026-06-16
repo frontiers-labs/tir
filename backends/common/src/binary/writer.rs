@@ -265,8 +265,9 @@ impl BinaryWriter {
                             op: fixup.op.clone(),
                         }
                     })?;
+                    let field = (fmt.reloc_field_offset)(&fixup.op) as u64;
                     state.obj.sections[fixup.section].relocs.push(ObjReloc {
-                        offset: fixup.offset,
+                        offset: fixup.offset + field,
                         symbol: symbol.clone(),
                         r_type: kind.r_type,
                         addend: kind.addend,

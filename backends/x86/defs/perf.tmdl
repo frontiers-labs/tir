@@ -1,0 +1,28 @@
+// Minimal scheduling model for the x86 scalar prototype: just the machine-
+// independent scheduling classes the instructions opt into, plus one generic
+// out-of-order core per ISA so tooling has something to name.
+sched_class WriteIALU { latency = 1; }
+sched_class WriteLoad { latency = 4; }
+sched_class WriteStore { latency = 1; }
+
+machine GenericCore32 ("x86-32-generic") for [X86_32] {
+    issue_width = 4;
+
+    unit ALU { count = 4; }
+    unit LSU { count = 2; }
+
+    bind WriteIALU { latency = 1; uses = [ALU]; }
+    bind WriteLoad { latency = 4; uses = [LSU]; }
+    bind WriteStore { latency = 1; uses = [LSU]; }
+}
+
+machine GenericCore64 ("x86-64-generic") for [X86_64] {
+    issue_width = 4;
+
+    unit ALU { count = 4; }
+    unit LSU { count = 2; }
+
+    bind WriteIALU { latency = 1; uses = [ALU]; }
+    bind WriteLoad { latency = 4; uses = [LSU]; }
+    bind WriteStore { latency = 1; uses = [LSU]; }
+}

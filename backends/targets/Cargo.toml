@@ -12,6 +12,7 @@ tir.workspace = true
 tir-be-common.workspace = true
 tir-riscv.workspace = true
 tir-arm64.workspace = true
+tir-x86.workspace = true
 
 [dev-dependencies]
 tir-lit.workspace = true

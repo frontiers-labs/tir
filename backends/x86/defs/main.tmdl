@@ -1,0 +1,48 @@
+// x86 scalar prototype: 32-bit (X86_32) and 64-bit (X86_64) as separate ISAs.
+// Only the eight legacy general-purpose registers are modeled, so every ModRM
+// register field fits in three bits and no REX extension bits are needed; the
+// 64-bit ISA differs from the 32-bit one by a REX.W prefix and the `q` mnemonic
+// suffix. Assembly is emitted in AT&T syntax (`op src, dst`, `%reg`, `$imm`).
+
+isa X86_32 {
+    param XLEN: Integer = 32;
+}
+
+isa X86_64 {
+    param XLEN: Integer = 64;
+}
+
+// Indices are the architectural register numbers used by the ModRM encoding, so
+// the allocator's index doubles as the encoded register field. rsp/rbp are
+// reserved: rsp is the stack pointer and rbp is the frame base for spill slots.
+register_class GPR32 for [X86_32] {
+    param ENCODING_LEN: Integer = 3;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        eax => { index = 0, traits = [return_value, caller_saved] },
+        ecx => { index = 1, traits = [argument, caller_saved] },
+        edx => { index = 2, traits = [argument, caller_saved] },
+        ebx => { index = 3, traits = [callee_saved] },
+        esp => { index = 4, traits = [stack_pointer] },
+        ebp => { index = 5, traits = [stack_pointer] },
+        esi => { index = 6, traits = [argument, caller_saved] },
+        edi => { index = 7, traits = [argument, caller_saved] },
+    }
+}
+
+register_class GPR64 for [X86_64] {
+    param ENCODING_LEN: Integer = 3;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rax => { index = 0, traits = [return_value, caller_saved] },
+        rcx => { index = 1, traits = [argument, caller_saved] },
+        rdx => { index = 2, traits = [argument, caller_saved] },
+        rbx => { index = 3, traits = [callee_saved] },
+        rsp => { index = 4, traits = [stack_pointer] },
+        rbp => { index = 5, traits = [stack_pointer] },
+        rsi => { index = 6, traits = [argument, caller_saved] },
+        rdi => { index = 7, traits = [argument, caller_saved] },
+    }
+}

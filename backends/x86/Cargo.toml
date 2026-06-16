@@ -1,0 +1,18 @@
+[package]
+name = "tir-x86"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tir.workspace = true
+tir-be-common.workspace = true
+
+[build-dependencies]
+tmdl.workspace = true
+
+[dev-dependencies]
+tir-lit.workspace = true
+
+[[test]]
+name = "lit"
+harness = false

@@ -37,6 +37,8 @@ pub(crate) fn object_format(xlen: u32) -> ObjectFormatInfo {
         // RISC-V branch immediates are byte offsets (bit 0 implicit in the
         // encoding's scattering), so deltas are patched unscaled.
         pc_rel_scale: |_| 0,
+        // Relocations cover the whole 32-bit instruction word.
+        reloc_field_offset: |_| 0,
     }
 }
 

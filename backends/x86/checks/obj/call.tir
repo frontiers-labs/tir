@@ -1,0 +1,21 @@
+// RUN: tir mc --march=x86-64 --filetype=obj-ascii %s | filecheck %s
+// RUN: tir mc --march=x86-64 --filetype=obj -o - %s | tir readobj - | filecheck %s --check-prefix=ELF
+
+// A direct call: the argument travels through rcx, the result out of rax, and the
+// callee's address is a link-time PC-relative relocation on the `call rel32`
+// displacement (one byte past the 0xE8 opcode, addend -4).
+
+module {
+  func @caller(%0: !i64) -> !i64 {
+    %1 = call @foo(%0 : !i64) -> !i64
+    return %1
+  }
+  module_end
+}
+
+// CHECK: caller:
+// The call is `0xE8` then a zero displacement awaiting the relocation.
+// CHECK: [0xE8, 0x00, 0x00, 0x00, 0x00]
+
+// ELF: Symbol foo: value=0x0 size=0x0 bind=GLOBAL type=NOTYPE section=UND
+// ELF: Reloc .text+0x7: reloc(2) foo + -4

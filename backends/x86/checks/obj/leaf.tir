@@ -1,0 +1,26 @@
+// RUN: tir mc --march=x86-64 --filetype=obj-ascii %s | filecheck %s --check-prefixes=CHECK,X64
+// RUN: tir mc --march=i386 --filetype=obj-ascii %s | filecheck %s --check-prefixes=CHECK,X32
+// RUN: tir mc --march=x86-64 --filetype=obj -o - %s | tir readobj - | filecheck %s --check-prefix=ELF
+
+// A leaf function: the two-address add lowers to `mov %rcx, %rax` + `add %rdx,
+// %rax` + `ret`. Golden bytes match what gas/llvm-mc emit.
+
+module {
+  func @add(%0: !i64, %1: !i64) -> !i64 {
+    %2 = addi %0, %1 : !i64
+    return %2
+  }
+  module_end
+}
+
+// CHECK: .section .text
+// CHECK-NEXT: add:
+// X64-NEXT: [0x48, 0x89, 0xC8]
+// X64-NEXT: [0x48, 0x01, 0xD0]
+// X64-NEXT: [0xC3]
+// X32-NEXT: [0x89, 0xC8]
+// X32-NEXT: [0x01, 0xD0]
+// X32-NEXT: [0xC3]
+
+// ELF: File: ELF64 LSB REL
+// ELF: Symbol add: value=0x0 size=0x7 bind=GLOBAL type=FUNC section=.text

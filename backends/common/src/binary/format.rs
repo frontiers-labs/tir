@@ -30,4 +30,9 @@ pub struct ObjectFormatInfo {
     /// scattered into the instruction (0 on RISC-V; 2 on AArch64, whose
     /// branch immediates are word offsets).
     pub pc_rel_scale: fn(&str) -> u8,
+    /// Byte offset, from the start of an instruction, of the field a symbol
+    /// relocation applies to. Zero on fixed-width RISC targets, where the
+    /// relocation covers the whole instruction word; on x86 it skips the
+    /// opcode bytes so the relocation lands on the trailing displacement.
+    pub reloc_field_offset: fn(&str) -> u8,
 }

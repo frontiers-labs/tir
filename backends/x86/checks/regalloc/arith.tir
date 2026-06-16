@@ -1,0 +1,17 @@
+// RUN: tir mc --march=x86-64 --stage=regalloc %s | filecheck %s
+
+// System V style precoloring in the prototype's register convention: arg0 -> rcx,
+// arg1 -> rdx, return value -> rax. The two-address add reuses rax for both the
+// destination and (after the copy) the first source.
+
+module {
+  func @add(%0: !i64, %1: !i64) -> !i64 {
+    %2 = addi %0, %1 : !i64
+    return %2
+  }
+  module_end
+}
+
+// CHECK: x86.movq_rr {rd = rax, rs = rcx}
+// CHECK: x86.addq {rd = rax, rs2 = rdx}
+// CHECK: x86.vret

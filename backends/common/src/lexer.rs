@@ -13,6 +13,11 @@ pub enum Token<'src> {
     LParen,
     #[token(")")]
     RParen,
+    // AT&T assembly sigils: `%` prefixes registers, `$` prefixes immediates.
+    #[token("%")]
+    Percent,
+    #[token("$")]
+    Dollar,
 
     #[token(".section")]
     Section,
