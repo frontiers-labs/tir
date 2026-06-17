@@ -11,6 +11,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 tir.workspace = true
 tir-targets.workspace = true
 tir-be-common.workspace = true
+tir-torch = { path = "../../torch-inductor" }
 
 [dev-dependencies]
 tir.workspace = true

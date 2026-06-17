@@ -123,12 +123,15 @@ pub(crate) unsafe fn str_from_raw<'a>(ptr: *const c_char, len: usize) -> Option<
 }
 
 /// Create a context preloaded with the default dialects (builtin, ptr, scf,
-/// vector). Free with [`tir_context_destroy`].
+/// vector) plus the `torch` dialect used by the Torch Inductor frontend. Free
+/// with [`tir_context_destroy`].
 #[unsafe(no_mangle)]
 pub extern "C" fn tir_context_create() -> *mut Context {
     guard(ptr::null_mut(), || {
         clear_error();
-        Box::into_raw(Box::new(Context::with_default_dialects()))
+        let context = Context::with_default_dialects();
+        context.register_dialect::<tir_torch::TorchDialect>();
+        Box::into_raw(Box::new(context))
     })
 }
 
