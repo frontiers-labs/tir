@@ -20,6 +20,7 @@ members = [
     "utils/isa-test-suite",
     "tools",
     "utils/capi",
+    "torch",
 ]
 
 [workspace.dependencies]
