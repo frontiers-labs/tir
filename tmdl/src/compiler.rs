@@ -9,6 +9,7 @@ use chumsky::error::{Cheap, Rich};
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, ValueEnum};
 
 use crate::Span;
+use crate::btor2gen::generate_btor2;
 use crate::error::TMDLError;
 use crate::lexer::lex;
 use crate::parser::parse;
@@ -46,11 +47,15 @@ pub enum Action {
     EmitAstJson,
     EmitRust,
     EmitSmtlib,
+    EmitBtor2,
 }
 
 impl Action {
     fn needs_whole_program(&self) -> bool {
-        matches!(self, Action::EmitRust | Action::EmitSmtlib)
+        matches!(
+            self,
+            Action::EmitRust | Action::EmitSmtlib | Action::EmitBtor2
+        )
     }
 }
 
@@ -186,11 +191,11 @@ impl Compiler {
             )
             .exit();
         }
-        if matches!(self.action, Action::EmitSmtlib) && self.isa.is_none() {
+        if matches!(self.action, Action::EmitSmtlib | Action::EmitBtor2) && self.isa.is_none() {
             let mut cmd = Cli::command();
             cmd.error(
                 clap::error::ErrorKind::ArgumentConflict,
-                "--isa must be specified with --action=emit-smtlib",
+                "--isa must be specified with --action=emit-smtlib or --action=emit-btor2",
             )
             .exit();
         }
@@ -268,6 +273,15 @@ impl Compiler {
                 let writer: Box<dyn Write> = self.create_output_writer()?;
                 generate_smtlib(
                     self.dialect.as_ref().unwrap(),
+                    self.isa.as_ref().unwrap(),
+                    &parsed_files,
+                    &item_cache,
+                    writer,
+                )?;
+            }
+            Action::EmitBtor2 => {
+                let writer: Box<dyn Write> = self.create_output_writer()?;
+                generate_btor2(
                     self.isa.as_ref().unwrap(),
                     &parsed_files,
                     &item_cache,

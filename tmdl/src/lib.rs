@@ -1,4 +1,5 @@
 mod ast;
+mod btor2gen;
 mod compiler;
 mod error;
 mod lexer;

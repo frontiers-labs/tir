@@ -1,4 +1,5 @@
 pub mod utils;
+mod verify_btor2;
 mod verify_smt;
 
 use std::{env, path::PathBuf};
@@ -20,6 +21,14 @@ fn main() -> anyhow::Result<()> {
             let isa = env::args().nth(2);
             match isa.as_deref() {
                 Some(isa) => verify_smt::verify_smt(&sh, isa)?,
+                _ => print_help(),
+            }
+        }
+        Some("verify-btor2") => {
+            let isa = env::args().nth(2);
+            let impl_btor2 = env::args().nth(3);
+            match (isa.as_deref(), impl_btor2.as_deref()) {
+                (Some(isa), Some(path)) => verify_btor2::run(&sh, isa, std::path::Path::new(path))?,
                 _ => print_help(),
             }
         }
