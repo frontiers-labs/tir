@@ -1009,6 +1009,7 @@ fn emit_sem_expr(
         ExprKind::VectorMap | ExprKind::Lane => None,
         ExprKind::Map | ExprKind::Zip | ExprKind::IterConcat => None,
         ExprKind::Split | ExprKind::Reduce | ExprKind::Arg => None,
+        ExprKind::CondBranch => None,
     }
 }
 

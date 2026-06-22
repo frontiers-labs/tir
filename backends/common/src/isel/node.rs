@@ -200,7 +200,7 @@ pub(crate) fn class_is_pure(egraph: &SemEGraph, class: EClassId) -> bool {
     egraph.nodes(class).iter().all(|&id| {
         !matches!(
             egraph.get_node(id).kind,
-            ExprKind::LoadMemory | ExprKind::StoreMemory
+            ExprKind::LoadMemory | ExprKind::StoreMemory | ExprKind::CondBranch
         )
     })
 }

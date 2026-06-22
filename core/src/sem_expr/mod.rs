@@ -149,6 +149,13 @@ pub enum ExprKind {
     /// Read one lane of a vector value. Arguments are `[vector, index]`.
     #[arity = 2]
     Lane,
+    /// A conditional control transfer: branch to the op's target when the single
+    /// child (the condition) is nonzero, else fall through. The target is not a
+    /// semantic value — it is a block reference carried as an op attribute and
+    /// resolved at emit time — so it never appears in the expression. This is an
+    /// effect node, never a pure value: it roots a match and is never internalized.
+    #[arity = 1]
+    CondBranch,
 }
 
 impl ExprKind {

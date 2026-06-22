@@ -633,6 +633,194 @@ fn emit_instructions<'a>(
             });
         }
 
+        // A conditional branch (`if COND { PC::pc = ... }`) gets a selection rule
+        // whose pattern is `CondBranch(COND)`: it matches the `asm.condbr` the CFG
+        // split produced, fusing the branch's comparison. Conditions that read
+        // registers (e.g. AArch64 `PSTATE` flags) are not handled here — they need
+        // flag modeling — so only conditions over encoded operands get a rule.
+        if let Some(cond_expr) = branch_condition_expr(inst) {
+            let mut cond_pattern = tir::sem_expr::ExprPostGraph::new();
+            let cond_lowering = cond_expr.lower_to_sema_with_isa(
+                &mut cond_pattern,
+                &numeric_params,
+                &isa_param_values,
+                &register_index_map,
+            );
+
+            // The encoded immediate operands not read by the condition are branch
+            // targets; selection requires exactly one (the PC-relative destination).
+            let cond_vars = cond_lowering
+                .as_ref()
+                .map(|l| l.variable_symbols.clone())
+                .unwrap_or_default();
+            let target_operands: Vec<&String> = ops
+                .iter()
+                .filter(|(name, ty)| {
+                    matches!(ty, Type::Bits(_) | Type::Integer) && !cond_vars.contains_key(name)
+                })
+                .map(|(name, _)| name)
+                .collect();
+
+            if let Some(lowering) = cond_lowering
+                && lowering.register_symbols.is_empty()
+                && target_operands.len() == 1
+            {
+                let target_operand = target_operands[0].clone();
+                let immediate_symbols: std::collections::HashSet<u32> = ops
+                    .iter()
+                    .filter(|(_, ty)| matches!(ty, Type::Bits(_) | Type::Integer))
+                    .filter_map(|(name, _)| lowering.variable_symbols.get(name).copied())
+                    .collect();
+                let (canon_pattern, canon_root, forced_widths) =
+                    tir::sem_expr::canonicalize_for_selection(
+                        &cond_pattern,
+                        lowering.root,
+                        &immediate_symbols,
+                    );
+                let mut pattern_widths = tir::sem_expr::infer_widths(&canon_pattern, |_| None);
+                for (index, forced) in forced_widths.iter().enumerate() {
+                    if forced.is_some() {
+                        pattern_widths[index] = *forced;
+                    }
+                }
+                let (cond_stmts, cond_root_var) =
+                    emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+                let base_cost = {
+                    use tir::graph::Dag;
+                    (canon_pattern.len() as u32 + 1).max(1)
+                };
+
+                let branch_pattern_fn =
+                    format_ident!("branch_pattern_{}", inst.name.to_lowercase());
+                let branch_emit_fn = format_ident!("branch_emit_{}", inst.name.to_lowercase());
+
+                // Per-operand constraints: condition registers bind to non-constant
+                // values, condition immediates to constants.
+                let mut operand_constraint_entries: Vec<proc_macro2::TokenStream> = Vec::new();
+                for (op_name, op_ty) in &ops {
+                    let Some(&symbol) = lowering.variable_symbols.get(op_name) else {
+                        continue;
+                    };
+                    let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
+                    let constraint = match op_ty {
+                        Type::Struct(_) => quote! { tir::graph::OperandConstraint::Register },
+                        Type::Bits(_) | Type::Integer => {
+                            quote! { tir::graph::OperandConstraint::Immediate }
+                        }
+                        _ => continue,
+                    };
+                    operand_constraint_entries.push(quote! { (#symbol_lit, #constraint) });
+                }
+
+                // Emit: condition operands come from the match; the target operand is
+                // the `asm.condbr`'s `dest` block, read off the op being replaced.
+                let mut branch_emit_steps: Vec<proc_macro2::TokenStream> = Vec::new();
+                for (op_name, op_ty) in &ops {
+                    let op_name_lit = proc_macro2::Literal::string(op_name);
+                    if *op_name == target_operand {
+                        branch_emit_steps.push(quote! {
+                            let __target = {
+                                let op = req.op.ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                                op.op()
+                                    .attributes
+                                    .iter()
+                                    .find_map(|a| match a.value {
+                                        tir::attributes::AttributeValue::Block(b)
+                                            if a.name == "dest" =>
+                                        {
+                                            Some(b)
+                                        }
+                                        _ => None,
+                                    })
+                                    .ok_or(tir::PassError::RewriteFailed(req.op_id()))?
+                            };
+                            builder = builder.attr(
+                                #op_name_lit,
+                                tir::attributes::AttributeValue::Block(__target),
+                            );
+                        });
+                        continue;
+                    }
+                    let Some(&symbol) = lowering.variable_symbols.get(op_name) else {
+                        continue;
+                    };
+                    let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
+                    match op_ty {
+                        Type::Struct(class_name) => {
+                            let class_lit = proc_macro2::Literal::string(class_name);
+                            branch_emit_steps.push(quote! {
+                                let src = m.value_binding(#symbol_lit)
+                                    .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                                builder = builder.attr(
+                                    #op_name_lit,
+                                    tir::attributes::AttributeValue::Register(
+                                        tir::attributes::RegisterAttr::Virtual {
+                                            id: src.number(),
+                                            class: Some(#class_lit.to_string()),
+                                        },
+                                    ),
+                                );
+                            });
+                        }
+                        Type::Bits(_) | Type::Integer => {
+                            branch_emit_steps.push(quote! {
+                                let v = m.int_binding(#symbol_lit)
+                                    .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                                builder = builder.attr(
+                                    #op_name_lit,
+                                    tir::attributes::AttributeValue::Int(v),
+                                );
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+
+                let base_cost_lit = proc_macro2::Literal::u32_unsuffixed(base_cost);
+                let mnemonic_cost_lit = proc_macro2::Literal::string(mnemonic_name);
+                let rule_name_lit =
+                    proc_macro2::Literal::string(&format!("{}_branch", inst.name.to_lowercase()));
+                let inst_features = feature_slice(&inst.for_isas);
+
+                isel_rule_emitters.push(quote! {
+                    fn #branch_pattern_fn(_context: &tir::Context) -> tir::sem_expr::ExprPostGraph {
+                        use tir::graph::MutDag;
+                        let mut g = tir::sem_expr::ExprPostGraph::new();
+                        #(#cond_stmts)*
+                        let __cond_root = #cond_root_var;
+                        let __branch = g.add_node(tir::sem_expr::ExprKind::CondBranch);
+                        g.add_edge(__branch, __cond_root);
+                        g
+                    }
+
+                    fn #branch_emit_fn(
+                        context: &tir::Context,
+                        req: &tir_be_common::isel::EmitRequest,
+                        m: &tir_be_common::isel::RuleMatch,
+                    ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+                        let _ = (req, m);
+                        let mut builder = #builder_ident::new(context);
+                        #(#branch_emit_steps)*
+                        Ok(Box::new(builder.build()))
+                    }
+                });
+
+                isel_rule_inits.push(quote! {
+                    if features_enabled(features, #inst_features) {
+                        rules.push(
+                            tir_be_common::isel::Rule::new(
+                                #rule_name_lit,
+                                #branch_pattern_fn(context),
+                                (#base_cost_lit).max(instruction_cost(#mnemonic_cost_lit)),
+                                #branch_emit_fn,
+                            )
+                            .with_operand_constraints(vec![#(#operand_constraint_entries),*]),
+                        );
+                    }
+                });
+            }
+        }
+
         // A pure register definer (e.g. `vsetvli`) gets no matching rule; instead it
         // is registered as the definer of the registers its behavior writes, to be
         // introduced ahead of instructions that read them. Its emitter hardwires the
@@ -2303,6 +2491,21 @@ fn synthesize_branch_value(inst: &ast::Instruction, width_bytes: u64) -> Option<
     }))
 }
 
+/// The condition of a conditional control transfer `if COND { PC::pc = TARGET }`
+/// (no else). Returns `None` for any other behavior. The condition is what an
+/// `asm.condbr` matches against, so the branch participates in the cover with its
+/// comparison fused in.
+fn branch_condition_expr(inst: &ast::Instruction) -> Option<&ast::Expr> {
+    let ast::Expr::If(if_) = unwrap_single_stmt_block(&inst.behavior) else {
+        return None;
+    };
+    if if_.else_.is_some() {
+        return None;
+    }
+    extract_pc_assignment_target(&if_.then)?;
+    Some(&if_.cond)
+}
+
 /// Peel `{ stmt }` blocks down to their single inner statement.
 fn unwrap_single_stmt_block(e: &ast::Expr) -> &ast::Expr {
     match e {
@@ -2912,6 +3115,7 @@ fn emit_expr_kind_ts(kind: &tir::sem_expr::ExprKind) -> proc_macro2::TokenStream
         ExprKind::Split => quote! { tir::sem_expr::ExprKind::Split },
         ExprKind::Reduce => quote! { tir::sem_expr::ExprKind::Reduce },
         ExprKind::Arg => quote! { tir::sem_expr::ExprKind::Arg },
+        ExprKind::CondBranch => quote! { tir::sem_expr::ExprKind::CondBranch },
     }
 }
 

@@ -449,6 +449,9 @@ fn eval_node<M: Memory>(
             };
             symbols[*id as usize].clone()
         }
+        // A branch is an effect used only by instruction selection, never the
+        // interpreter; if reached, its value is just the condition.
+        ExprKind::CondBranch => c(0),
         ExprKind::Constant => match graph.get_leaf_data(node).unwrap() {
             ExprPayload::Int(v) => Value::Int(v.clone()),
             ExprPayload::Float(v) => Value::Float(v.clone()),

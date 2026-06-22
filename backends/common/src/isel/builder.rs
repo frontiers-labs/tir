@@ -166,6 +166,10 @@ impl<'a> SemDagBuilder<'a> {
     }
 
     pub(crate) fn build_for_op(&mut self, op: &std::sync::Arc<OpInstance>) -> Option<EClassId> {
+        if let Some(class) = self.build_branch_effect(op) {
+            return Some(class);
+        }
+
         if let Some(class) = self.build_memory_effect(op) {
             return Some(class);
         }
@@ -182,6 +186,18 @@ impl<'a> SemDagBuilder<'a> {
             self.set_value(class, *result);
         }
         Some(class)
+    }
+
+    /// Lower an `asm.condbr` into a `CondBranch` effect node over its condition.
+    /// Like a memory effect it is unique (never merged) and never a pure value, so
+    /// it roots a match and is never internalized; the branch target is an op
+    /// attribute resolved at emit time, so it does not appear in the expression.
+    fn build_branch_effect(&mut self, op: &std::sync::Arc<OpInstance>) -> Option<EClassId> {
+        if op.name != "condbr" {
+            return None;
+        }
+        let condition = self.build_from_value(*op.operands.first()?);
+        Some(self.add_op_unique(ExprKind::CondBranch, vec![condition], None))
     }
 
     fn build_memory_effect(&mut self, op: &std::sync::Arc<OpInstance>) -> Option<EClassId> {

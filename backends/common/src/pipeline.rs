@@ -25,6 +25,10 @@ pub fn build_pipeline(
     stop: StopAfter,
 ) -> PassManager {
     let mut pm = PassManager::new();
+    // NOTE: the `asm.condbr` control-effect selection path (CFG split +
+    // `crate::cfg::split_cond_branch`) is being brought up incrementally and is
+    // not yet wired here; conditional branches still lower through the target's
+    // own `op_lowering`s below until the selection rules cover every condition.
     pm.nest(FuncOp::name()).add_pass(target.isel_pass(context));
     if stop == StopAfter::ISel {
         return pm;

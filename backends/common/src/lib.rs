@@ -1,6 +1,7 @@
 use tir::helpers::dialect;
 
 pub mod binary;
+pub mod cfg;
 pub mod isel;
 mod lexer;
 pub mod liveness;
@@ -192,6 +193,6 @@ pub mod ops {
 dialect! {
     AsmDialect {
         name: "asm",
-        operations: [SectionOp, SectionEndOp, SymbolOp, SymbolEndOp, LiteralOp, BlockEndOp],
+        operations: [SectionOp, SectionEndOp, SymbolOp, SymbolEndOp, LiteralOp, BlockEndOp, CondBranchOp],
     }
 }
