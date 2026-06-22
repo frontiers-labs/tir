@@ -103,6 +103,15 @@ wrapped as `addr + 0` so the targets' base+offset addressing patterns
 match a bare pointer. The interfaces are the only trigger; there is no op-name
 matching.
 
+### Branch effects
+
+`build_branch_effect` lowers an `asm.condbr` (see [Control-flow
+selection](#control-flow-selection)) into a `CondBranch` node over its
+condition. Like a memory effect it is `add_op_unique` (never merges) and
+non-pure (`class_is_pure` excludes it), so it roots a match and is never
+internalized. The branch target is an op attribute, not a value, so it never
+appears in the expression.
+
 ### Side tables produced by the build
 
 | table | meaning |
@@ -271,6 +280,84 @@ incomplete rule set is rejected instead of silently dropping an op.
 3. Drop `constant` ops left dead — an immediate folded into an instruction
    attribute detaches the constant's only use, so the maintained def-use chain
    reports zero uses and it is erased.
+
+## Control-flow selection
+
+Conditional branches are selected through the same cover as every other op,
+rather than by hand-written per-target lowering. The key idea: a branch's
+**condition** is an ordinary value the e-graph can fuse, and its **target** is
+an op attribute the emitter copies — so the only new node is `CondBranch`, an
+effect that roots a match (§1, *Branch effects*).
+
+### CFG split
+
+A two-way `builtin.cond_br %c, ^t, ^f` does not map to one machine
+instruction, so a target-independent pre-selection pass
+(`backends/common/src/cfg.rs::split_cond_branch`) rewrites it into:
+
+```
+   asm.condbr %c, ^t      ; conditional, falls through otherwise
+   br ^f                  ; the not-taken edge, an ordinary unconditional branch
+```
+
+`asm.condbr` is deliberately **not** a `Terminator` — it sits mid-block, ahead
+of the block's real terminator (the `br`). The not-taken edge is always an
+explicit jump (no fall-through layout dependence); a later pass can drop
+redundant jumps. A target opts into the split via `pre_isel_lowerings`, so it
+runs only once that target has `asm.condbr` rules. Block arguments on branch
+edges are not yet supported and are rejected here.
+
+### Generated branch rules
+
+`rustgen` derives the rules from each branch instruction's own behavior
+(`if COND { PC::pc = … }`), with no hand-written selection rule:
+
+- **Fused (compare-and-branch).** Pattern `CondBranch(COND)` where `COND` is the
+  branch's predicate over its operands. RISC-V `beq`'s `if rs1 == rs2` →
+  `CondBranch(Eq(rs1, rs2))`. A `cmpi` feeding the branch lowers to the same
+  `Eq`/`Lt`/… node (`cmpi` supplies a `custom_semantic_expr` mapping its
+  predicate to an `ExprKind`), so the comparison is consumed and a single
+  `blt`/`beq`/… is emitted.
+- **Branch-if-nonzero.** For a `!=` branch whose operand class has a
+  `hardwired_zero` register (RISC-V `x0`), an extra rule with pattern
+  `CondBranch(Boundary)` matches a bare i1 condition and emits `bne cond, x0`,
+  wiring the second operand to the zero register. It costs one more than the
+  fused form, so a real comparison still prefers compare-and-branch.
+
+The emitter reads the target block from the `asm.condbr`'s `dest` attribute off
+the op being replaced; condition operands come from the match bindings as usual.
+
+### Future: flag-based branches (AArch64 NZCV)
+
+The model above assumes the branch's condition is expressed over its operands
+(compare-and-branch ISAs: RISC-V). AArch64 instead branches on **NZCV flags**:
+`b.lt` is `if PSTATE::n != PSTATE::v { … }`, and the comparison lives in a
+separate `cmp`/`subs` that writes the flags. `b.eq`/`b.lt`/`b.ne` are therefore
+*identical in shape* (`CondBranch(<flag read>)`) and indistinguishable without
+modeling the flags. Supporting them needs three pieces, none of which the
+current infra provides:
+
+1. **Flag-lemma rewrites.** A `b.cc`'s behavior never mentions the compared
+   operands, so no rule is derivable from it alone. The equivalences
+   (`Lt(a,b) ≡ Ne(N(a,b), V(a,b))` with `N=sign(a−b)`, `V=sovf(a−b)`, and the
+   `eq/ne/lo/hs` analogues) must be **discovered** by composing `cmp`'s flag
+   definitions with each predicate via the `FuzzOracle`/`EquivalenceOracle`,
+   then added as saturation rewrites so a comparison class also holds its flag
+   form (mirrors `discover_rewrites` for the shift-pair extension lemma).
+2. **A multi-output, multi-operand definer.** `cmp` writes all four flags from
+   *two* operands. Today's `RegisterDefiner` is single-register / single-value
+   (it backs `vsetvli → vl`), and `rustgen` gives multi-write instructions no
+   rule at all. The `N` and `V` reads in `b.lt` must both resolve to the *same*
+   introduced `cmp(a,b)`; the definer must recover `a,b` from the matched flag
+   sub-expressions.
+3. **Cost modeling** of the two-instruction `cmp; b.cc` sequence so the cover
+   weighs it against alternatives.
+
+The bare-i1 AArch64 form (`cmp cond, xzr; b.ne`) hits the same blockers — it,
+too, needs a flag lemma plus a flags-definer — so there is no cheaper AArch64
+slice that reuses the RISC-V path. Until this lands, AArch64 keeps its
+hand-written branch lowering (`lower_vcond_br` / `finalize_virtual_ops`) and
+does **not** install `pre_isel_lowerings`.
 
 ## Cost model
 
