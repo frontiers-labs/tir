@@ -25,10 +25,15 @@ pub fn build_pipeline(
     stop: StopAfter,
 ) -> PassManager {
     let mut pm = PassManager::new();
-    // NOTE: the `asm.condbr` control-effect selection path (CFG split +
-    // `crate::cfg::split_cond_branch`) is being brought up incrementally and is
-    // not yet wired here; conditional branches still lower through the target's
-    // own `op_lowering`s below until the selection rules cover every condition.
+    // Normalize comparison-fed conditional branches into a fall-through
+    // `asm.condbr` plus a trailing `br` before selection, so the comparison fuses
+    // into a compare-and-branch through the e-graph cover. Bare i1 conditions are
+    // left for the target's own branch lowering until zero-register selection
+    // lands.
+    pm.add_pass(OpLoweringPass::new(
+        "split-cond-branch",
+        vec![crate::cfg::split_cond_branch],
+    ));
     pm.nest(FuncOp::name()).add_pass(target.isel_pass(context));
     if stop == StopAfter::ISel {
         return pm;

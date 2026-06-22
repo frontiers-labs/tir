@@ -1,7 +1,7 @@
 use crate::operation;
 
 use crate as tir;
-use crate::{Commutative, ConstantLike, OpCost, SameOperandType};
+use crate::{Commutative, ConstantLike, OpCost, Operation, SameOperandType};
 
 operation! {
     ConstantOp {
@@ -222,6 +222,7 @@ operation! {
         results: R {
             result: "crate::Integer<1>",
         },
+        sem: "custom",
     }
 }
 
@@ -231,6 +232,51 @@ impl CmpIOpBuilder {
             "predicate",
             tir::attributes::AttributeValue::Str(pred.to_string()),
         )
+    }
+}
+
+impl CmpIOp {
+    /// Map the comparison predicate to its semantic operator, building
+    /// `<cmp>(lhs, rhs)` over the two operand symbols so a comparison participates
+    /// in the e-graph (and fuses into a compare-and-branch). The predicate is read
+    /// at build time, so the static `sem` form cannot express it. `sle` has no
+    /// signed-or-equal `ExprKind`, so it stays opaque for now.
+    fn custom_semantic_expr(
+        &self,
+        g: &mut tir::sem_expr::ExprPostGraph,
+    ) -> Option<tir::graph::NodeId> {
+        use tir::graph::MutDag;
+        use tir::sem_expr::{ExprKind, ExprPayload};
+
+        let predicate = self.attributes().iter().find_map(|a| match &a.value {
+            tir::attributes::AttributeValue::Str(s) if a.name == "predicate" => Some(s.as_str()),
+            _ => None,
+        })?;
+        let kind = match predicate {
+            "eq" => ExprKind::Eq,
+            "ne" => ExprKind::Ne,
+            "slt" => ExprKind::Lt,
+            "sgt" => ExprKind::Gt,
+            "sge" => ExprKind::Ge,
+            "ult" => ExprKind::ULt,
+            "ule" => ExprKind::ULe,
+            "ugt" => ExprKind::UGt,
+            "uge" => ExprKind::UGe,
+            _ => return None,
+        };
+
+        let lhs = g.add_node(ExprKind::Symbol);
+        g.set_leaf_data(lhs, ExprPayload::SymbolId(0));
+        let rhs = g.add_node(ExprKind::Symbol);
+        g.set_leaf_data(rhs, ExprPayload::SymbolId(1));
+        let root = g.add_node(kind);
+        g.add_edge(root, lhs);
+        g.add_edge(root, rhs);
+
+        g.set_original_op(root, <Self as tir::Operation>::id(self));
+        let context = self.0.context.upgrade();
+        g.set_actual_type(root, context.get_value(self.result()).ty());
+        Some(root)
     }
 }
 

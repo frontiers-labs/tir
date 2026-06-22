@@ -1,0 +1,23 @@
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
+
+// A comparison feeding a conditional branch fuses into a compare-and-branch:
+// the `cmpi slt` is consumed and the branch selects `blt`, instead of
+// materializing the predicate and branching on it separately.
+
+module {
+  func @f(%0: !i32, %1: !i32) -> !i32 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i32
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i32
+    return %4
+  }
+  module_end
+}
+
+// CHECK: riscv.blt {rs1 = %{{.*}}:GPR, rs2 = %{{.*}}:GPR, imm = ^bb1}
+// CHECK-NEXT: riscv.vbr ^bb2
+// CHECK-NOT: cmpi

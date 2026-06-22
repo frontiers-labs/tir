@@ -17,6 +17,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         interfaces,
         custom_format,
         as_sem_expr_body,
+        custom_sem,
         custom_verifier,
     } = parse_macro_input!(item as Operation);
 
@@ -302,7 +303,13 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         interfaces.push(syn::parse_quote!(tir::ConstantFold));
     }
 
-    let semantic_expr_method = if let Some(body) = &as_sem_expr_body {
+    let semantic_expr_method = if custom_sem {
+        quote! {
+            fn semantic_expr(&self, g: &mut tir::sem_expr::ExprPostGraph) -> Option<tir::graph::NodeId> {
+                Self::custom_semantic_expr(self, g)
+            }
+        }
+    } else if let Some(body) = &as_sem_expr_body {
         let actual_type_setter = if has_results {
             quote! {
                 let __tir_sem_expr_context = self.0.context.upgrade();
@@ -951,6 +958,10 @@ struct Operation {
     interfaces: Vec<Path>,
     custom_format: bool,
     as_sem_expr_body: Option<proc_macro2::TokenStream>,
+    /// `sem: "custom"` — the op provides its semantic expression at runtime via an
+    /// inherent `custom_semantic_expr`, used when the semantics depend on an
+    /// attribute (e.g. `cmpi`'s predicate) and so cannot be a static `sem` form.
+    custom_sem: bool,
     custom_verifier: bool,
 }
 
@@ -1125,21 +1136,16 @@ impl Parse for Operation {
             })
             .unwrap_or(false);
 
-        let as_sem_expr_body = struct_
-            .fields
-            .iter()
-            .find_map(|f| match &f.member {
-                Member::Named(ident) => {
-                    if ident.to_string().as_str() == "sem" {
-                        let new = expr_as_sem_expr_body(&f.expr, &operands);
-                        Some(new)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            })
-            .unwrap_or(None);
+        let sem_field = struct_.fields.iter().find_map(|f| match &f.member {
+            Member::Named(ident) if ident.to_string().as_str() == "sem" => Some(&f.expr),
+            _ => None,
+        });
+        let custom_sem = sem_field.map(expr_as_string).is_some_and(|s| s == "custom");
+        let as_sem_expr_body = if custom_sem {
+            None
+        } else {
+            sem_field.and_then(|e| expr_as_sem_expr_body(e, &operands))
+        };
 
         Ok(Operation {
             struct_name,
@@ -1153,6 +1159,7 @@ impl Parse for Operation {
             interfaces,
             custom_format,
             as_sem_expr_body,
+            custom_sem,
             custom_verifier,
         })
     }
