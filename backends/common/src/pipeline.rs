@@ -25,15 +25,12 @@ pub fn build_pipeline(
     stop: StopAfter,
 ) -> PassManager {
     let mut pm = PassManager::new();
-    // Normalize comparison-fed conditional branches into a fall-through
-    // `asm.condbr` plus a trailing `br` before selection, so the comparison fuses
-    // into a compare-and-branch through the e-graph cover. Bare i1 conditions are
-    // left for the target's own branch lowering until zero-register selection
-    // lands.
-    pm.add_pass(OpLoweringPass::new(
-        "split-cond-branch",
-        vec![crate::cfg::split_cond_branch],
-    ));
+    // Target-provided pre-selection lowerings (e.g. splitting two-way branches
+    // into `asm.condbr` + `br` so the condition is covered by the e-graph).
+    let pre_isel = target.pre_isel_lowerings();
+    if !pre_isel.is_empty() {
+        pm.add_pass(OpLoweringPass::new("pre-isel-lowering", pre_isel));
+    }
     pm.nest(FuncOp::name()).add_pass(target.isel_pass(context));
     if stop == StopAfter::ISel {
         return pm;

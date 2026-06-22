@@ -86,6 +86,14 @@ pub trait TargetMachine {
         vec![]
     }
 
+    /// Lowerings that run before instruction selection (e.g. splitting a
+    /// two-way `cond_br` into a fall-through `asm.condbr` plus a trailing `br`
+    /// so the branch condition is covered by the e-graph). A target opts in only
+    /// once it has selection rules for `asm.condbr`.
+    fn pre_isel_lowerings(&self) -> Vec<OpLowering> {
+        Vec::new()
+    }
+
     /// Lowerings that must run between instruction selection and register
     /// allocation (e.g. expanding `vcond_br` into a conditional branch whose
     /// SSA condition the allocator still has to color).

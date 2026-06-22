@@ -7,8 +7,8 @@ use tir::attributes::AttributeValue;
 use tir_be_common::binary::{EM_RISCV, ElfClass, ObjectFormatInfo, RelocKind};
 
 use crate::{
-    BranchNotEqOpBuilder, JumpAndLinkOpBuilder, JumpAndLinkRegOpBuilder, VirtualBranchOp,
-    VirtualCallOp, VirtualCondBranchOp, VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
+    JumpAndLinkOpBuilder, JumpAndLinkRegOpBuilder, VirtualBranchOp, VirtualCallOp,
+    VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
 };
 
 const R_RISCV_BRANCH: u32 = 16;
@@ -115,42 +115,6 @@ fn lower_constant(
             .build();
         rewriter.replace_op(op, &add)?;
     }
-    Ok(true)
-}
-
-/// Pre-RA: `vcond_br cond, t, f` becomes `bne cond, x0, t` + `vbr f`. Runs
-/// before register allocation so the condition register gets colored.
-pub(crate) fn lower_vcond_br(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-) -> Result<bool, tir::PassError> {
-    let Some(cond_br) = op.as_op::<VirtualCondBranchOp>() else {
-        return Ok(false);
-    };
-    // The only operand is the condition; any extra operands are values
-    // forwarded to successor block arguments, which codegen cannot place yet.
-    let operands = cond_br.operands();
-    let (Some(&condition), 1) = (operands.first(), operands.len()) else {
-        return Err(tir::PassError::InvalidRuleSet(
-            "block arguments on conditional branch edges are not supported by codegen yet"
-                .to_string(),
-        ));
-    };
-    let true_dest = block_attr(&cond_br, "true_dest")?;
-    let false_dest = block_attr(&cond_br, "false_dest")?;
-
-    let bne = BranchNotEqOpBuilder::new(context)
-        .attr("rs1", virt(condition.number(), "GPR"))
-        .attr("rs2", phys(&("GPR".to_string(), 0)))
-        .attr("imm", AttributeValue::Block(true_dest))
-        .build();
-    rewriter.insert_op_before(op, &bne)?;
-
-    let fallthrough = crate::VirtualBranchOpBuilder::new(context)
-        .attr("dest", AttributeValue::Block(false_dest))
-        .build();
-    rewriter.replace_op(op, &fallthrough)?;
     Ok(true)
 }
 

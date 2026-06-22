@@ -24,18 +24,6 @@ pub fn split_cond_branch(
         return Ok(false);
     };
 
-    // Only split when the condition is a comparison: those fuse into a
-    // compare-and-branch through the cover. A bare i1 condition still needs the
-    // zero-register form (`bne cond, x0`), so it stays on the legacy path for now.
-    let condition_is_cmp = context
-        .get_value(cond_br.condition())
-        .defining_op()
-        .map(|id| context.get_op(id).name == "cmpi")
-        .unwrap_or(false);
-    if !condition_is_cmp {
-        return Ok(false);
-    }
-
     if !cond_br.true_args().is_empty() || !cond_br.false_args().is_empty() {
         return Err(PassError::InvalidRuleSet(
             "block arguments on conditional branch edges are not supported by codegen yet"

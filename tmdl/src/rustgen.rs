@@ -818,6 +818,123 @@ fn emit_instructions<'a>(
                         );
                     }
                 });
+
+                // Branch-if-nonzero: a `rs1 != rs2` branch with one operand wired to
+                // a hardwired-zero register tests a bare i1 condition directly
+                // (`bne cond, x0`). Derived from the instruction's own semantics plus
+                // the zero register's trait — no hand-written rule.
+                if let Some((tested, zero_name, zero_class, zero_index)) =
+                    nonzero_branch_form(&cond_pattern, &lowering, &ops, files)
+                {
+                    let tested_symbol_lit = proc_macro2::Literal::u32_unsuffixed(tested.symbol);
+                    let nz_pattern_fn =
+                        format_ident!("branch_nz_pattern_{}", inst.name.to_lowercase());
+                    let nz_emit_fn = format_ident!("branch_nz_emit_{}", inst.name.to_lowercase());
+                    let zero_class_lit = proc_macro2::Literal::string(&zero_class);
+                    let zero_index_lit = proc_macro2::Literal::u16_unsuffixed(zero_index);
+
+                    let mut nz_emit_steps: Vec<proc_macro2::TokenStream> = Vec::new();
+                    for (op_name, _op_ty) in &ops {
+                        let op_name_lit = proc_macro2::Literal::string(op_name);
+                        if *op_name == target_operand {
+                            nz_emit_steps.push(quote! {
+                                let __target = {
+                                    let op = req.op.ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                                    op.op()
+                                        .attributes
+                                        .iter()
+                                        .find_map(|a| match a.value {
+                                            tir::attributes::AttributeValue::Block(b)
+                                                if a.name == "dest" =>
+                                            {
+                                                Some(b)
+                                            }
+                                            _ => None,
+                                        })
+                                        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?
+                                };
+                                builder = builder.attr(
+                                    #op_name_lit,
+                                    tir::attributes::AttributeValue::Block(__target),
+                                );
+                            });
+                        } else if *op_name == zero_name {
+                            nz_emit_steps.push(quote! {
+                                builder = builder.attr(
+                                    #op_name_lit,
+                                    tir::attributes::AttributeValue::Register(
+                                        tir::attributes::RegisterAttr::Physical {
+                                            class: #zero_class_lit.to_string(),
+                                            index: #zero_index_lit,
+                                        },
+                                    ),
+                                );
+                            });
+                        } else if *op_name == tested.name {
+                            nz_emit_steps.push(quote! {
+                                let src = m.value_binding(#tested_symbol_lit)
+                                    .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                                builder = builder.attr(
+                                    #op_name_lit,
+                                    tir::attributes::AttributeValue::Register(
+                                        tir::attributes::RegisterAttr::Virtual {
+                                            id: src.number(),
+                                            class: Some(#zero_class_lit.to_string()),
+                                        },
+                                    ),
+                                );
+                            });
+                        }
+                    }
+
+                    // One instruction larger than the fused form so the cover prefers
+                    // a real compare-and-branch when the condition is a comparison.
+                    let nz_cost_lit = proc_macro2::Literal::u32_unsuffixed(base_cost + 1);
+                    let nz_rule_name_lit = proc_macro2::Literal::string(&format!(
+                        "{}_branch_nz",
+                        inst.name.to_lowercase()
+                    ));
+
+                    isel_rule_emitters.push(quote! {
+                        fn #nz_pattern_fn(_context: &tir::Context) -> tir::sem_expr::ExprPostGraph {
+                            use tir::graph::MutDag;
+                            let mut g = tir::sem_expr::ExprPostGraph::new();
+                            let __v = g.add_node(tir::sem_expr::ExprKind::Symbol);
+                            g.set_leaf_data(__v, tir::sem_expr::ExprPayload::SymbolId(#tested_symbol_lit));
+                            let __branch = g.add_node(tir::sem_expr::ExprKind::CondBranch);
+                            g.add_edge(__branch, __v);
+                            g
+                        }
+
+                        fn #nz_emit_fn(
+                            context: &tir::Context,
+                            req: &tir_be_common::isel::EmitRequest,
+                            m: &tir_be_common::isel::RuleMatch,
+                        ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+                            let _ = (req, m);
+                            let mut builder = #builder_ident::new(context);
+                            #(#nz_emit_steps)*
+                            Ok(Box::new(builder.build()))
+                        }
+                    });
+
+                    isel_rule_inits.push(quote! {
+                        if features_enabled(features, #inst_features) {
+                            rules.push(
+                                tir_be_common::isel::Rule::new(
+                                    #nz_rule_name_lit,
+                                    #nz_pattern_fn(context),
+                                    (#nz_cost_lit).max(instruction_cost(#mnemonic_cost_lit)),
+                                    #nz_emit_fn,
+                                )
+                                .with_operand_constraints(vec![(
+                                    #tested_symbol_lit,
+                                    tir::graph::OperandConstraint::Register,
+                                )]),
+                            );
+                        }
+                    });
+                }
             }
         }
 
@@ -2489,6 +2606,69 @@ fn synthesize_branch_value(inst: &ast::Instruction, width_bytes: u64) -> Option<
         else_: Some(Box::new(fallthrough)),
         span,
     }))
+}
+
+/// The tested operand of a branch-if-nonzero form: its name and pattern symbol.
+struct NonzeroTested {
+    name: String,
+    symbol: u32,
+}
+
+/// If the branch condition is `a != b` over two register operands of a class with
+/// a hardwired-zero register, describe the branch-if-nonzero form `a != 0`: the
+/// tested operand `a`, and the operand `b` wired to that zero register. This makes
+/// a bare i1 condition (`bne cond, x0`) selectable straight from the branch's own
+/// semantics. Returns `None` for any other condition.
+fn nonzero_branch_form(
+    cond_pattern: &tir::sem_expr::ExprPostGraph,
+    lowering: &ast::SemaLowering,
+    ops: &[(String, Type)],
+    files: &[ast::File],
+) -> Option<(NonzeroTested, String, String, u16)> {
+    use tir::graph::Dag;
+    use tir::sem_expr::{ExprKind, ExprPayload};
+
+    if *cond_pattern.get_node(lowering.root) != ExprKind::Ne {
+        return None;
+    }
+    let children: Vec<_> = cond_pattern.children(lowering.root).collect();
+    let [a, b] = children.as_slice() else {
+        return None;
+    };
+
+    let sym_to_name: HashMap<u32, &String> = lowering
+        .variable_symbols
+        .iter()
+        .map(|(name, sym)| (*sym, name))
+        .collect();
+    let operand = |node: tir::graph::NodeId| -> Option<(String, u32, String)> {
+        let &ExprPayload::SymbolId(sym) = cond_pattern.get_leaf_data(node)? else {
+            return None;
+        };
+        let name = sym_to_name.get(&sym)?;
+        let Type::Struct(class) = ops.iter().find(|(n, _)| n == *name).map(|(_, t)| t)? else {
+            return None;
+        };
+        Some(((*name).clone(), sym, class.clone()))
+    };
+
+    let (tested_name, tested_sym, _) = operand(*a)?;
+    let (zero_name, _, zero_class) = operand(*b)?;
+    let zero_index = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .find(|rc| rc.name == zero_class)
+        .and_then(|rc| rc.hardwired_zero_register_index())?;
+
+    Some((
+        NonzeroTested {
+            name: tested_name,
+            symbol: tested_sym,
+        },
+        zero_name,
+        zero_class,
+        zero_index,
+    ))
 }
 
 /// The condition of a conditional control transfer `if COND { PC::pc = TARGET }`

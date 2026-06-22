@@ -344,36 +344,6 @@ impl VirtualBranchOp {
     }
 }
 
-operation! {
-    VirtualCondBranchOp {
-        name: "vcond_br",
-        dialect: "riscv",
-        format: "custom",
-        operands: O {
-            condition: "Any",
-            true_args: "*Any",
-            false_args: "*Any",
-        },
-        attributes: A {
-            true_dest: "Block",
-            false_dest: "Block",
-        },
-    }
-}
-
-impl VirtualCondBranchOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        tir_be_common::print_branch(fmt, self, "riscv.vcond_br")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        _context: &tir::Context,
-    ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
-}
-
 // Virtual call ops: the lowered form of `builtin.call`/`builtin.indirect_call`.
 // Arguments and results travel through the ABI registers via copies emitted by
 // `lower_calls`; the ops only carry the callee (a symbol whose address is
@@ -486,7 +456,6 @@ dialect! {
             JumpAndLinkRegOp,
             VirtualReturnOp,
             VirtualBranchOp,
-            VirtualCondBranchOp,
             VirtualCallOp,
             VirtualIndirectCallOp
         ],
@@ -581,24 +550,14 @@ fn lower_branches(
     rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
     use tir::attributes::AttributeValue;
-    use tir::builtin::{BranchOp, CondBranchOp};
+    use tir::builtin::BranchOp;
 
+    // `cond_br` is split into `asm.condbr` + `br` before selection and covered by
+    // the e-graph; only the unconditional `br` reaches this lowering.
     if let Some(br) = op.as_op::<BranchOp>() {
         let lowered = VirtualBranchOpBuilder::new(context)
             .dest_args(br.dest_args())
             .attr("dest", AttributeValue::Block(br.dest()))
-            .build();
-        rewriter.replace_op(op, &lowered)?;
-        return Ok(true);
-    }
-
-    if let Some(cond_br) = op.as_op::<CondBranchOp>() {
-        let lowered = VirtualCondBranchOpBuilder::new(context)
-            .condition(cond_br.condition())
-            .true_args(cond_br.true_args())
-            .false_args(cond_br.false_args())
-            .attr("true_dest", AttributeValue::Block(cond_br.true_dest()))
-            .attr("false_dest", AttributeValue::Block(cond_br.false_dest()))
             .build();
         rewriter.replace_op(op, &lowered)?;
         return Ok(true);
@@ -930,13 +889,17 @@ impl tir_be_common::TargetMachine for RiscvTarget {
         counters
     }
 
+    fn pre_isel_lowerings(&self) -> Vec<tir_be_common::isel::OpLowering> {
+        vec![tir_be_common::cfg::split_cond_branch]
+    }
+
     fn pre_ra_lowerings(&self) -> Vec<tir_be_common::isel::OpLowering> {
         let lower_constant = if self.config.xlen == 64 {
             obj::lower_constant_rv64
         } else {
             obj::lower_constant_rv32
         };
-        vec![lower_constant, obj::lower_vcond_br]
+        vec![lower_constant]
     }
 
     fn finalize_lowerings(&self) -> Vec<tir_be_common::isel::OpLowering> {
@@ -1029,49 +992,46 @@ mod tests {
     }
 
     #[test]
-    fn builtin_cond_br_lowers_to_virtual() {
+    fn cond_br_selects_branch_if_nonzero() {
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
         context.register_dialect::<RiscvDialect>();
 
         let i1 = IntegerType::new(&context, 1);
-        let i32 = IntegerType::new(&context, 32);
         let module = ops::module(&context, None).build();
 
         let cond = context.create_value(i1, None);
-        let x = context.create_value(i32, None);
         let region = context.create_region();
-        let block = context.create_block(vec![cond, x]);
+        let block = context.create_block(vec![cond]);
         region.add_block(block.id());
 
         let func = ops::func(&context, "demo", UnitType::new(&context), Some(region.id())).build();
-        let fbody = func.body();
-        let args = fbody.arguments();
-        let (cond_id, x_id) = (args[0].id(), args[1].id());
+        let cond_id = func.body().arguments()[0].id();
 
         let t = context.create_block(vec![]);
         let f = context.create_block(vec![]);
 
         let mut fb = IRBuilder::new(func.body());
-        let add = ops::addi(&context, x_id, x_id, i32).build();
-        let add_r = add.result();
-        fb.insert(add);
-        fb.insert(ops::cond_br(&context, cond_id, vec![add_r], vec![], t.id(), f.id()).build());
+        fb.insert(ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build());
 
         let mut mb = IRBuilder::new(module.body());
         mb.insert(func);
         mb.insert(ops::module_end(&context).build());
 
+        // The CFG split runs before selection, then the bare i1 condition selects
+        // `bne cond, x0` through the cover and the fall-through edge becomes `vbr`.
         let mut pm = PassManager::new();
+        pm.add_pass(tir_be_common::lower::OpLoweringPass::new(
+            "split",
+            vec![tir_be_common::cfg::split_cond_branch],
+        ));
         pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
-            .expect("isel should lower the conditional branch");
+            .expect("selection should lower the conditional branch");
 
-        // The data op selects (addw), the conditional branch lowers to the virtual
-        // op, and no builtin control flow remains.
         assert_eq!(
             body_op_names(&context, region.id()),
-            vec!["addw", "vcond_br", "symbol_end"]
+            vec!["bne", "vbr", "symbol_end"]
         );
         let mut buf = String::new();
         let mut fmt = IRFormatter::new(&mut buf);
