@@ -1,0 +1,15 @@
+// RUN: not tir opt --verify %s
+
+// A value-producing scf.for must carry an init operand whose type matches the
+// result type; an i1 init for an i32 result fails verification.
+
+module {
+  func @bad(%0: !index, %1: !index, %2: !index, %3: !i1) -> !i32 {
+    %4 = scf.for %0, %1, %2 iter_args(%5 = %3) -> !i32 {
+      %6 = constant {value = 1} : !i32
+      scf.yield %6
+    }
+    return %4
+  }
+  module_end
+}

@@ -22,6 +22,10 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
 
     let builder_name = format_ident!("{}Builder", struct_name.to_string());
     let has_results = !results.is_empty();
+    // A `?`-prefixed result type makes the single result optional: the op may be built
+    // with or without it. Used by structured control flow, whose value is absent when
+    // the construct is purely side-effecting.
+    let result_optional = results.iter().any(|r| r.ty.starts_with('?'));
     let op_fn_name = op_fn_ident(&name);
     let operand_names: Vec<String> = operands.iter().map(|o| o.name.clone()).collect();
 
@@ -409,16 +413,24 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    let result_fn_param = if has_results {
-        quote! { result_type: tir::TypeId, }
-    } else {
+    let result_fn_param = if !has_results {
         quote! {}
+    } else if result_optional {
+        quote! { result_type: Option<tir::TypeId>, }
+    } else {
+        quote! { result_type: tir::TypeId, }
     };
 
-    let result_fn_builder = if has_results {
-        quote! { builder = builder.result_type(result_type); }
-    } else {
+    let result_fn_builder = if !has_results {
         quote! {}
+    } else if result_optional {
+        quote! {
+            if let Some(result_type) = result_type {
+                builder = builder.result_type(result_type);
+            }
+        }
+    } else {
+        quote! { builder = builder.result_type(result_type); }
     };
 
     let attr_fn_params: Vec<_> = attributes
@@ -460,17 +472,48 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let result_build = if has_results {
+    let result_count_check = if result_optional {
+        quote! {
+            if self.0.results.len() > result_specs.len() {
+                return Err(tir::Error::VerificationError(format!(
+                    "{} expects at most {} results, got {}",
+                    <Self as tir::Operation>::name(),
+                    result_specs.len(),
+                    self.0.results.len()
+                )));
+            }
+        }
+    } else {
+        quote! {
+            if self.0.results.len() != result_specs.len() {
+                return Err(tir::Error::VerificationError(format!(
+                    "{} expects {} results, got {}",
+                    <Self as tir::Operation>::name(),
+                    result_specs.len(),
+                    self.0.results.len()
+                )));
+            }
+        }
+    };
+
+    let result_build = if !has_results {
+        quote! {
+            let result_vec: Vec<tir::ValueId> = vec![];
+        }
+    } else if result_optional {
+        quote! {
+            let result_vec = match self.result_type {
+                Some(ty) => vec![self.context.create_value(ty, None).id()],
+                None => vec![],
+            };
+        }
+    } else {
         quote! {
             let result_vec = {
                 let ty = self.result_type.expect("result_type must be set for ops with results");
                 let val = self.context.create_value(ty, None);
                 vec![val.id()]
             };
-        }
-    } else {
-        quote! {
-            let result_vec: Vec<tir::ValueId> = vec![];
         }
     };
 
@@ -673,16 +716,10 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
 
                 #operand_validation
 
-                if self.0.results.len() != result_specs.len() {
-                    return Err(tir::Error::VerificationError(format!(
-                        "{} expects {} results, got {}",
-                        <Self as tir::Operation>::name(),
-                        result_specs.len(),
-                        self.0.results.len()
-                    )));
-                }
+                #result_count_check
 
-                for (idx, (result_name, _type_spec)) in result_specs.iter().enumerate() {
+                for idx in 0..self.0.results.len() {
+                    let (result_name, _type_spec) = result_specs[idx];
                     let value_id = self.0.results[idx];
                     if !context.has_value(value_id) {
                         return Err(tir::Error::VerificationError(format!(

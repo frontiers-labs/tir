@@ -97,6 +97,64 @@ pub trait Terminator {
     }
 }
 
+/// A terminator that transfers control to successor blocks within the same region,
+/// forwarding values to their block arguments. Lets a CFG analysis read the edge
+/// targets and the values flowing along each edge without knowing the concrete
+/// branch op.
+pub trait BranchTerminator {
+    /// One entry per outgoing control-flow edge: the successor block and the values
+    /// forwarded to its block arguments, in argument order.
+    fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)>;
+
+    fn verify_interface(
+        &self,
+        _this: &dyn Operation,
+        _context: &Context,
+    ) -> Result<(), crate::Error> {
+        Ok(())
+    }
+}
+
+/// A structured loop that carries one value across iterations: it enters the body as a
+/// region argument, starts at an init value, and updates to the value the body yields on
+/// the back edge. The op's single result is the carried value at loop exit. Lets a
+/// flow-sensitive analysis build μ gates without knowing the concrete loop op.
+pub trait LoopLike {
+    /// The pre-loop initial value of the carried value.
+    fn init(&self) -> ValueId;
+    /// The body region argument through which the value enters each iteration — where
+    /// the loop body observes the carried value.
+    fn carried_arg(&self) -> ValueId;
+    /// The value the body yields on the back edge: the next iteration's carried value.
+    fn latched(&self) -> ValueId;
+
+    fn verify_interface(
+        &self,
+        _this: &dyn Operation,
+        _context: &Context,
+    ) -> Result<(), crate::Error> {
+        Ok(())
+    }
+}
+
+/// A [`BranchTerminator`] whose successor edges run under a known boolean fact — e.g.
+/// `cond_br %c` enters its true successor when `%c` is 1 and its false successor when
+/// `%c` is 0. The CFG analog of [`RegionGuard`], letting a flow-sensitive analysis
+/// recover the predicate gating a merge without knowing the concrete branch op.
+pub trait BranchGuard {
+    /// For each guarded successor edge, the value known to equal a boolean when that
+    /// edge is taken (`true` => 1, `false` => 0).
+    fn guarded_successors(&self) -> Vec<(BlockId, ValueId, bool)>;
+
+    fn verify_interface(
+        &self,
+        _this: &dyn Operation,
+        _context: &Context,
+    ) -> Result<(), crate::Error> {
+        Ok(())
+    }
+}
+
 pub trait SameOperandType {
     fn verify_interface(
         &self,

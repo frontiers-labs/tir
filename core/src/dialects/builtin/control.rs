@@ -1,6 +1,9 @@
 use crate::Any;
 use crate::attributes::AttributeValue;
-use crate::{BlockId, Context, Error, Operation, Terminator, ValueId, operation};
+use crate::{
+    BlockId, BranchGuard, BranchTerminator, Context, Error, Operation, Terminator, ValueId,
+    operation,
+};
 
 use crate as tir;
 
@@ -15,13 +18,19 @@ operation! {
         attributes: A {
             dest: "Block",
         },
-        interfaces: [Terminator],
+        interfaces: [Terminator, BranchTerminator],
     }
 }
 
 impl Terminator for BranchOp {
     fn successors(&self) -> Vec<BlockId> {
         vec![self.dest()]
+    }
+}
+
+impl BranchTerminator for BranchOp {
+    fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
+        vec![(self.dest(), self.dest_args())]
     }
 }
 
@@ -70,13 +79,31 @@ operation! {
             true_dest: "Block",
             false_dest: "Block",
         },
-        interfaces: [Terminator],
+        interfaces: [Terminator, BranchTerminator, BranchGuard],
     }
 }
 
 impl Terminator for CondBranchOp {
     fn successors(&self) -> Vec<BlockId> {
         vec![self.true_dest(), self.false_dest()]
+    }
+}
+
+impl BranchTerminator for CondBranchOp {
+    fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
+        vec![
+            (self.true_dest(), self.true_args()),
+            (self.false_dest(), self.false_args()),
+        ]
+    }
+}
+
+impl BranchGuard for CondBranchOp {
+    fn guarded_successors(&self) -> Vec<(BlockId, ValueId, bool)> {
+        vec![
+            (self.true_dest(), self.condition(), true),
+            (self.false_dest(), self.condition(), false),
+        ]
     }
 }
 

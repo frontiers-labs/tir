@@ -545,8 +545,14 @@ mod tests {
             .unwrap()
             .id();
 
-        let if_op =
-            crate::scf::ops::r#if(&context, cond_id, Some(then_region), Some(else_region)).build();
+        let if_op = crate::scf::ops::r#if(
+            &context,
+            cond_id,
+            None,
+            Some(then_region),
+            Some(else_region),
+        )
+        .build();
 
         let mut builder = IRBuilder::new(entry.clone());
         builder.insert(if_op);
@@ -632,8 +638,16 @@ mod tests {
             .unwrap()
             .id();
 
-        let for_op =
-            crate::scf::ops::r#for(&context, lb.id(), ub.id(), step.id(), Some(body)).build();
+        let for_op = crate::scf::ops::r#for(
+            &context,
+            lb.id(),
+            ub.id(),
+            step.id(),
+            Operand::none(),
+            None,
+            Some(body),
+        )
+        .build();
 
         // An scf.for can itself be the root: its single body region is the tree.
         let dt = DominatorTree::new(&context, for_op.id());

@@ -42,8 +42,9 @@ pub use diagnostics::{print_error_range, print_parse_error};
 pub use dialect::{Dialect, OperationParser};
 pub use error::Error;
 pub use interfaces::{
-    Commutative, ConstantFold, ConstantLike, MemoryRead, MemoryWrite, OpCost, PromotableAllocation,
-    RegionGuard, SameOperandType, Terminator,
+    BranchGuard, BranchTerminator, Commutative, ConstantFold, ConstantLike, LoopLike,
+    MemoryRead, MemoryWrite, OpCost, PromotableAllocation, RegionGuard, SameOperandType,
+    Terminator,
 };
 pub use ir_formatter::IRFormatter;
 pub use operand::Operand;

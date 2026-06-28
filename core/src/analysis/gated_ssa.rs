@@ -1,29 +1,9 @@
-//! Prototype Gated SSA construction over block SSA.
-//!
-//! Block SSA encodes phis as block arguments: a predecessor forwards a value to
-//! an argument through its branch (`br dest(args)`, `cond_br c, t(args), f(args)`).
-//! Gated SSA makes the merge explicit by replacing each such phi with a gating
-//! function (see Ottenstein, Ballance & MacCabe, "The program dependence web",
-//! 1990):
-//!
-//! * a γ (gamma) gate selects between two inputs on a predicate, for a non-loop
-//!   (if/else) merge;
-//! * a μ (mu) gate merges a loop header's pre-loop input with its latched input.
-//!
-//! Mirroring [`DominatorTree`](super::DominatorTree), the form is built over the
-//! blocks reachable from a root operation's region and exposed through the [`Dag`]
-//! trait by delegating to an internal [`GenericDag`]. Operations are referenced by
-//! [`OpId`]; their internals are never copied. The value graph is cyclic across μ
-//! gates, so it is stored in a [`GenericDag`] rather than a [`PostOrderDag`].
-//!
-//! [`PostOrderDag`]: crate::graph::PostOrderDag
-
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    BlockId, Context, OpId, Terminator, TypeId, ValueId,
+    BlockId, BranchGuard, BranchTerminator, Context, LoopLike, OpId, RegionGuard, RegionId,
+    Terminator, TypeId, ValueId,
     analysis::DominatorTree,
-    builtin::{BranchOp, CondBranchOp},
     graph::{Dag, GenericDag, MutDag, NodeId},
 };
 
@@ -50,27 +30,32 @@ pub enum GateNode {
 }
 
 /// Gated SSA for the blocks reachable from a root operation's first region.
-///
-/// Implements [`Dag`] by delegating to an internal [`GenericDag`] whose nodes are
-/// [`GateNode`]s. Build one with [`Self::new`].
-pub struct GatedSsa {
+pub struct GSA {
     inner: GenericDag<GateNode, ()>,
     nodes: HashMap<ValueId, NodeId>,
 }
 
-impl GatedSsa {
+impl GSA {
     /// Build the gated SSA form rooted at `root`'s first region.
     pub fn new<O: Into<OpId>>(context: &Context, root: O) -> Self {
         let root = root.into();
         let blocks = region_blocks(context, root);
         let preds = predecessor_map(context, &blocks);
         let phis = collect_phis(context, &blocks, &preds);
+        let StructuredGates {
+            gamma,
+            mu,
+            loop_result,
+        } = structured_gates(context, &blocks);
 
         let mut builder = Builder {
             context,
             dom: DominatorTree::new(context, root),
             preds,
             phis,
+            gamma,
+            mu,
+            loop_result,
             inner: GenericDag::new(),
             nodes: HashMap::new(),
         };
@@ -126,7 +111,7 @@ impl GatedSsa {
     }
 }
 
-impl Dag for GatedSsa {
+impl Dag for GSA {
     type Node = GateNode;
     type Leaf = ();
 
@@ -167,15 +152,30 @@ impl Dag for GatedSsa {
     }
 }
 
+/// One incoming control-flow edge of a block: the predecessor and the values it
+/// forwards to the block's arguments, in argument order.
+struct Edge {
+    pred: BlockId,
+    args: Vec<ValueId>,
+}
+
 struct Builder<'a> {
     context: &'a Context,
     dom: DominatorTree,
-    /// Block-SSA predecessors reaching a block through a `br`/`cond_br`, each paired
-    /// with the forwarding terminator.
-    preds: HashMap<BlockId, Vec<(BlockId, OpId)>>,
+    /// Block-SSA predecessors reaching each block, with the values forwarded along
+    /// the edge.
+    preds: HashMap<BlockId, Vec<Edge>>,
     /// Block arguments that are phis (their block has branch predecessors), mapped to
     /// their block and argument index.
     phis: HashMap<ValueId, (BlockId, usize)>,
+    /// Result of a structured conditional ([`RegionGuard`]) → `(cond, true, false)` γ
+    /// inputs.
+    gamma: HashMap<ValueId, (ValueId, ValueId, ValueId)>,
+    /// Loop-carried region argument ([`LoopCarried`]) → `(init, latch)` μ inputs.
+    mu: HashMap<ValueId, (ValueId, ValueId)>,
+    /// Structured loop result → its carried region argument; the result shares the
+    /// carried value's μ node.
+    loop_result: HashMap<ValueId, ValueId>,
     inner: GenericDag<GateNode, ()>,
     nodes: HashMap<ValueId, NodeId>,
 }
@@ -189,14 +189,21 @@ impl Builder<'_> {
             return node;
         }
 
-        if let Some(&(block, index)) = self.phis.get(&value) {
-            let (gate, inputs) = self.plan_gate(block, index, value);
+        if let Some((gate, inputs)) = self.gate_plan(value) {
             let node = self.inner.add_node(gate);
             self.nodes.insert(value, node);
             for input in inputs {
                 let child = self.node_for_value(input);
                 self.inner.add_edge(node, child);
             }
+            return node;
+        }
+
+        // A structured loop's result is the carried value at exit: it shares the μ node
+        // of its carried region argument rather than getting one of its own.
+        if let Some(&carried) = self.loop_result.get(&value) {
+            let node = self.node_for_value(carried);
+            self.nodes.insert(value, node);
             return node;
         }
 
@@ -215,50 +222,109 @@ impl Builder<'_> {
         node
     }
 
+    /// The gate replacing `value` and the inputs feeding it, in edge order, if `value`
+    /// is an unstructured phi, a structured γ result, or a structured μ carried value.
+    fn gate_plan(&self, value: ValueId) -> Option<(GateNode, Vec<ValueId>)> {
+        if let Some(&(block, index)) = self.phis.get(&value) {
+            return Some(self.plan_gate(block, index, value));
+        }
+        if let Some(&(cond, t, f)) = self.gamma.get(&value) {
+            return Some((GateNode::Gamma { value, cond }, vec![cond, t, f]));
+        }
+        if let Some(&(init, latch)) = self.mu.get(&value) {
+            return Some((GateNode::Mu { value }, vec![init, latch]));
+        }
+        None
+    }
+
     /// Classify the phi `value` (argument `index` of `block`) into a gate and list
     /// its inputs in edge order.
     fn plan_gate(&self, block: BlockId, index: usize, value: ValueId) -> (GateNode, Vec<ValueId>) {
         let incoming = self.incoming(block, index);
 
-        // Loop header: an incoming edge comes from a block this header dominates.
-        if incoming
-            .iter()
-            .any(|(pred, _)| self.dom.dominates(block, *pred))
-        {
-            let mut init = None;
-            let mut latch = None;
-            for &(pred, v) in &incoming {
-                if self.dom.dominates(block, pred) {
-                    latch.get_or_insert(v);
-                } else {
-                    init.get_or_insert(v);
-                }
-            }
-            if let (Some(init), Some(latch)) = (init, latch) {
-                return (GateNode::Mu { value }, vec![init, latch]);
-            }
+        if let Some(gate) = self.mu_gate(block, value, &incoming) {
+            return gate;
         }
-
-        // Two-way merge gated by the condition of the dominating `cond_br`.
-        if incoming.len() == 2
-            && let Some((cond, true_dest, false_dest)) = self.gamma_cond(block)
-        {
-            let mut true_val = None;
-            let mut false_val = None;
-            for &(pred, v) in &incoming {
-                if self.dom.dominates(true_dest, pred) {
-                    true_val.get_or_insert(v);
-                } else if self.dom.dominates(false_dest, pred) {
-                    false_val.get_or_insert(v);
-                }
-            }
-            if let (Some(t), Some(f)) = (true_val, false_val) {
-                return (GateNode::Gamma { value, cond }, vec![cond, t, f]);
-            }
+        if let Some(gate) = self.gamma_gate(block, value, &incoming) {
+            return gate;
         }
 
         let inputs = incoming.into_iter().map(|(_, v)| v).collect();
         (GateNode::Phi { value }, inputs)
+    }
+
+    /// μ gate for a loop header: some incoming edge comes from a block the header
+    /// dominates (the back edge). Inputs are `[init, latch]`.
+    fn mu_gate(
+        &self,
+        block: BlockId,
+        value: ValueId,
+        incoming: &[(BlockId, ValueId)],
+    ) -> Option<(GateNode, Vec<ValueId>)> {
+        if !incoming
+            .iter()
+            .any(|&(pred, _)| self.dom.dominates(block, pred))
+        {
+            return None;
+        }
+
+        let mut init = None;
+        let mut latch = None;
+        for &(pred, v) in incoming {
+            if self.dom.dominates(block, pred) {
+                latch.get_or_insert(v);
+            } else {
+                init.get_or_insert(v);
+            }
+        }
+        match (init, latch) {
+            (Some(init), Some(latch)) => Some((GateNode::Mu { value }, vec![init, latch])),
+            _ => None,
+        }
+    }
+
+    /// γ gate for a two-way merge: the immediately dominating terminator is a
+    /// [`BranchGuard`], and each incoming edge is reached through one of its guarded
+    /// successors. Inputs are `[condition, true_input, false_input]`.
+    fn gamma_gate(
+        &self,
+        block: BlockId,
+        value: ValueId,
+        incoming: &[(BlockId, ValueId)],
+    ) -> Option<(GateNode, Vec<ValueId>)> {
+        if incoming.len() != 2 {
+            return None;
+        }
+        let idom = self.dom.idom(block)?;
+        let term = self.context.get_block(idom).op_ids().last().copied()?;
+        let guarded = self
+            .context
+            .get_op(term)
+            .as_interface::<dyn BranchGuard>()?
+            .guarded_successors();
+
+        let mut cond = None;
+        let mut true_val = None;
+        let mut false_val = None;
+        for &(pred, v) in incoming {
+            for &(succ, c, taken_when_true) in &guarded {
+                if self.dom.dominates(succ, pred) {
+                    cond = Some(c);
+                    if taken_when_true {
+                        true_val.get_or_insert(v);
+                    } else {
+                        false_val.get_or_insert(v);
+                    }
+                    break;
+                }
+            }
+        }
+        match (cond, true_val, false_val) {
+            (Some(cond), Some(t), Some(f)) => {
+                Some((GateNode::Gamma { value, cond }, vec![cond, t, f]))
+            }
+            _ => None,
+        }
     }
 
     /// The `(predecessor, forwarded value)` pairs feeding argument `index` of `block`.
@@ -267,43 +333,9 @@ impl Builder<'_> {
             .get(&block)
             .into_iter()
             .flatten()
-            .filter_map(|&(pred, term)| {
-                forwarded_value(self.context, term, block, index).map(|v| (pred, v))
-            })
+            .filter_map(|edge| edge.args.get(index).map(|&v| (edge.pred, v)))
             .collect()
     }
-
-    /// The condition and successors of the `cond_br` immediately dominating `block`,
-    /// if any — the predicate gating a γ merge at `block`.
-    fn gamma_cond(&self, block: BlockId) -> Option<(ValueId, BlockId, BlockId)> {
-        let idom = self.dom.idom(block)?;
-        let term = self.context.get_block(idom).op_ids().last().copied()?;
-        let cond_br = self.context.get_op(term).as_op::<CondBranchOp>()?;
-        Some((
-            cond_br.condition(),
-            cond_br.true_dest(),
-            cond_br.false_dest(),
-        ))
-    }
-}
-
-/// The value `term` forwards to argument `index` of successor `succ`.
-fn forwarded_value(context: &Context, term: OpId, succ: BlockId, index: usize) -> Option<ValueId> {
-    let instance = context.get_op(term);
-    if let Some(br) = instance.clone().as_op::<BranchOp>() {
-        return br.dest_args().get(index).copied();
-    }
-    if let Some(cond_br) = instance.as_op::<CondBranchOp>() {
-        if cond_br.true_dest() == succ
-            && let Some(&v) = cond_br.true_args().get(index)
-        {
-            return Some(v);
-        }
-        if cond_br.false_dest() == succ {
-            return cond_br.false_args().get(index).copied();
-        }
-    }
-    None
 }
 
 /// Every block reachable from `root`'s first region, descending into nested regions
@@ -354,29 +386,23 @@ fn region_blocks(context: &Context, root: OpId) -> Vec<BlockId> {
     order
 }
 
-/// Map each block to the `br`/`cond_br` edges (predecessor block, terminator) that
-/// target it. Structured-region edges are excluded: they forward no block arguments.
-fn predecessor_map(
-    context: &Context,
-    blocks: &[BlockId],
-) -> HashMap<BlockId, Vec<(BlockId, OpId)>> {
-    let mut preds: HashMap<BlockId, Vec<(BlockId, OpId)>> = HashMap::new();
+/// Map each block to its incoming [`BranchTerminator`] edges. Terminators that forward
+/// no block arguments (returns, yields, structured-region edges) do not implement the
+/// interface and so contribute no predecessors.
+fn predecessor_map(context: &Context, blocks: &[BlockId]) -> HashMap<BlockId, Vec<Edge>> {
+    let mut preds: HashMap<BlockId, Vec<Edge>> = HashMap::new();
     for &block in blocks {
         let Some(&term) = context.get_block(block).op_ids().last() else {
             continue;
         };
-        let instance = context.get_op(term);
-        if let Some(br) = instance.clone().as_op::<BranchOp>() {
-            preds.entry(br.dest()).or_default().push((block, term));
-        } else if let Some(cond_br) = instance.as_op::<CondBranchOp>() {
+        let Some(branch) = context.get_op(term).as_interface::<dyn BranchTerminator>() else {
+            continue;
+        };
+        for (succ, args) in branch.successor_operands() {
             preds
-                .entry(cond_br.true_dest())
+                .entry(succ)
                 .or_default()
-                .push((block, term));
-            preds
-                .entry(cond_br.false_dest())
-                .or_default()
-                .push((block, term));
+                .push(Edge { pred: block, args });
         }
     }
     preds
@@ -387,7 +413,7 @@ fn predecessor_map(
 fn collect_phis(
     context: &Context,
     blocks: &[BlockId],
-    preds: &HashMap<BlockId, Vec<(BlockId, OpId)>>,
+    preds: &HashMap<BlockId, Vec<Edge>>,
 ) -> HashMap<ValueId, (BlockId, usize)> {
     let mut phis = HashMap::new();
     for &block in blocks {
@@ -399,6 +425,80 @@ fn collect_phis(
         }
     }
     phis
+}
+
+/// Structured-control-flow gates collected from the region's ops.
+struct StructuredGates {
+    /// γ: result of a [`RegionGuard`] op → `(cond, true_input, false_input)`.
+    gamma: HashMap<ValueId, (ValueId, ValueId, ValueId)>,
+    /// μ: carried region argument of a [`LoopCarried`] op → `(init, latch)`.
+    mu: HashMap<ValueId, (ValueId, ValueId)>,
+    /// Structured loop result → its carried region argument.
+    loop_result: HashMap<ValueId, ValueId>,
+}
+
+/// Scan the region's ops for structured control flow: a [`RegionGuard`] op that
+/// produces a value yields a γ over its arms' yielded values; a [`LoopCarried`] op
+/// yields a μ over its carried region argument, with its result aliasing that argument.
+fn structured_gates(context: &Context, blocks: &[BlockId]) -> StructuredGates {
+    let mut gamma = HashMap::new();
+    let mut mu = HashMap::new();
+    let mut loop_result = HashMap::new();
+
+    for &block in blocks {
+        for op in context.get_block(block).op_ids() {
+            let instance = context.get_op(op);
+            // A structured gate exists only when the op produces a value: a resultless
+            // `scf.if`/loop is side-effecting and carries nothing.
+            let Some(result) = instance.results.first().copied() else {
+                continue;
+            };
+
+            if let Some(guard) = instance.clone().as_interface::<dyn RegionGuard>() {
+                if let Some(inputs) = gamma_inputs(context, guard.as_ref()) {
+                    gamma.insert(result, inputs);
+                }
+            } else if let Some(lp) = instance.clone().as_interface::<dyn LoopLike>() {
+                mu.insert(lp.carried_arg(), (lp.init(), lp.latched()));
+                loop_result.insert(result, lp.carried_arg());
+            }
+        }
+    }
+
+    StructuredGates {
+        gamma,
+        mu,
+        loop_result,
+    }
+}
+
+/// The γ inputs `(cond, true_input, false_input)` of a two-armed [`RegionGuard`]: the
+/// condition and the values its true/false regions yield.
+fn gamma_inputs(context: &Context, guard: &dyn RegionGuard) -> Option<(ValueId, ValueId, ValueId)> {
+    let mut cond = None;
+    let mut true_val = None;
+    let mut false_val = None;
+    for (region, c, taken_when_true) in guard.guarded_regions() {
+        let yielded = region_yield_value(context, region)?;
+        cond = Some(c);
+        if taken_when_true {
+            true_val = Some(yielded);
+        } else {
+            false_val = Some(yielded);
+        }
+    }
+    Some((cond?, true_val?, false_val?))
+}
+
+/// The single value yielded by a structured region's terminator.
+fn region_yield_value(context: &Context, region: RegionId) -> Option<ValueId> {
+    let block = context
+        .get_region(region)
+        .iter(context.clone())
+        .next()?
+        .id();
+    let terminator = context.get_block(block).op_ids().last().copied()?;
+    context.get_op(terminator).operands.first().copied()
 }
 
 #[cfg(test)]
@@ -415,7 +515,7 @@ mod tests {
             .id()
     }
 
-    fn children(gs: &GatedSsa, node: NodeId) -> Vec<NodeId> {
+    fn children(gs: &GSA, node: NodeId) -> Vec<NodeId> {
         gs.children(node).collect()
     }
 
@@ -456,7 +556,7 @@ mod tests {
         IRBuilder::new(merge.clone())
             .insert(ops::r#return(&context, Operand::from(merge_arg_id)).build());
 
-        let gs = GatedSsa::new(&context, func_with_region(&context, region.id()));
+        let gs = GSA::new(&context, func_with_region(&context, region.id()));
 
         let node = gs.node_of(merge_arg_id).unwrap();
         assert_eq!(
@@ -520,7 +620,7 @@ mod tests {
 
         IRBuilder::new(exit.clone()).insert(ops::r#return(&context, Operand::from(iv_id)).build());
 
-        let gs = GatedSsa::new(&context, func_with_region(&context, region.id()));
+        let gs = GSA::new(&context, func_with_region(&context, region.id()));
 
         let node = gs.node_of(iv_id).unwrap();
         assert_eq!(*gs.gate(node), GateNode::Mu { value: iv_id });
@@ -549,9 +649,184 @@ mod tests {
         IRBuilder::new(entry.clone())
             .insert(ops::r#return(&context, Operand::from(arg_id)).build());
 
-        let gs = GatedSsa::new(&context, func_with_region(&context, region.id()));
+        let gs = GSA::new(&context, func_with_region(&context, region.id()));
 
         let node = gs.node_of(arg_id).unwrap();
         assert_eq!(*gs.gate(node), GateNode::Input(arg_id));
+    }
+
+    /// A region yielding a single value through its terminator.
+    fn yielding_region(context: &Context, value: ValueId, def: impl Operation) -> RegionId {
+        let region = context.create_region();
+        let block = context.create_block(vec![]);
+        region.add_block(block.id());
+        let mut b = IRBuilder::new(block);
+        b.insert(def);
+        b.insert(crate::scf::ops::r#yield(context, Operand::from(value)).build());
+        region.id()
+    }
+
+    #[test]
+    fn gamma_for_scf_if_result() {
+        let context = Context::with_default_dialects();
+        let i1 = IntegerType::new(&context, 1);
+        let i32 = IntegerType::new(&context, 32);
+        let cond = context.create_value(i1, None);
+        let cond_id = cond.id();
+
+        let c_true = ops::constant(&context, 1, i32).build();
+        let true_val = c_true.result();
+        let true_op = c_true.id();
+        let then_region = yielding_region(&context, true_val, c_true);
+
+        let c_false = ops::constant(&context, 0, i32).build();
+        let false_val = c_false.result();
+        let false_op = c_false.id();
+        let else_region = yielding_region(&context, false_val, c_false);
+
+        let region = context.create_region();
+        let entry = context.create_block(vec![cond]);
+        region.add_block(entry.id());
+
+        let if_op = crate::scf::ops::r#if(
+            &context,
+            cond_id,
+            Some(i32),
+            Some(then_region),
+            Some(else_region),
+        )
+        .build();
+        let if_result = if_op.result();
+        let mut eb = IRBuilder::new(entry.clone());
+        eb.insert(if_op);
+        eb.insert(ops::r#return(&context, Operand::from(if_result)).build());
+
+        let gs = GSA::new(&context, func_with_region(&context, region.id()));
+
+        let node = gs.node_of(if_result).unwrap();
+        assert_eq!(
+            *gs.gate(node),
+            GateNode::Gamma {
+                value: if_result,
+                cond: cond_id,
+            }
+        );
+
+        let kids = children(&gs, node);
+        assert_eq!(kids.len(), 3);
+        // Order is [condition, true_input, false_input].
+        assert_eq!(gs.value_of(kids[0]), Some(cond_id));
+        assert_eq!(gs.op_of(kids[1]), Some(true_op));
+        assert_eq!(gs.op_of(kids[2]), Some(false_op));
+    }
+
+    /// A loop body carrying `acc`: `%next = addi %acc, 1; scf.yield %next`. Returns the
+    /// body region, the carried block argument, and the latch (`addi`) op id.
+    fn counting_body(context: &Context, i32: TypeId) -> (RegionId, ValueId, OpId) {
+        let acc = context.create_value(i32, None);
+        let acc_id = acc.id();
+        let region = context.create_region();
+        let block = context.create_block(vec![acc]);
+        region.add_block(block.id());
+
+        let step = ops::constant(context, 1, i32).build();
+        let step_val = step.result();
+        let next = ops::addi(context, acc_id, step_val, i32).build();
+        let next_val = next.result();
+        let next_op = next.id();
+        let mut bb = IRBuilder::new(block);
+        bb.insert(step);
+        bb.insert(next);
+        bb.insert(crate::scf::ops::r#yield(context, Operand::from(next_val)).build());
+        (region.id(), acc_id, next_op)
+    }
+
+    /// Assert the loop's result shares one μ node with its carried argument, gated over
+    /// `[init, latch]` with the latch reading the μ back.
+    fn assert_mu(gs: &GSA, result: ValueId, acc_id: ValueId, init_op: OpId, latch_op: OpId) {
+        let node = gs.node_of(result).unwrap();
+        assert_eq!(gs.node_of(acc_id), Some(node));
+        assert_eq!(*gs.gate(node), GateNode::Mu { value: acc_id });
+
+        let kids = children(gs, node);
+        assert_eq!(kids.len(), 2);
+        // Order is [init, latch].
+        assert_eq!(gs.op_of(kids[0]), Some(init_op));
+        assert_eq!(gs.op_of(kids[1]), Some(latch_op));
+        assert!(children(gs, kids[1]).contains(&node));
+    }
+
+    #[test]
+    fn mu_for_scf_for_result() {
+        let context = Context::with_default_dialects();
+        let index = crate::builtin::IndexType::new(&context);
+        let i32 = IntegerType::new(&context, 32);
+        let lb = context.create_value(index, None);
+        let ub = context.create_value(index, None);
+        let step = context.create_value(index, None);
+
+        let (body, acc_id, latch_op) = counting_body(&context, i32);
+
+        let init = ops::constant(&context, 0, i32).build();
+        let init_val = init.result();
+        let init_op = init.id();
+
+        let region = context.create_region();
+        let entry = context.create_block(vec![]);
+        region.add_block(entry.id());
+
+        let for_op = crate::scf::ops::r#for(
+            &context,
+            lb.id(),
+            ub.id(),
+            step.id(),
+            Operand::from(init_val),
+            Some(i32),
+            Some(body),
+        )
+        .build();
+        let for_result = for_op.result();
+        let mut eb = IRBuilder::new(entry.clone());
+        eb.insert(init);
+        eb.insert(for_op);
+        eb.insert(ops::r#return(&context, Operand::from(for_result)).build());
+
+        let gs = GSA::new(&context, func_with_region(&context, region.id()));
+        assert_mu(&gs, for_result, acc_id, init_op, latch_op);
+    }
+
+    #[test]
+    fn mu_for_scf_while_result() {
+        let context = Context::with_default_dialects();
+        let i1 = IntegerType::new(&context, 1);
+        let i32 = IntegerType::new(&context, 32);
+        let cond = context.create_value(i1, None);
+
+        let (body, acc_id, latch_op) = counting_body(&context, i32);
+
+        let init = ops::constant(&context, 0, i32).build();
+        let init_val = init.result();
+        let init_op = init.id();
+
+        let region = context.create_region();
+        let entry = context.create_block(vec![]);
+        region.add_block(entry.id());
+
+        let while_op = crate::scf::ops::r#while(
+            &context,
+            cond.id(),
+            Operand::from(init_val),
+            Some(i32),
+            Some(body),
+        )
+        .build();
+        let while_result = while_op.result();
+        let mut eb = IRBuilder::new(entry.clone());
+        eb.insert(init);
+        eb.insert(while_op);
+        eb.insert(ops::r#return(&context, Operand::from(while_result)).build());
+
+        let gs = GSA::new(&context, func_with_region(&context, region.id()));
+        assert_mu(&gs, while_result, acc_id, init_op, latch_op);
     }
 }
