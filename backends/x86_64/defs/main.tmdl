@@ -118,21 +118,23 @@ register_class GPR8 for [X86] : GPR {
     }
 }
 
-// High byte of the legacy four GPRs (bits 8..15). Their ModR/M numbers are 4..7
-// and they are encodable only WITHOUT a REX prefix, which collides with the low
-// bytes spl/bpl/sil/dil and with r8b..r15b. So this is a standalone four-register
-// file with its own no-REX templates, not an inheritor of GPR. The index is the
-// ModR/M number; physical overlap with rax..rbx is left unmodeled (no test or
-// allocation path reaches it in this prototype).
+// High byte of the legacy four GPRs (bits 8..15 of rax/rcx/rdx/rbx). These
+// overlap their enclosing 64-bit register, so for allocation aliasing they sit in
+// the GPR file at the SAME indices as rax..rbx (0..3) — `file = GPR` shares that
+// file without importing GPR's registers. Their ModR/M numbers are 4..7, which
+// the no-REX templates form by setting the field's high bit, and they are
+// encodable only WITHOUT a REX prefix (numbers 4..7 with REX would mean the low
+// bytes spl/bpl/sil/dil instead).
 register_class GPR8H for [X86] {
+    file = GPR;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 8;
 
     registers {
-        ah => { index = 4, traits = [caller_saved] },
-        ch => { index = 5, traits = [caller_saved] },
-        dh => { index = 6, traits = [caller_saved] },
-        bh => { index = 7, traits = [callee_saved] },
+        ah => { index = 0, traits = [caller_saved] },
+        ch => { index = 1, traits = [caller_saved] },
+        dh => { index = 2, traits = [caller_saved] },
+        bh => { index = 3, traits = [callee_saved] },
     }
 }
 
@@ -475,7 +477,8 @@ template RegShift8 for [X86] {
 }
 
 // High-byte forms carry no REX prefix, so the encoding is just opcode + ModR/M
-// (+ immediate). The register's index is already its ModR/M number (4..7).
+// (+ immediate). The register index is its position in rax..rbx (0..3); the
+// ModR/M number is that plus 4, formed here by setting the field's high bit.
 template RegReg8H for [X86] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
@@ -487,8 +490,10 @@ template RegReg8H for [X86] {
 
     encoding {
         0..7 => OPCODE,
-        8..10 => dst[0..2],
-        11..13 => src[0..2],
+        8..9 => dst[0..1],
+        10 => 0b1,
+        11..12 => src[0..1],
+        13 => 0b1,
         14..15 => 0b11,
     }
 
@@ -509,7 +514,8 @@ template RegImm8H for [X86] {
 
     encoding {
         0..7 => OPCODE,
-        8..10 => dst[0..2],
+        8..9 => dst[0..1],
+        10 => 0b1,
         11..13 => EXT,
         14..15 => 0b11,
         16..23 => imm,
@@ -531,7 +537,8 @@ template RegShift8H for [X86] {
 
     encoding {
         0..7 => 0xC0,
-        8..10 => dst[0..2],
+        8..9 => dst[0..1],
+        10 => 0b1,
         11..13 => EXT,
         14..15 => 0b11,
         16..23 => imm,

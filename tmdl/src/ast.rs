@@ -71,6 +71,14 @@ pub struct RegisterClass {
     /// Resolved (flattened into `parameters`/`registers`) by
     /// [`resolve_register_class_inheritance`] before any analysis runs.
     pub base: Option<String>,
+    /// Explicit physical register file this class draws from, decoupling file
+    /// sharing (for allocation aliasing) from register inheritance. Unlike `base`,
+    /// it does not import the named class's registers — the class keeps only its
+    /// own — so a class can alias a subset of another file at chosen indices.
+    /// x86 high bytes (`ah`/`ch`/`dh`/`bh`) use this: they overlap `rax`..`rbx`
+    /// (file `GPR`, indices 0..3) but their own encoding differs, so inheriting
+    /// `GPR`'s full register list would be wrong.
+    pub file: Option<String>,
     #[serde(serialize_with = "serialize_params")]
     pub parameters: StableHashMap<String, (Type, Option<Expr>)>,
     pub registers: Vec<RegisterDef>,
@@ -1881,6 +1889,9 @@ impl RegisterClass {
     /// register allocator must treat those indices as aliases. A standalone class
     /// is its own file. `classes` maps every class name to its definition.
     pub fn register_file<'a>(&'a self, classes: &'a HashMap<String, &'a RegisterClass>) -> &'a str {
+        if let Some(file) = &self.file {
+            return file;
+        }
         let mut current = self;
         let mut seen = std::collections::HashSet::new();
         while let Some(base_name) = &current.base {

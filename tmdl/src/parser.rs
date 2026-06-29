@@ -135,6 +135,7 @@ where
         .then(just(Token::Colon).ignore_then(ident).or_not())
         .then(
             choice((
+                register_class_file().map(RegClassBody::File),
                 parameter().map(RegClassBody::Param),
                 register_class_registers().map(RegClassBody::Registers),
             ))
@@ -161,10 +162,15 @@ where
                     }
                 })
                 .unwrap_or_default();
+            let file = body.iter().find_map(|b| match b {
+                RegClassBody::File(f) => Some(f.clone()),
+                _ => None,
+            });
             RegisterClass {
                 name,
                 for_isas,
                 base,
+                file,
                 parameters,
                 registers,
                 span: e.span(),
@@ -176,6 +182,22 @@ where
 enum RegClassBody {
     Param((String, (Type, Option<ast::Expr>))),
     Registers(Vec<RegisterDef>),
+    File(String),
+}
+
+// `file = GPR;` — the physical register file this class aliases, when it is not
+// the inheritance root (see `RegisterClass::file`).
+fn register_class_file<'src, I>()
+-> impl Parser<'src, I, String, extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let ident = select! { Token::Identifier(ident) => ident.to_string() };
+    just(Token::Identifier("file"))
+        .then_ignore(just(Token::Equals))
+        .ignore_then(ident)
+        .then_ignore(just(Token::Semicolon))
+        .labelled("register class file")
 }
 
 fn template_def<'src, I>()
@@ -1557,6 +1579,28 @@ mod tests {
             .0
             .clone();
         assert_eq!(rc.base, None);
+    }
+
+    #[test]
+    fn register_class_parses_file_override() {
+        let src = "register_class GPR8H for [Isa] { file = GPR; param WIDTH: Integer = 8; registers { ah => { index = 0, traits = [caller_saved] }, } }";
+        let (tokens, _e) = lexer().parse(src).into_output_errors();
+        let tokens = tokens.unwrap();
+        let rc = register_class_def()
+            .then(end())
+            .parse(
+                tokens
+                    .as_slice()
+                    .map((src.len()..src.len()).into(), |(t, s)| (t, s)),
+            )
+            .output()
+            .unwrap()
+            .0
+            .clone();
+        assert_eq!(rc.file.as_deref(), Some("GPR"));
+        assert_eq!(rc.base, None);
+        // A file override does not import the named file's registers.
+        assert_eq!(rc.registers.len(), 1);
     }
 
     #[test]
