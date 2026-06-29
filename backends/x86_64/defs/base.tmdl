@@ -203,17 +203,6 @@ instruction Ret for [X86_64] {
     }
 }
 
-// Memory operands. Intel-syntax `[base]` register-indirect loads/stores and
-// AT&T-style `*target` indirect transfers exercise the assembler's `[`, `]`
-// and `*` tokens.
-//
-// `[base]` uses ModR/M mod=00 with the base register number in the rm field.
-// In x86 that form only addresses bases whose low three bits are not 100 (rsp,
-// r12 -> SIB byte) or 101 (rbp, r13 -> disp32); those addressing modes are
-// distinct encodings and would be separate instructions, so they are out of
-// scope here.
-
-// `mov dst, [base]`: REX.W + 0x8B + ModR/M(mod=00, reg=dst, rm=base).
 instruction MovLoad for [X86_64] {
     param OPNAME: String = "mov_load";
     param MNEMONIC: String = "mov";
@@ -244,7 +233,6 @@ instruction MovLoad for [X86_64] {
     }
 }
 
-// `mov [base], src`: REX.W + 0x89 + ModR/M(mod=00, reg=src, rm=base).
 instruction MovStore for [X86_64] {
     param OPNAME: String = "mov_store";
     param MNEMONIC: String = "mov";
@@ -275,9 +263,6 @@ instruction MovStore for [X86_64] {
     }
 }
 
-// `jmp *target`: 0xFF /4 + ModR/M(mod=11, rm=target). Operand size is fixed
-// 64-bit for the near indirect jump, so the REX prefix carries only REX.B for
-// target's 4th register bit (W=0).
 instruction JmpIndirect for [X86_64] {
     param OPNAME: String = "jmp_indirect";
     param MNEMONIC: String = "jmp";
@@ -307,7 +292,6 @@ instruction JmpIndirect for [X86_64] {
     }
 }
 
-// `call *target`: 0xFF /2 + ModR/M(mod=11, rm=target).
 instruction CallIndirect for [X86_64] {
     param OPNAME: String = "call_indirect";
     param MNEMONIC: String = "call";

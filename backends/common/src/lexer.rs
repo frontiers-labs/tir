@@ -118,7 +118,6 @@ mod tests {
 
     #[test]
     fn asm_lexes_memory_operand_punctuation() {
-        // Memory operands: `[base]` (Intel) and `*target` (indirect).
         assert_eq!(
             lex("mov rax, [rbx]"),
             Ok(vec![
