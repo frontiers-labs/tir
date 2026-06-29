@@ -322,3 +322,148 @@ instruction CallIndirect for [X86_64] {
         PC::pc = target;
     }
 }
+
+instruction Add32 for [X86] : RegReg32 {
+    param OPNAME: String = "add32";
+    param MNEMONIC: String = "add";
+    param OPCODE: bits<8> = 0x01;
+
+    behavior {
+        dst = dst + src;
+    }
+}
+
+instruction Sub32 for [X86] : RegReg32 {
+    param OPNAME: String = "sub32";
+    param MNEMONIC: String = "sub";
+    param OPCODE: bits<8> = 0x29;
+
+    behavior {
+        dst = dst - src;
+    }
+}
+
+instruction And32 for [X86] : RegReg32 {
+    param OPNAME: String = "and32";
+    param MNEMONIC: String = "and";
+    param OPCODE: bits<8> = 0x21;
+
+    behavior {
+        dst = dst & src;
+    }
+}
+
+instruction Or32 for [X86] : RegReg32 {
+    param OPNAME: String = "or32";
+    param MNEMONIC: String = "or";
+    param OPCODE: bits<8> = 0x09;
+
+    behavior {
+        dst = dst | src;
+    }
+}
+
+instruction Xor32 for [X86] : RegReg32 {
+    param OPNAME: String = "xor32";
+    param MNEMONIC: String = "xor";
+    param OPCODE: bits<8> = 0x31;
+
+    behavior {
+        dst = dst ^ src;
+    }
+}
+
+instruction Mov32 for [X86] : RegReg32 {
+    param OPNAME: String = "mov32";
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0x89;
+
+    behavior {
+        dst = src;
+    }
+}
+
+instruction AddImm32 for [X86] : RegImm32 {
+    param OPNAME: String = "add_imm32";
+    param MNEMONIC: String = "add";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = dst + sext(imm, 32);
+    }
+}
+
+instruction OrImm32 for [X86] : RegImm32 {
+    param OPNAME: String = "or_imm32";
+    param MNEMONIC: String = "or";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b001;
+
+    behavior {
+        dst = dst | sext(imm, 32);
+    }
+}
+
+instruction AndImm32 for [X86] : RegImm32 {
+    param OPNAME: String = "and_imm32";
+    param MNEMONIC: String = "and";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst & sext(imm, 32);
+    }
+}
+
+instruction XorImm32 for [X86] : RegImm32 {
+    param OPNAME: String = "xor_imm32";
+    param MNEMONIC: String = "xor";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b110;
+
+    behavior {
+        dst = dst ^ sext(imm, 32);
+    }
+}
+
+instruction MovImm32 for [X86] : RegImm32 {
+    param OPNAME: String = "mov_imm32";
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0xC7;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = sext(imm, 32);
+    }
+}
+
+instruction ShlImm32 for [X86] : RegShift32 {
+    param OPNAME: String = "shl32";
+    param MNEMONIC: String = "shl";
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst << extract(imm, 4, 0);
+    }
+}
+
+instruction ShrImm32 for [X86] : RegShift32 {
+    param OPNAME: String = "shr32";
+    param MNEMONIC: String = "shr";
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        dst = dst >> extract(imm, 4, 0);
+    }
+}
+
+instruction SarImm32 for [X86] : RegShift32 {
+    param OPNAME: String = "sar32";
+    param MNEMONIC: String = "sar";
+    param EXT: bits<3> = 0b111;
+
+    behavior {
+        dst = dst >>> extract(imm, 4, 0);
+    }
+}

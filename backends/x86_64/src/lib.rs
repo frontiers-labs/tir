@@ -41,7 +41,21 @@ mod isa {
                 CallOp,
                 RetOp,
                 JmpIndirectOp,
-                CallIndirectOp
+                CallIndirectOp,
+                Add32Op,
+                Sub32Op,
+                And32Op,
+                Or32Op,
+                Xor32Op,
+                Mov32Op,
+                AddImm32Op,
+                AndImm32Op,
+                OrImm32Op,
+                XorImm32Op,
+                MovImm32Op,
+                ShlImm32Op,
+                ShrImm32Op,
+                SarImm32Op
             ],
         }
     }
