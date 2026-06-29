@@ -2956,11 +2956,11 @@ struct IntField {
     width: u16,
 }
 
-fn encoding_mask(width: u16) -> u64 {
-    if width >= 64 {
-        u64::MAX
+fn encoding_mask(width: u16) -> u128 {
+    if width >= 128 {
+        u128::MAX
     } else {
-        (1u64 << width) - 1
+        (1u128 << width) - 1
     }
 }
 
@@ -2978,14 +2978,14 @@ fn emit_instruction_encoder(
     if encoding_arms.is_empty() {
         return Ok(None);
     }
-    if width_bytes > 8 {
+    if width_bytes > 16 {
         return Err(TMDLError::Codegen(format!(
-            "instruction '{}': encodings wider than 64 bits are not supported",
+            "instruction '{}': encodings wider than 128 bits are not supported",
             inst.name
         )));
     }
 
-    let mut const_word: u64 = 0;
+    let mut const_word: u128 = 0;
     // Insertion-ordered so generated code is stable across runs.
     let mut reg_fields: Vec<(String, Vec<IntField>)> = Vec::new();
     let mut int_fields: Vec<(String, Vec<IntField>)> = Vec::new();
@@ -3012,7 +3012,8 @@ fn emit_instruction_encoder(
 
         match &arm.value {
             ast::Expr::Lit(ast::Lit::Int(li)) => {
-                const_word |= (parse_literal_value(li) & encoding_mask(width)) << word_lo;
+                const_word |=
+                    (u128::from(parse_literal_value(li)) & encoding_mask(width)) << word_lo;
             }
             ast::Expr::Ident(id) => match ops_map.get(&id.name) {
                 Some(Type::Struct(_)) => push_field(
@@ -3036,7 +3037,8 @@ fn emit_instruction_encoder(
                 Some(_) => return Err(bad_value()),
                 None => match resolved_params.get(&id.name) {
                     Some((_, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => {
-                        const_word |= (parse_literal_value(li) & encoding_mask(width)) << word_lo;
+                        const_word |=
+                            (u128::from(parse_literal_value(li)) & encoding_mask(width)) << word_lo;
                     }
                     _ => {
                         return Err(TMDLError::Codegen(format!(
@@ -3088,7 +3090,7 @@ fn emit_instruction_encoder(
         fields
             .iter()
             .map(|f| {
-                let mask = proc_macro2::Literal::u64_suffixed(encoding_mask(f.width));
+                let mask = proc_macro2::Literal::u128_suffixed(encoding_mask(f.width));
                 let bits = if f.op_lo > 0 {
                     let op_lo = proc_macro2::Literal::u32_suffixed(f.op_lo as u32);
                     quote! { (value >> #op_lo) & #mask }
@@ -3115,7 +3117,7 @@ fn emit_instruction_encoder(
                 let value = match &attr.value {
                     tir::attributes::AttributeValue::Register(
                         tir::attributes::RegisterAttr::Physical { index, .. },
-                    ) => *index as u64,
+                    ) => *index as u128,
                     _ => return None,
                 };
                 #(#ors)*
@@ -3147,13 +3149,13 @@ fn emit_instruction_encoder(
                     tir::attributes::AttributeValue::Int(v) => {
                         let v = *v;
                         #int_check
-                        let value = v as u64;
+                        let value = v as u128;
                         #(#ors)*
                     }
                     tir::attributes::AttributeValue::UInt(v) => {
                         let v = *v;
                         #uint_check
-                        let value = v;
+                        let value = v as u128;
                         #(#ors)*
                     }
                     tir::attributes::AttributeValue::Str(s) => {
@@ -3175,12 +3177,12 @@ fn emit_instruction_encoder(
     }
 
     let encode_fn_ident = format_ident!("encode_{}_inst", inst.name.to_lowercase());
-    let const_word_lit = proc_macro2::Literal::u64_suffixed(const_word);
+    let const_word_lit = proc_macro2::Literal::u128_suffixed(const_word);
     let wb_lit = proc_macro2::Literal::usize_unsuffixed(width_bytes as usize);
     let word_decl = if reg_fields.is_empty() && int_fields.is_empty() {
-        quote! { let word: u64 = #const_word_lit; }
+        quote! { let word: u128 = #const_word_lit; }
     } else {
-        quote! { let mut word: u64 = #const_word_lit; }
+        quote! { let mut word: u128 = #const_word_lit; }
     };
     let fixups_decl = if int_fields.is_empty() {
         quote! { let fixups: Vec<tir_be_common::binary::InstFixup> = Vec::new(); }
@@ -3222,8 +3224,8 @@ fn emit_instruction_encoder(
         // scatter (e.g. bit 0 of RISC-V branch offsets); a value with any of
         // them set cannot be represented.
         let dropped_check = if lowest_bit > 0 {
-            let dropped_mask = proc_macro2::Literal::u64_suffixed(encoding_mask(lowest_bit));
-            quote! { if (value as u64) & #dropped_mask != 0 { return None; } }
+            let dropped_mask = proc_macro2::Literal::u128_suffixed(encoding_mask(lowest_bit));
+            quote! { if (value as u128) & #dropped_mask != 0 { return None; } }
         } else {
             quote! {}
         };
@@ -3237,11 +3239,11 @@ fn emit_instruction_encoder(
                 if bytes.len() < #wb_lit {
                     return None;
                 }
-                let mut word: u64 = 0;
+                let mut word: u128 = 0;
                 for (i, b) in bytes.iter().enumerate().take(#wb_lit) {
-                    word |= (*b as u64) << (8 * i);
+                    word |= (*b as u128) << (8 * i);
                 }
-                let value = value as u64;
+                let value = value as u128;
                 #(#ors)*
                 let out = word.to_le_bytes();
                 bytes[..#wb_lit].copy_from_slice(&out[..#wb_lit]);
