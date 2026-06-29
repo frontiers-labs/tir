@@ -11,5 +11,8 @@ tir-be-common.workspace = true
 tmdl.workspace = true
 
 [dev-dependencies]
-tir.workspace = true
-tir-be-common.workspace = true
+tir-lit.workspace = true
+
+[[test]]
+name = "lit"
+harness = false
