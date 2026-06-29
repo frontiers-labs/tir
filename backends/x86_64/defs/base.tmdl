@@ -468,8 +468,6 @@ instruction SarImm32 for [X86] : RegShift32 {
     }
 }
 
-// 16-bit operand-size forms.
-
 instruction Add16 for [X86] : RegReg16 {
     param OPNAME: String = "add16";
     param MNEMONIC: String = "add";
@@ -615,9 +613,6 @@ instruction SarImm16 for [X86] : RegShift16 {
     }
 }
 
-// 8-bit low-byte forms. ALU reg/reg opcodes are one below their wider
-// counterparts; the immediate and shift groups use 0x80/0xC6/0xC0.
-
 instruction Add8 for [X86] : RegReg8 {
     param OPNAME: String = "add8";
     param MNEMONIC: String = "add";
@@ -762,8 +757,6 @@ instruction SarImm8 for [X86] : RegShift8 {
         dst = dst >>> extract(imm, 4, 0);
     }
 }
-
-// 8-bit high-byte forms (ah/ch/dh/bh), encoded without a REX prefix.
 
 instruction Add8H for [X86] : RegReg8H {
     param OPNAME: String = "add8h";

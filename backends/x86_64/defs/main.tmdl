@@ -67,8 +67,6 @@ register_class GPR32 for [X86] : GPR {
     }
 }
 
-// 16-bit operand size: the 0x66 prefix selects word width, register numbers are
-// unchanged. Same physical file as GPR, so the indices alias the 64-bit names.
 register_class GPR16 for [X86] : GPR {
     param WIDTH: Integer = 16;
 
@@ -92,9 +90,8 @@ register_class GPR16 for [X86] : GPR {
     }
 }
 
-// Low byte of each GPR. The base four (al..bl) need no REX, but spl/bpl/sil/dil
-// and r8b..r15b only exist when a REX prefix is present; the templates always
-// emit one, so the whole class is uniformly encodable. Same file as GPR.
+// spl/bpl/sil/dil and r8b..r15b are encodable only with a REX prefix, which the
+// templates always emit.
 register_class GPR8 for [X86] : GPR {
     param WIDTH: Integer = 8;
 
@@ -118,13 +115,9 @@ register_class GPR8 for [X86] : GPR {
     }
 }
 
-// High byte of the legacy four GPRs (bits 8..15 of rax/rcx/rdx/rbx). These
-// overlap their enclosing 64-bit register, so for allocation aliasing they sit in
-// the GPR file at the SAME indices as rax..rbx (0..3) — `file = GPR` shares that
-// file without importing GPR's registers. Their ModR/M numbers are 4..7, which
-// the no-REX templates form by setting the field's high bit, and they are
-// encodable only WITHOUT a REX prefix (numbers 4..7 with REX would mean the low
-// bytes spl/bpl/sil/dil instead).
+// ah/ch/dh/bh overlap bits 8..15 of rax..rbx, so they alias the GPR file at
+// indices 0..3 (`file = GPR` shares the file without importing its registers).
+// Their ModR/M numbers 4..7 are encodable only without a REX prefix.
 register_class GPR8H for [X86] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;
@@ -305,9 +298,7 @@ template RegShift32 for [X86] {
     }
 }
 
-// 16-bit forms prepend the 0x66 operand-size prefix to the 32-bit encoding, so
-// every field shifts up by one byte. The REX byte stays (W=0); immediates shrink
-// to 16 bits.
+// 16-bit forms prepend the 0x66 operand-size prefix to the 32-bit encoding.
 template RegReg16 for [X86] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
@@ -392,9 +383,7 @@ template RegShift16 for [X86] {
     }
 }
 
-// 8-bit forms reuse the 32-bit layout (REX always emitted, W=0) but take the
-// byte-sized opcode, which is one less than the word/dword opcode for the ALU
-// ops (0x80/0xC6/0xC0 for the immediate and shift groups). Immediates are 8-bit.
+// 8-bit forms reuse the 32-bit layout with the byte-sized opcode.
 template RegReg8 for [X86] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
@@ -476,9 +465,8 @@ template RegShift8 for [X86] {
     }
 }
 
-// High-byte forms carry no REX prefix, so the encoding is just opcode + ModR/M
-// (+ immediate). The register index is its position in rax..rbx (0..3); the
-// ModR/M number is that plus 4, formed here by setting the field's high bit.
+// No REX prefix: just opcode + ModR/M. The field's high bit turns the register
+// index (0..3) into its ModR/M number (4..7).
 template RegReg8H for [X86] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;

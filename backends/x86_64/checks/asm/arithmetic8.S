@@ -1,8 +1,5 @@
 # RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-# Low byte (al..r15b) and high byte (ah/ch/dh/bh) share the mnemonics; the
-# operand register class selects the form.
-
 	.global alu8
 alu8:
 	add al, bl
