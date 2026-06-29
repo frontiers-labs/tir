@@ -1355,6 +1355,35 @@ mod encoding_tests {
     }
 
     #[test]
+    fn register_operand_splice_has_no_diagnostics() {
+        // A register split across two fields (r8..r15: 4th bit in REX, low three
+        // in ModR/M) must be accepted just like a sliced immediate.
+        let src = "
+            isa Arch { param XLEN: Integer = 64; }
+            register_class GPR for [Arch] {
+                param ENCODING_LEN: Integer = 4;
+                param WIDTH: Integer = self.XLEN;
+                registers {
+                    rax => { index = 0 },
+                    r8 => { index = 8 },
+                }
+            }
+            instruction Foo for [Arch] {
+                param MNEMONIC: String = \"foo\";
+                operands { dst: GPR }
+                encoding { 0 => dst[3], 1..7 => 0b0100100, 8..10 => dst[0..2] }
+                asm { \"{self.MNEMONIC} {dst}\" }
+                behavior { dst = dst; }
+            }
+        ";
+        let diags: Vec<_> = diagnose(src)
+            .into_iter()
+            .filter(|d| d.contains("encoding"))
+            .collect();
+        assert!(diags.is_empty(), "unexpected encoding diags: {diags:?}");
+    }
+
+    #[test]
     fn whole_operand_width_mismatch_is_reported() {
         let src = format!(
             "{INST}

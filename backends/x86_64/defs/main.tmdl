@@ -1,7 +1,8 @@
-// x86-64 prototype, Intel syntax. Scope: the eight base 64-bit GPRs, addressed
-// by the 3-bit ModR/M field with a fixed REX.W prefix. r8..r15 are absent: their
-// 4th register-number bit lives in the REX prefix, and TMDL cannot split a
-// register operand across the REX byte and the ModR/M field.
+// x86-64 prototype, Intel syntax. Scope: the sixteen 64-bit GPRs with a fixed
+// REX.W prefix. r8..r15 carry the 4th register-number bit in the REX prefix
+// (REX.R for the ModR/M reg field, REX.B for the rm field); the low three bits
+// stay in ModR/M. Register operands are spliced across both fields via slices,
+// e.g. `dst[0..2]` and `dst[3]`.
 
 isa X86_64 {
     param XLEN: Integer = 64;
@@ -18,7 +19,7 @@ register_class PC for [X86_64] {
 
 // Names carry no trailing digit, so each declares its register number.
 register_class GPR for [X86_64] {
-    param ENCODING_LEN: Integer = 3;
+    param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = self.XLEN;
 
     registers {
@@ -30,10 +31,19 @@ register_class GPR for [X86_64] {
         rbp => { index = 5, traits = [callee_saved] },
         rsi => { index = 6, traits = [argument, caller_saved] },
         rdi => { index = 7, traits = [argument, caller_saved] },
+        r8 => { index = 8, traits = [argument, caller_saved] },
+        r9 => { index = 9, traits = [argument, caller_saved] },
+        r10 => { index = 10, traits = [caller_saved] },
+        r11 => { index = 11, traits = [caller_saved] },
+        r12 => { index = 12, traits = [callee_saved] },
+        r13 => { index = 13, traits = [callee_saved] },
+        r14 => { index = 14, traits = [callee_saved] },
+        r15 => { index = 15, traits = [callee_saved] },
     }
 }
 
-// `op dst, src`: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst).
+// `op dst, src`: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst). The REX byte
+// is 0100 WRXB: REX.B carries dst's 4th bit, REX.R carries src's.
 template RegReg for [X86_64] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
@@ -44,10 +54,14 @@ template RegReg for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x48,
+        0 => dst[3],
+        1 => 0b0,
+        2 => src[3],
+        3 => 0b1,
+        4..7 => 0b0100,
         8..15 => OPCODE,
-        16..18 => dst,
-        19..21 => src,
+        16..18 => dst[0..2],
+        19..21 => src[0..2],
         22..23 => 0b11,
     }
 
@@ -56,7 +70,8 @@ template RegReg for [X86_64] {
     }
 }
 
-// `op dst, imm32`: REX.W + opcode + ModR/M(mod=11, reg=EXT, rm=dst) + imm32.
+// `op dst, imm32`: REX.W + opcode + ModR/M(mod=11, reg=EXT, rm=dst) + imm32. The
+// reg field holds the /digit extension, so only REX.B (dst's 4th bit) varies.
 template RegImm for [X86_64] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
@@ -68,9 +83,13 @@ template RegImm for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x48,
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b1,
+        4..7 => 0b0100,
         8..15 => OPCODE,
-        16..18 => dst,
+        16..18 => dst[0..2],
         19..21 => EXT,
         22..23 => 0b11,
         24..55 => imm,
@@ -92,9 +111,13 @@ template RegShift for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x48,
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b1,
+        4..7 => 0b0100,
         8..15 => 0xC1,
-        16..18 => dst,
+        16..18 => dst[0..2],
         19..21 => EXT,
         22..23 => 0b11,
         24..31 => imm,

@@ -225,6 +225,9 @@ instruction Add for [RV32I, RV64I] : RType {
 - Locations use bit indices where `0` is least significant bit.
 - Range `a..b` covers bits `[a, b)`; e.g., `7..11` covers bits 7,8,9,10.
 - RHS expressions can be immediates, parameters, operand values, slices/indexes of bitvectors.
+- Register operands can be sliced too, splitting one register across several
+  fields. x86-64 r8..r15 put their 4th number bit in the REX prefix and the low
+  three in ModR/M: `0 => dst[3]` and `16..18 => dst[0..2]`.
 
 Examples from `tmdl/checks/Inputs/simple.tmdl`:
 
