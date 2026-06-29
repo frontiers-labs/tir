@@ -1,7 +1,4 @@
-//! Assembly roundtrip tests: parse Intel-syntax x86-64 assembly into the
-//! generated dialect, print it back, and check the instruction text is
-//! reproduced. This exercises the TMDL-generated asm parser and printer
-//! together with the register-name tables.
+//! Assembly parse -> print roundtrip tests.
 
 use tir::Context;
 use tir_be_common::AsmDialect;
@@ -79,7 +76,6 @@ fn negative_immediate_roundtrips() {
 
 #[test]
 fn shared_mnemonic_picks_register_form() {
-    // `add` names both a register and an immediate form. The register operand
     // `rbx` must select the register form, not be misread as a symbol immediate.
     assert_eq!(roundtrip("add rax, rbx"), vec!["add rax, rbx".to_string()]);
     assert_eq!(roundtrip("add rax, 9"), vec!["add rax, 9".to_string()]);

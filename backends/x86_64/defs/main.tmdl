@@ -1,17 +1,7 @@
-// x86-64 prototype: ISA, register file and shared instruction templates.
-//
-// Syntax choice: Intel. The shared assembler lexer (backends/common) has no
-// `%` or `$` sigils, so AT&T operands (`%rax`, `$1`) do not lex; Intel uses
-// bare identifiers for registers and bare numbers for immediates, which the
-// lexer already produces. Intel's dest-first operand order also matches the
-// `dst, src` shape of the templates. See BLOCKERS.md.
-//
-// Scope: the eight base 64-bit GPRs, addressed by the 3-bit ModR/M field with a
-// fixed REX.W prefix (operand size 64). The extended registers r8..r15 are
-// deliberately absent: their 4th register-number bit lives in the REX prefix,
-// and TMDL cannot split a register operand across the REX byte and the ModR/M
-// field (see BLOCKERS.md). Every instruction therefore has a correct,
-// fixed-length encoding.
+// x86-64 prototype, Intel syntax. Scope: the eight base 64-bit GPRs, addressed
+// by the 3-bit ModR/M field with a fixed REX.W prefix. r8..r15 are absent: their
+// 4th register-number bit lives in the REX prefix, and TMDL cannot split a
+// register operand across the REX byte and the ModR/M field.
 
 isa X86_64 {
     param XLEN: Integer = 64;
@@ -26,8 +16,7 @@ register_class PC for [X86_64] {
     }
 }
 
-// The eight base general-purpose 64-bit registers. Names carry no trailing
-// digit, so each declares its architectural register number explicitly.
+// Names carry no trailing digit, so each declares its register number.
 register_class GPR for [X86_64] {
     param ENCODING_LEN: Integer = 3;
     param WIDTH: Integer = self.XLEN;
@@ -44,10 +33,7 @@ register_class GPR for [X86_64] {
     }
 }
 
-// Register/register form: `op dst, src` (Intel), dst read-modify-write.
-// Encoding: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst). The opcode byte
-// is the `r/m64, r64` form, so the register operand (ModR/M.reg) is the source
-// and r/m is the destination.
+// `op dst, src`: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst).
 template RegReg for [X86_64] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
@@ -70,9 +56,7 @@ template RegReg for [X86_64] {
     }
 }
 
-// Register/immediate form: `op dst, imm32`, immediate sign-extended to 64 bits.
-// Encoding: REX.W + opcode + ModR/M(mod=11, reg=EXT opcode-extension, rm=dst) +
-// imm32.
+// `op dst, imm32`: REX.W + opcode + ModR/M(mod=11, reg=EXT, rm=dst) + imm32.
 template RegImm for [X86_64] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
@@ -97,8 +81,7 @@ template RegImm for [X86_64] {
     }
 }
 
-// Shift-by-immediate form: `op dst, imm8`. Encoding: REX.W + 0xC1 +
-// ModR/M(mod=11, reg=EXT, rm=dst) + imm8.
+// `op dst, imm8`: REX.W + 0xC1 + ModR/M(mod=11, reg=EXT, rm=dst) + imm8.
 template RegShift for [X86_64] {
     param MNEMONIC: String;
     param EXT: bits<3>;

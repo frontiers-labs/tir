@@ -1,12 +1,5 @@
-// x86-64 base instructions (prototype): a behavior subset roughly mirroring the
-// RISC-V "I" integer set, in Intel syntax. Register/register and
-// register/immediate forms share a mnemonic and are distinguished by their
-// operands - the assembler tries the register form first, then the immediate
-// form, so register forms are declared before the matching immediate forms.
-//
-// Opcodes are the 64-bit (REX.W) `r/m64, r64` and `r/m64, imm32` forms.
-
-// Register/register ALU. OPCODE is the `r/m64, r64` opcode byte.
+// Reg/reg and reg/imm forms share a mnemonic; the assembler tries forms in
+// declaration order, so register forms precede the matching immediate forms.
 
 instruction Add for [X86_64] : RegReg {
     param MNEMONIC: String = "add";
@@ -62,9 +55,8 @@ instruction Mov for [X86_64] : RegReg {
     }
 }
 
-// Register/immediate ALU. The immediate is sign-extended to the register width.
-// The group-1 ops share opcode 0x81 and select the operation via the ModR/M
-// opcode extension (EXT = the `/digit`); mov uses 0xC7.
+// Group-1 ops share opcode 0x81 and select via the ModR/M EXT (/digit); mov
+// uses 0xC7.
 
 instruction AddImm for [X86_64] : RegImm {
     param OPNAME: String = "add_imm";
@@ -121,8 +113,7 @@ instruction MovImm for [X86_64] : RegImm {
     }
 }
 
-// Shift by immediate (count masked to 6 bits for a 64-bit operand). EXT selects
-// the shift within the 0xC1 group.
+// Shift count masked to 6 bits for a 64-bit operand.
 
 instruction ShlImm for [X86_64] : RegShift {
     param MNEMONIC: String = "shl";
@@ -151,10 +142,6 @@ instruction SarImm for [X86_64] : RegShift {
     }
 }
 
-// Control flow. These carry no register operand in ModR/M, so their
-// fixed-length encodings are fully expressible: a constant opcode byte plus, for
-// the relative transfers, a 32-bit displacement.
-
 instruction Jmp for [X86_64] {
     param MNEMONIC: String = "jmp";
 
@@ -171,8 +158,6 @@ instruction Jmp for [X86_64] {
         "{self.MNEMONIC} {imm}"
     }
 
-    // Displacement is relative to the next instruction; the simulator advances
-    // PC past this instruction before applying behavior.
     behavior {
         PC::pc = PC::pc + sext(imm, self.XLEN);
     }

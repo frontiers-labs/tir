@@ -1,7 +1,4 @@
-//! Encoding tests: assemble an instruction and check the generated machine-code
-//! bytes. Only the operand-free and immediate-only encodings are fully
-//! expressible in TMDL; the register forms encode the eight base GPRs with a
-//! fixed REX.W prefix (see BLOCKERS.md).
+//! Assemble -> machine-code byte tests.
 
 use tir::Context;
 use tir_be_common::{AsmDialect, SectionOp, SymbolOp};
