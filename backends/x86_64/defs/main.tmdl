@@ -67,6 +67,75 @@ register_class GPR32 for [X86] : GPR {
     }
 }
 
+// 16-bit operand size: the 0x66 prefix selects word width, register numbers are
+// unchanged. Same physical file as GPR, so the indices alias the 64-bit names.
+register_class GPR16 for [X86] : GPR {
+    param WIDTH: Integer = 16;
+
+    registers {
+        ax => { index = 0, traits = [return_value, caller_saved] },
+        cx => { index = 1, traits = [argument, caller_saved] },
+        dx => { index = 2, traits = [argument, return_value, caller_saved] },
+        bx => { index = 3, traits = [callee_saved] },
+        sp => { index = 4, traits = [stack_pointer, callee_saved] },
+        bp => { index = 5, traits = [callee_saved] },
+        si => { index = 6, traits = [argument, caller_saved] },
+        di => { index = 7, traits = [argument, caller_saved] },
+        r8w => { index = 8, traits = [argument, caller_saved] },
+        r9w => { index = 9, traits = [argument, caller_saved] },
+        r10w => { index = 10, traits = [caller_saved] },
+        r11w => { index = 11, traits = [caller_saved] },
+        r12w => { index = 12, traits = [callee_saved] },
+        r13w => { index = 13, traits = [callee_saved] },
+        r14w => { index = 14, traits = [callee_saved] },
+        r15w => { index = 15, traits = [callee_saved] },
+    }
+}
+
+// Low byte of each GPR. The base four (al..bl) need no REX, but spl/bpl/sil/dil
+// and r8b..r15b only exist when a REX prefix is present; the templates always
+// emit one, so the whole class is uniformly encodable. Same file as GPR.
+register_class GPR8 for [X86] : GPR {
+    param WIDTH: Integer = 8;
+
+    registers {
+        al => { index = 0, traits = [return_value, caller_saved] },
+        cl => { index = 1, traits = [argument, caller_saved] },
+        dl => { index = 2, traits = [argument, return_value, caller_saved] },
+        bl => { index = 3, traits = [callee_saved] },
+        spl => { index = 4, traits = [stack_pointer, callee_saved] },
+        bpl => { index = 5, traits = [callee_saved] },
+        sil => { index = 6, traits = [argument, caller_saved] },
+        dil => { index = 7, traits = [argument, caller_saved] },
+        r8b => { index = 8, traits = [argument, caller_saved] },
+        r9b => { index = 9, traits = [argument, caller_saved] },
+        r10b => { index = 10, traits = [caller_saved] },
+        r11b => { index = 11, traits = [caller_saved] },
+        r12b => { index = 12, traits = [callee_saved] },
+        r13b => { index = 13, traits = [callee_saved] },
+        r14b => { index = 14, traits = [callee_saved] },
+        r15b => { index = 15, traits = [callee_saved] },
+    }
+}
+
+// High byte of the legacy four GPRs (bits 8..15). Their ModR/M numbers are 4..7
+// and they are encodable only WITHOUT a REX prefix, which collides with the low
+// bytes spl/bpl/sil/dil and with r8b..r15b. So this is a standalone four-register
+// file with its own no-REX templates, not an inheritor of GPR. The index is the
+// ModR/M number; physical overlap with rax..rbx is left unmodeled (no test or
+// allocation path reaches it in this prototype).
+register_class GPR8H for [X86] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 8;
+
+    registers {
+        ah => { index = 4, traits = [caller_saved] },
+        ch => { index = 5, traits = [caller_saved] },
+        dh => { index = 6, traits = [caller_saved] },
+        bh => { index = 7, traits = [callee_saved] },
+    }
+}
+
 // `op dst, src`: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst). The REX byte
 // is 0100 WRXB: REX.B carries dst's 4th bit, REX.R carries src's.
 template RegReg for [X86_64] {
@@ -227,6 +296,245 @@ template RegShift32 for [X86] {
         19..21 => EXT,
         22..23 => 0b11,
         24..31 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+// 16-bit forms prepend the 0x66 operand-size prefix to the 32-bit encoding, so
+// every field shifts up by one byte. The REX byte stays (W=0); immediates shrink
+// to 16 bits.
+template RegReg16 for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR16,
+        src: GPR16,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => dst[3],
+        9 => 0b0,
+        10 => src[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => OPCODE,
+        24..26 => dst[0..2],
+        27..29 => src[0..2],
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+template RegImm16 for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR16,
+        imm: bits<16>,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => dst[3],
+        9 => 0b0,
+        10 => 0b0,
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => OPCODE,
+        24..26 => dst[0..2],
+        27..29 => EXT,
+        30..31 => 0b11,
+        32..47 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+template RegShift16 for [X86] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR16,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => dst[3],
+        9 => 0b0,
+        10 => 0b0,
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0xC1,
+        24..26 => dst[0..2],
+        27..29 => EXT,
+        30..31 => 0b11,
+        32..39 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+// 8-bit forms reuse the 32-bit layout (REX always emitted, W=0) but take the
+// byte-sized opcode, which is one less than the word/dword opcode for the ALU
+// ops (0x80/0xC6/0xC0 for the immediate and shift groups). Immediates are 8-bit.
+template RegReg8 for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR8,
+        src: GPR8,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => src[3],
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => OPCODE,
+        16..18 => dst[0..2],
+        19..21 => src[0..2],
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+template RegImm8 for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR8,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => OPCODE,
+        16..18 => dst[0..2],
+        19..21 => EXT,
+        22..23 => 0b11,
+        24..31 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+template RegShift8 for [X86] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR8,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0xC0,
+        16..18 => dst[0..2],
+        19..21 => EXT,
+        22..23 => 0b11,
+        24..31 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+// High-byte forms carry no REX prefix, so the encoding is just opcode + ModR/M
+// (+ immediate). The register's index is already its ModR/M number (4..7).
+template RegReg8H for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR8H,
+        src: GPR8H,
+    }
+
+    encoding {
+        0..7 => OPCODE,
+        8..10 => dst[0..2],
+        11..13 => src[0..2],
+        14..15 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+template RegImm8H for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR8H,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..7 => OPCODE,
+        8..10 => dst[0..2],
+        11..13 => EXT,
+        14..15 => 0b11,
+        16..23 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+template RegShift8H for [X86] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR8H,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..7 => 0xC0,
+        8..10 => dst[0..2],
+        11..13 => EXT,
+        14..15 => 0b11,
+        16..23 => imm,
     }
 
     asm {

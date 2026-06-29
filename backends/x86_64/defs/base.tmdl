@@ -467,3 +467,445 @@ instruction SarImm32 for [X86] : RegShift32 {
         dst = dst >>> extract(imm, 4, 0);
     }
 }
+
+// 16-bit operand-size forms.
+
+instruction Add16 for [X86] : RegReg16 {
+    param OPNAME: String = "add16";
+    param MNEMONIC: String = "add";
+    param OPCODE: bits<8> = 0x01;
+
+    behavior {
+        dst = dst + src;
+    }
+}
+
+instruction Sub16 for [X86] : RegReg16 {
+    param OPNAME: String = "sub16";
+    param MNEMONIC: String = "sub";
+    param OPCODE: bits<8> = 0x29;
+
+    behavior {
+        dst = dst - src;
+    }
+}
+
+instruction And16 for [X86] : RegReg16 {
+    param OPNAME: String = "and16";
+    param MNEMONIC: String = "and";
+    param OPCODE: bits<8> = 0x21;
+
+    behavior {
+        dst = dst & src;
+    }
+}
+
+instruction Or16 for [X86] : RegReg16 {
+    param OPNAME: String = "or16";
+    param MNEMONIC: String = "or";
+    param OPCODE: bits<8> = 0x09;
+
+    behavior {
+        dst = dst | src;
+    }
+}
+
+instruction Xor16 for [X86] : RegReg16 {
+    param OPNAME: String = "xor16";
+    param MNEMONIC: String = "xor";
+    param OPCODE: bits<8> = 0x31;
+
+    behavior {
+        dst = dst ^ src;
+    }
+}
+
+instruction Mov16 for [X86] : RegReg16 {
+    param OPNAME: String = "mov16";
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0x89;
+
+    behavior {
+        dst = src;
+    }
+}
+
+instruction AddImm16 for [X86] : RegImm16 {
+    param OPNAME: String = "add_imm16";
+    param MNEMONIC: String = "add";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = dst + sext(imm, 16);
+    }
+}
+
+instruction OrImm16 for [X86] : RegImm16 {
+    param OPNAME: String = "or_imm16";
+    param MNEMONIC: String = "or";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b001;
+
+    behavior {
+        dst = dst | sext(imm, 16);
+    }
+}
+
+instruction AndImm16 for [X86] : RegImm16 {
+    param OPNAME: String = "and_imm16";
+    param MNEMONIC: String = "and";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst & sext(imm, 16);
+    }
+}
+
+instruction XorImm16 for [X86] : RegImm16 {
+    param OPNAME: String = "xor_imm16";
+    param MNEMONIC: String = "xor";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b110;
+
+    behavior {
+        dst = dst ^ sext(imm, 16);
+    }
+}
+
+instruction MovImm16 for [X86] : RegImm16 {
+    param OPNAME: String = "mov_imm16";
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0xC7;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = sext(imm, 16);
+    }
+}
+
+instruction ShlImm16 for [X86] : RegShift16 {
+    param OPNAME: String = "shl16";
+    param MNEMONIC: String = "shl";
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst << extract(imm, 4, 0);
+    }
+}
+
+instruction ShrImm16 for [X86] : RegShift16 {
+    param OPNAME: String = "shr16";
+    param MNEMONIC: String = "shr";
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        dst = dst >> extract(imm, 4, 0);
+    }
+}
+
+instruction SarImm16 for [X86] : RegShift16 {
+    param OPNAME: String = "sar16";
+    param MNEMONIC: String = "sar";
+    param EXT: bits<3> = 0b111;
+
+    behavior {
+        dst = dst >>> extract(imm, 4, 0);
+    }
+}
+
+// 8-bit low-byte forms. ALU reg/reg opcodes are one below their wider
+// counterparts; the immediate and shift groups use 0x80/0xC6/0xC0.
+
+instruction Add8 for [X86] : RegReg8 {
+    param OPNAME: String = "add8";
+    param MNEMONIC: String = "add";
+    param OPCODE: bits<8> = 0x00;
+
+    behavior {
+        dst = dst + src;
+    }
+}
+
+instruction Sub8 for [X86] : RegReg8 {
+    param OPNAME: String = "sub8";
+    param MNEMONIC: String = "sub";
+    param OPCODE: bits<8> = 0x28;
+
+    behavior {
+        dst = dst - src;
+    }
+}
+
+instruction And8 for [X86] : RegReg8 {
+    param OPNAME: String = "and8";
+    param MNEMONIC: String = "and";
+    param OPCODE: bits<8> = 0x20;
+
+    behavior {
+        dst = dst & src;
+    }
+}
+
+instruction Or8 for [X86] : RegReg8 {
+    param OPNAME: String = "or8";
+    param MNEMONIC: String = "or";
+    param OPCODE: bits<8> = 0x08;
+
+    behavior {
+        dst = dst | src;
+    }
+}
+
+instruction Xor8 for [X86] : RegReg8 {
+    param OPNAME: String = "xor8";
+    param MNEMONIC: String = "xor";
+    param OPCODE: bits<8> = 0x30;
+
+    behavior {
+        dst = dst ^ src;
+    }
+}
+
+instruction Mov8 for [X86] : RegReg8 {
+    param OPNAME: String = "mov8";
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0x88;
+
+    behavior {
+        dst = src;
+    }
+}
+
+instruction AddImm8 for [X86] : RegImm8 {
+    param OPNAME: String = "add_imm8";
+    param MNEMONIC: String = "add";
+    param OPCODE: bits<8> = 0x80;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = dst + sext(imm, 8);
+    }
+}
+
+instruction OrImm8 for [X86] : RegImm8 {
+    param OPNAME: String = "or_imm8";
+    param MNEMONIC: String = "or";
+    param OPCODE: bits<8> = 0x80;
+    param EXT: bits<3> = 0b001;
+
+    behavior {
+        dst = dst | sext(imm, 8);
+    }
+}
+
+instruction AndImm8 for [X86] : RegImm8 {
+    param OPNAME: String = "and_imm8";
+    param MNEMONIC: String = "and";
+    param OPCODE: bits<8> = 0x80;
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst & sext(imm, 8);
+    }
+}
+
+instruction XorImm8 for [X86] : RegImm8 {
+    param OPNAME: String = "xor_imm8";
+    param MNEMONIC: String = "xor";
+    param OPCODE: bits<8> = 0x80;
+    param EXT: bits<3> = 0b110;
+
+    behavior {
+        dst = dst ^ sext(imm, 8);
+    }
+}
+
+instruction MovImm8 for [X86] : RegImm8 {
+    param OPNAME: String = "mov_imm8";
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0xC6;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = sext(imm, 8);
+    }
+}
+
+instruction ShlImm8 for [X86] : RegShift8 {
+    param OPNAME: String = "shl8";
+    param MNEMONIC: String = "shl";
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst << extract(imm, 4, 0);
+    }
+}
+
+instruction ShrImm8 for [X86] : RegShift8 {
+    param OPNAME: String = "shr8";
+    param MNEMONIC: String = "shr";
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        dst = dst >> extract(imm, 4, 0);
+    }
+}
+
+instruction SarImm8 for [X86] : RegShift8 {
+    param OPNAME: String = "sar8";
+    param MNEMONIC: String = "sar";
+    param EXT: bits<3> = 0b111;
+
+    behavior {
+        dst = dst >>> extract(imm, 4, 0);
+    }
+}
+
+// 8-bit high-byte forms (ah/ch/dh/bh), encoded without a REX prefix.
+
+instruction Add8H for [X86] : RegReg8H {
+    param OPNAME: String = "add8h";
+    param MNEMONIC: String = "add";
+    param OPCODE: bits<8> = 0x00;
+
+    behavior {
+        dst = dst + src;
+    }
+}
+
+instruction Sub8H for [X86] : RegReg8H {
+    param OPNAME: String = "sub8h";
+    param MNEMONIC: String = "sub";
+    param OPCODE: bits<8> = 0x28;
+
+    behavior {
+        dst = dst - src;
+    }
+}
+
+instruction And8H for [X86] : RegReg8H {
+    param OPNAME: String = "and8h";
+    param MNEMONIC: String = "and";
+    param OPCODE: bits<8> = 0x20;
+
+    behavior {
+        dst = dst & src;
+    }
+}
+
+instruction Or8H for [X86] : RegReg8H {
+    param OPNAME: String = "or8h";
+    param MNEMONIC: String = "or";
+    param OPCODE: bits<8> = 0x08;
+
+    behavior {
+        dst = dst | src;
+    }
+}
+
+instruction Xor8H for [X86] : RegReg8H {
+    param OPNAME: String = "xor8h";
+    param MNEMONIC: String = "xor";
+    param OPCODE: bits<8> = 0x30;
+
+    behavior {
+        dst = dst ^ src;
+    }
+}
+
+instruction Mov8H for [X86] : RegReg8H {
+    param OPNAME: String = "mov8h";
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0x88;
+
+    behavior {
+        dst = src;
+    }
+}
+
+instruction AddImm8H for [X86] : RegImm8H {
+    param OPNAME: String = "add_imm8h";
+    param MNEMONIC: String = "add";
+    param OPCODE: bits<8> = 0x80;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = dst + sext(imm, 8);
+    }
+}
+
+instruction OrImm8H for [X86] : RegImm8H {
+    param OPNAME: String = "or_imm8h";
+    param MNEMONIC: String = "or";
+    param OPCODE: bits<8> = 0x80;
+    param EXT: bits<3> = 0b001;
+
+    behavior {
+        dst = dst | sext(imm, 8);
+    }
+}
+
+instruction AndImm8H for [X86] : RegImm8H {
+    param OPNAME: String = "and_imm8h";
+    param MNEMONIC: String = "and";
+    param OPCODE: bits<8> = 0x80;
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst & sext(imm, 8);
+    }
+}
+
+instruction XorImm8H for [X86] : RegImm8H {
+    param OPNAME: String = "xor_imm8h";
+    param MNEMONIC: String = "xor";
+    param OPCODE: bits<8> = 0x80;
+    param EXT: bits<3> = 0b110;
+
+    behavior {
+        dst = dst ^ sext(imm, 8);
+    }
+}
+
+instruction MovImm8H for [X86] : RegImm8H {
+    param OPNAME: String = "mov_imm8h";
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0xC6;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = sext(imm, 8);
+    }
+}
+
+instruction ShlImm8H for [X86] : RegShift8H {
+    param OPNAME: String = "shl8h";
+    param MNEMONIC: String = "shl";
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst << extract(imm, 4, 0);
+    }
+}
+
+instruction ShrImm8H for [X86] : RegShift8H {
+    param OPNAME: String = "shr8h";
+    param MNEMONIC: String = "shr";
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        dst = dst >> extract(imm, 4, 0);
+    }
+}
+
+instruction SarImm8H for [X86] : RegShift8H {
+    param OPNAME: String = "sar8h";
+    param MNEMONIC: String = "sar";
+    param EXT: bits<3> = 0b111;
+
+    behavior {
+        dst = dst >>> extract(imm, 4, 0);
+    }
+}
