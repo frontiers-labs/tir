@@ -31,7 +31,7 @@ Expressions are used in parameters, encodings, asm templates, and behavior.
 - Identifiers and field access: `self.MNEMONIC`, `imm`.
 - Indexing and slicing on bitvectors:
   - Single bit/index: `imm[11]`
-  - Range (half‑open): `imm[0..4]` (selects bits 0–3)
+  - Range (inclusive): `imm[0..4]` (selects bits 0–4)
 - Calls: `foo(a, b)` (reserved for future extensions).
 - Grouping: `(expr)`
 - Binary operators and precedence:
@@ -223,7 +223,7 @@ instruction Add for [RV32I, RV64I] : RType {
 ## Encoding Section Details
 
 - Locations use bit indices where `0` is least significant bit.
-- Range `a..b` covers bits `[a, b)`; e.g., `7..11` covers bits 7,8,9,10.
+- Range `a..b` covers bits `[a, b]` inclusive; e.g., `7..11` covers bits 7,8,9,10,11.
 - RHS expressions can be immediates, parameters, operand values, slices/indexes of bitvectors.
 - Register operands can be sliced too, splitting one register across several
   fields. x86-64 r8..r15 put their 4th number bit in the REX prefix and the low

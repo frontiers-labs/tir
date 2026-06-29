@@ -1356,8 +1356,6 @@ mod encoding_tests {
 
     #[test]
     fn register_operand_splice_has_no_diagnostics() {
-        // A register split across two fields (r8..r15: 4th bit in REX, low three
-        // in ModR/M) must be accepted just like a sliced immediate.
         let src = "
             isa Arch { param XLEN: Integer = 64; }
             register_class GPR for [Arch] {

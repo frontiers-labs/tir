@@ -3052,9 +3052,6 @@ fn emit_instruction_encoder(
                 let ast::Expr::Ident(id) = &*slc.base else {
                     return Err(bad_value());
                 };
-                // Registers can be spliced too: r8..r15 put their 4th number bit
-                // in the REX prefix and the low three in ModR/M (see the x86-64
-                // templates). Slicing the register index scatters each piece.
                 let dst = match ops_map.get(&id.name) {
                     Some(Type::Struct(_)) => &mut reg_fields,
                     Some(Type::Integer | Type::Bits(_)) => &mut int_fields,
