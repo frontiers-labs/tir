@@ -28,6 +28,7 @@ techniques or creating ISA extensions.
 - `backends/`
   - [`common/`](./backends/common/) - common utils for binary code generation
   - [`riscv/`](./backends/riscv/) - generic RISC-V backend
+  - [`x86_64/`](./backends/x86_64/) - prototype x86-64 backend
 - [`core/`](./core/src) - generic IR definitions
   - [`src/builtin/`](./core/src/builtin/) - builtin dialect, roughly implementing
     functionality of LLVM IR

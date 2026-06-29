@@ -1,0 +1,123 @@
+// x86-64 prototype: ISA, register file and shared instruction templates.
+//
+// Syntax choice: Intel. The shared assembler lexer (backends/common) has no
+// `%` or `$` sigils, so AT&T operands (`%rax`, `$1`) do not lex; Intel uses
+// bare identifiers for registers and bare numbers for immediates, which the
+// lexer already produces. Intel's dest-first operand order also matches the
+// `dst, src` shape of the templates. See BLOCKERS.md.
+//
+// Scope: the eight base 64-bit GPRs, addressed by the 3-bit ModR/M field with a
+// fixed REX.W prefix (operand size 64). The extended registers r8..r15 are
+// deliberately absent: their 4th register-number bit lives in the REX prefix,
+// and TMDL cannot split a register operand across the REX byte and the ModR/M
+// field (see BLOCKERS.md). Every instruction therefore has a correct,
+// fixed-length encoding.
+
+isa X86_64 {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [X86_64] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+// The eight base general-purpose 64-bit registers. Names carry no trailing
+// digit, so each declares its architectural register number explicitly.
+register_class GPR for [X86_64] {
+    param ENCODING_LEN: Integer = 3;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rax => { index = 0, traits = [return_value, caller_saved] },
+        rcx => { index = 1, traits = [argument, caller_saved] },
+        rdx => { index = 2, traits = [argument, return_value, caller_saved] },
+        rbx => { index = 3, traits = [callee_saved] },
+        rsp => { index = 4, traits = [stack_pointer, callee_saved] },
+        rbp => { index = 5, traits = [callee_saved] },
+        rsi => { index = 6, traits = [argument, caller_saved] },
+        rdi => { index = 7, traits = [argument, caller_saved] },
+    }
+}
+
+// Register/register form: `op dst, src` (Intel), dst read-modify-write.
+// Encoding: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst). The opcode byte
+// is the `r/m64, r64` form, so the register operand (ModR/M.reg) is the source
+// and r/m is the destination.
+template RegReg for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR,
+        src: GPR,
+    }
+
+    encoding {
+        0..7 => 0x48,
+        8..15 => OPCODE,
+        16..18 => dst,
+        19..21 => src,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+// Register/immediate form: `op dst, imm32`, immediate sign-extended to 64 bits.
+// Encoding: REX.W + opcode + ModR/M(mod=11, reg=EXT opcode-extension, rm=dst) +
+// imm32.
+template RegImm for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0x48,
+        8..15 => OPCODE,
+        16..18 => dst,
+        19..21 => EXT,
+        22..23 => 0b11,
+        24..55 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+// Shift-by-immediate form: `op dst, imm8`. Encoding: REX.W + 0xC1 +
+// ModR/M(mod=11, reg=EXT, rm=dst) + imm8.
+template RegShift for [X86_64] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..7 => 0x48,
+        8..15 => 0xC1,
+        16..18 => dst,
+        19..21 => EXT,
+        22..23 => 0b11,
+        24..31 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
