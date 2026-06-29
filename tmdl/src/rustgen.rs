@@ -843,6 +843,9 @@ fn emit_instructions<'a>(
                     AsmAction::Comma
                         | AsmAction::LParen
                         | AsmAction::RParen
+                        | AsmAction::LBracket
+                        | AsmAction::RBracket
+                        | AsmAction::Star
                         | AsmAction::Operand(_)
                 )
             });
@@ -937,6 +940,30 @@ fn emit_instructions<'a>(
                         parse_steps.push(quote! {
                             match parser.bump() {
                                 Some(tir_be_common::Token::RParen) => {}
+                                _ => return Err(()),
+                            }
+                        });
+                    }
+                    AsmAction::LBracket => {
+                        parse_steps.push(quote! {
+                            match parser.bump() {
+                                Some(tir_be_common::Token::LBracket) => {}
+                                _ => return Err(()),
+                            }
+                        });
+                    }
+                    AsmAction::RBracket => {
+                        parse_steps.push(quote! {
+                            match parser.bump() {
+                                Some(tir_be_common::Token::RBracket) => {}
+                                _ => return Err(()),
+                            }
+                        });
+                    }
+                    AsmAction::Star => {
+                        parse_steps.push(quote! {
+                            match parser.bump() {
+                                Some(tir_be_common::Token::Star) => {}
                                 _ => return Err(()),
                             }
                         });
@@ -2171,6 +2198,9 @@ enum AsmAction {
     Skip,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
+    Star,
 }
 
 enum AsmPrintPart {
@@ -2213,6 +2243,18 @@ fn compile_asm_template(template: &str) -> Vec<AsmAction> {
             }
             ')' => {
                 actions.push(AsmAction::RParen);
+                i += 1;
+            }
+            '[' => {
+                actions.push(AsmAction::LBracket);
+                i += 1;
+            }
+            ']' => {
+                actions.push(AsmAction::RBracket);
+                i += 1;
+            }
+            '*' => {
+                actions.push(AsmAction::Star);
                 i += 1;
             }
             _ => {

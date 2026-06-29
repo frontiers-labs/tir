@@ -13,6 +13,12 @@ pub enum Token<'src> {
     LParen,
     #[token(")")]
     RParen,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
+    #[token("*")]
+    Star,
 
     #[token(".section")]
     Section,
@@ -108,6 +114,26 @@ mod tests {
         );
         // Dedicated tokens still win over the directive catch-all.
         assert_eq!(lex(".text .data"), Ok(vec![Token::Text, Token::Data]));
+    }
+
+    #[test]
+    fn asm_lexes_memory_operand_punctuation() {
+        // Memory operands: `[base]` (Intel) and `*target` (indirect).
+        assert_eq!(
+            lex("mov rax, [rbx]"),
+            Ok(vec![
+                Token::Ident("mov"),
+                Token::Ident("rax"),
+                Token::Comma,
+                Token::LBracket,
+                Token::Ident("rbx"),
+                Token::RBracket,
+            ])
+        );
+        assert_eq!(
+            lex("jmp *rax"),
+            Ok(vec![Token::Ident("jmp"), Token::Star, Token::Ident("rax")])
+        );
     }
 
     #[test]

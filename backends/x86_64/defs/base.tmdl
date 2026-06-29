@@ -202,3 +202,139 @@ instruction Ret for [X86_64] {
         GPR::rsp = GPR::rsp + zext(0b1000, self.XLEN);
     }
 }
+
+// Memory operands. Intel-syntax `[base]` register-indirect loads/stores and
+// AT&T-style `*target` indirect transfers exercise the assembler's `[`, `]`
+// and `*` tokens.
+//
+// `[base]` uses ModR/M mod=00 with the base register number in the rm field.
+// In x86 that form only addresses bases whose low three bits are not 100 (rsp,
+// r12 -> SIB byte) or 101 (rbp, r13 -> disp32); those addressing modes are
+// distinct encodings and would be separate instructions, so they are out of
+// scope here.
+
+// `mov dst, [base]`: REX.W + 0x8B + ModR/M(mod=00, reg=dst, rm=base).
+instruction MovLoad for [X86_64] {
+    param OPNAME: String = "mov_load";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR,
+        base: GPR,
+    }
+
+    encoding {
+        0 => base[3],
+        1 => 0b0,
+        2 => dst[3],
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0x8B,
+        16..18 => base[0..2],
+        19..21 => dst[0..2],
+        22..23 => 0b00,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base}]"
+    }
+
+    behavior {
+        dst = load(base, 8, 0b0);
+    }
+}
+
+// `mov [base], src`: REX.W + 0x89 + ModR/M(mod=00, reg=src, rm=base).
+instruction MovStore for [X86_64] {
+    param OPNAME: String = "mov_store";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        base: GPR,
+        src: GPR,
+    }
+
+    encoding {
+        0 => base[3],
+        1 => 0b0,
+        2 => src[3],
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0x89,
+        16..18 => base[0..2],
+        19..21 => src[0..2],
+        22..23 => 0b00,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base}], {src}"
+    }
+
+    behavior {
+        store(base, 8, src);
+    }
+}
+
+// `jmp *target`: 0xFF /4 + ModR/M(mod=11, rm=target). Operand size is fixed
+// 64-bit for the near indirect jump, so the REX prefix carries only REX.B for
+// target's 4th register bit (W=0).
+instruction JmpIndirect for [X86_64] {
+    param OPNAME: String = "jmp_indirect";
+    param MNEMONIC: String = "jmp";
+
+    operands {
+        target: GPR,
+    }
+
+    encoding {
+        0 => target[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0xFF,
+        16..18 => target[0..2],
+        19..21 => 0b100,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} *{target}"
+    }
+
+    behavior {
+        PC::pc = target;
+    }
+}
+
+// `call *target`: 0xFF /2 + ModR/M(mod=11, rm=target).
+instruction CallIndirect for [X86_64] {
+    param OPNAME: String = "call_indirect";
+    param MNEMONIC: String = "call";
+
+    operands {
+        target: GPR,
+    }
+
+    encoding {
+        0 => target[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0xFF,
+        16..18 => target[0..2],
+        19..21 => 0b010,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} *{target}"
+    }
+
+    behavior {
+        GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
+        store(GPR::rsp, 8, PC::pc);
+        PC::pc = target;
+    }
+}

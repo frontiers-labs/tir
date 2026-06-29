@@ -33,10 +33,15 @@ mod isa {
                 ShlImmOp,
                 ShrImmOp,
                 SarImmOp,
+                // Memory operands
+                MovLoadOp,
+                MovStoreOp,
                 // Control flow
                 JmpOp,
                 CallOp,
-                RetOp
+                RetOp,
+                JmpIndirectOp,
+                CallIndirectOp
             ],
         }
     }
