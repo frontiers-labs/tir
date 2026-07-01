@@ -1,0 +1,18 @@
+// RUN: tir llvm-import %s | filecheck %s
+//
+// The importer skips `//` and `;` comment lines, so this file doubles as both
+// the LLVM IR input and the FileCheck script.
+
+// CHECK: module {
+// CHECK: func @sum
+// CHECK: addi
+// CHECK: constant
+// CHECK: addi
+// CHECK: return
+// CHECK: module_end
+
+define i32 @sum(i32 %a, i32 %b) {
+  %t = add i32 %a, %b
+  %r = add i32 %t, 1
+  ret i32 %r
+}

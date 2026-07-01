@@ -1,0 +1,10 @@
+[package]
+name = "tir-llvm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tir.workspace = true
+thiserror.workspace = true
+logos.workspace = true
+chumsky.workspace = true

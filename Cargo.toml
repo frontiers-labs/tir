@@ -21,6 +21,7 @@ members = [
     "utils/adt",
     "utils/graph",
     "utils/symbolic",
+    "utils/llvm",
     "tools",
 ]
 
@@ -35,6 +36,7 @@ tir-graph = { path = "utils/graph" }
 tir-symbolic = { path = "utils/symbolic" }
 tir-macros = { path = "utils/macros" }
 tir-lit = { path = "utils/lit" }
+tir-llvm = { path = "utils/llvm" }
 
 # Per-target crates
 tir-riscv = { path = "backends/riscv" }

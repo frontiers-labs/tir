@@ -1,0 +1,8 @@
+// RUN: not tir llvm-import %s
+
+// `sdiv` has no TIR equivalent today, so the import must fail rather than drop
+// the instruction.
+define i32 @d(i32 %a, i32 %b) {
+  %r = sdiv i32 %a, %b
+  ret i32 %r
+}
