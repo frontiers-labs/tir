@@ -5,7 +5,7 @@
 
 use tir::{Context, OperationRef, Pass, PassError, PassTarget, Rewriter};
 
-use crate::isel::OpLowering;
+use crate::backend::isel::OpLowering;
 
 pub struct OpLoweringPass {
     name: &'static str,

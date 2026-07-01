@@ -9,7 +9,6 @@ members = [
     "xtask",
     "core",
     "utils/macros",
-    "backends/common",
     "backends/riscv",
     "utils/fuzz",
     "simulator/isasim",
@@ -17,7 +16,6 @@ members = [
     "backends/arm64",
     "backends/x86_64",
     "fcc",
-    "backends/targets",
     "utils/isa-test-suite",
     "utils/capi",
     "utils/adt",
@@ -28,8 +26,6 @@ members = [
 
 [workspace.dependencies]
 tir = { path = "core" }
-tir-targets = { path = "backends/targets" }
-tir-be-common = { path = "backends/common" }
 tir-sim = { path = "simulator/simcore" }
 tmdl = { path = "tmdl" }
 

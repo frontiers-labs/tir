@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 tir.workspace = true
-tir-be-common.workspace = true
 
 [dev-dependencies]
 tir-riscv.workspace = true

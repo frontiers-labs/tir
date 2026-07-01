@@ -7,10 +7,10 @@
 
 use std::collections::HashMap;
 
+use tir::backend::liveness::op_regs;
+use tir::backend::sched::{InstrSchedClass, MachineModel};
+use tir::backend::{ControlFlow, MachineInstruction};
 use tir::{Context, OpId};
-use tir_be_common::liveness::op_regs;
-use tir_be_common::sched::{InstrSchedClass, MachineModel};
-use tir_be_common::{ControlFlow, MachineInstruction};
 
 use crate::predictor::BranchPredictor;
 use crate::scoreboard::{self, BranchOutcome, EventHandler, Prf, ScoreboardInstr, phys_regs};
@@ -100,7 +100,7 @@ pub fn simulate(
 mod tests {
     use super::*;
     use crate::{Executor, ProgramImage, TraceOptions};
-    use tir_be_common::AsmDialect;
+    use tir::backend::AsmDialect;
     use tir_riscv::RiscvDialect;
 
     use crate::predictor::AlwaysNotTaken;
@@ -113,7 +113,7 @@ mod tests {
     fn control_flow_derived_from_pc_writes() {
         use tir::Operation;
         use tir::attributes::{AttributeValue, RegisterAttr};
-        use tir_be_common::ControlFlow;
+        use tir::backend::ControlFlow;
 
         let context = tir::Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn loop_branch_prediction_end_to_end() {
         use crate::predictor::BackwardTaken;
-        use tir_be_common::MachineContext;
+        use tir::backend::MachineContext;
 
         // Sentinel/exit blocks precede the entry so the reverse-ordered layout puts
         // `first` at the base; `bne …, -4` is a single-instruction block, so its PC

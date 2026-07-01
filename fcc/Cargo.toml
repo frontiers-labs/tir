@@ -8,8 +8,9 @@ logos = "0.16.1"
 chumsky = "0.10.1"
 ariadne = { workspace = true }
 tir = { path = "../core" }
-tir-be-common.workspace = true
-tir-targets.workspace = true
+tir-riscv.workspace = true
+tir-arm64.workspace = true
+tir-x86_64.workspace = true
 clap = { version = "4.6.0", features = ["derive"] }
 
 [dev-dependencies]

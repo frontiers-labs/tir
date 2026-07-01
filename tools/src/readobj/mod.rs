@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::io::Read;
 
 use clap::Parser;
-use tir_be_common::binary::{ElfClass, ElfFile, parse_elf, reloc_name};
+use tir::backend::binary::{ElfClass, ElfFile, parse_elf, reloc_name};
 
 #[derive(Parser)]
 pub struct ToolArgs {

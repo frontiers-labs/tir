@@ -10,7 +10,7 @@ assembler. The pieces:
   A *patcher* (also generated) re-scatters a resolved value into the
   operand's encoding bits, including non-contiguous immediates such as
   RISC-V B/J-type offsets.
-- **`BinaryWriter`** (`tir_be_common::binary`) walks lowered machine IR the
+- **`BinaryWriter`** (`tir::backend::binary`) walks lowered machine IR the
   same way the assembly printer does, lays out `.text`, records symbol and
   block offsets, patches block-target fixups, and turns symbol fixups into
   relocations using the target's `ObjectFormatInfo` (ELF machine, class,

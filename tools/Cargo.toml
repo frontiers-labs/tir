@@ -9,7 +9,15 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-tir-targets.workspace = true
 tir.workspace = true
-tir-be-common.workspace = true
+tir-riscv.workspace = true
+tir-arm64.workspace = true
+tir-x86_64.workspace = true
 tir-sim.workspace = true
+
+[dev-dependencies]
+tir-lit.workspace = true
+
+[[test]]
+name = "lit"
+harness = false

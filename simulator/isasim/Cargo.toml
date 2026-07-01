@@ -6,8 +6,9 @@ edition = "2024"
 [dependencies]
 tir.workspace = true
 tir-sim.workspace = true
-tir-be-common.workspace = true
-tir-targets.workspace = true
+tir-riscv.workspace = true
+tir-arm64.workspace = true
+tir-x86_64.workspace = true
 clap = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

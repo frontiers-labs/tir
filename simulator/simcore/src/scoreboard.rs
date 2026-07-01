@@ -17,9 +17,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use tir_be_common::liveness::RegRef;
-use tir_be_common::regalloc::RegisterInfo;
-use tir_be_common::sched::{InstrSchedClass, MachineModel};
+use tir::backend::liveness::RegRef;
+use tir::backend::regalloc::RegisterInfo;
+use tir::backend::sched::{InstrSchedClass, MachineModel};
 
 use crate::predictor::BranchPredictor;
 

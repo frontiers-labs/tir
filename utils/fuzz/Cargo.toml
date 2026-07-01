@@ -13,7 +13,6 @@ tmdl.workspace = true
 tir.workspace = true
 tir-riscv.workspace = true
 tir-arm64.workspace = true
-tir-be-common.workspace = true
 
 [[bin]]
 name = "tmdl-fuzz"

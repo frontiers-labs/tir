@@ -4,17 +4,18 @@
 //! object: dialect registration, the instruction-selection and register
 //! allocation passes, an assembly parser and the cycle-approximate machine
 //! models. Each backend crate implements this trait and registers itself with
-//! the [`TARGETS`] registry via `register_target!`; the `tir-targets` crate
-//! links the backends and re-exports the registry's lookup helpers.
+//! the [`TARGETS`] registry via `register_target!`; tools depend on the backend
+//! crates directly to link their registrations and resolve targets through
+//! [`select_target`].
 
 use linkme::distributed_slice;
 use tir::Context;
 
-use crate::binary::{BinaryWriter, ObjectFormatInfo};
-use crate::isel::{InstructionSelectPass, OpLowering};
-use crate::regalloc::{RegisterAllocationPass, RegisterInfo};
-use crate::sched::MachineModel;
-use crate::{AsmParser, AsmPrinter};
+use crate::backend::binary::{BinaryWriter, ObjectFormatInfo};
+use crate::backend::isel::{InstructionSelectPass, OpLowering};
+use crate::backend::regalloc::{RegisterAllocationPass, RegisterInfo};
+use crate::backend::sched::MachineModel;
+use crate::backend::{AsmParser, AsmPrinter};
 
 /// A selectable code-generation / simulation target.
 ///
@@ -82,7 +83,7 @@ pub trait TargetMachine {
     /// Registers backed by hardware performance counters under the selected
     /// features, as `(class, index, counter)`. Simulators route reads of these
     /// registers to their counters instead of the register file.
-    fn counter_registers(&self) -> Vec<(&'static str, u16, crate::PerfCounter)> {
+    fn counter_registers(&self) -> Vec<(&'static str, u16, crate::backend::PerfCounter)> {
         vec![]
     }
 
@@ -117,7 +118,7 @@ pub trait TargetMachine {
 ///
 /// Backends contribute entries with [`register_target!`]; tools resolve targets
 /// purely through this registry, so adding a backend never requires touching
-/// `tir-mc`, `isasim` or the `tir-targets` aggregator.
+/// `tir-mc` or `isasim`.
 pub struct TargetInfo {
     /// Canonical names this backend answers to, for help text and diagnostics.
     pub canonical_names: &'static [&'static str],
@@ -176,9 +177,9 @@ pub fn supported_targets() -> Vec<&'static str> {
 macro_rules! register_target {
     ($select:path, [$($name:expr),+ $(,)?]) => {
         const _: () = {
-            #[$crate::linkme::distributed_slice($crate::TARGETS)]
-            #[linkme(crate = $crate::linkme)]
-            static REGISTRATION: $crate::TargetInfo = $crate::TargetInfo {
+            #[$crate::backend::linkme::distributed_slice($crate::backend::TARGETS)]
+            #[linkme(crate = $crate::backend::linkme)]
+            static REGISTRATION: $crate::backend::TargetInfo = $crate::backend::TargetInfo {
                 canonical_names: &[$($name),+],
                 select: $select,
             };

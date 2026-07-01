@@ -9,8 +9,9 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 tir.workspace = true
-tir-targets.workspace = true
-tir-be-common.workspace = true
+tir-riscv.workspace = true
+tir-arm64.workspace = true
+tir-x86_64.workspace = true
 
 [dev-dependencies]
 tir.workspace = true

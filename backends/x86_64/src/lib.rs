@@ -103,8 +103,8 @@ mod isa {
     }
 
     impl X86_64Dialect {
-        pub fn get_asm_printer(&self) -> tir_be_common::AsmPrinter {
-            tir_be_common::AsmPrinter::new(get_instruction_printers())
+        pub fn get_asm_printer(&self) -> tir::backend::AsmPrinter {
+            tir::backend::AsmPrinter::new(get_instruction_printers())
         }
     }
 
@@ -123,8 +123,8 @@ mod isa {
     /// model, so spilling is left unimplemented (no test reaches it).
     struct X86RegAlloc;
 
-    impl tir_be_common::regalloc::TargetRegAlloc for X86RegAlloc {
-        fn register_info(&self) -> tir_be_common::regalloc::RegisterInfo {
+    impl tir::backend::regalloc::TargetRegAlloc for X86RegAlloc {
+        fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
             register_info()
         }
 
@@ -173,8 +173,8 @@ mod isa {
         }
     }
 
-    fn object_format() -> tir_be_common::binary::ObjectFormatInfo {
-        use tir_be_common::binary::{ElfClass, ObjectFormatInfo};
+    fn object_format() -> tir::backend::binary::ObjectFormatInfo {
+        use tir::backend::binary::{ElfClass, ObjectFormatInfo};
         // EM_X86_64.
         ObjectFormatInfo {
             elf_machine: 62,
@@ -187,41 +187,41 @@ mod isa {
 
     struct X86Target;
 
-    impl tir_be_common::TargetMachine for X86Target {
+    impl tir::backend::TargetMachine for X86Target {
         fn name(&self) -> &'static str {
             "x86_64"
         }
 
         fn register_dialects(&self, context: &tir::Context) {
-            context.register_dialect::<tir_be_common::AsmDialect>();
+            context.register_dialect::<tir::backend::AsmDialect>();
             context.register_dialect::<X86_64Dialect>();
         }
 
-        fn isel_pass(&self, context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
-            tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context, Feature::ALL))
+        fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
+            tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, Feature::ALL))
         }
 
-        fn regalloc_pass(&self) -> tir_be_common::regalloc::RegisterAllocationPass {
-            tir_be_common::regalloc::RegisterAllocationPass::new(Box::new(X86RegAlloc))
+        fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
+            tir::backend::regalloc::RegisterAllocationPass::new(Box::new(X86RegAlloc))
         }
 
-        fn register_info(&self) -> tir_be_common::regalloc::RegisterInfo {
+        fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
             register_info()
         }
 
-        fn asm_parser(&self, _context: &tir::Context) -> tir_be_common::AsmParser {
+        fn asm_parser(&self, _context: &tir::Context) -> tir::backend::AsmParser {
             let (parsers, disabled) = get_instruction_parsers(Feature::ALL);
-            tir_be_common::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
+            tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
         }
 
-        fn asm_printer(&self, context: &tir::Context) -> tir_be_common::AsmPrinter {
+        fn asm_printer(&self, context: &tir::Context) -> tir::backend::AsmPrinter {
             context
                 .find_dialect::<X86_64Dialect>()
                 .expect("x86_64 dialect must be registered before building an asm printer")
                 .get_asm_printer()
         }
 
-        fn machine_model(&self, name: &str) -> Option<tir_be_common::sched::MachineModel> {
+        fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {
             machine_model(name, Feature::ALL)
         }
 
@@ -241,15 +241,15 @@ mod isa {
             register_name(class, index, prefer_abi)
         }
 
-        fn object_format(&self) -> Option<tir_be_common::binary::ObjectFormatInfo> {
+        fn object_format(&self) -> Option<tir::backend::binary::ObjectFormatInfo> {
             Some(object_format())
         }
 
         fn binary_writer(
             &self,
             _context: &tir::Context,
-        ) -> Option<tir_be_common::binary::BinaryWriter> {
-            Some(tir_be_common::binary::BinaryWriter::new(
+        ) -> Option<tir::backend::binary::BinaryWriter> {
+            Some(tir::backend::binary::BinaryWriter::new(
                 get_instruction_encoders(),
                 get_instruction_patchers(),
             ))
@@ -260,12 +260,12 @@ mod isa {
         march: &str,
         _mcpu: Option<&str>,
         _mattr: Option<&str>,
-    ) -> Result<Option<Box<dyn tir_be_common::TargetMachine>>, String> {
+    ) -> Result<Option<Box<dyn tir::backend::TargetMachine>>, String> {
         match march.trim().to_ascii_lowercase().replace('-', "_").as_str() {
             "x86_64" | "amd64" | "x64" => Ok(Some(Box::new(X86Target))),
             _ => Ok(None),
         }
     }
 
-    tir_be_common::register_target!(select_x86_64, ["x86_64"]);
+    tir::register_target!(select_x86_64, ["x86_64"]);
 }

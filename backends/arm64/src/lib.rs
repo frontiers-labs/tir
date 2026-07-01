@@ -140,7 +140,7 @@ operation! {
 
 impl VirtualBranchOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        tir_be_common::print_branch(fmt, self, "arm64.vbr")
+        tir::backend::print_branch(fmt, self, "arm64.vbr")
     }
 
     fn custom_parse(
@@ -170,7 +170,7 @@ operation! {
 
 impl VirtualCondBranchOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        tir_be_common::print_branch(fmt, self, "arm64.vcond_br")
+        tir::backend::print_branch(fmt, self, "arm64.vcond_br")
     }
 
     fn custom_parse(
@@ -274,11 +274,11 @@ fn lower_func_and_return_to_asm_symbol(
         let has_symbol_end = body
             .op_ids()
             .last()
-            .map(|id| context.get_op(*id).name == tir_be_common::SymbolEndOp::name())
+            .map(|id| context.get_op(*id).name == tir::backend::SymbolEndOp::name())
             .unwrap_or(false);
         if !has_symbol_end {
             let mut b = tir::IRBuilder::new(body);
-            b.insert(tir_be_common::SymbolEndOpBuilder::new(context).build());
+            b.insert(tir::backend::SymbolEndOpBuilder::new(context).build());
         }
 
         let sym_name = func
@@ -303,7 +303,7 @@ fn lower_func_and_return_to_asm_symbol(
             })
             .collect::<Vec<_>>();
 
-        let lowered = tir_be_common::SymbolOpBuilder::new(context)
+        let lowered = tir::backend::SymbolOpBuilder::new(context)
             .body(op.op().regions[0])
             .attr("name", AttributeValue::Str(sym_name))
             .attr("arg_regs", AttributeValue::Array(arg_regs))
@@ -326,12 +326,12 @@ fn lower_func_and_return_to_asm_symbol(
 }
 
 impl Arm64Dialect {
-    pub fn get_asm_parser(&self) -> tir_be_common::AsmParser {
-        tir_be_common::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
+    pub fn get_asm_parser(&self) -> tir::backend::AsmParser {
+        tir::backend::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
     }
 
-    pub fn get_asm_printer(&self) -> tir_be_common::AsmPrinter {
-        tir_be_common::AsmPrinter::new(get_instruction_printers())
+    pub fn get_asm_printer(&self) -> tir::backend::AsmPrinter {
+        tir::backend::AsmPrinter::new(get_instruction_printers())
     }
 }
 
@@ -500,15 +500,15 @@ fn caller_saved_clobbers() -> tir::attributes::AttributeValue {
     )
 }
 
-pub fn create_isel_pass(context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
+pub fn create_isel_pass(context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
     create_isel_pass_for(context, Feature::ALL)
 }
 
 fn create_isel_pass_for(
     context: &tir::Context,
     features: &[Feature],
-) -> tir_be_common::isel::InstructionSelectPass {
-    tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context, features))
+) -> tir::backend::isel::InstructionSelectPass {
+    tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, features))
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
         .with_op_lowering(lower_branches)
         .with_op_lowering(lower_calls)
@@ -536,8 +536,8 @@ fn virt(value: u32, class: &str) -> tir::attributes::AttributeValue {
 /// spill code and a `sub fp, fp, #frame` / `add fp, fp, #frame` prologue/epilogue.
 pub struct Arm64RegAlloc;
 
-impl tir_be_common::regalloc::TargetRegAlloc for Arm64RegAlloc {
-    fn register_info(&self) -> tir_be_common::regalloc::RegisterInfo {
+impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
+    fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
         register_info()
     }
 
@@ -600,8 +600,8 @@ impl tir_be_common::regalloc::TargetRegAlloc for Arm64RegAlloc {
     }
 }
 
-pub fn create_regalloc_pass() -> tir_be_common::regalloc::RegisterAllocationPass {
-    tir_be_common::regalloc::RegisterAllocationPass::new(Box::new(Arm64RegAlloc))
+pub fn create_regalloc_pass() -> tir::backend::regalloc::RegisterAllocationPass {
+    tir::backend::regalloc::RegisterAllocationPass::new(Box::new(Arm64RegAlloc))
 }
 
 /// The AArch64 (ARMv8-A) target, selected via `--march`/`--mcpu`.
@@ -609,42 +609,42 @@ pub struct Arm64Target {
     config: TargetConfig,
 }
 
-impl tir_be_common::TargetMachine for Arm64Target {
+impl tir::backend::TargetMachine for Arm64Target {
     fn name(&self) -> &'static str {
         self.config.canonical_name()
     }
 
     fn register_dialects(&self, context: &tir::Context) {
-        context.register_dialect::<tir_be_common::AsmDialect>();
+        context.register_dialect::<tir::backend::AsmDialect>();
         context.register_dialect::<Arm64Dialect>();
     }
 
-    fn isel_pass(&self, context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
+    fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
         create_isel_pass_for(context, &self.config.features)
     }
 
-    fn regalloc_pass(&self) -> tir_be_common::regalloc::RegisterAllocationPass {
+    fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
         create_regalloc_pass()
     }
 
-    fn register_info(&self) -> tir_be_common::regalloc::RegisterInfo {
-        use tir_be_common::regalloc::TargetRegAlloc;
+    fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
+        use tir::backend::regalloc::TargetRegAlloc;
         Arm64RegAlloc.register_info()
     }
 
-    fn asm_parser(&self, _context: &tir::Context) -> tir_be_common::AsmParser {
+    fn asm_parser(&self, _context: &tir::Context) -> tir::backend::AsmParser {
         let (parsers, disabled) = get_instruction_parsers(&self.config.features);
-        tir_be_common::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
+        tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
     }
 
-    fn asm_printer(&self, context: &tir::Context) -> tir_be_common::AsmPrinter {
+    fn asm_printer(&self, context: &tir::Context) -> tir::backend::AsmPrinter {
         context
             .find_dialect::<Arm64Dialect>()
             .expect("arm64 dialect must be registered before building an asm printer")
             .get_asm_printer()
     }
 
-    fn machine_model(&self, name: &str) -> Option<tir_be_common::sched::MachineModel> {
+    fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {
         crate::machine_model(name, &self.config.features)
     }
 
@@ -668,23 +668,20 @@ impl tir_be_common::TargetMachine for Arm64Target {
         crate::register_name(class, index, prefer_abi)
     }
 
-    fn pre_ra_lowerings(&self) -> Vec<tir_be_common::isel::OpLowering> {
+    fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         vec![obj::lower_constant, obj::lower_vcond_br]
     }
 
-    fn finalize_lowerings(&self) -> Vec<tir_be_common::isel::OpLowering> {
+    fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         vec![obj::finalize_virtual_ops]
     }
 
-    fn object_format(&self) -> Option<tir_be_common::binary::ObjectFormatInfo> {
+    fn object_format(&self) -> Option<tir::backend::binary::ObjectFormatInfo> {
         Some(obj::object_format())
     }
 
-    fn binary_writer(
-        &self,
-        _context: &tir::Context,
-    ) -> Option<tir_be_common::binary::BinaryWriter> {
-        Some(tir_be_common::binary::BinaryWriter::new(
+    fn binary_writer(&self, _context: &tir::Context) -> Option<tir::backend::binary::BinaryWriter> {
+        Some(tir::backend::binary::BinaryWriter::new(
             get_instruction_encoders(),
             get_instruction_patchers(),
         ))
@@ -695,7 +692,7 @@ fn select_arm64(
     march: &str,
     mcpu: Option<&str>,
     mattr: Option<&str>,
-) -> Result<Option<Box<dyn tir_be_common::TargetMachine>>, String> {
+) -> Result<Option<Box<dyn tir::backend::TargetMachine>>, String> {
     let owned = ["arm", "aarch64"]
         .iter()
         .any(|prefix| normalize(march).starts_with(prefix));
@@ -706,15 +703,15 @@ fn select_arm64(
     Ok(Some(Box::new(Arm64Target { config })))
 }
 
-tir_be_common::register_target!(select_arm64, ["arm64"]);
+tir::register_target!(select_arm64, ["arm64"]);
 
 #[cfg(test)]
 mod tests {
+    use tir::backend::AsmDialect;
     use tir::{
         Context, IRBuilder, IRFormatter, Operation, PassManager,
         builtin::{FuncOp, IntegerType, UnitType, ops},
     };
-    use tir_be_common::AsmDialect;
 
     use crate::{Arm64Dialect, create_isel_pass, create_regalloc_pass};
 
@@ -994,10 +991,10 @@ mod tests {
     /// the real target.
     struct TinyArm64(crate::Arm64RegAlloc);
 
-    impl tir_be_common::regalloc::TargetRegAlloc for TinyArm64 {
-        fn register_info(&self) -> tir_be_common::regalloc::RegisterInfo {
-            tir_be_common::regalloc::RegisterInfo {
-                classes: &[tir_be_common::regalloc::RegClassInfo {
+    impl tir::backend::regalloc::TargetRegAlloc for TinyArm64 {
+        fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
+            tir::backend::regalloc::RegisterInfo {
+                classes: &[tir::backend::regalloc::RegClassInfo {
                     name: "GPR",
                     file: "GPR",
                     allocation_order: &[0, 1, 2, 3, 4],
@@ -1090,9 +1087,9 @@ mod tests {
                 .value(tir::ValueId::from_number(acc))
                 .build(),
         );
-        bb.insert(tir_be_common::SymbolEndOpBuilder::new(&context).build());
+        bb.insert(tir::backend::SymbolEndOpBuilder::new(&context).build());
 
-        let symbol = tir_be_common::SymbolOpBuilder::new(&context)
+        let symbol = tir::backend::SymbolOpBuilder::new(&context)
             .body(region.id())
             .attr(
                 "name",
@@ -1104,7 +1101,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.add_pass(tir_be_common::regalloc::RegisterAllocationPass::new(
+        pm.add_pass(tir::backend::regalloc::RegisterAllocationPass::new(
             Box::new(TinyArm64(crate::Arm64RegAlloc)),
         ));
         pm.run(&context, context.get_op(module.id()))
@@ -1229,7 +1226,7 @@ mod tests {
     fn symbol_operands_become_fixups() {
         use crate::BranchLinkOpBuilder;
         use tir::attributes::AttributeValue;
-        use tir_be_common::binary::{FixupTarget, InstFixup};
+        use tir::backend::binary::{FixupTarget, InstFixup};
 
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
@@ -1332,8 +1329,8 @@ mod tests {
 
     #[test]
     fn call_finalizes_to_bl_with_symbol_target() {
-        use tir_be_common::TargetMachine;
-        use tir_be_common::pipeline::{StopAfter, build_pipeline};
+        use tir::backend::TargetMachine;
+        use tir::backend::pipeline::{StopAfter, build_pipeline};
 
         let context = Context::with_default_dialects();
         let target = crate::Arm64Target {
@@ -1419,8 +1416,8 @@ mod tests {
 
     #[test]
     fn indirect_call_finalizes_to_blr() {
-        use tir_be_common::TargetMachine;
-        use tir_be_common::pipeline::{StopAfter, build_pipeline};
+        use tir::backend::TargetMachine;
+        use tir::backend::pipeline::{StopAfter, build_pipeline};
 
         let context = Context::with_default_dialects();
         let target = crate::Arm64Target {

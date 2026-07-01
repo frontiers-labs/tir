@@ -4,7 +4,7 @@
 
 use tir::Operation;
 use tir::attributes::AttributeValue;
-use tir_be_common::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
+use tir::backend::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
 
 use crate::{
     BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder, BranchNotEqOpBuilder,
@@ -53,7 +53,7 @@ pub(crate) fn lower_constant(
     let Some(constant) = op.as_op::<ConstantOp>() else {
         return Ok(false);
     };
-    let value = tir_be_common::int_attr(constant.attributes(), "value").ok_or_else(|| {
+    let value = tir::backend::int_attr(constant.attributes(), "value").ok_or_else(|| {
         tir::PassError::InvalidRuleSet("constant op without an integer value".to_string())
     })?;
     if !(0..=0xFFFF).contains(&value) {

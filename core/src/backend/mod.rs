@@ -187,7 +187,7 @@ pub fn int_attr(attrs: &[tir::attributes::NamedAttribute], name: &str) -> Option
 }
 
 pub mod ops {
-    pub use crate::operations::*;
+    pub use crate::backend::operations::*;
 }
 
 dialect! {

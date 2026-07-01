@@ -9,7 +9,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use tir::Context;
-use tir_be_common::{MachineContext, MachineInstruction, PerfCounter, SimTrap};
+use tir::backend::{MachineContext, MachineInstruction, PerfCounter, SimTrap};
 
 use crate::error::Error;
 use crate::program::{MachineBlock, ProgramImage};
@@ -480,8 +480,8 @@ impl MachineContext for Executor {
 #[cfg(test)]
 mod tests {
     use tir::Context;
+    use tir::backend::{AsmDialect, MachineInstruction};
     use tir::utils::APInt;
-    use tir_be_common::{AsmDialect, MachineInstruction};
     use tir_riscv::RiscvDialect;
 
     use crate::{Executor, ProgramImage, TraceOptions, error::Error};
@@ -507,16 +507,16 @@ mod tests {
 
         let until_pc = program.entry_pc;
         let mut executor = Executor::new(4096);
-        tir_be_common::MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, 3))
+        tir::backend::MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, 3))
             .unwrap();
         executor.load(program).unwrap();
         executor.run(until_pc, 10).unwrap();
 
-        let x1 = tir_be_common::MachineContext::read_register(&executor, "GPR", 1).unwrap();
-        let x2 = tir_be_common::MachineContext::read_register(&executor, "GPR", 2).unwrap();
+        let x1 = tir::backend::MachineContext::read_register(&executor, "GPR", 1).unwrap();
+        let x2 = tir::backend::MachineContext::read_register(&executor, "GPR", 2).unwrap();
         assert_eq!(x1.to_u64(), 3);
         assert_eq!(x2.to_u64(), 0);
-        assert_eq!(tir_be_common::MachineContext::read_pc(&executor), until_pc);
+        assert_eq!(tir::backend::MachineContext::read_pc(&executor), until_pc);
     }
 
     #[test]
@@ -549,8 +549,7 @@ mod tests {
         executor.load(program).unwrap();
         executor.run(0x8000_000c, 10).unwrap();
 
-        let reg =
-            |idx| tir_be_common::MachineContext::read_register(&executor, "GPR", idx).unwrap();
+        let reg = |idx| tir::backend::MachineContext::read_register(&executor, "GPR", idx).unwrap();
         // lui keeps 32-bit values (no sign extension into a 64-bit register),
         // the doubled value wraps to zero, and -1 is the 32-bit all-ones.
         assert_eq!((reg(1).to_u64(), reg(1).width()), (0x8000_0000, 32));
@@ -578,7 +577,7 @@ mod tests {
 
         let err = executor.run(0xFFFF_FFFF, 0).unwrap_err();
         match err {
-            Error::Trap(tir_be_common::SimTrap::MaxCyclesExceeded { .. }) => {}
+            Error::Trap(tir::backend::SimTrap::MaxCyclesExceeded { .. }) => {}
             other => panic!("unexpected error: {:?}", other),
         }
     }
@@ -599,7 +598,7 @@ mod tests {
         let program = ProgramImage::from_module(&context, module, 0x8000_0000, Some("first"))
             .expect("program builder must succeed");
         let mut executor = Executor::new(4096);
-        tir_be_common::MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, 7))
+        tir::backend::MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, 7))
             .unwrap();
 
         let inst_id = *program
@@ -614,7 +613,7 @@ mod tests {
             .expect("expected machine instruction in symbol body");
         machine_inst.execute(&mut executor).unwrap();
 
-        let x0 = tir_be_common::MachineContext::read_register(&executor, "GPR", 0).unwrap();
+        let x0 = tir::backend::MachineContext::read_register(&executor, "GPR", 0).unwrap();
         assert_eq!(x0.to_u64(), 0);
     }
 
@@ -637,7 +636,7 @@ mod tests {
         let program = ProgramImage::from_module(&context, module, 0x8000_0000, Some("first"))
             .expect("program builder must succeed");
         let mut executor = Executor::new(4096);
-        tir_be_common::MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, 2))
+        tir::backend::MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, 2))
             .unwrap();
         executor.load(program).unwrap();
 
@@ -655,7 +654,7 @@ mod tests {
             )
             .unwrap_err();
         match err {
-            Error::Trap(tir_be_common::SimTrap::MaxCyclesExceeded { .. }) => {}
+            Error::Trap(tir::backend::SimTrap::MaxCyclesExceeded { .. }) => {}
             Error::MissingFallthrough { .. } => {}
             other => panic!("unexpected error: {:?}", other),
         }
@@ -671,7 +670,7 @@ mod tests {
     fn riscv_load_store_execute_against_memory_window() {
         use tir::Operation;
         use tir::attributes::{AttributeValue, RegisterAttr};
-        use tir_be_common::MachineContext;
+        use tir::backend::MachineContext;
 
         fn gpr(index: u16) -> AttributeValue {
             AttributeValue::Register(RegisterAttr::Physical {
@@ -749,7 +748,7 @@ mod tests {
 
         let mut executor = Executor::new(4096);
         let mut write = |idx, v| {
-            tir_be_common::MachineContext::write_register(
+            tir::backend::MachineContext::write_register(
                 &mut executor,
                 "GPR",
                 idx,
@@ -764,7 +763,7 @@ mod tests {
         executor.run(0x8000_0010, 10).unwrap();
 
         let reg = |class, idx| {
-            tir_be_common::MachineContext::read_register(&executor, class, idx)
+            tir::backend::MachineContext::read_register(&executor, class, idx)
                 .unwrap()
                 .to_u64()
         };
@@ -804,14 +803,14 @@ mod tests {
         executor.set_counter_registers([(
             "CSR",
             0xC02,
-            tir_be_common::PerfCounter::InstructionsRetired,
+            tir::backend::PerfCounter::InstructionsRetired,
         )]);
         executor.load(program).unwrap();
         executor.run(0x8000_0010, 10).unwrap();
 
         // The csrrw write to the read-only counter is ignored; the csrrs read
         // sees the three instructions retired before it.
-        let x2 = tir_be_common::MachineContext::read_register(&executor, "GPR", 2).unwrap();
+        let x2 = tir::backend::MachineContext::read_register(&executor, "GPR", 2).unwrap();
         assert_eq!(x2.to_u64(), 3);
         assert_eq!(executor.retired_instructions(), 4);
     }
@@ -822,13 +821,12 @@ mod tests {
         let mut executor = Executor::new(64);
         executor.set_register_widths(tir_riscv::register_widths(&rv32));
         executor.set_counter_registers([
-            ("CSR", 0xC00, tir_be_common::PerfCounter::Cycles),
-            ("CSR", 0xC80, tir_be_common::PerfCounter::CyclesHigh),
+            ("CSR", 0xC00, tir::backend::PerfCounter::Cycles),
+            ("CSR", 0xC80, tir::backend::PerfCounter::CyclesHigh),
         ]);
         executor.retired_instructions = 0x0000_0005_8000_0001;
 
-        let reg =
-            |idx| tir_be_common::MachineContext::read_register(&executor, "CSR", idx).unwrap();
+        let reg = |idx| tir::backend::MachineContext::read_register(&executor, "CSR", idx).unwrap();
         // cycle returns the low word (the CSR class is 32 bits wide on rv32),
         // cycleh the upper word of the same 64-bit counter.
         assert_eq!((reg(0xC00).to_u64(), reg(0xC00).width()), (0x8000_0001, 32));
@@ -855,7 +853,7 @@ mod tests {
 
         let err = executor.run(0xFFFF_FFFF, 10).unwrap_err();
         match err {
-            Error::Trap(tir_be_common::SimTrap::Exception { cause, pc }) => {
+            Error::Trap(tir::backend::SimTrap::Exception { cause, pc }) => {
                 assert_eq!(cause, 11, "ecall raises environment-call-from-M-mode");
                 assert_eq!(pc, 0x8000_0000);
             }
@@ -910,7 +908,7 @@ mod tests {
             "handler saw the ecall and the ebreak with their PCs"
         );
         let reg = |idx| {
-            tir_be_common::MachineContext::read_register(&executor, "GPR", idx)
+            tir::backend::MachineContext::read_register(&executor, "GPR", idx)
                 .unwrap()
                 .to_u64()
         };
@@ -928,7 +926,7 @@ mod tests {
     fn arm64_compare_sets_flags_and_conditional_branch_reads_them() {
         use tir::Operation;
         use tir::attributes::{AttributeValue, RegisterAttr};
-        use tir_be_common::{MachineContext, MachineInstruction};
+        use tir::backend::{MachineContext, MachineInstruction};
 
         fn gpr(index: u16) -> AttributeValue {
             AttributeValue::Register(RegisterAttr::Physical {
@@ -944,7 +942,7 @@ mod tests {
         const V: u16 = 3;
 
         let context = Context::with_default_dialects();
-        context.register_dialect::<tir_be_common::AsmDialect>();
+        context.register_dialect::<tir::backend::AsmDialect>();
         context.register_dialect::<tir_arm64::Arm64Dialect>();
 
         let exec_cmp = |x0: u64, x1: u64| -> Executor {

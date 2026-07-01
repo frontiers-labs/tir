@@ -9,9 +9,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use tir::attributes::AttributeValue;
+use tir::backend::{MachineInstruction, SectionOp, SymbolOp};
 use tir::builtin::ModuleOp;
 use tir::{BlockId, Context, OpId, Operation};
-use tir_be_common::{MachineInstruction, SectionOp, SymbolOp};
 
 use crate::error::Error;
 

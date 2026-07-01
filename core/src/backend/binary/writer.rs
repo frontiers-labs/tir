@@ -17,7 +17,9 @@ use super::{
     FixupTarget, InstructionEncoder, InstructionPatcher, ObjReloc, ObjSection, ObjSymbol,
     ObjectFile, SectionKind, SymBinding, SymKind,
 };
-use crate::{BlockEndOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp};
+use crate::backend::{
+    BlockEndOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinaryEmitError {

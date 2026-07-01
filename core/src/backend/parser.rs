@@ -6,7 +6,7 @@ use tir::{
     parse::tokens::Parser,
 };
 
-use crate::{
+use crate::backend::{
     LiteralOpBuilder, SectionOpBuilder, SymbolEndOpBuilder, SymbolOpBuilder, lex, lexer::Token,
 };
 

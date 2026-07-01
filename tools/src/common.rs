@@ -6,8 +6,8 @@ use std::{
 };
 
 use clap::ValueEnum;
+use tir::backend::TargetMachine;
 use tir::{Context, builtin::ModuleOp};
-use tir_be_common::TargetMachine;
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum InputKind {

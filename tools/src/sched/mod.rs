@@ -4,7 +4,7 @@
 //! repeated `--iterations` times and fed to the shared scoreboard engine in
 //! `tir-sim`, which reconstructs data dependencies from each instruction's
 //! read/written registers and assigns dispatch/issue/retire cycles against a
-//! TMDL-generated [`MachineModel`](tir_be_common::sched::MachineModel). The
+//! TMDL-generated [`MachineModel`](tir::backend::sched::MachineModel). The
 //! engine is the same one `isasim --timing` replays executed traces through,
 //! so the two views can never disagree about an instruction's cost.
 
@@ -12,8 +12,8 @@ use std::{error::Error, ffi::OsString};
 
 use clap::Args;
 use tir::Context;
-use tir_be_common::liveness::op_regs;
-use tir_be_common::{MachineInstruction, SectionOp, SymbolOp};
+use tir::backend::liveness::op_regs;
+use tir::backend::{MachineInstruction, SectionOp, SymbolOp};
 use tir_sim::scoreboard::{self, Prf, ScoreboardInstr, TimingConfig, phys_regs};
 
 use crate::common::{InputKind, parse_module};
@@ -24,7 +24,7 @@ mod event;
 /// The scheduling fallback when no `--model` is selected: a generic single-issue
 /// core with no functional units, so every instruction resolves to the
 /// single-cycle [`InstrSchedClass::DEFAULT`].
-const GENERIC_MODEL: tir_be_common::sched::MachineModel = tir_be_common::sched::MachineModel {
+const GENERIC_MODEL: tir::backend::sched::MachineModel = tir::backend::sched::MachineModel {
     name: "generic",
     issue_width: 1,
     resources: &[],
@@ -62,7 +62,8 @@ pub struct ToolArgs {
 }
 
 pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
-    let target = tir_targets::select(&args.march, args.mcpu.as_deref(), args.mattr.as_deref())?;
+    let target =
+        tir::backend::select_target(&args.march, args.mcpu.as_deref(), args.mattr.as_deref())?;
 
     let context = Context::with_default_dialects();
     target.register_dialects(&context);

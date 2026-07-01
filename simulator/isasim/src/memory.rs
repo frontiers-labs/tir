@@ -3,8 +3,8 @@
 //! until programs arrive as ELF images with their own segments.
 
 use serde::Deserialize;
+use tir::backend::MachineContext;
 use tir::utils::APInt;
-use tir_be_common::MachineContext;
 use tir_sim::Executor;
 
 use crate::parse_addr;

@@ -3,7 +3,7 @@
 //! suite to compare against a golden oracle.
 
 use serde::Serialize;
-use tir_be_common::MachineContext;
+use tir::backend::MachineContext;
 use tir_sim::Executor;
 
 use crate::parse_addr;

@@ -1,4 +1,4 @@
-use tir_be_common::SimTrap;
+use tir::backend::SimTrap;
 
 #[derive(Debug)]
 pub enum Error {

@@ -8,6 +8,12 @@ use tir_sim::scoreboard::{EventHandler, Prf};
 use tir_sim::timing::{self, TimingConfig};
 use tir_sim::{Executor, ProgramImage, TraceOptions};
 
+// Force the backend crates to be linked so their `register_target!` entries are
+// included in the final binary; the target registry is otherwise their only user.
+use tir_arm64 as _;
+use tir_riscv as _;
+use tir_x86_64 as _;
+
 mod dump;
 mod konata;
 mod memory;
@@ -75,11 +81,12 @@ fn main() {
     let args = Cli::parse();
     let src = std::fs::read_to_string(&args.program).expect("failed to read program path");
 
-    let target = tir_targets::select(&args.march, args.mcpu.as_deref(), args.mattr.as_deref())
-        .unwrap_or_else(|error| {
-            eprintln!("{error}");
-            std::process::exit(2);
-        });
+    let target =
+        tir::backend::select_target(&args.march, args.mcpu.as_deref(), args.mattr.as_deref())
+            .unwrap_or_else(|error| {
+                eprintln!("{error}");
+                std::process::exit(2);
+            });
 
     let context = tir::Context::with_default_dialects();
     target.register_dialects(&context);

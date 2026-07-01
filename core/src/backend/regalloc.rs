@@ -21,7 +21,7 @@ use tir::{
     BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter, ValueId,
 };
 
-use crate::liveness::{self, Liveness, PhysReg};
+use crate::backend::liveness::{self, Liveness, PhysReg};
 
 /// Allocation metadata for one register class, emitted by the TMDL backend from a
 /// target's `register_class` traits.

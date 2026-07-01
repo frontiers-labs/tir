@@ -207,7 +207,7 @@ pub struct MachineUnit {
 }
 
 /// How a pipeline stage handles data hazards. Mirrors
-/// [`tir_be_common::sched::Protection`].
+/// [`tir::backend::sched::Protection`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Protection {
     Protected,
@@ -263,7 +263,7 @@ pub struct MachineOverride {
 }
 
 /// A forwarding/bypass path between two of a machine's resources, with the
-/// producer→consumer latency it grants. Mirrors [`tir_be_common::sched::Forward`].
+/// producer→consumer latency it grants. Mirrors [`tir::backend::sched::Forward`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Forward {
     pub from: String,

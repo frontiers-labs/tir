@@ -9,7 +9,7 @@ use tir::{
     Terminator,
 };
 
-use crate::liveness::{RegRef, op_regs};
+use crate::backend::liveness::{RegRef, op_regs};
 
 #[derive(Default)]
 pub struct DeadCodeEliminationPass;

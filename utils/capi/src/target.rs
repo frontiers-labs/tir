@@ -1,15 +1,17 @@
 //! Backend target support. Registering a target installs its dialects into a
 //! context so the generic ABI can parse, build and inspect target-specific IR
 //! and run target passes. Target passes and op schemas are linked in
-//! automatically via `tir-targets`.
+//! automatically by depending on the backend crates directly.
 
 use std::ffi::{CStr, c_char};
 
 // Force the backend crates to be linked so their target, pass, and schema
 // registrations are included in the cdylib.
-use tir_be_common::pipeline::{StopAfter, build_pipeline};
-use tir_be_common::{select_target, supported_targets};
-use tir_targets as _;
+use tir::backend::pipeline::{StopAfter, build_pipeline};
+use tir::backend::{select_target, supported_targets};
+use tir_arm64 as _;
+use tir_riscv as _;
+use tir_x86_64 as _;
 
 use crate::{guard, into_cstring, op_instance, set_error, with_context};
 

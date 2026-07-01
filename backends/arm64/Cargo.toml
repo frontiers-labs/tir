@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 tir.workspace = true
-tir-be-common.workspace = true
 
 [build-dependencies]
 tmdl.workspace = true

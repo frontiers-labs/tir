@@ -9,13 +9,19 @@ tir-graph.workspace = true
 tir-symbolic.workspace = true
 tir-adt.workspace = true
 linkme.workspace = true
+logos.workspace = true
 parking_lot = "0.12.3"
 thiserror = "2.0.12"
 ariadne.workspace = true
 
 [dev-dependencies]
 tir-lit = { path = "../utils/lit" }
+criterion = { workspace = true, features = ["html_reports"] }
 
 [[test]]
 name = "lit"
+harness = false
+
+[[bench]]
+name = "lexer"
 harness = false

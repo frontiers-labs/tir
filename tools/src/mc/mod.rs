@@ -4,9 +4,9 @@ use std::io::Write;
 use std::{error::Error, ffi::OsString};
 
 use clap::{Args, ValueEnum};
+use tir::backend::binary::{render_ascii, write_elf};
+use tir::backend::pipeline::{StopAfter, build_pipeline};
 use tir::{Context, IRFormatter, Operation};
-use tir_be_common::binary::{render_ascii, write_elf};
-use tir_be_common::pipeline::{StopAfter, build_pipeline};
 
 use crate::common::{InputKind, parse_module};
 
@@ -57,7 +57,8 @@ pub enum FileType {
 }
 
 pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
-    let target = tir_targets::select(&args.march, args.mcpu.as_deref(), args.mattr.as_deref())?;
+    let target =
+        tir::backend::select_target(&args.march, args.mcpu.as_deref(), args.mattr.as_deref())?;
 
     let context = Context::with_default_dialects();
     target.register_dialects(&context);

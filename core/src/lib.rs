@@ -6,6 +6,7 @@ pub use linkme;
 
 pub mod analysis;
 pub mod attributes;
+pub mod backend;
 mod block;
 mod builder;
 mod context;

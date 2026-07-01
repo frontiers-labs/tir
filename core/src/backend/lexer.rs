@@ -84,7 +84,7 @@ impl<'src> tir::parse::tokens::TokenLike<'src> for Token<'src> {
 
 #[cfg(test)]
 mod tests {
-    use crate::lexer::{Token, lex};
+    use crate::backend::lexer::{Token, lex};
 
     #[test]
     fn asm_rejects_unknown_punctuation_without_panicking() {

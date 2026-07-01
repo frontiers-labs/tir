@@ -180,16 +180,17 @@ fn lower_to_ir(context: &tir::Context, unit: &crate::ast::Ast) -> tir::builtin::
 /// allocation, finalization) and render assembly or an ELF object.
 fn emit_machine_code(args: &CompileArgs, name: &str, source: &str) -> Vec<u8> {
     use tir::Operation;
-    use tir_be_common::pipeline::{StopAfter, build_pipeline};
+    use tir::backend::pipeline::{StopAfter, build_pipeline};
 
     let Some(march) = args.march.as_deref() else {
         eprintln!("fcc: --march is required for the asm and obj stages");
         std::process::exit(1);
     };
-    let target = tir_targets::select(march, args.mcpu.as_deref(), None).unwrap_or_else(|e| {
-        eprintln!("fcc: {e}");
-        std::process::exit(1);
-    });
+    let target =
+        tir::backend::select_target(march, args.mcpu.as_deref(), None).unwrap_or_else(|e| {
+            eprintln!("fcc: {e}");
+            std::process::exit(1);
+        });
 
     let unit = parse_source(name, source);
     let context = tir::Context::with_default_dialects();
@@ -233,7 +234,7 @@ fn emit_machine_code(args: &CompileArgs, name: &str, source: &str) -> Vec<u8> {
             eprintln!("fcc: failed to emit object: {e}");
             std::process::exit(1);
         });
-    tir_be_common::binary::write_elf(&object, &format)
+    tir::backend::binary::write_elf(&object, &format)
 }
 
 /// Preprocess `source`, reporting any `#error`/`#warning` diagnostics. Exits if

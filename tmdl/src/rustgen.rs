@@ -328,7 +328,7 @@ fn emit_instructions<'a>(
                     dialect: #dialect,
                     attributes: A { #attrs_schema },
                     roles: R { #roles_schema },
-                    interfaces: [tir_be_common::MachineInstruction],
+                    interfaces: [tir::backend::MachineInstruction],
                     format: custom,
                 }
             }
@@ -580,8 +580,8 @@ fn emit_instructions<'a>(
 
                 fn #emit_fn_ident(
                     context: &tir::Context,
-                    req: &tir_be_common::isel::EmitRequest,
-                    m: &tir_be_common::isel::RuleMatch,
+                    req: &tir::backend::isel::EmitRequest,
+                    m: &tir::backend::isel::RuleMatch,
                 ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
                     let _ = (req, m);
                     let mut builder = #builder_ident::new(context);
@@ -603,7 +603,7 @@ fn emit_instructions<'a>(
                     let index_lit = proc_macro2::Literal::u32_unsuffixed(*index);
                     let sym_lit = proc_macro2::Literal::u32_unsuffixed(**sym);
                     quote! {
-                        tir_be_common::isel::ImplicitUse {
+                        tir::backend::isel::ImplicitUse {
                             symbol: #sym_lit,
                             register_class: #class_lit,
                             register_index: #index_lit,
@@ -616,7 +616,7 @@ fn emit_instructions<'a>(
             isel_rule_inits.push(quote! {
                 if features_enabled(features, #inst_features) {
                     rules.push(
-                        tir_be_common::isel::Rule::new(
+                        tir::backend::isel::Rule::new(
                             #rule_name_lit,
                             #pattern_fn_ident(context),
                             // base_cost is the larger of the canonical pattern size and the
@@ -695,8 +695,8 @@ fn emit_instructions<'a>(
             isel_definer_emitters.push(quote! {
                 fn #definer_emit_fn_ident(
                     context: &tir::Context,
-                    req: &tir_be_common::isel::EmitRequest,
-                    m: &tir_be_common::isel::RuleMatch,
+                    req: &tir::backend::isel::EmitRequest,
+                    m: &tir::backend::isel::RuleMatch,
                 ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
                     let _ = (req, m);
                     let mut builder = #builder_ident::new(context);
@@ -712,7 +712,7 @@ fn emit_instructions<'a>(
                 let immediate = write.value_is_immediate;
                 isel_definer_inits.push(quote! {
                     if features_enabled(features, #definer_features) {
-                        definers.push(tir_be_common::isel::RegisterDefiner {
+                        definers.push(tir::backend::isel::RegisterDefiner {
                             register_class: #class_lit,
                             register_index: #index_lit,
                             value_is_immediate: #immediate,
@@ -785,7 +785,7 @@ fn emit_instructions<'a>(
                     Ok(())
                 },
                 None => quote! {
-                    Err(tir_be_common::SimTrap::InvalidInstruction {
+                    Err(tir::backend::SimTrap::InvalidInstruction {
                         op: #mnemonic_lit,
                         reason: "failed to convert behavior to executable expression".to_string(),
                     })
@@ -798,20 +798,20 @@ fn emit_instructions<'a>(
         // branch. The trait default covers sequential instructions.
         let control_flow_method = match pc_writes(&inst.behavior) {
             (true, _) => quote! {
-                fn control_flow(&self) -> tir_be_common::ControlFlow {
-                    tir_be_common::ControlFlow::Unconditional
+                fn control_flow(&self) -> tir::backend::ControlFlow {
+                    tir::backend::ControlFlow::Unconditional
                 }
             },
             (false, true) => quote! {
-                fn control_flow(&self) -> tir_be_common::ControlFlow {
-                    tir_be_common::ControlFlow::Conditional
+                fn control_flow(&self) -> tir::backend::ControlFlow {
+                    tir::backend::ControlFlow::Conditional
                 }
             },
             (false, false) => quote! {},
         };
 
         machine_instruction_impls.push(quote! {
-            impl tir_be_common::MachineInstruction for #name_ident {
+            impl tir::backend::MachineInstruction for #name_ident {
                 fn mnemonic(&self) -> &'static str {
                     #mnemonic_lit
                 }
@@ -822,8 +822,8 @@ fn emit_instructions<'a>(
 
                 fn execute(
                     &self,
-                    machine: &mut dyn tir_be_common::MachineContext,
-                ) -> Result<(), tir_be_common::SimTrap> {
+                    machine: &mut dyn tir::backend::MachineContext,
+                ) -> Result<(), tir::backend::SimTrap> {
                     #execute_body
                 }
 
@@ -884,12 +884,12 @@ fn emit_instructions<'a>(
                                     parse_steps.push(quote! {
                                         let val = if let Some(tok) = parser.peek() {
                                             match tok {
-                                                tir_be_common::Token::DecNumber(n) => {
+                                                tir::backend::Token::DecNumber(n) => {
                                                     let parsed = (*n).parse::<i64>().map_err(|_| ())?;
                                                     let _ = parser.bump();
                                                     tir::attributes::AttributeValue::Int(parsed)
                                                 }
-                                                tir_be_common::Token::HexNumber(h) => {
+                                                tir::backend::Token::HexNumber(h) => {
                                                     let s = *h;
                                                     let neg = s.starts_with('-');
                                                     let s = if neg { &s[1..] } else { s };
@@ -902,7 +902,7 @@ fn emit_instructions<'a>(
                                                 }
                                                 // A bare identifier in an immediate position is a
                                                 // symbol reference, resolved at object emission.
-                                                tir_be_common::Token::Ident(name) => {
+                                                tir::backend::Token::Ident(name) => {
                                                     let symbol = (*name).to_string();
                                                     let _ = parser.bump();
                                                     tir::attributes::AttributeValue::Str(symbol)
@@ -930,7 +930,7 @@ fn emit_instructions<'a>(
                     AsmAction::LParen => {
                         parse_steps.push(quote! {
                             match parser.bump() {
-                                Some(tir_be_common::Token::LParen) => {}
+                                Some(tir::backend::Token::LParen) => {}
                                 _ => return Err(()),
                             }
                         });
@@ -938,7 +938,7 @@ fn emit_instructions<'a>(
                     AsmAction::RParen => {
                         parse_steps.push(quote! {
                             match parser.bump() {
-                                Some(tir_be_common::Token::RParen) => {}
+                                Some(tir::backend::Token::RParen) => {}
                                 _ => return Err(()),
                             }
                         });
@@ -946,7 +946,7 @@ fn emit_instructions<'a>(
                     AsmAction::LBracket => {
                         parse_steps.push(quote! {
                             match parser.bump() {
-                                Some(tir_be_common::Token::LBracket) => {}
+                                Some(tir::backend::Token::LBracket) => {}
                                 _ => return Err(()),
                             }
                         });
@@ -954,7 +954,7 @@ fn emit_instructions<'a>(
                     AsmAction::RBracket => {
                         parse_steps.push(quote! {
                             match parser.bump() {
-                                Some(tir_be_common::Token::RBracket) => {}
+                                Some(tir::backend::Token::RBracket) => {}
                                 _ => return Err(()),
                             }
                         });
@@ -962,7 +962,7 @@ fn emit_instructions<'a>(
                     AsmAction::Star => {
                         parse_steps.push(quote! {
                             match parser.bump() {
-                                Some(tir_be_common::Token::Star) => {}
+                                Some(tir::backend::Token::Star) => {}
                                 _ => return Err(()),
                             }
                         });
@@ -1068,7 +1068,7 @@ fn emit_instructions<'a>(
 
             let printer_op_name_lit = proc_macro2::Literal::string(op_name);
             instruction_printer_map_inits.push(quote! {
-                let f: tir_be_common::AsmInstructionPrinter = #print_fn_ident;
+                let f: tir::backend::AsmInstructionPrinter = #print_fn_ident;
                 map.insert(#printer_op_name_lit.to_string(), f);
             });
 
@@ -1082,7 +1082,7 @@ fn emit_instructions<'a>(
                 fn #parse_fn_ident<'src>(
                     context: &tir::Context,
                     builder: &mut tir::IRBuilder,
-                    #parser_param: &mut tir::parse::tokens::Parser<'src, tir_be_common::Token<'src>>,
+                    #parser_param: &mut tir::parse::tokens::Parser<'src, tir::backend::Token<'src>>,
                 ) -> Result<(), ()> {
                     #builder_binding = #builder_ident::new(context);
                     #(#parse_steps)*
@@ -1097,7 +1097,7 @@ fn emit_instructions<'a>(
                 let inst_features = feature_slice(&inst.for_isas);
                 instruction_parser_map_inits.push(quote! {
                     if features_enabled(features, #inst_features) {
-                        let f: tir_be_common::AsmInstructionParser = #parse_fn_ident;
+                        let f: tir::backend::AsmInstructionParser = #parse_fn_ident;
                         map.entry(#mn_lit.to_string()).or_default().push(f);
                     } else {
                         disabled.insert(#mn_lit.to_string());
@@ -1116,14 +1116,14 @@ fn emit_instructions<'a>(
             let encode_fn_ident = format_ident!("encode_{}_inst", inst.name.to_lowercase());
             instruction_encoder_impls.push(encoder);
             instruction_encoder_map_inits.push(quote! {
-                let f: tir_be_common::binary::InstructionEncoder = #encode_fn_ident;
+                let f: tir::backend::binary::InstructionEncoder = #encode_fn_ident;
                 map.insert(#op_name_lit.to_string(), f);
             });
             if let Some(patcher) = patcher {
                 let patch_fn_ident = format_ident!("patch_{}_inst", inst.name.to_lowercase());
                 instruction_encoder_impls.push(patcher);
                 instruction_patcher_map_inits.push(quote! {
-                    let f: tir_be_common::binary::InstructionPatcher = #patch_fn_ident;
+                    let f: tir::backend::binary::InstructionPatcher = #patch_fn_ident;
                     map.insert(#op_name_lit.to_string(), f);
                 });
             }
@@ -1142,10 +1142,10 @@ fn emit_instructions<'a>(
         fn get_instruction_parsers(
             features: &[Feature],
         ) -> (
-            std::collections::HashMap<String, Vec<tir_be_common::AsmInstructionParser>>,
+            std::collections::HashMap<String, Vec<tir::backend::AsmInstructionParser>>,
             std::collections::HashSet<String>,
         ) {
-            let mut map: std::collections::HashMap<String, Vec<tir_be_common::AsmInstructionParser>> = std::collections::HashMap::new();
+            let mut map: std::collections::HashMap<String, Vec<tir::backend::AsmInstructionParser>> = std::collections::HashMap::new();
             let mut disabled: std::collections::HashSet<String> = std::collections::HashSet::new();
             #(#instruction_parsers_impls)*
             #(#instruction_parser_map_inits)*
@@ -1155,8 +1155,8 @@ fn emit_instructions<'a>(
             (map, disabled)
         }
 
-        fn get_instruction_printers() -> std::collections::HashMap<String, tir_be_common::AsmInstructionPrinter> {
-            let mut map: std::collections::HashMap<String, tir_be_common::AsmInstructionPrinter> = std::collections::HashMap::new();
+        fn get_instruction_printers() -> std::collections::HashMap<String, tir::backend::AsmInstructionPrinter> {
+            let mut map: std::collections::HashMap<String, tir::backend::AsmInstructionPrinter> = std::collections::HashMap::new();
             #(#instruction_printers_impls)*
             #(#instruction_printer_map_inits)*
 
@@ -1166,15 +1166,15 @@ fn emit_instructions<'a>(
         #(#instruction_encoder_impls)*
 
         // Consumed by object-file emission.
-        fn get_instruction_encoders() -> std::collections::HashMap<String, tir_be_common::binary::InstructionEncoder> {
-            let mut map: std::collections::HashMap<String, tir_be_common::binary::InstructionEncoder> = std::collections::HashMap::new();
+        fn get_instruction_encoders() -> std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> {
+            let mut map: std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> = std::collections::HashMap::new();
             #(#instruction_encoder_map_inits)*
 
             map
         }
 
-        fn get_instruction_patchers() -> std::collections::HashMap<String, tir_be_common::binary::InstructionPatcher> {
-            let mut map: std::collections::HashMap<String, tir_be_common::binary::InstructionPatcher> = std::collections::HashMap::new();
+        fn get_instruction_patchers() -> std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> {
+            let mut map: std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> = std::collections::HashMap::new();
             #(#instruction_patcher_map_inits)*
 
             map
@@ -1183,7 +1183,7 @@ fn emit_instructions<'a>(
         #(#isel_rule_emitters)*
 
         /// Instruction-selection rules for the instructions available under `features`.
-        pub fn get_isel_rules(context: &tir::Context, features: &[Feature]) -> Vec<tir_be_common::isel::Rule> {
+        pub fn get_isel_rules(context: &tir::Context, features: &[Feature]) -> Vec<tir::backend::isel::Rule> {
             let _ = (&context, &features);
             let mut rules = Vec::new();
             #(#isel_rule_inits)*
@@ -1194,7 +1194,7 @@ fn emit_instructions<'a>(
 
         /// Instructions that define a register implicitly (e.g. `vsetvli` defining
         /// `VCSR::vl`), introduced ahead of ops that read those registers.
-        pub fn get_register_definers(context: &tir::Context, features: &[Feature]) -> Vec<tir_be_common::isel::RegisterDefiner> {
+        pub fn get_register_definers(context: &tir::Context, features: &[Feature]) -> Vec<tir::backend::isel::RegisterDefiner> {
             let _ = (&context, &features);
             let mut definers = Vec::new();
             #(#isel_definer_inits)*
@@ -1306,7 +1306,7 @@ fn emit_register_parsers_and_printers(
         };
 
         fns.push(quote! {
-            pub fn #fn_name<'src>(parser: &mut tir::parse::tokens::Parser<'src, tir_be_common::Token<'src>>) -> Option<u16> {
+            pub fn #fn_name<'src>(parser: &mut tir::parse::tokens::Parser<'src, tir::backend::Token<'src>>) -> Option<u16> {
                 #parse_body
             }
             pub fn #print_fn_name(idx: u16, prefer_abi: bool) -> Option<String> {
@@ -1331,7 +1331,7 @@ fn emit_register_parsers_and_printers(
 }
 
 /// Emit a `register_info()` constructor returning the target-independent
-/// [`tir_be_common::regalloc::RegisterInfo`] the allocator consumes: per class, the
+/// [`tir::backend::regalloc::RegisterInfo`] the allocator consumes: per class, the
 /// allocatable order plus the caller/callee-saved, argument, return-value, and
 /// reserved index sets, all derived from each register's TMDL traits.
 fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLError> {
@@ -1360,7 +1360,7 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
         let return_values = slice(&meta.return_values);
         let reserved = slice(&meta.reserved);
         class_entries.push(quote! {
-            tir_be_common::regalloc::RegClassInfo {
+            tir::backend::regalloc::RegClassInfo {
                 name: #name_lit,
                 file: #file_lit,
                 allocation_order: #allocation_order,
@@ -1409,8 +1409,8 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
     }
 
     Ok(quote! {
-        pub fn register_info() -> tir_be_common::regalloc::RegisterInfo {
-            tir_be_common::regalloc::RegisterInfo {
+        pub fn register_info() -> tir::backend::regalloc::RegisterInfo {
+            tir::backend::regalloc::RegisterInfo {
                 classes: &[#(#class_entries),*],
             }
         }
@@ -1424,7 +1424,7 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
     })
 }
 
-/// Emit one `fn <machine>_model() -> tir_be_common::sched::MachineModel` per TMDL
+/// Emit one `fn <machine>_model() -> tir::backend::sched::MachineModel` per TMDL
 /// `machine` block. Each instruction's `unit` membership is resolved against the
 /// machine's `bind`s at compile time into a concrete per-mnemonic scheduling class,
 /// so the runtime lookup is a binary search. This is the static half of the
@@ -1479,7 +1479,7 @@ fn emit_machine_models<'a>(
             let rthr_lit = proc_macro2::Literal::u16_unsuffixed(c.rthroughput);
             let res_lits = c.resources.iter().map(|r| proc_macro2::Literal::string(r));
             quote! {
-                (#mnem_lit, tir_be_common::sched::InstrSchedClass {
+                (#mnem_lit, tir::backend::sched::InstrSchedClass {
                     latency: #lat_lit,
                     read_cycle: #read_lit,
                     rthroughput: #rthr_lit,
@@ -1492,7 +1492,7 @@ fn emit_machine_models<'a>(
             let name_lit = proc_macro2::Literal::string(&p.name);
             let prot_ts = protection_ts(p.protection);
             quote! {
-                tir_be_common::sched::PipelinePhase { name: #name_lit, protection: #prot_ts }
+                tir::backend::sched::PipelinePhase { name: #name_lit, protection: #prot_ts }
             }
         });
 
@@ -1501,26 +1501,26 @@ fn emit_machine_models<'a>(
             let to_lit = proc_macro2::Literal::string(&f.to);
             let lat_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(f.latency));
             quote! {
-                tir_be_common::sched::Forward { from: #from_lit, to: #to_lit, latency: #lat_lit }
+                tir::backend::sched::Forward { from: #from_lit, to: #to_lit, latency: #lat_lit }
             }
         });
 
         let resource_lits = machine.resources.iter().map(|r| {
             let name_lit = proc_macro2::Literal::string(&r.name);
             let units_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(r.units));
-            quote! { tir_be_common::sched::ProcUnit { name: #name_lit, units: #units_lit } }
+            quote! { tir::backend::sched::ProcUnit { name: #name_lit, units: #units_lit } }
         });
 
         let buffer_lits = machine.buffers.iter().map(|(name, size)| {
             let name_lit = proc_macro2::Literal::string(name);
             let size_lit = proc_macro2::Literal::u32_unsuffixed(clamp_u32(*size));
-            quote! { tir_be_common::sched::BufferSize { name: #name_lit, size: #size_lit } }
+            quote! { tir::backend::sched::BufferSize { name: #name_lit, size: #size_lit } }
         });
 
         let reg_file_lits = machine.reg_files.iter().map(|(name, count)| {
             let name_lit = proc_macro2::Literal::string(name);
             let count_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(*count));
-            quote! { tir_be_common::sched::RegFile { name: #name_lit, count: #count_lit } }
+            quote! { tir::backend::sched::RegFile { name: #name_lit, count: #count_lit } }
         });
 
         let name_lit = proc_macro2::Literal::string(&machine.name);
@@ -1530,8 +1530,8 @@ fn emit_machine_models<'a>(
         let fn_ident = format_ident!("{}_model", to_snake_case(&machine.name));
 
         model_fns.push(quote! {
-            pub fn #fn_ident() -> tir_be_common::sched::MachineModel {
-                tir_be_common::sched::MachineModel {
+            pub fn #fn_ident() -> tir::backend::sched::MachineModel {
+                tir::backend::sched::MachineModel {
                     name: #name_lit,
                     issue_width: #issue_width_lit,
                     resources: &[#(#resource_lits),*],
@@ -1568,7 +1568,7 @@ fn emit_machine_models<'a>(
 
         /// Resolve a machine by its TMDL name or alias. `None` when the name is
         /// unknown or the machine's `for [...]` clause is disjoint from `features`.
-        pub fn machine_model(name: &str, features: &[Feature]) -> Option<tir_be_common::sched::MachineModel> {
+        pub fn machine_model(name: &str, features: &[Feature]) -> Option<tir::backend::sched::MachineModel> {
             match name {
                 #(#lookup_arms,)*
                 _ => None,
@@ -1784,12 +1784,12 @@ fn resolve_sched_class(
     }
 }
 
-/// The `tir_be_common::sched::Protection` variant for an AST protection mode.
+/// The `tir::backend::sched::Protection` variant for an AST protection mode.
 fn protection_ts(p: ast::Protection) -> proc_macro2::TokenStream {
     match p {
-        ast::Protection::Protected => quote! { tir_be_common::sched::Protection::Protected },
-        ast::Protection::Unprotected => quote! { tir_be_common::sched::Protection::Unprotected },
-        ast::Protection::Hard => quote! { tir_be_common::sched::Protection::Hard },
+        ast::Protection::Protected => quote! { tir::backend::sched::Protection::Protected },
+        ast::Protection::Unprotected => quote! { tir::backend::sched::Protection::Unprotected },
+        ast::Protection::Hard => quote! { tir::backend::sched::Protection::Hard },
     }
 }
 
@@ -2651,9 +2651,9 @@ fn emit_value_eval(
             let __syms: Vec<tir::sem::Value> = __syms.into_iter()
                 .map(|v| v.unwrap_or_else(|| tir::sem::int_value(64, 0)))
                 .collect();
-            struct __TmdlMachineMemory<'a>(&'a mut dyn tir_be_common::MachineContext);
+            struct __TmdlMachineMemory<'a>(&'a mut dyn tir::backend::MachineContext);
             impl tir::sem::Memory for __TmdlMachineMemory<'_> {
-                type Error = tir_be_common::SimTrap;
+                type Error = tir::backend::SimTrap;
 
                 fn read_memory(&mut self, address: u64, size: usize) -> Result<u64, Self::Error> {
                     self.0.read_memory(address, size)
@@ -2672,7 +2672,7 @@ fn emit_value_eval(
             match tir::sem::execute_with_memory(&__g, &__syms, &mut __memory)? {
                 tir::sem::Value::Int(i) => tir::sem::register_from_int(i),
                 tir::sem::Value::Float(_) | tir::sem::Value::Iterator(_) | tir::sem::Value::RawBits(_) => {
-                    return Err(tir_be_common::SimTrap::InvalidInstruction {
+                    return Err(tir::backend::SimTrap::InvalidInstruction {
                         op: #mnemonic_lit,
                         reason: "instruction semantic expression did not evaluate to integer".to_string(),
                     });
@@ -2709,8 +2709,8 @@ fn emit_sym_inits(
             match ty {
                 Type::Struct(_) => steps.push(quote! {
                     {
-                        let (class, index) = tir_be_common::register_attr(self.attributes(), #name_lit)
-                            .ok_or(tir_be_common::SimTrap::MissingAttribute {
+                        let (class, index) = tir::backend::register_attr(self.attributes(), #name_lit)
+                            .ok_or(tir::backend::SimTrap::MissingAttribute {
                                 op: #mnemonic_lit,
                                 attribute: #name_lit,
                             })?;
@@ -2719,8 +2719,8 @@ fn emit_sym_inits(
                 }),
                 Type::Integer => steps.push(quote! {
                     {
-                        let value = tir_be_common::int_attr(self.attributes(), #name_lit)
-                            .ok_or(tir_be_common::SimTrap::MissingAttribute {
+                        let value = tir::backend::int_attr(self.attributes(), #name_lit)
+                            .ok_or(tir::backend::SimTrap::MissingAttribute {
                                 op: #mnemonic_lit,
                                 attribute: #name_lit,
                             })?;
@@ -2731,8 +2731,8 @@ fn emit_sym_inits(
                     let width_lit = proc_macro2::Literal::u32_unsuffixed(*width as u32);
                     steps.push(quote! {
                         {
-                            let value = tir_be_common::int_attr(self.attributes(), #name_lit)
-                                .ok_or(tir_be_common::SimTrap::MissingAttribute {
+                            let value = tir::backend::int_attr(self.attributes(), #name_lit)
+                                .ok_or(tir::backend::SimTrap::MissingAttribute {
                                     op: #mnemonic_lit,
                                     attribute: #name_lit,
                                 })?;
@@ -2784,8 +2784,8 @@ fn emit_destination_write(
     if let Some((_, Type::Struct(_))) = ops.iter().find(|(n, _)| *n == name) {
         let name_lit = proc_macro2::Literal::string(&name);
         return Some(quote! {
-            let (dst_class, dst_idx) = tir_be_common::register_attr(self.attributes(), #name_lit).ok_or(
-                tir_be_common::SimTrap::MissingAttribute {
+            let (dst_class, dst_idx) = tir::backend::register_attr(self.attributes(), #name_lit).ok_or(
+                tir::backend::SimTrap::MissingAttribute {
                     op: #mnemonic_lit,
                     attribute: #name_lit,
                 },
@@ -3168,15 +3168,15 @@ fn emit_instruction_encoder(
                         #(#ors)*
                     }
                     tir::attributes::AttributeValue::Str(s) => {
-                        fixups.push(tir_be_common::binary::InstFixup {
+                        fixups.push(tir::backend::binary::InstFixup {
                             operand: #name_lit,
-                            target: tir_be_common::binary::FixupTarget::Symbol(s.clone()),
+                            target: tir::backend::binary::FixupTarget::Symbol(s.clone()),
                         });
                     }
                     tir::attributes::AttributeValue::Block(b) => {
-                        fixups.push(tir_be_common::binary::InstFixup {
+                        fixups.push(tir::backend::binary::InstFixup {
                             operand: #name_lit,
-                            target: tir_be_common::binary::FixupTarget::Block(*b),
+                            target: tir::backend::binary::FixupTarget::Block(*b),
                         });
                     }
                     _ => return None,
@@ -3194,9 +3194,9 @@ fn emit_instruction_encoder(
         quote! { let mut word: u128 = #const_word_lit; }
     };
     let fixups_decl = if int_fields.is_empty() {
-        quote! { let fixups: Vec<tir_be_common::binary::InstFixup> = Vec::new(); }
+        quote! { let fixups: Vec<tir::backend::binary::InstFixup> = Vec::new(); }
     } else {
-        quote! { let mut fixups: Vec<tir_be_common::binary::InstFixup> = Vec::new(); }
+        quote! { let mut fixups: Vec<tir::backend::binary::InstFixup> = Vec::new(); }
     };
     // Operand-less instructions (e.g. ecall) encode to a constant word and never
     // consult the op's attributes.
@@ -3208,11 +3208,11 @@ fn emit_instruction_encoder(
     let encoder = quote! {
         fn #encode_fn_ident(
             #op_param: &tir::OpInstance,
-        ) -> Option<tir_be_common::binary::EncodedInst> {
+        ) -> Option<tir::backend::binary::EncodedInst> {
             #word_decl
             #fixups_decl
             #(#steps)*
-            Some(tir_be_common::binary::EncodedInst {
+            Some(tir::backend::binary::EncodedInst {
                 bytes: word.to_le_bytes()[..#wb_lit].to_vec(),
                 fixups,
             })

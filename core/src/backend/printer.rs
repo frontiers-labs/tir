@@ -7,7 +7,9 @@ use tir::attributes::AttributeValue;
 use tir::builtin::{ModuleEndOp, ModuleOp};
 use tir::{Context, OpInstance, Operation};
 
-use crate::{BlockEndOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp};
+use crate::backend::{
+    BlockEndOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp,
+};
 
 pub type AsmInstructionPrinter = fn(&OpInstance) -> Option<String>;
 

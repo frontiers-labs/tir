@@ -333,7 +333,7 @@ operation! {
 
 impl VirtualBranchOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        tir_be_common::print_branch(fmt, self, "riscv.vbr")
+        tir::backend::print_branch(fmt, self, "riscv.vbr")
     }
 
     fn custom_parse(
@@ -363,7 +363,7 @@ operation! {
 
 impl VirtualCondBranchOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        tir_be_common::print_branch(fmt, self, "riscv.vcond_br")
+        tir::backend::print_branch(fmt, self, "riscv.vcond_br")
     }
 
     fn custom_parse(
@@ -498,12 +498,12 @@ pub mod ops {
 }
 
 impl RiscvDialect {
-    pub fn get_asm_parser(&self) -> tir_be_common::AsmParser {
-        tir_be_common::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
+    pub fn get_asm_parser(&self) -> tir::backend::AsmParser {
+        tir::backend::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
     }
 
-    pub fn get_asm_printer(&self) -> tir_be_common::AsmPrinter {
-        tir_be_common::AsmPrinter::new(get_instruction_printers())
+    pub fn get_asm_printer(&self) -> tir::backend::AsmPrinter {
+        tir::backend::AsmPrinter::new(get_instruction_printers())
     }
 }
 
@@ -522,11 +522,11 @@ fn lower_func_and_return_to_asm_symbol(
         let has_symbol_end = body
             .op_ids()
             .last()
-            .map(|id| context.get_op(*id).name == tir_be_common::SymbolEndOp::name())
+            .map(|id| context.get_op(*id).name == tir::backend::SymbolEndOp::name())
             .unwrap_or(false);
         if !has_symbol_end {
             let mut b = tir::IRBuilder::new(body);
-            b.insert(tir_be_common::SymbolEndOpBuilder::new(context).build());
+            b.insert(tir::backend::SymbolEndOpBuilder::new(context).build());
         }
 
         let sym_name = func
@@ -551,7 +551,7 @@ fn lower_func_and_return_to_asm_symbol(
             })
             .collect::<Vec<_>>();
 
-        let lowered = tir_be_common::SymbolOpBuilder::new(context)
+        let lowered = tir::backend::SymbolOpBuilder::new(context)
             .body(op.op().regions[0])
             .attr("name", AttributeValue::Str(sym_name))
             .attr("arg_regs", AttributeValue::Array(arg_regs))
@@ -738,15 +738,15 @@ fn caller_saved_clobbers() -> tir::attributes::AttributeValue {
     )
 }
 
-pub fn create_isel_pass(context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
+pub fn create_isel_pass(context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
     create_isel_pass_for(context, Feature::ALL)
 }
 
 fn create_isel_pass_for(
     context: &tir::Context,
     features: &[Feature],
-) -> tir_be_common::isel::InstructionSelectPass {
-    tir_be_common::isel::InstructionSelectPass::new(get_isel_rules(context, features))
+) -> tir::backend::isel::InstructionSelectPass {
+    tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, features))
         .with_register_definers(get_register_definers(context, features))
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
         .with_op_lowering(lower_branches)
@@ -774,8 +774,8 @@ fn virt(value: u32, class: &str) -> tir::attributes::AttributeValue {
 /// spill code and an `addi sp, sp, ±frame` prologue/epilogue.
 pub struct RiscvRegAlloc;
 
-impl tir_be_common::regalloc::TargetRegAlloc for RiscvRegAlloc {
-    fn register_info(&self) -> tir_be_common::regalloc::RegisterInfo {
+impl tir::backend::regalloc::TargetRegAlloc for RiscvRegAlloc {
+    fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
         register_info()
     }
 
@@ -838,8 +838,8 @@ impl tir_be_common::regalloc::TargetRegAlloc for RiscvRegAlloc {
     }
 }
 
-pub fn create_regalloc_pass() -> tir_be_common::regalloc::RegisterAllocationPass {
-    tir_be_common::regalloc::RegisterAllocationPass::new(Box::new(RiscvRegAlloc))
+pub fn create_regalloc_pass() -> tir::backend::regalloc::RegisterAllocationPass {
+    tir::backend::regalloc::RegisterAllocationPass::new(Box::new(RiscvRegAlloc))
 }
 
 /// The RISC-V target, selected via `--march`/`--mcpu`.
@@ -847,42 +847,42 @@ pub struct RiscvTarget {
     config: TargetConfig,
 }
 
-impl tir_be_common::TargetMachine for RiscvTarget {
+impl tir::backend::TargetMachine for RiscvTarget {
     fn name(&self) -> &'static str {
         self.config.canonical_name()
     }
 
     fn register_dialects(&self, context: &tir::Context) {
-        context.register_dialect::<tir_be_common::AsmDialect>();
+        context.register_dialect::<tir::backend::AsmDialect>();
         context.register_dialect::<RiscvDialect>();
     }
 
-    fn isel_pass(&self, context: &tir::Context) -> tir_be_common::isel::InstructionSelectPass {
+    fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
         create_isel_pass_for(context, &self.config.features)
     }
 
-    fn regalloc_pass(&self) -> tir_be_common::regalloc::RegisterAllocationPass {
+    fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
         create_regalloc_pass()
     }
 
-    fn register_info(&self) -> tir_be_common::regalloc::RegisterInfo {
-        use tir_be_common::regalloc::TargetRegAlloc;
+    fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
+        use tir::backend::regalloc::TargetRegAlloc;
         RiscvRegAlloc.register_info()
     }
 
-    fn asm_parser(&self, _context: &tir::Context) -> tir_be_common::AsmParser {
+    fn asm_parser(&self, _context: &tir::Context) -> tir::backend::AsmParser {
         let (parsers, disabled) = get_instruction_parsers(&self.config.features);
-        tir_be_common::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
+        tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
     }
 
-    fn asm_printer(&self, context: &tir::Context) -> tir_be_common::AsmPrinter {
+    fn asm_printer(&self, context: &tir::Context) -> tir::backend::AsmPrinter {
         context
             .find_dialect::<RiscvDialect>()
             .expect("riscv dialect must be registered before building an asm printer")
             .get_asm_printer()
     }
 
-    fn machine_model(&self, name: &str) -> Option<tir_be_common::sched::MachineModel> {
+    fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {
         crate::machine_model(name, &self.config.features)
     }
 
@@ -906,8 +906,8 @@ impl tir_be_common::TargetMachine for RiscvTarget {
         crate::register_name(class, index, prefer_abi)
     }
 
-    fn counter_registers(&self) -> Vec<(&'static str, u16, tir_be_common::PerfCounter)> {
-        use tir_be_common::PerfCounter;
+    fn counter_registers(&self) -> Vec<(&'static str, u16, tir::backend::PerfCounter)> {
+        use tir::backend::PerfCounter;
         if !self.config.features.contains(&Feature::Zicsr) {
             return vec![];
         }
@@ -930,7 +930,7 @@ impl tir_be_common::TargetMachine for RiscvTarget {
         counters
     }
 
-    fn pre_ra_lowerings(&self) -> Vec<tir_be_common::isel::OpLowering> {
+    fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         let lower_constant = if self.config.xlen == 64 {
             obj::lower_constant_rv64
         } else {
@@ -939,19 +939,16 @@ impl tir_be_common::TargetMachine for RiscvTarget {
         vec![lower_constant, obj::lower_vcond_br]
     }
 
-    fn finalize_lowerings(&self) -> Vec<tir_be_common::isel::OpLowering> {
+    fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         vec![obj::finalize_virtual_ops]
     }
 
-    fn object_format(&self) -> Option<tir_be_common::binary::ObjectFormatInfo> {
+    fn object_format(&self) -> Option<tir::backend::binary::ObjectFormatInfo> {
         Some(obj::object_format(self.config.xlen))
     }
 
-    fn binary_writer(
-        &self,
-        _context: &tir::Context,
-    ) -> Option<tir_be_common::binary::BinaryWriter> {
-        Some(tir_be_common::binary::BinaryWriter::new(
+    fn binary_writer(&self, _context: &tir::Context) -> Option<tir::backend::binary::BinaryWriter> {
+        Some(tir::backend::binary::BinaryWriter::new(
             get_instruction_encoders(),
             get_instruction_patchers(),
         ))
@@ -962,7 +959,7 @@ fn select_riscv(
     march: &str,
     mcpu: Option<&str>,
     mattr: Option<&str>,
-) -> Result<Option<Box<dyn tir_be_common::TargetMachine>>, String> {
+) -> Result<Option<Box<dyn tir::backend::TargetMachine>>, String> {
     let owned = ["riscv", "rv32", "rv64"]
         .iter()
         .any(|prefix| normalize(march).starts_with(prefix));
@@ -973,15 +970,15 @@ fn select_riscv(
     Ok(Some(Box::new(RiscvTarget { config })))
 }
 
-tir_be_common::register_target!(select_riscv, ["riscv32", "riscv64"]);
+tir::register_target!(select_riscv, ["riscv32", "riscv64"]);
 
 #[cfg(test)]
 mod tests {
+    use tir::backend::AsmDialect;
     use tir::{
         Context, IRBuilder, IRFormatter, Operation, PassManager,
         builtin::{FuncOp, IntegerType, UnitType, ops},
     };
-    use tir_be_common::AsmDialect;
 
     use crate::{RiscvDialect, create_isel_pass, create_regalloc_pass};
 
@@ -1097,7 +1094,7 @@ mod tests {
             assert_eq!(model.sched_class("sw").resources, &["LSU"]);
             assert_eq!(
                 model.sched_class("mul"),
-                tir_be_common::sched::InstrSchedClass::DEFAULT
+                tir::backend::sched::InstrSchedClass::DEFAULT
             );
         }
     }
@@ -1111,7 +1108,7 @@ mod tests {
         assert_eq!(in_order.phase_cycle("MEM"), Some(3));
         assert_eq!(
             in_order.protection_at(2),
-            Some(tir_be_common::sched::Protection::Protected)
+            Some(tir::backend::sched::Protection::Protected)
         );
 
         // add: read@ID(1) → write@EX(2) ⇒ latency 1, read_cycle 1, write_cycle 2.
@@ -1191,7 +1188,7 @@ mod tests {
 
     #[test]
     fn asm_parser_gates_extensions() {
-        use tir_be_common::TargetMachine;
+        use tir::backend::TargetMachine;
 
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
@@ -1233,7 +1230,7 @@ mod tests {
 
     #[test]
     fn machines_filter_by_feature_set() {
-        use tir_be_common::TargetMachine;
+        use tir::backend::TargetMachine;
 
         let rv64 = target_for("rv64im");
         assert_eq!(rv64.machines(), vec!["rv64-in-order", "rv64-ooo"]);
@@ -1748,8 +1745,8 @@ mod tests {
 
     #[test]
     fn call_finalizes_to_jal_with_symbol_target() {
-        use tir_be_common::TargetMachine;
-        use tir_be_common::pipeline::{StopAfter, build_pipeline};
+        use tir::backend::TargetMachine;
+        use tir::backend::pipeline::{StopAfter, build_pipeline};
 
         let context = Context::with_default_dialects();
         let target = target_for("rv64im");
@@ -1823,8 +1820,8 @@ mod tests {
 
     #[test]
     fn indirect_call_finalizes_to_jalr() {
-        use tir_be_common::TargetMachine;
-        use tir_be_common::pipeline::{StopAfter, build_pipeline};
+        use tir::backend::TargetMachine;
+        use tir::backend::pipeline::{StopAfter, build_pipeline};
 
         let context = Context::with_default_dialects();
         let target = target_for("rv64im");
@@ -1888,10 +1885,10 @@ mod tests {
     /// target.
     struct TinyRiscv(crate::RiscvRegAlloc);
 
-    impl tir_be_common::regalloc::TargetRegAlloc for TinyRiscv {
-        fn register_info(&self) -> tir_be_common::regalloc::RegisterInfo {
-            tir_be_common::regalloc::RegisterInfo {
-                classes: &[tir_be_common::regalloc::RegClassInfo {
+    impl tir::backend::regalloc::TargetRegAlloc for TinyRiscv {
+        fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
+            tir::backend::regalloc::RegisterInfo {
+                classes: &[tir::backend::regalloc::RegClassInfo {
                     name: "GPR",
                     file: "GPR",
                     allocation_order: &[10, 11, 5, 6, 7],
@@ -1985,9 +1982,9 @@ mod tests {
                 .value(tir::ValueId::from_number(acc))
                 .build(),
         );
-        bb.insert(tir_be_common::SymbolEndOpBuilder::new(&context).build());
+        bb.insert(tir::backend::SymbolEndOpBuilder::new(&context).build());
 
-        let symbol = tir_be_common::SymbolOpBuilder::new(&context)
+        let symbol = tir::backend::SymbolOpBuilder::new(&context)
             .body(region.id())
             .attr(
                 "name",
@@ -1999,7 +1996,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.add_pass(tir_be_common::regalloc::RegisterAllocationPass::new(
+        pm.add_pass(tir::backend::regalloc::RegisterAllocationPass::new(
             Box::new(TinyRiscv(crate::RiscvRegAlloc)),
         ));
         pm.run(&context, context.get_op(module.id()))
@@ -2150,7 +2147,7 @@ mod tests {
     fn symbol_and_block_operands_become_fixups() {
         use crate::{BranchEqOpBuilder, JumpAndLinkOpBuilder, phys};
         use tir::attributes::AttributeValue;
-        use tir_be_common::binary::{FixupTarget, InstFixup};
+        use tir::backend::binary::{FixupTarget, InstFixup};
 
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
@@ -2317,7 +2314,7 @@ mod target_parser_tests {
 
     #[test]
     fn counter_registers_follow_the_feature_set() {
-        use tir_be_common::{PerfCounter, TargetMachine};
+        use tir::backend::{PerfCounter, TargetMachine};
 
         let target = |march| crate::RiscvTarget {
             config: TargetConfig::parse(march, None, None).expect("march should parse"),

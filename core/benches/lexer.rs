@@ -1,6 +1,6 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 
-use tir_be_common::lex;
+use tir::backend::lex;
 
 const LARGE_INPUT: &str = include_str!("./Inputs/large.s");
 
