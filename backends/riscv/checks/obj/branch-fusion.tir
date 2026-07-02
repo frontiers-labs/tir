@@ -1,0 +1,29 @@
+// RUN: tir mc --march=rv64i --filetype=obj-ascii %s | filecheck %s
+
+// A compared conditional branch encodes as the fused compare-and-branch
+// instruction; the compare op itself is consumed by selection.
+
+module {
+  func @pick(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  module_end
+}
+
+// blt a0, a1, +8 (B-type fixup patched), jal x0, +12, then each block:
+// addi a0, x0, imm and jalr x0, x1, 0.
+// CHECK: .section .text
+// CHECK-NEXT: pick:
+// CHECK-NEXT: [0x63, 0x44, 0xB5, 0x00]
+// CHECK-NEXT: [0x6F, 0x00, 0xC0, 0x00]
+// CHECK-NEXT: [0x13, 0x05, 0x10, 0x00]
+// CHECK-NEXT: [0x67, 0x80, 0x00, 0x00]
+// CHECK-NEXT: [0x13, 0x05, 0x00, 0x00]
+// CHECK-NEXT: [0x67, 0x80, 0x00, 0x00]

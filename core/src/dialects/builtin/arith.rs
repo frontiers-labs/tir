@@ -222,6 +222,57 @@ operation! {
         results: R {
             result: "crate::Integer<1>",
         },
+        sem: "(set result $cmp_expr)",
+    }
+}
+
+impl CmpIOp {
+    /// The comparison in canonical form: `sgt`/`sle`/`ugt`/`ule` become the
+    /// swapped-operand `Lt`/`Ge`/`ULt`/`UGe`, matching how TMDL lowers target
+    /// behaviors, so only six comparison kinds ever appear in patterns.
+    fn cmp_expr(
+        &self,
+        g: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+    ) -> Option<tir::graph::NodeId> {
+        use tir::sem::SymKind;
+
+        let predicate = self.0.attributes.iter().find_map(|a| {
+            (a.name == "predicate").then_some(match &a.value {
+                tir::attributes::AttributeValue::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+        })??;
+        let (kind, swap) = match predicate {
+            "eq" => (SymKind::Eq, false),
+            "ne" => (SymKind::Ne, false),
+            "slt" => (SymKind::Lt, false),
+            "sgt" => (SymKind::Lt, true),
+            "sge" => (SymKind::Ge, false),
+            "sle" => (SymKind::Ge, true),
+            "ult" => (SymKind::ULt, false),
+            "ugt" => (SymKind::ULt, true),
+            "uge" => (SymKind::UGe, false),
+            "ule" => (SymKind::UGe, true),
+            _ => return None,
+        };
+
+        let mut operand = |index: u32| {
+            let leaf = g.add_node(SymKind::Symbol);
+            g.set_leaf_data(leaf, tir::sem::SymPayload::SymbolId(index));
+            leaf
+        };
+        let (lhs, rhs) = if swap {
+            (operand(1), operand(0))
+        } else {
+            (operand(0), operand(1))
+        };
+        let node = g.add_node(kind);
+        g.add_edge(node, lhs);
+        g.add_edge(node, rhs);
+        Some(node)
     }
 }
 

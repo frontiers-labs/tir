@@ -344,36 +344,6 @@ impl VirtualBranchOp {
     }
 }
 
-operation! {
-    VirtualCondBranchOp {
-        name: "vcond_br",
-        dialect: "riscv",
-        format: "custom",
-        operands: O {
-            condition: "Any",
-            true_args: "*Any",
-            false_args: "*Any",
-        },
-        attributes: A {
-            true_dest: "Block",
-            false_dest: "Block",
-        },
-    }
-}
-
-impl VirtualCondBranchOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        tir::backend::print_branch(fmt, self, "riscv.vcond_br")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        _context: &tir::Context,
-    ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
-}
-
 // Virtual call ops: the lowered form of `builtin.call`/`builtin.indirect_call`.
 // Arguments and results travel through the ABI registers via copies emitted by
 // `lower_calls`; the ops only carry the callee (a symbol whose address is
@@ -486,7 +456,6 @@ dialect! {
             JumpAndLinkRegOp,
             VirtualReturnOp,
             VirtualBranchOp,
-            VirtualCondBranchOp,
             VirtualCallOp,
             VirtualIndirectCallOp
         ],
@@ -573,38 +542,35 @@ fn lower_func_and_return_to_asm_symbol(
     Ok(false)
 }
 
-/// Lower the builtin control-flow terminators to RISC-V virtual branch ops,
-/// preserving successor block references and forwarded block arguments.
-fn lower_branches(
+/// Emit the deferred unconditional branch (`vbr`, finalized to `jal x0` after
+/// register allocation), forwarding any block arguments.
+fn emit_uncond_branch(
     context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-) -> Result<bool, tir::PassError> {
-    use tir::attributes::AttributeValue;
-    use tir::builtin::{BranchOp, CondBranchOp};
+    dest: tir::BlockId,
+    args: &[tir::ValueId],
+) -> Box<dyn Operation> {
+    Box::new(
+        VirtualBranchOpBuilder::new(context)
+            .dest_args(args.to_vec())
+            .attr("dest", tir::attributes::AttributeValue::Block(dest))
+            .build(),
+    )
+}
 
-    if let Some(br) = op.as_op::<BranchOp>() {
-        let lowered = VirtualBranchOpBuilder::new(context)
-            .dest_args(br.dest_args())
-            .attr("dest", AttributeValue::Block(br.dest()))
-            .build();
-        rewriter.replace_op(op, &lowered)?;
-        return Ok(true);
-    }
-
-    if let Some(cond_br) = op.as_op::<CondBranchOp>() {
-        let lowered = VirtualCondBranchOpBuilder::new(context)
-            .condition(cond_br.condition())
-            .true_args(cond_br.true_args())
-            .false_args(cond_br.false_args())
-            .attr("true_dest", AttributeValue::Block(cond_br.true_dest()))
-            .attr("false_dest", AttributeValue::Block(cond_br.false_dest()))
-            .build();
-        rewriter.replace_op(op, &lowered)?;
-        return Ok(true);
-    }
-
-    Ok(false)
+/// Emit the branch-if-nonzero fallback for a condition no branch rule fused:
+/// `bne cond, x0, dest`.
+fn emit_branch_nonzero(
+    context: &tir::Context,
+    condition: tir::ValueId,
+    dest: tir::BlockId,
+) -> Box<dyn Operation> {
+    Box::new(
+        BranchNotEqOpBuilder::new(context)
+            .attr("rs1", virt(condition.number(), "GPR"))
+            .attr("rs2", phys(&("GPR".to_string(), 0)))
+            .attr("imm", tir::attributes::AttributeValue::Block(dest))
+            .build(),
+    )
 }
 
 /// The RISC-V return-address register (`ra` = `x1`).
@@ -748,8 +714,11 @@ fn create_isel_pass_for(
 ) -> tir::backend::isel::InstructionSelectPass {
     tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, features))
         .with_register_definers(get_register_definers(context, features))
+        .with_branch_emitters(tir::backend::isel::BranchEmitters {
+            uncond: emit_uncond_branch,
+            cond_nonzero: emit_branch_nonzero,
+        })
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
-        .with_op_lowering(lower_branches)
         .with_op_lowering(lower_calls)
 }
 
@@ -936,7 +905,7 @@ impl tir::backend::TargetMachine for RiscvTarget {
         } else {
             obj::lower_constant_rv32
         };
-        vec![lower_constant, obj::lower_vcond_br]
+        vec![lower_constant]
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
@@ -1051,9 +1020,10 @@ mod tests {
 
         let mut fb = IRBuilder::new(func.body());
         let add = ops::addi(&context, x_id, x_id, i32).build();
-        let add_r = add.result();
         fb.insert(add);
-        fb.insert(ops::cond_br(&context, cond_id, vec![add_r], vec![], t.id(), f.id()).build());
+        // A bare i1 condition (a block argument): no branch rule can fuse it, so
+        // selection falls back to `bne cond, x0, t` plus the deferred `vbr f`.
+        fb.insert(ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build());
 
         let mut mb = IRBuilder::new(module.body());
         mb.insert(func);
@@ -1064,11 +1034,12 @@ mod tests {
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should lower the conditional branch");
 
-        // The data op selects (addw), the conditional branch lowers to the virtual
-        // op, and no builtin control flow remains.
+        // The data op selects (addw), the conditional branch lowers to the
+        // fallback machine branch + virtual fallthrough, and no builtin control
+        // flow remains.
         assert_eq!(
             body_op_names(&context, region.id()),
-            vec!["addw", "vcond_br", "symbol_end"]
+            vec!["addw", "bne", "vbr", "symbol_end"]
         );
         let mut buf = String::new();
         let mut fmt = IRFormatter::new(&mut buf);

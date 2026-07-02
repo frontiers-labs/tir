@@ -326,7 +326,9 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
             .iter()
             .map(|name| {
                 let method = format_ident!("{}", name);
-                quote! { #name => Some(self.#method(g)), }
+                // `.into()` accepts both `NodeId` and `Option<NodeId>` splice
+                // methods, so a splice can signal "un-lowerable" with `None`.
+                quote! { #name => self.#method(g).into(), }
             })
             .collect();
         let result_width_body = if has_results {

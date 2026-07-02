@@ -1,0 +1,35 @@
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
+
+// A block entered through exactly one guarded CFG edge inherits the guard's
+// fact (asserted in an e-graph assumption scope while the block solves): the
+// identical compare re-computed in ^bb1 is proven true there, so its guard
+// folds to an unconditional branch to the taken successor and the compare op
+// is erased.
+
+module {
+  func @dominated(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %3, ^bb3, ^bb4
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  ^bb3:
+    %5 = constant {value = 1} : !i64
+    return %5
+  ^bb4:
+    %6 = constant {value = 2} : !i64
+    return %6
+  }
+  module_end
+}
+
+// The entry selects the fused compare-and-branch; the dominated block reduces
+// to a single unconditional branch to the known successor.
+// CHECK: riscv.blt {rs1 = %virt0:GPR, rs2 = %virt1:GPR, imm = ^bb1}
+// CHECK-NEXT: riscv.vbr ^bb2
+// CHECK: ^bb1:
+// CHECK-NEXT: riscv.vbr ^bb3
+// CHECK-NEXT: ^bb2:

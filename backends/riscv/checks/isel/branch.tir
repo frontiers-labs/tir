@@ -1,0 +1,94 @@
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
+
+// Conditional branches select through the TMDL-derived branch rules: the
+// comparison fuses into the branch instruction (beq/bne/blt/bge/bltu/bgeu)
+// and the compare op is consumed unless its value is needed elsewhere.
+
+module {
+  func @slt_branch(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // The compare fuses into blt; no slt is materialized.
+  // CHECK: asm.symbol {name = "slt_branch"
+  // CHECK-NOT: riscv.slt
+  // CHECK: riscv.blt {rs1 = %virt0:GPR, rs2 = %virt1:GPR, imm = ^bb1}
+  // CHECK-NEXT: riscv.vbr ^bb2
+
+  func @sle_branch(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "sle"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // a <= b canonicalizes to b >= a, selecting bge with swapped operands.
+  // CHECK: asm.symbol {name = "sle_branch"
+  // CHECK: riscv.bge {rs1 = %virt6:GPR, rs2 = %virt5:GPR, imm = ^bb1}
+  // CHECK-NEXT: riscv.vbr ^bb2
+
+  func @ult_branch(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "ult"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: asm.symbol {name = "ult_branch"
+  // CHECK: riscv.bltu {rs1 = %virt10:GPR, rs2 = %virt11:GPR, imm = ^bb1}
+
+  func @eq_branch(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "eq"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: asm.symbol {name = "eq_branch"
+  // CHECK: riscv.beq {rs1 = %virt15:GPR, rs2 = %virt16:GPR, imm = ^bb1}
+
+  func @materialized(%0: !i64, %1: !i64) -> !i1 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    return %2
+  ^bb2:
+    return %2
+  }
+  // The compare value escapes to other blocks, so it is materialized (slt via
+  // the boolean-materialization bridge) *and* still fused into the branch.
+  // CHECK: asm.symbol {name = "materialized"
+  // CHECK: riscv.slt {rd = %virt22:GPR, rs1 = %virt20:GPR, rs2 = %virt21:GPR}
+  // CHECK: riscv.blt {rs1 = %virt20:GPR, rs2 = %virt21:GPR, imm = ^bb1}
+
+  func @fallback(%0: !i1) -> !i64 {
+    cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    %1 = constant {value = 1} : !i64
+    return %1
+  ^bb2:
+    %2 = constant {value = 0} : !i64
+    return %2
+  }
+  // A bare i1 condition has no comparison to fuse: branch-if-nonzero fallback.
+  // CHECK: asm.symbol {name = "fallback"
+  // CHECK: riscv.bne {rs1 = %virt23:GPR, rs2 = x0, imm = ^bb1}
+  // CHECK-NEXT: riscv.vbr ^bb2
+
+  module_end
+}

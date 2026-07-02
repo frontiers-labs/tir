@@ -27,6 +27,13 @@ impl<S> Substitution<S> {
     }
 }
 
+impl<S> Substitution<S> {
+    /// The bound variables and their classes, in binding order.
+    pub fn entries(&self) -> impl Iterator<Item = (&Var<S>, Id)> {
+        self.vec.iter().map(|(var, id)| (var, *id))
+    }
+}
+
 impl<S: PartialEq> Substitution<S> {
     pub fn insert(&mut self, var: Var<S>, id: Id) -> Option<Id> {
         for pair in &mut self.vec {
@@ -62,12 +69,24 @@ pub struct Pattern<N: ENode, S> {
     root: Id,
 }
 
-/// One match of a [`Pattern`] against an e-graph: the matched e-class and the
-/// variable bindings that made it match.
+/// One match of a [`Pattern`] against an e-graph: the matched e-class, the
+/// variable bindings that made it match, and the e-class bound to every pattern
+/// node (for callers that need interior bindings, e.g. instruction selection's
+/// PBQP cover).
 #[derive(Debug, Clone)]
 pub struct EMatch<S> {
     pub root: Id,
     pub subst: Substitution<S>,
+    /// Per-pattern-node bound class, indexed by pattern node; `None` only for a
+    /// node unreachable from the root.
+    pub bindings: Vec<Option<Id>>,
+}
+
+impl<S> EMatch<S> {
+    /// The e-class bound to `node`; panics for a node unreachable from the root.
+    pub fn binding(&self, node: Id) -> Id {
+        self.bindings[node.index()].expect("pattern node not reached from the root")
+    }
 }
 
 impl<N: ENode, S> Default for Pattern<N, S> {
@@ -98,6 +117,22 @@ impl<N: ENode, S> Pattern<N, S> {
         self.root = root;
     }
 
+    pub fn root(&self) -> Id {
+        self.root
+    }
+
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    pub fn node(&self, id: Id) -> &PatternNode<N, S> {
+        &self.nodes[id.index()]
+    }
+
     fn push(&mut self, node: PatternNode<N, S>) -> Id {
         let id = Id::from_raw(self.nodes.len() as u32);
         self.nodes.push(node);
@@ -108,30 +143,49 @@ impl<N: ENode, S> Pattern<N, S> {
 
 impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
     /// Every match across the e-graph; an operator-rooted pattern visits only classes holding that operator ([`EGraph::classes_with_op`]), a bare-variable root every class.
-    pub fn search<'p>(&'p self, eg: &EGraph<N>) -> Vec<EMatch<S>> {
+    pub fn search(&self, eg: &EGraph<N>) -> Vec<EMatch<S>> {
+        self.search_with_legality(eg, &|_, _| true)
+    }
+
+    /// Like [`Pattern::search`], but `allowed(pattern_node, class)` prunes any
+    /// branch binding a disallowed pair — the hook for caller-side operand
+    /// constraints and match legality (e.g. instruction selection's register /
+    /// immediate / width requirements).
+    pub fn search_with_legality(
+        &self,
+        eg: &EGraph<N>,
+        allowed: &dyn Fn(Id, Id) -> bool,
+    ) -> Vec<EMatch<S>> {
         let mut out = Vec::new();
         let mut goals: Vec<(Id, Id)> = Vec::new();
         // Bindings borrow the pattern's `Var`s; names are cloned only when a full match is emitted.
-        let mut subst: Vec<(&'p Var<S>, Id)> = Vec::new();
+        let mut subst: Vec<(&Var<S>, Id)> = Vec::new();
+        let mut bound: Vec<Option<Id>> = vec![None; self.nodes.len()];
         let roots: Vec<Id> = match &self.nodes[self.root.index()] {
             PatternNode::Node(template) => eg.classes_with_op(template.op_key()),
             _ => eg.classes().map(|c| c.id()).collect(),
         };
         for root in roots {
+            let root = eg.find(root);
             goals.push((self.root, root));
-            self.solve(eg, root, &mut goals, &mut subst, &mut out);
+            self.solve(
+                eg, root, &mut goals, &mut subst, &mut bound, allowed, &mut out,
+            );
             goals.clear();
         }
         out
     }
 
-    /// Depth-first backtracking e-matcher: pops one goal off the `(pattern node, e-class)` stack, explores every solution restoring `goals`/`subst` between branches, then restores the goal for the caller.
+    /// Depth-first backtracking e-matcher: pops one goal off the `(pattern node, e-class)` stack, explores every solution restoring `goals`/`subst`/`bound` between branches, then restores the goal for the caller.
+    #[allow(clippy::too_many_arguments)]
     fn solve<'p>(
         &'p self,
         eg: &EGraph<N>,
         root: Id,
         goals: &mut Vec<(Id, Id)>,
         subst: &mut Vec<(&'p Var<S>, Id)>,
+        bound: &mut Vec<Option<Id>>,
+        allowed: &dyn Fn(Id, Id) -> bool,
         out: &mut Vec<EMatch<S>>,
     ) {
         let Some((pat, class)) = goals.pop() else {
@@ -140,45 +194,72 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
                 subst: Substitution {
                     vec: subst.iter().map(|&(v, id)| (v.clone(), id)).collect(),
                 },
+                bindings: bound.clone(),
             });
             return;
         };
-        let mark = goals.len();
-        match &self.nodes[pat.index()] {
-            PatternNode::Var(var @ Var::Symbol(_)) => {
-                match subst.iter().find(|(v, _)| *v == var).map(|&(_, id)| id) {
-                    Some(bound) if eg.find(bound) != eg.find(class) => {}
-                    Some(_) => self.solve(eg, root, goals, subst, out),
-                    None => {
-                        subst.push((var, class));
-                        self.solve(eg, root, goals, subst, out);
-                        subst.pop();
+        let class = eg.find(class);
+        // A pattern node shared by several parents (a DAG pattern) must bind the
+        // same class at every occurrence.
+        let previous = bound[pat.index()];
+        let consistent = previous.is_none_or(|existing| eg.find(existing) == class);
+        if consistent && allowed(pat, class) {
+            bound[pat.index()] = Some(class);
+            let mark = goals.len();
+            match &self.nodes[pat.index()] {
+                PatternNode::Var(var @ Var::Symbol(_)) => {
+                    match subst.iter().find(|(v, _)| *v == var).map(|&(_, id)| id) {
+                        Some(prior) if eg.find(prior) != class => {}
+                        Some(_) => self.solve(eg, root, goals, subst, bound, allowed, out),
+                        None => {
+                            subst.push((var, class));
+                            self.solve(eg, root, goals, subst, bound, allowed, out);
+                            subst.pop();
+                        }
+                    }
+                }
+                PatternNode::Var(Var::Int(v)) => {
+                    if class_has_const(eg, N::from_int(v.clone()), class) {
+                        self.solve(eg, root, goals, subst, bound, allowed, out);
+                    }
+                }
+                PatternNode::Var(Var::Float(v)) => {
+                    if class_has_const(eg, N::from_float(v.clone()), class) {
+                        self.solve(eg, root, goals, subst, bound, allowed, out);
+                    }
+                }
+                PatternNode::Node(template) => {
+                    let tchildren = template.children();
+                    for enode in eg.nodes(class) {
+                        let node_children = enode.children();
+                        if !template.matches_template(enode)
+                            || tchildren.len() != node_children.len()
+                        {
+                            continue;
+                        }
+                        // A commutative binary operator matches in both operand
+                        // orders.
+                        let orders = if template.commutative() && node_children.len() == 2 {
+                            2
+                        } else {
+                            1
+                        };
+                        for order in 0..orders {
+                            for (slot, pc) in tchildren.iter().enumerate().rev() {
+                                let ec = if order == 1 {
+                                    node_children[1 - slot]
+                                } else {
+                                    node_children[slot]
+                                };
+                                goals.push((*pc, eg.find(ec)));
+                            }
+                            self.solve(eg, root, goals, subst, bound, allowed, out);
+                            goals.truncate(mark);
+                        }
                     }
                 }
             }
-            PatternNode::Var(Var::Int(v)) => {
-                if class_has_const(eg, N::from_int(v.clone()), class) {
-                    self.solve(eg, root, goals, subst, out);
-                }
-            }
-            PatternNode::Var(Var::Float(v)) => {
-                if class_has_const(eg, N::from_float(v.clone()), class) {
-                    self.solve(eg, root, goals, subst, out);
-                }
-            }
-            PatternNode::Node(template) => {
-                let tchildren = template.children();
-                for enode in eg.nodes(class) {
-                    if !template.matches(enode) || tchildren.len() != enode.children().len() {
-                        continue;
-                    }
-                    for (pc, ec) in tchildren.iter().zip(enode.children()).rev() {
-                        goals.push((*pc, eg.find(*ec)));
-                    }
-                    self.solve(eg, root, goals, subst, out);
-                    goals.truncate(mark);
-                }
-            }
+            bound[pat.index()] = previous;
         }
         goals.push((pat, class));
     }
