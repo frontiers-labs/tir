@@ -166,6 +166,21 @@ matches (each fused instruction recomputes it); a shared *memory effect* (§1)
 is allowed as a match root or boundary, but never as an interior node a larger
 match would erase.
 
+### Width-sensitive operands
+
+A boundary may carry a **width requirement** (`Rule::with_operand_widths`,
+compiled to `Pattern::operand_width`): the bound class must hold a value of
+exactly that width, or one of *unknown* width (a rewrite-introduced
+intermediate, produced at register width by whatever materializes it). TMDL
+derives these for operands whose upper register bits reach the result —
+comparison operands always; right-shift values and division/remainder operands
+under an *untyped* node (a typed word form like `sraw` already pins its
+operands through width inference) — resolving the width from the operand's
+register class per enabled features (XLEN: 64 on rv64, 32 on rv32). So an i32
+compare fuses into `blt` on rv32 but is *refused* on rv64 (a 64-bit compare
+would read undefined upper bits) instead of miscompiling.
+Low-bits-preserving operators (add/and/shl/mul-low) stay width-agnostic.
+
 ### Dominance pruning (specificity)
 
 Before the solve, `prune_dominated_matches` deduplicates interchangeable

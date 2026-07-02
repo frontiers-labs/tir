@@ -186,6 +186,11 @@ pub struct Rule {
     /// are unconstrained, so hand-written and synthesized rules keep matching any
     /// value.
     pub operand_constraints: Vec<(u32, OperandConstraint)>,
+    /// Per-operand-symbol required value width, for operands the instruction is
+    /// width-sensitive in (comparisons, right shifts, division): the operand's
+    /// upper bits reach the result, so a narrower value must not bind. Symbols
+    /// absent here match any width.
+    pub operand_widths: Vec<(u32, u32)>,
     /// Registers this instruction reads implicitly (from its behavior, not its
     /// encoded operands); selection introduces each one's definer ahead of this op.
     pub implicit_uses: Vec<ImplicitUse>,
@@ -200,6 +205,7 @@ impl Rule {
             base_cost,
             kind: RuleKind::Value,
             operand_constraints: Vec::new(),
+            operand_widths: Vec::new(),
             implicit_uses: Vec::new(),
             emit_fn,
         }
@@ -209,6 +215,14 @@ impl Rule {
     /// immediate-shift pattern only matches a constant shift amount.
     pub fn with_operand_constraints(mut self, constraints: Vec<(u32, OperandConstraint)>) -> Self {
         self.operand_constraints = constraints;
+        self
+    }
+
+    /// Require operand symbols to bind values of exactly the given width (see
+    /// [`Rule::operand_widths`]). Values of unknown width — rewrite-introduced
+    /// intermediates carrying no IR type — still match.
+    pub fn with_operand_widths(mut self, widths: Vec<(u32, u32)>) -> Self {
+        self.operand_widths = widths;
         self
     }
 
@@ -315,7 +329,12 @@ impl InstructionSelectPass {
             .iter()
             .enumerate()
             .filter_map(|(rule_index, rule)| {
-                compile_isel_pattern(rule_index, &rule.pattern, &rule.operand_constraints)
+                compile_isel_pattern(
+                    rule_index,
+                    &rule.pattern,
+                    &rule.operand_constraints,
+                    &rule.operand_widths,
+                )
             })
             .collect();
 

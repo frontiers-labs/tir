@@ -1,0 +1,25 @@
+// RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s
+// RUN: not tir mc --march=rv64i --stage=isel %s
+
+// Comparison operands are width-sensitive: their upper register bits reach the
+// result. An i32 compare matches the branch/slt rules only when the register
+// width is 32 (rv32); on rv64 selecting `blt` would compare garbage upper
+// bits, so selection must refuse instead of miscompiling.
+
+module {
+  func @pick(%0: !i32, %1: !i32) -> !i32 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i32
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i32
+    return %4
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "pick"
+// CHECK: riscv.blt {rs1 = %virt0:GPR, rs2 = %virt1:GPR, imm = ^bb1}
+// CHECK-NEXT: riscv.vbr ^bb2

@@ -578,6 +578,11 @@ fn emit_instructions<'a>(
             }
             let (pattern_stmts, _root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+            let operand_width_call = emit_operand_width_call(
+                &ops,
+                &semantics.variable_symbols,
+                &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+            );
             // Cost reflects the canonical pattern's size (one machine instruction).
             let base_cost = {
                 use tir::graph::Dag;
@@ -641,6 +646,7 @@ fn emit_instructions<'a>(
                             #emit_fn_ident,
                         )
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
+                        #operand_width_call
                         .with_implicit_uses(vec![#(#implicit_use_entries),*]),
                     );
                 }
@@ -743,6 +749,11 @@ fn emit_instructions<'a>(
             }
             let (pattern_stmts, _root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+            let operand_width_call = emit_operand_width_call(
+                &ops,
+                &branch.variable_symbols,
+                &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+            );
             let base_cost = {
                 use tir::graph::Dag;
                 (canon_pattern.len() as u32).max(1)
@@ -783,7 +794,8 @@ fn emit_instructions<'a>(
                         .with_kind(tir::backend::isel::RuleKind::CondBranch {
                             target_symbol: #target_symbol_lit,
                         })
-                        .with_operand_constraints(vec![#(#operand_constraint_entries),*]),
+                        .with_operand_constraints(vec![#(#operand_constraint_entries),*])
+                        #operand_width_call,
                     );
                 }
             });
@@ -1347,6 +1359,10 @@ fn emit_instructions<'a>(
         /// Instruction-selection rules for the instructions available under `features`.
         pub fn get_isel_rules(context: &tir::Context, features: &[Feature]) -> Vec<tir::backend::isel::Rule> {
             let _ = (&context, &features);
+            // Width-sensitive operands are constrained to their register class's
+            // architectural width under the enabled features (e.g. XLEN).
+            let __register_widths = register_widths(features);
+            let _ = &__register_widths;
             let mut rules = Vec::new();
             #(#isel_rule_inits)*
             rules
@@ -2249,6 +2265,87 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
             }
         }
         ast::Expr::Lambda(l) => collect_referenced_idents(&l.body, operands, out),
+    }
+}
+
+/// The boundary symbols an instruction is width-sensitive in: the operands'
+/// upper register bits reach the result, so a value of a different width must
+/// not bind (its bits above the value width are undefined). Comparison
+/// operands always qualify — the comparison node's own type is its i1 result
+/// and says nothing about operand widths. Right-shift values and
+/// division/remainder operands qualify only under an *untyped* node: a typed
+/// node (a word form like `sraw`) already pins its operands through width
+/// inference. Low-bits-preserving operators (add/and/shl/mul low half) are
+/// exempt: a narrower value's upper garbage never reaches its own low bits.
+fn width_sensitive_symbols(
+    dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+    node_widths: &[Option<u32>],
+) -> HashSet<u32> {
+    use tir::sem::SymKind as K;
+
+    let mut out = HashSet::new();
+    for index in 0..dag.len() {
+        let node = tir::graph::NodeId::from_index(index);
+        let untyped = node_widths.get(index).copied().flatten().is_none();
+        let sensitive_children: &[usize] = match dag.get_node(node) {
+            K::Eq | K::Ne | K::Lt | K::Le | K::Gt | K::Ge | K::ULt | K::ULe | K::UGt | K::UGe => {
+                &[0, 1]
+            }
+            K::Div | K::UDiv | K::SRem | K::URem if untyped => &[0, 1],
+            K::ShiftRightLogic | K::ShiftRightArithmetic if untyped => &[0],
+            _ => &[],
+        };
+        let children: Vec<tir::graph::NodeId> = dag.children(node).collect();
+        for &slot in sensitive_children {
+            if let Some(child) = children.get(slot)
+                && let Some(tir::sem::SymPayload::SymbolId(symbol)) = dag.get_leaf_data(*child)
+            {
+                out.insert(*symbol);
+            }
+        }
+    }
+    out
+}
+
+/// Emit the `.with_operand_widths` builder call constraining each sensitive
+/// register operand to its register class's architectural width (resolved at
+/// runtime from the enabled features via `__register_widths`).
+fn emit_operand_width_call(
+    ops: &[(String, Type)],
+    variable_symbols: &HashMap<String, u32>,
+    sensitive_symbols: &HashSet<u32>,
+) -> proc_macro2::TokenStream {
+    let width_steps: Vec<proc_macro2::TokenStream> = ops
+        .iter()
+        .filter_map(|(op_name, op_ty)| {
+            let Type::Struct(class_name) = op_ty else {
+                return None;
+            };
+            let &symbol = variable_symbols.get(op_name)?;
+            if !sensitive_symbols.contains(&symbol) {
+                return None;
+            }
+            let class_lit = proc_macro2::Literal::string(class_name);
+            let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
+            Some(quote! {
+                if let Some((_, width)) =
+                    __register_widths.iter().find(|(class, _)| *class == #class_lit)
+                {
+                    __operand_widths.push((#symbol_lit, *width));
+                }
+            })
+        })
+        .collect();
+
+    if width_steps.is_empty() {
+        return quote! {};
+    }
+    quote! {
+        .with_operand_widths({
+            let mut __operand_widths: Vec<(u32, u32)> = Vec::new();
+            #(#width_steps)*
+            __operand_widths
+        })
     }
 }
 

@@ -55,6 +55,9 @@ pub struct Pattern<N, A> {
     parents: HashMap<NodeId, Vec<NodeId>>,
     duplicable: HashSet<NodeId>,
     operand_constraints: HashMap<NodeId, OperandConstraint>,
+    /// Required integer bit-width of a boundary's bound value, for operands the
+    /// instruction is width-sensitive in (comparisons, right shifts, division).
+    operand_widths: HashMap<NodeId, u32>,
     root: Option<NodeId>,
     applicator: A,
 }
@@ -67,6 +70,7 @@ impl<N, A> Pattern<N, A> {
             parents: HashMap::new(),
             duplicable: HashSet::new(),
             operand_constraints: HashMap::new(),
+            operand_widths: HashMap::new(),
             root: None,
             applicator: a,
         }
@@ -113,6 +117,14 @@ impl<N, A> Pattern<N, A> {
 
     pub fn operand_constraint(&self, node: NodeId) -> Option<OperandConstraint> {
         self.operand_constraints.get(&node).copied()
+    }
+
+    pub fn set_operand_width(&mut self, node: NodeId, width: u32) {
+        self.operand_widths.insert(node, width);
+    }
+
+    pub fn operand_width(&self, node: NodeId) -> Option<u32> {
+        self.operand_widths.get(&node).copied()
     }
 
     pub fn set_root(&mut self, root: NodeId) {

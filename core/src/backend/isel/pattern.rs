@@ -25,6 +25,7 @@ pub(crate) fn compile_isel_pattern(
     rule_index: usize,
     expr: &SemGraph,
     operand_constraints: &[(u32, OperandConstraint)],
+    operand_widths: &[(u32, u32)],
 ) -> Option<CompiledIselPattern> {
     let root = expr.root()?;
     let mut pattern = Pattern::new(rule_index);
@@ -35,10 +36,15 @@ pub(crate) fn compile_isel_pattern(
     pattern.set_root(pattern_root);
 
     // Constrain each operand boundary to register or immediate, so e.g. an
-    // immediate-shift pattern never matches a register shift amount.
+    // immediate-shift pattern never matches a register shift amount; a width
+    // requirement keeps width-sensitive operands (comparisons, right shifts)
+    // from binding narrower values whose upper register bits are undefined.
     for (&pattern_node, &symbol) in &boundary_symbols {
         if let Some((_, constraint)) = operand_constraints.iter().find(|(s, _)| *s == symbol) {
             pattern.set_operand_constraint(pattern_node, *constraint);
+        }
+        if let Some((_, width)) = operand_widths.iter().find(|(s, _)| *s == symbol) {
+            pattern.set_operand_width(pattern_node, *width);
         }
     }
 

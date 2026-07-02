@@ -339,7 +339,14 @@ pub(crate) fn completeness_error(
         if has_root.contains(&class) || has_internal.contains(&class) || exempt.contains(&class) {
             continue;
         }
-        if let Some(kind) = egraph.nodes(class).first().map(|n| n.kind)
+        // Prefer a member that isn't a rewrite-introduced `If` bridge, so the
+        // diagnostic names the original semantic kind (e.g. the comparison).
+        let nodes = egraph.nodes(class);
+        if let Some(kind) = nodes
+            .iter()
+            .map(|n| n.kind)
+            .find(|kind| *kind != SymKind::If)
+            .or_else(|| nodes.first().map(|n| n.kind))
             && !missing.contains(&kind)
         {
             missing.push(kind);

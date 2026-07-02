@@ -6,7 +6,7 @@ use tir::Context;
 use tir::graph::{Matchable, NodeId, OperandConstraint, Pattern, PatternExpr};
 use tir_symbolic::egraph::{ENode, Id};
 
-use super::node::{SemEGraph, SemNode};
+use super::node::{SemEGraph, SemNode, class_width};
 
 /// One match of a [`Pattern`]: the matched root class and the e-class bound to each pattern node.
 #[derive(Clone, Debug)]
@@ -85,7 +85,7 @@ fn solve<A>(
 
     match pattern.get_node(pattern_node) {
         PatternExpr::Boundary => {
-            if boundary_ok(eg, pattern, pattern_node, class) {
+            if boundary_ok(eg, ctx, pattern, pattern_node, class) {
                 bind_self()
             } else {
                 Vec::new()
@@ -167,10 +167,23 @@ fn solve_children<A>(
 
 fn boundary_ok<A>(
     eg: &SemEGraph,
+    ctx: &Context,
     pattern: &Pattern<SemNode, A>,
     pattern_node: NodeId,
     class: Id,
 ) -> bool {
+    // A width requirement rejects a value *known* to be narrower or wider than
+    // the width the instruction operates at (its upper register bits would leak
+    // into the result). A class of unknown width — a rewrite-introduced
+    // intermediate carrying no IR type — is produced at register width by the
+    // instructions that materialize it, so it still matches.
+    if let Some(required) = pattern.operand_width(pattern_node)
+        && let Some(actual) = class_width(ctx, eg, class)
+        && actual != required
+    {
+        return false;
+    }
+
     match pattern.operand_constraint(pattern_node) {
         Some(OperandConstraint::Register) => eg.nodes(class).iter().any(|n| !n.is_constant()),
         Some(OperandConstraint::Immediate) => eg.nodes(class).iter().any(|n| n.is_constant()),

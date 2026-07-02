@@ -649,6 +649,10 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
     let mut srai = Pattern::<SemNode, ()>::new(());
     let rs1 = srai.add_node(PatternExpr::Boundary);
     srai.set_duplicable(rs1, true);
+    // A width requirement must not reject the rewrite-introduced shl class:
+    // it carries no IR type, and introduced classes are produced at register
+    // width by the instructions that materialize them.
+    srai.set_operand_width(rs1, 64);
     let imm = srai.add_node(PatternExpr::Boundary);
     srai.set_duplicable(imm, true);
     srai.set_operand_constraint(imm, OperandConstraint::Immediate);
@@ -1255,6 +1259,67 @@ fn escaping_compare_materializes_and_fuses() {
     // cmpi -> subi marker (materialized), addi stays selected, then the fused
     // branch marker and the fallthrough.
     assert_eq!(names, vec!["subi", "addi", "br", "br"]);
+}
+
+/// Width-constrained comparison operands: a rule constrained to width 64 must
+/// not bind i32 values (their upper register bits are undefined), while the
+/// matching width fuses as usual.
+#[test]
+fn width_constraint_gates_comparison_fusion() {
+    let build_cmp = |context: &Context, fb: &mut IRBuilder, args: &[tir::ValueId]| {
+        let cmp = tir::builtin::CmpIOpBuilder::new(context)
+            .lhs(args[0])
+            .rhs(args[1])
+            .predicate("slt")
+            .result_type(IntegerType::new(context, 1))
+            .build();
+        let result = cmp.result();
+        fb.insert(cmp);
+        result
+    };
+
+    let run = |arg_width: u32, rule_width: u32| {
+        let context = Context::with_default_dialects();
+        let module = ops::module(&context, None).build();
+        let values: Vec<_> = (0..2)
+            .map(|_| context.create_value(IntegerType::new(&context, arg_width), None))
+            .collect();
+        let arg_ids: Vec<_> = values.iter().map(|v| v.id()).collect();
+        let region = context.create_region();
+        let block = context.create_block(values);
+        region.add_block(block.id());
+        let t = context.create_block(vec![]);
+        let f = context.create_block(vec![]);
+
+        let func = ops::func(
+            &context,
+            "demo",
+            IntegerType::new(&context, 64),
+            Some(region.id()),
+        )
+        .build();
+        let mut fb = IRBuilder::new(func.body());
+        let cond = build_cmp(&context, &mut fb, &arg_ids);
+        fb.insert(ops::cond_br(&context, cond, vec![], vec![], t.id(), f.id()).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let rules = vec![branch_rule().with_operand_widths(vec![(0, rule_width), (1, rule_width)])];
+        let mut pm = PassManager::new();
+        pm.nest(FuncOp::name())
+            .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+        pm.run(&context, context.get_op(module.id()))
+            .map(|()| block_ops(&context, region.id()).len())
+    };
+
+    // Matching width: the compare fuses and is consumed (branch + fallthrough).
+    assert_eq!(run(64, 64).expect("matching width should fuse"), 2);
+    // Mismatched width: no branch rule matches, the fallback needs the
+    // condition materialized, and no rule can — selection must refuse.
+    let err = run(32, 64).expect_err("mismatched width must be rejected");
+    assert!(err.to_string().contains("Lt"));
 }
 
 /// Block arguments on conditional edges are still rejected (codegen cannot
