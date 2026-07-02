@@ -629,12 +629,12 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
     sext_node.children = vec![v, width];
     let sext = egraph.add(sext_node);
 
-    let text = super::synthesis::synthesize_bridge_text(
+    let texts = super::synthesis::synthesize_bridge_texts(
         SymKind::SExt,
         &std::collections::HashSet::from([SymKind::ShiftLeft, SymKind::ShiftRightArithmetic]),
-    )
-    .expect("sext bridge discovered");
-    let rewrite = super::axioms::parse_axiom(&text).unwrap().compile();
+    );
+    let text = texts.first().expect("sext bridge discovered");
+    let rewrite = super::axioms::parse_axiom(text).unwrap().compile();
     super::rewrites::saturate(
         &ctx,
         &mut egraph,

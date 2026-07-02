@@ -23,6 +23,8 @@ const OP_VOCABULARY: &[(&str, SymKind)] = &[
     ("ashr", SymKind::ShiftRightArithmetic),
     ("zip", SymKind::Zip),
     ("split", SymKind::Split),
+    ("not", SymKind::Not),
+    ("neg", SymKind::Neg),
     ("sext", SymKind::SExt),
     ("zext", SymKind::ZExt),
     ("if", SymKind::If),

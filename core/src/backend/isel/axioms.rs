@@ -16,10 +16,11 @@
 //! ```
 //!
 //! An RHS template references declared vars, `root` (the matched class),
-//! nested `(<kind> ...)` nodes, and integer expressions over bound widths — a
-//! bare expression becomes a width-64 constant, `(const <expr> <width>)`
-//! picks the width explicitly. Node kinds are the op-sem surface's fixed-arity
-//! vocabulary ([`op_kind`]).
+//! nested `(<kind> ...)` nodes, and integer expressions over bound widths
+//! (names, `-`, `(ones <e>)` for `2^e - 1`). A bare expression is an untyped
+//! immediate ([`ConstWidth::Register`]); `(const <expr> <width>)` pins the
+//! width. Node kinds are the op-sem surface's fixed-arity vocabulary
+//! ([`op_kind`]).
 //!
 //! The proof obligation depends on what the RHS reads. Referencing only
 //! `root`, the lemma quantifies over an opaque root value of the root's width
@@ -82,6 +83,8 @@ enum WidthExpr {
     Lit(u64),
     Name(usize),
     Sub(Box<WidthExpr>, Box<WidthExpr>),
+    /// `(ones e)`: the all-ones value of `e` bits, `2^e - 1`.
+    Ones(Box<WidthExpr>),
 }
 
 impl WidthExpr {
@@ -90,6 +93,11 @@ impl WidthExpr {
             WidthExpr::Lit(v) => Some(*v),
             WidthExpr::Name(i) => Some(widths[*i]),
             WidthExpr::Sub(a, b) => a.eval(widths)?.checked_sub(b.eval(widths)?),
+            WidthExpr::Ones(e) => match e.eval(widths)? {
+                64 => Some(u64::MAX),
+                v if v < 64 => Some((1u64 << v) - 1),
+                _ => None,
+            },
         }
     }
 }
@@ -109,6 +117,16 @@ impl Guard {
     }
 }
 
+/// The width a template constant materializes at.
+#[derive(Clone, Copy)]
+enum ConstWidth {
+    /// A bare expression: an untyped immediate — proved at the register width,
+    /// instantiated at the e-graph's 64-bit introduced-constant convention.
+    Register,
+    /// An explicit `(const <expr> <width>)`.
+    Fixed(u32),
+}
+
 /// One template tree shared by both sides; which leaves are legal where is
 /// enforced at parse by [`Side`].
 enum AxNode {
@@ -118,9 +136,8 @@ enum AxNode {
     Hole(String, Option<usize>),
     /// The matched root class (RHS only).
     Root,
-    /// An integer expression materialized as a constant of the given width
-    /// (RHS only).
-    Const(WidthExpr, u32),
+    /// An integer expression materialized as a constant (RHS only).
+    Const(WidthExpr, ConstWidth),
     Node(SymKind, Vec<AxNode>),
 }
 
@@ -342,18 +359,16 @@ fn parse_width_expr(e: &SemExpr, width_names: &[String]) -> Result<WidthExpr, St
                 Err(format!("unknown width `{a}`"))
             }
         }
-        SemExpr::List(parts) => {
-            let [SemExpr::Atom(minus), a, b] = parts.as_slice() else {
-                return Err("width expressions are atoms or (- <a> <b>)".into());
-            };
-            if minus != "-" {
-                return Err(format!("unknown width operator `{minus}`"));
-            }
-            Ok(WidthExpr::Sub(
+        SemExpr::List(parts) => match parts.as_slice() {
+            [SemExpr::Atom(minus), a, b] if minus == "-" => Ok(WidthExpr::Sub(
                 Box::new(parse_width_expr(a, width_names)?),
                 Box::new(parse_width_expr(b, width_names)?),
-            ))
-        }
+            )),
+            [SemExpr::Atom(ones), e] if ones == "ones" => {
+                Ok(WidthExpr::Ones(Box::new(parse_width_expr(e, width_names)?)))
+            }
+            _ => Err("width expressions are atoms, (- <a> <b>), or (ones <e>)".into()),
+        },
     }
 }
 
@@ -382,7 +397,10 @@ fn parse_node(
                 Side::Lhs => Ok(AxNode::Hole(a.clone(), var)),
                 Side::Rhs => match var {
                     Some(i) => Ok(AxNode::Hole(a.clone(), Some(i))),
-                    None => Ok(AxNode::Const(parse_width_expr(e, width_names)?, 64)),
+                    None => Ok(AxNode::Const(
+                        parse_width_expr(e, width_names)?,
+                        ConstWidth::Register,
+                    )),
                 },
             }
         }
@@ -391,9 +409,10 @@ fn parse_node(
                 return Err("template nodes must be (<kind> <operand>...)".into());
             };
             match head.as_str() {
-                "-" if side == Side::Rhs => {
-                    Ok(AxNode::Const(parse_width_expr(e, width_names)?, 64))
-                }
+                "-" | "ones" if side == Side::Rhs => Ok(AxNode::Const(
+                    parse_width_expr(e, width_names)?,
+                    ConstWidth::Register,
+                )),
                 "const" if side == Side::Rhs => {
                     let [value, SemExpr::Atom(width)] = rest else {
                         return Err("const form is (const <expr> <width>)".into());
@@ -401,7 +420,10 @@ fn parse_node(
                     let width: u32 = width
                         .parse()
                         .map_err(|_| "const width must be an integer")?;
-                    Ok(AxNode::Const(parse_width_expr(value, width_names)?, width))
+                    Ok(AxNode::Const(
+                        parse_width_expr(value, width_names)?,
+                        ConstWidth::Fixed(width),
+                    ))
                 }
                 _ => {
                     let kind = op_kind(head).ok_or_else(|| format!("unknown kind `{head}`"))?;
@@ -606,7 +628,13 @@ impl Axiom {
                 let i = self.width_names.iter().position(|n| n == name)?;
                 Some(con(g, widths[i], 16))
             }
-            AxNode::Const(e, width) => Some(con(g, e.eval(widths)?, *width)),
+            AxNode::Const(e, width) => {
+                let width = match width {
+                    ConstWidth::Register => register_width,
+                    ConstWidth::Fixed(w) => *w,
+                };
+                Some(con(g, e.eval(widths)?, width))
+            }
             AxNode::Node(kind, children) => {
                 let children = children
                     .iter()
@@ -629,11 +657,17 @@ impl Axiom {
         Some(match node {
             AxNode::Root => m.root,
             AxNode::Hole(name, _) => m.binding(holes[name]),
-            AxNode::Const(e, width) => eg.add(template_node(
-                SymKind::Constant,
-                Some(SymPayload::Int(APInt::new(*width, e.eval(widths)?))),
-                None,
-            )),
+            AxNode::Const(e, width) => {
+                let width = match width {
+                    ConstWidth::Register => 64,
+                    ConstWidth::Fixed(w) => *w,
+                };
+                eg.add(template_node(
+                    SymKind::Constant,
+                    Some(SymPayload::Int(APInt::new(width, e.eval(widths)?))),
+                    None,
+                ))
+            }
             AxNode::Node(kind, children) => {
                 let children = children
                     .iter()

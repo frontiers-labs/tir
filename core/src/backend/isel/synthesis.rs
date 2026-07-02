@@ -1,20 +1,32 @@
 //! Discovery of materializer bridges by enumeration, not hand-authoring.
 //!
 //! For a semantic kind the program may contain but no instruction can root
-//! (a sub-word `sext`/`zext`), [`synthesize_bridge`] searches for an
-//! equivalent term over the kinds the target *can* realize:
+//! (a sub-word `sext`/`zext`, a bare `neg`/`not`), [`synthesize_bridge_texts`]
+//! searches for equivalent terms over the kinds the target *can* realize:
 //!
 //! 1. Terms are enumerated smallest-first over the target's atomic kinds,
 //!    directly in the axiom DSL's language — constant leaves are width
-//!    *expressions* (`0`, `1`, `n`, `w`, `(- w n)`), so every candidate is
-//!    width-parameterized by construction and needs no later generalization.
+//!    *expressions* (`0`, `1`, `n`, `w`, `(- w n)`, `(ones w)`), so every
+//!    candidate is width-parameterized by construction and needs no later
+//!    generalization.
 //! 2. Each term is fingerprinted by evaluation over sample inputs at several
 //!    `(n, w)` width pairs; the bank keeps one representative per behavior
 //!    (observational-equivalence pruning), so the space stays small.
-//! 3. Terms whose fingerprint matches the goal's register realization (the
-//!    low `n` bits of a register extended to `w` — upper junk bits included)
-//!    are rendered as axiom text and confirmed by [`Axiom::prove`] at every
-//!    sampled width pair. The first (smallest) proved candidate wins.
+//! 3. Terms whose fingerprint matches the goal's register realization (for an
+//!    extension goal: the low `n` bits of a register extended to `w` — upper
+//!    junk bits included) are rendered as axiom text and confirmed by
+//!    [`Axiom::prove`] at every sampled width pair. Every proved candidate of
+//!    the smallest proving size is emitted — alternatives realize the goal
+//!    through different kinds, and the cover picks whichever the target's
+//!    operand constraints admit.
+//!
+//! Extension goals deliberately exclude the `(ones n)` mask leaf: matching
+//! has no immediate-*range* legality yet (an `Immediate` constraint accepts
+//! any constant), so a discovered `zext(x, w) == and(x, 2^n - 1)` would beat
+//! the shift pair on cost and select `andi` with masks that do not encode
+//! (e.g. `0xffff` in a 12-bit field). Enable it once matching enforces
+//! immediate ranges. The full-register `(ones w)` leaf is safe — as an
+//! immediate it folds to `-1`.
 //!
 //! The result is the same artifact a hand-written axiom would be — s-expr
 //! text through [`parse_axiom`] — so the compiled rewrite still re-proves
@@ -67,11 +79,11 @@ enum WLeaf {
     N,
     W,
     WMinusN,
+    /// `2^w - 1`, the all-ones register (`-1` as an immediate).
+    OnesW,
 }
 
 impl WLeaf {
-    const ALL: [WLeaf; 5] = [WLeaf::Zero, WLeaf::One, WLeaf::N, WLeaf::W, WLeaf::WMinusN];
-
     fn eval(self, n: u32, w: u32) -> u64 {
         match self {
             WLeaf::Zero => 0,
@@ -79,6 +91,7 @@ impl WLeaf {
             WLeaf::N => n as u64,
             WLeaf::W => w as u64,
             WLeaf::WMinusN => (w - n) as u64,
+            WLeaf::OnesW => mask(w),
         }
     }
 
@@ -89,6 +102,51 @@ impl WLeaf {
             WLeaf::N => "n",
             WLeaf::W => "w",
             WLeaf::WMinusN => "(- w n)",
+            WLeaf::OnesW => "(ones w)",
+        }
+    }
+}
+
+/// The shape of a bridge goal: a two-operand extension (`(sext x w)`, value of
+/// width `n < w`) or a same-width unary (`(neg x)`).
+#[derive(Clone, Copy, PartialEq)]
+enum GoalShape {
+    Extension,
+    Unary,
+}
+
+/// The kinds discovery bridges, with their shapes.
+const GOALS: &[(SymKind, GoalShape)] = &[
+    (SymKind::SExt, GoalShape::Extension),
+    (SymKind::ZExt, GoalShape::Extension),
+    (SymKind::Neg, GoalShape::Unary),
+    (SymKind::Not, GoalShape::Unary),
+];
+
+impl GoalShape {
+    /// Constant leaves candidates may use. Extension goals omit `(ones n)`
+    /// masks until matching enforces immediate ranges (see the module doc).
+    fn leaves(self) -> &'static [WLeaf] {
+        match self {
+            GoalShape::Extension => &[WLeaf::Zero, WLeaf::One, WLeaf::N, WLeaf::W, WLeaf::WMinusN],
+            GoalShape::Unary => &[WLeaf::Zero, WLeaf::One, WLeaf::W, WLeaf::OnesW],
+        }
+    }
+
+    /// The `(n, w)` pairs fingerprints and proofs sample; a unary goal
+    /// operates at the register width, so `n == w`.
+    fn width_pairs(self) -> Vec<(u32, u32)> {
+        match self {
+            GoalShape::Extension => EXT_WIDTH_SAMPLES.to_vec(),
+            GoalShape::Unary => [8, 32, 64].into_iter().map(|w| (w, w)).collect(),
+        }
+    }
+
+    /// The `prove` argument for one pair, in width-name declaration order.
+    fn prove_widths(self, n: u32, w: u32) -> Vec<u64> {
+        match self {
+            GoalShape::Extension => vec![n as u64, w as u64],
+            GoalShape::Unary => vec![w as u64],
         }
     }
 }
@@ -111,6 +169,13 @@ impl Term {
             Term::X => true,
             Term::Const(_) => false,
             Term::Node(_, a, b) => a.contains_x() || b.contains_x(),
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            Term::X | Term::Const(_) => 0,
+            Term::Node(_, a, b) => 1 + a.size() + b.size(),
         }
     }
 
@@ -175,10 +240,11 @@ impl Term {
 /// Per width pair: `(n, w, register-wide input samples)`. The samples carry
 /// junk above bit `n`, so a candidate must tolerate undefined upper bits to
 /// match the goal.
-fn build_samples() -> Vec<(u32, u32, Vec<u64>)> {
-    EXT_WIDTH_SAMPLES
-        .iter()
-        .map(|&(n, w)| {
+fn build_samples(shape: GoalShape) -> Vec<(u32, u32, Vec<u64>)> {
+    shape
+        .width_pairs()
+        .into_iter()
+        .map(|(n, w)| {
             let xs = sample_values(w, 2)
                 .iter()
                 .map(|v| v.to_u64() & mask(w))
@@ -195,8 +261,8 @@ fn fingerprint(term: &Term, samples: &[(u32, u32, Vec<u64>)]) -> Vec<u64> {
         .collect()
 }
 
-/// The bridged kind's register realization: extend the low `n` bits of the
-/// register to `w`.
+/// The bridged kind's register realization: extensions widen the low `n` bits
+/// of the register to `w`; unary goals operate on the whole register.
 fn goal_eval(goal: SymKind, x: u64, n: u32, w: u32) -> u64 {
     let low = x & mask(n);
     match goal {
@@ -208,18 +274,24 @@ fn goal_eval(goal: SymKind, x: u64, n: u32, w: u32) -> u64 {
                 low
             }
         }
+        SymKind::Neg => x.wrapping_neg() & mask(w),
+        SymKind::Not => !x & mask(w),
         other => unreachable!("kind {other:?} is not a bridge goal"),
     }
 }
 
 /// Enumerate terms smallest-first with observational-equivalence pruning:
 /// per behavior class, the first few terms found (ordered by size).
-fn enumerate(kinds: &[SymKind], samples: &[(u32, u32, Vec<u64>)]) -> HashMap<Vec<u64>, Vec<Term>> {
+fn enumerate(
+    kinds: &[SymKind],
+    shape: GoalShape,
+    samples: &[(u32, u32, Vec<u64>)],
+) -> HashMap<Vec<u64>, Vec<Term>> {
     let mut classes: HashMap<Vec<u64>, Vec<Term>> = HashMap::new();
     let mut by_size: Vec<Vec<Term>> = Vec::with_capacity(MAX_OPS + 1);
 
     let leaves: Vec<Term> = std::iter::once(Term::X)
-        .chain(WLeaf::ALL.into_iter().map(Term::Const))
+        .chain(shape.leaves().iter().copied().map(Term::Const))
         .collect();
     for leaf in &leaves {
         classes
@@ -241,6 +313,11 @@ fn enumerate(kinds: &[SymKind], samples: &[(u32, u32, Vec<u64>)]) -> HashMap<Vec
                         if !a.contains_x() && !b.contains_x() {
                             continue;
                         }
+                        // One operand order suffices: the match engine handles
+                        // commutativity, so the swap is a redundant candidate.
+                        if kind.is_commutative() && a.render() > b.render() {
+                            continue;
+                        }
                         let term = Term::Node(kind, Box::new(a.clone()), Box::new(b.clone()));
                         let fp = fingerprint(&term, samples);
                         let class = classes.entry(fp).or_default();
@@ -259,55 +336,83 @@ fn enumerate(kinds: &[SymKind], samples: &[(u32, u32, Vec<u64>)]) -> HashMap<Vec
     classes
 }
 
-fn render_axiom(goal: SymKind, rhs: &Term) -> String {
+fn render_axiom(goal: SymKind, shape: GoalShape, rhs: &Term, index: usize) -> String {
     let goal_name = op_name(goal).expect("bridge goal is in the vocabulary");
-    format!(
-        "(axiom {goal_name}-bridge (vars (x n)) (root w) (where (< n w)) \
-         (lhs ({goal_name} x w)) (rhs {}))",
-        rhs.render()
-    )
+    let suffix = if index == 0 {
+        String::new()
+    } else {
+        format!("-{}", index + 1)
+    };
+    match shape {
+        GoalShape::Extension => format!(
+            "(axiom {goal_name}-bridge{suffix} (vars (x n)) (root w) (where (< n w)) \
+             (lhs ({goal_name} x w)) (rhs {}))",
+            rhs.render()
+        ),
+        GoalShape::Unary => format!(
+            "(axiom {goal_name}-bridge{suffix} (vars (x w)) (root w) \
+             (lhs ({goal_name} x)) (rhs {}))",
+            rhs.render()
+        ),
+    }
 }
 
-/// Search for a proved bridge realizing `goal` over `kinds`; the axiom text of
-/// the smallest fingerprint-matching candidate that survives [`Axiom::prove`]
-/// at every sampled width pair.
-fn discover_bridge_text(goal: SymKind, kinds: &[SymKind]) -> Option<String> {
+/// Search for proved bridges realizing `goal` over `kinds`: every candidate of
+/// the smallest proving size whose fingerprint matches the goal and that
+/// survives [`Axiom::prove`] at every sampled width pair. Same-size
+/// alternatives are all emitted — they realize the goal through different
+/// kinds and operand shapes, and the cover picks whichever the target's
+/// operand constraints admit.
+fn discover_bridge_texts(goal: SymKind, shape: GoalShape, kinds: &[SymKind]) -> Vec<String> {
     if kinds.is_empty() {
-        return None;
+        return Vec::new();
     }
-    let samples = build_samples();
-    let classes = enumerate(kinds, &samples);
+    let samples = build_samples(shape);
+    let classes = enumerate(kinds, shape, &samples);
     let goal_fp: Vec<u64> = samples
         .iter()
         .flat_map(|&(n, w, ref xs)| xs.iter().map(move |&x| goal_eval(goal, x, n, w)))
         .collect();
-    for candidate in classes.get(&goal_fp)? {
+    let Some(candidates) = classes.get(&goal_fp) else {
+        return Vec::new();
+    };
+    let mut texts = Vec::new();
+    let mut proved_size = None;
+    for candidate in candidates {
         if !candidate.contains_x() {
             continue;
         }
-        let text = render_axiom(goal, candidate);
+        // Candidates arrive size-ascending; stop after the minimal proved size.
+        if proved_size.is_some_and(|s| candidate.size() > s) {
+            break;
+        }
+        let text = render_axiom(goal, shape, candidate, texts.len());
         let axiom = parse_axiom(&text).expect("rendered axiom must parse");
-        // Width order matches the rendered declarations: `n` (vars), `w` (root).
-        if EXT_WIDTH_SAMPLES
+        if shape
+            .width_pairs()
             .iter()
-            .all(|&(n, w)| axiom.prove(&[n as u64, w as u64]))
+            .all(|&(n, w)| axiom.prove(&shape.prove_widths(n, w)))
         {
-            return Some(text);
+            proved_size = Some(candidate.size());
+            texts.push(text);
         }
     }
-    None
+    texts
 }
 
-/// The proved bridge axiom text realizing `goal` over the target's atomic
-/// kinds, if discovery finds one. Deterministic.
-pub(crate) fn synthesize_bridge_text(goal: SymKind, atomics: &HashSet<SymKind>) -> Option<String> {
+/// The proved bridge axiom texts realizing `goal` over the target's atomic
+/// kinds; empty if discovery finds none. Deterministic.
+pub(crate) fn synthesize_bridge_texts(goal: SymKind, atomics: &HashSet<SymKind>) -> Vec<String> {
+    let Some((_, shape)) = GOALS.iter().find(|(kind, _)| *kind == goal) else {
+        return Vec::new();
+    };
     let mut kinds: Vec<SymKind> = SUPPORTED_KINDS
         .iter()
         .copied()
         .filter(|k| atomics.contains(k))
         .collect();
     kinds.sort();
-    discover_bridge_text(goal, &kinds)
+    discover_bridge_texts(goal, *shape, &kinds)
 }
 
 /// Discover every bridge axiom the rule set supports: the `tir axioms`
@@ -327,9 +432,9 @@ pub fn discover_axioms(rules: &[Rule]) -> Vec<String> {
         })
         .collect();
     let atomics = atomic_kinds(&compiled);
-    [SymKind::SExt, SymKind::ZExt]
-        .into_iter()
-        .filter_map(|goal| synthesize_bridge_text(goal, &atomics))
+    GOALS
+        .iter()
+        .flat_map(|&(goal, _)| synthesize_bridge_texts(goal, &atomics))
         .collect()
 }
 
@@ -358,44 +463,88 @@ mod tests {
 
     #[test]
     fn discovers_the_sign_extension_shift_pair() {
-        let text = discover_bridge_text(
+        let texts = discover_bridge_texts(
             SymKind::SExt,
+            GoalShape::Extension,
             &[SymKind::ShiftLeft, SymKind::ShiftRightArithmetic],
-        )
-        .expect("sext bridge must be discovered");
+        );
+        assert_eq!(texts.len(), 1, "unexpected discoveries: {texts:?}");
         assert!(
-            text.contains("(ashr (shl x (- w n)) (- w n))"),
-            "unexpected discovery: {text}"
+            texts[0].contains("(ashr (shl x (- w n)) (- w n))"),
+            "unexpected discovery: {}",
+            texts[0]
         );
     }
 
     #[test]
     fn discovers_the_zero_extension_shift_pair() {
-        let text = discover_bridge_text(
+        let texts = discover_bridge_texts(
             SymKind::ZExt,
+            GoalShape::Extension,
             &[SymKind::ShiftLeft, SymKind::ShiftRightLogic],
-        )
-        .expect("zext bridge must be discovered");
+        );
+        assert_eq!(texts.len(), 1, "unexpected discoveries: {texts:?}");
         assert!(
-            text.contains("(lshr (shl x (- w n)) (- w n))"),
-            "unexpected discovery: {text}"
+            texts[0].contains("(lshr (shl x (- w n)) (- w n))"),
+            "unexpected discovery: {}",
+            texts[0]
         );
     }
 
     #[test]
+    fn discovers_negation_via_subtraction() {
+        let texts = discover_bridge_texts(
+            SymKind::Neg,
+            GoalShape::Unary,
+            &[SymKind::Sub, SymKind::Add],
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("(sub 0 x)")),
+            "unexpected discoveries: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn discovers_complement_alternatives() {
+        // Both same-size realizations are emitted: the cover picks whichever
+        // the target's operand constraints admit (xori folds `-1`; sub needs
+        // the all-ones value in a register).
+        let texts = discover_bridge_texts(
+            SymKind::Not,
+            GoalShape::Unary,
+            &[SymKind::Sub, SymKind::Xor],
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("(xor (ones w) x)")),
+            "unexpected discoveries: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("(sub (ones w) x)")),
+            "unexpected discoveries: {texts:?}"
+        );
+        assert_eq!(texts.len(), 2, "commutative twin must be pruned: {texts:?}");
+    }
+
+    #[test]
     fn insufficient_kinds_discover_nothing() {
-        assert!(discover_bridge_text(SymKind::SExt, &[]).is_none());
-        assert!(discover_bridge_text(SymKind::SExt, &[SymKind::Add, SymKind::Xor]).is_none());
+        assert!(discover_bridge_texts(SymKind::SExt, GoalShape::Extension, &[]).is_empty());
+        assert!(
+            discover_bridge_texts(
+                SymKind::SExt,
+                GoalShape::Extension,
+                &[SymKind::Add, SymKind::Xor]
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn synthesized_bridge_is_a_full_axiom() {
-        let text = synthesize_bridge_text(
+        let texts = synthesize_bridge_texts(
             SymKind::SExt,
             &kinds(&[SymKind::ShiftLeft, SymKind::ShiftRightArithmetic]),
-        )
-        .expect("bridge");
-        let axiom = parse_axiom(&text).unwrap();
+        );
+        let axiom = parse_axiom(&texts[0]).unwrap();
         assert_eq!(
             axiom.rhs_kinds(),
             kinds(&[SymKind::ShiftLeft, SymKind::ShiftRightArithmetic])
@@ -407,7 +556,7 @@ mod tests {
 
     #[test]
     fn irrelevant_atomics_do_not_change_the_discovery() {
-        let text = synthesize_bridge_text(
+        let texts = synthesize_bridge_texts(
             SymKind::ZExt,
             &kinds(&[
                 SymKind::ShiftLeft,
@@ -415,11 +564,12 @@ mod tests {
                 SymKind::Add,
                 SymKind::Xor,
             ]),
-        )
-        .expect("bridge");
+        );
+        assert_eq!(texts.len(), 1, "unexpected discoveries: {texts:?}");
         assert!(
-            text.contains("(lshr (shl x (- w n)) (- w n))"),
-            "unexpected discovery: {text}"
+            texts[0].contains("(lshr (shl x (- w n)) (- w n))"),
+            "unexpected discovery: {}",
+            texts[0]
         );
     }
 }
