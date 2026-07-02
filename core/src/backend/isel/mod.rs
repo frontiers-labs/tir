@@ -20,7 +20,9 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     Block, BlockId, BranchGuard, BranchTerminator, Context, OpId, Operation, OperationRef, Pass,
-    PassError, PassTarget, Rewriter, TypeId, ValueId, graph::OperandConstraint, sem::SemGraph,
+    PassError, PassTarget, Rewriter, Terminator, TypeId, ValueId,
+    graph::OperandConstraint,
+    sem::{SemGraph, SymKind},
 };
 use tir_adt::APInt;
 use tir_symbolic::egraph::{ENode, Id, Var};
@@ -35,11 +37,11 @@ use cover::{
     build_eclass_cover, completeness_error, prune_dominated_matches,
 };
 use emit::{BlockDecision, BlockPlan, DefinerEmit, EmissionBuilder, GuardBranch, TerminatorPlan};
-use node::{Binding, class_binding};
+use node::{Binding, class_binding, class_int_binding, template_node};
 use pattern::{CompiledIselPattern, compile_isel_pattern};
 use rewrites::discover_rewrites;
 #[cfg(test)]
-use {node::template_node, rewrites::extension_rewrite};
+use rewrites::extension_rewrite;
 
 #[derive(Debug, Clone)]
 pub struct RuleMatch {
@@ -276,6 +278,9 @@ struct BlockSelectionCache {
     /// Plain unconditional branch terminators, lowered through the target's
     /// `uncond` emitter.
     jumps: Vec<BlockJump>,
+    /// Whether the e-graph currently holds an open assumption scope (popped
+    /// once the plan is solved).
+    scoped: bool,
     /// The solved emission plan, or the completeness error explaining why the block
     /// cannot be selected with this rule set.
     plan: Option<Result<BlockPlan, String>>,
@@ -300,6 +305,23 @@ struct BlockJump {
     dest: BlockId,
     args: Vec<ValueId>,
 }
+
+/// The fact a guarded CFG edge carries: on this edge, `condition` is known to
+/// equal `holds`.
+#[derive(Clone, Copy)]
+struct EdgeFact {
+    condition: ValueId,
+    holds: bool,
+}
+
+/// An edge fact prepared against a block's e-graph: the condition's class and,
+/// when its definer is a comparison, the comparison class with its kind and
+/// operand classes.
+struct PreparedAssumption {
+    holds: bool,
+    condition: Id,
+    compare: Option<(Id, SymKind, Id, Id)>,
+}
 pub type OpLowering = fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool, PassError>;
 
 pub struct InstructionSelectPass {
@@ -319,6 +341,12 @@ pub struct InstructionSelectPass {
     op_lowerings: Vec<OpLowering>,
     block_cache: HashMap<BlockId, BlockSelectionCache>,
     emitted_blocks: HashSet<BlockId>,
+    /// Incoming CFG edges per block — the fact carried when the edge is guarded
+    /// — recorded when the pass visits the enclosing function.
+    cfg_in_edges: HashMap<BlockId, Vec<Option<EdgeFact>>>,
+    /// Region entry blocks: they carry an implicit edge from the function
+    /// boundary, so no single CFG edge dominates them.
+    entry_blocks: HashSet<BlockId>,
 }
 
 impl InstructionSelectPass {
@@ -348,6 +376,8 @@ impl InstructionSelectPass {
             op_lowerings: vec![],
             block_cache: HashMap::new(),
             emitted_blocks: HashSet::new(),
+            cfg_in_edges: HashMap::new(),
+            entry_blocks: HashSet::new(),
         }
     }
 
@@ -384,6 +414,49 @@ impl InstructionSelectPass {
         self
     }
 
+    /// Record the CFG edges of every block in `op`'s regions (called when the
+    /// pass visits the enclosing function, before any of its blocks commit).
+    /// Guarded edges carry the guard's fact; region entries are excluded from
+    /// assumptions (they have an implicit incoming edge).
+    fn record_cfg(&mut self, context: &Context, op: &OperationRef) {
+        for region_id in &op.op().regions {
+            let region = context.get_region(*region_id);
+            let mut blocks = region.iter(context.clone());
+            if let Some(entry) = blocks.next() {
+                self.entry_blocks.insert(entry.id());
+            }
+            for block in region.iter(context.clone()) {
+                for op_id in block.op_ids() {
+                    let inst = context.get_op(op_id);
+                    if let Some(guard) = inst.clone().as_interface::<dyn BranchGuard>() {
+                        for (dest, condition, holds) in guard.guarded_successors() {
+                            self.cfg_in_edges
+                                .entry(dest)
+                                .or_default()
+                                .push(Some(EdgeFact { condition, holds }));
+                        }
+                    } else if let Some(terminator) = inst.clone().as_interface::<dyn Terminator>() {
+                        for dest in terminator.successors() {
+                            self.cfg_in_edges.entry(dest).or_default().push(None);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The fact known to hold throughout `block`: it is entered through exactly
+    /// one CFG edge, and that edge is guarded.
+    fn edge_fact(&self, block: BlockId) -> Option<EdgeFact> {
+        if self.entry_blocks.contains(&block) {
+            return None;
+        }
+        match self.cfg_in_edges.get(&block)?.as_slice() {
+            [Some(fact)] => Some(*fact),
+            _ => None,
+        }
+    }
+
     fn ensure_block_cache(&mut self, context: &Context, block: &Block) {
         if self.block_cache.contains_key(&block.id()) {
             return;
@@ -406,6 +479,7 @@ impl InstructionSelectPass {
         let op_ids = block.op_ids();
         let mut guards = Vec::new();
         let mut jumps = Vec::new();
+        let mut assumption = None;
         let class_value = {
             let mut builder = SemDagBuilder::new(context, &value_to_def, &mut egraph);
             for op_id in &op_ids {
@@ -413,6 +487,18 @@ impl InstructionSelectPass {
                 if let Some(root) = builder.build_for_op(&op) {
                     roots_by_op.insert(*op_id, root);
                 }
+            }
+
+            // A block entered through exactly one guarded CFG edge inherits the
+            // guard's fact: the condition holds (or not) throughout. The related
+            // classes are built in the base graph; the equalities they imply are
+            // asserted in an assumption scope popped once the plan is solved.
+            if let Some(fact) = self.edge_fact(block.id()) {
+                assumption = Some(PreparedAssumption {
+                    holds: fact.holds,
+                    condition: builder.build_from_value(fact.condition),
+                    compare: builder.build_defining_compare(fact.condition),
+                });
             }
             // With branch emitters installed, terminators are selected here too:
             // a guarded two-way terminator's condition is lowered into the
@@ -469,6 +555,47 @@ impl InstructionSelectPass {
             }
             builder.class_value
         };
+
+        // Assert the dominating edge's fact inside an assumption scope: the
+        // condition (and its defining comparison, when there is one) equals its
+        // known truth value, the complement comparison equals the opposite, and
+        // an `eq`/`ne` guard makes its operands congruent. Saturation and the
+        // solve below run inside the scope; it is popped once the plan is
+        // stored, leaving the cached e-graph assumption-free.
+        let scoped = assumption.is_some();
+        if let Some(assumption) = assumption {
+            egraph.push_context();
+            let truth = |egraph: &mut SemEGraph, holds: bool| {
+                egraph.add(template_node(
+                    SymKind::Constant,
+                    Some(tir::sem::SymPayload::Int(APInt::new(1, holds as u64))),
+                    None,
+                ))
+            };
+            let known = truth(&mut egraph, assumption.holds);
+            egraph.union(assumption.condition, known);
+            if let Some((compare, kind, lhs, rhs)) = assumption.compare {
+                egraph.union(compare, known);
+                if let Some(complement) = node::complement_comparison(kind) {
+                    let mut node = template_node(
+                        complement,
+                        None,
+                        Some(tir::builtin::IntegerType::new(context, 1)),
+                    );
+                    node.children = vec![lhs, rhs];
+                    let complement_class = egraph.add(node);
+                    let opposite = truth(&mut egraph, !assumption.holds);
+                    egraph.union(complement_class, opposite);
+                }
+                if (kind == SymKind::Eq && assumption.holds)
+                    || (kind == SymKind::Ne && !assumption.holds)
+                {
+                    egraph.union(lhs, rhs);
+                }
+            }
+            egraph.rebuild();
+        }
+
         rewrites::saturate(context, &mut egraph, &self.rewrites, Default::default());
 
         // Saturation may merge classes, so canonicalize both maps through `find`.
@@ -568,6 +695,7 @@ impl InstructionSelectPass {
                 must_materialize,
                 guards,
                 jumps,
+                scoped,
                 plan: None,
             },
         );
@@ -585,6 +713,12 @@ impl InstructionSelectPass {
         let plan = self.solve_block(context, block, cache);
         if let Some(cache) = self.block_cache.get_mut(&block.id()) {
             cache.plan = Some(plan);
+            // The plan is concrete (rules, values, blocks); drop the assumption
+            // scope so the cached e-graph reverts to unassumed facts.
+            if cache.scoped {
+                cache.egraph.pop_context();
+                cache.scoped = false;
+            }
         }
     }
 
@@ -766,6 +900,21 @@ impl InstructionSelectPass {
                         .to_string(),
                 );
             }
+            // A condition proven constant (a dominating-edge assumption) folds
+            // the guard to an unconditional branch to the known successor.
+            if let Some(known) = class_int_binding(&cache.egraph, guard.class) {
+                let dest = if known.to_u64() != 0 {
+                    guard.true_dest
+                } else {
+                    guard.false_dest
+                };
+                terminators.push(TerminatorPlan::Jump {
+                    op: guard.op,
+                    dest,
+                    args: Vec::new(),
+                });
+                continue;
+            }
             match self.select_guard_branch(context, cache, guard) {
                 Some((rule_index, m, boundary_classes)) => {
                     for class in boundary_classes {
@@ -811,9 +960,24 @@ impl InstructionSelectPass {
             return Err(message);
         }
         // The cover still runs with no value matches when a fused condition can
-        // go Dead: its defining op must receive the Consume decision.
+        // go Dead: its defining op must receive the Consume decision. Without
+        // either, only constant-proven op roots (a dominating-edge assumption)
+        // need decisions — their consumers fold the immediate, so they are
+        // erased.
         if matches.is_empty() && dead_allowed.is_empty() {
+            let mut op_decisions = HashMap::new();
+            for op_id in block.op_ids() {
+                let Some(class) = cache.op_root.get(&op_id).map(|c| cache.egraph.find(*c)) else {
+                    continue;
+                };
+                if !must_materialize.contains(&class)
+                    && class_int_binding(&cache.egraph, class).is_some()
+                {
+                    op_decisions.insert(op_id, BlockDecision::Consume);
+                }
+            }
             return Ok(BlockPlan {
+                op_decisions,
                 terminators,
                 ..BlockPlan::default()
             });
@@ -878,6 +1042,13 @@ impl InstructionSelectPass {
                     },
                 );
             } else if internal_classes.contains(&class) {
+                op_decisions.insert(op_id, BlockDecision::Consume);
+            } else if !must_materialize.contains(&class)
+                && class_int_binding(&cache.egraph, class).is_some()
+            {
+                // The class is proven constant under the block's assumption:
+                // consumers fold the immediate (or read the merged input value's
+                // register), so the defining op is erased.
                 op_decisions.insert(op_id, BlockDecision::Consume);
             }
         }
@@ -1136,6 +1307,22 @@ impl Pass for InstructionSelectPass {
         context: &Context,
         rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
+        // The function op is visited before any of its blocks' ops: record its
+        // CFG, then solve every block up front — a dominating-edge assumption
+        // reads the guard condition's *defining op*, which a dominator's commit
+        // would otherwise have replaced by the time the dominated block solves.
+        if !op.op().regions.is_empty() {
+            self.record_cfg(context, op);
+            for region_id in &op.op().regions {
+                let region = context.get_region(*region_id);
+                for block in region.iter(context.clone()) {
+                    if !block.is_empty() {
+                        self.ensure_block_solution(context, &block);
+                    }
+                }
+            }
+        }
+
         for lowering in &self.op_lowerings {
             if lowering(context, op, rewriter)? {
                 return Ok(());

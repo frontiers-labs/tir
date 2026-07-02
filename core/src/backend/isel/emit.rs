@@ -8,7 +8,7 @@ use tir_symbolic::egraph::Id;
 
 use super::RuleMatch;
 use super::cover::PbqpIselMatch;
-use super::node::{Binding, SemEGraph, class_binding, class_width};
+use super::node::{SemEGraph, class_int_binding, class_value_binding, class_width};
 
 #[derive(Clone, Debug)]
 pub(crate) enum BlockDecision {
@@ -171,16 +171,18 @@ impl EmissionBuilder<'_> {
         let mut value_bindings = Vec::new();
         for (sym, class) in &self.matches[match_id].bindings.captures.entries {
             let class = self.egraph.find(*class);
-            // An introduced operand's fresh value takes priority; otherwise resolve
-            // the class to its constant/input/intermediate operand as usual.
+            // An introduced operand's fresh value takes priority; otherwise
+            // resolve the class to its constant and/or register operand (a class
+            // can carry both — see `CaptureBindings::to_rule_match`).
             if let Some(&dest) = self.introduced_dest.get(&class) {
                 value_bindings.push((*sym, dest));
                 continue;
             }
-            match class_binding(self.egraph, self.class_value, class) {
-                Some(Binding::Int(v)) => int_bindings.push((*sym, v)),
-                Some(Binding::Value(v)) => value_bindings.push((*sym, v)),
-                None => {}
+            if let Some(v) = class_int_binding(self.egraph, class) {
+                int_bindings.push((*sym, v));
+            }
+            if let Some(v) = class_value_binding(self.egraph, self.class_value, class) {
+                value_bindings.push((*sym, v));
             }
         }
         RuleMatch::new(int_bindings, value_bindings)

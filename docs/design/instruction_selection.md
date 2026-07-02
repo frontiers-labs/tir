@@ -338,6 +338,29 @@ Instructions that read or write the PC *unconditionally* (`jal`, `jalr`,
 effect (a `jal` rule would match a plain `x + 4`). They also never register as
 register definers. Returns and calls remain per-target op lowerings.
 
+## Dominating-edge assumptions (scoped e-graph)
+
+A block entered through **exactly one guarded CFG edge** inherits the guard's
+fact. The pass records each function's CFG when it visits the function op and
+solves every block up front (so a dominator's commit never erases a condition's
+defining op before a dominated block reads it). While such a block solves, its
+e-graph holds an **assumption scope** (`push_context`):
+
+- the condition class ≡ its known truth value (0/1),
+- the defining comparison ≡ the same truth, its *complement* comparison
+  (`!(a<b)` is `a>=b`) ≡ the opposite,
+- an `eq`-true / `ne`-false guard additionally asserts `lhs ≡ rhs`, so scope
+  congruence merges everything computed from equal operands.
+
+Consequences fall out of the ordinary machinery: a re-computed identical (or
+complement, or operand-swapped-under-`eq`) compare's class now holds a
+constant, so its guard folds to an unconditional `Jump` and the compare op is
+Consumed; a value consumer folds the known immediate (`RuleMatch` records
+*both* the int and register binding when a class carries both). The scope is
+popped once the block's plan is stored, leaving the cached e-graph
+assumption-free — the same mechanism will let a future shared function-level
+graph solve one block under several alternative edge facts.
+
 ## Cost model
 
 A target may install an `IselCostModel` (`with_cost_model`); its single hook,

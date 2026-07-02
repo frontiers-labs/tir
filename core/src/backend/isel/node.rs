@@ -146,9 +146,34 @@ pub(crate) enum Binding {
     Value(ValueId),
 }
 
+/// The constant a class is proven to hold, if any member is an integer literal.
+pub(crate) fn class_int_binding(egraph: &SemEGraph, class: Id) -> Option<APInt> {
+    egraph.nodes(class).iter().find_map(|n| match &n.payload {
+        Some(SemPayload::Expr(SymPayload::Int(v))) => Some(v.clone()),
+        _ => None,
+    })
+}
+
+/// The register value carrying a class: an input value, then the IR value an
+/// intermediate result produces (looked up in `class_value`, the map recording
+/// which class computes which op result).
+pub(crate) fn class_value_binding(
+    egraph: &SemEGraph,
+    class_value: &HashMap<Id, ValueId>,
+    class: Id,
+) -> Option<ValueId> {
+    egraph
+        .nodes(class)
+        .iter()
+        .find_map(|n| match n.payload.as_ref() {
+            Some(SemPayload::Expr(SymPayload::Value(v))) => Some(*v),
+            _ => None,
+        })
+        .or_else(|| class_value.get(&egraph.find(class)).copied())
+}
+
 /// Resolve one capture e-class to its operand binding: a constant immediate, then
-/// an input value, then the IR value an intermediate result produces (looked up in
-/// `class_value`, the map recording which class computes which op result). `None` if
+/// an input value, then the IR value an intermediate result produces. `None` if
 /// the class carries no materializable operand. This is the single resolution rule
 /// used by both match collection and emission.
 pub(crate) fn class_binding(
@@ -156,23 +181,31 @@ pub(crate) fn class_binding(
     class_value: &HashMap<Id, ValueId>,
     class: Id,
 ) -> Option<Binding> {
-    let nodes = egraph.nodes(class);
-    if let Some(v) = nodes.iter().find_map(|n| match n.payload.as_ref() {
-        Some(SemPayload::Expr(SymPayload::Int(v))) => Some(v),
-        _ => None,
-    }) {
-        Some(Binding::Int(v.clone()))
-    } else if let Some(v) = nodes.iter().find_map(|n| match n.payload.as_ref() {
-        Some(SemPayload::Expr(SymPayload::Value(v))) => Some(*v),
-        _ => None,
-    }) {
-        Some(Binding::Value(v))
-    } else {
-        class_value
-            .get(&egraph.find(class))
-            .copied()
-            .map(Binding::Value)
-    }
+    class_int_binding(egraph, class)
+        .map(Binding::Int)
+        .or_else(|| class_value_binding(egraph, class_value, class).map(Binding::Value))
+}
+
+/// The negated comparison at the same operand order (`!(a < b)` is `a >= b`).
+pub(crate) fn complement_comparison(kind: SymKind) -> Option<SymKind> {
+    Some(match kind {
+        SymKind::Eq => SymKind::Ne,
+        SymKind::Ne => SymKind::Eq,
+        SymKind::Lt => SymKind::Ge,
+        SymKind::Ge => SymKind::Lt,
+        SymKind::Gt => SymKind::Le,
+        SymKind::Le => SymKind::Gt,
+        SymKind::ULt => SymKind::UGe,
+        SymKind::UGe => SymKind::ULt,
+        SymKind::UGt => SymKind::ULe,
+        SymKind::ULe => SymKind::UGt,
+        _ => return None,
+    })
+}
+
+/// Whether the kind is a boolean comparison.
+pub(crate) fn is_comparison(kind: SymKind) -> bool {
+    complement_comparison(kind).is_some()
 }
 
 /// The integer bit-width of an IR type, or `None` if it is not an integer type.

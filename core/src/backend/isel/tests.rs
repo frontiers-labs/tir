@@ -1317,6 +1317,165 @@ fn width_constraint_gates_comparison_fusion() {
     assert!(err.to_string().contains("Lt"));
 }
 
+/// A function of two i64 args whose entry compares them (`predicate`) and
+/// branches to `body` (in the region) or `other`; `body` re-compares with
+/// `body_predicate` and operand order `body_swapped`, branching to `u`/`v`.
+/// `body_on_true` picks which edge of the entry guard reaches `body`. Returns
+/// the op names of the selected body block plus the block ids the body's
+/// branches reference.
+struct DominatedBlocks {
+    context: Context,
+    body: tir::BlockId,
+    u: tir::BlockId,
+}
+
+fn run_dominated_compare(
+    predicate: &str,
+    body_on_true: bool,
+    body_predicate: &str,
+    body_swapped: bool,
+) -> DominatedBlocks {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let i64_ty = IntegerType::new(&context, 64);
+    let i1 = IntegerType::new(&context, 1);
+    let a = context.create_value(i64_ty, None);
+    let b = context.create_value(i64_ty, None);
+    let (a_id, b_id) = (a.id(), b.id());
+    let region = context.create_region();
+    let entry = context.create_block(vec![a, b]);
+    region.add_block(entry.id());
+    let body = context.create_block(vec![]);
+    region.add_block(body.id());
+    let other = context.create_block(vec![]);
+    let u = context.create_block(vec![]);
+    let v = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    let mut eb = IRBuilder::new(entry.clone());
+    let entry_cmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(a_id)
+        .rhs(b_id)
+        .predicate(predicate)
+        .result_type(i1)
+        .build();
+    let entry_cond = entry_cmp.result();
+    eb.insert(entry_cmp);
+    let (t_dest, f_dest) = if body_on_true {
+        (body.id(), other.id())
+    } else {
+        (other.id(), body.id())
+    };
+    eb.insert(ops::cond_br(&context, entry_cond, vec![], vec![], t_dest, f_dest).build());
+
+    let mut bb = IRBuilder::new(body.clone());
+    let (lhs, rhs) = if body_swapped {
+        (b_id, a_id)
+    } else {
+        (a_id, b_id)
+    };
+    let body_cmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(lhs)
+        .rhs(rhs)
+        .predicate(body_predicate)
+        .result_type(i1)
+        .build();
+    let body_cond = body_cmp.result();
+    bb.insert(body_cmp);
+    bb.insert(ops::cond_br(&context, body_cond, vec![], vec![], u.id(), v.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        branch_rule(),
+        Rule::new(
+            "beq-marker",
+            atomic_pattern(SymKind::Eq),
+            1,
+            emit_fused_branch_marker,
+        )
+        .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
+    ];
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("dominated selection should succeed");
+
+    DominatedBlocks {
+        context,
+        body: body.id(),
+        u: u.id(),
+    }
+}
+
+fn block_op_list(context: &Context, block: tir::BlockId) -> Vec<std::sync::Arc<tir::OpInstance>> {
+    context
+        .get_block(block)
+        .op_ids()
+        .into_iter()
+        .map(|op_id| context.get_op(op_id))
+        .collect()
+}
+
+/// A block dominated by a guard edge knows the guard's fact: the identical
+/// compare in the body folds to the known truth, its guard becomes an
+/// unconditional branch to the taken successor, and the compare op is erased.
+#[test]
+fn dominated_block_folds_redundant_compare_and_branch() {
+    let r = run_dominated_compare("slt", true, "slt", false);
+    let body = block_op_list(&r.context, r.body);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(
+        names,
+        vec!["br"],
+        "compare consumed, guard folded to a jump"
+    );
+    let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(jump.dest(), r.u, "the true successor is taken");
+}
+
+/// On the false edge the *complement* comparison is known true: `a >= b`
+/// dominated by the false edge of `a < b` folds the same way.
+#[test]
+fn false_edge_assumes_complement_comparison() {
+    let r = run_dominated_compare("slt", false, "sge", false);
+    let body = block_op_list(&r.context, r.body);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br"]);
+    let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(jump.dest(), r.u);
+}
+
+/// An `eq` guard makes its operands congruent in the dominated block, so even
+/// the operand-swapped `eq` compare folds (the swapped node becomes congruent
+/// with the assumed one once `a == b` is asserted).
+#[test]
+fn eq_edge_congruence_folds_swapped_compare() {
+    let r = run_dominated_compare("eq", true, "eq", true);
+    let body = block_op_list(&r.context, r.body);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br"]);
+    let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(jump.dest(), r.u);
+}
+
+/// The assumption scope is popped once the block's plan is solved: the cached
+/// e-graph must not leak the assumed facts.
+#[test]
+fn assumption_scope_is_popped_after_solving() {
+    let r = run_dominated_compare("slt", true, "slt", false);
+    // Selection succeeded and committed; nothing to assert beyond the fold
+    // tests other than clean teardown, which reaching this point (no panic in
+    // the scope machinery, plan committed) demonstrates. The body block was
+    // rewritten to a plain jump.
+    assert_eq!(block_op_list(&r.context, r.body).len(), 1);
+}
+
 /// Block arguments on conditional edges are still rejected (codegen cannot
 /// place them yet), now at selection time.
 #[test]

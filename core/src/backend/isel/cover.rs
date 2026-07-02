@@ -11,7 +11,7 @@ use tir::{
 use tir_symbolic::egraph::{ENode, Id};
 
 use super::RuleMatch;
-use super::node::{Binding, SemEGraph, class_binding, class_is_pure};
+use super::node::{SemEGraph, class_int_binding, class_is_pure, class_value_binding};
 use super::pattern::CompiledIselPattern;
 
 #[derive(Clone, Debug)]
@@ -40,13 +40,17 @@ impl CaptureBindings {
         egraph: &SemEGraph,
         class_value: &HashMap<Id, ValueId>,
     ) -> RuleMatch {
+        // A class can carry both a proven constant and a register value (an
+        // assumption merges a condition with its truth value); record both so
+        // immediate-folding and register-reading emitters each find theirs.
         let mut int_bindings = Vec::new();
         let mut value_bindings = Vec::new();
         for (sym, class) in &self.entries {
-            match class_binding(egraph, class_value, *class) {
-                Some(Binding::Int(v)) => int_bindings.push((*sym, v)),
-                Some(Binding::Value(v)) => value_bindings.push((*sym, v)),
-                None => {}
+            if let Some(v) = class_int_binding(egraph, *class) {
+                int_bindings.push((*sym, v));
+            }
+            if let Some(v) = class_value_binding(egraph, class_value, *class) {
+                value_bindings.push((*sym, v));
             }
         }
         RuleMatch::new(int_bindings, value_bindings)
