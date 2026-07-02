@@ -124,8 +124,9 @@ identities (`self.rewrites`). These are **not** hand-written selection rules —
 are bit-vector lemmas the target's own instructions happen to realize.
 
 `discover_rewrites` finds them: if the target has an atomic `slli` plus the
-matching right shift, it confirms the standard shift-pair extension identity
-against a `FuzzOracle` and emits a width-parameterized rewrite:
+matching right shift, it proves the standard shift-pair extension identity
+with the `SmtOracle` (an unsat check through `tir-symbolic`'s QF_BV
+bit-blaster) and emits a width-parameterized rewrite:
 
 ```
    SExt(v, W)   ──rewrite──►   ShiftRightArithmetic( ShiftLeft(v, W-n), W-n )
@@ -328,7 +329,7 @@ Either way the terminator is replaced by the branch (inserted ahead of it)
 plus `uncond` to the false successor; a plain `br` lowers through `uncond`
 directly. `cmpi` participates via its predicate-dependent semantic expression
 (canonicalized so only `Eq/Ne/Lt/Ge/ULt/UGe` appear — `sgt`/`sle`/… swap
-operands), and a discovered width-1 identity
+operands), and a proved width-1 identity
 `c == If(c, zext(1,1), zext(0,1))` bridges a bare comparison class to the
 `slt`-style `If`-patterns so a compare used as a *value* materializes with no
 hand-written rule.

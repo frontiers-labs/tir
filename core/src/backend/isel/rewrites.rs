@@ -3,7 +3,7 @@
 
 use tir::{
     Context,
-    sem::{FuzzOracle, SymKind, SymPayload, confirm_extension_via_shifts},
+    sem::{SmtOracle, SymKind, SymPayload, confirm_bool_via_if, confirm_extension_via_shifts},
 };
 use tir_adt::APInt;
 use tir_symbolic::egraph::{EMatch, Pattern, PatternNode, Var};
@@ -75,16 +75,16 @@ pub fn saturate(
 }
 
 /// Discover the algebraic bridges the rule set needs to cover sub-word extensions.
-/// If the target has `slli` plus the matching right shift, confirm the standard
-/// shift-pair identity against the [`FuzzOracle`] and, on success, emit a
+/// If the target has `slli` plus the matching right shift, prove the standard
+/// shift-pair identity with the [`SmtOracle`] and, on success, emit a
 /// width-parameterized rewrite. No hand-written selection rule is involved — only a
 /// proved bit-vector lemma the target's own instructions happen to realize.
 pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRewrite> {
     let atomics = atomic_kinds(patterns);
     let mut rewrites = Vec::new();
+    let oracle = SmtOracle;
 
     if atomics.contains(&SymKind::ShiftLeft) {
-        let oracle = FuzzOracle::default();
         for (ext_kind, shr_kind) in [
             (SymKind::SExt, SymKind::ShiftRightArithmetic),
             (SymKind::ZExt, SymKind::ShiftRightLogic),
@@ -99,7 +99,7 @@ pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRew
 
     // If the rule set has an `If`-rooted materializer (the `slt`-style
     // "set register to comparison" instructions), bridge bare boolean
-    // comparison classes to that shape via the width-1 identity
+    // comparison classes to that shape via the proved width-1 identity
     // `c == If(c, zext(1, 1), zext(0, 1))`, so a `cmpi` value that must live
     // in a register is selectable without a hand-written rule.
     let has_if_materializer = patterns.iter().any(|compiled| {
@@ -108,7 +108,7 @@ pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRew
             PatternNode::Node(node) if node.kind == SymKind::If
         )
     });
-    if has_if_materializer {
+    if has_if_materializer && confirm_bool_via_if(&oracle) {
         for kind in [
             SymKind::Eq,
             SymKind::Ne,
