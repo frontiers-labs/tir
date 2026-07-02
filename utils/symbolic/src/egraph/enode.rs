@@ -27,6 +27,22 @@ pub trait ENode: Debug + Clone {
     /// holds and their canonical children are equal.
     fn matches(&self, other: &Self) -> bool;
 
+    /// Whether `self`, used as a pattern *template*, matches graph node `target`.
+    /// Unlike [`matches`](ENode::matches) — which is node identity and must stay
+    /// strict for hash-consing — a template may treat missing fields as wildcards
+    /// (e.g. an untyped template matching any type). The [`op_key`](ENode::op_key)
+    /// contract extends to this relation: `a.matches_template(b)` implies
+    /// `a.op_key() == b.op_key()`.
+    fn matches_template(&self, target: &Self) -> bool {
+        self.matches(target)
+    }
+
+    /// Whether the operator is commutative in its two operands; pattern search
+    /// then tries both operand orders.
+    fn commutative(&self) -> bool {
+        false
+    }
+
     /// A unique node gets a fresh class on every `add` and never hash-conses or
     /// congruence-merges (effectful ops, distinct unknowns); its operands still
     /// resolve through `find`.

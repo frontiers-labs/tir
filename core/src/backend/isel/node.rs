@@ -71,11 +71,41 @@ impl ENode for SemNode {
         h.finish()
     }
 
+    /// The operator index buckets by kind alone: a pattern template with a
+    /// wildcard type/payload must find every class holding its kind (the
+    /// [`ENode::op_key`] contract for [`ENode::matches_template`]).
+    fn op_key(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.kind.hash(&mut h);
+        h.finish()
+    }
+
     /// Operator/label equality, ignoring children: the kind, result type, and
     /// payload. A distinct opaque serial keeps memory effects and un-lowerable
     /// nodes from ever congruence-merging.
     fn matches(&self, other: &Self) -> bool {
         self == other
+    }
+
+    /// Template matching: a typed template only matches a node of exactly that
+    /// type, an untyped one (`ty == None`) any type; a payload of `None` is a
+    /// wildcard, `Some` matches by equality.
+    fn matches_template(&self, target: &Self) -> bool {
+        if self.kind != target.kind {
+            return false;
+        }
+        if self.ty.is_some() && target.ty != self.ty {
+            return false;
+        }
+        match (&self.payload, &target.payload) {
+            (None, _) => true,
+            (Some(expected), Some(actual)) => expected == actual,
+            (Some(_), None) => false,
+        }
+    }
+
+    fn commutative(&self) -> bool {
+        self.kind.is_commutative()
     }
 }
 
@@ -110,51 +140,40 @@ fn hash_label(node: &SemNode, state: &mut impl Hasher) {
     }
 }
 
-impl tir::graph::Matchable<Context> for SemNode {
-    fn is_leaf(&self, ctx: &Context) -> bool {
-        self.kind.is_leaf(ctx)
-    }
-
-    fn num_children(&self, ctx: &Context) -> usize {
-        self.kind.num_children(ctx)
-    }
-
-    fn is_commutative(&self) -> bool {
-        self.kind.is_commutative()
-    }
-
-    fn is_constant(&self) -> bool {
-        self.kind == SymKind::Constant
-    }
-
-    fn matches_pattern(&self, pattern: &Self, _ctx: &Context) -> bool {
-        if self.kind != pattern.kind {
-            return false;
-        }
-
-        // A typed pattern node only matches a graph node of exactly that type;
-        // an untyped pattern node (`ty == None`) is a type wildcard.
-        if pattern.ty.is_some() && self.ty != pattern.ty {
-            return false;
-        }
-
-        match (&self.payload, &pattern.payload) {
-            (_, None) => true,
-            (Some(actual), Some(expected)) => actual == expected,
-            (None, Some(_)) => false,
-        }
-    }
-}
-
 /// The concrete operand a capture e-class resolves to.
 pub(crate) enum Binding {
     Int(APInt),
     Value(ValueId),
 }
 
+/// The constant a class is proven to hold, if any member is an integer literal.
+pub(crate) fn class_int_binding(egraph: &SemEGraph, class: Id) -> Option<APInt> {
+    egraph.nodes(class).iter().find_map(|n| match &n.payload {
+        Some(SemPayload::Expr(SymPayload::Int(v))) => Some(v.clone()),
+        _ => None,
+    })
+}
+
+/// The register value carrying a class: an input value, then the IR value an
+/// intermediate result produces (looked up in `class_value`, the map recording
+/// which class computes which op result).
+pub(crate) fn class_value_binding(
+    egraph: &SemEGraph,
+    class_value: &HashMap<Id, ValueId>,
+    class: Id,
+) -> Option<ValueId> {
+    egraph
+        .nodes(class)
+        .iter()
+        .find_map(|n| match n.payload.as_ref() {
+            Some(SemPayload::Expr(SymPayload::Value(v))) => Some(*v),
+            _ => None,
+        })
+        .or_else(|| class_value.get(&egraph.find(class)).copied())
+}
+
 /// Resolve one capture e-class to its operand binding: a constant immediate, then
-/// an input value, then the IR value an intermediate result produces (looked up in
-/// `class_value`, the map recording which class computes which op result). `None` if
+/// an input value, then the IR value an intermediate result produces. `None` if
 /// the class carries no materializable operand. This is the single resolution rule
 /// used by both match collection and emission.
 pub(crate) fn class_binding(
@@ -162,23 +181,31 @@ pub(crate) fn class_binding(
     class_value: &HashMap<Id, ValueId>,
     class: Id,
 ) -> Option<Binding> {
-    let nodes = egraph.nodes(class);
-    if let Some(v) = nodes.iter().find_map(|n| match n.payload.as_ref() {
-        Some(SemPayload::Expr(SymPayload::Int(v))) => Some(v),
-        _ => None,
-    }) {
-        Some(Binding::Int(v.clone()))
-    } else if let Some(v) = nodes.iter().find_map(|n| match n.payload.as_ref() {
-        Some(SemPayload::Expr(SymPayload::Value(v))) => Some(*v),
-        _ => None,
-    }) {
-        Some(Binding::Value(v))
-    } else {
-        class_value
-            .get(&egraph.find(class))
-            .copied()
-            .map(Binding::Value)
-    }
+    class_int_binding(egraph, class)
+        .map(Binding::Int)
+        .or_else(|| class_value_binding(egraph, class_value, class).map(Binding::Value))
+}
+
+/// The negated comparison at the same operand order (`!(a < b)` is `a >= b`).
+pub(crate) fn complement_comparison(kind: SymKind) -> Option<SymKind> {
+    Some(match kind {
+        SymKind::Eq => SymKind::Ne,
+        SymKind::Ne => SymKind::Eq,
+        SymKind::Lt => SymKind::Ge,
+        SymKind::Ge => SymKind::Lt,
+        SymKind::Gt => SymKind::Le,
+        SymKind::Le => SymKind::Gt,
+        SymKind::ULt => SymKind::UGe,
+        SymKind::UGe => SymKind::ULt,
+        SymKind::UGt => SymKind::ULe,
+        SymKind::ULe => SymKind::UGt,
+        _ => return None,
+    })
+}
+
+/// Whether the kind is a boolean comparison.
+pub(crate) fn is_comparison(kind: SymKind) -> bool {
+    complement_comparison(kind).is_some()
 }
 
 /// The integer bit-width of an IR type, or `None` if it is not an integer type.

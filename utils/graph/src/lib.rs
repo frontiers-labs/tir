@@ -3,7 +3,7 @@ use std::collections::HashMap;
 mod pattern;
 mod postorder;
 
-pub use pattern::{Matchable, OperandConstraint, Pattern, PatternExpr};
+pub use pattern::{Matchable, OperandConstraint};
 pub use postorder::PostOrderDag;
 
 pub(crate) static EMPTY_CHILDREN: [NodeId; 0] = [];
