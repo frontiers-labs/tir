@@ -2,13 +2,13 @@
 //!
 //! Each block's operations are lowered into an e-graph of semantic expressions
 //! ([`builder`]), saturated with proved algebraic rewrites ([`rewrites`]), and
-//! covered by the target's instruction patterns ([`pattern`]) — e-matched by
-//! the shared [`tir_symbolic::egraph`] engine — via a PBQP instance over
-//! e-classes ([`cover`]). The solved cover becomes an emission plan ([`emit`])
-//! the pass commits through the rewriter.
+//! covered by the target's instruction patterns ([`pattern`]) via a PBQP
+//! instance over e-classes ([`cover`]). The solved cover becomes an emission
+//! plan ([`emit`]) the pass commits through the rewriter.
 
 mod builder;
 mod cover;
+mod ematch;
 mod emit;
 mod node;
 mod pattern;
@@ -19,37 +19,34 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 
 use tir::{
-    AnalysisManager, Block, BlockId, BranchGuard, BranchTerminator, Context, OpId, Operation,
-    OperationRef, Pass, PassError, PassTarget, PreservedAnalyses, Rewriter, Terminator, TypeId,
-    ValueId,
-    graph::OperandConstraint,
+    AnalysisManager, Block, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError,
+    PassTarget, PreservedAnalyses, Rewriter, TypeId, ValueId,
+    graph::{NodeId, OperandConstraint, PatternExpr},
     sem::{SemGraph, SymKind},
 };
 use tir_adt::APInt;
-use tir_symbolic::egraph::{ENode, Id, Var};
+use tir_symbolic::egraph::{ENode, Id};
 
+pub use ematch::EMatch;
 pub use node::{SemEGraph, SemNode, SemPayload};
 pub use rewrites::{IselRewrite, SaturationLimits};
-pub use tir_symbolic::egraph::EMatch;
 
 use builder::SemDagBuilder;
 use cover::{
     CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative, PbqpIselMatch,
     build_eclass_cover, completeness_error, prune_dominated_matches,
 };
-use emit::{BlockDecision, BlockPlan, DefinerEmit, EmissionBuilder, GuardBranch, TerminatorPlan};
-use node::{Binding, class_binding, class_int_binding, template_node};
+use emit::{BlockDecision, BlockPlan, DefinerEmit, EmissionBuilder};
+use node::{Binding, class_binding};
 use pattern::{CompiledIselPattern, compile_isel_pattern};
 use rewrites::discover_rewrites;
 #[cfg(test)]
-use rewrites::extension_rewrite;
+use {node::template_node, rewrites::extension_rewrite};
 
 #[derive(Debug, Clone)]
 pub struct RuleMatch {
     int_bindings: Vec<(u32, APInt)>,
     value_bindings: Vec<(u32, ValueId)>,
-    /// Block operands (branch targets), bound by conditional-branch selection.
-    block_bindings: Vec<(u32, BlockId)>,
 }
 
 impl RuleMatch {
@@ -62,13 +59,7 @@ impl RuleMatch {
         Self {
             int_bindings,
             value_bindings,
-            block_bindings: Vec::new(),
         }
-    }
-
-    pub(crate) fn with_block_binding(mut self, symbol: u32, block: BlockId) -> Self {
-        self.block_bindings.push((symbol, block));
-        self
     }
 
     pub fn value_binding(&self, symbol: u32) -> Option<ValueId> {
@@ -83,13 +74,6 @@ impl RuleMatch {
             .iter()
             .find(|(sym, _)| *sym == symbol)
             .map(|(_, v)| v.to_u64() as i64)
-    }
-
-    pub fn block_binding(&self, symbol: u32) -> Option<BlockId> {
-        self.block_bindings
-            .iter()
-            .find(|(sym, _)| *sym == symbol)
-            .map(|(_, b)| *b)
     }
 }
 
@@ -168,30 +152,14 @@ pub struct RegisterDefiner {
     pub emit_fn: RuleEmitFn,
 }
 
-/// What a rule selects. A `Value` rule computes its pattern's value into a
-/// destination register. A `CondBranch` rule is a conditional branch whose
-/// pattern is the *branch condition* (from the instruction's guarded PC write);
-/// its taken target is bound to `target_symbol` as a block operand at emit time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RuleKind {
-    Value,
-    CondBranch { target_symbol: u32 },
-}
-
 pub struct Rule {
     pub name: &'static str,
     pub pattern: SemGraph,
     pub base_cost: u32,
-    pub kind: RuleKind,
     /// Per-operand-symbol constraint (register vs immediate). Symbols absent here
     /// are unconstrained, so hand-written and synthesized rules keep matching any
     /// value.
     pub operand_constraints: Vec<(u32, OperandConstraint)>,
-    /// Per-operand-symbol required value width, for operands the instruction is
-    /// width-sensitive in (comparisons, right shifts, division): the operand's
-    /// upper bits reach the result, so a narrower value must not bind. Symbols
-    /// absent here match any width.
-    pub operand_widths: Vec<(u32, u32)>,
     /// Registers this instruction reads implicitly (from its behavior, not its
     /// encoded operands); selection introduces each one's definer ahead of this op.
     pub implicit_uses: Vec<ImplicitUse>,
@@ -204,9 +172,7 @@ impl Rule {
             name,
             pattern,
             base_cost,
-            kind: RuleKind::Value,
             operand_constraints: Vec::new(),
-            operand_widths: Vec::new(),
             implicit_uses: Vec::new(),
             emit_fn,
         }
@@ -219,41 +185,12 @@ impl Rule {
         self
     }
 
-    /// Require operand symbols to bind values of exactly the given width (see
-    /// [`Rule::operand_widths`]). Values of unknown width — rewrite-introduced
-    /// intermediates carrying no IR type — still match.
-    pub fn with_operand_widths(mut self, widths: Vec<(u32, u32)>) -> Self {
-        self.operand_widths = widths;
-        self
-    }
-
     /// Declare the registers this instruction reads implicitly, so selection
     /// introduces their definers ahead of it.
     pub fn with_implicit_uses(mut self, uses: Vec<ImplicitUse>) -> Self {
         self.implicit_uses = uses;
         self
     }
-
-    /// Mark this rule as a conditional branch (see [`RuleKind::CondBranch`]).
-    pub fn with_kind(mut self, kind: RuleKind) -> Self {
-        self.kind = kind;
-        self
-    }
-}
-
-/// Target hooks for lowering control-flow terminators, enabling rule-driven
-/// conditional-branch selection: `builtin.br` lowers through `uncond`, and
-/// `builtin.cond_br` becomes a selected [`RuleKind::CondBranch`] instruction
-/// (or `cond_nonzero` when no branch rule fuses the condition) followed by an
-/// `uncond` to the false successor.
-#[derive(Clone, Copy)]
-pub struct BranchEmitters {
-    /// Emit an unconditional branch to `dest`, forwarding `args` to its block
-    /// arguments (typically a virtual branch finalized after regalloc).
-    pub uncond: fn(&Context, BlockId, &[ValueId]) -> Box<dyn Operation>,
-    /// Emit a branch to `dest` taken when `condition` (an i1 in a register) is
-    /// nonzero — the fallback when no branch rule matches the guard condition.
-    pub cond_nonzero: fn(&Context, ValueId, BlockId) -> Box<dyn Operation>,
 }
 struct BlockSelectionCache {
     egraph: SemEGraph,
@@ -273,55 +210,9 @@ struct BlockSelectionCache {
     /// by an op no match reaches (return, branch, an un-lowerable op) or by an op
     /// outside this block — so the defining op must never be consumed.
     must_materialize: HashSet<Id>,
-    /// The guarded terminators of the block (e.g. `cond_br`), each with its
-    /// condition's e-class, when the target supplies branch emitters.
-    guards: Vec<BlockGuard>,
-    /// Plain unconditional branch terminators, lowered through the target's
-    /// `uncond` emitter.
-    jumps: Vec<BlockJump>,
-    /// Whether the e-graph currently holds an open assumption scope (popped
-    /// once the plan is solved).
-    scoped: bool,
     /// The solved emission plan, or the completeness error explaining why the block
     /// cannot be selected with this rule set.
     plan: Option<Result<BlockPlan, String>>,
-}
-
-/// A guarded two-way terminator: branch to `true_dest` when `condition` is
-/// nonzero, else to `false_dest`.
-struct BlockGuard {
-    op: OpId,
-    condition: ValueId,
-    /// The canonical e-class holding the condition's semantic expression.
-    class: Id,
-    true_dest: BlockId,
-    false_dest: BlockId,
-    /// Whether any edge forwards block arguments (unsupported by codegen).
-    has_edge_args: bool,
-}
-
-/// An unconditional branch terminator and its forwarded block arguments.
-struct BlockJump {
-    op: OpId,
-    dest: BlockId,
-    args: Vec<ValueId>,
-}
-
-/// The fact a guarded CFG edge carries: on this edge, `condition` is known to
-/// equal `holds`.
-#[derive(Clone, Copy)]
-struct EdgeFact {
-    condition: ValueId,
-    holds: bool,
-}
-
-/// An edge fact prepared against a block's e-graph: the condition's class and,
-/// when its definer is a comparison, the comparison class with its kind and
-/// operand classes.
-struct PreparedAssumption {
-    holds: bool,
-    condition: Id,
-    compare: Option<(Id, SymKind, Id, Id)>,
 }
 pub type OpLowering = fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool, PassError>;
 
@@ -335,19 +226,10 @@ pub struct InstructionSelectPass {
     /// Instructions that define a register implicitly; selection introduces one
     /// ahead of any op whose `implicit_uses` name a matching register.
     definers: Vec<RegisterDefiner>,
-    /// Target hooks for terminator lowering; branch selection is off without them
-    /// (terminators are then left to the target's op lowerings).
-    branch_emitters: Option<BranchEmitters>,
     cost_model: Box<dyn IselCostModel>,
     op_lowerings: Vec<OpLowering>,
     block_cache: HashMap<BlockId, BlockSelectionCache>,
     emitted_blocks: HashSet<BlockId>,
-    /// Incoming CFG edges per block — the fact carried when the edge is guarded
-    /// — recorded when the pass visits the enclosing function.
-    cfg_in_edges: HashMap<BlockId, Vec<Option<EdgeFact>>>,
-    /// Region entry blocks: they carry an implicit edge from the function
-    /// boundary, so no single CFG edge dominates them.
-    entry_blocks: HashSet<BlockId>,
 }
 
 impl InstructionSelectPass {
@@ -356,12 +238,7 @@ impl InstructionSelectPass {
             .iter()
             .enumerate()
             .filter_map(|(rule_index, rule)| {
-                compile_isel_pattern(
-                    rule_index,
-                    &rule.pattern,
-                    &rule.operand_constraints,
-                    &rule.operand_widths,
-                )
+                compile_isel_pattern(rule_index, &rule.pattern, &rule.operand_constraints)
             })
             .collect();
 
@@ -372,21 +249,11 @@ impl InstructionSelectPass {
             compiled_patterns,
             rewrites,
             definers: Vec::new(),
-            branch_emitters: None,
             cost_model: Box::new(DefaultIselCostModel),
             op_lowerings: vec![],
             block_cache: HashMap::new(),
             emitted_blocks: HashSet::new(),
-            cfg_in_edges: HashMap::new(),
-            entry_blocks: HashSet::new(),
         }
-    }
-
-    /// Install the target's terminator emitters, enabling rule-driven selection
-    /// of conditional branches (and generic lowering of unconditional ones).
-    pub fn with_branch_emitters(mut self, emitters: BranchEmitters) -> Self {
-        self.branch_emitters = Some(emitters);
-        self
     }
 
     /// Install the instructions that define registers implicitly (e.g.
@@ -415,49 +282,6 @@ impl InstructionSelectPass {
         self
     }
 
-    /// Record the CFG edges of every block in `op`'s regions (called when the
-    /// pass visits the enclosing function, before any of its blocks commit).
-    /// Guarded edges carry the guard's fact; region entries are excluded from
-    /// assumptions (they have an implicit incoming edge).
-    fn record_cfg(&mut self, context: &Context, op: &OperationRef) {
-        for region_id in &op.op().regions {
-            let region = context.get_region(*region_id);
-            let mut blocks = region.iter(context.clone());
-            if let Some(entry) = blocks.next() {
-                self.entry_blocks.insert(entry.id());
-            }
-            for block in region.iter(context.clone()) {
-                for op_id in block.op_ids() {
-                    let inst = context.get_op(op_id);
-                    if let Some(guard) = inst.clone().as_interface::<dyn BranchGuard>() {
-                        for (dest, condition, holds) in guard.guarded_successors() {
-                            self.cfg_in_edges
-                                .entry(dest)
-                                .or_default()
-                                .push(Some(EdgeFact { condition, holds }));
-                        }
-                    } else if let Some(terminator) = inst.clone().as_interface::<dyn Terminator>() {
-                        for dest in terminator.successors() {
-                            self.cfg_in_edges.entry(dest).or_default().push(None);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// The fact known to hold throughout `block`: it is entered through exactly
-    /// one CFG edge, and that edge is guarded.
-    fn edge_fact(&self, block: BlockId) -> Option<EdgeFact> {
-        if self.entry_blocks.contains(&block) {
-            return None;
-        }
-        match self.cfg_in_edges.get(&block)?.as_slice() {
-            [Some(fact)] => Some(*fact),
-            _ => None,
-        }
-    }
-
     fn ensure_block_cache(&mut self, context: &Context, block: &Block) {
         if self.block_cache.contains_key(&block.id()) {
             return;
@@ -478,9 +302,6 @@ impl InstructionSelectPass {
         let mut egraph = SemEGraph::new();
         let mut roots_by_op = HashMap::new();
         let op_ids = block.op_ids();
-        let mut guards = Vec::new();
-        let mut jumps = Vec::new();
-        let mut assumption = None;
         let class_value = {
             let mut builder = SemDagBuilder::new(context, &value_to_def, &mut egraph);
             for op_id in &op_ids {
@@ -489,114 +310,8 @@ impl InstructionSelectPass {
                     roots_by_op.insert(*op_id, root);
                 }
             }
-
-            // A block entered through exactly one guarded CFG edge inherits the
-            // guard's fact: the condition holds (or not) throughout. The related
-            // classes are built in the base graph; the equalities they imply are
-            // asserted in an assumption scope popped once the plan is solved.
-            if let Some(fact) = self.edge_fact(block.id()) {
-                assumption = Some(PreparedAssumption {
-                    holds: fact.holds,
-                    condition: builder.build_from_value(fact.condition),
-                    compare: builder.build_defining_compare(fact.condition),
-                });
-            }
-            // With branch emitters installed, terminators are selected here too:
-            // a guarded two-way terminator's condition is lowered into the
-            // e-graph so branch rules can match (and fuse) it; a plain branch is
-            // recorded for the target's unconditional emitter.
-            if self.branch_emitters.is_some() {
-                for op_id in &op_ids {
-                    let op = context.get_op(*op_id);
-                    if let Some(guard) = op.clone().as_interface::<dyn BranchGuard>() {
-                        let successors = guard.guarded_successors();
-                        let [(a_dest, a_cond, a_taken), (b_dest, b_cond, _)] =
-                            successors.as_slice()
-                        else {
-                            continue;
-                        };
-                        if a_cond != b_cond {
-                            continue;
-                        }
-                        let has_edge_args = op
-                            .clone()
-                            .as_interface::<dyn BranchTerminator>()
-                            .is_some_and(|branch| {
-                                branch
-                                    .successor_operands()
-                                    .iter()
-                                    .any(|(_, args)| !args.is_empty())
-                            });
-                        let (true_dest, false_dest) = if *a_taken {
-                            (*a_dest, *b_dest)
-                        } else {
-                            (*b_dest, *a_dest)
-                        };
-                        let class = builder.build_from_value(*a_cond);
-                        guards.push(BlockGuard {
-                            op: *op_id,
-                            condition: *a_cond,
-                            class,
-                            true_dest,
-                            false_dest,
-                            has_edge_args,
-                        });
-                    } else if let Some(branch) = op.clone().as_interface::<dyn BranchTerminator>() {
-                        let successors = branch.successor_operands();
-                        let [(dest, args)] = successors.as_slice() else {
-                            continue;
-                        };
-                        jumps.push(BlockJump {
-                            op: *op_id,
-                            dest: *dest,
-                            args: args.clone(),
-                        });
-                    }
-                }
-            }
             builder.class_value
         };
-
-        // Assert the dominating edge's fact inside an assumption scope: the
-        // condition (and its defining comparison, when there is one) equals its
-        // known truth value, the complement comparison equals the opposite, and
-        // an `eq`/`ne` guard makes its operands congruent. Saturation and the
-        // solve below run inside the scope; it is popped once the plan is
-        // stored, leaving the cached e-graph assumption-free.
-        let scoped = assumption.is_some();
-        if let Some(assumption) = assumption {
-            egraph.push_context();
-            let truth = |egraph: &mut SemEGraph, holds: bool| {
-                egraph.add(template_node(
-                    SymKind::Constant,
-                    Some(tir::sem::SymPayload::Int(APInt::new(1, holds as u64))),
-                    None,
-                ))
-            };
-            let known = truth(&mut egraph, assumption.holds);
-            egraph.union(assumption.condition, known);
-            if let Some((compare, kind, lhs, rhs)) = assumption.compare {
-                egraph.union(compare, known);
-                if let Some(complement) = node::complement_comparison(kind) {
-                    let mut node = template_node(
-                        complement,
-                        None,
-                        Some(tir::builtin::IntegerType::new(context, 1)),
-                    );
-                    node.children = vec![lhs, rhs];
-                    let complement_class = egraph.add(node);
-                    let opposite = truth(&mut egraph, !assumption.holds);
-                    egraph.union(complement_class, opposite);
-                }
-                if (kind == SymKind::Eq && assumption.holds)
-                    || (kind == SymKind::Ne && !assumption.holds)
-                {
-                    egraph.union(lhs, rhs);
-                }
-            }
-            egraph.rebuild();
-        }
-
         rewrites::saturate(context, &mut egraph, &self.rewrites, Default::default());
 
         // Saturation may merge classes, so canonicalize both maps through `find`.
@@ -661,28 +376,21 @@ impl InstructionSelectPass {
 
         // A value used by an op no match can reach (it lowered to no e-graph root)
         // or by an op outside this block can never be recomputed inside a fused
-        // instruction, so its class must keep a materializing alternative. A use
-        // by a guarded terminator is exempt: branch selection either fuses the
-        // condition (recomputing it inside the branch instruction) or re-adds the
-        // materialization requirement itself (see `solve_block`).
+        // instruction, so its class must keep a materializing alternative.
         let block_ops: HashSet<OpId> = op_ids.iter().copied().collect();
-        let guard_ops: HashSet<OpId> = guards.iter().map(|guard| guard.op).collect();
         let mut must_materialize = HashSet::new();
         for (op_id, root) in &roots_by_op {
             let op = context.get_op(*op_id);
             let escapes = op.results.iter().any(|result| {
-                context.get_value(*result).uses().iter().any(|u| {
-                    !block_ops.contains(&u.op())
-                        || (!roots_by_op.contains_key(&u.op()) && !guard_ops.contains(&u.op()))
-                })
+                context
+                    .get_value(*result)
+                    .uses()
+                    .iter()
+                    .any(|u| !block_ops.contains(&u.op()) || !roots_by_op.contains_key(&u.op()))
             });
             if escapes {
                 must_materialize.insert(egraph.find(*root));
             }
-        }
-
-        for guard in &mut guards {
-            guard.class = egraph.find(guard.class);
         }
 
         self.block_cache.insert(
@@ -694,9 +402,6 @@ impl InstructionSelectPass {
                 class_value: canon_class_value,
                 shared_classes,
                 must_materialize,
-                guards,
-                jumps,
-                scoped,
                 plan: None,
             },
         );
@@ -714,12 +419,6 @@ impl InstructionSelectPass {
         let plan = self.solve_block(context, block, cache);
         if let Some(cache) = self.block_cache.get_mut(&block.id()) {
             cache.plan = Some(plan);
-            // The plan is concrete (rules, values, blocks); drop the assumption
-            // scope so the cached e-graph reverts to unassumed facts.
-            if cache.scoped {
-                cache.egraph.pop_context();
-                cache.scoped = false;
-            }
         }
     }
 
@@ -778,47 +477,6 @@ impl InstructionSelectPass {
                 None,
             );
             rewriter.insert_op_before(&anchor, new_op.as_ref())?;
-        }
-
-        // Lower the terminators first: a fused conditional branch reads its
-        // operand *values* (not the condition register), so the condition's
-        // defining op — possibly erased as Dead below — must lose its last use
-        // before the main loop runs.
-        if let Some(emitters) = &self.branch_emitters {
-            for terminator in &plan.terminators {
-                match terminator {
-                    TerminatorPlan::Guard {
-                        op,
-                        branch,
-                        false_dest,
-                    } => {
-                        let op_ref =
-                            OperationRef::new(context.get_op(*op), Some(block_arc.clone()), None);
-                        let branch_op: Box<dyn Operation> = match branch {
-                            GuardBranch::Fused { rule_index, m } => {
-                                let request = EmitRequest {
-                                    op: None,
-                                    results: &[],
-                                    result_ty: None,
-                                };
-                                (self.rules[*rule_index].emit_fn)(context, &request, m)?
-                            }
-                            GuardBranch::Nonzero { condition, dest } => {
-                                (emitters.cond_nonzero)(context, *condition, *dest)
-                            }
-                        };
-                        rewriter.insert_op_before(&op_ref, branch_op.as_ref())?;
-                        let fallthrough = (emitters.uncond)(context, *false_dest, &[]);
-                        rewriter.replace_op(&op_ref, fallthrough.as_ref())?;
-                    }
-                    TerminatorPlan::Jump { op, dest, args } => {
-                        let op_ref =
-                            OperationRef::new(context.get_op(*op), Some(block_arc.clone()), None);
-                        let jump = (emitters.uncond)(context, *dest, args);
-                        rewriter.replace_op(&op_ref, jump.as_ref())?;
-                    }
-                }
-            }
         }
 
         // Rewrite the original ops in reverse block order — consumers before
@@ -885,110 +543,17 @@ impl InstructionSelectPass {
 
         let matches = self.collect_block_matches(context, cache, &op_refs);
 
-        // Resolve each guarded terminator: fuse its condition into a branch-rule
-        // instruction when one matches, else fall back to the target's
-        // branch-if-nonzero (which needs the condition materialized). Fused
-        // branches read their operands as registers, so those classes join the
-        // materialization set; a condition consumed only by its fused branch may
-        // instead go Dead (its defining op is erased).
-        let mut must_materialize = cache.must_materialize.clone();
-        let mut fused_conditions = HashSet::new();
-        let mut terminators = Vec::new();
-        for guard in &cache.guards {
-            if guard.has_edge_args {
-                return Err(
-                    "block arguments on conditional branch edges are not supported by codegen yet"
-                        .to_string(),
-                );
-            }
-            // A condition proven constant (a dominating-edge assumption) folds
-            // the guard to an unconditional branch to the known successor.
-            if let Some(known) = class_int_binding(&cache.egraph, guard.class) {
-                let dest = if known.to_u64() != 0 {
-                    guard.true_dest
-                } else {
-                    guard.false_dest
-                };
-                terminators.push(TerminatorPlan::Jump {
-                    op: guard.op,
-                    dest,
-                    args: Vec::new(),
-                });
-                continue;
-            }
-            match self.select_guard_branch(context, cache, guard) {
-                Some((rule_index, m, boundary_classes)) => {
-                    for class in boundary_classes {
-                        must_materialize.insert(cache.egraph.find(class));
-                    }
-                    fused_conditions.insert(guard.class);
-                    terminators.push(TerminatorPlan::Guard {
-                        op: guard.op,
-                        branch: GuardBranch::Fused { rule_index, m },
-                        false_dest: guard.false_dest,
-                    });
-                }
-                None => {
-                    must_materialize.insert(guard.class);
-                    terminators.push(TerminatorPlan::Guard {
-                        op: guard.op,
-                        branch: GuardBranch::Nonzero {
-                            condition: guard.condition,
-                            dest: guard.true_dest,
-                        },
-                        false_dest: guard.false_dest,
-                    });
-                }
-            }
-        }
-        for jump in &cache.jumps {
-            terminators.push(TerminatorPlan::Jump {
-                op: jump.op,
-                dest: jump.dest,
-                args: jump.args.clone(),
-            });
-        }
-
-        let dead_allowed: HashSet<Id> = fused_conditions
-            .iter()
-            .copied()
-            .filter(|class| !must_materialize.contains(class))
-            .collect();
-
-        if let Some(message) =
-            completeness_error(&cache.egraph, &cache.op_by_root, &matches, &dead_allowed)
-        {
+        if let Some(message) = completeness_error(&cache.egraph, &cache.op_by_root, &matches) {
             return Err(message);
         }
-        // The cover still runs with no value matches when a fused condition can
-        // go Dead: its defining op must receive the Consume decision. Without
-        // either, only constant-proven op roots (a dominating-edge assumption)
-        // need decisions — their consumers fold the immediate, so they are
-        // erased.
-        if matches.is_empty() && dead_allowed.is_empty() {
-            let mut op_decisions = HashMap::new();
-            for op_id in block.op_ids() {
-                let Some(class) = cache.op_root.get(&op_id).map(|c| cache.egraph.find(*c)) else {
-                    continue;
-                };
-                if !must_materialize.contains(&class)
-                    && class_int_binding(&cache.egraph, class).is_some()
-                {
-                    op_decisions.insert(op_id, BlockDecision::Consume);
-                }
-            }
-            return Ok(BlockPlan {
-                op_decisions,
-                terminators,
-                ..BlockPlan::default()
-            });
+        if matches.is_empty() {
+            return Ok(BlockPlan::default());
         }
 
         let Some(cover) = build_eclass_cover(
             &cache.egraph,
             &cache.op_by_root,
-            &must_materialize,
-            &dead_allowed,
+            &cache.must_materialize,
             &matches,
         ) else {
             return Ok(BlockPlan::default());
@@ -1003,9 +568,7 @@ impl InstructionSelectPass {
                 PbqpIselAlternative::Root { match_id } => {
                     root_match.insert(cover.classes[node], *match_id);
                 }
-                // A Dead condition's defining op is erased like a consumed
-                // internal: the fused branch recomputes the value.
-                PbqpIselAlternative::Internal { .. } | PbqpIselAlternative::Dead => {
+                PbqpIselAlternative::Internal { .. } => {
                     internal_classes.insert(cover.classes[node]);
                 }
                 PbqpIselAlternative::External => {}
@@ -1043,13 +606,6 @@ impl InstructionSelectPass {
                     },
                 );
             } else if internal_classes.contains(&class) {
-                op_decisions.insert(op_id, BlockDecision::Consume);
-            } else if !must_materialize.contains(&class)
-                && class_int_binding(&cache.egraph, class).is_some()
-            {
-                // The class is proven constant under the block's assumption:
-                // consumers fold the immediate (or read the merged input value's
-                // register), so the defining op is erased.
                 op_decisions.insert(op_id, BlockDecision::Consume);
             }
         }
@@ -1114,79 +670,7 @@ impl InstructionSelectPass {
             op_decisions,
             introduced: emit.introduced,
             definers,
-            terminators,
         })
-    }
-
-    /// The best conditional-branch rule match rooted at a guard's condition
-    /// class: the rule, the operand bindings (with the taken target bound as a
-    /// block), and the boundary classes the branch reads as registers. `None`
-    /// when no branch rule matches (the fallback path).
-    fn select_guard_branch(
-        &self,
-        context: &Context,
-        cache: &BlockSelectionCache,
-        guard: &BlockGuard,
-    ) -> Option<(usize, RuleMatch, Vec<Id>)> {
-        let mut best: Option<(u64, usize, usize, RuleMatch, Vec<Id>)> = None;
-        for compiled in &self.compiled_patterns {
-            let rule = &self.rules[compiled.rule_index];
-            let RuleKind::CondBranch { target_symbol } = rule.kind else {
-                continue;
-            };
-            for m in compiled.search(&cache.egraph, context) {
-                if cache.egraph.find(m.root) != guard.class {
-                    continue;
-                }
-
-                let mut captures = CaptureBindings::new();
-                for (var, class) in m.subst.entries() {
-                    let Var::Symbol(symbol) = var else { continue };
-                    captures.bind(*symbol, cache.egraph.find(class));
-                }
-
-                // Every operand must resolve: immediates fold into the encoding;
-                // register operands make their classes materialization
-                // requirements. An unresolvable boundary (e.g. a rewrite-introduced
-                // class with no backing value) disqualifies the match.
-                let mut boundary_classes = Vec::new();
-                let resolvable = captures.entries.iter().all(|(_, class)| {
-                    match class_binding(&cache.egraph, &cache.class_value, *class) {
-                        Some(Binding::Int(_)) => true,
-                        Some(Binding::Value(_)) => {
-                            boundary_classes.push(*class);
-                            true
-                        }
-                        None => false,
-                    }
-                });
-                if !resolvable {
-                    continue;
-                }
-
-                let cost = rule.base_cost as u64;
-                let specificity = compiled.specificity;
-                let better = match &best {
-                    None => true,
-                    Some((best_cost, best_specificity, ..)) => {
-                        cost < *best_cost || (cost == *best_cost && specificity > *best_specificity)
-                    }
-                };
-                if better {
-                    let rule_match = captures
-                        .to_rule_match(&cache.egraph, &cache.class_value)
-                        .with_block_binding(target_symbol, guard.true_dest);
-                    best = Some((
-                        cost,
-                        specificity,
-                        compiled.rule_index,
-                        rule_match,
-                        boundary_classes,
-                    ));
-                }
-            }
-        }
-        best.map(|(_, _, rule_index, m, boundaries)| (rule_index, m, boundaries))
     }
 
     fn collect_block_matches(
@@ -1198,34 +682,25 @@ impl InstructionSelectPass {
         let mut matches = Vec::new();
         for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
             let rule = &self.rules[compiled.rule_index];
-            // Branch rules select terminators, not values (see `select_guard_branch`).
-            if rule.kind != RuleKind::Value {
+            let Some(pattern_root) = compiled.pattern.root() else {
                 continue;
-            }
-            let pattern_root = compiled.pattern.root();
+            };
+            let pattern = &compiled.pattern;
 
             // A pure class may sit interior to any number of matches: each fused
             // instruction recomputes it, and whether the defining op is erased is
             // the solver's separate Consume decision. A shared *memory effect*
             // must stay materialized — it may be a match root or a boundary
             // operand, never an interior node a larger match would consume.
-            // Boundaries additionally honor the rule's register/immediate/width
-            // requirements.
-            let allowed = |pattern_node: Id, class: Id| {
-                if !compiled.boundary_ok(&cache.egraph, context, pattern_node, class) {
-                    return false;
-                }
+            let allowed = |pattern_node: NodeId, class: Id| {
                 pattern_node == pattern_root
-                    || compiled.node_meta[pattern_node.index()].duplicable
+                    || pattern.is_duplicable(pattern_node)
                     || node::class_is_pure(&cache.egraph, class)
                     || !cache.shared_classes.contains(&cache.egraph.find(class))
             };
 
-            for m in compiled
-                .pattern
-                .search_with_legality(&cache.egraph, &allowed)
-            {
-                let root = cache.egraph.find(m.root);
+            for m in ematch::ematch_with_legality(&cache.egraph, context, pattern, &allowed) {
+                let root = cache.egraph.find(m.root());
                 let op_id = cache.op_by_root.get(&root).copied();
                 // Instructions root at computed values: an original op result, or a
                 // rewrite-introduced intermediate (which has no op). Matches rooted at
@@ -1240,25 +715,25 @@ impl InstructionSelectPass {
                 }
 
                 let mut captures = CaptureBindings::new();
-                for (var, class) in m.subst.entries() {
-                    let Var::Symbol(symbol) = var else { continue };
-                    captures.bind(*symbol, cache.egraph.find(class));
+                for (pattern_node, symbol) in &compiled.boundary_symbols {
+                    captures.bind(*symbol, cache.egraph.find(m.binding(*pattern_node)));
                 }
 
-                let pattern_nodes = (0..compiled.pattern.len())
-                    .map(|index| Id::from_raw(index as u32))
-                    .map(|pattern_node| {
-                        let meta = &compiled.node_meta[pattern_node.index()];
-                        PatternNodeBinding {
-                            pattern_node,
-                            class: cache.egraph.find(m.binding(pattern_node)),
-                            // Constants are boundary-like: pure, folded into the
-                            // encoding, never consumed by the match — so the same
-                            // constant class (e.g. the literal 0) can sit inside one
-                            // match and under a boundary of another without making
-                            // the cover infeasible.
-                            is_boundary: meta.is_boundary || meta.is_constant,
-                        }
+                let pattern_nodes = (0..pattern.len())
+                    .map(NodeId::from_index)
+                    .map(|pattern_node| PatternNodeBinding {
+                        pattern_node,
+                        class: cache.egraph.find(m.binding(pattern_node)),
+                        // Constants are boundary-like: pure, folded into the
+                        // encoding, never consumed by the match — so the same
+                        // constant class (e.g. the literal 0) can sit inside one
+                        // match and under a boundary of another without making
+                        // the cover infeasible.
+                        is_boundary: match pattern.get_node(pattern_node) {
+                            PatternExpr::Boundary => true,
+                            PatternExpr::Node(node) => node.kind == SymKind::Constant,
+                            _ => false,
+                        },
                     })
                     .collect();
                 let bindings = FullMatchBindings {
@@ -1309,22 +784,6 @@ impl Pass for InstructionSelectPass {
         rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<PreservedAnalyses, PassError> {
-        // The function op is visited before any of its blocks' ops: record its
-        // CFG, then solve every block up front — a dominating-edge assumption
-        // reads the guard condition's *defining op*, which a dominator's commit
-        // would otherwise have replaced by the time the dominated block solves.
-        if !op.op().regions.is_empty() {
-            self.record_cfg(context, op);
-            for region_id in &op.op().regions {
-                let region = context.get_region(*region_id);
-                for block in region.iter(context.clone()) {
-                    if !block.is_empty() {
-                        self.ensure_block_solution(context, &block);
-                    }
-                }
-            }
-        }
-
         for lowering in &self.op_lowerings {
             if lowering(context, op, rewriter)? {
                 return Ok(PreservedAnalyses::none());

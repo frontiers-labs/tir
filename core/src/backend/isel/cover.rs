@@ -5,13 +5,14 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     OpId, ValueId,
+    graph::NodeId,
     pbqp::{self, INF_COST, PbqpAlternative, PbqpMatrix, PbqpProblem},
     sem::SymKind,
 };
 use tir_symbolic::egraph::{ENode, Id};
 
 use super::RuleMatch;
-use super::node::{SemEGraph, class_int_binding, class_is_pure, class_value_binding};
+use super::node::{Binding, SemEGraph, class_binding, class_is_pure};
 use super::pattern::CompiledIselPattern;
 
 #[derive(Clone, Debug)]
@@ -40,17 +41,13 @@ impl CaptureBindings {
         egraph: &SemEGraph,
         class_value: &HashMap<Id, ValueId>,
     ) -> RuleMatch {
-        // A class can carry both a proven constant and a register value (an
-        // assumption merges a condition with its truth value); record both so
-        // immediate-folding and register-reading emitters each find theirs.
         let mut int_bindings = Vec::new();
         let mut value_bindings = Vec::new();
         for (sym, class) in &self.entries {
-            if let Some(v) = class_int_binding(egraph, *class) {
-                int_bindings.push((*sym, v));
-            }
-            if let Some(v) = class_value_binding(egraph, class_value, *class) {
-                value_bindings.push((*sym, v));
+            match class_binding(egraph, class_value, *class) {
+                Some(Binding::Int(v)) => int_bindings.push((*sym, v)),
+                Some(Binding::Value(v)) => value_bindings.push((*sym, v)),
+                None => {}
             }
         }
         RuleMatch::new(int_bindings, value_bindings)
@@ -59,7 +56,7 @@ impl CaptureBindings {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PatternNodeBinding {
-    pub(crate) pattern_node: Id,
+    pub(crate) pattern_node: NodeId,
     pub(crate) class: Id,
     pub(crate) is_boundary: bool,
 }
@@ -78,13 +75,8 @@ pub(crate) enum PbqpIselAlternative {
     },
     Internal {
         match_id: usize,
-        pattern_node: Id,
+        pattern_node: NodeId,
     },
-    /// The class's value is not needed in a register: its only consumer is a
-    /// fused conditional branch that recomputes the condition from its own
-    /// operands. Unlike `External`, `Dead` never satisfies a boundary's
-    /// materialization requirement — the defining op is erased.
-    Dead,
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +84,7 @@ pub(crate) struct PbqpIselMatch {
     pub(crate) pattern_index: usize,
     pub(crate) rule_index: usize,
     pub(crate) root: Id,
-    pub(crate) pattern_root: Id,
+    pub(crate) pattern_root: NodeId,
     pub(crate) bindings: FullMatchBindings,
     pub(crate) cost: u64,
 }
@@ -114,7 +106,6 @@ pub(crate) fn build_eclass_cover(
     egraph: &SemEGraph,
     op_by_root: &HashMap<Id, OpId>,
     must_materialize: &HashSet<Id>,
-    dead_allowed: &HashSet<Id>,
     matches: &[PbqpIselMatch],
 ) -> Option<ClassCover> {
     let classes: Vec<Id> = egraph.classes().map(|c| egraph.find(c.id())).collect();
@@ -146,10 +137,6 @@ pub(crate) fn build_eclass_cover(
         }
     }
 
-    for &c in dead_allowed {
-        alternatives_by_node[class_index(c)].push(PbqpIselAlternative::Dead);
-    }
-
     for (i, &c) in classes.iter().enumerate() {
         if alternatives_by_node[i].is_empty() && (is_terminal(c) || !op_by_root.contains_key(&c)) {
             alternatives_by_node[i].push(PbqpIselAlternative::External);
@@ -166,9 +153,7 @@ pub(crate) fn build_eclass_cover(
             .iter()
             .map(|alternative| match alternative {
                 PbqpIselAlternative::Root { match_id } => matches[*match_id].cost,
-                PbqpIselAlternative::External
-                | PbqpIselAlternative::Internal { .. }
-                | PbqpIselAlternative::Dead => 0,
+                PbqpIselAlternative::External | PbqpIselAlternative::Internal { .. } => 0,
             })
             .collect();
         problem.add_node(costs);
@@ -191,7 +176,7 @@ pub(crate) fn build_eclass_cover(
                         match_id: alt_match,
                         ..
                     } => *alt_match == match_id && !class_is_pure(egraph, classes[node]),
-                    PbqpIselAlternative::External | PbqpIselAlternative::Dead => false,
+                    PbqpIselAlternative::External => false,
                 };
                 if belongs_to_match {
                     coherent.push(PbqpAlternative {
@@ -314,13 +299,10 @@ pub(crate) fn prune_dominated_matches(
 /// (it roots some match) or consumable by a parent match (it is an interior node of
 /// some match). A non-terminal op-root that is neither cannot be selected by this
 /// rule set — even after saturation — so selection fails with a diagnostic.
-/// Classes in `exempt` (guard conditions covered by a fused branch, with no other
-/// consumer needing the value) are skipped.
 pub(crate) fn completeness_error(
     egraph: &SemEGraph,
     op_by_root: &HashMap<Id, OpId>,
     matches: &[PbqpIselMatch],
-    exempt: &HashSet<Id>,
 ) -> Option<String> {
     let mut has_root: HashSet<Id> = HashSet::new();
     let mut has_internal: HashSet<Id> = HashSet::new();
@@ -339,17 +321,10 @@ pub(crate) fn completeness_error(
         if egraph.nodes(class).iter().any(|n| n.children().is_empty()) {
             continue;
         }
-        if has_root.contains(&class) || has_internal.contains(&class) || exempt.contains(&class) {
+        if has_root.contains(&class) || has_internal.contains(&class) {
             continue;
         }
-        // Prefer a member that isn't a rewrite-introduced `If` bridge, so the
-        // diagnostic names the original semantic kind (e.g. the comparison).
-        let nodes = egraph.nodes(class);
-        if let Some(kind) = nodes
-            .iter()
-            .map(|n| n.kind)
-            .find(|kind| *kind != SymKind::If)
-            .or_else(|| nodes.first().map(|n| n.kind))
+        if let Some(kind) = egraph.nodes(class).first().map(|n| n.kind)
             && !missing.contains(&kind)
         {
             missing.push(kind);
@@ -410,7 +385,7 @@ pub(crate) fn child_requirement(
         PbqpIselAlternative::Root { match_id } | PbqpIselAlternative::Internal { match_id, .. } => {
             *match_id
         }
-        PbqpIselAlternative::External | PbqpIselAlternative::Dead => return None,
+        PbqpIselAlternative::External => return None,
     };
 
     let m = &matches[match_id];
@@ -442,5 +417,8 @@ pub(crate) fn child_requirement(
 
 pub(crate) enum ChildRequirement {
     Materialized,
-    SameMatch { match_id: usize, pattern_node: Id },
+    SameMatch {
+        match_id: usize,
+        pattern_node: NodeId,
+    },
 }
