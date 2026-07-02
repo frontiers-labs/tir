@@ -5,9 +5,9 @@ use clap::{Parser, Subcommand};
 mod common;
 
 pub mod axioms;
+pub mod llvm_import;
 pub mod mc;
 pub mod opt;
-pub mod llvm_import;
 pub mod readobj;
 pub mod sched;
 
