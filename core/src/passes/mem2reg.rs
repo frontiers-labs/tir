@@ -4,8 +4,9 @@ use crate::Operation;
 use crate::analysis::DominatorTree;
 use crate::graph::{Dag, NodeId};
 use crate::{
-    BlockId, Context, MemoryRead, MemoryWrite, OpId, OperationRef, Pass, PassError, PassTarget,
-    PromotableAllocation, Rewriter, ValueId, builtin::FuncOp,
+    AnalysisManager, BlockId, Context, MemoryRead, MemoryWrite, OpId, OperationRef, Pass,
+    PassError, PassTarget, PreservedAnalyses, PromotableAllocation, Rewriter, ValueId,
+    builtin::FuncOp,
 };
 
 #[derive(Default)]
@@ -44,14 +45,15 @@ impl Pass for Mem2RegPass {
         op: &OperationRef,
         context: &Context,
         rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+        analyses: &AnalysisManager,
+    ) -> Result<PreservedAnalyses, PassError> {
         if op.as_op::<FuncOp>().is_none() {
-            return Ok(());
+            return Ok(PreservedAnalyses::all());
         }
 
         // Dominance over the function's whole region tree (including nested
         // structured-control-flow regions) drives the promotion decisions below.
-        let dom_tree = DominatorTree::new(context, op.op().id);
+        let dom_tree = analyses.get::<DominatorTree>(context, op.op().id);
         let layout = OpLayout::collect(context, &dom_tree);
 
         let slots = collect_slots(context, &layout);
@@ -84,7 +86,9 @@ impl Pass for Mem2RegPass {
             rewriter.erase_op(&target)?;
         }
 
-        Ok(())
+        // Promotion only erases loads/stores/allocas — never terminators or
+        // blocks — so block-level dominance survives.
+        Ok(PreservedAnalyses::none().preserve::<DominatorTree>())
     }
 }
 

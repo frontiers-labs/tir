@@ -18,7 +18,8 @@ use std::collections::{HashMap, HashSet};
 use tir::attributes::{AttributeRole, AttributeValue, RegisterAttr};
 use tir::pbqp::{self, INF_COST, PbqpMatrix, PbqpNodeId, PbqpProblem};
 use tir::{
-    BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter, ValueId,
+    AnalysisManager, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
+    PreservedAnalyses, Rewriter, ValueId,
 };
 
 use crate::backend::liveness::{self, Liveness, PhysReg};
@@ -425,11 +426,12 @@ impl Pass for RegisterAllocationPass {
         op: &OperationRef,
         context: &Context,
         rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+        _analyses: &AnalysisManager,
+    ) -> Result<PreservedAnalyses, PassError> {
         let info = self.target.register_info();
         let blocks = symbol_body_blocks(context, op);
         if blocks.is_empty() {
-            return Ok(());
+            return Ok(PreservedAnalyses::all());
         }
 
         let precolor = abi_precolor(context, op, &info, &blocks);
@@ -480,7 +482,7 @@ impl Pass for RegisterAllocationPass {
             self.insert_frame(context, rewriter, &blocks, frame.size())?;
         }
 
-        Ok(())
+        Ok(PreservedAnalyses::none())
     }
 }
 

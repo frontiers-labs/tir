@@ -19,8 +19,8 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 
 use tir::{
-    Block, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter,
-    TypeId, ValueId,
+    AnalysisManager, Block, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError,
+    PassTarget, PreservedAnalyses, Rewriter, TypeId, ValueId,
     graph::{NodeId, OperandConstraint, PatternExpr},
     sem::{SemGraph, SymKind},
 };
@@ -782,19 +782,21 @@ impl Pass for InstructionSelectPass {
         op: &OperationRef,
         context: &Context,
         rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+        _analyses: &AnalysisManager,
+    ) -> Result<PreservedAnalyses, PassError> {
         for lowering in &self.op_lowerings {
             if lowering(context, op, rewriter)? {
-                return Ok(());
+                return Ok(PreservedAnalyses::none());
             }
         }
 
         // Result-less ops still participate: a store must trigger its block's
         // selection even when no value-producing op precedes it.
         let Some(block) = op.block() else {
-            return Ok(());
+            return Ok(PreservedAnalyses::all());
         };
 
-        self.commit_block_solution(context, block, rewriter)
+        self.commit_block_solution(context, block, rewriter)?;
+        Ok(PreservedAnalyses::none())
     }
 }

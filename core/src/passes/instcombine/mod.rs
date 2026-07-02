@@ -16,10 +16,12 @@ use std::collections::HashMap;
 
 use tir_symbolic::egraph::{EGraph, Extraction, Id};
 
-use crate::analysis::{DominatorTree, GateNode};
+use std::rc::Rc;
+
+use crate::analysis::{DominatorTree, GSA, GateNode};
 use crate::{
-    BlockId, ConstantLike, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
-    RegionGuard, RegionId, Rewriter, TypeId, ValueId,
+    AnalysisManager, BlockId, ConstantLike, Context, OpId, Operation, OperationRef, Pass,
+    PassError, PassTarget, PreservedAnalyses, RegionGuard, RegionId, Rewriter, TypeId, ValueId,
     builtin::{FuncOp, ops},
     utils::APInt,
 };
@@ -55,22 +57,26 @@ impl Pass for InstCombinePass {
         op: &OperationRef,
         context: &Context,
         rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+        analyses: &AnalysisManager,
+    ) -> Result<PreservedAnalyses, PassError> {
         if op.as_op::<FuncOp>().is_none() {
-            return Ok(());
+            return Ok(PreservedAnalyses::all());
         }
         let root = op.op().id;
-        let seeded = seed::seed(context, root);
+        let seeded = seed::seed(context, root, &analyses.get::<GSA>(context, root));
         let mut driver = Driver {
             context,
             eg: seeded.eg,
             value_class: seeded.value_class,
             arg_block: seeded.arg_block,
-            dom: DominatorTree::new(context, root),
+            dom: analyses.get::<DominatorTree>(context, root),
             ruleset: builtin_ruleset(context),
         };
         let body = context.get_op(root).regions[0];
-        driver.process_region(body, rewriter)
+        driver.process_region(body, rewriter)?;
+        // Rewrites erase and insert ops within blocks but never touch the block
+        // graph, so dominance survives; the value graph does not.
+        Ok(PreservedAnalyses::none().preserve::<DominatorTree>())
     }
 }
 
@@ -90,7 +96,7 @@ struct Driver<'a> {
     eg: EGraph<Node>,
     value_class: HashMap<ValueId, Id>,
     arg_block: HashMap<ValueId, BlockId>,
-    dom: DominatorTree,
+    dom: Rc<DominatorTree>,
     ruleset: Ruleset,
 }
 

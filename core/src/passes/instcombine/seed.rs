@@ -20,11 +20,10 @@ pub struct Seeded {
 }
 
 /// Build the e-graph for the value graph rooted at `root`.
-pub fn seed(context: &Context, root: OpId) -> Seeded {
-    let gsa = GSA::new(context, root);
+pub fn seed(context: &Context, root: OpId, gsa: &GSA) -> Seeded {
     let mut seeder = Seeder {
         context,
-        gsa: &gsa,
+        gsa,
         eg: EGraph::new(),
         id_of: HashMap::new(),
     };

@@ -35,6 +35,7 @@ pub mod helpers {
 }
 pub mod parse;
 
+pub use analysis::{Analysis, AnalysisManager, PreservedAnalyses};
 pub use block::{Block, BlockId};
 pub use builder::{IRBuilder, InsertionPoint};
 pub use context::{Context, ContextIterator, ContextRef, GetFromContext};

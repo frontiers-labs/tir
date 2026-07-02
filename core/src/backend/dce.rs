@@ -5,8 +5,8 @@
 use std::collections::HashSet;
 
 use tir::{
-    BlockId, Context, MemoryWrite, OpId, OperationRef, Pass, PassError, PassTarget, Rewriter,
-    Terminator,
+    AnalysisManager, BlockId, Context, MemoryWrite, OpId, OperationRef, Pass, PassError,
+    PassTarget, PreservedAnalyses, Rewriter, Terminator,
 };
 
 use crate::backend::liveness::{RegRef, op_regs};
@@ -34,9 +34,10 @@ impl Pass for DeadCodeEliminationPass {
         op: &OperationRef,
         context: &Context,
         rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+        _analyses: &AnalysisManager,
+    ) -> Result<PreservedAnalyses, PassError> {
         let Some(&region) = op.op().regions.first() else {
-            return Ok(());
+            return Ok(PreservedAnalyses::all());
         };
         let blocks: Vec<BlockId> = context
             .get_region(region)
@@ -80,7 +81,7 @@ impl Pass for DeadCodeEliminationPass {
                 rewriter.erase_op(&op_ref)?;
             }
         }
-        Ok(())
+        Ok(PreservedAnalyses::none())
     }
 }
 

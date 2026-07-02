@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     BlockId, BranchGuard, BranchTerminator, Context, LoopLike, OpId, RegionGuard, RegionId,
     Terminator, ValueId,
-    analysis::DominatorTree,
+    analysis::{Analysis, AnalysisManager, DominatorTree, PreservedAnalyses},
     graph::{Dag, GenericDag, MutDag, NodeId},
 };
 
@@ -39,6 +39,10 @@ impl GSA {
     /// Build the gated SSA form rooted at `root`'s first region.
     pub fn new<O: Into<OpId>>(context: &Context, root: O) -> Self {
         let root = root.into();
+        Self::with_dom(context, root, &DominatorTree::new(context, root))
+    }
+
+    fn with_dom(context: &Context, root: OpId, dom: &DominatorTree) -> Self {
         let blocks = region_blocks(context, root);
         let preds = predecessor_map(context, &blocks);
         let phis = collect_phis(context, &blocks, &preds);
@@ -50,7 +54,7 @@ impl GSA {
 
         let mut builder = Builder {
             context,
-            dom: DominatorTree::new(context, root),
+            dom,
             preds,
             phis,
             gamma,
@@ -111,6 +115,17 @@ impl GSA {
     }
 }
 
+impl Analysis for GSA {
+    fn build(analyses: &AnalysisManager, context: &Context, op: OpId) -> Self {
+        Self::with_dom(context, op, &analyses.get::<DominatorTree>(context, op))
+    }
+
+    /// Derived from dominance, so it dies with it.
+    fn is_invalidated(&self, preserved: &PreservedAnalyses) -> bool {
+        !preserved.is_preserved::<Self>() || !preserved.is_preserved::<DominatorTree>()
+    }
+}
+
 impl Dag for GSA {
     type Node = GateNode;
     type Leaf = ();
@@ -158,7 +173,7 @@ struct Edge {
 
 struct Builder<'a> {
     context: &'a Context,
-    dom: DominatorTree,
+    dom: &'a DominatorTree,
     /// Block-SSA predecessors reaching each block, with the values forwarded along
     /// the edge.
     preds: HashMap<BlockId, Vec<Edge>>,
@@ -650,6 +665,27 @@ mod tests {
 
         let node = gs.node_of(arg_id).unwrap();
         assert_eq!(*gs.gate(node), GateNode::Input(arg_id));
+    }
+
+    #[test]
+    fn manager_shares_dominance_with_gsa() {
+        let context = Context::with_default_dialects();
+        let i32 = IntegerType::new(&context, 32);
+        let arg = context.create_value(i32, None);
+        let arg_id = arg.id();
+
+        let region = context.create_region();
+        let entry = context.create_block(vec![arg]);
+        region.add_block(entry.id());
+        IRBuilder::new(entry.clone())
+            .insert(ops::r#return(&context, Operand::from(arg_id)).build());
+        let func = func_with_region(&context, region.id());
+
+        let am = AnalysisManager::new();
+        let gs = am.get::<GSA>(&context, func);
+        assert!(gs.node_of(arg_id).is_some());
+        // Building GSA populated its dominance dependency in the cache.
+        assert!(am.get_cached::<DominatorTree>(func).is_some());
     }
 
     /// A region yielding a single value through its terminator.
