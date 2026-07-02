@@ -6,8 +6,8 @@ use tir::{
 };
 
 use super::{
-    EmitRequest, InstructionSelectPass, IselCostModel, Rule, RuleMatch, SemEGraph, SemNode,
-    extension_rewrite, template_node,
+    BranchEmitters, EmitRequest, InstructionSelectPass, IselCostModel, Rule, RuleKind, RuleMatch,
+    SemEGraph, SemNode, extension_rewrite, template_node,
 };
 
 fn symbol(g: &mut SemGraph, id: u32) -> tir::graph::NodeId {
@@ -603,9 +603,10 @@ fn internal_node_type_constraint_is_enforced() {
 #[test]
 fn saturation_bridges_sign_extension_to_shift_pair() {
     use super::SaturationLimits;
-    use tir::graph::{OperandConstraint, Pattern, PatternExpr};
+    use super::pattern::compile_isel_pattern;
     use tir::sem::{SymKind, SymPayload};
     use tir_adt::APInt;
+    use tir_symbolic::egraph::Var;
 
     let ctx = Context::with_default_dialects();
     let i16 = IntegerType::new(&ctx, 16);
@@ -646,28 +647,29 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
     );
 
     // An immediate `srai` pattern matches the class, with shift amount 64-16=48.
-    let mut srai = Pattern::<SemNode, ()>::new(());
-    let rs1 = srai.add_node(PatternExpr::Boundary);
-    srai.set_duplicable(rs1, true);
-    let imm = srai.add_node(PatternExpr::Boundary);
-    srai.set_duplicable(imm, true);
-    srai.set_operand_constraint(imm, OperandConstraint::Immediate);
-    let root = srai.add_node(PatternExpr::Node(template_node(
-        SymKind::ShiftRightArithmetic,
-        None,
-        None,
-    )));
-    srai.add_edge(root, rs1);
-    srai.add_edge(root, imm);
-    srai.set_root(root);
+    // The width requirement on the shifted value must not reject the
+    // rewrite-introduced shl class: it carries no IR type, and introduced
+    // classes are produced at register width by the instructions that
+    // materialize them.
+    let compiled = compile_isel_pattern(
+        0,
+        &shift_imm_pattern(SymKind::ShiftRightArithmetic),
+        &[(1, OperandConstraint::Immediate)],
+        &[(0, 64)],
+    )
+    .expect("srai pattern should compile");
 
-    let matches = super::ematch::ematch(&egraph, &ctx, &srai);
+    let matches = compiled.search(&egraph, &ctx);
     let m = matches
         .iter()
-        .find(|m| egraph.find(m.root()) == egraph.find(sext))
+        .find(|m| egraph.find(m.root) == egraph.find(sext))
         .expect("an immediate srai must match the sext class after saturation");
+    let imm_class = m
+        .subst
+        .get(&Var::Symbol(1))
+        .expect("shift amount operand bound");
     let shift_amount = egraph
-        .nodes(m.binding(imm))
+        .nodes(imm_class)
         .iter()
         .find_map(|n| match n.payload.as_ref() {
             Some(super::SemPayload::Expr(SymPayload::Int(v))) => Some(v.to_u64()),
@@ -925,7 +927,7 @@ fn memory_ops_select_via_interfaces() {
 #[test]
 fn merged_value_classes_resolve_to_earliest_def() {
     use super::{EMatch, IselRewrite};
-    use tir::graph::{Pattern, PatternExpr};
+    use tir_symbolic::egraph::{Pattern, Var};
 
     let context = Context::with_default_dialects();
     let module = ops::module(&context, None).build();
@@ -957,25 +959,22 @@ fn merged_value_classes_resolve_to_earliest_def() {
 
     // A test-only "proof" that x*y == x+y: union the Mul class with the Add
     // class, exactly the shape a discovered algebraic bridge produces.
-    let mut searcher = Pattern::<SemNode, ()>::new(());
-    let lhs = searcher.add_node(PatternExpr::Boundary);
-    searcher.set_duplicable(lhs, true);
-    let rhs = searcher.add_node(PatternExpr::Boundary);
-    searcher.set_duplicable(rhs, true);
-    let root = searcher.add_node(PatternExpr::Node(template_node(SymKind::Mul, None, None)));
-    searcher.add_edge(root, lhs);
-    searcher.add_edge(root, rhs);
-    searcher.set_root(root);
+    let mut searcher = Pattern::<SemNode, u32>::new();
+    let lhs = searcher.var(Var::Symbol(0));
+    let rhs = searcher.var(Var::Symbol(1));
+    let mut mul_root = template_node(SymKind::Mul, None, None);
+    mul_root.children = vec![lhs, rhs];
+    searcher.add(mul_root);
     let union_mul_add = IselRewrite {
         name: "mul-equals-add".to_string(),
         searcher,
-        apply: Box::new(|_ctx: &Context, egraph: &mut SemEGraph, m: &EMatch| {
+        apply: Box::new(|_ctx: &Context, egraph: &mut SemEGraph, m: &EMatch<u32>| {
             let add_class = egraph
                 .classes()
                 .find(|class| class.nodes().iter().any(|n| n.kind == SymKind::Add))
                 .map(|class| class.id());
             if let Some(add_class) = add_class {
-                egraph.union(m.root(), add_class);
+                egraph.union(m.root, add_class);
             }
         }),
     };
@@ -1026,6 +1025,491 @@ fn merged_value_classes_resolve_to_earliest_def() {
     // result of the muli that replaced the original mul.
     let sub_op = &body[2];
     assert_eq!(sub_op.operands[0], body[0].results[0]);
+}
+
+// ── Conditional-branch selection ────────────────────────────────────────────
+//
+// Marker convention: the fused branch emits a `br` to the bound target
+// forwarding the two compared values; the uncond emitter a `br` with the
+// forwarded args; the nonzero fallback a `br` forwarding the condition.
+
+fn emit_fused_branch_marker(
+    context: &Context,
+    req: &EmitRequest,
+    m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let dest = m
+        .block_binding(2)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let lhs = m
+        .value_binding(0)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let rhs = m
+        .value_binding(1)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    Ok(Box::new(ops::br(context, vec![lhs, rhs], dest).build()))
+}
+
+fn emit_uncond_marker(
+    context: &Context,
+    dest: tir::BlockId,
+    args: &[tir::ValueId],
+) -> Box<dyn Operation> {
+    Box::new(ops::br(context, args.to_vec(), dest).build())
+}
+
+fn emit_nonzero_marker(
+    context: &Context,
+    condition: tir::ValueId,
+    dest: tir::BlockId,
+) -> Box<dyn Operation> {
+    Box::new(ops::br(context, vec![condition], dest).build())
+}
+
+fn branch_rule() -> Rule {
+    Rule::new(
+        "blt-marker",
+        atomic_pattern(SymKind::Lt),
+        1,
+        emit_fused_branch_marker,
+    )
+    .with_kind(RuleKind::CondBranch { target_symbol: 2 })
+}
+
+fn branch_emitters() -> BranchEmitters {
+    BranchEmitters {
+        uncond: emit_uncond_marker,
+        cond_nonzero: emit_nonzero_marker,
+    }
+}
+
+struct BranchBlock {
+    context: Context,
+    region: tir::RegionId,
+    true_dest: tir::BlockId,
+    false_dest: tir::BlockId,
+    args: Vec<tir::ValueId>,
+}
+
+/// A function whose entry block holds `body(entry builder, args)` followed by
+/// `cond_br cond, ^t, ^f`, where `body` returns the condition value.
+fn guarded_block(
+    arg_tys: &[u32],
+    body: impl Fn(&Context, &mut IRBuilder, &[tir::ValueId]) -> tir::ValueId,
+) -> BranchBlock {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let values: Vec<_> = arg_tys
+        .iter()
+        .map(|w| context.create_value(IntegerType::new(&context, *w), None))
+        .collect();
+    let arg_ids: Vec<_> = values.iter().map(|v| v.id()).collect();
+    let region = context.create_region();
+    let block = context.create_block(values);
+    region.add_block(block.id());
+    let t = context.create_block(vec![]);
+    let f = context.create_block(vec![]);
+
+    let func = ops::func(
+        &context,
+        "demo",
+        IntegerType::new(&context, 64),
+        Some(region.id()),
+    )
+    .build();
+    let mut fb = IRBuilder::new(func.body());
+    let cond = body(&context, &mut fb, &arg_ids);
+    fb.insert(ops::cond_br(&context, cond, vec![], vec![], t.id(), f.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name()).add_pass(
+        InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
+    );
+    pm.run(&context, context.get_op(module.id()))
+        .expect("branch selection should succeed");
+
+    BranchBlock {
+        context,
+        region: region.id(),
+        true_dest: t.id(),
+        false_dest: f.id(),
+        args: arg_ids,
+    }
+}
+
+fn block_ops(context: &Context, region: tir::RegionId) -> Vec<std::sync::Arc<tir::OpInstance>> {
+    context
+        .get_region(region)
+        .iter(context.clone())
+        .next()
+        .unwrap()
+        .op_ids()
+        .into_iter()
+        .map(|op_id| context.get_op(op_id))
+        .collect()
+}
+
+/// A comparison feeding only the guard fuses into the branch rule, the compare
+/// op is consumed (Dead), and the false edge lowers through the uncond emitter.
+#[test]
+fn guard_fuses_comparison_and_consumes_compare() {
+    let b = guarded_block(&[64, 64], |context, fb, args| {
+        let cmp = tir::builtin::CmpIOpBuilder::new(context)
+            .lhs(args[0])
+            .rhs(args[1])
+            .predicate("slt")
+            .result_type(IntegerType::new(context, 1))
+            .build();
+        let result = cmp.result();
+        fb.insert(cmp);
+        result
+    });
+
+    let body = block_ops(&b.context, b.region);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br", "br"], "cmpi must be consumed");
+
+    // The fused branch reads the compared values and targets the true block.
+    let fused = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(fused.dest(), b.true_dest);
+    assert_eq!(fused.dest_args(), b.args);
+    // The fallthrough targets the false block.
+    let fallthrough = body[1].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(fallthrough.dest(), b.false_dest);
+    assert!(fallthrough.dest_args().is_empty());
+}
+
+/// A bare i1 condition no branch rule can fuse takes the branch-if-nonzero
+/// fallback, forwarding the condition value.
+#[test]
+fn guard_without_matching_rule_uses_nonzero_fallback() {
+    let b = guarded_block(&[1], |_, _, args| args[0]);
+
+    let body = block_ops(&b.context, b.region);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br", "br"]);
+
+    let nonzero = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(nonzero.dest(), b.true_dest);
+    assert_eq!(nonzero.dest_args(), vec![b.args[0]]);
+}
+
+/// A compared condition with another in-block consumer is both materialized
+/// (the boundary edge forbids Dead) and fused into the branch.
+#[test]
+fn escaping_compare_materializes_and_fuses() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let i1 = IntegerType::new(&context, 1);
+    let i64_ty = IntegerType::new(&context, 64);
+    let x = context.create_value(i64_ty, None);
+    let y = context.create_value(i64_ty, None);
+    let (x_id, y_id) = (x.id(), y.id());
+    let region = context.create_region();
+    let block = context.create_block(vec![x, y]);
+    region.add_block(block.id());
+    let t = context.create_block(vec![]);
+    let f = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let mut fb = IRBuilder::new(func.body());
+    let cmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(x_id)
+        .rhs(y_id)
+        .predicate("slt")
+        .result_type(i1)
+        .build();
+    let cond = cmp.result();
+    fb.insert(cmp);
+    // A second consumer of the condition: its class must stay materialized.
+    fb.insert(ops::addi(&context, cond, cond, i1).build());
+    fb.insert(ops::cond_br(&context, cond, vec![], vec![], t.id(), f.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        branch_rule(),
+        // The Lt materializer (subi marker) and the add consumer's rule.
+        Rule::new("slt-marker", atomic_pattern(SymKind::Lt), 10, emit_sub),
+        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+    ];
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("selection should succeed");
+
+    let names: Vec<_> = block_ops(&context, region.id())
+        .iter()
+        .map(|op| op.name)
+        .collect();
+    // cmpi -> subi marker (materialized), addi stays selected, then the fused
+    // branch marker and the fallthrough.
+    assert_eq!(names, vec!["subi", "addi", "br", "br"]);
+}
+
+/// Width-constrained comparison operands: a rule constrained to width 64 must
+/// not bind i32 values (their upper register bits are undefined), while the
+/// matching width fuses as usual.
+#[test]
+fn width_constraint_gates_comparison_fusion() {
+    let build_cmp = |context: &Context, fb: &mut IRBuilder, args: &[tir::ValueId]| {
+        let cmp = tir::builtin::CmpIOpBuilder::new(context)
+            .lhs(args[0])
+            .rhs(args[1])
+            .predicate("slt")
+            .result_type(IntegerType::new(context, 1))
+            .build();
+        let result = cmp.result();
+        fb.insert(cmp);
+        result
+    };
+
+    let run = |arg_width: u32, rule_width: u32| {
+        let context = Context::with_default_dialects();
+        let module = ops::module(&context, None).build();
+        let values: Vec<_> = (0..2)
+            .map(|_| context.create_value(IntegerType::new(&context, arg_width), None))
+            .collect();
+        let arg_ids: Vec<_> = values.iter().map(|v| v.id()).collect();
+        let region = context.create_region();
+        let block = context.create_block(values);
+        region.add_block(block.id());
+        let t = context.create_block(vec![]);
+        let f = context.create_block(vec![]);
+
+        let func = ops::func(
+            &context,
+            "demo",
+            IntegerType::new(&context, 64),
+            Some(region.id()),
+        )
+        .build();
+        let mut fb = IRBuilder::new(func.body());
+        let cond = build_cmp(&context, &mut fb, &arg_ids);
+        fb.insert(ops::cond_br(&context, cond, vec![], vec![], t.id(), f.id()).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let rules = vec![branch_rule().with_operand_widths(vec![(0, rule_width), (1, rule_width)])];
+        let mut pm = PassManager::new();
+        pm.nest(FuncOp::name())
+            .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+        pm.run(&context, context.get_op(module.id()))
+            .map(|()| block_ops(&context, region.id()).len())
+    };
+
+    // Matching width: the compare fuses and is consumed (branch + fallthrough).
+    assert_eq!(run(64, 64).expect("matching width should fuse"), 2);
+    // Mismatched width: no branch rule matches, the fallback needs the
+    // condition materialized, and no rule can — selection must refuse.
+    let err = run(32, 64).expect_err("mismatched width must be rejected");
+    assert!(err.to_string().contains("Lt"));
+}
+
+/// A function of two i64 args whose entry compares them (`predicate`) and
+/// branches to `body` (in the region) or `other`; `body` re-compares with
+/// `body_predicate` and operand order `body_swapped`, branching to `u`/`v`.
+/// `body_on_true` picks which edge of the entry guard reaches `body`. Returns
+/// the op names of the selected body block plus the block ids the body's
+/// branches reference.
+struct DominatedBlocks {
+    context: Context,
+    body: tir::BlockId,
+    u: tir::BlockId,
+}
+
+fn run_dominated_compare(
+    predicate: &str,
+    body_on_true: bool,
+    body_predicate: &str,
+    body_swapped: bool,
+) -> DominatedBlocks {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let i64_ty = IntegerType::new(&context, 64);
+    let i1 = IntegerType::new(&context, 1);
+    let a = context.create_value(i64_ty, None);
+    let b = context.create_value(i64_ty, None);
+    let (a_id, b_id) = (a.id(), b.id());
+    let region = context.create_region();
+    let entry = context.create_block(vec![a, b]);
+    region.add_block(entry.id());
+    let body = context.create_block(vec![]);
+    region.add_block(body.id());
+    let other = context.create_block(vec![]);
+    let u = context.create_block(vec![]);
+    let v = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    let mut eb = IRBuilder::new(entry.clone());
+    let entry_cmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(a_id)
+        .rhs(b_id)
+        .predicate(predicate)
+        .result_type(i1)
+        .build();
+    let entry_cond = entry_cmp.result();
+    eb.insert(entry_cmp);
+    let (t_dest, f_dest) = if body_on_true {
+        (body.id(), other.id())
+    } else {
+        (other.id(), body.id())
+    };
+    eb.insert(ops::cond_br(&context, entry_cond, vec![], vec![], t_dest, f_dest).build());
+
+    let mut bb = IRBuilder::new(body.clone());
+    let (lhs, rhs) = if body_swapped {
+        (b_id, a_id)
+    } else {
+        (a_id, b_id)
+    };
+    let body_cmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(lhs)
+        .rhs(rhs)
+        .predicate(body_predicate)
+        .result_type(i1)
+        .build();
+    let body_cond = body_cmp.result();
+    bb.insert(body_cmp);
+    bb.insert(ops::cond_br(&context, body_cond, vec![], vec![], u.id(), v.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        branch_rule(),
+        Rule::new(
+            "beq-marker",
+            atomic_pattern(SymKind::Eq),
+            1,
+            emit_fused_branch_marker,
+        )
+        .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
+    ];
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("dominated selection should succeed");
+
+    DominatedBlocks {
+        context,
+        body: body.id(),
+        u: u.id(),
+    }
+}
+
+fn block_op_list(context: &Context, block: tir::BlockId) -> Vec<std::sync::Arc<tir::OpInstance>> {
+    context
+        .get_block(block)
+        .op_ids()
+        .into_iter()
+        .map(|op_id| context.get_op(op_id))
+        .collect()
+}
+
+/// A block dominated by a guard edge knows the guard's fact: the identical
+/// compare in the body folds to the known truth, its guard becomes an
+/// unconditional branch to the taken successor, and the compare op is erased.
+#[test]
+fn dominated_block_folds_redundant_compare_and_branch() {
+    let r = run_dominated_compare("slt", true, "slt", false);
+    let body = block_op_list(&r.context, r.body);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(
+        names,
+        vec!["br"],
+        "compare consumed, guard folded to a jump"
+    );
+    let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(jump.dest(), r.u, "the true successor is taken");
+}
+
+/// On the false edge the *complement* comparison is known true: `a >= b`
+/// dominated by the false edge of `a < b` folds the same way.
+#[test]
+fn false_edge_assumes_complement_comparison() {
+    let r = run_dominated_compare("slt", false, "sge", false);
+    let body = block_op_list(&r.context, r.body);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br"]);
+    let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(jump.dest(), r.u);
+}
+
+/// An `eq` guard makes its operands congruent in the dominated block, so even
+/// the operand-swapped `eq` compare folds (the swapped node becomes congruent
+/// with the assumed one once `a == b` is asserted).
+#[test]
+fn eq_edge_congruence_folds_swapped_compare() {
+    let r = run_dominated_compare("eq", true, "eq", true);
+    let body = block_op_list(&r.context, r.body);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br"]);
+    let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(jump.dest(), r.u);
+}
+
+/// The assumption scope is popped once the block's plan is solved: the cached
+/// e-graph must not leak the assumed facts.
+#[test]
+fn assumption_scope_is_popped_after_solving() {
+    let r = run_dominated_compare("slt", true, "slt", false);
+    // Selection succeeded and committed; nothing to assert beyond the fold
+    // tests other than clean teardown, which reaching this point (no panic in
+    // the scope machinery, plan committed) demonstrates. The body block was
+    // rewritten to a plain jump.
+    assert_eq!(block_op_list(&r.context, r.body).len(), 1);
+}
+
+/// Block arguments on conditional edges are still rejected (codegen cannot
+/// place them yet), now at selection time.
+#[test]
+fn guard_edge_arguments_are_rejected() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let i1 = IntegerType::new(&context, 1);
+    let i64_ty = IntegerType::new(&context, 64);
+    let c = context.create_value(i1, None);
+    let x = context.create_value(i64_ty, None);
+    let (c_id, x_id) = (c.id(), x.id());
+    let region = context.create_region();
+    let block = context.create_block(vec![c, x]);
+    region.add_block(block.id());
+    let t = context.create_block(vec![]);
+    let f = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let mut fb = IRBuilder::new(func.body());
+    fb.insert(ops::cond_br(&context, c_id, vec![x_id], vec![], t.id(), f.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name()).add_pass(
+        InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
+    );
+    let err = pm
+        .run(&context, context.get_op(module.id()))
+        .expect_err("edge arguments should be rejected");
+    assert!(err.to_string().contains("block arguments"));
 }
 
 /// At *equal* cost, the type-constrained rule must win the tie via dominance

@@ -219,7 +219,45 @@ impl<'a> SemDagBuilder<'a> {
         None
     }
 
-    fn build_from_value(&mut self, value: ValueId) -> Id {
+    /// The canonical comparison the (possibly cross-block) definer of `value`
+    /// computes, lowered into this graph: `(class, kind, lhs class, rhs class)`.
+    /// `None` when the definer is unknown, effectful, or not a comparison. Used
+    /// by dominating-edge assumptions to relate a guard condition to the values
+    /// it compares.
+    pub(crate) fn build_defining_compare(
+        &mut self,
+        value: ValueId,
+    ) -> Option<(Id, SymKind, Id, Id)> {
+        let def_id = self.context.get_value(value).defining_op()?;
+        if !self.context.has_operation(def_id) {
+            return None;
+        }
+        let def = self.context.get_op(def_id);
+        if def.results.len() != 1
+            || def.clone().as_interface::<dyn MemoryRead>().is_some()
+            || def.clone().as_interface::<dyn MemoryWrite>().is_some()
+        {
+            return None;
+        }
+        let mut graph = SemGraph::new();
+        let root = def.clone().as_dyn_op().semantic_expr(&mut graph)?;
+        let operands = self.build_operands(&def.operands);
+        let class = self.lower_with_widths(&graph, root, &operands);
+        let comparison = self
+            .egraph
+            .nodes(class)
+            .iter()
+            .find(|n| super::node::is_comparison(n.kind))?
+            .clone();
+        Some((
+            class,
+            comparison.kind,
+            comparison.children[0],
+            comparison.children[1],
+        ))
+    }
+
+    pub(crate) fn build_from_value(&mut self, value: ValueId) -> Id {
         if let Some(existing) = self.value_to_class.get(&value) {
             return *existing;
         }

@@ -22,11 +22,10 @@ assembler. The pieces:
   as bracketed lists for lit tests.
 
 Targets opt in through `TargetMachine`: `object_format()`,
-`binary_writer()`, plus `pre_ra_lowerings()` (e.g. `vcond_br` →
-`bne`+`vbr`, constant materialization — before register allocation because
-the allocator must color the operands) and `finalize_lowerings()`
-(`vret`/`vbr` → real instructions — after it because the allocator matches
-`vret` by name).
+`binary_writer()`, plus `pre_ra_lowerings()` (e.g. constant
+materialization — before register allocation because the allocator must
+color the operands) and `finalize_lowerings()` (`vret`/`vbr` → real
+instructions — after it because the allocator matches `vret` by name).
 
 ## Emitting and linking an object
 

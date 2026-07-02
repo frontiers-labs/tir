@@ -1423,6 +1423,12 @@ impl RegisterClass {
         )
     }
 
+    /// Whether this class holds the program counter.
+    pub fn has_program_counter(&self) -> bool {
+        self.resolve_registers()
+            .any(|reg| reg.traits.contains(&RegisterTrait::ProgramCounter))
+    }
+
     pub fn hardwired_zero_register_index(&self) -> Option<u16> {
         self.resolve_registers().find_map(|reg| {
             reg.traits
