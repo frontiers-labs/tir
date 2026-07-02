@@ -151,36 +151,6 @@ impl VirtualBranchOp {
     }
 }
 
-operation! {
-    VirtualCondBranchOp {
-        name: "vcond_br",
-        dialect: "arm64",
-        format: "custom",
-        operands: O {
-            condition: "Any",
-            true_args: "*Any",
-            false_args: "*Any",
-        },
-        attributes: A {
-            true_dest: "Block",
-            false_dest: "Block",
-        },
-    }
-}
-
-impl VirtualCondBranchOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        tir::backend::print_branch(fmt, self, "arm64.vcond_br")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        _context: &tir::Context,
-    ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
-}
-
 // Virtual call ops: the lowered form of `builtin.call`/`builtin.indirect_call`.
 // Arguments and results travel through the ABI registers via copies emitted by
 // `lower_calls`; the ops only carry the callee (a symbol whose address is
@@ -219,7 +189,6 @@ dialect! {
         operations: [
             VirtualReturnOp,
             VirtualBranchOp,
-            VirtualCondBranchOp,
             VirtualCallOp,
             VirtualIndirectCallOp,
             AddOp,
@@ -335,38 +304,41 @@ impl Arm64Dialect {
     }
 }
 
-/// Lower the builtin control-flow terminators to AArch64 virtual branch ops,
-/// preserving successor block references and forwarded block arguments.
-fn lower_branches(
+/// Emit the deferred unconditional branch (`vbr`, finalized to `b` after
+/// register allocation), forwarding any block arguments.
+fn emit_uncond_branch(
     context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-) -> Result<bool, tir::PassError> {
-    use tir::attributes::AttributeValue;
-    use tir::builtin::{BranchOp, CondBranchOp};
+    dest: tir::BlockId,
+    args: &[tir::ValueId],
+) -> Box<dyn Operation> {
+    Box::new(
+        VirtualBranchOpBuilder::new(context)
+            .dest_args(args.to_vec())
+            .attr("dest", tir::attributes::AttributeValue::Block(dest))
+            .build(),
+    )
+}
 
-    if let Some(br) = op.as_op::<BranchOp>() {
-        let lowered = VirtualBranchOpBuilder::new(context)
-            .dest_args(br.dest_args())
-            .attr("dest", AttributeValue::Block(br.dest()))
-            .build();
-        rewriter.replace_op(op, &lowered)?;
-        return Ok(true);
-    }
-
-    if let Some(cond_br) = op.as_op::<CondBranchOp>() {
-        let lowered = VirtualCondBranchOpBuilder::new(context)
-            .condition(cond_br.condition())
-            .true_args(cond_br.true_args())
-            .false_args(cond_br.false_args())
-            .attr("true_dest", AttributeValue::Block(cond_br.true_dest()))
-            .attr("false_dest", AttributeValue::Block(cond_br.false_dest()))
-            .build();
-        rewriter.replace_op(op, &lowered)?;
-        return Ok(true);
-    }
-
-    Ok(false)
+/// Emit the branch-if-nonzero fallback for a condition no branch rule fused:
+/// `cmp cond, xzr` + `b.ne dest`.
+fn emit_branch_nonzero(
+    context: &tir::Context,
+    condition: tir::ValueId,
+    dest: tir::BlockId,
+) -> Vec<Box<dyn Operation>> {
+    vec![
+        Box::new(
+            CompareOpBuilder::new(context)
+                .attr("rn", virt(condition.number(), "GPR"))
+                .attr("rm", phys(&("GPR".to_string(), XZR)))
+                .build(),
+        ),
+        Box::new(
+            BranchNotEqOpBuilder::new(context)
+                .attr("imm", tir::attributes::AttributeValue::Block(dest))
+                .build(),
+        ),
+    ]
 }
 
 /// The AArch64 link register (`lr` = `x30`) and zero register (`xzr` = slot 31).
@@ -510,8 +482,11 @@ fn create_isel_pass_for(
 ) -> tir::backend::isel::InstructionSelectPass {
     tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, features))
         .with_axioms(include_str!("isel.axioms"))
+        .with_branch_emitters(tir::backend::isel::BranchEmitters {
+            uncond: emit_uncond_branch,
+            cond_nonzero: emit_branch_nonzero,
+        })
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
-        .with_op_lowering(lower_branches)
         .with_op_lowering(lower_calls)
 }
 
@@ -670,7 +645,7 @@ impl tir::backend::TargetMachine for Arm64Target {
     }
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        vec![obj::lower_constant, obj::lower_vcond_br]
+        vec![obj::lower_constant]
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
@@ -731,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn arm64_builtin_cond_br_lowers_to_virtual() {
+    fn arm64_builtin_cond_br_lowers_through_branch_emitters() {
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
         context.register_dialect::<Arm64Dialect>();
@@ -756,9 +731,11 @@ mod tests {
 
         let mut fb = IRBuilder::new(func.body());
         let add = ops::addi(&context, x_id, x_id, i64).build();
-        let add_r = add.result();
         fb.insert(add);
-        fb.insert(ops::cond_br(&context, cond_id, vec![add_r], vec![], t.id(), f.id()).build());
+        // A bare i1 condition (a block argument): no branch rule can fuse it, so
+        // selection falls back to `cmp cond, xzr` + `b.ne t` plus the deferred
+        // `vbr f`.
+        fb.insert(ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build());
 
         let mut mb = IRBuilder::new(module.body());
         mb.insert(func);
@@ -778,7 +755,7 @@ mod tests {
             .into_iter()
             .map(|id| context.get_op(id).name)
             .collect();
-        assert_eq!(body, vec!["add", "vcond_br", "symbol_end"]);
+        assert_eq!(body, vec!["add", "cmp", "b.ne", "vbr", "symbol_end"]);
 
         let mut buf = String::new();
         let mut fmt = IRFormatter::new(&mut buf);
@@ -787,6 +764,65 @@ mod tests {
             !buf.contains("builtin"),
             "no builtin ops should remain:\n{buf}"
         );
+    }
+
+    #[test]
+    fn arm64_cmpi_cond_br_fuses_into_cmp_and_bcond() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<Arm64Dialect>();
+
+        let i64 = IntegerType::new(&context, 64);
+        let i1 = IntegerType::new(&context, 1);
+        let module = ops::module(&context, None).build();
+
+        let a = context.create_value(i64, None);
+        let b = context.create_value(i64, None);
+        let region = context.create_region();
+        let block = context.create_block(vec![a, b]);
+        region.add_block(block.id());
+
+        let func = ops::func(&context, "demo", UnitType::new(&context), Some(region.id())).build();
+        let fbody = func.body();
+        let args = fbody.arguments();
+        let (a_id, b_id) = (args[0].id(), args[1].id());
+
+        let t = context.create_block(vec![]);
+        let f = context.create_block(vec![]);
+
+        let mut fb = IRBuilder::new(func.body());
+        let cmp = tir::builtin::CmpIOpBuilder::new(&context)
+            .lhs(a_id)
+            .rhs(b_id)
+            .predicate("slt")
+            .result_type(i1)
+            .build();
+        let cmp_r = cmp.result();
+        fb.insert(cmp);
+        fb.insert(ops::cond_br(&context, cmp_r, vec![], vec![], t.id(), f.id()).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let mut pm = PassManager::new();
+        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.run(&context, context.get_op(module.id()))
+            .expect("isel should select the flag-mediated branch pair");
+
+        // The signed compare-and-branch selects through the TMDL-derived
+        // `cmp+b.lt` rule: the definer sets PSTATE, `b.lt` reads it, and the
+        // `cmpi` op is consumed.
+        let body: Vec<_> = context
+            .get_region(region.id())
+            .iter(context.clone())
+            .next()
+            .unwrap()
+            .op_ids()
+            .into_iter()
+            .map(|id| context.get_op(id).name)
+            .collect();
+        assert_eq!(body, vec!["cmp", "b.lt", "vbr", "symbol_end"]);
     }
 
     fn phys_of(op: &std::sync::Arc<tir::OpInstance>, name: &str) -> Option<(String, u16)> {

@@ -191,6 +191,12 @@ pub struct Rule {
     pub pattern: SemGraph,
     pub base_cost: u32,
     pub kind: RuleKind,
+    /// A companion instruction emitted immediately before the rule's own — a
+    /// flag-setting compare (`cmp`, x86 `cmp`/`test`) whose status-register
+    /// writes the branch instruction's condition reads. TMDL derives such rules
+    /// by composing the definer's flag semantics into the branch guard, so the
+    /// pair selects as one condition pattern but emits two real instructions.
+    pub prelude_emit: Option<RuleEmitFn>,
     /// Per-operand-symbol constraint (register vs immediate). Symbols absent here
     /// are unconstrained, so hand-written and synthesized rules keep matching any
     /// value.
@@ -214,6 +220,7 @@ impl Rule {
             pattern,
             base_cost,
             kind: RuleKind::Value,
+            prelude_emit: None,
             operand_constraints: Vec::new(),
             operand_widths: Vec::new(),
             operand_imm_ranges: Vec::new(),
@@ -248,6 +255,14 @@ impl Rule {
         self.kind = kind;
         self
     }
+
+    /// Emit a companion instruction ahead of the rule's own (see
+    /// [`Rule::prelude_emit`]). The prelude emitter reads the same [`RuleMatch`]
+    /// bindings as the rule's emitter.
+    pub fn with_prelude_emitter(mut self, emit_fn: RuleEmitFn) -> Self {
+        self.prelude_emit = Some(emit_fn);
+        self
+    }
 }
 
 /// Target hooks for lowering control-flow terminators, enabling rule-driven
@@ -260,9 +275,13 @@ pub struct BranchEmitters {
     /// Emit an unconditional branch to `dest`, forwarding `args` to its block
     /// arguments (typically a virtual branch finalized after regalloc).
     pub uncond: fn(&Context, BlockId, &[ValueId]) -> Box<dyn Operation>,
-    /// Emit a branch to `dest` taken when `condition` (an i1 in a register) is
-    /// nonzero — the fallback when no branch rule matches the guard condition.
-    pub cond_nonzero: fn(&Context, ValueId, BlockId) -> Box<dyn Operation>,
+    /// Emit the instruction(s) branching to `dest` when `condition` (an i1 in a
+    /// register) is nonzero — the fallback when no branch rule matches the
+    /// guard condition. One instruction on targets that compare against a zero
+    /// register (`bne cond, x0`); a flag-setting test plus the conditional
+    /// branch on flag targets (`test cond, cond` + `jne`, `cmp cond, xzr` +
+    /// `b.ne`).
+    pub cond_nonzero: fn(&Context, ValueId, BlockId) -> Vec<Box<dyn Operation>>,
 }
 struct BlockSelectionCache {
     egraph: SemEGraph,
@@ -794,20 +813,31 @@ impl InstructionSelectPass {
                     } => {
                         let op_ref =
                             OperationRef::new(context.get_op(*op), Some(block_arc.clone()), None);
-                        let branch_op: Box<dyn Operation> = match branch {
+                        let branch_ops: Vec<Box<dyn Operation>> = match branch {
                             GuardBranch::Fused { rule_index, m } => {
                                 let request = EmitRequest {
                                     op: None,
                                     results: &[],
                                     result_ty: None,
                                 };
-                                (self.rules[*rule_index].emit_fn)(context, &request, m)?
+                                let rule = &self.rules[*rule_index];
+                                // A flag-mediated branch rule emits its
+                                // flag-setting definer right before the branch
+                                // instruction that reads the flags.
+                                let mut ops = Vec::new();
+                                if let Some(prelude) = rule.prelude_emit {
+                                    ops.push(prelude(context, &request, m)?);
+                                }
+                                ops.push((rule.emit_fn)(context, &request, m)?);
+                                ops
                             }
                             GuardBranch::Nonzero { condition, dest } => {
                                 (emitters.cond_nonzero)(context, *condition, *dest)
                             }
                         };
-                        rewriter.insert_op_before(&op_ref, branch_op.as_ref())?;
+                        for branch_op in &branch_ops {
+                            rewriter.insert_op_before(&op_ref, branch_op.as_ref())?;
+                        }
                         let fallthrough = (emitters.uncond)(context, *false_dest, &[]);
                         rewriter.replace_op(&op_ref, fallthrough.as_ref())?;
                     }

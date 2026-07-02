@@ -21,6 +21,10 @@ pub enum RegisterTrait {
     ReturnValue,
     Temporary,
     Saved,
+    /// A condition-code bit (x86 EFLAGS `zf`, AArch64 PSTATE `z`): written as a
+    /// side effect by compare-style instructions and read by conditional-branch
+    /// guards. Marks the class for flag-branch rule derivation.
+    StatusFlag,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -891,6 +895,40 @@ impl Expr {
         })
     }
 
+    /// Lower several expressions into one graph through a single shared symbol
+    /// table, so an operand referenced by more than one expression binds the
+    /// same symbol id in each (a flag definer's per-flag semantics all read the
+    /// same `rn`/`rm`). Returns each expression's root in order.
+    pub fn lower_all_to_sema_with_isa(
+        exprs: &[&Expr],
+        g: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+        params: &HashMap<String, i64>,
+        isa_consts: &HashMap<String, i64>,
+        register_indices: &HashMap<(String, String), u32>,
+    ) -> Option<(Vec<tir::graph::NodeId>, SemaLowering)> {
+        let mut ctx = SemaExprLoweringCtx::new_with_registers(g, params, register_indices);
+        ctx.isa_consts = isa_consts.clone();
+        let roots: Vec<_> = exprs
+            .iter()
+            .map(|expr| expr.lower_with_ctx(&mut ctx))
+            .collect();
+        if ctx.had_error {
+            return None;
+        }
+        let root = *roots.last()?;
+        Some((
+            roots,
+            SemaLowering {
+                root,
+                variable_symbols: ctx.variable_symbols,
+                register_symbols: ctx.register_symbols,
+            },
+        ))
+    }
+
     /// Like [`Expr::lower_to_sema`], but resolves index-less register paths (e.g.
     /// status flags such as `PSTATE::z`) through `register_indices`, a
     /// `(class, register-name) -> index` table derived from the register-class
@@ -1437,6 +1475,12 @@ impl RegisterClass {
     pub fn has_program_counter(&self) -> bool {
         self.resolve_registers()
             .any(|reg| reg.traits.contains(&RegisterTrait::ProgramCounter))
+    }
+
+    /// Whether this class holds condition-code bits (`status_flag` registers).
+    pub fn has_status_flags(&self) -> bool {
+        self.resolve_registers()
+            .any(|reg| reg.traits.contains(&RegisterTrait::StatusFlag))
     }
 
     pub fn hardwired_zero_register_index(&self) -> Option<u16> {

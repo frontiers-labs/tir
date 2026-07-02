@@ -1164,8 +1164,8 @@ fn emit_nonzero_marker(
     context: &Context,
     condition: tir::ValueId,
     dest: tir::BlockId,
-) -> Box<dyn Operation> {
-    Box::new(ops::br(context, vec![condition], dest).build())
+) -> Vec<Box<dyn Operation>> {
+    vec![Box::new(ops::br(context, vec![condition], dest).build())]
 }
 
 fn branch_rule() -> Rule {
@@ -1199,6 +1199,14 @@ fn guarded_block(
     arg_tys: &[u32],
     body: impl Fn(&Context, &mut IRBuilder, &[tir::ValueId]) -> tir::ValueId,
 ) -> BranchBlock {
+    guarded_block_with_rules(arg_tys, vec![branch_rule()], body)
+}
+
+fn guarded_block_with_rules(
+    arg_tys: &[u32],
+    rules: Vec<Rule>,
+    body: impl Fn(&Context, &mut IRBuilder, &[tir::ValueId]) -> tir::ValueId,
+) -> BranchBlock {
     let context = Context::with_default_dialects();
     let module = ops::module(&context, None).build();
 
@@ -1229,9 +1237,8 @@ fn guarded_block(
     mb.insert(ops::module_end(&context).build());
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name()).add_pass(
-        InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
-    );
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
     pm.run(&context, context.get_op(module.id()))
         .expect("branch selection should succeed");
 
@@ -1284,6 +1291,65 @@ fn guard_fuses_comparison_and_consumes_compare() {
     let fallthrough = body[1].clone().as_op::<tir::builtin::BranchOp>().unwrap();
     assert_eq!(fallthrough.dest(), b.false_dest);
     assert!(fallthrough.dest_args().is_empty());
+}
+
+/// The flag-definer prelude marker: a `subi` of the two compared values, the
+/// stand-in for a flag-setting compare (`cmp`) emitted ahead of its branch.
+fn emit_prelude_marker(
+    context: &Context,
+    req: &EmitRequest,
+    m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let lhs = m
+        .value_binding(0)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let rhs = m
+        .value_binding(1)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    Ok(Box::new(
+        ops::subi(context, lhs, rhs, IntegerType::new(context, 64)).build(),
+    ))
+}
+
+/// A branch rule carrying a prelude emitter (a flag-mediated pair) emits the
+/// flag definer immediately before the branch instruction, reading the same
+/// match bindings; the compare op is still consumed.
+#[test]
+fn flag_branch_rule_emits_prelude_before_branch() {
+    let rule = Rule::new(
+        "cmp+jlt-marker",
+        atomic_pattern(SymKind::Lt),
+        1,
+        emit_fused_branch_marker,
+    )
+    .with_kind(RuleKind::CondBranch { target_symbol: 2 })
+    .with_prelude_emitter(emit_prelude_marker);
+    let b = guarded_block_with_rules(&[64, 64], vec![rule], |context, fb, args| {
+        let cmp = tir::builtin::CmpIOpBuilder::new(context)
+            .lhs(args[0])
+            .rhs(args[1])
+            .predicate("slt")
+            .result_type(IntegerType::new(context, 1))
+            .build();
+        let result = cmp.result();
+        fb.insert(cmp);
+        result
+    });
+
+    let body = block_ops(&b.context, b.region);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(
+        names,
+        vec!["subi", "br", "br"],
+        "prelude, branch, fallthrough; cmpi consumed"
+    );
+
+    // The prelude reads the compared values, like the flag definer would.
+    assert_eq!(body[0].operands, b.args);
+    // The branch itself still targets the true block with the same bindings.
+    let fused = body[1].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(fused.dest(), b.true_dest);
+    assert_eq!(fused.dest_args(), b.args);
 }
 
 /// A bare i1 condition no branch rule can fuse takes the branch-if-nonzero

@@ -14,7 +14,9 @@ assembler. The pieces:
   same way the assembly printer does, lays out `.text`, records symbol and
   block offsets, patches block-target fixups, and turns symbol fixups into
   relocations using the target's `ObjectFormatInfo` (ELF machine, class,
-  flags, op-name → relocation type mapping).
+  flags, op-name → relocation type mapping, pc-relative scaling, and whether
+  an op's displacement is measured from the instruction's end — x86 `rel32` —
+  rather than its start).
 - **The ELF emitter/parser** (`write_elf`/`parse_elf`) serialize the
   format-neutral `ObjectFile` for both ELF32 and ELF64 (little-endian,
   `RELA` relocations). `tir readobj` dumps any relocatable ELF as

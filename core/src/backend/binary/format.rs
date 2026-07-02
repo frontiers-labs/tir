@@ -30,4 +30,8 @@ pub struct ObjectFormatInfo {
     /// scattered into the instruction (0 on RISC-V; 2 on AArch64, whose
     /// branch immediates are word offsets).
     pub pc_rel_scale: fn(&str) -> u8,
+    /// Whether an op's pc-relative displacement is measured from the *end* of
+    /// the instruction rather than its start (x86 `rel8`/`rel32`, where RIP
+    /// already points past the branch when the displacement is applied).
+    pub pc_rel_from_end: fn(&str) -> bool,
 }

@@ -240,7 +240,12 @@ impl BinaryWriter {
                             op: fixup.op.clone(),
                         }
                     })?;
-                    let delta = target as i64 - fixup.offset as i64;
+                    let base = if (fmt.pc_rel_from_end)(&fixup.op) {
+                        fixup.offset + u64::from(fixup.len)
+                    } else {
+                        fixup.offset
+                    };
+                    let delta = target as i64 - base as i64;
                     let scale = (fmt.pc_rel_scale)(&fixup.op);
                     if delta & ((1 << scale) - 1) != 0 {
                         return Err(BinaryEmitError::MisalignedTarget {

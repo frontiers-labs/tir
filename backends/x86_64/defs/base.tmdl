@@ -55,6 +55,48 @@ instruction Mov for [X86_64] : RegReg {
     }
 }
 
+// Compare: subtraction driving EFLAGS only (0x39: cmp r/m64, r64). The ALU
+// forms above do not model their flag writes yet — nothing reads flags between
+// a compare and its jump, so only the dedicated definers set them.
+instruction Cmp for [X86_64] : RegReg {
+    param MNEMONIC: String = "cmp";
+    param OPCODE: bits<8> = 0x39;
+
+    behavior {
+        EFLAGS::cf = if dst ~< src {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if dst == src {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst - src, self.XLEN - 1, self.XLEN - 1);
+        // Signed overflow of dst - src: operands differ in sign and the
+        // result's sign differs from dst's.
+        EFLAGS::of = extract((dst ^ src) & (dst ^ (dst - src)), self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+// Logical compare (0x85: test r/m64, r64): flags from dst & src; cf/of clear.
+instruction Test for [X86_64] : RegReg {
+    param MNEMONIC: String = "test";
+    param OPCODE: bits<8> = 0x85;
+
+    behavior {
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = if (dst & src) == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst & src, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = zext(0b0, 1);
+    }
+}
+
 // Two-operand imul (0F AF): unlike the group-1 ALU ops, ModR/M.reg carries the
 // destination.
 
@@ -164,6 +206,10 @@ instruction SarImm for [X86_64] : RegShift {
     }
 }
 
+// Relative control transfers: rel32 is measured from the end of the
+// instruction (RIP points past it), and `PC::pc` in behaviors is the
+// instruction's own address — hence the explicit instruction-length addends.
+
 instruction Jmp for [X86_64] {
     param MNEMONIC: String = "jmp";
 
@@ -181,7 +227,76 @@ instruction Jmp for [X86_64] {
     }
 
     behavior {
-        PC::pc = PC::pc + sext(imm, self.XLEN);
+        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
+    }
+}
+
+// Conditional jumps: EFLAGS-guarded PC writes. Selection derives cmp/test +
+// jcc branch rules from these guards composed with the flag definers above.
+
+instruction JumpEq for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "je";
+    param CC: bits<8> = 0x84;
+
+    behavior {
+        if EFLAGS::zf == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpNotEq for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jne";
+    param CC: bits<8> = 0x85;
+
+    behavior {
+        if EFLAGS::zf == zext(0b0, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpLess for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jl";
+    param CC: bits<8> = 0x8C;
+
+    behavior {
+        if EFLAGS::sf != EFLAGS::of {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpGreaterEq for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jge";
+    param CC: bits<8> = 0x8D;
+
+    behavior {
+        if EFLAGS::sf == EFLAGS::of {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpBelow for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jb";
+    param CC: bits<8> = 0x82;
+
+    behavior {
+        if EFLAGS::cf == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpAboveEq for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jae";
+    param CC: bits<8> = 0x83;
+
+    behavior {
+        if EFLAGS::cf == zext(0b0, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
     }
 }
 
@@ -203,8 +318,8 @@ instruction Call for [X86_64] {
 
     behavior {
         GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
-        store(GPR::rsp, 8, PC::pc);
-        PC::pc = PC::pc + sext(imm, self.XLEN);
+        store(GPR::rsp, 8, PC::pc + zext(0b101, self.XLEN));
+        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
     }
 }
 
@@ -340,7 +455,8 @@ instruction CallIndirect for [X86_64] {
 
     behavior {
         GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
-        store(GPR::rsp, 8, PC::pc);
+        // The pushed return address is the next instruction (3 encoded bytes).
+        store(GPR::rsp, 8, PC::pc + zext(0b11, self.XLEN));
         PC::pc = target;
     }
 }

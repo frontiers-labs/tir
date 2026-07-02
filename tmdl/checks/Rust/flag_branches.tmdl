@@ -1,0 +1,159 @@
+// Flag-mediated branch derivation: a definer writing status_flag registers
+// composes with each flag-guarded branch, and the proved composition becomes a
+// CondBranch rule emitting the definer + branch pair.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa FlagIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [FlagIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [FlagIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0..x3 => { traits = [caller_saved] },
+    }
+}
+
+register_class FLAGS for [FlagIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = 1;
+
+    registers {
+        zf => { traits = [status_flag] },
+        sf => { traits = [status_flag] },
+        of => { traits = [status_flag] },
+    }
+}
+
+instruction Cmp for [FlagIsa] {
+    param MNEMONIC: String = "cmp";
+
+    operands {
+        rn: GPR,
+        rm: GPR,
+    }
+
+    encoding {
+        0..4 => rn,
+        5..9 => rm,
+        10..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rn}, {rm}"
+    }
+
+    behavior {
+        FLAGS::zf = if rn == rm {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        FLAGS::sf = extract(rn - rm, self.XLEN - 1, self.XLEN - 1);
+        FLAGS::of = extract((rn ^ rm) & (rn ^ (rn - rm)), self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction BranchEq for [FlagIsa] {
+    param MNEMONIC: String = "beq";
+
+    operands {
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..11 => imm,
+        12..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        if FLAGS::zf == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction BranchLt for [FlagIsa] {
+    param MNEMONIC: String = "blt";
+
+    operands {
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..11 => imm,
+        12..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        if FLAGS::sf != FLAGS::of {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+// Overflow alone matches no canonical comparison: no rule is derived, and the
+// instruction still compiles (simulator path only).
+instruction BranchOverflow for [FlagIsa] {
+    param MNEMONIC: String = "bo";
+
+    operands {
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..11 => imm,
+        12..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        if FLAGS::of == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+// The shared flag-definer emitter binds the compare's register operands.
+// CHECK: fn emit_isel_flag_definer_cmp(
+// CHECK: let src = m.value_binding(0)
+// CHECK: "rn",
+
+// zf == 1 composes to Eq over the definer's operands.
+// CHECK: fn isel_pattern_brancheq_via_cmp(
+// CHECK: tir::sem::SymKind::Eq
+
+// sf != of composes to the signed Lt (proved through the sign/overflow
+// formula, not recognized syntactically). The overflow guard alone derives
+// nothing — no canonical comparison is equivalent to it.
+// CHECK: fn isel_pattern_branchlt_via_cmp(
+// CHECK: tir::sem::SymKind::Lt
+// CHECK-NOT: branchoverflow_via_cmp
+
+// Both rules are conditional branches emitting the definer first.
+// CHECK: RuleKind::CondBranch
+// CHECK: .with_prelude_emitter(emit_isel_flag_definer_cmp)
+// CHECK-NOT: branchoverflow_via_cmp

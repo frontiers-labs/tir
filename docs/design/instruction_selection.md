@@ -347,8 +347,10 @@ incomplete rule set is rejected instead of silently dropping an op.
 
 Terminators select through the same rule machinery when the target installs
 `BranchEmitters` (`with_branch_emitters`): an `uncond` emitter (e.g. `vbr`,
-finalized to `jal x0` post-RA) and a `cond_nonzero` fallback (e.g.
-`bne cond, x0`).
+finalized to `jal x0` post-RA) and a `cond_nonzero` fallback returning the
+instruction(s) that branch on a nonzero register (one op on targets with a
+zero register — `bne cond, x0`; a flag-setting test plus the branch on flag
+targets — `test cond, cond` + `jne`, `cmp cond, xzr` + `b.ne`).
 
 TMDL derives a **branch rule** (`RuleKind::CondBranch { target_symbol }`) from
 any instruction whose behavior is a guarded PC write:
@@ -385,6 +387,43 @@ Instructions that read or write the PC *unconditionally* (`jal`, `jalr`,
 `auipc`) get **no value rule**: their pattern would hide the control-flow
 effect (a `jal` rule would match a plain `x + 4`). Returns and calls remain
 per-target op lowerings.
+
+### Flag-mediated branches (x86 EFLAGS, AArch64 PSTATE)
+
+On flag architectures the branch condition is not a function of the branch's
+own operands: a compare writes condition-code registers (`cmp` sets
+`PSTATE::n/z/c/v` or `EFLAGS::cf/zf/sf/of`) and the conditional branch guards
+on them (`if PSTATE::n != PSTATE::v { PC::pc = ... }`). TMDL marks such
+registers with the `status_flag` trait and derives branch rules by
+**composition**: for every *flag definer* (an instruction whose behavior
+assigns only status-flag registers of one class, each flag a pure function of
+its encoded register operands) paired with every *flag-guarded branch* (a
+guarded PC write whose condition reads only that class), the definer's
+per-flag expressions substitute into the guard, producing a condition over the
+definer's operands:
+
+```
+   b.lt:  if n != v { PC::pc = ... }         cmp:  n = extract(rn - rm, 63, 63)
+                                                   v = extract((rn^rm) & (rn^(rn-rm)), 63, 63)
+   compose:  extract(rn-rm,63,63) != extract((rn^rm)&(rn^(rn-rm)),63,63)
+```
+
+The composition is then matched against the six canonical comparisons (both
+operand orders) the same way discovered rewrites are confirmed: a fuzz filter
+picks the candidate, and the `SmtOracle` **proves** the equivalence by
+bit-blasting at the operands' architectural width. Above, the sign/overflow
+formula proves equal to `Lt(rn, rm)` — nothing recognizes the idiom
+syntactically, so any correct flag formulation derives, and a wrong one
+derives *no* rule instead of a miscompiling one. The proved comparison becomes
+the rule's pattern; emission produces **two real instructions** — the rule's
+`prelude_emit` builds the flag definer (binding the compared operands), then
+`emit_fn` builds the branch (binding the taken target) — inserted adjacently
+ahead of the terminator. Everything else (the `Dead` alternative consuming the
+compare, boundary-forced materialization, dominating-edge assumptions) is the
+same machinery as the fused single-instruction path.
+
+A guard matching no canonical comparison (e.g. a branch on overflow alone)
+derives no rule; the instruction still assembles, encodes, and simulates.
 
 ## Implicit register reads (demand attributes)
 

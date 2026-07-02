@@ -24,6 +24,36 @@ mod isa {
         }
     }
 
+    // Virtual unconditional branch: emitted by selection for `builtin.br` and
+    // conditional-branch fallthroughs, finalized to `jmp` after register
+    // allocation (its block arguments must be colored first).
+    operation! {
+        VirtualBranchOp {
+            name: "vbr",
+            dialect: "x86_64",
+            format: "custom",
+            operands: O {
+                dest_args: "*Any",
+            },
+            attributes: A {
+                dest: "Block",
+            },
+        }
+    }
+
+    impl VirtualBranchOp {
+        fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
+            tir::backend::print_branch(fmt, self, "x86_64.vbr")
+        }
+
+        fn custom_parse(
+            parser: &mut tir::parse::text::Parser,
+            _context: &tir::Context,
+        ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
+            Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+        }
+    }
+
     dialect! {
         X86_64Dialect {
             name: "x86_64",
@@ -48,8 +78,17 @@ mod isa {
                 // Memory operands
                 MovLoadOp,
                 MovStoreOp,
+                // EFLAGS definers
+                CmpOp,
+                TestOp,
                 // Control flow
                 JmpOp,
+                JumpEqOp,
+                JumpNotEqOp,
+                JumpLessOp,
+                JumpGreaterEqOp,
+                JumpBelowOp,
+                JumpAboveEqOp,
                 CallOp,
                 RetOp,
                 JmpIndirectOp,
@@ -96,6 +135,7 @@ mod isa {
                 ShlImm8Op,
                 ShrImm8Op,
                 SarImm8Op,
+                VirtualBranchOp,
                 Add8HOp,
                 Sub8HOp,
                 And8HOp,
@@ -186,6 +226,119 @@ mod isa {
         pub fn get_asm_printer(&self) -> tir::backend::AsmPrinter {
             tir::backend::AsmPrinter::new(get_instruction_printers())
         }
+    }
+
+    fn virt(value: u32, class: &str) -> AttributeValue {
+        AttributeValue::Register(RegisterAttr::Virtual {
+            id: value,
+            class: Some(class.to_string()),
+        })
+    }
+
+    /// Emit the deferred unconditional branch (`vbr`, finalized to `jmp` after
+    /// register allocation), forwarding any block arguments.
+    fn emit_uncond_branch(
+        context: &tir::Context,
+        dest: tir::BlockId,
+        args: &[tir::ValueId],
+    ) -> Box<dyn Operation> {
+        Box::new(
+            VirtualBranchOpBuilder::new(context)
+                .dest_args(args.to_vec())
+                .attr("dest", AttributeValue::Block(dest))
+                .build(),
+        )
+    }
+
+    /// Emit the branch-if-nonzero fallback for a condition no branch rule
+    /// fused: `test cond, cond` + `jne dest`.
+    fn emit_branch_nonzero(
+        context: &tir::Context,
+        condition: tir::ValueId,
+        dest: tir::BlockId,
+    ) -> Vec<Box<dyn Operation>> {
+        vec![
+            Box::new(
+                TestOpBuilder::new(context)
+                    .attr("dst", virt(condition.number(), "GPR"))
+                    .attr("src", virt(condition.number(), "GPR"))
+                    .build(),
+            ),
+            Box::new(
+                JumpNotEqOpBuilder::new(context)
+                    .attr("imm", AttributeValue::Block(dest))
+                    .build(),
+            ),
+        ]
+    }
+
+    /// Pre-RA: materialize a `constant` that survived instruction selection
+    /// (one no instruction folded as an immediate) into `mov rd, imm32`.
+    fn lower_constant(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        use tir::builtin::ConstantOp;
+
+        let Some(constant) = op.as_op::<ConstantOp>() else {
+            return Ok(false);
+        };
+        let value = tir::backend::int_attr(constant.attributes(), "value").ok_or_else(|| {
+            tir::PassError::InvalidRuleSet("constant op without an integer value".to_string())
+        })?;
+        if i32::try_from(value).is_err() {
+            return Err(tir::PassError::InvalidRuleSet(format!(
+                "constant {value} does not fit mov imm32; wide constant materialization is not implemented"
+            )));
+        }
+
+        let mov = MovImmOpBuilder::new(context)
+            .attr("dst", virt(constant.result().number(), "GPR"))
+            .attr("imm", AttributeValue::Int(value))
+            .build();
+        rewriter.replace_op(op, &mov)?;
+        Ok(true)
+    }
+
+    /// Post-RA: `vret` becomes `ret`; `vbr` becomes `jmp dest`.
+    fn finalize_virtual_ops(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        if op.as_op::<VirtualReturnOp>().is_some() {
+            let ret = RetOpBuilder::new(context).build();
+            rewriter.replace_op(op, &ret)?;
+            return Ok(true);
+        }
+
+        if let Some(br) = op.as_op::<VirtualBranchOp>() {
+            if !br.operands().is_empty() {
+                return Err(tir::PassError::InvalidRuleSet(
+                    "block arguments on branch edges are not supported by codegen yet".to_string(),
+                ));
+            }
+            let dest = br
+                .attributes()
+                .iter()
+                .find_map(|attr| match (&attr.value, attr.name == "dest") {
+                    (AttributeValue::Block(block), true) => Some(*block),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    tir::PassError::InvalidRuleSet(
+                        "branch is missing its 'dest' target".to_string(),
+                    )
+                })?;
+            let jump = JmpOpBuilder::new(context)
+                .attr("imm", AttributeValue::Block(dest))
+                .build();
+            rewriter.replace_op(op, &jump)?;
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     /// The x86-64 stack pointer (`rsp`, GPR index 4).
@@ -310,6 +463,14 @@ mod isa {
             elf_flags: 0,
             reloc_for: |_| None,
             pc_rel_scale: |_| 0,
+            // rel32 displacements are measured from the end of the instruction
+            // (RIP points past the branch when the displacement applies).
+            pc_rel_from_end: |op| {
+                matches!(
+                    op,
+                    "jmp" | "je" | "jne" | "jl" | "jge" | "jb" | "jae" | "call"
+                )
+            },
         }
     }
 
@@ -328,11 +489,23 @@ mod isa {
         fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
             tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, Feature::ALL))
                 .with_axioms(include_str!("isel.axioms"))
+                .with_branch_emitters(tir::backend::isel::BranchEmitters {
+                    uncond: emit_uncond_branch,
+                    cond_nonzero: emit_branch_nonzero,
+                })
                 .with_op_lowering(lower_func_and_return_to_asm_symbol)
         }
 
         fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
             tir::backend::regalloc::RegisterAllocationPass::new(Box::new(X86RegAlloc))
+        }
+
+        fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
+            vec![lower_constant]
+        }
+
+        fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
+            vec![finalize_virtual_ops]
         }
 
         fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {

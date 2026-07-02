@@ -98,7 +98,14 @@ register_class GPR for [RV32I, RV64I] {
   Without it, the index is the trailing number in the name (`x5` -> 5), or the
   declaration position for index-less registers. Both `index` and `traits` are
   optional inside the braces.
-- Known traits currently recognized by tools: `hardwired_zero`, `return_address`, `caller_saved`, `callee_saved`, `stack_pointer`. Other identifiers parse but may be ignored by current tooling.
+- Known traits currently recognized by tools: `hardwired_zero`, `return_address`, `caller_saved`, `callee_saved`, `stack_pointer`, `status_flag`. Other identifiers parse but may be ignored by current tooling.
+- `status_flag` marks condition-code bits (x86 EFLAGS `zf`, AArch64 PSTATE `z`):
+  1-bit registers written as side effects by compare-style instructions
+  (`EFLAGS::zf = ...` in a behavior) and read by conditional-branch guards
+  (`if EFLAGS::zf == zext(0b1, 1) { PC::pc = ... }`). Instruction selection
+  derives compare+branch rules from these classes (see the instruction
+  selection design doc); flag registers carry no encoding slots and are never
+  allocated.
 
 #### Inheritance
 

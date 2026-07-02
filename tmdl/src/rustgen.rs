@@ -277,6 +277,17 @@ fn emit_instructions<'a>(
         .map(|rc| rc.name.clone())
         .collect();
 
+    // Register classes holding condition-code bits (`status_flag` registers,
+    // e.g. AArch64 PSTATE, x86 EFLAGS). Instructions writing only such
+    // registers pair with the branches guarding on them into derived
+    // conditional-branch rules (see `emit_flag_branch_rules`).
+    let flag_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .filter(|rc| rc.has_status_flags())
+        .map(|rc| rc.name.clone())
+        .collect();
+
     for inst in files.iter().flat_map(|f| f.instructions()) {
         let name_ident = format_ident!("{}Op", &inst.name);
         let builder_ident = format_ident!("{}OpBuilder", &inst.name);
@@ -1343,6 +1354,18 @@ fn emit_instructions<'a>(
         }
     }
 
+    // Flag-mediated conditional branches: definer + branch pairs composed and
+    // proved into single-comparison rules.
+    emit_flag_branch_rules(
+        files,
+        item_cache,
+        &register_index_map,
+        &pc_classes,
+        &flag_classes,
+        &mut isel_rule_emitters,
+        &mut isel_rule_inits,
+    )?;
+
     Ok(quote! {
         #(#instruction_defs)*
         #(#instruction_custom_format_impls)*
@@ -2090,14 +2113,15 @@ struct BranchSemantics {
 /// instruction's register operands, and `imm` becomes the taken-target block
 /// operand. Anything else (fallthrough writes, extra state, PC in the
 /// condition) is rejected.
-fn analyze_branch_semantics(
-    inst: &ast::Instruction,
+/// Recognize the guarded-PC-write shape `if COND { PC::pc = …imm… }` and return
+/// the guard condition together with the single immediate operand the PC write
+/// references (the taken target). Anything else (an `else` arm, fallthrough
+/// writes, a non-immediate target) is rejected.
+fn guarded_pc_write_shape<'a>(
+    inst: &'a ast::Instruction,
     operands: &[(String, Type)],
-    numeric_params: &HashMap<String, i64>,
-    isa_param_values: &HashMap<String, i64>,
-    register_index_map: &HashMap<(String, String), u32>,
     pc_classes: &HashSet<String>,
-) -> Option<BranchSemantics> {
+) -> Option<(&'a ast::Expr, String)> {
     // Behavior must be exactly one guarded write: `if cond { PC::pc = … }`.
     let mut body = &inst.behavior;
     while let ast::Expr::Block(block) = body {
@@ -2141,12 +2165,25 @@ fn analyze_branch_semantics(
         return None;
     }
 
+    Some((&guarded.cond, target_operand.clone()))
+}
+
+fn analyze_branch_semantics(
+    inst: &ast::Instruction,
+    operands: &[(String, Type)],
+    numeric_params: &HashMap<String, i64>,
+    isa_param_values: &HashMap<String, i64>,
+    register_index_map: &HashMap<(String, String), u32>,
+    pc_classes: &HashSet<String>,
+) -> Option<BranchSemantics> {
+    let (cond, target_operand) = guarded_pc_write_shape(inst, operands, pc_classes)?;
+
     // The condition must be expressible over the encoded operands alone.
-    if behavior_references_pc(&guarded.cond, pc_classes) {
+    if behavior_references_pc(cond, pc_classes) {
         return None;
     }
     let mut pattern = tir::sem::SemGraph::new();
-    let lowering = guarded.cond.lower_to_sema_with_isa(
+    let lowering = cond.lower_to_sema_with_isa(
         &mut pattern,
         numeric_params,
         isa_param_values,
@@ -2166,9 +2203,748 @@ fn analyze_branch_semantics(
         pattern,
         root: lowering.root,
         variable_symbols: lowering.variable_symbols,
-        target_operand: target_operand.clone(),
+        target_operand,
         target_symbol,
     })
+}
+
+/// A flag-definer instruction (`cmp`, `test`): every behavior statement assigns
+/// a status-flag register of one class. `flag_roots` maps each written flag's
+/// register index to its value expression, lowered over the encoded operands
+/// into `graph` through one shared symbol table.
+struct FlagDefinerSemantics {
+    class: String,
+    graph: tir::sem::SemGraph,
+    flag_roots: HashMap<u32, tir::graph::NodeId>,
+    variable_symbols: HashMap<String, u32>,
+}
+
+/// A flag-guarded branch (`b.lt`, `jl`): a guarded PC write whose condition
+/// reads only status-flag registers of one class.
+struct FlagBranchSemantics {
+    class: String,
+    graph: tir::sem::SemGraph,
+    root: tir::graph::NodeId,
+    /// Guard symbol id -> the flag register index it reads.
+    flag_symbols: HashMap<u32, u32>,
+    target_operand: String,
+}
+
+/// The statement list of a behavior body (peeling wrapper blocks).
+fn behavior_statements(behavior: &ast::Expr) -> Vec<&ast::Expr> {
+    let mut body = behavior;
+    while let ast::Expr::Block(block) = body {
+        if let [stmt] = block.stmts.as_slice() {
+            body = stmt;
+        } else {
+            return block.stmts.iter().collect();
+        }
+    }
+    vec![body]
+}
+
+/// Recognize a flag definer: every behavior statement assigns a distinct
+/// status-flag register of one class, each flag's value a pure function of the
+/// encoded register operands. ISA parameters (`self.XLEN`) resolve to their
+/// concrete values here — the composed condition is proved against a canonical
+/// comparison, so no width expression survives into the emitted pattern.
+fn analyze_flag_definer_semantics(
+    inst: &ast::Instruction,
+    operands: &[(String, Type)],
+    numeric_params: &HashMap<String, i64>,
+    isa_param_values: &HashMap<String, i64>,
+    register_index_map: &HashMap<(String, String), u32>,
+    flag_classes: &HashSet<String>,
+    pc_classes: &HashSet<String>,
+) -> Option<FlagDefinerSemantics> {
+    if flag_classes.is_empty() {
+        return None;
+    }
+    let stmts = behavior_statements(&inst.behavior);
+    if stmts.is_empty() {
+        return None;
+    }
+
+    let mut class: Option<String> = None;
+    let mut flag_exprs: Vec<(u32, &ast::Expr)> = Vec::new();
+    for stmt in stmts {
+        let ast::Expr::Assign(assign) = stmt else {
+            return None;
+        };
+        let (dest_class, dest_reg) = assignment_dest_register_path(&assign.dest)?;
+        if !flag_classes.contains(&dest_class) {
+            return None;
+        }
+        match &class {
+            Some(existing) if *existing != dest_class => return None,
+            None => class = Some(dest_class.clone()),
+            _ => {}
+        }
+        let index = *register_index_map.get(&(dest_class, dest_reg))?;
+        if flag_exprs.iter().any(|(existing, _)| *existing == index) {
+            return None;
+        }
+        if behavior_references_pc(&assign.value, pc_classes) {
+            return None;
+        }
+        flag_exprs.push((index, &assign.value));
+    }
+
+    // Composition binds each operand to a pattern symbol the emitted pair
+    // reads back as a register; immediate-operand definers are not derived.
+    if operands
+        .iter()
+        .any(|(_, ty)| !matches!(ty, Type::Struct(_) | Type::String))
+    {
+        return None;
+    }
+
+    let mut params = numeric_params.clone();
+    params.extend(isa_param_values.iter().map(|(k, v)| (k.clone(), *v)));
+    let mut graph = tir::sem::SemGraph::new();
+    let exprs: Vec<&ast::Expr> = flag_exprs.iter().map(|(_, expr)| *expr).collect();
+    let (roots, lowering) = ast::Expr::lower_all_to_sema_with_isa(
+        &exprs,
+        &mut graph,
+        &params,
+        isa_param_values,
+        register_index_map,
+    )?;
+    // The flags must be functions of the encoded operands alone (no implicit
+    // register reads), and every register operand must feed some flag, or the
+    // emitted definer could not bind it.
+    if !lowering.register_symbols.is_empty() {
+        return None;
+    }
+    if operands.iter().any(|(name, ty)| {
+        matches!(ty, Type::Struct(_)) && !lowering.variable_symbols.contains_key(name)
+    }) {
+        return None;
+    }
+
+    Some(FlagDefinerSemantics {
+        class: class?,
+        graph,
+        flag_roots: flag_exprs
+            .iter()
+            .map(|(index, _)| *index)
+            .zip(roots)
+            .collect(),
+        variable_symbols: lowering.variable_symbols,
+    })
+}
+
+/// Recognize a flag-guarded branch: the guarded-PC-write shape whose condition
+/// reads only status-flag registers of one class and whose sole encodable
+/// operand is the taken target.
+fn analyze_flag_branch_semantics(
+    inst: &ast::Instruction,
+    operands: &[(String, Type)],
+    numeric_params: &HashMap<String, i64>,
+    isa_param_values: &HashMap<String, i64>,
+    register_index_map: &HashMap<(String, String), u32>,
+    flag_classes: &HashSet<String>,
+    pc_classes: &HashSet<String>,
+) -> Option<FlagBranchSemantics> {
+    if flag_classes.is_empty() {
+        return None;
+    }
+    let (cond, target_operand) = guarded_pc_write_shape(inst, operands, pc_classes)?;
+    if operands
+        .iter()
+        .any(|(name, ty)| *name != target_operand && !matches!(ty, Type::String))
+    {
+        return None;
+    }
+    if behavior_references_pc(cond, pc_classes) {
+        return None;
+    }
+
+    let mut params = numeric_params.clone();
+    params.extend(isa_param_values.iter().map(|(k, v)| (k.clone(), *v)));
+    let mut graph = tir::sem::SemGraph::new();
+    let lowering =
+        cond.lower_to_sema_with_isa(&mut graph, &params, isa_param_values, register_index_map)?;
+    if !lowering.variable_symbols.is_empty() || lowering.register_symbols.is_empty() {
+        return None;
+    }
+
+    let mut class: Option<String> = None;
+    let mut flag_symbols = HashMap::new();
+    for ((reg_class, index), symbol) in &lowering.register_symbols {
+        if !flag_classes.contains(reg_class) {
+            return None;
+        }
+        match &class {
+            Some(existing) if existing != reg_class => return None,
+            None => class = Some(reg_class.clone()),
+            _ => {}
+        }
+        flag_symbols.insert(*symbol, *index);
+    }
+
+    Some(FlagBranchSemantics {
+        class: class?,
+        graph,
+        root: lowering.root,
+        flag_symbols,
+        target_operand,
+    })
+}
+
+/// Copy `node`'s subgraph from `src` into `dst`, preserving payloads. Children
+/// are copied first, keeping `dst` in post order.
+fn copy_subgraph(
+    dst: &mut tir::sem::SemGraph,
+    src: &tir::sem::SemGraph,
+    node: tir::graph::NodeId,
+    memo: &mut HashMap<usize, tir::graph::NodeId>,
+) -> tir::graph::NodeId {
+    use tir::graph::{Dag, MutDag};
+    if let Some(&copied) = memo.get(&node.index()) {
+        return copied;
+    }
+    let children: Vec<tir::graph::NodeId> = src.children(node).collect();
+    let copied_children: Vec<tir::graph::NodeId> = children
+        .into_iter()
+        .map(|child| copy_subgraph(dst, src, child, memo))
+        .collect();
+    let copied = dst.add_node(*src.get_node(node));
+    if let Some(data) = src.get_leaf_data(node) {
+        dst.set_leaf_data(copied, data.clone());
+    }
+    for child in copied_children {
+        dst.add_edge(copied, child);
+    }
+    memo.insert(node.index(), copied);
+    copied
+}
+
+/// Copy the branch guard from `guard` into `dst`, replacing each status-flag
+/// read (a symbol in `substitute`) with a copy of the definer's expression for
+/// that flag. The definer's operand symbols survive verbatim, so the composed
+/// condition is a function of the definer's encoded operands alone.
+fn compose_guard_with_definer(
+    dst: &mut tir::sem::SemGraph,
+    guard: &tir::sem::SemGraph,
+    node: tir::graph::NodeId,
+    substitute: &HashMap<u32, tir::graph::NodeId>,
+    definer: &tir::sem::SemGraph,
+    guard_memo: &mut HashMap<usize, tir::graph::NodeId>,
+    definer_memo: &mut HashMap<usize, tir::graph::NodeId>,
+) -> tir::graph::NodeId {
+    use tir::graph::{Dag, MutDag};
+    if let Some(&copied) = guard_memo.get(&node.index()) {
+        return copied;
+    }
+    if let Some(tir::sem::SymPayload::SymbolId(symbol)) = guard.get_leaf_data(node)
+        && let Some(&flag_root) = substitute.get(symbol)
+    {
+        let copied = copy_subgraph(dst, definer, flag_root, definer_memo);
+        guard_memo.insert(node.index(), copied);
+        return copied;
+    }
+    let children: Vec<tir::graph::NodeId> = guard.children(node).collect();
+    let copied_children: Vec<tir::graph::NodeId> = children
+        .into_iter()
+        .map(|child| {
+            compose_guard_with_definer(
+                dst,
+                guard,
+                child,
+                substitute,
+                definer,
+                guard_memo,
+                definer_memo,
+            )
+        })
+        .collect();
+    let copied = dst.add_node(*guard.get_node(node));
+    if let Some(data) = guard.get_leaf_data(node) {
+        dst.set_leaf_data(copied, data.clone());
+    }
+    for child in copied_children {
+        dst.add_edge(copied, child);
+    }
+    guard_memo.insert(node.index(), copied);
+    copied
+}
+
+/// Operator kinds the constant folder may evaluate: pure scalar computations
+/// with a defined interpreter semantics.
+fn foldable_kind(kind: &tir::sem::SymKind) -> bool {
+    use tir::sem::SymKind as K;
+    matches!(
+        kind,
+        K::Add
+            | K::Sub
+            | K::Mul
+            | K::Neg
+            | K::And
+            | K::Or
+            | K::Xor
+            | K::Not
+            | K::ShiftLeft
+            | K::ShiftRightLogic
+            | K::ShiftRightArithmetic
+            | K::ZExt
+            | K::SExt
+            | K::Extract
+            | K::Log2Ceil
+            | K::Concat
+    )
+}
+
+/// Fold maximal constant subtrees into constant leaves. Width expressions like
+/// `self.XLEN - 1` lower (with the concrete ISA parameter) to `Sub(64, 1)`;
+/// the SMT oracle's bit-blaster needs them as literal extract bounds and
+/// extension widths, so they are evaluated here with the reference interpreter.
+fn fold_constant_subtrees(
+    src: &tir::sem::SemGraph,
+    root: tir::graph::NodeId,
+) -> (tir::sem::SemGraph, tir::graph::NodeId) {
+    use tir::graph::{Dag, MutDag};
+
+    // Whether every leaf under `node` is a constant and every operator foldable.
+    fn all_constant(
+        src: &tir::sem::SemGraph,
+        node: tir::graph::NodeId,
+        memo: &mut HashMap<usize, bool>,
+    ) -> bool {
+        if let Some(&known) = memo.get(&node.index()) {
+            return known;
+        }
+        let result = match src.get_leaf_data(node) {
+            Some(tir::sem::SymPayload::Int(_)) => true,
+            Some(_) => false,
+            None => {
+                foldable_kind(src.get_node(node))
+                    && src
+                        .children(node)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .all(|child| all_constant(src, child, memo))
+            }
+        };
+        memo.insert(node.index(), result);
+        result
+    }
+
+    fn walk(
+        dst: &mut tir::sem::SemGraph,
+        src: &tir::sem::SemGraph,
+        node: tir::graph::NodeId,
+        const_memo: &mut HashMap<usize, bool>,
+        copy_memo: &mut HashMap<usize, tir::graph::NodeId>,
+    ) -> tir::graph::NodeId {
+        if let Some(&copied) = copy_memo.get(&node.index()) {
+            return copied;
+        }
+        let copied = if src.get_leaf_data(node).is_none() && all_constant(src, node, const_memo) {
+            let mut sub = tir::sem::SemGraph::new();
+            copy_subgraph(&mut sub, src, node, &mut HashMap::new());
+            let tir::sem::Value::Int(value) = tir::sem::execute(&sub, &[]) else {
+                // Not evaluable after all: copy verbatim.
+                return copy_subgraph(dst, src, node, copy_memo);
+            };
+            let leaf = dst.add_node(tir::sem::SymKind::Constant);
+            dst.set_leaf_data(leaf, tir::sem::SymPayload::Int(value));
+            leaf
+        } else {
+            let children: Vec<tir::graph::NodeId> = src.children(node).collect();
+            let copied_children: Vec<tir::graph::NodeId> = children
+                .into_iter()
+                .map(|child| walk(dst, src, child, const_memo, copy_memo))
+                .collect();
+            let copied = dst.add_node(*src.get_node(node));
+            if let Some(data) = src.get_leaf_data(node) {
+                dst.set_leaf_data(copied, data.clone());
+            }
+            for child in copied_children {
+                dst.add_edge(copied, child);
+            }
+            copied
+        };
+        copy_memo.insert(node.index(), copied);
+        copied
+    }
+
+    let mut dst = tir::sem::SemGraph::new();
+    let folded_root = walk(
+        &mut dst,
+        src,
+        root,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    );
+    (dst, folded_root)
+}
+
+/// `kind(s0, s1)` (or swapped) — a candidate canonical comparison over the
+/// definer's two operand symbols.
+fn comparison_candidate(
+    kind: tir::sem::SymKind,
+    swap: bool,
+) -> (tir::sem::SemGraph, tir::graph::NodeId) {
+    use tir::graph::MutDag;
+    let mut g = tir::sem::SemGraph::new();
+    let a = g.add_node(tir::sem::SymKind::Symbol);
+    g.set_leaf_data(a, tir::sem::SymPayload::SymbolId(0));
+    let b = g.add_node(tir::sem::SymKind::Symbol);
+    g.set_leaf_data(b, tir::sem::SymPayload::SymbolId(1));
+    let (lhs, rhs) = if swap { (b, a) } else { (a, b) };
+    let root = g.add_node(kind);
+    g.add_edge(root, lhs);
+    g.add_edge(root, rhs);
+    (g, root)
+}
+
+/// The comparison the composed flag condition is provably equivalent to, if
+/// any: the six canonical predicates `cmpi` lowers to, in both operand orders.
+/// A fuzz filter picks the candidate cheaply; the SMT oracle then proves it
+/// (bit-blasted equivalence at the operands' architectural widths), so a wrong
+/// flag formula derives no rule instead of a miscompiling one.
+fn find_equivalent_comparison(
+    composed: &tir::sem::SemGraph,
+    symbol_widths: &[u32],
+) -> Option<(tir::sem::SemGraph, tir::graph::NodeId)> {
+    use tir::sem::{EquivalenceOracle, FuzzOracle, SmtOracle, SymKind};
+    const CANDIDATES: &[(SymKind, bool)] = &[
+        (SymKind::Eq, false),
+        (SymKind::Ne, false),
+        (SymKind::Lt, false),
+        (SymKind::Lt, true),
+        (SymKind::Ge, false),
+        (SymKind::Ge, true),
+        (SymKind::ULt, false),
+        (SymKind::ULt, true),
+        (SymKind::UGe, false),
+        (SymKind::UGe, true),
+    ];
+    let fuzz = FuzzOracle::default();
+    for (kind, swap) in CANDIDATES {
+        let (candidate, root) = comparison_candidate(*kind, *swap);
+        if fuzz.equivalent(composed, &candidate, symbol_widths)
+            && SmtOracle.equivalent(composed, &candidate, symbol_widths)
+        {
+            return Some((candidate, root));
+        }
+    }
+    None
+}
+
+/// A register class's architectural width: a literal `WIDTH`, or `WIDTH =
+/// self.PARAM` resolved through the instruction's ISA parameter view.
+fn register_class_width_with_isa(
+    files: &[ast::File],
+    class_name: &str,
+    isa_param_values: &HashMap<String, i64>,
+) -> Option<u32> {
+    let rc = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .find(|rc| rc.name == class_name)?;
+    match rc.parameters.get("WIDTH") {
+        Some((_ty, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => {
+            Some(parse_literal_value(li) as u32)
+        }
+        Some((_ty, Some(ast::Expr::Field(field)))) if matches!(&*field.base, ast::Expr::Ident(id) if id.name == "self") => {
+            isa_param_values
+                .get(field.member.as_str())
+                .map(|v| *v as u32)
+        }
+        _ => None,
+    }
+}
+
+/// Derive conditional-branch rules for flag-mediated ISAs (x86 EFLAGS, AArch64
+/// PSTATE). Each flag definer's per-flag semantics substitute into each
+/// flag-guarded branch's condition; when the composition is provably one
+/// canonical comparison over the definer's operands, the pair registers a
+/// [`RuleKind::CondBranch`] rule whose emission is the definer followed by the
+/// branch — two real instructions selected from TMDL semantics alone.
+fn emit_flag_branch_rules<'a>(
+    files: &'a [ast::File],
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+    register_index_map: &HashMap<(String, String), u32>,
+    pc_classes: &HashSet<String>,
+    flag_classes: &HashSet<String>,
+    isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
+    isel_rule_inits: &mut Vec<proc_macro2::TokenStream>,
+) -> Result<(), TMDLError> {
+    if flag_classes.is_empty() {
+        return Ok(());
+    }
+
+    struct FlagInst<'a> {
+        inst: &'a ast::Instruction,
+        ops: Vec<(String, Type)>,
+        mnemonic: String,
+        isa_param_values: HashMap<String, i64>,
+    }
+
+    let mut definers: Vec<(FlagInst<'a>, FlagDefinerSemantics)> = Vec::new();
+    let mut branches: Vec<(FlagInst<'a>, FlagBranchSemantics)> = Vec::new();
+    for inst in files.iter().flat_map(|f| f.instructions()) {
+        let resolved_params = resolve_params_for_instruction(inst, item_cache);
+        let Some(mnemonic) = resolved_params
+            .get("MNEMONIC")
+            .and_then(|(_, value)| value.as_ref())
+            .and_then(resolve_string)
+        else {
+            continue;
+        };
+        let isa_param_values = resolve_isa_param_values(inst, item_cache);
+        let ops = resolve_operand_widths(
+            resolve_operands_for_instruction(inst, item_cache),
+            &isa_param_values,
+        );
+        let numeric_params: HashMap<String, i64> = resolved_params
+            .into_iter()
+            .filter_map(|(name, (_ty, value))| match value {
+                Some(ast::Expr::Lit(ast::Lit::Int(li))) => {
+                    Some((name, parse_literal_value(&li) as i64))
+                }
+                _ => None,
+            })
+            .collect();
+        let info = FlagInst {
+            inst,
+            ops,
+            mnemonic,
+            isa_param_values,
+        };
+        if let Some(sem) = analyze_flag_definer_semantics(
+            inst,
+            &info.ops,
+            &numeric_params,
+            &info.isa_param_values,
+            register_index_map,
+            flag_classes,
+            pc_classes,
+        ) {
+            definers.push((info, sem));
+        } else if let Some(sem) = analyze_flag_branch_semantics(
+            inst,
+            &info.ops,
+            &numeric_params,
+            &info.isa_param_values,
+            register_index_map,
+            flag_classes,
+            pc_classes,
+        ) {
+            branches.push((info, sem));
+        }
+    }
+
+    let mut emitted_preludes: HashSet<String> = HashSet::new();
+    for (b, b_sem) in &branches {
+        for (d, d_sem) in &definers {
+            if d_sem.class != b_sem.class {
+                continue;
+            }
+            let shared_isas: Vec<String> = b
+                .inst
+                .for_isas
+                .iter()
+                .filter(|isa| d.inst.for_isas.contains(isa))
+                .cloned()
+                .collect();
+            if shared_isas.is_empty() {
+                continue;
+            }
+            if !b_sem
+                .flag_symbols
+                .values()
+                .all(|index| d_sem.flag_roots.contains_key(index))
+            {
+                continue;
+            }
+            // The canonical comparisons are binary: exactly two operands.
+            if d_sem.variable_symbols.len() != 2 {
+                continue;
+            }
+            let mut symbol_widths = vec![0u32; d_sem.variable_symbols.len()];
+            let mut widths_ok = true;
+            for (op_name, op_ty) in &d.ops {
+                let (Type::Struct(class_name), Some(&symbol)) =
+                    (op_ty, d_sem.variable_symbols.get(op_name))
+                else {
+                    continue;
+                };
+                match register_class_width_with_isa(files, class_name, &d.isa_param_values) {
+                    Some(width) => symbol_widths[symbol as usize] = width,
+                    None => widths_ok = false,
+                }
+            }
+            if !widths_ok || symbol_widths.contains(&0) {
+                continue;
+            }
+
+            let mut spliced = tir::sem::SemGraph::new();
+            let substitute: HashMap<u32, tir::graph::NodeId> = b_sem
+                .flag_symbols
+                .iter()
+                .map(|(symbol, index)| (*symbol, d_sem.flag_roots[index]))
+                .collect();
+            let spliced_root = compose_guard_with_definer(
+                &mut spliced,
+                &b_sem.graph,
+                b_sem.root,
+                &substitute,
+                &d_sem.graph,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+            );
+            let (composed, _) = fold_constant_subtrees(&spliced, spliced_root);
+
+            let Some((candidate, candidate_root)) =
+                find_equivalent_comparison(&composed, &symbol_widths)
+            else {
+                continue;
+            };
+
+            let no_immediates: HashSet<u32> = HashSet::new();
+            let (canon_pattern, canon_root, forced_widths) =
+                tir::sem::canonicalize_for_selection(&candidate, candidate_root, &no_immediates);
+            let mut pattern_widths = tir::sem::infer_widths(&canon_pattern, |_| None);
+            for (index, forced) in forced_widths.iter().enumerate() {
+                if forced.is_some() {
+                    pattern_widths[index] = *forced;
+                }
+            }
+            let (pattern_stmts, _root_var) =
+                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+            let operand_width_call = emit_operand_width_call(
+                &d.ops,
+                &d_sem.variable_symbols,
+                &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+            );
+
+            let target_symbol = d_sem
+                .variable_symbols
+                .values()
+                .max()
+                .map_or(0, |max| max + 1);
+            let d_lower = d.inst.name.to_lowercase();
+            let b_lower = b.inst.name.to_lowercase();
+            let pattern_fn_ident = format_ident!("isel_pattern_{}_via_{}", b_lower, d_lower);
+            let emit_fn_ident = format_ident!("emit_isel_{}_via_{}", b_lower, d_lower);
+            let prelude_fn_ident = format_ident!("emit_isel_flag_definer_{}", d_lower);
+            let rule_name_lit =
+                proc_macro2::Literal::string(&format!("{}+{}", d.mnemonic, b.mnemonic));
+            let target_symbol_lit = proc_macro2::Literal::u32_unsuffixed(target_symbol);
+            let b_builder_ident = format_ident!("{}OpBuilder", &b.inst.name);
+            let d_builder_ident = format_ident!("{}OpBuilder", &d.inst.name);
+            let target_name_lit = proc_macro2::Literal::string(&b_sem.target_operand);
+
+            let mut operand_constraint_entries: Vec<proc_macro2::TokenStream> = Vec::new();
+            let mut prelude_attr_steps: Vec<proc_macro2::TokenStream> = Vec::new();
+            for (op_name, op_ty) in &d.ops {
+                let Type::Struct(class_name) = op_ty else {
+                    continue;
+                };
+                let Some(&symbol) = d_sem.variable_symbols.get(op_name) else {
+                    continue;
+                };
+                let op_name_lit = proc_macro2::Literal::string(op_name);
+                let class_lit = proc_macro2::Literal::string(class_name);
+                let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
+                operand_constraint_entries
+                    .push(quote! { (#symbol_lit, tir::graph::OperandConstraint::Register) });
+                prelude_attr_steps.push(quote! {
+                    let src = m
+                        .value_binding(#symbol_lit)
+                        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                    builder = builder.attr(
+                        #op_name_lit,
+                        tir::attributes::AttributeValue::Register(
+                            tir::attributes::RegisterAttr::Virtual {
+                                id: src.number(),
+                                class: Some(#class_lit.to_string()),
+                            },
+                        ),
+                    );
+                });
+            }
+
+            if emitted_preludes.insert(d.inst.name.clone()) {
+                isel_rule_emitters.push(quote! {
+                    fn #prelude_fn_ident(
+                        context: &tir::Context,
+                        req: &tir::backend::isel::EmitRequest,
+                        m: &tir::backend::isel::RuleMatch,
+                    ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+                        let _ = (req, m);
+                        let mut builder = #d_builder_ident::new(context);
+                        #(#prelude_attr_steps)*
+                        Ok(Box::new(builder.build()))
+                    }
+                });
+            }
+
+            let base_cost = {
+                use tir::graph::Dag;
+                // The condition pattern plus the definer instruction.
+                canon_pattern.len() as u32 + 1
+            };
+            let base_cost_lit = proc_macro2::Literal::u32_unsuffixed(base_cost);
+            let d_mnemonic_lit = proc_macro2::Literal::string(&d.mnemonic);
+            let b_mnemonic_lit = proc_macro2::Literal::string(&b.mnemonic);
+
+            isel_rule_emitters.push(quote! {
+                fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
+                    use tir::graph::MutDag;
+                    let mut g = tir::sem::SemGraph::new();
+                    #(#pattern_stmts)*
+                    g
+                }
+
+                fn #emit_fn_ident(
+                    context: &tir::Context,
+                    req: &tir::backend::isel::EmitRequest,
+                    m: &tir::backend::isel::RuleMatch,
+                ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+                    let mut builder = #b_builder_ident::new(context);
+                    let dest = m
+                        .block_binding(#target_symbol_lit)
+                        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                    builder = builder.attr(
+                        #target_name_lit,
+                        tir::attributes::AttributeValue::Block(dest),
+                    );
+                    Ok(Box::new(builder.build()))
+                }
+            });
+
+            let pair_features = feature_slice(&shared_isas);
+            isel_rule_inits.push(quote! {
+                if features_enabled(features, #pair_features) {
+                    rules.push(
+                        tir::backend::isel::Rule::new(
+                            #rule_name_lit,
+                            #pattern_fn_ident(context),
+                            // Structural proxy or the TMDL-modeled cost of the
+                            // two emitted instructions, whichever is larger.
+                            (#base_cost_lit).max(
+                                instruction_cost(#d_mnemonic_lit)
+                                    + instruction_cost(#b_mnemonic_lit),
+                            ),
+                            #emit_fn_ident,
+                        )
+                        .with_kind(tir::backend::isel::RuleKind::CondBranch {
+                            target_symbol: #target_symbol_lit,
+                        })
+                        .with_prelude_emitter(#prelude_fn_ident)
+                        .with_operand_constraints(vec![#(#operand_constraint_entries),*])
+                        #operand_width_call,
+                    );
+                }
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn analyze_instruction_semantics(

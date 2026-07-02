@@ -19,6 +19,22 @@ register_class PC for [X86_64] {
     }
 }
 
+// Status flags written by compare-style instructions and read by conditional
+// jumps. Only the four flags the jcc family consumes are modeled (cf/zf/sf/of);
+// af/pf are omitted until an instruction reads them. The registers carry no
+// encoding slots, so the class is never allocated.
+register_class EFLAGS for [X86_64] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = 1;
+
+    registers {
+        cf => { traits = [status_flag] },
+        zf => { traits = [status_flag] },
+        sf => { traits = [status_flag] },
+        of => { traits = [status_flag] },
+    }
+}
+
 // Names carry no trailing digit, so each declares its register number.
 register_class GPR for [X86_64] {
     param ENCODING_LEN: Integer = 4;
@@ -591,5 +607,27 @@ template RegShift8H for [X86] {
 
     asm {
         "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+// `jcc rel32`: the 0x0F opcode escape, 0x80|cc, then a 32-bit displacement
+// measured from the end of the 6-byte instruction (RIP already points past the
+// branch when the displacement applies — hence the `+ 6` in the behaviors).
+template JccRel32 for [X86_64] {
+    param MNEMONIC: String;
+    param CC: bits<8>;
+
+    operands {
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0x0F,
+        8..15 => CC,
+        16..47 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
     }
 }

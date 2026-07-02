@@ -1072,6 +1072,7 @@ where
                     "return_value" => Some(RegisterTrait::ReturnValue),
                     "temporary" => Some(RegisterTrait::Temporary),
                     "saved" => Some(RegisterTrait::Saved),
+                    "status_flag" => Some(RegisterTrait::StatusFlag),
                     _ => {
                         emitter.emit(Rich::custom(
                             e.span(),

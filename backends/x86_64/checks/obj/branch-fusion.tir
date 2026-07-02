@@ -1,0 +1,31 @@
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
+
+// A compared conditional branch encodes as the flag pair: `cmp` sets EFLAGS,
+// `jl` consumes it. The rel32 displacements are measured from the end of each
+// instruction (jl at offset 3, len 6, target 14: disp 5; jmp at 9, len 5,
+// target 22: disp 8).
+
+module {
+  func @pick(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  module_end
+}
+
+// cmp rcx, rdx; jl +5; jmp +8; then each block: mov rax, imm and ret.
+// CHECK: .section .text
+// CHECK-NEXT: pick:
+// CHECK-NEXT: [0x48, 0x39, 0xD1]
+// CHECK-NEXT: [0x0F, 0x8C, 0x05, 0x00, 0x00, 0x00]
+// CHECK-NEXT: [0xE9, 0x08, 0x00, 0x00, 0x00]
+// CHECK-NEXT: [0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]
+// CHECK-NEXT: [0xC3]
+// CHECK-NEXT: [0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00]
+// CHECK-NEXT: [0xC3]

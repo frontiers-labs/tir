@@ -42,10 +42,10 @@ register_class PSTATE for [ARMv8A64] {
     param WIDTH: Integer = self.FLAG_WIDTH;
 
     registers {
-        n => { traits = [] },
-        z => { traits = [] },
-        c => { traits = [] },
-        v => { traits = [] },
+        n => { traits = [status_flag] },
+        z => { traits = [status_flag] },
+        c => { traits = [status_flag] },
+        v => { traits = [status_flag] },
     }
 }
 

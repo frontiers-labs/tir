@@ -7,9 +7,9 @@ use tir::attributes::AttributeValue;
 use tir::backend::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
 
 use crate::{
-    BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder, BranchNotEqOpBuilder,
-    CompareOpBuilder, MoveWideZeroOpBuilder, ReturnOpBuilder, VirtualBranchOp, VirtualCallOp,
-    VirtualCondBranchOp, VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
+    BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder, MoveWideZeroOpBuilder,
+    ReturnOpBuilder, VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp, phys,
+    virt,
 };
 
 const R_AARCH64_CONDBR19: u32 = 280;
@@ -38,6 +38,7 @@ pub(crate) fn object_format() -> ObjectFormatInfo {
         },
         // AArch64 branch immediates are word offsets: byte delta >> 2.
         pc_rel_scale: |_| 2,
+        pc_rel_from_end: |_| false,
     }
 }
 
@@ -67,45 +68,6 @@ pub(crate) fn lower_constant(
         .attr("imm", AttributeValue::Int(value))
         .build();
     rewriter.replace_op(op, &movz)?;
-    Ok(true)
-}
-
-/// Pre-RA: `vcond_br cond, t, f` becomes `cmp cond, xzr` + `b.ne t` + `b f`.
-/// Runs before register allocation so the condition register gets colored.
-pub(crate) fn lower_vcond_br(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-) -> Result<bool, tir::PassError> {
-    let Some(cond_br) = op.as_op::<VirtualCondBranchOp>() else {
-        return Ok(false);
-    };
-    // The only operand is the condition; any extra operands are values
-    // forwarded to successor block arguments, which codegen cannot place yet.
-    let operands = cond_br.operands();
-    let (Some(&condition), 1) = (operands.first(), operands.len()) else {
-        return Err(tir::PassError::InvalidRuleSet(
-            "block arguments on conditional branch edges are not supported by codegen yet"
-                .to_string(),
-        ));
-    };
-    let true_dest = block_attr(&cond_br, "true_dest")?;
-    let false_dest = block_attr(&cond_br, "false_dest")?;
-
-    let cmp = CompareOpBuilder::new(context)
-        .attr("rn", virt(condition.number(), "GPR"))
-        .attr("rm", phys(&("GPR".to_string(), 31))) // xzr
-        .build();
-    rewriter.insert_op_before(op, &cmp)?;
-    let bne = BranchNotEqOpBuilder::new(context)
-        .attr("imm", AttributeValue::Block(true_dest))
-        .build();
-    rewriter.insert_op_before(op, &bne)?;
-
-    let fallthrough = crate::VirtualBranchOpBuilder::new(context)
-        .attr("dest", AttributeValue::Block(false_dest))
-        .build();
-    rewriter.replace_op(op, &fallthrough)?;
     Ok(true)
 }
 

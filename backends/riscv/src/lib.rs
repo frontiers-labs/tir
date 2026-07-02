@@ -619,14 +619,14 @@ fn emit_branch_nonzero(
     context: &tir::Context,
     condition: tir::ValueId,
     dest: tir::BlockId,
-) -> Box<dyn Operation> {
-    Box::new(
+) -> Vec<Box<dyn Operation>> {
+    vec![Box::new(
         BranchNotEqOpBuilder::new(context)
             .attr("rs1", virt(condition.number(), "GPR"))
             .attr("rs2", phys(&("GPR".to_string(), 0)))
             .attr("imm", tir::attributes::AttributeValue::Block(dest))
             .build(),
-    )
+    )]
 }
 
 /// The RISC-V return-address register (`ra` = `x1`).
