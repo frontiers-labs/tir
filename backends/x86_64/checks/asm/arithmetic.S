@@ -16,9 +16,11 @@ alu:
 	shl rax, 3
 	shr rbx, 1
 	sar rcx, 63
+	imul rax, rbx
 	add r8, r9
 	mov r15, r10
 	add r12, 42
+	imul r8, r9
 
 # CHECK:      asm.symbol {name = "alu"}
 # CHECK-NEXT: x86_64.add {dst = rax, src = rbx}
@@ -35,6 +37,8 @@ alu:
 # CHECK-NEXT: x86_64.shl {dst = rax, imm = 3}
 # CHECK-NEXT: x86_64.shr {dst = rbx, imm = 1}
 # CHECK-NEXT: x86_64.sar {dst = rcx, imm = 63}
+# CHECK-NEXT: x86_64.imul {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.add {dst = r8, src = r9}
 # CHECK-NEXT: x86_64.mov {dst = r15, src = r10}
 # CHECK-NEXT: x86_64.add_imm {dst = r12, imm = 42}
+# CHECK-NEXT: x86_64.imul {dst = r8, src = r9}

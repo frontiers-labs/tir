@@ -7,11 +7,22 @@ mod isa {
     // Generated code: not everything is used by this asm-focused prototype.
     #![allow(dead_code, unused_variables, unused_mut, clippy::all)]
 
-    use tir::Operation;
     use tir::attributes::{AttributeValue, RegisterAttr};
     use tir::helpers::{dialect, operation};
+    use tir::{Any, Operation};
 
     include!(concat!(env!("OUT_DIR"), "/x86_64.rs"));
+
+    // Virtual return: the lowered form of `builtin.return`, deferring the actual
+    // `ret` sequence. Register allocation matches it by name to pin its operand
+    // to the return register.
+    operation! {
+        VirtualReturnOp {
+            name: "vret",
+            dialect: "x86_64",
+            operands: [value],
+        }
+    }
 
     dialect! {
         X86_64Dialect {
@@ -98,9 +109,77 @@ mod isa {
                 MovImm8HOp,
                 ShlImm8HOp,
                 ShrImm8HOp,
-                SarImm8HOp
+                SarImm8HOp,
+                ImulOp,
+                Imul32Op,
+                VirtualReturnOp
             ],
         }
+    }
+
+    fn lower_func_and_return_to_asm_symbol(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        use tir::Operation;
+        use tir::builtin::{FuncOp, ReturnOp};
+
+        if let Some(func) = op.as_op::<FuncOp>() {
+            // asm.symbol regions require an explicit symbol_end terminator.
+            let body = func.body();
+            let has_symbol_end = body
+                .op_ids()
+                .last()
+                .map(|id| context.get_op(*id).name == tir::backend::SymbolEndOp::name())
+                .unwrap_or(false);
+            if !has_symbol_end {
+                let mut b = tir::IRBuilder::new(body);
+                b.insert(tir::backend::SymbolEndOpBuilder::new(context).build());
+            }
+
+            let sym_name = func
+                .attributes()
+                .iter()
+                .find(|a| a.name == "sym_name")
+                .and_then(|a| match &a.value {
+                    AttributeValue::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let arg_regs = func
+                .body()
+                .arguments()
+                .iter()
+                .map(|arg| {
+                    AttributeValue::Register(RegisterAttr::Virtual {
+                        id: arg.id().number(),
+                        class: Some("GPR".to_string()),
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            let lowered = tir::backend::SymbolOpBuilder::new(context)
+                .body(op.op().regions[0])
+                .attr("name", AttributeValue::Str(sym_name))
+                .attr("arg_regs", AttributeValue::Array(arg_regs))
+                .build();
+            rewriter.replace_op(op, &lowered)?;
+            return Ok(true);
+        }
+
+        if let Some(ret) = op.as_op::<ReturnOp>() {
+            let mut builder = VirtualReturnOpBuilder::new(context);
+            if let Some(value) = ret.operands().first().copied() {
+                builder = builder.value(value);
+            }
+            let lowered = builder.build();
+            rewriter.replace_op(op, &lowered)?;
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     impl X86_64Dialect {
@@ -155,6 +234,54 @@ mod isa {
             unimplemented!("x86-64 spilling needs memory operands, out of prototype scope")
         }
 
+        fn emit_copy(
+            &self,
+            context: &tir::Context,
+            class: &str,
+            dst: u32,
+            src: u32,
+        ) -> Box<dyn Operation> {
+            let virt = |id: u32| {
+                AttributeValue::Register(RegisterAttr::Virtual {
+                    id,
+                    class: Some(class.to_string()),
+                })
+            };
+            match class {
+                "GPR" => Box::new(
+                    MovOpBuilder::new(context)
+                        .attr("dst", virt(dst))
+                        .attr("src", virt(src))
+                        .build(),
+                ),
+                "GPR32" => Box::new(
+                    Mov32OpBuilder::new(context)
+                        .attr("dst", virt(dst))
+                        .attr("src", virt(src))
+                        .build(),
+                ),
+                "GPR16" => Box::new(
+                    Mov16OpBuilder::new(context)
+                        .attr("dst", virt(dst))
+                        .attr("src", virt(src))
+                        .build(),
+                ),
+                "GPR8" => Box::new(
+                    Mov8OpBuilder::new(context)
+                        .attr("dst", virt(dst))
+                        .attr("src", virt(src))
+                        .build(),
+                ),
+                "GPR8H" => Box::new(
+                    Mov8HOpBuilder::new(context)
+                        .attr("dst", virt(dst))
+                        .attr("src", virt(src))
+                        .build(),
+                ),
+                other => unreachable!("unknown x86-64 register class {other}"),
+            }
+        }
+
         fn emit_prologue(&self, context: &tir::Context, size: u32) -> Vec<Box<dyn Operation>> {
             vec![Box::new(
                 AddImmOpBuilder::new(context)
@@ -201,6 +328,7 @@ mod isa {
         fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
             tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, Feature::ALL))
                 .with_axioms(include_str!("isel.axioms"))
+                .with_op_lowering(lower_func_and_return_to_asm_symbol)
         }
 
         fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {

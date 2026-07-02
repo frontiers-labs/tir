@@ -1,0 +1,36 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s --check-prefixes=ISEL
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+// Two-address instructions: every x86 ALU op reads and writes `dst`, so
+// selection records the value the read binds to in a `dst_tied` attribute and
+// register allocation lowers the tie to a `mov` ahead of the instruction.
+
+module {
+  func @chain(%0: !i64, %1: !i64) -> !i64 {
+    %2 = addi %0, %1 : !i64
+    %3 = subi %0, %2 : !i64
+    %4 = muli %3, %1 : !i64
+    %5 = ori %4, %0 : !i64
+    return %5
+  }
+  module_end
+}
+
+// ISEL:      x86_64.add {dst = %virt2:GPR, dst_tied = %virt0:GPR, src = %virt1:GPR}
+// ISEL-NEXT: x86_64.sub {dst = %virt3:GPR, dst_tied = %virt0:GPR, src = %virt2:GPR}
+// ISEL-NEXT: x86_64.imul {dst = %virt4:GPR, dst_tied = %virt1:GPR, src = %virt3:GPR}
+// ISEL-NEXT: x86_64.or {dst = %virt5:GPR, dst_tied = %virt0:GPR, src = %virt4:GPR}
+// ISEL-NEXT: x86_64.vret
+
+// %0 and %1 arrive in rcx and rdx. Each two-address op is preceded by a copy of
+// its tied value into its destination register; %0 stays live to the last op,
+// so no destination may take rcx. The result is pinned to rax by the return.
+// CHECK:      x86_64.mov {dst = [[T1:(?:rax|rbx|rdx|rsi|rdi|rbp|r8|r9|r1[0-5])]], src = rcx}
+// CHECK-NEXT: x86_64.add {dst = [[T1]], src = rdx}
+// CHECK-NEXT: x86_64.mov {dst = [[T2:(?:rax|rbx|rdx|rsi|rdi|rbp|r8|r9|r1[0-5])]], src = rcx}
+// CHECK-NEXT: x86_64.sub {dst = [[T2]], src = [[T1]]}
+// CHECK-NEXT: x86_64.mov {dst = [[T3:(?:rax|rbx|rdx|rsi|rdi|rbp|r8|r9|r1[0-5])]], src = rdx}
+// CHECK-NEXT: x86_64.imul {dst = [[T3]], src = [[T2]]}
+// CHECK-NEXT: x86_64.mov {dst = rax, src = rcx}
+// CHECK-NEXT: x86_64.or {dst = rax, src = [[T3]]}
+// CHECK-NEXT: x86_64.vret

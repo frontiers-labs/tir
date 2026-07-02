@@ -109,6 +109,13 @@ pub(crate) fn compile_isel_pattern(
     )?;
     pattern.set_root(pattern_root);
 
+    // A pattern that is a bare operand symbol — a register-to-register copy like
+    // x86 `mov dst, src` — selects nothing: it would match every e-class as
+    // "compute x by copying x", rooting a self-referential instruction.
+    if pattern.len() == 1 && node_meta[0].is_boundary {
+        return None;
+    }
+
     let specificity = (0..pattern.len())
         .map(|index| Id::from_raw(index as u32))
         .filter(|&n| matches!(pattern.node(n), PatternNode::Node(node) if node.ty.is_some()))

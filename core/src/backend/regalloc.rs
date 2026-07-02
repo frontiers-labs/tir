@@ -380,6 +380,14 @@ pub trait TargetRegAlloc: Send + Sync {
         offset: i64,
     ) -> Box<dyn Operation>;
 
+    /// Build a register-to-register copy of virtual register `src` into virtual
+    /// register `dst` (both of class `class`). Only reached on targets whose
+    /// instructions have tied (two-address) operands, so the default panics.
+    fn emit_copy(&self, context: &Context, class: &str, dst: u32, src: u32) -> Box<dyn Operation> {
+        let _ = (context, class, dst, src);
+        unimplemented!("this target has tied operands but no copy emitter")
+    }
+
     /// Prologue instructions reserving a frame of `size` bytes (e.g. `addi sp, sp,
     /// -size`). Inserted at the top of the entry block when any vreg spills.
     fn emit_prologue(&self, _context: &Context, _size: u32) -> Vec<Box<dyn Operation>> {
@@ -434,6 +442,8 @@ impl Pass for RegisterAllocationPass {
             return Ok(PreservedAnalyses::all());
         }
 
+        self.lower_tied_operands(context, rewriter, &blocks)?;
+
         let precolor = abi_precolor(context, op, &info, &blocks);
 
         let mut frame = FrameState::new(self.target.slot_size());
@@ -487,6 +497,67 @@ impl Pass for RegisterAllocationPass {
 }
 
 impl RegisterAllocationPass {
+    /// Lower tied (two-address) operands ahead of allocation. Instruction
+    /// selection emits `op {dst = %r (ReadWrite), dst_tied = %x, ...}` for an
+    /// instruction whose behavior reads its destination (e.g. the x86
+    /// `dst = dst + src`): the op defines `%r` but must read `%x` through the same
+    /// register. Insert `copy %r <- %x` ahead of the op and drop the marker
+    /// attribute, leaving a plain read-modify-write of `%r` that liveness and
+    /// coloring already model.
+    fn lower_tied_operands(
+        &self,
+        context: &Context,
+        rewriter: &mut Rewriter,
+        blocks: &[BlockId],
+    ) -> Result<(), PassError> {
+        for &block_id in blocks {
+            for op_id in context.get_block(block_id).op_ids() {
+                let op = context.get_op(op_id);
+                let mut ties = Vec::new();
+                for attr in &op.attributes {
+                    let Some(base) = attr.name.strip_suffix("_tied") else {
+                        continue;
+                    };
+                    if role_of(&op, base) != AttributeRole::ReadWrite {
+                        continue;
+                    }
+                    let AttributeValue::Register(RegisterAttr::Virtual { id: src, .. }) =
+                        &attr.value
+                    else {
+                        continue;
+                    };
+                    let Some(AttributeValue::Register(RegisterAttr::Virtual { id: dst, class })) =
+                        op.attributes
+                            .iter()
+                            .find(|a| a.name == base)
+                            .map(|a| &a.value)
+                    else {
+                        continue;
+                    };
+                    let class = class.clone().ok_or_else(|| {
+                        PassError::InvalidRuleSet(format!(
+                            "tied operand {} has no register class",
+                            attr.name
+                        ))
+                    })?;
+                    ties.push((attr.name.clone(), *dst, *src, class));
+                }
+                if ties.is_empty() {
+                    continue;
+                }
+                let op_ref = op_ref_in(context, block_id, op_id);
+                for (_, dst, src, class) in &ties {
+                    let copy = self.target.emit_copy(context, class, *dst, *src);
+                    rewriter.insert_op_before(&op_ref, copy.as_ref())?;
+                }
+                let mut attrs = op.attributes.clone();
+                attrs.retain(|a| !ties.iter().any(|(name, ..)| a.name == *name));
+                context.set_op_attributes(op_id, attrs);
+            }
+        }
+        Ok(())
+    }
+
     /// Lower every spilled virtual register by splitting its live range: each def is
     /// renamed to a fresh register and followed by a store; each use is preceded by a
     /// reload into a fresh register. The fresh registers are short-lived and get
@@ -529,7 +600,11 @@ impl RegisterAllocationPass {
                     let defines = regs.defs.iter().any(|r| is_vreg(r, vreg));
                     let uses = regs.uses.iter().any(|r| is_vreg(r, vreg));
 
-                    if uses {
+                    // A read-modify-write occurrence (a ReadWrite attribute, e.g. a
+                    // lowered two-address destination) must keep the read and the
+                    // write in one register: reload into a single fresh register,
+                    // rename both directions to it, and store it back after.
+                    if uses && defines {
                         let fresh = context.create_value(ty, None).id().number();
                         frame.temps.insert(fresh);
                         let reload = self
@@ -538,9 +613,21 @@ impl RegisterAllocationPass {
                         let op_ref = op_ref_in(context, block_id, op_id);
                         rewriter.insert_op_before(&op_ref, reload.as_ref())?;
                         rename_attr(context, op_id, vreg, fresh, RoleClass::Read);
-                    }
-
-                    if defines {
+                        rename_attr(context, op_id, vreg, fresh, RoleClass::Write);
+                        let store = self
+                            .target
+                            .emit_spill_store(context, fresh, &class, &frame_reg, offset);
+                        insert_after(context, rewriter, block_id, op_id, store.as_ref())?;
+                    } else if uses {
+                        let fresh = context.create_value(ty, None).id().number();
+                        frame.temps.insert(fresh);
+                        let reload = self
+                            .target
+                            .emit_spill_reload(context, fresh, &class, &frame_reg, offset);
+                        let op_ref = op_ref_in(context, block_id, op_id);
+                        rewriter.insert_op_before(&op_ref, reload.as_ref())?;
+                        rename_attr(context, op_id, vreg, fresh, RoleClass::Read);
+                    } else if defines {
                         let fresh = context.create_value(ty, None).id().number();
                         frame.temps.insert(fresh);
                         rename_attr(context, op_id, vreg, fresh, RoleClass::Write);

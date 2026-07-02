@@ -8,6 +8,8 @@
 
 (axiom neg-bridge (vars (x w)) (root w) (lhs (neg x)) (rhs (sub 0 x)))
 
+(axiom neg-bridge-2 (vars (x w)) (root w) (lhs (neg x)) (rhs (mul (ones w) x)))
+
 (axiom not-bridge (vars (x w)) (root w) (lhs (not x)) (rhs (sub (ones w) x)))
 
 (axiom not-bridge-2 (vars (x w)) (root w) (lhs (not x)) (rhs (xor (ones w) x)))

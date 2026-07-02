@@ -316,18 +316,33 @@ fn emit_instructions<'a>(
             quote! { #(#items,)* }
         };
 
-        // Build roles from behavior assignments so we don't depend on naming conventions.
+        // Build roles from behavior assignments so we don't depend on naming
+        // conventions. An operand both written and read (e.g. the two-address x86
+        // `dst = dst + src`) is ReadWrite; its isel-emitted op additionally carries
+        // a `<name>_tied` register attribute naming the value the read binds to,
+        // which register allocation lowers to a copy (see `lower_tied_operands`).
+        let read_register_operands = infer_read_register_operands(&inst.behavior, &ops);
         let roles_schema = {
             let mut items = vec![];
             for (name, ty) in &ops {
                 if let Type::Struct(_) = ty {
                     let field_ident = format_ident!("{}", name);
                     let role = if defined_register_operands.contains(name) {
-                        quote! { Def }
+                        if read_register_operands.contains(name) {
+                            quote! { ReadWrite }
+                        } else {
+                            quote! { Def }
+                        }
                     } else {
                         quote! { Use }
                     };
                     items.push(quote! { #field_ident: #role });
+                    if defined_register_operands.contains(name)
+                        && read_register_operands.contains(name)
+                    {
+                        let tied_ident = format_ident!("{}_tied", name);
+                        items.push(quote! { #tied_ident: Use });
+                    }
                 }
             }
             quote! { #(#items,)* }
@@ -507,6 +522,28 @@ fn emit_instructions<'a>(
                                     ),
                                 );
                             });
+                            // A two-address destination also reads a pattern operand:
+                            // record the bound value in a `_tied` attribute so register
+                            // allocation can lower the tie to a copy.
+                            if read_register_operands.contains(op_name)
+                                && let Some(sym) = semantics.variable_symbols.get(op_name)
+                            {
+                                let tied_name_lit =
+                                    proc_macro2::Literal::string(&format!("{op_name}_tied"));
+                                let sym_lit = proc_macro2::Literal::u32_unsuffixed(*sym);
+                                emit_attr_steps.push(quote! {
+                                    let tied = m.value_binding(#sym_lit).ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                                    builder = builder.attr(
+                                        #tied_name_lit,
+                                        tir::attributes::AttributeValue::Register(
+                                            tir::attributes::RegisterAttr::Virtual {
+                                                id: tied.number(),
+                                                class: Some(#class_lit.to_string()),
+                                            },
+                                        ),
+                                    );
+                                });
+                            }
                         } else if let Some(sym) = semantics.variable_symbols.get(op_name) {
                             let sym_lit = proc_macro2::Literal::u32_unsuffixed(*sym);
                             emit_attr_steps.push(quote! {
@@ -2504,6 +2541,50 @@ fn definer_writes(
         });
     }
     writes
+}
+
+/// Register operands the behavior *reads*: referenced anywhere outside an
+/// assignment-destination position. An operand that is also defined is a tied
+/// (two-address) operand, e.g. the x86 `dst = dst + src`.
+fn infer_read_register_operands(
+    behavior: &ast::Expr,
+    operands: &[(String, Type)],
+) -> HashSet<String> {
+    fn walk(expr: &ast::Expr, operands: &HashSet<&str>, out: &mut Vec<String>) {
+        if let ast::Expr::Assign(a) = expr {
+            // A plain identifier/path destination is a pure write; any other
+            // destination form (e.g. a slice, a partial update) reads its base.
+            if assignment_dest_name(&a.dest).is_none() {
+                collect_referenced_idents(&a.dest, operands, out);
+            }
+            walk(&a.value, operands, out);
+            return;
+        }
+        if let ast::Expr::Block(b) = expr {
+            for stmt in &b.stmts {
+                walk(stmt, operands, out);
+            }
+            return;
+        }
+        if let ast::Expr::If(i) = expr {
+            collect_referenced_idents(&i.cond, operands, out);
+            walk(&i.then, operands, out);
+            if let Some(e) = &i.else_ {
+                walk(e, operands, out);
+            }
+            return;
+        }
+        if let ast::Expr::Try(t) = expr {
+            walk(&t.body, operands, out);
+            return;
+        }
+        collect_referenced_idents(expr, operands, out);
+    }
+
+    let register_operands = register_operand_names(operands);
+    let mut reads = Vec::new();
+    walk(behavior, &register_operands, &mut reads);
+    reads.into_iter().collect()
 }
 
 fn infer_defined_register_operands(
