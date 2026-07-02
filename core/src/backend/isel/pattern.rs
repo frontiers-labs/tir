@@ -9,7 +9,8 @@ use tir::{
 };
 use tir_symbolic::egraph::{Id, Pattern, PatternNode, Var};
 
-use super::node::{SemEGraph, SemNode, class_width};
+use super::ImmRange;
+use super::node::{SemEGraph, SemNode, class_int_binding, class_width};
 
 /// A rule's pattern compiled for e-matching: the [`Pattern`] itself plus the
 /// per-pattern-node metadata the matcher and the PBQP cover consult.
@@ -39,14 +40,17 @@ pub(crate) struct PatternNodeMeta {
     pub(crate) constraint: Option<OperandConstraint>,
     /// Required value width of the bound class (see `Rule::operand_widths`).
     pub(crate) width: Option<u32>,
+    /// Encoding range of an immediate operand (see `Rule::operand_imm_ranges`).
+    pub(crate) imm_range: Option<ImmRange>,
 }
 
 impl CompiledIselPattern {
     /// Whether `class` may bind under `pattern_node`: a width requirement rejects
     /// a value *known* to be of a different width than the instruction operates
     /// at (a rewrite-introduced class of unknown width is produced at register
-    /// width, so it still matches), and a register/immediate constraint requires
-    /// a non-constant/constant member.
+    /// width, so it still matches), an immediate range rejects a constant the
+    /// encoding field cannot represent, and a register/immediate constraint
+    /// requires a non-constant/constant member.
     pub(crate) fn boundary_ok(
         &self,
         egraph: &SemEGraph,
@@ -58,6 +62,12 @@ impl CompiledIselPattern {
         if let Some(required) = meta.width
             && let Some(actual) = class_width(ctx, egraph, class)
             && actual != required
+        {
+            return false;
+        }
+        if let Some(range) = meta.imm_range
+            && let Some(value) = class_int_binding(egraph, class)
+            && !range.contains(&value)
         {
             return false;
         }
@@ -93,6 +103,7 @@ pub(crate) fn compile_isel_pattern(
     expr: &SemGraph,
     operand_constraints: &[(u32, OperandConstraint)],
     operand_widths: &[(u32, u32)],
+    operand_imm_ranges: &[(u32, ImmRange)],
 ) -> Option<CompiledIselPattern> {
     let root = expr.root()?;
     let mut pattern = Pattern::new();
@@ -106,6 +117,7 @@ pub(crate) fn compile_isel_pattern(
         &mut memo,
         operand_constraints,
         operand_widths,
+        operand_imm_ranges,
     )?;
     pattern.set_root(pattern_root);
 
@@ -129,6 +141,7 @@ pub(crate) fn compile_isel_pattern(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_isel_pattern_node(
     expr: &SemGraph,
     node: NodeId,
@@ -137,6 +150,7 @@ fn compile_isel_pattern_node(
     memo: &mut HashMap<NodeId, Id>,
     operand_constraints: &[(u32, OperandConstraint)],
     operand_widths: &[(u32, u32)],
+    operand_imm_ranges: &[(u32, ImmRange)],
 ) -> Option<Id> {
     if let Some(compiled) = memo.get(&node).copied() {
         return Some(compiled);
@@ -159,6 +173,10 @@ fn compile_isel_pattern_node(
                     .iter()
                     .find(|(s, _)| s == symbol)
                     .map(|(_, w)| *w),
+                imm_range: operand_imm_ranges
+                    .iter()
+                    .find(|(s, _)| s == symbol)
+                    .map(|(_, r)| *r),
                 ..Default::default()
             });
             compiled
@@ -196,6 +214,7 @@ fn compile_isel_pattern_node(
                         memo,
                         operand_constraints,
                         operand_widths,
+                        operand_imm_ranges,
                     )
                 })
                 .collect::<Option<Vec<Id>>>()?;

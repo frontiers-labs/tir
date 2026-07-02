@@ -1,0 +1,33 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// Narrow-width instruction forms are typed at their destination register
+// class's width: an i32 add selects `add32` (not the 64-bit `add`), i16 the
+// 16-bit form, i8 the byte form. The full-width forms stay width-agnostic, so
+// i64 still selects `add`.
+
+module {
+  func @widths(%0: !i64, %1: !i64, %2: !i32, %3: !i32, %4: !i16, %5: !i16, %6: !i8, %7: !i8) -> !i64 {
+    %8 = addi %0, %1 : !i64
+    %9 = addi %2, %3 : !i32
+    %10 = subi %4, %5 : !i16
+    %11 = xori %6, %7 : !i8
+    return %8
+  }
+  func @imm(%0: !i32) -> !i32 {
+    %1 = constant {value = 5} : !i32
+    %2 = addi %0, %1 : !i32
+    return %2
+  }
+  module_end
+}
+
+// CHECK:      x86_64.add {dst = %virt8:GPR, dst_tied = %virt0:GPR, src = %virt1:GPR}
+// CHECK-NEXT: x86_64.add32 {dst = %virt9:GPR32, dst_tied = %virt2:GPR32, src = %virt3:GPR32}
+// CHECK-NEXT: x86_64.sub16 {dst = %virt10:GPR16, dst_tied = %virt4:GPR16, src = %virt5:GPR16}
+// CHECK-NEXT: x86_64.xor8 {dst = %virt11:GPR8, dst_tied = %virt6:GPR8, src = %virt7:GPR8}
+// CHECK-NEXT: x86_64.vret
+
+// The immediate form is typed the same way: an i32 add with a constant folds
+// into `add_imm32`.
+// CHECK: asm.symbol {name = "imm"
+// CHECK: x86_64.add_imm32 {dst = %virt{{[0-9]+}}:GPR32, dst_tied = %virt{{[0-9]+}}:GPR32, imm = 5}

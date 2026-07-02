@@ -583,6 +583,99 @@ fn run_inner_typed_fusion(inner_width: Option<u32>) -> Vec<&'static str> {
         .collect()
 }
 
+fn emit_add_imm_marker(
+    context: &Context,
+    req: &EmitRequest,
+    m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let lhs = m
+        .value_binding(0)
+        .or_else(|| m.value_binding(1))
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    m.int_binding(1)
+        .or_else(|| m.int_binding(0))
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let result_ty = req.result_ty.expect("typed result");
+    // The immediate folds into the instruction (`subi` is only a marker), so
+    // the constant op loses its last use and is swept.
+    Ok(Box::new(ops::subi(context, lhs, lhs, result_ty).build()))
+}
+
+/// Select `add(a, constant)` with a cheap immediate rule bounded to a signed
+/// 12-bit field (`subi` marker) and an expensive register-form fallback.
+fn run_immediate_range(constant: i64) -> Vec<&'static str> {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let i64_ty = IntegerType::new(&context, 64);
+    let a = context.create_value(i64_ty, None);
+    let a_id = a.id();
+    let region = context.create_region();
+    let block = context.create_block(vec![a]);
+    region.add_block(block.id());
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let mut fb = IRBuilder::new(func.body());
+    let c = ops::constant(&context, constant, i64_ty).build();
+    let c_result = c.result();
+    fb.insert(c);
+    let add = ops::addi(&context, a_id, c_result, i64_ty).build();
+    let add_result = add.result();
+    fb.insert(add);
+    fb.insert(ops::r#return(&context, add_result).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        Rule::new("addi", atomic_pattern(SymKind::Add), 1, emit_add_imm_marker)
+            .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+            .with_operand_imm_ranges(vec![(
+                1,
+                super::ImmRange {
+                    width: 12,
+                    signed: true,
+                },
+            )]),
+        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+    ];
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("pass pipeline should succeed");
+
+    context
+        .get_region(region.id())
+        .iter(context.clone())
+        .next()
+        .unwrap()
+        .op_ids()
+        .into_iter()
+        .map(|op_id| context.get_op(op_id).name)
+        .collect()
+}
+
+#[test]
+fn immediate_range_gates_immediate_rules() {
+    // The signed 12-bit boundaries fold into the immediate form; the constant
+    // op is swept.
+    assert_eq!(run_immediate_range(2047), vec!["subi", "return"]);
+    assert_eq!(run_immediate_range(-2048), vec!["subi", "return"]);
+    // One past either boundary must not bind the immediate rule: the register
+    // form is selected and the constant stays materialized.
+    assert_eq!(
+        run_immediate_range(2048),
+        vec!["constant", "addi", "return"]
+    );
+    assert_eq!(
+        run_immediate_range(-2049),
+        vec!["constant", "addi", "return"]
+    );
+}
+
 #[test]
 fn internal_node_type_constraint_is_enforced() {
     // Inner add inferred as i32 from i32 operands. A matching i32 constraint
@@ -661,6 +754,7 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
         &shift_imm_pattern(SymKind::ShiftRightArithmetic),
         &[(1, OperandConstraint::Immediate)],
         &[(0, 64)],
+        &[],
     )
     .expect("srai pattern should compile");
 

@@ -613,6 +613,20 @@ fn emit_instructions<'a>(
                     pattern_widths[index] = *forced;
                 }
             }
+            // A destination register class statically narrower than the
+            // architectural width (x86 `add32`/`add16`/`add8`) defines exactly
+            // that many bits: type the pattern root at the class width, so the
+            // narrow form matches only values of its width instead of tying
+            // with the full-width form on every width.
+            if pattern_widths[canon_root.index()].is_none()
+                && scalar_root_kind(tir::graph::Dag::get_node(&canon_pattern, canon_root))
+                && let Some(Type::Struct(dst_class)) = defined_register_operands
+                    .first()
+                    .and_then(|name| ops_map.get(name))
+                && let Some(width) = literal_register_class_width(files, dst_class)
+            {
+                pattern_widths[canon_root.index()] = Some(width);
+            }
             let (pattern_stmts, _root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
             let operand_width_call = emit_operand_width_call(
@@ -620,6 +634,11 @@ fn emit_instructions<'a>(
                 &semantics.variable_symbols,
                 &width_sensitive_symbols(&canon_pattern, &pattern_widths),
             );
+            let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
+                &semantics.pattern,
+                &ops,
+                &semantics.variable_symbols,
+            ));
             // Cost reflects the canonical pattern's size (one machine instruction).
             let base_cost = {
                 use tir::graph::Dag;
@@ -684,6 +703,7 @@ fn emit_instructions<'a>(
                         )
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
                         #operand_width_call
+                        #operand_imm_range_call
                         .with_implicit_uses(vec![#(#implicit_use_entries),*]),
                     );
                 }
@@ -791,6 +811,11 @@ fn emit_instructions<'a>(
                 &branch.variable_symbols,
                 &width_sensitive_symbols(&canon_pattern, &pattern_widths),
             );
+            let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
+                &branch.pattern,
+                &ops,
+                &branch.variable_symbols,
+            ));
             let base_cost = {
                 use tir::graph::Dag;
                 (canon_pattern.len() as u32).max(1)
@@ -832,7 +857,8 @@ fn emit_instructions<'a>(
                             target_symbol: #target_symbol_lit,
                         })
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
-                        #operand_width_call,
+                        #operand_width_call
+                        #operand_imm_range_call,
                     );
                 }
             });
@@ -2384,6 +2410,126 @@ fn emit_operand_width_call(
             __operand_widths
         })
     }
+}
+
+/// The encoding range of each immediate operand: the field's bit width from the
+/// operand type, signedness from how the behavior consumes the symbol —
+/// `sext(imm, _)` sign-extends, everything else is unsigned — and an
+/// `extract(imm, hi, 0)` wrapper (a shift-amount mask) narrows the usable bits.
+/// Selection uses these to refuse constants the field cannot represent.
+fn immediate_operand_ranges(
+    dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+    ops: &[(String, Type)],
+    variable_symbols: &HashMap<String, u32>,
+) -> Vec<(u32, u32, bool)> {
+    use tir::sem::{SymKind as K, SymPayload};
+
+    let is_symbol_leaf = |node: tir::graph::NodeId, symbol: u32| {
+        *dag.get_node(node) == K::Symbol
+            && matches!(
+                dag.get_leaf_data(node),
+                Some(SymPayload::SymbolId(id)) if *id == symbol
+            )
+    };
+    let const_value = |node: tir::graph::NodeId| match dag.get_leaf_data(node) {
+        Some(SymPayload::Int(v)) => Some(v.to_u64()),
+        _ => None,
+    };
+
+    let mut out = Vec::new();
+    for (op_name, op_ty) in ops {
+        let Type::Bits(bits) = op_ty else { continue };
+        let Some(&symbol) = variable_symbols.get(op_name) else {
+            continue;
+        };
+        let mut signed = false;
+        let mut width = u32::from(*bits);
+        for index in 0..dag.len() {
+            let node = tir::graph::NodeId::from_index(index);
+            let children: Vec<tir::graph::NodeId> = dag.children(node).collect();
+            let uses_symbol = children
+                .first()
+                .is_some_and(|&child| is_symbol_leaf(child, symbol));
+            if !uses_symbol {
+                continue;
+            }
+            match dag.get_node(node) {
+                K::SExt => signed = true,
+                K::Extract
+                    if children.len() == 3
+                        && children.get(2).and_then(|&c| const_value(c)) == Some(0) =>
+                {
+                    if let Some(hi) = children.get(1).and_then(|&c| const_value(c)) {
+                        width = width.min(hi as u32 + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push((symbol, width, signed));
+    }
+    out
+}
+
+/// Emit the `.with_operand_imm_ranges` builder call for the immediate operands'
+/// encoding ranges.
+fn emit_operand_imm_range_call(ranges: &[(u32, u32, bool)]) -> proc_macro2::TokenStream {
+    if ranges.is_empty() {
+        return quote! {};
+    }
+    let entries: Vec<proc_macro2::TokenStream> = ranges
+        .iter()
+        .map(|(symbol, width, signed)| {
+            let symbol_lit = proc_macro2::Literal::u32_unsuffixed(*symbol);
+            let width_lit = proc_macro2::Literal::u32_unsuffixed(*width);
+            quote! {
+                (#symbol_lit, tir::backend::isel::ImmRange { width: #width_lit, signed: #signed })
+            }
+        })
+        .collect();
+    quote! { .with_operand_imm_ranges(vec![#(#entries),*]) }
+}
+
+/// The literal architectural width of a register class, when its `WIDTH` param
+/// is a compile-time literal (x86 `GPR32`/`GPR16`/`GPR8`). A class sized by an
+/// ISA parameter (`self.XLEN`) resolves only under the enabled features and
+/// yields `None`.
+fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option<u32> {
+    files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .find(|rc| rc.name == class_name)?
+        .parameters
+        .get("WIDTH")
+        .and_then(|(_ty, value)| match value {
+            Some(ast::Expr::Lit(ast::Lit::Int(li))) => Some(parse_literal_value(li) as u32),
+            _ => None,
+        })
+}
+
+/// Operator kinds whose result is meaningfully sized by the destination register
+/// width — scalar integer computations. Vector, memory, and control kinds carry
+/// no scalar width and are never typed from a register class.
+fn scalar_root_kind(kind: &tir::sem::SymKind) -> bool {
+    use tir::sem::SymKind as K;
+    matches!(
+        kind,
+        K::Add
+            | K::Sub
+            | K::Mul
+            | K::Div
+            | K::UDiv
+            | K::SRem
+            | K::URem
+            | K::Neg
+            | K::And
+            | K::Or
+            | K::Xor
+            | K::Not
+            | K::ShiftLeft
+            | K::ShiftRightLogic
+            | K::ShiftRightArithmetic
+    )
 }
 
 /// Whether `expr` reads or writes a program-counter register (`PC::pc`).

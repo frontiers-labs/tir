@@ -214,6 +214,26 @@ compare fuses into `blt` on rv32 but is *refused* on rv64 (a 64-bit compare
 would read undefined upper bits) instead of miscompiling.
 Low-bits-preserving operators (add/and/shl/mul-low) stay width-agnostic.
 
+### Immediate ranges
+
+An immediate boundary additionally carries its **encoding range**
+(`Rule::with_operand_imm_ranges`): the field's bit width from the TMDL operand
+type (`imm: bits<12>`), signedness from how the behavior consumes the symbol
+(`sext(imm, _)` is signed, everything else unsigned), and an
+`extract(imm, hi, 0)` shift-amount mask narrows the usable bits. A constant
+outside the range must not bind — its encoding would silently truncate — so
+`addi x, 2047` folds while `addi x, 2048` refuses the immediate rule (and,
+with no wide-constant materializer in the rule set, fails selection loudly).
+
+### Narrow register-width forms
+
+An instruction whose destination register class is statically narrower than
+the architectural registers (x86 `add32`/`add16`/`add8` on
+`GPR32`/`GPR16`/`GPR8`) defines exactly that many bits: TMDL types the
+pattern root at the class width, so each narrow form matches only values of
+its width and wins the specificity tie-break below against the untyped
+full-width form (which keeps matching every other width).
+
 ### Dominance pruning (specificity)
 
 Before the solve, `prune_dominated_matches` deduplicates interchangeable
