@@ -7,6 +7,7 @@
 //! e-classes ([`cover`]). The solved cover becomes an emission plan ([`emit`])
 //! the pass commits through the rewriter.
 
+mod axioms;
 mod builder;
 mod cover;
 mod emit;
@@ -41,8 +42,6 @@ use emit::{BlockDecision, BlockPlan, DefinerEmit, EmissionBuilder, GuardBranch, 
 use node::{Binding, class_binding, class_int_binding, template_node};
 use pattern::{CompiledIselPattern, compile_isel_pattern};
 use rewrites::discover_rewrites;
-#[cfg(test)]
-use rewrites::extension_rewrite;
 
 #[derive(Debug, Clone)]
 pub struct RuleMatch {

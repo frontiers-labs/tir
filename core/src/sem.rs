@@ -18,6 +18,7 @@ mod discover;
 pub use discover::{
     EquivalenceOracle, FuzzOracle, SmtOracle, confirm_bool_via_if, confirm_extension_via_shifts,
 };
+pub(crate) use discover::{con, op, sym};
 
 /// The post-order graph core builds semantic expressions into: [`SymKind`] nodes
 /// over `SymPayload<ValueId>` leaves, annotated with [`NodeMeta`] so a node can

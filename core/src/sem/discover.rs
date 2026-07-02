@@ -202,19 +202,19 @@ fn sample_values(width: u32, extra: usize) -> Vec<APInt> {
         .collect()
 }
 
-fn sym(g: &mut SemGraph, id: u32) -> NodeId {
+pub(crate) fn sym(g: &mut SemGraph, id: u32) -> NodeId {
     let node = g.add_node(SymKind::Symbol);
     g.set_leaf_data(node, SymPayload::SymbolId(id));
     node
 }
 
-fn con(g: &mut SemGraph, value: u64, width: u32) -> NodeId {
+pub(crate) fn con(g: &mut SemGraph, value: u64, width: u32) -> NodeId {
     let node = g.add_node(SymKind::Constant);
     g.set_leaf_data(node, SymPayload::Int(APInt::new(width, value)));
     node
 }
 
-fn op(g: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
+pub(crate) fn op(g: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
     let node = g.add_node(kind);
     for &child in children {
         g.add_edge(node, child);

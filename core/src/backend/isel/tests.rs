@@ -7,7 +7,7 @@ use tir::{
 
 use super::{
     BranchEmitters, EmitRequest, InstructionSelectPass, IselCostModel, Rule, RuleKind, RuleMatch,
-    SemEGraph, SemNode, extension_rewrite, template_node,
+    SemEGraph, SemNode, template_node,
 };
 
 fn symbol(g: &mut SemGraph, id: u32) -> tir::graph::NodeId {
@@ -629,7 +629,11 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
     sext_node.children = vec![v, width];
     let sext = egraph.add(sext_node);
 
-    let rewrite = extension_rewrite(SymKind::SExt, SymKind::ShiftRightArithmetic);
+    let rewrite = super::axioms::extension_axioms()
+        .into_iter()
+        .find(|a| a.name() == "sext-via-shifts")
+        .expect("builtin sext axiom")
+        .compile();
     super::rewrites::saturate(
         &ctx,
         &mut egraph,

@@ -18,7 +18,8 @@ does the rest.
 | `isel/node.rs` | the `SemNode` label, `SemPayload`, and e-class helpers (`class_binding`, widths) |
 | `isel/builder.rs` | `SemDagBuilder`: IR ops → semantic e-graph, including memory effects |
 | `isel/pattern.rs` | `compile_isel_pattern`: rule semantics → `tir_symbolic::egraph::Pattern`s + per-node metadata |
-| `isel/rewrites.rs` | discovery of proved algebraic rewrites (`discover_rewrites`) |
+| `isel/axioms.rs` | s-expression axioms and their compilation into proved rewrites |
+| `isel/rewrites.rs` | selection of applicable axioms (`discover_rewrites`), saturation driver |
 | `isel/cover.rs` | PBQP construction, match dominance pruning, completeness check |
 | `isel/emit.rs` | `BlockPlan` and `EmissionBuilder`: cover → per-op decisions |
 
@@ -121,12 +122,27 @@ dominates every later use in the block.
 
 Before tiling, the e-graph is saturated with target-independent algebraic
 identities (`self.rewrites`). These are **not** hand-written selection rules — they
-are bit-vector lemmas the target's own instructions happen to realize.
+are bit-vector lemmas the target's own instructions happen to realize, declared
+as s-expressions in `isel/axioms.rs`:
 
-`discover_rewrites` finds them: if the target has an atomic `slli` plus the
-matching right shift, it proves the standard shift-pair extension identity
-with the `SmtOracle` (an unsat check through `tir-symbolic`'s QF_BV
-bit-blaster) and emits a width-parameterized rewrite:
+```
+(axiom sext-via-shifts
+  (vars (x n)) (root w) (where (< n w))
+  (lhs (sext x w))
+  (rhs (ashr (shl x (- w n)) (- w n))))
+```
+
+`discover_rewrites` selects the axioms the rule set can realize (an extension
+bridge needs an atomic instruction for every node its RHS introduces, e.g.
+`slli` plus the matching right shift) and compiles each into a rewrite. The
+compiled applier resolves the axiom's width names from the matched classes
+(`n` from `x`'s class, `w` from the root), checks the guards, and **proves the
+exact width instantiation** with the `SmtOracle` (an unsat check through
+`tir-symbolic`'s QF_BV bit-blaster, memoized per instantiation) before it
+unions — so there is no gap between the lemma proved and the rewrite applied.
+The proof models each operand as the low `n` bits of a full-width register the
+RHS reads whole, covering the undefined upper register bits the emitted
+instructions actually see. The extension axiom asserts:
 
 ```
    SExt(v, W)   ──rewrite──►   ShiftRightArithmetic( ShiftLeft(v, W-n), W-n )
