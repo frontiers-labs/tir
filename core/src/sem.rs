@@ -11,11 +11,15 @@ use crate::{Operation, ValueId};
 
 pub use tir_symbolic::lang::{
     BuildError, Memory, SemBuilderHooks, SemExpr, SymKind, SymPayload, Value, build,
-    canonicalize_for_selection, execute, execute_with_memory, infer_widths, parse,
+    canonicalize_for_selection, execute, execute_with_memory, infer_widths, op_kind, op_name,
+    parse,
 };
 
 mod discover;
-pub use discover::{EquivalenceOracle, FuzzOracle, confirm_extension_via_shifts};
+pub(crate) use discover::{EXT_WIDTH_SAMPLES, con, op, sample_values, sym};
+pub use discover::{
+    EquivalenceOracle, FuzzOracle, SmtOracle, confirm_bool_via_if, confirm_extension_via_shifts,
+};
 
 /// The post-order graph core builds semantic expressions into: [`SymKind`] nodes
 /// over `SymPayload<ValueId>` leaves, annotated with [`NodeMeta`] so a node can

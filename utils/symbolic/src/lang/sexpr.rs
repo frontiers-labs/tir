@@ -5,6 +5,57 @@ use tir_graph::{MutDag, NodeId};
 
 use crate::lang::{SymKind, SymPayload};
 
+/// The fixed-arity operator vocabulary of the s-expression surface, shared by
+/// the op-sem builder and the isel axiom DSL; operand count is
+/// [`SymKind::arity`]. Excludes the context-dependent forms [`build`] resolves
+/// itself (unary `sext`/`zext`/`trunc` taking the result width, `(concat
+/// iter)`, `map`/`reduce` lambdas).
+const OP_VOCABULARY: &[(&str, SymKind)] = &[
+    ("add", SymKind::Add),
+    ("sub", SymKind::Sub),
+    ("mul", SymKind::Mul),
+    ("div", SymKind::Div),
+    ("and", SymKind::And),
+    ("or", SymKind::Or),
+    ("xor", SymKind::Xor),
+    ("shl", SymKind::ShiftLeft),
+    ("lshr", SymKind::ShiftRightLogic),
+    ("ashr", SymKind::ShiftRightArithmetic),
+    ("zip", SymKind::Zip),
+    ("split", SymKind::Split),
+    ("not", SymKind::Not),
+    ("neg", SymKind::Neg),
+    ("sext", SymKind::SExt),
+    ("zext", SymKind::ZExt),
+    ("if", SymKind::If),
+    ("eq", SymKind::Eq),
+    ("ne", SymKind::Ne),
+    ("lt", SymKind::Lt),
+    ("le", SymKind::Le),
+    ("gt", SymKind::Gt),
+    ("ge", SymKind::Ge),
+    ("ult", SymKind::ULt),
+    ("ule", SymKind::ULe),
+    ("ugt", SymKind::UGt),
+    ("uge", SymKind::UGe),
+];
+
+/// The [`SymKind`] an operator atom names, if any.
+pub fn op_kind(name: &str) -> Option<SymKind> {
+    OP_VOCABULARY
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|&(_, k)| k)
+}
+
+/// The operator atom naming a [`SymKind`]; inverse of [`op_kind`].
+pub fn op_name(kind: SymKind) -> Option<&'static str> {
+    OP_VOCABULARY
+        .iter()
+        .find(|&&(_, k)| k == kind)
+        .map(|&(n, _)| n)
+}
+
 /// Parsed s-expression: surface syntax of an op's `sem = "..."`; [`build`] lowers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemExpr {
@@ -230,14 +281,16 @@ where
         return Ok(node(g, SymKind::IterConcat, &[inner]));
     }
 
-    // Unary width-changing ops take width from the result type, not an operand.
-    if let [SemExpr::Atom(op), arg] = items {
-        let kind = match op.as_str() {
-            "sext" => Some(SymKind::SExt),
-            "zext" => Some(SymKind::ZExt),
-            "trunc" => None,
-            other => return Err(BuildError::UnknownAtom(other.to_string())),
-        };
+    // Unary width-changing ops take width from the result type, not an operand
+    // (their explicit-width forms fall through to the generic vocabulary).
+    if let [SemExpr::Atom(op), arg] = items
+        && let Some(kind) = match op.as_str() {
+            "sext" => Some(Some(SymKind::SExt)),
+            "zext" => Some(Some(SymKind::ZExt)),
+            "trunc" => Some(None),
+            _ => None,
+        }
+    {
         let inner = build_node(g, arg, symbols, lambda_params, hooks)?;
         let width = hooks.result_width().ok_or(BuildError::MissingWidth)?;
         return Ok(match kind {
@@ -293,28 +346,18 @@ where
         return Ok(node(g, kind, &[iter_node, body_node]));
     }
 
-    let [SemExpr::Atom(op), lhs, rhs] = items else {
+    let [SemExpr::Atom(op), args @ ..] = items else {
         return Err(BuildError::BadForm("expression".to_string()));
     };
-    let kind = match op.as_str() {
-        "add" => SymKind::Add,
-        "sub" => SymKind::Sub,
-        "mul" => SymKind::Mul,
-        "div" => SymKind::Div,
-        "and" => SymKind::And,
-        "or" => SymKind::Or,
-        "xor" => SymKind::Xor,
-        "shl" => SymKind::ShiftLeft,
-        "lshr" => SymKind::ShiftRightLogic,
-        "ashr" => SymKind::ShiftRightArithmetic,
-        // zip pairs iterators lane-wise; split cuts a bit value into n lanes.
-        "zip" => SymKind::Zip,
-        "split" => SymKind::Split,
-        other => return Err(BuildError::UnknownAtom(other.to_string())),
-    };
-    let lhs_node = build_node(g, lhs, symbols, lambda_params, hooks)?;
-    let rhs_node = build_node(g, rhs, symbols, lambda_params, hooks)?;
-    Ok(node(g, kind, &[lhs_node, rhs_node]))
+    let kind = op_kind(op).ok_or_else(|| BuildError::UnknownAtom(op.to_string()))?;
+    if args.len() != kind.arity() {
+        return Err(BuildError::BadForm(op.to_string()));
+    }
+    let children = args
+        .iter()
+        .map(|a| build_node(g, a, symbols, lambda_params, hooks))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(node(g, kind, &children))
 }
 
 #[cfg(test)]
@@ -461,6 +504,56 @@ mod tests {
             Value::RawBits(bits) => assert_eq!(bits.bytes(), &[0x04, 0x06]),
             other => panic!("expected raw bits, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn op_vocabulary_roundtrips() {
+        for &(name, kind) in OP_VOCABULARY {
+            assert_eq!(op_kind(name), Some(kind));
+            assert_eq!(op_name(kind), Some(name));
+        }
+    }
+
+    #[test]
+    fn builds_comparison_and_if() {
+        let mut g = Graph::new();
+        build(
+            &mut g,
+            "(set r (if (ult a b) a b))",
+            &[("a", 0), ("b", 1)],
+            &no_hooks(),
+        )
+        .unwrap();
+        let out = execute(
+            &g,
+            &[Value::Int(APInt::new(32, 7)), Value::Int(APInt::new(32, 3))],
+        );
+        match out {
+            Value::Int(v) => assert_eq!(v.to_u64(), 3),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn builds_explicit_width_extension() {
+        // The binary form takes the target width from its operand, no hooks.
+        let mut g = Graph::new();
+        let root = build(&mut g, "(set r (zext x 16))", &[("x", 0)], &no_hooks()).unwrap();
+        assert_eq!(*g.get_kind(root), SymKind::ZExt);
+        match execute(&g, &[Value::Int(APInt::new(8, 0xff))]) {
+            Value::Int(v) => {
+                assert_eq!(v.width(), 16);
+                assert_eq!(v.to_u64(), 0xff);
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn wrong_arity_is_malformed() {
+        let mut g = Graph::new();
+        let err = build(&mut g, "(set r (add x))", &[("x", 0)], &no_hooks()).unwrap_err();
+        assert_eq!(err, BuildError::BadForm("add".into()));
     }
 
     #[test]

@@ -18,6 +18,8 @@ enc:
 	add r8, rax
 	add r8, 42
 	shl r9, 3
+	imul rax, rbx
+	imul r8, r9
 	jmp 16
 	call 256
 	ret
@@ -46,6 +48,10 @@ enc:
 # CHECK-NEXT: [0x49, 0x81, 0xC0, 0x2A, 0x00, 0x00, 0x00]
 # shl r9, 3: REX.WB=49, opcode C1, ModR/M=11 100(/4) rm(r9&7=1) = E1, imm8=3.
 # CHECK-NEXT: [0x49, 0xC1, 0xE1, 0x03]
+# imul rax, rbx: REX.W=48, 0F AF, ModR/M=11 reg(rax=0) rm(rbx=3) = C3 (dst in reg).
+# CHECK-NEXT: [0x48, 0x0F, 0xAF, 0xC3]
+# imul r8, r9: REX.WRB=4D, 0F AF, ModR/M=11 reg(r8&7=0) rm(r9&7=1) = C1.
+# CHECK-NEXT: [0x4D, 0x0F, 0xAF, 0xC1]
 # jmp rel32 / call rel32 / ret.
 # CHECK-NEXT: [0xE9, 0x10, 0x00, 0x00, 0x00]
 # CHECK-NEXT: [0xE8, 0x00, 0x01, 0x00, 0x00]

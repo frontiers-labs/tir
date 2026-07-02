@@ -1,0 +1,24 @@
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
+
+// The discovered zext bridges: the single-instruction mask form
+// `zext(x, w) == and(x, 2^n - 1)` where the mask encodes (255 fits andi's
+// signed 12-bit field), and the shift-pair fallback where it does not
+// (0xffff does not encode, so i16 lowers through slli/srli).
+
+module {
+  func @z8(%0: !i8) -> !i64 {
+    %1 = extui %0 : !i64
+    return %1
+  }
+  func @z16(%0: !i16) -> !i64 {
+    %1 = extui %0 : !i64
+    return %1
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "z8"
+// CHECK: riscv.andi {rd = %virt{{[0-9]+}}:GPR, rs1 = %virt{{[0-9]+}}:GPR, imm = 255}
+// CHECK: asm.symbol {name = "z16"
+// CHECK: riscv.slli {rd = %virt[[T:[0-9]+]]:GPR, rs1 = %virt{{[0-9]+}}:GPR, imm = 48}
+// CHECK-NEXT: riscv.srli {rd = %virt{{[0-9]+}}:GPR, rs1 = %virt[[T]]:GPR, imm = 48}

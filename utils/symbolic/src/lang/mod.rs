@@ -7,7 +7,7 @@ mod sexpr;
 
 pub use exec::{Memory, execute, execute_with_memory};
 pub use infer::{canonicalize_for_selection, infer_widths};
-pub use sexpr::{BuildError, SemBuilderHooks, SemExpr, build, parse};
+pub use sexpr::{BuildError, SemBuilderHooks, SemExpr, build, op_kind, op_name, parse};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]

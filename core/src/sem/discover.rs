@@ -1,17 +1,22 @@
-//! Discovery of algebraic identities by *testing*, not hand-authoring.
+//! Discovery of algebraic identities by *testing and proving*, not hand-authoring.
 //!
 //! Instruction selection needs target-independent bit-vector lemmas to bridge IR
 //! operators that no single instruction implements (e.g. a sub-word sign extension)
 //! to sequences that the target *does* have. Rather than writing those lemmas by
 //! hand, we propose a candidate shape and confirm it against an
-//! [`EquivalenceOracle`]. The default oracle evaluates both sides on many inputs
-//! with the reference interpreter ([`super::execute`]); an SMT-backed oracle can be
-//! slotted in later for a soundness proof. Confirmed shapes become e-graph rewrites
-//! at the call site.
+//! [`EquivalenceOracle`]: [`FuzzOracle`] evaluates both sides on many inputs with
+//! the reference interpreter ([`super::execute`]), [`SmtOracle`] proves the
+//! equivalence unsatisfiable-to-refute with [`tir_symbolic`]'s QF_BV pipeline.
+//! Confirmed shapes become e-graph rewrites at the call site.
+
+use std::collections::HashMap;
 
 use tir_adt::APInt;
+use tir_symbolic::bitblast::{SolveOutcome, blast};
+use tir_symbolic::lang::infer_widths;
 
-use crate::graph::{MutDag, NodeId};
+use crate::ValueId;
+use crate::graph::{Dag, GenericDag, MutDag, NodeId};
 use crate::sem::{SemGraph, SymKind, SymPayload, Value, execute};
 
 /// Decides whether two single-output expression graphs (over the same symbols)
@@ -59,6 +64,82 @@ impl EquivalenceOracle for FuzzOracle {
     }
 }
 
+/// Proving oracle: bit-blasts `lhs != rhs` over shared symbols and reports
+/// equivalence iff the SAT backend returns unsat — a proof, not a sampling.
+/// Anything the pipeline cannot handle (unsupported node kinds, unknown or
+/// mismatched root widths, an `Unknown` verdict) conservatively reports
+/// non-equivalence.
+#[derive(Default)]
+pub struct SmtOracle;
+
+type OracleGraph = GenericDag<SymKind, SymPayload<ValueId>>;
+
+impl EquivalenceOracle for SmtOracle {
+    fn equivalent(&self, lhs: &SemGraph, rhs: &SemGraph, symbol_widths: &[u32]) -> bool {
+        let (Some(lhs_root), Some(rhs_root)) = (lhs.root(), rhs.root()) else {
+            return false;
+        };
+        let mut g = OracleGraph::new();
+        let mut symbols = HashMap::new();
+        let l = copy_reachable(lhs, lhs_root, &mut g, &mut symbols, &mut HashMap::new());
+        let r = copy_reachable(rhs, rhs_root, &mut g, &mut symbols, &mut HashMap::new());
+        let ne = g.add_node(SymKind::Ne);
+        g.add_edge(ne, l);
+        g.add_edge(ne, r);
+
+        let widths = infer_widths(&g, |id| match g.get_leaf_data(id) {
+            Some(SymPayload::SymbolId(id)) => symbol_widths.get(*id as usize).copied(),
+            _ => None,
+        });
+        match (widths[l.index()], widths[r.index()]) {
+            (Some(lw), Some(rw)) if lw == rw => {}
+            _ => return false,
+        }
+        match blast(&g, &widths) {
+            Ok(b) => matches!(b.solve(), SolveOutcome::Unsat),
+            Err(_) => false,
+        }
+    }
+}
+
+/// Copy the subgraph under `node` into `dst`. Symbol leaves are shared through
+/// `symbols` across *both* sides of the equivalence — the bit-blaster allocates
+/// fresh literals per node, so a symbol duplicated per side would leave the two
+/// occurrences unconstrained against each other.
+fn copy_reachable(
+    src: &SemGraph,
+    node: NodeId,
+    dst: &mut OracleGraph,
+    symbols: &mut HashMap<u32, NodeId>,
+    memo: &mut HashMap<NodeId, NodeId>,
+) -> NodeId {
+    if let Some(&copied) = memo.get(&node) {
+        return copied;
+    }
+    let copied = if let Some(SymPayload::SymbolId(id)) = src.get_leaf_data(node) {
+        *symbols.entry(*id).or_insert_with(|| {
+            let n = dst.add_node(SymKind::Symbol);
+            dst.set_leaf_data(n, SymPayload::SymbolId(*id));
+            n
+        })
+    } else {
+        let children: Vec<NodeId> = src
+            .children(node)
+            .map(|c| copy_reachable(src, c, dst, symbols, memo))
+            .collect();
+        let n = dst.add_node(*src.get_kind(node));
+        if let Some(data) = src.get_leaf_data(node) {
+            dst.set_leaf_data(n, data.clone());
+        }
+        for child in children {
+            dst.add_edge(n, child);
+        }
+        n
+    };
+    memo.insert(node, copied);
+    copied
+}
+
 /// Mixed-radix odometer over the per-symbol value sets; returns false when wrapped.
 fn advance(assignment: &mut [usize], value_sets: &[Vec<APInt>]) -> bool {
     for (slot, set) in assignment.iter_mut().zip(value_sets.iter()) {
@@ -90,7 +171,7 @@ fn values_bit_eq(a: &Value, b: &Value) -> bool {
 
 /// Boundary values (0, 1, all-ones, sign bit, alternating patterns) plus a small
 /// deterministic LCG spread, all masked to `width` bits.
-fn sample_values(width: u32, extra: usize) -> Vec<APInt> {
+pub(crate) fn sample_values(width: u32, extra: usize) -> Vec<APInt> {
     let mask = if width >= 64 {
         u64::MAX
     } else {
@@ -121,19 +202,19 @@ fn sample_values(width: u32, extra: usize) -> Vec<APInt> {
         .collect()
 }
 
-fn sym(g: &mut SemGraph, id: u32) -> NodeId {
+pub(crate) fn sym(g: &mut SemGraph, id: u32) -> NodeId {
     let node = g.add_node(SymKind::Symbol);
     g.set_leaf_data(node, SymPayload::SymbolId(id));
     node
 }
 
-fn con(g: &mut SemGraph, value: u64, width: u32) -> NodeId {
+pub(crate) fn con(g: &mut SemGraph, value: u64, width: u32) -> NodeId {
     let node = g.add_node(SymKind::Constant);
     g.set_leaf_data(node, SymPayload::Int(APInt::new(width, value)));
     node
 }
 
-fn op(g: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
+pub(crate) fn op(g: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
     let node = g.add_node(kind);
     for &child in children {
         g.add_edge(node, child);
@@ -165,10 +246,10 @@ fn shift_pair(shr_kind: SymKind, k: u32, w: u32) -> SemGraph {
     g
 }
 
-/// Representative `(source_width, register_width)` pairs the extension bridge is
-/// confirmed against. Covering several widths is what justifies generalizing the
-/// shift amount to the symbolic `w - n`.
-const EXT_WIDTH_SAMPLES: &[(u32, u32)] = &[(8, 32), (16, 32), (8, 64), (16, 64), (32, 64)];
+/// Representative `(source_width, register_width)` pairs width-parameterized
+/// identities are sampled at, spanning several source widths per register width.
+pub(crate) const EXT_WIDTH_SAMPLES: &[(u32, u32)] =
+    &[(8, 32), (16, 32), (8, 64), (16, 64), (32, 64)];
 
 /// Confirm that extending the low `n` bits of a register (`ext_kind` ∈ {`SExt`,
 /// `ZExt`}) equals `shr_kind(shl(x, w - n), w - n)` for every sampled width pair.
@@ -187,6 +268,24 @@ pub fn confirm_extension_via_shifts(
                 &[w],
             )
     })
+}
+
+/// Confirm the width-1 identity `c == If(c, zext(1, 1), zext(0, 1))` — the shape
+/// TMDL derives for `slt`-style instructions — so the caller may bridge bare
+/// boolean classes to `If`-rooted materializer patterns.
+pub fn confirm_bool_via_if(oracle: &dyn EquivalenceOracle) -> bool {
+    let mut lhs = SemGraph::new();
+    sym(&mut lhs, 0);
+
+    let mut rhs = SemGraph::new();
+    let c = sym(&mut rhs, 0);
+    let one = con(&mut rhs, 1, 1);
+    let zero = con(&mut rhs, 0, 1);
+    let then_branch = op(&mut rhs, SymKind::ZExt, &[one, one]);
+    let else_branch = op(&mut rhs, SymKind::ZExt, &[zero, one]);
+    op(&mut rhs, SymKind::If, &[c, then_branch, else_branch]);
+
+    oracle.equivalent(&lhs, &rhs, &[1])
 }
 
 #[cfg(test)]
@@ -219,5 +318,58 @@ mod tests {
             SymKind::ShiftRightLogic,
             &FuzzOracle::default(),
         ));
+    }
+
+    #[test]
+    fn smt_oracle_proves_extension_identities() {
+        assert!(confirm_extension_via_shifts(
+            SymKind::SExt,
+            SymKind::ShiftRightArithmetic,
+            &SmtOracle,
+        ));
+        assert!(confirm_extension_via_shifts(
+            SymKind::ZExt,
+            SymKind::ShiftRightLogic,
+            &SmtOracle,
+        ));
+    }
+
+    #[test]
+    fn smt_oracle_refutes_wrong_pairing() {
+        assert!(!confirm_extension_via_shifts(
+            SymKind::SExt,
+            SymKind::ShiftRightLogic,
+            &SmtOracle,
+        ));
+    }
+
+    #[test]
+    fn smt_oracle_shares_symbols_across_sides() {
+        // `x ^ x == 0` holds only if both sides constrain the same `x`.
+        let mut lhs = SemGraph::new();
+        let x = sym(&mut lhs, 0);
+        op(&mut lhs, SymKind::Xor, &[x, x]);
+        let mut rhs = SemGraph::new();
+        con(&mut rhs, 0, 32);
+        assert!(SmtOracle.equivalent(&lhs, &rhs, &[32]));
+    }
+
+    #[test]
+    fn smt_oracle_finds_counterexamples_over_two_symbols() {
+        // `x + y != x - y` whenever `2*y != 0`.
+        let mut lhs = SemGraph::new();
+        let x = sym(&mut lhs, 0);
+        let y = sym(&mut lhs, 1);
+        op(&mut lhs, SymKind::Add, &[x, y]);
+        let mut rhs = SemGraph::new();
+        let x = sym(&mut rhs, 0);
+        let y = sym(&mut rhs, 1);
+        op(&mut rhs, SymKind::Sub, &[x, y]);
+        assert!(!SmtOracle.equivalent(&lhs, &rhs, &[32, 32]));
+    }
+
+    #[test]
+    fn bool_via_if_identity_is_proved() {
+        assert!(confirm_bool_via_if(&SmtOracle));
     }
 }

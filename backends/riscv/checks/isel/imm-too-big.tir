@@ -1,0 +1,15 @@
+// RUN: not tir mc --march=rv64i --stage=isel %s
+
+// 2048 does not fit `addi`'s signed 12-bit immediate field: the encoding
+// would truncate to -2048. The immediate rule must refuse the constant, and
+// with no wide-constant materializer in the rule set selection fails instead
+// of miscompiling.
+
+module {
+  func @big(%0: !i64) -> !i64 {
+    %1 = constant {value = 2048} : !i64
+    %2 = addi %0, %1 : !i64
+    return %2
+  }
+  module_end
+}

@@ -509,6 +509,7 @@ fn create_isel_pass_for(
     features: &[Feature],
 ) -> tir::backend::isel::InstructionSelectPass {
     tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, features))
+        .with_axioms(include_str!("isel.axioms"))
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
         .with_op_lowering(lower_branches)
         .with_op_lowering(lower_calls)
@@ -714,6 +715,20 @@ mod tests {
     };
 
     use crate::{Arm64Dialect, create_isel_pass, create_regalloc_pass};
+
+    #[test]
+    fn committed_isel_axioms_are_fresh() {
+        let context = Context::with_default_dialects();
+        let discovered = tir::backend::isel::discover_axioms(&crate::get_isel_rules(
+            &context,
+            crate::Feature::ALL,
+        ));
+        assert_eq!(
+            include_str!("isel.axioms"),
+            tir::backend::isel::render_axioms_file(&discovered),
+            "isel.axioms is stale; run `cargo run -p tir-tools --bin tir -- axioms --write`"
+        );
+    }
 
     #[test]
     fn arm64_builtin_cond_br_lowers_to_virtual() {

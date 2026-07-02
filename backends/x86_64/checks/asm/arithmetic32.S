@@ -19,6 +19,8 @@ alu32:
 	add r8d, r9d
 	mov r15d, r10d
 	add r12d, 42
+	imul eax, ebx
+	imul r8d, r9d
 
 # CHECK:      asm.symbol {name = "alu32"}
 # CHECK-NEXT: x86_64.add32 {dst = eax, src = ebx}
@@ -38,3 +40,5 @@ alu32:
 # CHECK-NEXT: x86_64.add32 {dst = r8d, src = r9d}
 # CHECK-NEXT: x86_64.mov32 {dst = r15d, src = r10d}
 # CHECK-NEXT: x86_64.add_imm32 {dst = r12d, imm = 42}
+# CHECK-NEXT: x86_64.imul32 {dst = eax, src = ebx}
+# CHECK-NEXT: x86_64.imul32 {dst = r8d, src = r9d}

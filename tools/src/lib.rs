@@ -2,17 +2,12 @@ use std::error::Error;
 
 use clap::{Parser, Subcommand};
 
-// Force the backend crates to be linked so their `register_target!` entries are
-// included in the final binary; the target registry is otherwise their only user.
-use tir_arm64 as _;
-use tir_riscv as _;
-use tir_x86_64 as _;
-
 mod common;
 
-pub mod llvm_import;
+pub mod axioms;
 pub mod mc;
 pub mod opt;
+pub mod llvm_import;
 pub mod readobj;
 pub mod sched;
 
@@ -20,6 +15,7 @@ pub fn tools_main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Axioms(args) => axioms::run(args),
         Command::Mc(args) => mc::run(args),
         Command::Opt(args) => opt::run(args),
         Command::Readobj(args) => readobj::run(args),
@@ -30,6 +26,8 @@ pub fn tools_main() -> Result<(), Box<dyn Error>> {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Regenerate a backend's discovered isel bridge axioms
+    Axioms(axioms::ToolArgs),
     /// Compile machine code
     Mc(mc::ToolArgs),
     /// Run optimizations on IR

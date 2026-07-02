@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     BlockId, Context, OpId, Operation, Terminator,
+    analysis::{Analysis, AnalysisManager},
     graph::{Dag, MutDag, NodeId, PostOrderDag},
 };
 
@@ -179,6 +180,12 @@ impl DominatorTree {
         } else {
             false
         }
+    }
+}
+
+impl Analysis for DominatorTree {
+    fn build(_: &AnalysisManager, context: &Context, op: OpId) -> Self {
+        Self::new(context, op)
     }
 }
 

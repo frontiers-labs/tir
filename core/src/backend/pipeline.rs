@@ -8,8 +8,8 @@
 use tir::{Context, Operation, PassManager, builtin::FuncOp};
 
 use crate::backend::TargetMachine;
-use crate::backend::dce::DeadCodeEliminationPass;
 use crate::backend::lower::OpLoweringPass;
+use crate::passes::DeadCodeEliminationPass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopAfter {

@@ -253,6 +253,18 @@ fn emit_instructions<'a>(
         })
         .collect();
 
+    // Register classes holding the program counter. An instruction whose behavior
+    // reads or writes the PC cannot be selected as a value rule: the pattern only
+    // models the assigned result, so the control-flow effect would be invisible
+    // (a `jal` rule would match a plain `x + 4`). Conditional PC writes instead
+    // produce branch rules (see `analyze_branch_semantics`).
+    let pc_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .filter(|rc| rc.has_program_counter())
+        .map(|rc| rc.name.clone())
+        .collect();
+
     for inst in files.iter().flat_map(|f| f.instructions()) {
         let name_ident = format_ident!("{}Op", &inst.name);
         let builder_ident = format_ident!("{}OpBuilder", &inst.name);
@@ -304,18 +316,33 @@ fn emit_instructions<'a>(
             quote! { #(#items,)* }
         };
 
-        // Build roles from behavior assignments so we don't depend on naming conventions.
+        // Build roles from behavior assignments so we don't depend on naming
+        // conventions. An operand both written and read (e.g. the two-address x86
+        // `dst = dst + src`) is ReadWrite; its isel-emitted op additionally carries
+        // a `<name>_tied` register attribute naming the value the read binds to,
+        // which register allocation lowers to a copy (see `lower_tied_operands`).
+        let read_register_operands = infer_read_register_operands(&inst.behavior, &ops);
         let roles_schema = {
             let mut items = vec![];
             for (name, ty) in &ops {
                 if let Type::Struct(_) = ty {
                     let field_ident = format_ident!("{}", name);
                     let role = if defined_register_operands.contains(name) {
-                        quote! { Def }
+                        if read_register_operands.contains(name) {
+                            quote! { ReadWrite }
+                        } else {
+                            quote! { Def }
+                        }
                     } else {
                         quote! { Use }
                     };
                     items.push(quote! { #field_ident: #role });
+                    if defined_register_operands.contains(name)
+                        && read_register_operands.contains(name)
+                    {
+                        let tied_ident = format_ident!("{}_tied", name);
+                        items.push(quote! { #tied_ident: Use });
+                    }
                 }
             }
             quote! { #(#items,)* }
@@ -427,8 +454,11 @@ fn emit_instructions<'a>(
         // Instructions defining several register operands (e.g. CSR ops writing
         // both `rd` and `csr`) cannot be modeled by a single-value DAG pattern;
         // emitting one for the last assignment would let isel match an
-        // unrelated expression, so they get no selection rule.
+        // unrelated expression, so they get no selection rule. The same goes for
+        // instructions touching the PC (jal/jalr/auipc): their pattern would hide
+        // the control-flow effect and match unrelated arithmetic.
         if defined_register_operands.len() <= 1
+            && !behavior_references_pc(&inst.behavior, &pc_classes)
             && let Some(semantics) = analyze_instruction_semantics(
                 inst,
                 &ops,
@@ -492,6 +522,28 @@ fn emit_instructions<'a>(
                                     ),
                                 );
                             });
+                            // A two-address destination also reads a pattern operand:
+                            // record the bound value in a `_tied` attribute so register
+                            // allocation can lower the tie to a copy.
+                            if read_register_operands.contains(op_name)
+                                && let Some(sym) = semantics.variable_symbols.get(op_name)
+                            {
+                                let tied_name_lit =
+                                    proc_macro2::Literal::string(&format!("{op_name}_tied"));
+                                let sym_lit = proc_macro2::Literal::u32_unsuffixed(*sym);
+                                emit_attr_steps.push(quote! {
+                                    let tied = m.value_binding(#sym_lit).ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                                    builder = builder.attr(
+                                        #tied_name_lit,
+                                        tir::attributes::AttributeValue::Register(
+                                            tir::attributes::RegisterAttr::Virtual {
+                                                id: tied.number(),
+                                                class: Some(#class_lit.to_string()),
+                                            },
+                                        ),
+                                    );
+                                });
+                            }
                         } else if let Some(sym) = semantics.variable_symbols.get(op_name) {
                             let sym_lit = proc_macro2::Literal::u32_unsuffixed(*sym);
                             emit_attr_steps.push(quote! {
@@ -561,8 +613,32 @@ fn emit_instructions<'a>(
                     pattern_widths[index] = *forced;
                 }
             }
+            // A destination register class statically narrower than the
+            // architectural width (x86 `add32`/`add16`/`add8`) defines exactly
+            // that many bits: type the pattern root at the class width, so the
+            // narrow form matches only values of its width instead of tying
+            // with the full-width form on every width.
+            if pattern_widths[canon_root.index()].is_none()
+                && scalar_root_kind(tir::graph::Dag::get_node(&canon_pattern, canon_root))
+                && let Some(Type::Struct(dst_class)) = defined_register_operands
+                    .first()
+                    .and_then(|name| ops_map.get(name))
+                && let Some(width) = literal_register_class_width(files, dst_class)
+            {
+                pattern_widths[canon_root.index()] = Some(width);
+            }
             let (pattern_stmts, _root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+            let operand_width_call = emit_operand_width_call(
+                &ops,
+                &semantics.variable_symbols,
+                &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+            );
+            let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
+                &semantics.pattern,
+                &ops,
+                &semantics.variable_symbols,
+            ));
             // Cost reflects the canonical pattern's size (one machine instruction).
             let base_cost = {
                 use tir::graph::Dag;
@@ -626,7 +702,163 @@ fn emit_instructions<'a>(
                             #emit_fn_ident,
                         )
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
+                        #operand_width_call
+                        #operand_imm_range_call
                         .with_implicit_uses(vec![#(#implicit_use_entries),*]),
+                    );
+                }
+            });
+        }
+
+        // A guarded PC write (`if cond { PC::pc = PC::pc + imm }`) becomes a
+        // conditional-branch rule: the pattern is the branch condition over the
+        // encoded operands, and the target operand is emitted as a block
+        // attribute bound by branch selection.
+        if defined_register_operands.is_empty()
+            && let Some(branch) = analyze_branch_semantics(
+                inst,
+                &ops,
+                &numeric_params,
+                &isa_param_values,
+                &register_index_map,
+                &pc_classes,
+            )
+        {
+            let emit_fn_ident = format_ident!("emit_isel_{}", inst.name.to_lowercase());
+            let pattern_fn_ident = format_ident!("isel_pattern_{}", inst.name.to_lowercase());
+            let rule_name_lit = proc_macro2::Literal::string(&inst.name.to_lowercase());
+            let target_symbol_lit = proc_macro2::Literal::u32_unsuffixed(branch.target_symbol);
+
+            let mut operand_constraint_entries: Vec<proc_macro2::TokenStream> = Vec::new();
+            let mut emit_attr_steps: Vec<proc_macro2::TokenStream> = Vec::new();
+            for (op_name, op_ty) in &ops {
+                let op_name_lit = proc_macro2::Literal::string(op_name);
+                if op_name == &branch.target_operand {
+                    emit_attr_steps.push(quote! {
+                        let dest = m
+                            .block_binding(#target_symbol_lit)
+                            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                        builder = builder.attr(
+                            #op_name_lit,
+                            tir::attributes::AttributeValue::Block(dest),
+                        );
+                    });
+                    continue;
+                }
+                let Some(&symbol) = branch.variable_symbols.get(op_name) else {
+                    continue;
+                };
+                let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
+                match op_ty {
+                    Type::Struct(class_name) => {
+                        let class_lit = proc_macro2::Literal::string(class_name);
+                        operand_constraint_entries.push(
+                            quote! { (#symbol_lit, tir::graph::OperandConstraint::Register) },
+                        );
+                        emit_attr_steps.push(quote! {
+                            let src = m
+                                .value_binding(#symbol_lit)
+                                .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                            builder = builder.attr(
+                                #op_name_lit,
+                                tir::attributes::AttributeValue::Register(
+                                    tir::attributes::RegisterAttr::Virtual {
+                                        id: src.number(),
+                                        class: Some(#class_lit.to_string()),
+                                    },
+                                ),
+                            );
+                        });
+                    }
+                    Type::Integer | Type::Bits(_) => {
+                        operand_constraint_entries.push(
+                            quote! { (#symbol_lit, tir::graph::OperandConstraint::Immediate) },
+                        );
+                        emit_attr_steps.push(quote! {
+                            let v = m
+                                .int_binding(#symbol_lit)
+                                .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                            builder = builder.attr(
+                                #op_name_lit,
+                                tir::attributes::AttributeValue::Int(v),
+                            );
+                        });
+                    }
+                    _ => {}
+                }
+            }
+
+            let immediate_symbols: std::collections::HashSet<u32> = ops
+                .iter()
+                .filter(|(_, op_ty)| matches!(op_ty, Type::Bits(_) | Type::Integer))
+                .filter_map(|(op_name, _)| branch.variable_symbols.get(op_name).copied())
+                .collect();
+            let (canon_pattern, canon_root, forced_widths) = tir::sem::canonicalize_for_selection(
+                &branch.pattern,
+                branch.root,
+                &immediate_symbols,
+            );
+            let mut pattern_widths = tir::sem::infer_widths(&canon_pattern, |_| None);
+            for (index, forced) in forced_widths.iter().enumerate() {
+                if forced.is_some() {
+                    pattern_widths[index] = *forced;
+                }
+            }
+            let (pattern_stmts, _root_var) =
+                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+            let operand_width_call = emit_operand_width_call(
+                &ops,
+                &branch.variable_symbols,
+                &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+            );
+            let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
+                &branch.pattern,
+                &ops,
+                &branch.variable_symbols,
+            ));
+            let base_cost = {
+                use tir::graph::Dag;
+                (canon_pattern.len() as u32).max(1)
+            };
+            let base_cost_lit = proc_macro2::Literal::u32_unsuffixed(base_cost);
+            let mnemonic_cost_lit = proc_macro2::Literal::string(mnemonic_name);
+
+            isel_rule_emitters.push(quote! {
+                fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
+                    use tir::graph::MutDag;
+                    let mut g = tir::sem::SemGraph::new();
+                    #(#pattern_stmts)*
+                    g
+                }
+
+                fn #emit_fn_ident(
+                    context: &tir::Context,
+                    req: &tir::backend::isel::EmitRequest,
+                    m: &tir::backend::isel::RuleMatch,
+                ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+                    let _ = (req, m);
+                    let mut builder = #builder_ident::new(context);
+                    #(#emit_attr_steps)*
+                    Ok(Box::new(builder.build()))
+                }
+            });
+
+            let inst_features = feature_slice(&inst.for_isas);
+            isel_rule_inits.push(quote! {
+                if features_enabled(features, #inst_features) {
+                    rules.push(
+                        tir::backend::isel::Rule::new(
+                            #rule_name_lit,
+                            #pattern_fn_ident(context),
+                            (#base_cost_lit).max(instruction_cost(#mnemonic_cost_lit)),
+                            #emit_fn_ident,
+                        )
+                        .with_kind(tir::backend::isel::RuleKind::CondBranch {
+                            target_symbol: #target_symbol_lit,
+                        })
+                        .with_operand_constraints(vec![#(#operand_constraint_entries),*])
+                        #operand_width_call
+                        #operand_imm_range_call,
                     );
                 }
             });
@@ -637,8 +869,13 @@ fn emit_instructions<'a>(
         // introduced ahead of instructions that read them. Its emitter hardwires the
         // discardable destination(s) to `x0` and takes the written value from the
         // def/use binding (symbol 0).
-        let definer_writes =
-            definer_writes(inst, &ops, &defined_register_operands, &register_index_map);
+        let definer_writes = definer_writes(
+            inst,
+            &ops,
+            &defined_register_operands,
+            &register_index_map,
+            &pc_classes,
+        );
         if !definer_writes.is_empty() {
             let definer_emit_fn_ident = format_ident!("emit_definer_{}", inst.name.to_lowercase());
 
@@ -1185,6 +1422,10 @@ fn emit_instructions<'a>(
         /// Instruction-selection rules for the instructions available under `features`.
         pub fn get_isel_rules(context: &tir::Context, features: &[Feature]) -> Vec<tir::backend::isel::Rule> {
             let _ = (&context, &features);
+            // Width-sensitive operands are constrained to their register class's
+            // architectural width under the enabled features (e.g. XLEN).
+            let __register_widths = register_widths(features);
+            let _ = &__register_widths;
             let mut rules = Vec::new();
             #(#isel_rule_inits)*
             rules
@@ -1857,6 +2098,105 @@ struct InstructionSemantics {
     register_symbols: HashMap<(String, u32), u32>,
 }
 
+/// The selectable semantics of a conditional-branch instruction: the branch
+/// condition as a pattern, plus the operand carrying the taken target.
+struct BranchSemantics {
+    /// The condition expression (`rs1 == rs2`, …) as a pattern graph.
+    pattern: tir::sem::SemGraph,
+    root: tir::graph::NodeId,
+    variable_symbols: HashMap<String, u32>,
+    /// The immediate operand encoding the taken target (`imm`), and the fresh
+    /// pattern symbol the emitter reads it from as a block binding.
+    target_operand: String,
+    target_symbol: u32,
+}
+
+/// Recognize the guarded-PC-write shape `if COND { PC::pc = PC::pc + …imm… }`
+/// and derive a conditional-branch rule from it: the pattern is `COND` over the
+/// instruction's register operands, and `imm` becomes the taken-target block
+/// operand. Anything else (fallthrough writes, extra state, PC in the
+/// condition) is rejected.
+fn analyze_branch_semantics(
+    inst: &ast::Instruction,
+    operands: &[(String, Type)],
+    numeric_params: &HashMap<String, i64>,
+    isa_param_values: &HashMap<String, i64>,
+    register_index_map: &HashMap<(String, String), u32>,
+    pc_classes: &HashSet<String>,
+) -> Option<BranchSemantics> {
+    // Behavior must be exactly one guarded write: `if cond { PC::pc = … }`.
+    let mut body = &inst.behavior;
+    while let ast::Expr::Block(block) = body {
+        let [stmt] = block.stmts.as_slice() else {
+            return None;
+        };
+        body = stmt;
+    }
+    let ast::Expr::If(guarded) = body else {
+        return None;
+    };
+    if guarded.else_.is_some() {
+        return None;
+    }
+
+    let mut taken = guarded.then.as_ref();
+    while let ast::Expr::Block(block) = taken {
+        let [stmt] = block.stmts.as_slice() else {
+            return None;
+        };
+        taken = stmt;
+    }
+    let ast::Expr::Assign(assign) = taken else {
+        return None;
+    };
+    let (dest_class, _) = assignment_dest_register_path(&assign.dest)?;
+    if !pc_classes.contains(&dest_class) {
+        return None;
+    }
+
+    // The taken target: the single immediate operand the PC write references.
+    let operand_names: HashSet<&str> = operands.iter().map(|(name, _)| name.as_str()).collect();
+    let target_refs = referenced_operands(&assign.value, &operand_names);
+    let [target_operand] = target_refs.as_slice() else {
+        return None;
+    };
+    let target_is_immediate = operands
+        .iter()
+        .any(|(name, ty)| name == target_operand && matches!(ty, Type::Bits(_) | Type::Integer));
+    if !target_is_immediate {
+        return None;
+    }
+
+    // The condition must be expressible over the encoded operands alone.
+    if behavior_references_pc(&guarded.cond, pc_classes) {
+        return None;
+    }
+    let mut pattern = tir::sem::SemGraph::new();
+    let lowering = guarded.cond.lower_to_sema_with_isa(
+        &mut pattern,
+        numeric_params,
+        isa_param_values,
+        register_index_map,
+    )?;
+    if !lowering.register_symbols.is_empty() {
+        return None;
+    }
+
+    let target_symbol = lowering
+        .variable_symbols
+        .values()
+        .max()
+        .map_or(0, |max| max + 1);
+
+    Some(BranchSemantics {
+        pattern,
+        root: lowering.root,
+        variable_symbols: lowering.variable_symbols,
+        target_operand: target_operand.clone(),
+        target_symbol,
+    })
+}
+
 fn analyze_instruction_semantics(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
@@ -1991,6 +2331,251 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
     }
 }
 
+/// The boundary symbols an instruction is width-sensitive in: the operands'
+/// upper register bits reach the result, so a value of a different width must
+/// not bind (its bits above the value width are undefined). Comparison
+/// operands always qualify — the comparison node's own type is its i1 result
+/// and says nothing about operand widths. Right-shift values and
+/// division/remainder operands qualify only under an *untyped* node: a typed
+/// node (a word form like `sraw`) already pins its operands through width
+/// inference. Low-bits-preserving operators (add/and/shl/mul low half) are
+/// exempt: a narrower value's upper garbage never reaches its own low bits.
+fn width_sensitive_symbols(
+    dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+    node_widths: &[Option<u32>],
+) -> HashSet<u32> {
+    use tir::sem::SymKind as K;
+
+    let mut out = HashSet::new();
+    for index in 0..dag.len() {
+        let node = tir::graph::NodeId::from_index(index);
+        let untyped = node_widths.get(index).copied().flatten().is_none();
+        let sensitive_children: &[usize] = match dag.get_node(node) {
+            K::Eq | K::Ne | K::Lt | K::Le | K::Gt | K::Ge | K::ULt | K::ULe | K::UGt | K::UGe => {
+                &[0, 1]
+            }
+            K::Div | K::UDiv | K::SRem | K::URem if untyped => &[0, 1],
+            K::ShiftRightLogic | K::ShiftRightArithmetic if untyped => &[0],
+            _ => &[],
+        };
+        let children: Vec<tir::graph::NodeId> = dag.children(node).collect();
+        for &slot in sensitive_children {
+            if let Some(child) = children.get(slot)
+                && let Some(tir::sem::SymPayload::SymbolId(symbol)) = dag.get_leaf_data(*child)
+            {
+                out.insert(*symbol);
+            }
+        }
+    }
+    out
+}
+
+/// Emit the `.with_operand_widths` builder call constraining each sensitive
+/// register operand to its register class's architectural width (resolved at
+/// runtime from the enabled features via `__register_widths`).
+fn emit_operand_width_call(
+    ops: &[(String, Type)],
+    variable_symbols: &HashMap<String, u32>,
+    sensitive_symbols: &HashSet<u32>,
+) -> proc_macro2::TokenStream {
+    let width_steps: Vec<proc_macro2::TokenStream> = ops
+        .iter()
+        .filter_map(|(op_name, op_ty)| {
+            let Type::Struct(class_name) = op_ty else {
+                return None;
+            };
+            let &symbol = variable_symbols.get(op_name)?;
+            if !sensitive_symbols.contains(&symbol) {
+                return None;
+            }
+            let class_lit = proc_macro2::Literal::string(class_name);
+            let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
+            Some(quote! {
+                if let Some((_, width)) =
+                    __register_widths.iter().find(|(class, _)| *class == #class_lit)
+                {
+                    __operand_widths.push((#symbol_lit, *width));
+                }
+            })
+        })
+        .collect();
+
+    if width_steps.is_empty() {
+        return quote! {};
+    }
+    quote! {
+        .with_operand_widths({
+            let mut __operand_widths: Vec<(u32, u32)> = Vec::new();
+            #(#width_steps)*
+            __operand_widths
+        })
+    }
+}
+
+/// The encoding range of each immediate operand: the field's bit width from the
+/// operand type, signedness from how the behavior consumes the symbol —
+/// `sext(imm, _)` sign-extends, everything else is unsigned — and an
+/// `extract(imm, hi, 0)` wrapper (a shift-amount mask) narrows the usable bits.
+/// Selection uses these to refuse constants the field cannot represent.
+fn immediate_operand_ranges(
+    dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+    ops: &[(String, Type)],
+    variable_symbols: &HashMap<String, u32>,
+) -> Vec<(u32, u32, bool)> {
+    use tir::sem::{SymKind as K, SymPayload};
+
+    let is_symbol_leaf = |node: tir::graph::NodeId, symbol: u32| {
+        *dag.get_node(node) == K::Symbol
+            && matches!(
+                dag.get_leaf_data(node),
+                Some(SymPayload::SymbolId(id)) if *id == symbol
+            )
+    };
+    let const_value = |node: tir::graph::NodeId| match dag.get_leaf_data(node) {
+        Some(SymPayload::Int(v)) => Some(v.to_u64()),
+        _ => None,
+    };
+
+    let mut out = Vec::new();
+    for (op_name, op_ty) in ops {
+        let Type::Bits(bits) = op_ty else { continue };
+        let Some(&symbol) = variable_symbols.get(op_name) else {
+            continue;
+        };
+        let mut signed = false;
+        let mut width = u32::from(*bits);
+        for index in 0..dag.len() {
+            let node = tir::graph::NodeId::from_index(index);
+            let children: Vec<tir::graph::NodeId> = dag.children(node).collect();
+            let uses_symbol = children
+                .first()
+                .is_some_and(|&child| is_symbol_leaf(child, symbol));
+            if !uses_symbol {
+                continue;
+            }
+            match dag.get_node(node) {
+                K::SExt => signed = true,
+                K::Extract
+                    if children.len() == 3
+                        && children.get(2).and_then(|&c| const_value(c)) == Some(0) =>
+                {
+                    if let Some(hi) = children.get(1).and_then(|&c| const_value(c)) {
+                        width = width.min(hi as u32 + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push((symbol, width, signed));
+    }
+    out
+}
+
+/// Emit the `.with_operand_imm_ranges` builder call for the immediate operands'
+/// encoding ranges.
+fn emit_operand_imm_range_call(ranges: &[(u32, u32, bool)]) -> proc_macro2::TokenStream {
+    if ranges.is_empty() {
+        return quote! {};
+    }
+    let entries: Vec<proc_macro2::TokenStream> = ranges
+        .iter()
+        .map(|(symbol, width, signed)| {
+            let symbol_lit = proc_macro2::Literal::u32_unsuffixed(*symbol);
+            let width_lit = proc_macro2::Literal::u32_unsuffixed(*width);
+            quote! {
+                (#symbol_lit, tir::backend::isel::ImmRange { width: #width_lit, signed: #signed })
+            }
+        })
+        .collect();
+    quote! { .with_operand_imm_ranges(vec![#(#entries),*]) }
+}
+
+/// The literal architectural width of a register class, when its `WIDTH` param
+/// is a compile-time literal (x86 `GPR32`/`GPR16`/`GPR8`). A class sized by an
+/// ISA parameter (`self.XLEN`) resolves only under the enabled features and
+/// yields `None`.
+fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option<u32> {
+    files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .find(|rc| rc.name == class_name)?
+        .parameters
+        .get("WIDTH")
+        .and_then(|(_ty, value)| match value {
+            Some(ast::Expr::Lit(ast::Lit::Int(li))) => Some(parse_literal_value(li) as u32),
+            _ => None,
+        })
+}
+
+/// Operator kinds whose result is meaningfully sized by the destination register
+/// width — scalar integer computations. Vector, memory, and control kinds carry
+/// no scalar width and are never typed from a register class.
+fn scalar_root_kind(kind: &tir::sem::SymKind) -> bool {
+    use tir::sem::SymKind as K;
+    matches!(
+        kind,
+        K::Add
+            | K::Sub
+            | K::Mul
+            | K::Div
+            | K::UDiv
+            | K::SRem
+            | K::URem
+            | K::Neg
+            | K::And
+            | K::Or
+            | K::Xor
+            | K::Not
+            | K::ShiftLeft
+            | K::ShiftRightLogic
+            | K::ShiftRightArithmetic
+    )
+}
+
+/// Whether `expr` reads or writes a program-counter register (`PC::pc`).
+fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> bool {
+    match expr {
+        ast::Expr::Path(path) => pc_classes.contains(&path.base),
+        ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
+        ast::Expr::Invalid => false,
+        ast::Expr::Assign(a) => {
+            behavior_references_pc(&a.dest, pc_classes)
+                || behavior_references_pc(&a.value, pc_classes)
+        }
+        ast::Expr::Binary(b) => {
+            behavior_references_pc(&b.lhs, pc_classes) || behavior_references_pc(&b.rhs, pc_classes)
+        }
+        ast::Expr::Unary(u) => behavior_references_pc(&u.x, pc_classes),
+        ast::Expr::Block(b) => b
+            .stmts
+            .iter()
+            .any(|stmt| behavior_references_pc(stmt, pc_classes)),
+        ast::Expr::Call(c) => {
+            behavior_references_pc(&c.callee, pc_classes)
+                || c.arguments
+                    .iter()
+                    .any(|arg| behavior_references_pc(arg, pc_classes))
+        }
+        ast::Expr::Field(f) => behavior_references_pc(&f.base, pc_classes),
+        ast::Expr::If(i) => {
+            behavior_references_pc(&i.cond, pc_classes)
+                || behavior_references_pc(&i.then, pc_classes)
+                || i.else_
+                    .as_ref()
+                    .is_some_and(|e| behavior_references_pc(e, pc_classes))
+        }
+        ast::Expr::IndexAccess(i) => behavior_references_pc(&i.base, pc_classes),
+        ast::Expr::Slice(s) => behavior_references_pc(&s.base, pc_classes),
+        ast::Expr::Try(t) => {
+            behavior_references_pc(&t.body, pc_classes)
+                || t.handlers
+                    .iter()
+                    .any(|h| behavior_references_pc(&h.body, pc_classes))
+        }
+        ast::Expr::Lambda(l) => behavior_references_pc(&l.body, pc_classes),
+    }
+}
+
 fn collect_behavior_assignments<'a>(expr: &'a ast::Expr, out: &mut Vec<(String, &'a ast::Expr)>) {
     match expr {
         ast::Expr::Assign(a) => {
@@ -2056,6 +2641,7 @@ fn definer_writes(
     ops: &[(String, Type)],
     defined_register_operands: &[String],
     register_index_map: &HashMap<(String, String), u32>,
+    pc_classes: &HashSet<String>,
 ) -> Vec<DefinerWrite> {
     // A pure definer assigns no encoded result operand; an instruction that also
     // produces a normal result (e.g. a CSR op writing `rd`) is matched by value.
@@ -2074,6 +2660,11 @@ fn definer_writes(
         let Some((class, name)) = assignment_dest_register_path(dest) else {
             continue;
         };
+        // A PC write is control flow, not a register definition: a branch must
+        // never be introduced as the "definer" of the program counter.
+        if pc_classes.contains(&class) {
+            continue;
+        }
         if operand_names.contains(name.as_str()) {
             continue;
         }
@@ -2096,6 +2687,50 @@ fn definer_writes(
         });
     }
     writes
+}
+
+/// Register operands the behavior *reads*: referenced anywhere outside an
+/// assignment-destination position. An operand that is also defined is a tied
+/// (two-address) operand, e.g. the x86 `dst = dst + src`.
+fn infer_read_register_operands(
+    behavior: &ast::Expr,
+    operands: &[(String, Type)],
+) -> HashSet<String> {
+    fn walk(expr: &ast::Expr, operands: &HashSet<&str>, out: &mut Vec<String>) {
+        if let ast::Expr::Assign(a) = expr {
+            // A plain identifier/path destination is a pure write; any other
+            // destination form (e.g. a slice, a partial update) reads its base.
+            if assignment_dest_name(&a.dest).is_none() {
+                collect_referenced_idents(&a.dest, operands, out);
+            }
+            walk(&a.value, operands, out);
+            return;
+        }
+        if let ast::Expr::Block(b) = expr {
+            for stmt in &b.stmts {
+                walk(stmt, operands, out);
+            }
+            return;
+        }
+        if let ast::Expr::If(i) = expr {
+            collect_referenced_idents(&i.cond, operands, out);
+            walk(&i.then, operands, out);
+            if let Some(e) = &i.else_ {
+                walk(e, operands, out);
+            }
+            return;
+        }
+        if let ast::Expr::Try(t) = expr {
+            walk(&t.body, operands, out);
+            return;
+        }
+        collect_referenced_idents(expr, operands, out);
+    }
+
+    let register_operands = register_operand_names(operands);
+    let mut reads = Vec::new();
+    walk(behavior, &register_operands, &mut reads);
+    reads.into_iter().collect()
 }
 
 fn infer_defined_register_operands(

@@ -1,9 +1,13 @@
 //! A pass that applies a list of per-op lowering functions, reusing the same
 //! [`OpLowering`] shape instruction selection uses for its structural
 //! lowerings. Targets contribute lowerings for the virtual ops that survive
-//! earlier stages (`vcond_br` before register allocation; `vret`/`vbr` after).
+//! earlier stages (wide constants before register allocation; `vret`/`vbr`
+//! after).
 
-use tir::{Context, OperationRef, Pass, PassError, PassTarget, Rewriter};
+use tir::{
+    AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, PreservedAnalyses,
+    Rewriter,
+};
 
 use crate::backend::isel::OpLowering;
 
@@ -32,12 +36,13 @@ impl Pass for OpLoweringPass {
         op: &OperationRef,
         context: &Context,
         rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+        _analyses: &AnalysisManager,
+    ) -> Result<PreservedAnalyses, PassError> {
         for lowering in &self.lowerings {
             if lowering(context, op, rewriter)? {
-                return Ok(());
+                return Ok(PreservedAnalyses::none());
             }
         }
-        Ok(())
+        Ok(PreservedAnalyses::all())
     }
 }

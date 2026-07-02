@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use linkme::distributed_slice;
 
-use crate::{Block, Context, OpId, OpInstance, Operation};
+use crate::{
+    Block, Context, OpId, OpInstance, Operation,
+    analysis::{AnalysisManager, PreservedAnalyses},
+};
 
 /// A pass made available to the pipeline parser by name.
 ///
@@ -215,12 +218,17 @@ pub trait Pass: Send {
         PassTarget::Any
     }
 
+    /// Run on `op`, reporting which cached analyses stayed valid. Return
+    /// [`PreservedAnalyses::none`] after mutating the IR unless the pass
+    /// provably kept an analysis intact; [`PreservedAnalyses::all`] when
+    /// nothing changed.
     fn run(
         &mut self,
         op: &OperationRef,
         context: &Context,
         rewriter: &mut Rewriter,
-    ) -> Result<(), PassError>;
+        analyses: &AnalysisManager,
+    ) -> Result<PreservedAnalyses, PassError>;
 }
 
 pub struct Rewriter {
@@ -361,17 +369,18 @@ impl PassManager {
             block: None,
             position: None,
         };
-        self.run_on_op_ref(context, root)
+        self.run_on_op_ref(context, root, &AnalysisManager::new())
     }
 
     pub fn run_on_op_ref(
         &mut self,
         context: &Context,
         root: OperationRef,
+        analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let mut rewriter = Rewriter::new(context.clone());
         for entry in &mut self.passes {
-            PassManager::run_entry(entry, context, &root, &mut rewriter)?;
+            PassManager::run_entry(entry, context, &root, &mut rewriter, analyses)?;
         }
         Ok(())
     }
@@ -381,18 +390,20 @@ impl PassManager {
         context: &Context,
         root: &OperationRef,
         rewriter: &mut Rewriter,
+        analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         match entry {
             PassNode::Pass(pass) => PassManager::walk_ops(context, root, &mut |op_ref| {
                 if pass.target().matches(op_ref.op()) {
-                    pass.run(&op_ref, context, rewriter)?;
+                    let preserved = pass.run(&op_ref, context, rewriter, analyses)?;
+                    analyses.invalidate(&preserved);
                 }
                 Ok(())
             }),
             PassNode::Nested { op_name, manager } => {
                 PassManager::walk_ops(context, root, &mut |op_ref| {
                     if matches_op_name(op_ref.op(), op_name) {
-                        manager.run_on_op_ref(context, op_ref.clone())?;
+                        manager.run_on_op_ref(context, op_ref.clone(), analyses)?;
                     }
                     Ok(())
                 })
@@ -444,7 +455,7 @@ mod tests {
         builtin::{AddIOp, FuncOp, IntegerType, ops},
     };
 
-    use super::{Pass, PassError, PassManager, PassTarget};
+    use super::{AnalysisManager, Pass, PassError, PassManager, PassTarget, PreservedAnalyses};
 
     struct AddToSubPass;
 
@@ -462,12 +473,14 @@ mod tests {
             op: &super::OperationRef,
             context: &Context,
             rewriter: &mut super::Rewriter,
-        ) -> Result<(), PassError> {
+            _analyses: &AnalysisManager,
+        ) -> Result<PreservedAnalyses, PassError> {
             let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
             let operands = add.operands();
             let result_ty = context.get_value(add.result()).ty();
             let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
-            rewriter.replace_op(op, &new_op)
+            rewriter.replace_op(op, &new_op)?;
+            Ok(PreservedAnalyses::none())
         }
     }
 

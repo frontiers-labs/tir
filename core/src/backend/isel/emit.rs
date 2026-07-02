@@ -3,12 +3,12 @@
 
 use std::collections::HashMap;
 
-use tir::{Context, OpId, TypeId, ValueId, builtin::IntegerType};
+use tir::{BlockId, Context, OpId, TypeId, ValueId, builtin::IntegerType};
 use tir_symbolic::egraph::Id;
 
 use super::RuleMatch;
 use super::cover::PbqpIselMatch;
-use super::node::{Binding, SemEGraph, class_binding, class_width};
+use super::node::{SemEGraph, class_int_binding, class_value_binding, class_width};
 
 #[derive(Clone, Debug)]
 pub(crate) enum BlockDecision {
@@ -25,6 +25,37 @@ pub(crate) struct BlockPlan {
     /// Definer instructions to insert ahead of an op for the implicit register
     /// uses in its behavior (e.g. `vsetvli` defining `VCSR::vl` that `vadd` reads).
     pub(crate) definers: Vec<DefinerEmit>,
+    /// How each control-flow terminator is lowered (only when the target
+    /// installed branch emitters).
+    pub(crate) terminators: Vec<TerminatorPlan>,
+}
+
+/// The lowering of one terminator op.
+#[derive(Clone, Debug)]
+pub(crate) enum TerminatorPlan {
+    /// A guarded two-way terminator: insert the conditional branch to the true
+    /// successor ahead of `op`, then replace `op` with an unconditional branch
+    /// to `false_dest`.
+    Guard {
+        op: OpId,
+        branch: GuardBranch,
+        false_dest: BlockId,
+    },
+    /// An unconditional branch, lowered through the target's `uncond` emitter.
+    Jump {
+        op: OpId,
+        dest: BlockId,
+        args: Vec<ValueId>,
+    },
+}
+
+/// The conditional branch chosen for a guard: a fused branch rule recomputing
+/// the condition from its operands, or the target's branch-if-nonzero fallback
+/// reading the materialized condition register.
+#[derive(Clone, Debug)]
+pub(crate) enum GuardBranch {
+    Fused { rule_index: usize, m: RuleMatch },
+    Nonzero { condition: ValueId, dest: BlockId },
 }
 
 /// A definer instruction to materialize just before `anchor`: it defines a
@@ -140,16 +171,18 @@ impl EmissionBuilder<'_> {
         let mut value_bindings = Vec::new();
         for (sym, class) in &self.matches[match_id].bindings.captures.entries {
             let class = self.egraph.find(*class);
-            // An introduced operand's fresh value takes priority; otherwise resolve
-            // the class to its constant/input/intermediate operand as usual.
+            // An introduced operand's fresh value takes priority; otherwise
+            // resolve the class to its constant and/or register operand (a class
+            // can carry both — see `CaptureBindings::to_rule_match`).
             if let Some(&dest) = self.introduced_dest.get(&class) {
                 value_bindings.push((*sym, dest));
                 continue;
             }
-            match class_binding(self.egraph, self.class_value, class) {
-                Some(Binding::Int(v)) => int_bindings.push((*sym, v)),
-                Some(Binding::Value(v)) => value_bindings.push((*sym, v)),
-                None => {}
+            if let Some(v) = class_int_binding(self.egraph, class) {
+                int_bindings.push((*sym, v));
+            }
+            if let Some(v) = class_value_binding(self.egraph, self.class_value, class) {
+                value_bindings.push((*sym, v));
             }
         }
         RuleMatch::new(int_bindings, value_bindings)

@@ -17,8 +17,10 @@ does the rest.
 | `isel/mod.rs` | public API (`Rule`, `EmitRequest`, cost-model traits), the pass driver and per-block cache |
 | `isel/node.rs` | the `SemNode` label, `SemPayload`, and e-class helpers (`class_binding`, widths) |
 | `isel/builder.rs` | `SemDagBuilder`: IR ops → semantic e-graph, including memory effects |
-| `isel/pattern.rs` | `compile_isel_pattern`: rule semantics → matchable `Pattern`s |
-| `isel/rewrites.rs` | discovery of proved algebraic rewrites (`discover_rewrites`) |
+| `isel/pattern.rs` | `compile_isel_pattern`: rule semantics → `tir_symbolic::egraph::Pattern`s + per-node metadata |
+| `isel/axioms.rs` | s-expression axioms and their compilation into proved rewrites |
+| `isel/synthesis.rs` | offline discovery of bridge axioms by enumeration (`discover_axioms`) |
+| `isel/rewrites.rs` | the built-in boolean bridges (`discover_rewrites`), saturation driver |
 | `isel/cover.rs` | PBQP construction, match dominance pruning, completeness check |
 | `isel/emit.rs` | `BlockPlan` and `EmissionBuilder`: cover → per-op decisions |
 
@@ -121,11 +123,37 @@ dominates every later use in the block.
 
 Before tiling, the e-graph is saturated with target-independent algebraic
 identities (`self.rewrites`). These are **not** hand-written selection rules — they
-are bit-vector lemmas the target's own instructions happen to realize.
+are bit-vector lemmas the target's own instructions happen to realize, expressed
+as s-expression axioms (`isel/axioms.rs`):
 
-`discover_rewrites` finds them: if the target has an atomic `slli` plus the
-matching right shift, it confirms the standard shift-pair extension identity
-against a `FuzzOracle` and emits a width-parameterized rewrite:
+```
+(axiom sext-bridge
+  (vars (x n)) (root w) (where (< n w))
+  (lhs (sext x w))
+  (rhs (ashr (shl x (- w n)) (- w n))))
+```
+
+Nobody writes these by hand either: the `tir axioms` developer utility
+*discovers* them (`isel/synthesis.rs`) whenever a backend's instruction set
+changes. Discovery enumerates candidate terms over the target's atomic
+instruction kinds, directly in the axiom language (constant leaves are width
+expressions, so candidates are width-parameterized by construction), prunes by
+behavioral fingerprint over sampled inputs at several `(n, w)` pairs, and
+accepts the smallest candidate the `SmtOracle` proves at every sampled pair.
+The result is committed as `backends/<t>/src/isel.axioms`, installed by the
+backend through `with_axioms`, and guarded by a per-backend freshness test
+that re-runs discovery and diffs the file. `with_axioms` drops any axiom whose
+RHS needs a kind the rule set has no atomic instruction for, so a stale file
+degrades coverage, never correctness.
+
+The compiled applier resolves the axiom's width names from the matched classes
+(`n` from `x`'s class, `w` from the root), checks the guards, and **proves the
+exact width instantiation** with the `SmtOracle` (an unsat check through
+`tir-symbolic`'s QF_BV bit-blaster, memoized per instantiation) before it
+unions — so there is no gap between the lemma proved and the rewrite applied.
+The proof models each operand as the low `n` bits of a full-width register the
+RHS reads whole, covering the undefined upper register bits the emitted
+instructions actually see. The extension axiom asserts:
 
 ```
    SExt(v, W)   ──rewrite──►   ShiftRightArithmetic( ShiftLeft(v, W-n), W-n )
@@ -143,11 +171,16 @@ introduced shift nodes are untyped, so they match width-agnostic shift patterns.
 ## 3. Patterns and matches
 
 Each `Rule`'s pattern is compiled once (`compile_isel_pattern`) into a
-`Pattern<SemNode>`. Operand leaves become **Boundary** nodes (capture points,
-recorded in `boundary_symbols`); interior nodes become typed/untyped `Node`s.
-`specificity` counts type-constrained nodes — the tie-breaker (see below).
+`tir_symbolic::egraph::Pattern<SemNode, u32>`. Operand leaves become
+`Var::Symbol` holes (capture points — the match's substitution binds them);
+interior nodes become typed/untyped templates, with per-node register /
+immediate / width requirements kept in `node_meta`. `specificity` counts
+type-constrained nodes — the tie-breaker (see below).
 
-`collect_block_matches` ematches every pattern against the saturated e-graph,
+`collect_block_matches` e-matches every pattern against the saturated e-graph
+(via the shared `tir_symbolic::egraph` search engine — the same matcher
+instcombine uses — with operand constraints and match legality supplied as a
+legality callback),
 producing a `PbqpIselMatch` per hit:
 
 ```rust
@@ -165,6 +198,41 @@ at *computed* values only. A pure class may sit interior to any number of
 matches (each fused instruction recomputes it); a shared *memory effect* (§1)
 is allowed as a match root or boundary, but never as an interior node a larger
 match would erase.
+
+### Width-sensitive operands
+
+A boundary may carry a **width requirement** (`Rule::with_operand_widths`,
+compiled to `Pattern::operand_width`): the bound class must hold a value of
+exactly that width, or one of *unknown* width (a rewrite-introduced
+intermediate, produced at register width by whatever materializes it). TMDL
+derives these for operands whose upper register bits reach the result —
+comparison operands always; right-shift values and division/remainder operands
+under an *untyped* node (a typed word form like `sraw` already pins its
+operands through width inference) — resolving the width from the operand's
+register class per enabled features (XLEN: 64 on rv64, 32 on rv32). So an i32
+compare fuses into `blt` on rv32 but is *refused* on rv64 (a 64-bit compare
+would read undefined upper bits) instead of miscompiling.
+Low-bits-preserving operators (add/and/shl/mul-low) stay width-agnostic.
+
+### Immediate ranges
+
+An immediate boundary additionally carries its **encoding range**
+(`Rule::with_operand_imm_ranges`): the field's bit width from the TMDL operand
+type (`imm: bits<12>`), signedness from how the behavior consumes the symbol
+(`sext(imm, _)` is signed, everything else unsigned), and an
+`extract(imm, hi, 0)` shift-amount mask narrows the usable bits. A constant
+outside the range must not bind — its encoding would silently truncate — so
+`addi x, 2047` folds while `addi x, 2048` refuses the immediate rule (and,
+with no wide-constant materializer in the rule set, fails selection loudly).
+
+### Narrow register-width forms
+
+An instruction whose destination register class is statically narrower than
+the architectural registers (x86 `add32`/`add16`/`add8` on
+`GPR32`/`GPR16`/`GPR8`) defines exactly that many bits: TMDL types the
+pattern root at the class width, so each narrow form matches only values of
+its width and wins the specificity tie-break below against the untyped
+full-width form (which keeps matching every other width).
 
 ### Dominance pruning (specificity)
 
@@ -184,7 +252,10 @@ e-class**, each offering a set of **alternatives**:
    PbqpIselAlternative
    ├─ External                       leaf, or a value materialized in a register
    ├─ Root { match_id }              this class is the instruction's result   ← cost lives here
-   └─ Internal { match_id, p_node }  this class is an interior node of that match (cost 0)
+   ├─ Internal { match_id, p_node }  this class is an interior node of that match (cost 0)
+   └─ Dead                           value not needed in a register: its only consumer is a
+                                     fused conditional branch (cost 0; never satisfies a
+                                     boundary's materialization requirement)
 ```
 
 Only the **Root** alternative carries the match's cost; interior nodes are free
@@ -272,6 +343,72 @@ incomplete rule set is rejected instead of silently dropping an op.
    attribute detaches the constant's only use, so the maintained def-use chain
    reports zero uses and it is erased.
 
+## Conditional branches
+
+Terminators select through the same rule machinery when the target installs
+`BranchEmitters` (`with_branch_emitters`): an `uncond` emitter (e.g. `vbr`,
+finalized to `jal x0` post-RA) and a `cond_nonzero` fallback (e.g.
+`bne cond, x0`).
+
+TMDL derives a **branch rule** (`RuleKind::CondBranch { target_symbol }`) from
+any instruction whose behavior is a guarded PC write:
+
+```
+   if rs1 < rs2 { PC::pc = PC::pc + sext(imm, XLEN) }   →   pattern Lt(s0, s1),
+                                                            target_symbol = imm
+```
+
+The pattern is the *branch condition*; the taken target is bound at emit time
+as a Block attribute (`RuleMatch::block_binding`). At solve time each guarded
+terminator (`BranchGuard`, e.g. `cond_br`) has its condition lowered into the
+block e-graph; `select_guard_branch` picks the cheapest branch-rule match
+rooted at the condition class (tie → most specific):
+
+- **Fused**: the branch instruction recomputes the condition from its operand
+  registers (the match's boundary classes join `must_materialize`). The
+  condition class gets a `Dead` alternative — if nothing else needs the value,
+  the compare op is Consumed; a boundary edge from any chosen match forbids
+  `Dead`, so a multi-use compare is still materialized (`slt`) *and* fused.
+- **Fallback**: no branch rule matches (e.g. a bare i1 block argument) — the
+  condition is forced materialized and `cond_nonzero` emits the branch.
+
+Either way the terminator is replaced by the branch (inserted ahead of it)
+plus `uncond` to the false successor; a plain `br` lowers through `uncond`
+directly. `cmpi` participates via its predicate-dependent semantic expression
+(canonicalized so only `Eq/Ne/Lt/Ge/ULt/UGe` appear — `sgt`/`sle`/… swap
+operands), and a proved width-1 identity
+`c == If(c, zext(1,1), zext(0,1))` bridges a bare comparison class to the
+`slt`-style `If`-patterns so a compare used as a *value* materializes with no
+hand-written rule.
+
+Instructions that read or write the PC *unconditionally* (`jal`, `jalr`,
+`auipc`) get **no value rule**: their pattern would hide the control-flow
+effect (a `jal` rule would match a plain `x + 4`). They also never register as
+register definers. Returns and calls remain per-target op lowerings.
+
+## Dominating-edge assumptions (scoped e-graph)
+
+A block entered through **exactly one guarded CFG edge** inherits the guard's
+fact. The pass records each function's CFG when it visits the function op and
+solves every block up front (so a dominator's commit never erases a condition's
+defining op before a dominated block reads it). While such a block solves, its
+e-graph holds an **assumption scope** (`push_context`):
+
+- the condition class ≡ its known truth value (0/1),
+- the defining comparison ≡ the same truth, its *complement* comparison
+  (`!(a<b)` is `a>=b`) ≡ the opposite,
+- an `eq`-true / `ne`-false guard additionally asserts `lhs ≡ rhs`, so scope
+  congruence merges everything computed from equal operands.
+
+Consequences fall out of the ordinary machinery: a re-computed identical (or
+complement, or operand-swapped-under-`eq`) compare's class now holds a
+constant, so its guard folds to an unconditional `Jump` and the compare op is
+Consumed; a value consumer folds the known immediate (`RuleMatch` records
+*both* the int and register binding when a class carries both). The scope is
+popped once the block's plan is stored, leaving the cached e-graph
+assumption-free — the same mechanism will let a future shared function-level
+graph solve one block under several alternative edge facts.
+
 ## Cost model
 
 A target may install an `IselCostModel` (`with_cost_model`); its single hook,
@@ -308,8 +445,8 @@ and the Def-role register attribute claims their def-site.
 | `SemNode` | e-graph label: `(kind, payload, ty)` |
 | `SemDagBuilder` | lowers a block's ops into the e-graph |
 | `Rule` | a target's pattern + emitter + base cost + operand constraints |
-| `CompiledIselPattern` | a rule's pattern compiled for ematch, with boundary symbols + specificity |
-| `PbqpIselMatch` | one ematch hit: root class, bindings, cost |
+| `CompiledIselPattern` | a rule's pattern compiled for e-matching, with per-node metadata + specificity |
+| `PbqpIselMatch` | one e-match hit: root class, bindings, cost |
 | `BlockSelectionCache` | per-block memo: egraph + side tables + solved plan |
 | `BlockPlan` / `IntroducedEmit` | the emission plan and its synthesized instructions |
 | `EmissionBuilder` | turns a cover into per-op `RuleMatch`es, materializing introduced classes |

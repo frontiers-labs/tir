@@ -30,7 +30,7 @@ impl Id {
         self.0 as usize
     }
 
-    fn from_raw(raw: u32) -> Self {
+    pub fn from_raw(raw: u32) -> Self {
         Id(raw)
     }
 }

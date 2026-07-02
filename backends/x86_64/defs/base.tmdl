@@ -55,6 +55,28 @@ instruction Mov for [X86_64] : RegReg {
     }
 }
 
+// Two-operand imul (0F AF): unlike the group-1 ALU ops, ModR/M.reg carries the
+// destination.
+
+instruction Imul for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0xAF;
+
+    behavior {
+        dst = dst * src;
+    }
+}
+
+instruction Imul32 for [X86] : RegRegExt32 {
+    param OPNAME: String = "imul32";
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0xAF;
+
+    behavior {
+        dst = dst * src;
+    }
+}
+
 // Group-1 ops share opcode 0x81 and select via the ModR/M EXT (/digit); mov
 // uses 0xC7.
 
