@@ -19,8 +19,8 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 
 use tir::{
-    Block, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter,
-    TypeId, ValueId,
+    Block, BlockId, BranchGuard, BranchTerminator, Context, OpId, Operation, OperationRef, Pass,
+    PassError, PassTarget, Rewriter, TypeId, ValueId,
     graph::{NodeId, OperandConstraint, PatternExpr},
     sem::{SemGraph, SymKind},
 };
@@ -36,7 +36,7 @@ use cover::{
     CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative, PbqpIselMatch,
     build_eclass_cover, completeness_error, prune_dominated_matches,
 };
-use emit::{BlockDecision, BlockPlan, DefinerEmit, EmissionBuilder};
+use emit::{BlockDecision, BlockPlan, DefinerEmit, EmissionBuilder, GuardBranch, TerminatorPlan};
 use node::{Binding, class_binding};
 use pattern::{CompiledIselPattern, compile_isel_pattern};
 use rewrites::discover_rewrites;
@@ -47,6 +47,8 @@ use {node::template_node, rewrites::extension_rewrite};
 pub struct RuleMatch {
     int_bindings: Vec<(u32, APInt)>,
     value_bindings: Vec<(u32, ValueId)>,
+    /// Block operands (branch targets), bound by conditional-branch selection.
+    block_bindings: Vec<(u32, BlockId)>,
 }
 
 impl RuleMatch {
@@ -59,7 +61,13 @@ impl RuleMatch {
         Self {
             int_bindings,
             value_bindings,
+            block_bindings: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_block_binding(mut self, symbol: u32, block: BlockId) -> Self {
+        self.block_bindings.push((symbol, block));
+        self
     }
 
     pub fn value_binding(&self, symbol: u32) -> Option<ValueId> {
@@ -74,6 +82,13 @@ impl RuleMatch {
             .iter()
             .find(|(sym, _)| *sym == symbol)
             .map(|(_, v)| v.to_u64() as i64)
+    }
+
+    pub fn block_binding(&self, symbol: u32) -> Option<BlockId> {
+        self.block_bindings
+            .iter()
+            .find(|(sym, _)| *sym == symbol)
+            .map(|(_, b)| *b)
     }
 }
 
@@ -152,10 +167,21 @@ pub struct RegisterDefiner {
     pub emit_fn: RuleEmitFn,
 }
 
+/// What a rule selects. A `Value` rule computes its pattern's value into a
+/// destination register. A `CondBranch` rule is a conditional branch whose
+/// pattern is the *branch condition* (from the instruction's guarded PC write);
+/// its taken target is bound to `target_symbol` as a block operand at emit time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleKind {
+    Value,
+    CondBranch { target_symbol: u32 },
+}
+
 pub struct Rule {
     pub name: &'static str,
     pub pattern: SemGraph,
     pub base_cost: u32,
+    pub kind: RuleKind,
     /// Per-operand-symbol constraint (register vs immediate). Symbols absent here
     /// are unconstrained, so hand-written and synthesized rules keep matching any
     /// value.
@@ -172,6 +198,7 @@ impl Rule {
             name,
             pattern,
             base_cost,
+            kind: RuleKind::Value,
             operand_constraints: Vec::new(),
             implicit_uses: Vec::new(),
             emit_fn,
@@ -191,6 +218,27 @@ impl Rule {
         self.implicit_uses = uses;
         self
     }
+
+    /// Mark this rule as a conditional branch (see [`RuleKind::CondBranch`]).
+    pub fn with_kind(mut self, kind: RuleKind) -> Self {
+        self.kind = kind;
+        self
+    }
+}
+
+/// Target hooks for lowering control-flow terminators, enabling rule-driven
+/// conditional-branch selection: `builtin.br` lowers through `uncond`, and
+/// `builtin.cond_br` becomes a selected [`RuleKind::CondBranch`] instruction
+/// (or `cond_nonzero` when no branch rule fuses the condition) followed by an
+/// `uncond` to the false successor.
+#[derive(Clone, Copy)]
+pub struct BranchEmitters {
+    /// Emit an unconditional branch to `dest`, forwarding `args` to its block
+    /// arguments (typically a virtual branch finalized after regalloc).
+    pub uncond: fn(&Context, BlockId, &[ValueId]) -> Box<dyn Operation>,
+    /// Emit a branch to `dest` taken when `condition` (an i1 in a register) is
+    /// nonzero — the fallback when no branch rule matches the guard condition.
+    pub cond_nonzero: fn(&Context, ValueId, BlockId) -> Box<dyn Operation>,
 }
 struct BlockSelectionCache {
     egraph: SemEGraph,
@@ -210,9 +258,35 @@ struct BlockSelectionCache {
     /// by an op no match reaches (return, branch, an un-lowerable op) or by an op
     /// outside this block — so the defining op must never be consumed.
     must_materialize: HashSet<Id>,
+    /// The guarded terminators of the block (e.g. `cond_br`), each with its
+    /// condition's e-class, when the target supplies branch emitters.
+    guards: Vec<BlockGuard>,
+    /// Plain unconditional branch terminators, lowered through the target's
+    /// `uncond` emitter.
+    jumps: Vec<BlockJump>,
     /// The solved emission plan, or the completeness error explaining why the block
     /// cannot be selected with this rule set.
     plan: Option<Result<BlockPlan, String>>,
+}
+
+/// A guarded two-way terminator: branch to `true_dest` when `condition` is
+/// nonzero, else to `false_dest`.
+struct BlockGuard {
+    op: OpId,
+    condition: ValueId,
+    /// The canonical e-class holding the condition's semantic expression.
+    class: Id,
+    true_dest: BlockId,
+    false_dest: BlockId,
+    /// Whether any edge forwards block arguments (unsupported by codegen).
+    has_edge_args: bool,
+}
+
+/// An unconditional branch terminator and its forwarded block arguments.
+struct BlockJump {
+    op: OpId,
+    dest: BlockId,
+    args: Vec<ValueId>,
 }
 pub type OpLowering = fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool, PassError>;
 
@@ -226,6 +300,9 @@ pub struct InstructionSelectPass {
     /// Instructions that define a register implicitly; selection introduces one
     /// ahead of any op whose `implicit_uses` name a matching register.
     definers: Vec<RegisterDefiner>,
+    /// Target hooks for terminator lowering; branch selection is off without them
+    /// (terminators are then left to the target's op lowerings).
+    branch_emitters: Option<BranchEmitters>,
     cost_model: Box<dyn IselCostModel>,
     op_lowerings: Vec<OpLowering>,
     block_cache: HashMap<BlockId, BlockSelectionCache>,
@@ -249,11 +326,19 @@ impl InstructionSelectPass {
             compiled_patterns,
             rewrites,
             definers: Vec::new(),
+            branch_emitters: None,
             cost_model: Box::new(DefaultIselCostModel),
             op_lowerings: vec![],
             block_cache: HashMap::new(),
             emitted_blocks: HashSet::new(),
         }
+    }
+
+    /// Install the target's terminator emitters, enabling rule-driven selection
+    /// of conditional branches (and generic lowering of unconditional ones).
+    pub fn with_branch_emitters(mut self, emitters: BranchEmitters) -> Self {
+        self.branch_emitters = Some(emitters);
+        self
     }
 
     /// Install the instructions that define registers implicitly (e.g.
@@ -302,12 +387,67 @@ impl InstructionSelectPass {
         let mut egraph = SemEGraph::new();
         let mut roots_by_op = HashMap::new();
         let op_ids = block.op_ids();
+        let mut guards = Vec::new();
+        let mut jumps = Vec::new();
         let class_value = {
             let mut builder = SemDagBuilder::new(context, &value_to_def, &mut egraph);
             for op_id in &op_ids {
                 let op = context.get_op(*op_id);
                 if let Some(root) = builder.build_for_op(&op) {
                     roots_by_op.insert(*op_id, root);
+                }
+            }
+            // With branch emitters installed, terminators are selected here too:
+            // a guarded two-way terminator's condition is lowered into the
+            // e-graph so branch rules can match (and fuse) it; a plain branch is
+            // recorded for the target's unconditional emitter.
+            if self.branch_emitters.is_some() {
+                for op_id in &op_ids {
+                    let op = context.get_op(*op_id);
+                    if let Some(guard) = op.clone().as_interface::<dyn BranchGuard>() {
+                        let successors = guard.guarded_successors();
+                        let [(a_dest, a_cond, a_taken), (b_dest, b_cond, _)] =
+                            successors.as_slice()
+                        else {
+                            continue;
+                        };
+                        if a_cond != b_cond {
+                            continue;
+                        }
+                        let has_edge_args = op
+                            .clone()
+                            .as_interface::<dyn BranchTerminator>()
+                            .is_some_and(|branch| {
+                                branch
+                                    .successor_operands()
+                                    .iter()
+                                    .any(|(_, args)| !args.is_empty())
+                            });
+                        let (true_dest, false_dest) = if *a_taken {
+                            (*a_dest, *b_dest)
+                        } else {
+                            (*b_dest, *a_dest)
+                        };
+                        let class = builder.build_from_value(*a_cond);
+                        guards.push(BlockGuard {
+                            op: *op_id,
+                            condition: *a_cond,
+                            class,
+                            true_dest,
+                            false_dest,
+                            has_edge_args,
+                        });
+                    } else if let Some(branch) = op.clone().as_interface::<dyn BranchTerminator>() {
+                        let successors = branch.successor_operands();
+                        let [(dest, args)] = successors.as_slice() else {
+                            continue;
+                        };
+                        jumps.push(BlockJump {
+                            op: *op_id,
+                            dest: *dest,
+                            args: args.clone(),
+                        });
+                    }
                 }
             }
             builder.class_value
@@ -376,21 +516,28 @@ impl InstructionSelectPass {
 
         // A value used by an op no match can reach (it lowered to no e-graph root)
         // or by an op outside this block can never be recomputed inside a fused
-        // instruction, so its class must keep a materializing alternative.
+        // instruction, so its class must keep a materializing alternative. A use
+        // by a guarded terminator is exempt: branch selection either fuses the
+        // condition (recomputing it inside the branch instruction) or re-adds the
+        // materialization requirement itself (see `solve_block`).
         let block_ops: HashSet<OpId> = op_ids.iter().copied().collect();
+        let guard_ops: HashSet<OpId> = guards.iter().map(|guard| guard.op).collect();
         let mut must_materialize = HashSet::new();
         for (op_id, root) in &roots_by_op {
             let op = context.get_op(*op_id);
             let escapes = op.results.iter().any(|result| {
-                context
-                    .get_value(*result)
-                    .uses()
-                    .iter()
-                    .any(|u| !block_ops.contains(&u.op()) || !roots_by_op.contains_key(&u.op()))
+                context.get_value(*result).uses().iter().any(|u| {
+                    !block_ops.contains(&u.op())
+                        || (!roots_by_op.contains_key(&u.op()) && !guard_ops.contains(&u.op()))
+                })
             });
             if escapes {
                 must_materialize.insert(egraph.find(*root));
             }
+        }
+
+        for guard in &mut guards {
+            guard.class = egraph.find(guard.class);
         }
 
         self.block_cache.insert(
@@ -402,6 +549,8 @@ impl InstructionSelectPass {
                 class_value: canon_class_value,
                 shared_classes,
                 must_materialize,
+                guards,
+                jumps,
                 plan: None,
             },
         );
@@ -479,6 +628,47 @@ impl InstructionSelectPass {
             rewriter.insert_op_before(&anchor, new_op.as_ref())?;
         }
 
+        // Lower the terminators first: a fused conditional branch reads its
+        // operand *values* (not the condition register), so the condition's
+        // defining op — possibly erased as Dead below — must lose its last use
+        // before the main loop runs.
+        if let Some(emitters) = &self.branch_emitters {
+            for terminator in &plan.terminators {
+                match terminator {
+                    TerminatorPlan::Guard {
+                        op,
+                        branch,
+                        false_dest,
+                    } => {
+                        let op_ref =
+                            OperationRef::new(context.get_op(*op), Some(block_arc.clone()), None);
+                        let branch_op: Box<dyn Operation> = match branch {
+                            GuardBranch::Fused { rule_index, m } => {
+                                let request = EmitRequest {
+                                    op: None,
+                                    results: &[],
+                                    result_ty: None,
+                                };
+                                (self.rules[*rule_index].emit_fn)(context, &request, m)?
+                            }
+                            GuardBranch::Nonzero { condition, dest } => {
+                                (emitters.cond_nonzero)(context, *condition, *dest)
+                            }
+                        };
+                        rewriter.insert_op_before(&op_ref, branch_op.as_ref())?;
+                        let fallthrough = (emitters.uncond)(context, *false_dest, &[]);
+                        rewriter.replace_op(&op_ref, fallthrough.as_ref())?;
+                    }
+                    TerminatorPlan::Jump { op, dest, args } => {
+                        let op_ref =
+                            OperationRef::new(context.get_op(*op), Some(block_arc.clone()), None);
+                        let jump = (emitters.uncond)(context, *dest, args);
+                        rewriter.replace_op(&op_ref, jump.as_ref())?;
+                    }
+                }
+            }
+        }
+
         // Rewrite the original ops in reverse block order — consumers before
         // defs — so when a def's replacement remaps SSA uses of its results
         // (`replace_op`), every already-emitted consumer is visible. Positions
@@ -543,17 +733,80 @@ impl InstructionSelectPass {
 
         let matches = self.collect_block_matches(context, cache, &op_refs);
 
-        if let Some(message) = completeness_error(&cache.egraph, &cache.op_by_root, &matches) {
+        // Resolve each guarded terminator: fuse its condition into a branch-rule
+        // instruction when one matches, else fall back to the target's
+        // branch-if-nonzero (which needs the condition materialized). Fused
+        // branches read their operands as registers, so those classes join the
+        // materialization set; a condition consumed only by its fused branch may
+        // instead go Dead (its defining op is erased).
+        let mut must_materialize = cache.must_materialize.clone();
+        let mut fused_conditions = HashSet::new();
+        let mut terminators = Vec::new();
+        for guard in &cache.guards {
+            if guard.has_edge_args {
+                return Err(
+                    "block arguments on conditional branch edges are not supported by codegen yet"
+                        .to_string(),
+                );
+            }
+            match self.select_guard_branch(context, cache, guard) {
+                Some((rule_index, m, boundary_classes)) => {
+                    for class in boundary_classes {
+                        must_materialize.insert(cache.egraph.find(class));
+                    }
+                    fused_conditions.insert(guard.class);
+                    terminators.push(TerminatorPlan::Guard {
+                        op: guard.op,
+                        branch: GuardBranch::Fused { rule_index, m },
+                        false_dest: guard.false_dest,
+                    });
+                }
+                None => {
+                    must_materialize.insert(guard.class);
+                    terminators.push(TerminatorPlan::Guard {
+                        op: guard.op,
+                        branch: GuardBranch::Nonzero {
+                            condition: guard.condition,
+                            dest: guard.true_dest,
+                        },
+                        false_dest: guard.false_dest,
+                    });
+                }
+            }
+        }
+        for jump in &cache.jumps {
+            terminators.push(TerminatorPlan::Jump {
+                op: jump.op,
+                dest: jump.dest,
+                args: jump.args.clone(),
+            });
+        }
+
+        let dead_allowed: HashSet<Id> = fused_conditions
+            .iter()
+            .copied()
+            .filter(|class| !must_materialize.contains(class))
+            .collect();
+
+        if let Some(message) =
+            completeness_error(&cache.egraph, &cache.op_by_root, &matches, &dead_allowed)
+        {
             return Err(message);
         }
-        if matches.is_empty() {
-            return Ok(BlockPlan::default());
+        // The cover still runs with no value matches when a fused condition can
+        // go Dead: its defining op must receive the Consume decision.
+        if matches.is_empty() && dead_allowed.is_empty() {
+            return Ok(BlockPlan {
+                terminators,
+                ..BlockPlan::default()
+            });
         }
 
         let Some(cover) = build_eclass_cover(
             &cache.egraph,
             &cache.op_by_root,
-            &cache.must_materialize,
+            &must_materialize,
+            &dead_allowed,
             &matches,
         ) else {
             return Ok(BlockPlan::default());
@@ -568,7 +821,9 @@ impl InstructionSelectPass {
                 PbqpIselAlternative::Root { match_id } => {
                     root_match.insert(cover.classes[node], *match_id);
                 }
-                PbqpIselAlternative::Internal { .. } => {
+                // A Dead condition's defining op is erased like a consumed
+                // internal: the fused branch recomputes the value.
+                PbqpIselAlternative::Internal { .. } | PbqpIselAlternative::Dead => {
                     internal_classes.insert(cover.classes[node]);
                 }
                 PbqpIselAlternative::External => {}
@@ -670,7 +925,78 @@ impl InstructionSelectPass {
             op_decisions,
             introduced: emit.introduced,
             definers,
+            terminators,
         })
+    }
+
+    /// The best conditional-branch rule match rooted at a guard's condition
+    /// class: the rule, the operand bindings (with the taken target bound as a
+    /// block), and the boundary classes the branch reads as registers. `None`
+    /// when no branch rule matches (the fallback path).
+    fn select_guard_branch(
+        &self,
+        context: &Context,
+        cache: &BlockSelectionCache,
+        guard: &BlockGuard,
+    ) -> Option<(usize, RuleMatch, Vec<Id>)> {
+        let mut best: Option<(u64, usize, usize, RuleMatch, Vec<Id>)> = None;
+        for compiled in &self.compiled_patterns {
+            let rule = &self.rules[compiled.rule_index];
+            let RuleKind::CondBranch { target_symbol } = rule.kind else {
+                continue;
+            };
+            for m in ematch::ematch(&cache.egraph, context, &compiled.pattern) {
+                if cache.egraph.find(m.root()) != guard.class {
+                    continue;
+                }
+
+                let mut captures = CaptureBindings::new();
+                for (pattern_node, symbol) in &compiled.boundary_symbols {
+                    captures.bind(*symbol, cache.egraph.find(m.binding(*pattern_node)));
+                }
+
+                // Every operand must resolve: immediates fold into the encoding;
+                // register operands make their classes materialization
+                // requirements. An unresolvable boundary (e.g. a rewrite-introduced
+                // class with no backing value) disqualifies the match.
+                let mut boundary_classes = Vec::new();
+                let resolvable = captures.entries.iter().all(|(_, class)| {
+                    match class_binding(&cache.egraph, &cache.class_value, *class) {
+                        Some(Binding::Int(_)) => true,
+                        Some(Binding::Value(_)) => {
+                            boundary_classes.push(*class);
+                            true
+                        }
+                        None => false,
+                    }
+                });
+                if !resolvable {
+                    continue;
+                }
+
+                let cost = rule.base_cost as u64;
+                let specificity = compiled.specificity;
+                let better = match &best {
+                    None => true,
+                    Some((best_cost, best_specificity, ..)) => {
+                        cost < *best_cost || (cost == *best_cost && specificity > *best_specificity)
+                    }
+                };
+                if better {
+                    let rule_match = captures
+                        .to_rule_match(&cache.egraph, &cache.class_value)
+                        .with_block_binding(target_symbol, guard.true_dest);
+                    best = Some((
+                        cost,
+                        specificity,
+                        compiled.rule_index,
+                        rule_match,
+                        boundary_classes,
+                    ));
+                }
+            }
+        }
+        best.map(|(_, _, rule_index, m, boundaries)| (rule_index, m, boundaries))
     }
 
     fn collect_block_matches(
@@ -682,6 +1008,10 @@ impl InstructionSelectPass {
         let mut matches = Vec::new();
         for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
             let rule = &self.rules[compiled.rule_index];
+            // Branch rules select terminators, not values (see `select_guard_branch`).
+            if rule.kind != RuleKind::Value {
+                continue;
+            }
             let Some(pattern_root) = compiled.pattern.root() else {
                 continue;
             };

@@ -77,6 +77,11 @@ pub(crate) enum PbqpIselAlternative {
         match_id: usize,
         pattern_node: NodeId,
     },
+    /// The class's value is not needed in a register: its only consumer is a
+    /// fused conditional branch that recomputes the condition from its own
+    /// operands. Unlike `External`, `Dead` never satisfies a boundary's
+    /// materialization requirement — the defining op is erased.
+    Dead,
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +111,7 @@ pub(crate) fn build_eclass_cover(
     egraph: &SemEGraph,
     op_by_root: &HashMap<Id, OpId>,
     must_materialize: &HashSet<Id>,
+    dead_allowed: &HashSet<Id>,
     matches: &[PbqpIselMatch],
 ) -> Option<ClassCover> {
     let classes: Vec<Id> = egraph.classes().map(|c| egraph.find(c.id())).collect();
@@ -137,6 +143,10 @@ pub(crate) fn build_eclass_cover(
         }
     }
 
+    for &c in dead_allowed {
+        alternatives_by_node[class_index(c)].push(PbqpIselAlternative::Dead);
+    }
+
     for (i, &c) in classes.iter().enumerate() {
         if alternatives_by_node[i].is_empty() && (is_terminal(c) || !op_by_root.contains_key(&c)) {
             alternatives_by_node[i].push(PbqpIselAlternative::External);
@@ -153,7 +163,9 @@ pub(crate) fn build_eclass_cover(
             .iter()
             .map(|alternative| match alternative {
                 PbqpIselAlternative::Root { match_id } => matches[*match_id].cost,
-                PbqpIselAlternative::External | PbqpIselAlternative::Internal { .. } => 0,
+                PbqpIselAlternative::External
+                | PbqpIselAlternative::Internal { .. }
+                | PbqpIselAlternative::Dead => 0,
             })
             .collect();
         problem.add_node(costs);
@@ -176,7 +188,7 @@ pub(crate) fn build_eclass_cover(
                         match_id: alt_match,
                         ..
                     } => *alt_match == match_id && !class_is_pure(egraph, classes[node]),
-                    PbqpIselAlternative::External => false,
+                    PbqpIselAlternative::External | PbqpIselAlternative::Dead => false,
                 };
                 if belongs_to_match {
                     coherent.push(PbqpAlternative {
@@ -299,10 +311,13 @@ pub(crate) fn prune_dominated_matches(
 /// (it roots some match) or consumable by a parent match (it is an interior node of
 /// some match). A non-terminal op-root that is neither cannot be selected by this
 /// rule set — even after saturation — so selection fails with a diagnostic.
+/// Classes in `exempt` (guard conditions covered by a fused branch, with no other
+/// consumer needing the value) are skipped.
 pub(crate) fn completeness_error(
     egraph: &SemEGraph,
     op_by_root: &HashMap<Id, OpId>,
     matches: &[PbqpIselMatch],
+    exempt: &HashSet<Id>,
 ) -> Option<String> {
     let mut has_root: HashSet<Id> = HashSet::new();
     let mut has_internal: HashSet<Id> = HashSet::new();
@@ -321,7 +336,7 @@ pub(crate) fn completeness_error(
         if egraph.nodes(class).iter().any(|n| n.children().is_empty()) {
             continue;
         }
-        if has_root.contains(&class) || has_internal.contains(&class) {
+        if has_root.contains(&class) || has_internal.contains(&class) || exempt.contains(&class) {
             continue;
         }
         if let Some(kind) = egraph.nodes(class).first().map(|n| n.kind)
@@ -385,7 +400,7 @@ pub(crate) fn child_requirement(
         PbqpIselAlternative::Root { match_id } | PbqpIselAlternative::Internal { match_id, .. } => {
             *match_id
         }
-        PbqpIselAlternative::External => return None,
+        PbqpIselAlternative::External | PbqpIselAlternative::Dead => return None,
     };
 
     let m = &matches[match_id];

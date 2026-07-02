@@ -6,8 +6,8 @@ use tir::{
 };
 
 use super::{
-    EmitRequest, InstructionSelectPass, IselCostModel, Rule, RuleMatch, SemEGraph, SemNode,
-    extension_rewrite, template_node,
+    BranchEmitters, EmitRequest, InstructionSelectPass, IselCostModel, Rule, RuleKind, RuleMatch,
+    SemEGraph, SemNode, extension_rewrite, template_node,
 };
 
 fn symbol(g: &mut SemGraph, id: u32) -> tir::graph::NodeId {
@@ -1026,6 +1026,271 @@ fn merged_value_classes_resolve_to_earliest_def() {
     // result of the muli that replaced the original mul.
     let sub_op = &body[2];
     assert_eq!(sub_op.operands[0], body[0].results[0]);
+}
+
+// ── Conditional-branch selection ────────────────────────────────────────────
+//
+// Marker convention: the fused branch emits a `br` to the bound target
+// forwarding the two compared values; the uncond emitter a `br` with the
+// forwarded args; the nonzero fallback a `br` forwarding the condition.
+
+fn emit_fused_branch_marker(
+    context: &Context,
+    req: &EmitRequest,
+    m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let dest = m
+        .block_binding(2)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let lhs = m
+        .value_binding(0)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let rhs = m
+        .value_binding(1)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    Ok(Box::new(ops::br(context, vec![lhs, rhs], dest).build()))
+}
+
+fn emit_uncond_marker(
+    context: &Context,
+    dest: tir::BlockId,
+    args: &[tir::ValueId],
+) -> Box<dyn Operation> {
+    Box::new(ops::br(context, args.to_vec(), dest).build())
+}
+
+fn emit_nonzero_marker(
+    context: &Context,
+    condition: tir::ValueId,
+    dest: tir::BlockId,
+) -> Box<dyn Operation> {
+    Box::new(ops::br(context, vec![condition], dest).build())
+}
+
+fn branch_rule() -> Rule {
+    Rule::new(
+        "blt-marker",
+        atomic_pattern(SymKind::Lt),
+        1,
+        emit_fused_branch_marker,
+    )
+    .with_kind(RuleKind::CondBranch { target_symbol: 2 })
+}
+
+fn branch_emitters() -> BranchEmitters {
+    BranchEmitters {
+        uncond: emit_uncond_marker,
+        cond_nonzero: emit_nonzero_marker,
+    }
+}
+
+struct BranchBlock {
+    context: Context,
+    region: tir::RegionId,
+    true_dest: tir::BlockId,
+    false_dest: tir::BlockId,
+    args: Vec<tir::ValueId>,
+}
+
+/// A function whose entry block holds `body(entry builder, args)` followed by
+/// `cond_br cond, ^t, ^f`, where `body` returns the condition value.
+fn guarded_block(
+    arg_tys: &[u32],
+    body: impl Fn(&Context, &mut IRBuilder, &[tir::ValueId]) -> tir::ValueId,
+) -> BranchBlock {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let values: Vec<_> = arg_tys
+        .iter()
+        .map(|w| context.create_value(IntegerType::new(&context, *w), None))
+        .collect();
+    let arg_ids: Vec<_> = values.iter().map(|v| v.id()).collect();
+    let region = context.create_region();
+    let block = context.create_block(values);
+    region.add_block(block.id());
+    let t = context.create_block(vec![]);
+    let f = context.create_block(vec![]);
+
+    let func = ops::func(
+        &context,
+        "demo",
+        IntegerType::new(&context, 64),
+        Some(region.id()),
+    )
+    .build();
+    let mut fb = IRBuilder::new(func.body());
+    let cond = body(&context, &mut fb, &arg_ids);
+    fb.insert(ops::cond_br(&context, cond, vec![], vec![], t.id(), f.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name()).add_pass(
+        InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
+    );
+    pm.run(&context, context.get_op(module.id()))
+        .expect("branch selection should succeed");
+
+    BranchBlock {
+        context,
+        region: region.id(),
+        true_dest: t.id(),
+        false_dest: f.id(),
+        args: arg_ids,
+    }
+}
+
+fn block_ops(context: &Context, region: tir::RegionId) -> Vec<std::sync::Arc<tir::OpInstance>> {
+    context
+        .get_region(region)
+        .iter(context.clone())
+        .next()
+        .unwrap()
+        .op_ids()
+        .into_iter()
+        .map(|op_id| context.get_op(op_id))
+        .collect()
+}
+
+/// A comparison feeding only the guard fuses into the branch rule, the compare
+/// op is consumed (Dead), and the false edge lowers through the uncond emitter.
+#[test]
+fn guard_fuses_comparison_and_consumes_compare() {
+    let b = guarded_block(&[64, 64], |context, fb, args| {
+        let cmp = tir::builtin::CmpIOpBuilder::new(context)
+            .lhs(args[0])
+            .rhs(args[1])
+            .predicate("slt")
+            .result_type(IntegerType::new(context, 1))
+            .build();
+        let result = cmp.result();
+        fb.insert(cmp);
+        result
+    });
+
+    let body = block_ops(&b.context, b.region);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br", "br"], "cmpi must be consumed");
+
+    // The fused branch reads the compared values and targets the true block.
+    let fused = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(fused.dest(), b.true_dest);
+    assert_eq!(fused.dest_args(), b.args);
+    // The fallthrough targets the false block.
+    let fallthrough = body[1].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(fallthrough.dest(), b.false_dest);
+    assert!(fallthrough.dest_args().is_empty());
+}
+
+/// A bare i1 condition no branch rule can fuse takes the branch-if-nonzero
+/// fallback, forwarding the condition value.
+#[test]
+fn guard_without_matching_rule_uses_nonzero_fallback() {
+    let b = guarded_block(&[1], |_, _, args| args[0]);
+
+    let body = block_ops(&b.context, b.region);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br", "br"]);
+
+    let nonzero = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(nonzero.dest(), b.true_dest);
+    assert_eq!(nonzero.dest_args(), vec![b.args[0]]);
+}
+
+/// A compared condition with another in-block consumer is both materialized
+/// (the boundary edge forbids Dead) and fused into the branch.
+#[test]
+fn escaping_compare_materializes_and_fuses() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let i1 = IntegerType::new(&context, 1);
+    let i64_ty = IntegerType::new(&context, 64);
+    let x = context.create_value(i64_ty, None);
+    let y = context.create_value(i64_ty, None);
+    let (x_id, y_id) = (x.id(), y.id());
+    let region = context.create_region();
+    let block = context.create_block(vec![x, y]);
+    region.add_block(block.id());
+    let t = context.create_block(vec![]);
+    let f = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let mut fb = IRBuilder::new(func.body());
+    let cmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(x_id)
+        .rhs(y_id)
+        .predicate("slt")
+        .result_type(i1)
+        .build();
+    let cond = cmp.result();
+    fb.insert(cmp);
+    // A second consumer of the condition: its class must stay materialized.
+    fb.insert(ops::addi(&context, cond, cond, i1).build());
+    fb.insert(ops::cond_br(&context, cond, vec![], vec![], t.id(), f.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        branch_rule(),
+        // The Lt materializer (subi marker) and the add consumer's rule.
+        Rule::new("slt-marker", atomic_pattern(SymKind::Lt), 10, emit_sub),
+        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+    ];
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("selection should succeed");
+
+    let names: Vec<_> = block_ops(&context, region.id())
+        .iter()
+        .map(|op| op.name)
+        .collect();
+    // cmpi -> subi marker (materialized), addi stays selected, then the fused
+    // branch marker and the fallthrough.
+    assert_eq!(names, vec!["subi", "addi", "br", "br"]);
+}
+
+/// Block arguments on conditional edges are still rejected (codegen cannot
+/// place them yet), now at selection time.
+#[test]
+fn guard_edge_arguments_are_rejected() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+
+    let i1 = IntegerType::new(&context, 1);
+    let i64_ty = IntegerType::new(&context, 64);
+    let c = context.create_value(i1, None);
+    let x = context.create_value(i64_ty, None);
+    let (c_id, x_id) = (c.id(), x.id());
+    let region = context.create_region();
+    let block = context.create_block(vec![c, x]);
+    region.add_block(block.id());
+    let t = context.create_block(vec![]);
+    let f = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let mut fb = IRBuilder::new(func.body());
+    fb.insert(ops::cond_br(&context, c_id, vec![x_id], vec![], t.id(), f.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name()).add_pass(
+        InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
+    );
+    let err = pm
+        .run(&context, context.get_op(module.id()))
+        .expect_err("edge arguments should be rejected");
+    assert!(err.to_string().contains("block arguments"));
 }
 
 /// At *equal* cost, the type-constrained rule must win the tie via dominance

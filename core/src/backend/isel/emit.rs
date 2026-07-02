@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use tir::{Context, OpId, TypeId, ValueId, builtin::IntegerType};
+use tir::{BlockId, Context, OpId, TypeId, ValueId, builtin::IntegerType};
 use tir_symbolic::egraph::Id;
 
 use super::RuleMatch;
@@ -25,6 +25,37 @@ pub(crate) struct BlockPlan {
     /// Definer instructions to insert ahead of an op for the implicit register
     /// uses in its behavior (e.g. `vsetvli` defining `VCSR::vl` that `vadd` reads).
     pub(crate) definers: Vec<DefinerEmit>,
+    /// How each control-flow terminator is lowered (only when the target
+    /// installed branch emitters).
+    pub(crate) terminators: Vec<TerminatorPlan>,
+}
+
+/// The lowering of one terminator op.
+#[derive(Clone, Debug)]
+pub(crate) enum TerminatorPlan {
+    /// A guarded two-way terminator: insert the conditional branch to the true
+    /// successor ahead of `op`, then replace `op` with an unconditional branch
+    /// to `false_dest`.
+    Guard {
+        op: OpId,
+        branch: GuardBranch,
+        false_dest: BlockId,
+    },
+    /// An unconditional branch, lowered through the target's `uncond` emitter.
+    Jump {
+        op: OpId,
+        dest: BlockId,
+        args: Vec<ValueId>,
+    },
+}
+
+/// The conditional branch chosen for a guard: a fused branch rule recomputing
+/// the condition from its operands, or the target's branch-if-nonzero fallback
+/// reading the materialized condition register.
+#[derive(Clone, Debug)]
+pub(crate) enum GuardBranch {
+    Fused { rule_index: usize, m: RuleMatch },
+    Nonzero { condition: ValueId, dest: BlockId },
 }
 
 /// A definer instruction to materialize just before `anchor`: it defines a

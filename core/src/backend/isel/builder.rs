@@ -219,7 +219,7 @@ impl<'a> SemDagBuilder<'a> {
         None
     }
 
-    fn build_from_value(&mut self, value: ValueId) -> Id {
+    pub(crate) fn build_from_value(&mut self, value: ValueId) -> Id {
         if let Some(existing) = self.value_to_class.get(&value) {
             return *existing;
         }
