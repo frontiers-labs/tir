@@ -1,0 +1,33 @@
+// RUN: tir opt %s | filecheck %s
+
+module {
+  func @float_demo(%0: !f32, %1: !f32) -> !f32 {
+    %2 = constantf {value = 6.5} : !f32
+    %3 = addf %2, %0 : !f32
+    %4 = subf %3, %1 : !f32
+    %5 = mulf %4, %2 : !f32
+    %6 = divf %5, %1 : !f32
+    return %6
+  }
+  func @small_floats(%7: !bf16, %8: !f8e4m3, %9: !f8e5m2, %10: !f16) -> !bf16 {
+    %11 = addf %7, %7 : !bf16
+    return %11
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: func @float_demo(%{{[0-9]+}}: !f32, %{{[0-9]+}}: !f32) -> !f32 {
+// CHECK-NEXT: %{{[0-9]+}} = constantf {value = 6.5} : !f32
+// CHECK-NEXT: %{{[0-9]+}} = addf %{{[0-9]+}}, %{{[0-9]+}} : !f32
+// CHECK-NEXT: %{{[0-9]+}} = subf %{{[0-9]+}}, %{{[0-9]+}} : !f32
+// CHECK-NEXT: %{{[0-9]+}} = mulf %{{[0-9]+}}, %{{[0-9]+}} : !f32
+// CHECK-NEXT: %{{[0-9]+}} = divf %{{[0-9]+}}, %{{[0-9]+}} : !f32
+// CHECK-NEXT: return %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: func @small_floats(%{{[0-9]+}}: !bf16, %{{[0-9]+}}: !f8e4m3, %{{[0-9]+}}: !f8e5m2, %{{[0-9]+}}: !f16) -> !bf16 {
+// CHECK-NEXT: %{{[0-9]+}} = addf %{{[0-9]+}}, %{{[0-9]+}} : !bf16
+// CHECK-NEXT: return %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }

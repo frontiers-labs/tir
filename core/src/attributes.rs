@@ -59,8 +59,10 @@ impl AttributeValue {
             AttributeValue::Str(s) => fmt.write(format!("\"{}\"", s)),
             AttributeValue::Int(i) => fmt.write(i.to_string()),
             AttributeValue::UInt(u) => fmt.write(u.to_string()),
-            AttributeValue::F32(fv) => fmt.write(fv.to_string()),
-            AttributeValue::F64(fv) => fmt.write(fv.to_string()),
+            // `{:?}` keeps the decimal point (`3.0`, not `3`) so a float
+            // attribute never reparses as an integer.
+            AttributeValue::F32(fv) => fmt.write(format!("{:?}", fv)),
+            AttributeValue::F64(fv) => fmt.write(format!("{:?}", fv)),
             AttributeValue::Bool(b) => fmt.write(if *b { "true" } else { "false" }),
             AttributeValue::Array(arr) => {
                 fmt.write("[")?;

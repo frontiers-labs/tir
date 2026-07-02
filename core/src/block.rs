@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::{Context, ContextIterator, GetFromContext, OpId, Value, context::ContextRef};
+use crate::{
+    Context, ContextIterator, GetFromContext, OpId, Value,
+    attributes::{AttributeValue, NamedAttribute},
+    context::ContextRef,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId(u32);
@@ -14,6 +18,9 @@ pub struct Block {
     operations: RwLock<Vec<OpId>>,
     successors: RwLock<Vec<BlockId>>,
     predecessors: RwLock<Vec<BlockId>>,
+    /// Discardable metadata scoped to this block (e.g. `fpmath`), printed in the
+    /// block label.
+    attributes: RwLock<Vec<NamedAttribute>>,
     /// Handle back to the owning context, used to keep its op-to-parent-block index
     /// in step with every membership change below. Never held across a context lock.
     context: ContextRef,
@@ -45,7 +52,29 @@ impl Block {
             operations: RwLock::new(vec![]),
             successors: RwLock::new(vec![]),
             predecessors: RwLock::new(vec![]),
+            attributes: RwLock::new(vec![]),
             context,
+        }
+    }
+
+    pub fn attributes(&self) -> Vec<NamedAttribute> {
+        self.attributes.read().clone()
+    }
+
+    pub fn attr(&self, name: &str) -> Option<AttributeValue> {
+        self.attributes
+            .read()
+            .iter()
+            .find(|a| a.name == name)
+            .map(|a| a.value.clone())
+    }
+
+    /// Set (or replace) a named attribute on this block.
+    pub fn set_attr(&self, name: &str, value: AttributeValue) {
+        let mut attrs = self.attributes.write();
+        match attrs.iter_mut().find(|a| a.name == name) {
+            Some(attr) => attr.value = value,
+            None => attrs.push(NamedAttribute::new(name, value)),
         }
     }
 

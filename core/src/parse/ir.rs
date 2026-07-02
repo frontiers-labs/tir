@@ -2,6 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::attributes::{AttributeValue, NamedAttribute};
 use crate::block::BlockId;
 use crate::value::Value;
 use crate::{Block, Context, Error, Operation, Region};
@@ -10,7 +11,7 @@ use super::common::{Cursor, Span};
 use super::text::Parser as TextParser;
 
 type ParseResult<T> = Result<T, (Span, Error)>;
-type BlockLabel = (u32, Vec<(String, crate::TypeId)>);
+type BlockLabel = (u32, Vec<(String, crate::TypeId)>, Vec<NamedAttribute>);
 
 pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, Error)> {
     let mut parser = TextParser::new(src);
@@ -119,8 +120,11 @@ impl<'src> TextParser<'src> {
                 return Ok(());
             }
 
-            if let Some((block_index, block_args)) = self.try_parse_block_label(context)? {
+            if let Some((block_index, block_args, attrs)) = self.try_parse_block_label(context)? {
                 *current = self.block_at_region_index(context, region, block_index, block_args)?;
+                for attr in attrs {
+                    current.set_attr(&attr.name, attr.value);
+                }
                 continue;
             }
 
@@ -182,12 +186,59 @@ impl<'src> TextParser<'src> {
             vec![]
         };
 
+        let attrs = if self.parse_token("{") {
+            self.parse_block_attribute_list()?
+        } else {
+            vec![]
+        };
+
         if !self.parse_token(":") {
             self.set_pos(mark);
             return Ok(None);
         }
 
-        Ok(Some((block_index, block_args)))
+        Ok(Some((block_index, block_args, attrs)))
+    }
+
+    /// Parse the block-attribute entries of `{name = value, ...}` after the
+    /// opening brace: string, float, integer or boolean values.
+    fn parse_block_attribute_list(&mut self) -> ParseResult<Vec<NamedAttribute>> {
+        let mut attrs = vec![];
+        loop {
+            if self.parse_token("}") {
+                return Ok(attrs);
+            }
+
+            let name = self
+                .parse_ident()
+                .ok_or_else(|| (self.span(), Error::ExpectedToken("attribute name")))?
+                .to_string();
+            if !self.parse_token("=") {
+                return Err((self.span(), Error::ExpectedToken("=")));
+            }
+
+            let value = if let Some(s) = self.parse_string() {
+                AttributeValue::Str(s.to_string())
+            } else if let Some(f) = self.parse_float() {
+                AttributeValue::F64(f)
+            } else if let Some(n) = self.parse_number() {
+                AttributeValue::Int(n)
+            } else {
+                match self.parse_ident() {
+                    Some("true") => AttributeValue::Bool(true),
+                    Some("false") => AttributeValue::Bool(false),
+                    _ => return Err((self.span(), Error::ExpectedToken("attribute value"))),
+                }
+            };
+            attrs.push(NamedAttribute::new(name, value));
+
+            if self.parse_token("}") {
+                return Ok(attrs);
+            }
+            if !self.parse_token(",") {
+                return Err((self.span(), Error::ExpectedToken(",")));
+            }
+        }
     }
 
     fn parse_block_argument_list(

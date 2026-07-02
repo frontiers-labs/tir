@@ -16,6 +16,15 @@ pub trait Type: StdAny + Sync + Send + TypeConstraint {
     fn parse_key() -> &'static str
     where
         Self: Sized;
+    /// Additional mnemonic keys this type's parser registers under, for types
+    /// whose spellings do not share one prefix (e.g. floats parse as both
+    /// `f...` and `bf...`).
+    fn extra_parse_keys() -> &'static [&'static str]
+    where
+        Self: Sized,
+    {
+        &[]
+    }
     fn parse<'src>(
         mnemonic: &str,
         parser: &mut IRParser<'src>,

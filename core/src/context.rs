@@ -112,6 +112,10 @@ struct ContextInstance {
     /// `Block`'s membership mutators. Lets `parent_block` answer in O(1) instead of
     /// scanning every block's operation list.
     op_parent: Vec<Option<BlockId>>,
+    /// Reverse index from a block to the region that holds it, maintained by
+    /// [`Region::add_block`]. Together with [`Region::parent_op`] it lets walks
+    /// climb from an op to its enclosing ops.
+    block_parent: Vec<Option<RegionId>>,
     dialects: HashMap<&'static str, Arc<dyn Dialect>>,
     op_interface_converters:
         HashMap<(&'static str, &'static str, std::any::TypeId), OpInterfaceConverter>,
@@ -132,6 +136,7 @@ impl Context {
             blocks: Vec::new(),
             last_block_id: AtomicU32::new(0),
             op_parent: Vec::new(),
+            block_parent: Vec::new(),
             dialects: HashMap::new(),
             op_interface_converters: HashMap::new(),
             type_cache: vec![],
@@ -401,7 +406,7 @@ impl Context {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
         );
 
-        let region = Arc::new(Region::new(region_id));
+        let region = Arc::new(Region::new(region_id, self.as_context_ref()));
         slab_put(&mut inner.regions, region_id.index(), region.clone());
 
         region
@@ -439,6 +444,16 @@ impl Context {
         if let Some(slot) = inner.op_parent.get_mut(op.index()) {
             *slot = None;
         }
+    }
+
+    /// The region currently holding `block`, or `None` for a detached block.
+    /// Maintained by [`Region::add_block`]; see [`ContextInstance::block_parent`].
+    pub fn parent_region(&self, block: BlockId) -> Option<RegionId> {
+        slab_get(&self.0.read().block_parent, block.index()).copied()
+    }
+
+    pub(crate) fn set_block_parent(&self, block: BlockId, region: RegionId) {
+        slab_put(&mut self.0.write().block_parent, block.index(), region);
     }
 
     pub fn get_block(&self, id: BlockId) -> Arc<Block> {

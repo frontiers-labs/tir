@@ -1662,6 +1662,8 @@ fn make_parser(
                                    }
                                    tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Virtual { id: id as u32, class: class })
                                } else { ok = false; break; }
+                           } else if let Some(f) = parser.parse_float() {
+                               tir::attributes::AttributeValue::F64(f)
                            } else if let Some(n) = parser.parse_number() {
                                tir::attributes::AttributeValue::Int(n)
                            } else {

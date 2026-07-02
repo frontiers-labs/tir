@@ -153,6 +153,9 @@ fn make_register_types(_dialect_name: &str, types: &[Ident]) -> proc_macro2::Tok
         .map(|name| {
             quote! {
                 self.type_parsers.insert(#name::parse_key(), #name::parse);
+                for key in #name::extra_parse_keys() {
+                    self.type_parsers.insert(key, #name::parse);
+                }
             }
         })
         .collect::<Vec<_>>();

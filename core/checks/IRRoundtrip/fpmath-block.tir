@@ -1,0 +1,32 @@
+// RUN: tir opt %s | filecheck %s
+
+// The `fpmath` attribute rides on block labels; the entry block's label is
+// printed only when it carries attributes.
+
+module {
+  func @scoped(%0: !f64, %1: !i1) -> !f64 {
+  ^bb0 {fpmath = "contract,nnan"}:
+    %2 = mulf %0, %0 : !f64
+    cond_br %1, ^bb1, ^bb2
+  ^bb1 {fpmath = "none"}:
+    %3 = addf %2, %0 : !f64
+    return %3
+  ^bb2:
+    return %2
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: func @scoped(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !i1) -> !f64 {
+// CHECK-NEXT: ^bb0(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !i1) {fpmath = "contract,nnan"}:
+// CHECK-NEXT: %{{[0-9]+}} = mulf %{{[0-9]+}}, %{{[0-9]+}} : !f64
+// CHECK-NEXT: cond_br %{{[0-9]+}}, ^bb1, ^bb2
+// CHECK-NEXT: ^bb1 {fpmath = "none"}:
+// CHECK-NEXT: %{{[0-9]+}} = addf %{{[0-9]+}}, %{{[0-9]+}} : !f64
+// CHECK-NEXT: return %{{[0-9]+}}
+// CHECK-NEXT: ^bb2:
+// CHECK-NEXT: return %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// CHECK-NEXT: }

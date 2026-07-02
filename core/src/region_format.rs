@@ -20,21 +20,36 @@ pub fn print_block_label(
     block: &Arc<Block>,
     index: u32,
 ) -> Result<(), std::fmt::Error> {
+    fmt.write(format!("^bb{index}"))?;
+
     let args = block.arguments();
-    if args.is_empty() {
-        fmt.writeln(format!("^bb{index}:"))?;
-        return Ok(());
+    if !args.is_empty() {
+        fmt.write("(")?;
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                fmt.write(", ")?;
+            }
+            fmt.write(format!("%{}: ", arg.id().number()))?;
+            context.print_type(arg.ty(), fmt)?;
+        }
+        fmt.write(")")?;
     }
 
-    fmt.write(format!("^bb{index}("))?;
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
-            fmt.write(", ")?;
+    let attrs = block.attributes();
+    if !attrs.is_empty() {
+        fmt.write(" {")?;
+        for (i, attr) in attrs.iter().enumerate() {
+            if i > 0 {
+                fmt.write(", ")?;
+            }
+            fmt.write(&attr.name)?;
+            fmt.write(" = ")?;
+            attr.value.print(fmt, context)?;
         }
-        fmt.write(format!("%{}: ", arg.id().number()))?;
-        context.print_type(arg.ty(), fmt)?;
+        fmt.write("}")?;
     }
-    fmt.writeln("):")?;
+
+    fmt.writeln(":")?;
     Ok(())
 }
 
@@ -48,7 +63,9 @@ pub fn print_region(
     fmt.writeln(" {")?;
     fmt.push();
     for (index, block) in region.iter(context.clone()).enumerate() {
-        if index > 0 {
+        // The entry block is implicit, so its label appears only when needed to
+        // carry attributes.
+        if index > 0 || !block.attributes().is_empty() {
             print_block_label(fmt, context, &block, index as u32)?;
         }
         for op in block.iter(context.clone()) {

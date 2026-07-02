@@ -119,6 +119,56 @@ impl<'src> Parser<'src> {
         Some(val)
     }
 
+    /// Parse a float literal in Rust `{:?}` notation: a decimal point is
+    /// required (`3.0`, `-2.5e-3`), so plain integers are left for
+    /// [`Self::parse_number`]; `inf`/`-inf`/`NaN` cover the specials.
+    pub fn parse_float(&mut self) -> Option<f64> {
+        for (text, value) in [
+            ("-inf", f64::NEG_INFINITY),
+            ("inf", f64::INFINITY),
+            ("NaN", f64::NAN),
+        ] {
+            if self.parse_token(text) {
+                return Some(value);
+            }
+        }
+
+        let start = self.position as usize;
+        let bytes = self.src.as_bytes();
+        let mut i = start;
+        if i < bytes.len() && bytes[i] == b'-' {
+            i += 1;
+        }
+        let int_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == int_start || i >= bytes.len() || bytes[i] != b'.' {
+            return None;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+            let mut j = i + 1;
+            if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+                j += 1;
+            }
+            let exp_start = j;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > exp_start {
+                i = j;
+            }
+        }
+        let val: f64 = self.src[start..i].parse().ok()?;
+        self.position = i as u32;
+        self.skip_trivia();
+        Some(val)
+    }
+
     pub fn parse_value_ref(&mut self) -> Option<&'src str> {
         if !self.src.get(self.position as usize..)?.starts_with('%') {
             return None;

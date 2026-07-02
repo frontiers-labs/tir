@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::{BlockId, Context, ContextIterator, GetFromContext, OpId, Terminator};
+use crate::{
+    BlockId, Context, ContextIterator, GetFromContext, OpId, Terminator, context::ContextRef,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionId(u32);
@@ -12,6 +14,9 @@ pub struct Region {
     id: RegionId,
     blocks: RwLock<Vec<BlockId>>,
     parent_op: RwLock<OpId>,
+    /// Handle back to the owning context, used to keep its block-to-parent-region
+    /// index in step with `add_block`. Never held across a context lock.
+    context: ContextRef,
 }
 
 impl Region {
@@ -19,11 +24,12 @@ impl Region {
         self.id
     }
 
-    pub(crate) fn new(id: RegionId) -> Region {
+    pub(crate) fn new(id: RegionId, context: ContextRef) -> Region {
         Region {
             id,
             blocks: RwLock::new(vec![]),
             parent_op: RwLock::new(OpId::invalid()),
+            context,
         }
     }
 
@@ -31,8 +37,15 @@ impl Region {
         *self.parent_op.write() = op;
     }
 
+    /// The operation owning this region, if it has been attached to one.
+    pub fn parent_op(&self) -> Option<OpId> {
+        let op = *self.parent_op.read();
+        (op != OpId::invalid()).then_some(op)
+    }
+
     pub fn add_block(&self, id: BlockId) {
         self.blocks.write().push(id);
+        self.context.upgrade().set_block_parent(id, self.id);
     }
 
     pub fn iter(&self, context: Context) -> ContextIterator<BlockId> {
