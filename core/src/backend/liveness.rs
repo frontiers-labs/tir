@@ -1,12 +1,8 @@
 //! Liveness analysis over machine IR.
 //!
-//! After instruction selection, register operands live in op *attributes* as
-//! [`RegisterAttr::Virtual`] (whose `id` is the SSA value number) or
-//! [`RegisterAttr::Physical`], each tagged with an [`AttributeRole`] in the op's
-//! `attribute_roles` table. A handful of ops (e.g. `return`/`vret`) still carry
-//! their inputs as SSA `operands`/`results`; because a virtual register's `id`
-//! equals the value number, both notations name the same register and are unified
-//! here into a single `u32` virtual-register space.
+//! Register operands are resolved through [`op_regs`] (see
+//! [`crate::analysis::defuse`]), which unifies SSA `operands`/`results` and
+//! register-valued attributes into a single `u32` virtual-register space.
 //!
 //! The analysis computes, per block, the standard backward live-in/live-out sets,
 //! then replays a backward scan to derive the interference the register allocator
@@ -16,101 +12,12 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use tir::attributes::{AttributeRole, AttributeValue, RegisterAttr};
-use tir::{BlockId, Context, OpInstance};
+use tir::{BlockId, Context};
+
+pub use crate::analysis::defuse::{OpRegs, RegRef, op_regs};
 
 /// A physical register: its class name and encoding index.
 pub type PhysReg = (String, u16);
-
-/// A register operand resolved from an operation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RegRef {
-    Virtual { id: u32, class: Option<String> },
-    Physical { class: String, index: u16 },
-}
-
-/// The register operands of a single operation, split by direction. A
-/// read-modify-write operand appears in both `defs` and `uses`.
-#[derive(Clone, Debug, Default)]
-pub struct OpRegs {
-    pub defs: Vec<RegRef>,
-    pub uses: Vec<RegRef>,
-}
-
-fn role_writes(role: AttributeRole) -> bool {
-    matches!(
-        role,
-        AttributeRole::Def | AttributeRole::Clobber | AttributeRole::ReadWrite
-    )
-}
-
-fn role_reads(role: AttributeRole) -> bool {
-    matches!(role, AttributeRole::Use | AttributeRole::ReadWrite)
-}
-
-/// Resolve the register operands of one op from its SSA operands/results and its
-/// register-valued attributes (consulting the op's `attribute_roles`).
-pub fn op_regs(op: &OpInstance) -> OpRegs {
-    let mut regs = OpRegs::default();
-
-    // Builtin SSA ops (e.g. the block terminator) name registers positionally.
-    for result in &op.results {
-        regs.defs.push(RegRef::Virtual {
-            id: result.number(),
-            class: None,
-        });
-    }
-    for operand in &op.operands {
-        regs.uses.push(RegRef::Virtual {
-            id: operand.number(),
-            class: None,
-        });
-    }
-
-    // Machine ops carry their register operands in attributes, with a def/use role.
-    // An array of registers (e.g. a call's caller-saved clobber list) applies the
-    // attribute's role to every element.
-    for attr in &op.attributes {
-        let attr_regs: Vec<&RegisterAttr> = match &attr.value {
-            AttributeValue::Register(reg) => vec![reg],
-            AttributeValue::Array(items) => items
-                .iter()
-                .filter_map(|item| match item {
-                    AttributeValue::Register(reg) => Some(reg),
-                    _ => None,
-                })
-                .collect(),
-            _ => continue,
-        };
-        let role = op
-            .attribute_roles
-            .iter()
-            .find(|(name, _)| *name == attr.name)
-            .map(|(_, role)| *role)
-            .unwrap_or(AttributeRole::None);
-
-        for reg in attr_regs {
-            let reg_ref = match reg {
-                RegisterAttr::Virtual { id, class } => RegRef::Virtual {
-                    id: *id,
-                    class: class.clone(),
-                },
-                RegisterAttr::Physical { class, index } => RegRef::Physical {
-                    class: class.clone(),
-                    index: *index,
-                },
-            };
-            if role_writes(role) {
-                regs.defs.push(reg_ref.clone());
-            }
-            if role_reads(role) {
-                regs.uses.push(reg_ref);
-            }
-        }
-    }
-
-    regs
-}
 
 /// Per-op register information cached for the backward scans.
 struct OpInfo {
