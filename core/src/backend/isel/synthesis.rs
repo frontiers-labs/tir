@@ -20,13 +20,12 @@
 //!    through different kinds, and the cover picks whichever the target's
 //!    operand constraints admit.
 //!
-//! Extension goals deliberately exclude the `(ones n)` mask leaf: matching
-//! has no immediate-*range* legality yet (an `Immediate` constraint accepts
-//! any constant), so a discovered `zext(x, w) == and(x, 2^n - 1)` would beat
-//! the shift pair on cost and select `andi` with masks that do not encode
-//! (e.g. `0xffff` in a 12-bit field). Enable it once matching enforces
-//! immediate ranges. The full-register `(ones w)` leaf is safe — as an
-//! immediate it folds to `-1`.
+//! Extension goals include the `(ones n)` mask leaf: a discovered
+//! `zext(x, w) == and(x, 2^n - 1)` beats the shift pair on cost where the
+//! mask encodes, and matching's immediate-range legality (an `ImmRange` on
+//! the boundary) rejects the `and`-immediate match where it does not (e.g.
+//! `0xffff` in a 12-bit field), leaving the shift-pair realization to cover
+//! it. The full-register `(ones w)` leaf folds to `-1` as an immediate.
 //!
 //! The result is the same artifact a hand-written axiom would be — s-expr
 //! text through [`parse_axiom`] — so the compiled rewrite still re-proves
@@ -79,6 +78,8 @@ enum WLeaf {
     N,
     W,
     WMinusN,
+    /// `2^n - 1`, the mask of the extended value's bits.
+    OnesN,
     /// `2^w - 1`, the all-ones register (`-1` as an immediate).
     OnesW,
 }
@@ -91,6 +92,7 @@ impl WLeaf {
             WLeaf::N => n as u64,
             WLeaf::W => w as u64,
             WLeaf::WMinusN => (w - n) as u64,
+            WLeaf::OnesN => mask(n),
             WLeaf::OnesW => mask(w),
         }
     }
@@ -102,6 +104,7 @@ impl WLeaf {
             WLeaf::N => "n",
             WLeaf::W => "w",
             WLeaf::WMinusN => "(- w n)",
+            WLeaf::OnesN => "(ones n)",
             WLeaf::OnesW => "(ones w)",
         }
     }
@@ -124,11 +127,19 @@ const GOALS: &[(SymKind, GoalShape)] = &[
 ];
 
 impl GoalShape {
-    /// Constant leaves candidates may use. Extension goals omit `(ones n)`
-    /// masks until matching enforces immediate ranges (see the module doc).
+    /// Constant leaves candidates may use. Extension goals include the
+    /// `(ones n)` mask; immediate-range legality rejects the resulting
+    /// masked-`and` matches where the mask does not encode (see the module doc).
     fn leaves(self) -> &'static [WLeaf] {
         match self {
-            GoalShape::Extension => &[WLeaf::Zero, WLeaf::One, WLeaf::N, WLeaf::W, WLeaf::WMinusN],
+            GoalShape::Extension => &[
+                WLeaf::Zero,
+                WLeaf::One,
+                WLeaf::N,
+                WLeaf::W,
+                WLeaf::WMinusN,
+                WLeaf::OnesN,
+            ],
             GoalShape::Unary => &[WLeaf::Zero, WLeaf::One, WLeaf::W, WLeaf::OnesW],
         }
     }
@@ -169,6 +180,17 @@ impl Term {
             Term::X => true,
             Term::Const(_) => false,
             Term::Node(_, a, b) => a.contains_x() || b.contains_x(),
+        }
+    }
+
+    /// Whether the term folds a `ones` mask into an immediate. Such a
+    /// realization is conditional: matching rejects it where the mask does
+    /// not encode, so it never terminates the search on its own.
+    fn contains_ones_mask(&self) -> bool {
+        match self {
+            Term::X => false,
+            Term::Const(l) => matches!(l, WLeaf::OnesN | WLeaf::OnesW),
+            Term::Node(_, a, b) => a.contains_ones_mask() || b.contains_ones_mask(),
         }
     }
 
@@ -284,14 +306,14 @@ fn goal_eval(goal: SymKind, x: u64, n: u32, w: u32) -> u64 {
 /// per behavior class, the first few terms found (ordered by size).
 fn enumerate(
     kinds: &[SymKind],
-    shape: GoalShape,
+    leaves: &[WLeaf],
     samples: &[(u32, u32, Vec<u64>)],
 ) -> HashMap<Vec<u64>, Vec<Term>> {
     let mut classes: HashMap<Vec<u64>, Vec<Term>> = HashMap::new();
     let mut by_size: Vec<Vec<Term>> = Vec::with_capacity(MAX_OPS + 1);
 
     let leaves: Vec<Term> = std::iter::once(Term::X)
-        .chain(shape.leaves().iter().copied().map(Term::Const))
+        .chain(leaves.iter().copied().map(Term::Const))
         .collect();
     for leaf in &leaves {
         classes
@@ -357,18 +379,52 @@ fn render_axiom(goal: SymKind, shape: GoalShape, rhs: &Term, index: usize) -> St
     }
 }
 
-/// Search for proved bridges realizing `goal` over `kinds`: every candidate of
-/// the smallest proving size whose fingerprint matches the goal and that
-/// survives [`Axiom::prove`] at every sampled width pair. Same-size
-/// alternatives are all emitted — they realize the goal through different
-/// kinds and operand shapes, and the cover picks whichever the target's
-/// operand constraints admit.
+/// Search for proved bridges realizing `goal` over `kinds`. The main pass runs
+/// over the shape's full leaf vocabulary; when every realization it finds
+/// folds a `ones` mask into an immediate (`zext(x, w) == and(x, 2^n - 1)`,
+/// conditional: matching rejects it where the mask does not encode), a second
+/// pass without the mask leaves discovers the unconditional fallback (the
+/// shift pair) and both are emitted — the cover picks the mask where it
+/// encodes, the fallback everywhere else.
 fn discover_bridge_texts(goal: SymKind, shape: GoalShape, kinds: &[SymKind]) -> Vec<String> {
     if kinds.is_empty() {
         return Vec::new();
     }
+    let mut terms = proved_bridge_terms(goal, shape, kinds, shape.leaves());
+    if !terms.is_empty() && terms.iter().all(Term::contains_ones_mask) {
+        let mask_free: Vec<WLeaf> = shape
+            .leaves()
+            .iter()
+            .copied()
+            .filter(|leaf| !matches!(leaf, WLeaf::OnesN | WLeaf::OnesW))
+            .collect();
+        for term in proved_bridge_terms(goal, shape, kinds, &mask_free) {
+            if !terms.iter().any(|t| t.render() == term.render()) {
+                terms.push(term);
+            }
+        }
+    }
+    terms
+        .iter()
+        .enumerate()
+        .map(|(index, term)| render_axiom(goal, shape, term, index))
+        .collect()
+}
+
+/// The proved candidates of the smallest proving size over `leaves`: every
+/// candidate whose fingerprint matches the goal and that survives
+/// [`Axiom::prove`] at every sampled width pair. Same-size alternatives are
+/// all kept — they realize the goal through different kinds and operand
+/// shapes, and the cover picks whichever the target's operand constraints
+/// admit.
+fn proved_bridge_terms(
+    goal: SymKind,
+    shape: GoalShape,
+    kinds: &[SymKind],
+    leaves: &[WLeaf],
+) -> Vec<Term> {
     let samples = build_samples(shape);
-    let classes = enumerate(kinds, shape, &samples);
+    let classes = enumerate(kinds, leaves, &samples);
     let goal_fp: Vec<u64> = samples
         .iter()
         .flat_map(|&(n, w, ref xs)| xs.iter().map(move |&x| goal_eval(goal, x, n, w)))
@@ -376,7 +432,7 @@ fn discover_bridge_texts(goal: SymKind, shape: GoalShape, kinds: &[SymKind]) -> 
     let Some(candidates) = classes.get(&goal_fp) else {
         return Vec::new();
     };
-    let mut texts = Vec::new();
+    let mut terms = Vec::new();
     let mut proved_size = None;
     for candidate in candidates {
         if !candidate.contains_x() {
@@ -386,7 +442,7 @@ fn discover_bridge_texts(goal: SymKind, shape: GoalShape, kinds: &[SymKind]) -> 
         if proved_size.is_some_and(|s| candidate.size() > s) {
             break;
         }
-        let text = render_axiom(goal, shape, candidate, texts.len());
+        let text = render_axiom(goal, shape, candidate, 0);
         let axiom = parse_axiom(&text).expect("rendered axiom must parse");
         if shape
             .width_pairs()
@@ -394,10 +450,10 @@ fn discover_bridge_texts(goal: SymKind, shape: GoalShape, kinds: &[SymKind]) -> 
             .all(|&(n, w)| axiom.prove(&shape.prove_widths(n, w)))
         {
             proved_size = Some(candidate.size());
-            texts.push(text);
+            terms.push(candidate.clone());
         }
     }
-    texts
+    terms
 }
 
 /// The proved bridge axiom texts realizing `goal` over the target's atomic
@@ -509,7 +565,9 @@ mod tests {
     fn discovers_complement_alternatives() {
         // Both same-size realizations are emitted: the cover picks whichever
         // the target's operand constraints admit (xori folds `-1`; sub needs
-        // the all-ones value in a register).
+        // the all-ones value in a register). Both fold a `ones` mask, so the
+        // mask-free pass adds an unconditional fallback (`-x - 1`); xor's
+        // commutative twin `(xor x (ones w))` must still be pruned.
         let texts = discover_bridge_texts(
             SymKind::Not,
             GoalShape::Unary,
@@ -523,7 +581,11 @@ mod tests {
             texts.iter().any(|t| t.contains("(sub (ones w) x)")),
             "unexpected discoveries: {texts:?}"
         );
-        assert_eq!(texts.len(), 2, "commutative twin must be pruned: {texts:?}");
+        assert!(
+            texts.iter().any(|t| t.contains("(sub (sub 0 x) 1)")),
+            "unexpected discoveries: {texts:?}"
+        );
+        assert_eq!(texts.len(), 3, "commutative twin must be pruned: {texts:?}");
     }
 
     #[test]

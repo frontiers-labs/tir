@@ -179,20 +179,25 @@ pub struct ImmRange {
 }
 
 impl ImmRange {
-    /// Whether `value` is representable in the field, by numeric value: a
-    /// constant whose low `width` bits extend back to a different number is
-    /// rejected (e.g. 4096 in a signed 12-bit field).
+    /// Whether `value` is representable in the field: its 64-bit register
+    /// pattern must survive the encode/decode roundtrip (truncate to the
+    /// field, extend back per the field's signedness). So `4096` is rejected
+    /// by a signed 12-bit field (it would decode as `-2048`), while the
+    /// all-ones register constant fits any signed field as `-1`.
     pub fn contains(&self, value: &APInt) -> bool {
-        let v: i128 = if value.is_signed() {
-            i128::from(value.to_i64())
+        let bits = if value.is_signed() {
+            value.to_i64() as u64
         } else {
-            i128::from(value.to_u64())
+            value.to_u64()
         };
+        if self.width >= 64 {
+            return true;
+        }
         if self.signed {
-            let half = 1i128 << (self.width.min(64) - 1);
-            (-half..half).contains(&v)
+            let shift = 64 - self.width;
+            (((bits << shift) as i64) >> shift) as u64 == bits
         } else {
-            v >= 0 && (self.width >= 64 || v < (1i128 << self.width))
+            bits >> self.width == 0
         }
     }
 }

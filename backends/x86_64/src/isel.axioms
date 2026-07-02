@@ -4,7 +4,9 @@
 
 (axiom sext-bridge (vars (x n)) (root w) (where (< n w)) (lhs (sext x w)) (rhs (ashr (shl x (- w n)) (- w n))))
 
-(axiom zext-bridge (vars (x n)) (root w) (where (< n w)) (lhs (zext x w)) (rhs (lshr (shl x (- w n)) (- w n))))
+(axiom zext-bridge (vars (x n)) (root w) (where (< n w)) (lhs (zext x w)) (rhs (and (ones n) x)))
+
+(axiom zext-bridge-2 (vars (x n)) (root w) (where (< n w)) (lhs (zext x w)) (rhs (lshr (shl x (- w n)) (- w n))))
 
 (axiom neg-bridge (vars (x w)) (root w) (lhs (neg x)) (rhs (sub 0 x)))
 
@@ -13,3 +15,7 @@
 (axiom not-bridge (vars (x w)) (root w) (lhs (not x)) (rhs (sub (ones w) x)))
 
 (axiom not-bridge-2 (vars (x w)) (root w) (lhs (not x)) (rhs (xor (ones w) x)))
+
+(axiom not-bridge-3 (vars (x w)) (root w) (lhs (not x)) (rhs (sub 0 (add 1 x))))
+
+(axiom not-bridge-4 (vars (x w)) (root w) (lhs (not x)) (rhs (sub (sub 0 x) 1)))
