@@ -5,7 +5,6 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     OpId, ValueId,
-    graph::NodeId,
     pbqp::{self, INF_COST, PbqpAlternative, PbqpMatrix, PbqpProblem},
     sem::SymKind,
 };
@@ -56,7 +55,7 @@ impl CaptureBindings {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PatternNodeBinding {
-    pub(crate) pattern_node: NodeId,
+    pub(crate) pattern_node: Id,
     pub(crate) class: Id,
     pub(crate) is_boundary: bool,
 }
@@ -75,7 +74,7 @@ pub(crate) enum PbqpIselAlternative {
     },
     Internal {
         match_id: usize,
-        pattern_node: NodeId,
+        pattern_node: Id,
     },
     /// The class's value is not needed in a register: its only consumer is a
     /// fused conditional branch that recomputes the condition from its own
@@ -89,7 +88,7 @@ pub(crate) struct PbqpIselMatch {
     pub(crate) pattern_index: usize,
     pub(crate) rule_index: usize,
     pub(crate) root: Id,
-    pub(crate) pattern_root: NodeId,
+    pub(crate) pattern_root: Id,
     pub(crate) bindings: FullMatchBindings,
     pub(crate) cost: u64,
 }
@@ -439,8 +438,5 @@ pub(crate) fn child_requirement(
 
 pub(crate) enum ChildRequirement {
     Materialized,
-    SameMatch {
-        match_id: usize,
-        pattern_node: NodeId,
-    },
+    SameMatch { match_id: usize, pattern_node: Id },
 }

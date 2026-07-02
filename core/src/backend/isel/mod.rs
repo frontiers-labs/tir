@@ -2,13 +2,13 @@
 //!
 //! Each block's operations are lowered into an e-graph of semantic expressions
 //! ([`builder`]), saturated with proved algebraic rewrites ([`rewrites`]), and
-//! covered by the target's instruction patterns ([`pattern`]) via a PBQP
-//! instance over e-classes ([`cover`]). The solved cover becomes an emission
-//! plan ([`emit`]) the pass commits through the rewriter.
+//! covered by the target's instruction patterns ([`pattern`]) — e-matched by
+//! the shared [`tir_symbolic::egraph`] engine — via a PBQP instance over
+//! e-classes ([`cover`]). The solved cover becomes an emission plan ([`emit`])
+//! the pass commits through the rewriter.
 
 mod builder;
 mod cover;
-mod ematch;
 mod emit;
 mod node;
 mod pattern;
@@ -20,16 +20,14 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     Block, BlockId, BranchGuard, BranchTerminator, Context, OpId, Operation, OperationRef, Pass,
-    PassError, PassTarget, Rewriter, TypeId, ValueId,
-    graph::{NodeId, OperandConstraint, PatternExpr},
-    sem::{SemGraph, SymKind},
+    PassError, PassTarget, Rewriter, TypeId, ValueId, graph::OperandConstraint, sem::SemGraph,
 };
 use tir_adt::APInt;
-use tir_symbolic::egraph::{ENode, Id};
+use tir_symbolic::egraph::{ENode, Id, Var};
 
-pub use ematch::EMatch;
 pub use node::{SemEGraph, SemNode, SemPayload};
 pub use rewrites::{IselRewrite, SaturationLimits};
+pub use tir_symbolic::egraph::EMatch;
 
 use builder::SemDagBuilder;
 use cover::{
@@ -964,14 +962,15 @@ impl InstructionSelectPass {
             let RuleKind::CondBranch { target_symbol } = rule.kind else {
                 continue;
             };
-            for m in ematch::ematch(&cache.egraph, context, &compiled.pattern) {
-                if cache.egraph.find(m.root()) != guard.class {
+            for m in compiled.search(&cache.egraph, context) {
+                if cache.egraph.find(m.root) != guard.class {
                     continue;
                 }
 
                 let mut captures = CaptureBindings::new();
-                for (pattern_node, symbol) in &compiled.boundary_symbols {
-                    captures.bind(*symbol, cache.egraph.find(m.binding(*pattern_node)));
+                for (var, class) in m.subst.entries() {
+                    let Var::Symbol(symbol) = var else { continue };
+                    captures.bind(*symbol, cache.egraph.find(class));
                 }
 
                 // Every operand must resolve: immediates fold into the encoding;
@@ -1031,25 +1030,30 @@ impl InstructionSelectPass {
             if rule.kind != RuleKind::Value {
                 continue;
             }
-            let Some(pattern_root) = compiled.pattern.root() else {
-                continue;
-            };
-            let pattern = &compiled.pattern;
+            let pattern_root = compiled.pattern.root();
 
             // A pure class may sit interior to any number of matches: each fused
             // instruction recomputes it, and whether the defining op is erased is
             // the solver's separate Consume decision. A shared *memory effect*
             // must stay materialized — it may be a match root or a boundary
             // operand, never an interior node a larger match would consume.
-            let allowed = |pattern_node: NodeId, class: Id| {
+            // Boundaries additionally honor the rule's register/immediate/width
+            // requirements.
+            let allowed = |pattern_node: Id, class: Id| {
+                if !compiled.boundary_ok(&cache.egraph, context, pattern_node, class) {
+                    return false;
+                }
                 pattern_node == pattern_root
-                    || pattern.is_duplicable(pattern_node)
+                    || compiled.node_meta[pattern_node.index()].duplicable
                     || node::class_is_pure(&cache.egraph, class)
                     || !cache.shared_classes.contains(&cache.egraph.find(class))
             };
 
-            for m in ematch::ematch_with_legality(&cache.egraph, context, pattern, &allowed) {
-                let root = cache.egraph.find(m.root());
+            for m in compiled
+                .pattern
+                .search_with_legality(&cache.egraph, &allowed)
+            {
+                let root = cache.egraph.find(m.root);
                 let op_id = cache.op_by_root.get(&root).copied();
                 // Instructions root at computed values: an original op result, or a
                 // rewrite-introduced intermediate (which has no op). Matches rooted at
@@ -1064,25 +1068,25 @@ impl InstructionSelectPass {
                 }
 
                 let mut captures = CaptureBindings::new();
-                for (pattern_node, symbol) in &compiled.boundary_symbols {
-                    captures.bind(*symbol, cache.egraph.find(m.binding(*pattern_node)));
+                for (var, class) in m.subst.entries() {
+                    let Var::Symbol(symbol) = var else { continue };
+                    captures.bind(*symbol, cache.egraph.find(class));
                 }
 
-                let pattern_nodes = (0..pattern.len())
-                    .map(NodeId::from_index)
-                    .map(|pattern_node| PatternNodeBinding {
-                        pattern_node,
-                        class: cache.egraph.find(m.binding(pattern_node)),
-                        // Constants are boundary-like: pure, folded into the
-                        // encoding, never consumed by the match — so the same
-                        // constant class (e.g. the literal 0) can sit inside one
-                        // match and under a boundary of another without making
-                        // the cover infeasible.
-                        is_boundary: match pattern.get_node(pattern_node) {
-                            PatternExpr::Boundary => true,
-                            PatternExpr::Node(node) => node.kind == SymKind::Constant,
-                            _ => false,
-                        },
+                let pattern_nodes = (0..compiled.pattern.len())
+                    .map(|index| Id::from_raw(index as u32))
+                    .map(|pattern_node| {
+                        let meta = &compiled.node_meta[pattern_node.index()];
+                        PatternNodeBinding {
+                            pattern_node,
+                            class: cache.egraph.find(m.binding(pattern_node)),
+                            // Constants are boundary-like: pure, folded into the
+                            // encoding, never consumed by the match — so the same
+                            // constant class (e.g. the literal 0) can sit inside one
+                            // match and under a boundary of another without making
+                            // the cover infeasible.
+                            is_boundary: meta.is_boundary || meta.is_constant,
+                        }
                     })
                     .collect();
                 let bindings = FullMatchBindings {

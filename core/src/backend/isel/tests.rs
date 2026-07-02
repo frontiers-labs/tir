@@ -603,9 +603,10 @@ fn internal_node_type_constraint_is_enforced() {
 #[test]
 fn saturation_bridges_sign_extension_to_shift_pair() {
     use super::SaturationLimits;
-    use tir::graph::{OperandConstraint, Pattern, PatternExpr};
+    use super::pattern::compile_isel_pattern;
     use tir::sem::{SymKind, SymPayload};
     use tir_adt::APInt;
+    use tir_symbolic::egraph::Var;
 
     let ctx = Context::with_default_dialects();
     let i16 = IntegerType::new(&ctx, 16);
@@ -646,32 +647,29 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
     );
 
     // An immediate `srai` pattern matches the class, with shift amount 64-16=48.
-    let mut srai = Pattern::<SemNode, ()>::new(());
-    let rs1 = srai.add_node(PatternExpr::Boundary);
-    srai.set_duplicable(rs1, true);
-    // A width requirement must not reject the rewrite-introduced shl class:
-    // it carries no IR type, and introduced classes are produced at register
-    // width by the instructions that materialize them.
-    srai.set_operand_width(rs1, 64);
-    let imm = srai.add_node(PatternExpr::Boundary);
-    srai.set_duplicable(imm, true);
-    srai.set_operand_constraint(imm, OperandConstraint::Immediate);
-    let root = srai.add_node(PatternExpr::Node(template_node(
-        SymKind::ShiftRightArithmetic,
-        None,
-        None,
-    )));
-    srai.add_edge(root, rs1);
-    srai.add_edge(root, imm);
-    srai.set_root(root);
+    // The width requirement on the shifted value must not reject the
+    // rewrite-introduced shl class: it carries no IR type, and introduced
+    // classes are produced at register width by the instructions that
+    // materialize them.
+    let compiled = compile_isel_pattern(
+        0,
+        &shift_imm_pattern(SymKind::ShiftRightArithmetic),
+        &[(1, OperandConstraint::Immediate)],
+        &[(0, 64)],
+    )
+    .expect("srai pattern should compile");
 
-    let matches = super::ematch::ematch(&egraph, &ctx, &srai);
+    let matches = compiled.search(&egraph, &ctx);
     let m = matches
         .iter()
-        .find(|m| egraph.find(m.root()) == egraph.find(sext))
+        .find(|m| egraph.find(m.root) == egraph.find(sext))
         .expect("an immediate srai must match the sext class after saturation");
+    let imm_class = m
+        .subst
+        .get(&Var::Symbol(1))
+        .expect("shift amount operand bound");
     let shift_amount = egraph
-        .nodes(m.binding(imm))
+        .nodes(imm_class)
         .iter()
         .find_map(|n| match n.payload.as_ref() {
             Some(super::SemPayload::Expr(SymPayload::Int(v))) => Some(v.to_u64()),
@@ -929,7 +927,7 @@ fn memory_ops_select_via_interfaces() {
 #[test]
 fn merged_value_classes_resolve_to_earliest_def() {
     use super::{EMatch, IselRewrite};
-    use tir::graph::{Pattern, PatternExpr};
+    use tir_symbolic::egraph::{Pattern, Var};
 
     let context = Context::with_default_dialects();
     let module = ops::module(&context, None).build();
@@ -961,25 +959,22 @@ fn merged_value_classes_resolve_to_earliest_def() {
 
     // A test-only "proof" that x*y == x+y: union the Mul class with the Add
     // class, exactly the shape a discovered algebraic bridge produces.
-    let mut searcher = Pattern::<SemNode, ()>::new(());
-    let lhs = searcher.add_node(PatternExpr::Boundary);
-    searcher.set_duplicable(lhs, true);
-    let rhs = searcher.add_node(PatternExpr::Boundary);
-    searcher.set_duplicable(rhs, true);
-    let root = searcher.add_node(PatternExpr::Node(template_node(SymKind::Mul, None, None)));
-    searcher.add_edge(root, lhs);
-    searcher.add_edge(root, rhs);
-    searcher.set_root(root);
+    let mut searcher = Pattern::<SemNode, u32>::new();
+    let lhs = searcher.var(Var::Symbol(0));
+    let rhs = searcher.var(Var::Symbol(1));
+    let mut mul_root = template_node(SymKind::Mul, None, None);
+    mul_root.children = vec![lhs, rhs];
+    searcher.add(mul_root);
     let union_mul_add = IselRewrite {
         name: "mul-equals-add".to_string(),
         searcher,
-        apply: Box::new(|_ctx: &Context, egraph: &mut SemEGraph, m: &EMatch| {
+        apply: Box::new(|_ctx: &Context, egraph: &mut SemEGraph, m: &EMatch<u32>| {
             let add_class = egraph
                 .classes()
                 .find(|class| class.nodes().iter().any(|n| n.kind == SymKind::Add))
                 .map(|class| class.id());
             if let Some(add_class) = add_class {
-                egraph.union(m.root(), add_class);
+                egraph.union(m.root, add_class);
             }
         }),
     };

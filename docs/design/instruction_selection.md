@@ -17,7 +17,7 @@ does the rest.
 | `isel/mod.rs` | public API (`Rule`, `EmitRequest`, cost-model traits), the pass driver and per-block cache |
 | `isel/node.rs` | the `SemNode` label, `SemPayload`, and e-class helpers (`class_binding`, widths) |
 | `isel/builder.rs` | `SemDagBuilder`: IR ops → semantic e-graph, including memory effects |
-| `isel/pattern.rs` | `compile_isel_pattern`: rule semantics → matchable `Pattern`s |
+| `isel/pattern.rs` | `compile_isel_pattern`: rule semantics → `tir_symbolic::egraph::Pattern`s + per-node metadata |
 | `isel/rewrites.rs` | discovery of proved algebraic rewrites (`discover_rewrites`) |
 | `isel/cover.rs` | PBQP construction, match dominance pruning, completeness check |
 | `isel/emit.rs` | `BlockPlan` and `EmissionBuilder`: cover → per-op decisions |
@@ -143,11 +143,16 @@ introduced shift nodes are untyped, so they match width-agnostic shift patterns.
 ## 3. Patterns and matches
 
 Each `Rule`'s pattern is compiled once (`compile_isel_pattern`) into a
-`Pattern<SemNode>`. Operand leaves become **Boundary** nodes (capture points,
-recorded in `boundary_symbols`); interior nodes become typed/untyped `Node`s.
-`specificity` counts type-constrained nodes — the tie-breaker (see below).
+`tir_symbolic::egraph::Pattern<SemNode, u32>`. Operand leaves become
+`Var::Symbol` holes (capture points — the match's substitution binds them);
+interior nodes become typed/untyped templates, with per-node register /
+immediate / width requirements kept in `node_meta`. `specificity` counts
+type-constrained nodes — the tie-breaker (see below).
 
-`collect_block_matches` ematches every pattern against the saturated e-graph,
+`collect_block_matches` e-matches every pattern against the saturated e-graph
+(via the shared `tir_symbolic::egraph` search engine — the same matcher
+instcombine uses — with operand constraints and match legality supplied as a
+legality callback),
 producing a `PbqpIselMatch` per hit:
 
 ```rust
@@ -369,8 +374,8 @@ and the Def-role register attribute claims their def-site.
 | `SemNode` | e-graph label: `(kind, payload, ty)` |
 | `SemDagBuilder` | lowers a block's ops into the e-graph |
 | `Rule` | a target's pattern + emitter + base cost + operand constraints |
-| `CompiledIselPattern` | a rule's pattern compiled for ematch, with boundary symbols + specificity |
-| `PbqpIselMatch` | one ematch hit: root class, bindings, cost |
+| `CompiledIselPattern` | a rule's pattern compiled for e-matching, with per-node metadata + specificity |
+| `PbqpIselMatch` | one e-match hit: root class, bindings, cost |
 | `BlockSelectionCache` | per-block memo: egraph + side tables + solved plan |
 | `BlockPlan` / `IntroducedEmit` | the emission plan and its synthesized instructions |
 | `EmissionBuilder` | turns a cover into per-op `RuleMatch`es, materializing introduced classes |
