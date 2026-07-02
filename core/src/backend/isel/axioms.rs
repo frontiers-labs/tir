@@ -18,7 +18,8 @@
 //! An RHS template references declared vars, `root` (the matched class),
 //! nested `(<kind> ...)` nodes, and integer expressions over bound widths — a
 //! bare expression becomes a width-64 constant, `(const <expr> <width>)`
-//! picks the width explicitly.
+//! picks the width explicitly. Node kinds are the op-sem surface's fixed-arity
+//! vocabulary ([`op_kind`]).
 //!
 //! The proof obligation depends on what the RHS reads. Referencing only
 //! `root`, the lemma quantifies over an opaque root value of the root's width
@@ -35,7 +36,8 @@ use tir::{
     Context,
     graph::NodeId,
     sem::{
-        EquivalenceOracle, SemExpr, SemGraph, SmtOracle, SymKind, SymPayload, con, op, parse, sym,
+        EquivalenceOracle, SemExpr, SemGraph, SmtOracle, SymKind, SymPayload, con, op, op_kind,
+        parse, sym,
     },
 };
 use tir_adt::APInt;
@@ -107,18 +109,25 @@ impl Guard {
     }
 }
 
-enum LhsNode {
-    /// A hole: a declared var, a width name (matching the constant operand
-    /// that carries the width), or an undeclared wildcard.
-    Atom(String),
-    Node(SymKind, Vec<LhsNode>),
+/// One template tree shared by both sides; which leaves are legal where is
+/// enforced at parse by [`Side`].
+enum AxNode {
+    /// An LHS capture hole — a declared var (`Some(index)`, also referencable
+    /// from the RHS), or a width name / wildcard (`None`). In proofs a
+    /// width-name hole realizes as the constant carrying that width.
+    Hole(String, Option<usize>),
+    /// The matched root class (RHS only).
+    Root,
+    /// An integer expression materialized as a constant of the given width
+    /// (RHS only).
+    Const(WidthExpr, u32),
+    Node(SymKind, Vec<AxNode>),
 }
 
-enum RhsNode {
-    Var(usize),
-    Root,
-    Const(WidthExpr, u32),
-    Node(SymKind, Vec<RhsNode>),
+#[derive(Clone, Copy, PartialEq)]
+enum Side {
+    Lhs,
+    Rhs,
 }
 
 pub(crate) struct Axiom {
@@ -131,32 +140,10 @@ pub(crate) struct Axiom {
     vars: Vec<(String, WidthBinding)>,
     root_width: WidthBinding,
     guards: Vec<Guard>,
-    lhs: LhsNode,
-    rhs: RhsNode,
+    lhs: AxNode,
+    rhs: AxNode,
     /// The RHS references the matched root itself (excludes var references).
     uses_root: bool,
-}
-
-fn kind_of(name: &str) -> Option<SymKind> {
-    Some(match name {
-        "sext" => SymKind::SExt,
-        "zext" => SymKind::ZExt,
-        "shl" => SymKind::ShiftLeft,
-        "lshr" => SymKind::ShiftRightLogic,
-        "ashr" => SymKind::ShiftRightArithmetic,
-        "if" => SymKind::If,
-        "eq" => SymKind::Eq,
-        "ne" => SymKind::Ne,
-        "lt" => SymKind::Lt,
-        "le" => SymKind::Le,
-        "gt" => SymKind::Gt,
-        "ge" => SymKind::Ge,
-        "ult" => SymKind::ULt,
-        "ule" => SymKind::ULe,
-        "ugt" => SymKind::UGt,
-        "uge" => SymKind::UGe,
-        _ => return None,
-    })
 }
 
 fn atom(e: &SemExpr) -> Option<&str> {
@@ -253,26 +240,41 @@ pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
         }
     }
 
-    let lhs = parse_lhs(lhs_expr.ok_or("missing lhs section")?)?;
-    if matches!(lhs, LhsNode::Atom(_)) {
+    let lhs = parse_node(
+        lhs_expr.ok_or("missing lhs section")?,
+        Side::Lhs,
+        &vars,
+        &width_names,
+    )?;
+    if !matches!(lhs, AxNode::Node(..)) {
         return Err("lhs must be a pattern node, not a bare atom".into());
     }
     let root_width = root_width.ok_or("missing root section")?;
-    let rhs = parse_rhs(rhs_expr.ok_or("missing rhs section")?, &vars, &width_names)?;
+    let rhs = parse_node(
+        rhs_expr.ok_or("missing rhs section")?,
+        Side::Rhs,
+        &vars,
+        &width_names,
+    )?;
 
     let mut uses_root = false;
     let mut used_vars = HashSet::new();
-    rhs_references(&rhs, &mut uses_root, &mut used_vars);
+    references(&rhs, &mut uses_root, &mut used_vars);
     if uses_root && !used_vars.is_empty() {
         return Err("rhs may reference `root` or vars, not both".into());
     }
+    let mut lhs_holes = Vec::new();
+    holes_of(&lhs, &mut lhs_holes);
+    for &i in &used_vars {
+        if !lhs_holes.iter().any(|(_, v)| *v == Some(i)) {
+            return Err(format!("rhs var `{}` never bound by the lhs", vars[i].0));
+        }
+    }
     if !used_vars.is_empty() {
         // The proof realizes the whole LHS, so every hole needs a known width.
-        let mut atoms = Vec::new();
-        lhs_atoms(&lhs, &mut atoms);
-        for a in atoms {
-            if !vars.iter().any(|(v, _)| *v == a) && !width_names.contains(&a) {
-                return Err(format!("lhs atom `{a}` must be declared to be provable"));
+        for (name, var) in &lhs_holes {
+            if var.is_none() && !width_names.contains(name) {
+                return Err(format!("lhs atom `{name}` must be declared to be provable"));
             }
         }
     }
@@ -322,98 +324,93 @@ fn parse_width_expr(e: &SemExpr, width_names: &[String]) -> Result<WidthExpr, St
     }
 }
 
-fn parse_lhs(e: &SemExpr) -> Result<LhsNode, String> {
-    match e {
-        SemExpr::Atom(a) => {
-            if a.parse::<u64>().is_ok() {
-                Err("integer literals cannot be lhs operands".into())
-            } else {
-                Ok(LhsNode::Atom(a.clone()))
-            }
-        }
-        SemExpr::List(parts) => {
-            let [SemExpr::Atom(head), children @ ..] = parts.as_slice() else {
-                return Err("lhs nodes must be (<kind> <operand>...)".into());
-            };
-            let kind = kind_of(head).ok_or_else(|| format!("unknown lhs kind `{head}`"))?;
-            if kind.arity() != children.len() {
-                return Err(format!("`{head}` expects {} operands", kind.arity()));
-            }
-            let children = children.iter().map(parse_lhs).collect::<Result<_, _>>()?;
-            Ok(LhsNode::Node(kind, children))
-        }
-    }
-}
-
-fn parse_rhs(
+/// Parse one template tree; atoms resolve to holes on the LHS and to var
+/// references / constants on the RHS, node heads through the shared op-sem
+/// vocabulary ([`op_kind`]).
+fn parse_node(
     e: &SemExpr,
+    side: Side,
     vars: &[(String, WidthBinding)],
     width_names: &[String],
-) -> Result<RhsNode, String> {
+) -> Result<AxNode, String> {
     match e {
         SemExpr::Atom(a) => {
             if a == "root" {
-                Ok(RhsNode::Root)
-            } else if let Some(i) = vars.iter().position(|(v, _)| v == a) {
-                Ok(RhsNode::Var(i))
-            } else {
-                Ok(RhsNode::Const(parse_width_expr(e, width_names)?, 64))
+                return match side {
+                    Side::Lhs => Err("`root` cannot appear in the lhs".into()),
+                    Side::Rhs => Ok(AxNode::Root),
+                };
+            }
+            let var = vars.iter().position(|(v, _)| v == a);
+            match side {
+                Side::Lhs if a.parse::<u64>().is_ok() => {
+                    Err("integer literals cannot be lhs operands".into())
+                }
+                Side::Lhs => Ok(AxNode::Hole(a.clone(), var)),
+                Side::Rhs => match var {
+                    Some(i) => Ok(AxNode::Hole(a.clone(), Some(i))),
+                    None => Ok(AxNode::Const(parse_width_expr(e, width_names)?, 64)),
+                },
             }
         }
         SemExpr::List(parts) => {
             let [SemExpr::Atom(head), rest @ ..] = parts.as_slice() else {
-                return Err("rhs nodes must be (<kind> <operand>...)".into());
+                return Err("template nodes must be (<kind> <operand>...)".into());
             };
             match head.as_str() {
-                "-" => Ok(RhsNode::Const(parse_width_expr(e, width_names)?, 64)),
-                "const" => {
+                "-" if side == Side::Rhs => {
+                    Ok(AxNode::Const(parse_width_expr(e, width_names)?, 64))
+                }
+                "const" if side == Side::Rhs => {
                     let [value, SemExpr::Atom(width)] = rest else {
                         return Err("const form is (const <expr> <width>)".into());
                     };
                     let width: u32 = width
                         .parse()
                         .map_err(|_| "const width must be an integer")?;
-                    Ok(RhsNode::Const(parse_width_expr(value, width_names)?, width))
+                    Ok(AxNode::Const(parse_width_expr(value, width_names)?, width))
                 }
                 _ => {
-                    let kind = kind_of(head).ok_or_else(|| format!("unknown rhs kind `{head}`"))?;
+                    let kind = op_kind(head).ok_or_else(|| format!("unknown kind `{head}`"))?;
                     if kind.arity() != rest.len() {
                         return Err(format!("`{head}` expects {} operands", kind.arity()));
                     }
                     let children = rest
                         .iter()
-                        .map(|c| parse_rhs(c, vars, width_names))
+                        .map(|c| parse_node(c, side, vars, width_names))
                         .collect::<Result<_, _>>()?;
-                    Ok(RhsNode::Node(kind, children))
+                    Ok(AxNode::Node(kind, children))
                 }
             }
         }
     }
 }
 
-fn rhs_references(node: &RhsNode, uses_root: &mut bool, vars: &mut HashSet<usize>) {
+/// What the RHS reads: the matched root and/or declared vars.
+fn references(node: &AxNode, uses_root: &mut bool, vars: &mut HashSet<usize>) {
     match node {
-        RhsNode::Root => *uses_root = true,
-        RhsNode::Var(i) => {
+        AxNode::Root => *uses_root = true,
+        AxNode::Hole(_, Some(i)) => {
             vars.insert(*i);
         }
-        RhsNode::Const(..) => {}
-        RhsNode::Node(_, children) => {
+        AxNode::Hole(_, None) | AxNode::Const(..) => {}
+        AxNode::Node(_, children) => {
             for c in children {
-                rhs_references(c, uses_root, vars);
+                references(c, uses_root, vars);
             }
         }
     }
 }
 
-fn lhs_atoms(node: &LhsNode, out: &mut Vec<String>) {
+fn holes_of(node: &AxNode, out: &mut Vec<(String, Option<usize>)>) {
     match node {
-        LhsNode::Atom(a) => out.push(a.clone()),
-        LhsNode::Node(_, children) => {
+        AxNode::Hole(name, var) => out.push((name.clone(), *var)),
+        AxNode::Node(_, children) => {
             for c in children {
-                lhs_atoms(c, out);
+                holes_of(c, out);
             }
         }
+        AxNode::Root | AxNode::Const(..) => {}
     }
 }
 
@@ -425,8 +422,8 @@ impl Axiom {
 
     /// Every node kind the RHS introduces, for target-capability gating.
     pub(crate) fn rhs_kinds(&self) -> HashSet<SymKind> {
-        fn walk(node: &RhsNode, out: &mut HashSet<SymKind>) {
-            if let RhsNode::Node(kind, children) = node {
+        fn walk(node: &AxNode, out: &mut HashSet<SymKind>) {
+            if let AxNode::Node(kind, children) = node {
                 out.insert(*kind);
                 for c in children {
                     walk(c, out);
@@ -515,11 +512,12 @@ impl Axiom {
             let root_sym = sym(&mut rhs, 0);
             sym(&mut lhs, 0);
             let built = self
-                .realize_rhs(
+                .realize(
                     &self.rhs,
                     &mut rhs,
-                    &mut HashMap::new(),
                     widths,
+                    register_width,
+                    Side::Rhs,
                     Some(root_sym),
                 )
                 .is_some();
@@ -528,10 +526,10 @@ impl Axiom {
             // Register realization: each var is the low bits of a full-width
             // register symbol in the lhs; the rhs reads the register whole.
             let built = self
-                .realize_lhs(&self.lhs, &mut lhs, widths, register_width)
+                .realize(&self.lhs, &mut lhs, widths, register_width, Side::Lhs, None)
                 .is_some()
                 && self
-                    .realize_rhs(&self.rhs, &mut rhs, &mut HashMap::new(), widths, None)
+                    .realize(&self.rhs, &mut rhs, widths, register_width, Side::Rhs, None)
                     .is_some();
             (built, self.vars.len())
         };
@@ -542,59 +540,43 @@ impl Axiom {
         SmtOracle.equivalent(&lhs, &rhs, &symbol_widths)
     }
 
-    fn realize_lhs(
+    /// Build one side of the proof. A declared var is a register-wide symbol —
+    /// narrowed to its class width through an extract on the LHS, read whole on
+    /// the RHS; a width-name hole is the constant carrying that width.
+    fn realize(
         &self,
-        node: &LhsNode,
+        node: &AxNode,
         g: &mut SemGraph,
         widths: &[u64],
         register_width: u32,
-    ) -> Option<NodeId> {
-        match node {
-            LhsNode::Atom(a) => {
-                if let Some(i) = self.vars.iter().position(|(v, _)| v == a) {
-                    let class_w = self.vars[i].1.value(widths) as u32;
-                    let s = sym(g, i as u32);
-                    if class_w == register_width {
-                        Some(s)
-                    } else if class_w < register_width {
-                        let hi = con(g, (class_w - 1) as u64, 16);
-                        let lo = con(g, 0, 16);
-                        Some(op(g, SymKind::Extract, &[s, hi, lo]))
-                    } else {
-                        None
-                    }
-                } else {
-                    // A width name: the constant operand carrying that width.
-                    let i = self.width_names.iter().position(|n| n == a)?;
-                    Some(con(g, widths[i], 16))
-                }
-            }
-            LhsNode::Node(kind, children) => {
-                let children = children
-                    .iter()
-                    .map(|c| self.realize_lhs(c, g, widths, register_width))
-                    .collect::<Option<Vec<_>>>()?;
-                Some(op(g, *kind, &children))
-            }
-        }
-    }
-
-    fn realize_rhs(
-        &self,
-        node: &RhsNode,
-        g: &mut SemGraph,
-        syms: &mut HashMap<usize, NodeId>,
-        widths: &[u64],
+        side: Side,
         root_sym: Option<NodeId>,
     ) -> Option<NodeId> {
         match node {
-            RhsNode::Root => root_sym,
-            RhsNode::Var(i) => Some(*syms.entry(*i).or_insert_with(|| sym(g, *i as u32))),
-            RhsNode::Const(e, width) => Some(con(g, e.eval(widths)?, *width)),
-            RhsNode::Node(kind, children) => {
+            AxNode::Root => root_sym,
+            AxNode::Hole(_, Some(i)) => {
+                let s = sym(g, *i as u32);
+                let class_w = self.vars[*i].1.value(widths) as u32;
+                if side == Side::Rhs || class_w == register_width {
+                    Some(s)
+                } else if class_w < register_width {
+                    let hi = con(g, (class_w - 1) as u64, 16);
+                    let lo = con(g, 0, 16);
+                    Some(op(g, SymKind::Extract, &[s, hi, lo]))
+                } else {
+                    None
+                }
+            }
+            AxNode::Hole(name, None) => {
+                // A width name: the constant operand carrying that width.
+                let i = self.width_names.iter().position(|n| n == name)?;
+                Some(con(g, widths[i], 16))
+            }
+            AxNode::Const(e, width) => Some(con(g, e.eval(widths)?, *width)),
+            AxNode::Node(kind, children) => {
                 let children = children
                     .iter()
-                    .map(|c| self.realize_rhs(c, g, syms, widths, root_sym))
+                    .map(|c| self.realize(c, g, widths, register_width, side, root_sym))
                     .collect::<Option<Vec<_>>>()?;
                 Some(op(g, *kind, &children))
             }
@@ -604,21 +586,21 @@ impl Axiom {
     /// Build the RHS in the e-graph from a match's bindings.
     fn instantiate(
         &self,
-        node: &RhsNode,
+        node: &AxNode,
         eg: &mut SemEGraph,
         m: &EMatch<u32>,
         holes: &HashMap<String, Id>,
         widths: &[u64],
     ) -> Option<Id> {
         Some(match node {
-            RhsNode::Root => m.root,
-            RhsNode::Var(i) => m.binding(holes[&self.vars[*i].0]),
-            RhsNode::Const(e, width) => eg.add(template_node(
+            AxNode::Root => m.root,
+            AxNode::Hole(name, _) => m.binding(holes[name]),
+            AxNode::Const(e, width) => eg.add(template_node(
                 SymKind::Constant,
                 Some(SymPayload::Int(APInt::new(*width, e.eval(widths)?))),
                 None,
             )),
-            RhsNode::Node(kind, children) => {
+            AxNode::Node(kind, children) => {
                 let children = children
                     .iter()
                     .map(|c| self.instantiate(c, eg, m, holes, widths))
@@ -631,26 +613,26 @@ impl Axiom {
     }
 }
 
-/// Lower the LHS into a search pattern: atoms become capture holes (one per
+/// Lower the LHS into a search pattern: holes become capture vars (one per
 /// name), nodes become untyped templates. The LHS root is added last, so it is
 /// the pattern root.
 fn compile_lhs(
-    node: &LhsNode,
+    node: &AxNode,
     searcher: &mut Pattern<SemNode, u32>,
     holes: &mut HashMap<String, Id>,
     next_symbol: &mut u32,
 ) -> Id {
     match node {
-        LhsNode::Atom(a) => {
-            if let Some(&id) = holes.get(a) {
+        AxNode::Hole(name, _) => {
+            if let Some(&id) = holes.get(name) {
                 return id;
             }
             let id = searcher.var(Var::Symbol(*next_symbol));
             *next_symbol += 1;
-            holes.insert(a.clone(), id);
+            holes.insert(name.clone(), id);
             id
         }
-        LhsNode::Node(kind, children) => {
+        AxNode::Node(kind, children) => {
             let children: Vec<Id> = children
                 .iter()
                 .map(|c| compile_lhs(c, searcher, holes, next_symbol))
@@ -659,6 +641,7 @@ fn compile_lhs(
             n.children = children;
             searcher.add(n)
         }
+        AxNode::Root | AxNode::Const(..) => unreachable!("rejected when parsing the lhs"),
     }
 }
 

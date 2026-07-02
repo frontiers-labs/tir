@@ -11,7 +11,7 @@ use crate::{Operation, ValueId};
 
 pub use tir_symbolic::lang::{
     BuildError, Memory, SemBuilderHooks, SemExpr, SymKind, SymPayload, Value, build,
-    canonicalize_for_selection, execute, execute_with_memory, infer_widths, parse,
+    canonicalize_for_selection, execute, execute_with_memory, infer_widths, op_kind, parse,
 };
 
 mod discover;
