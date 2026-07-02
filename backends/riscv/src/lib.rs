@@ -713,6 +713,7 @@ fn create_isel_pass_for(
     features: &[Feature],
 ) -> tir::backend::isel::InstructionSelectPass {
     tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, features))
+        .with_axioms(include_str!("isel.axioms"))
         .with_register_definers(get_register_definers(context, features))
         .with_branch_emitters(tir::backend::isel::BranchEmitters {
             uncond: emit_uncond_branch,
@@ -1212,6 +1213,20 @@ mod tests {
         assert_eq!(rv32.machines(), vec!["scr1-3stage"]);
         assert!(rv32.machine_model("scr1-3stage").is_some());
         assert!(rv32.machine_model("rv64-ooo").is_none());
+    }
+
+    #[test]
+    fn committed_isel_axioms_are_fresh() {
+        let context = Context::with_default_dialects();
+        let discovered = tir::backend::isel::discover_axioms(&crate::get_isel_rules(
+            &context,
+            crate::Feature::ALL,
+        ));
+        assert_eq!(
+            include_str!("isel.axioms"),
+            tir::backend::isel::render_axioms_file(&discovered),
+            "isel.axioms is stale; run `cargo run -p tir-tools --bin tir -- axioms --write`"
+        );
     }
 
     #[test]

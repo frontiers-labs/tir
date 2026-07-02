@@ -14,6 +14,7 @@ mod emit;
 mod node;
 mod pattern;
 mod rewrites;
+mod synthesis;
 #[cfg(test)]
 mod tests;
 
@@ -31,6 +32,7 @@ use tir_symbolic::egraph::{ENode, Id, Var};
 
 pub use node::{SemEGraph, SemNode, SemPayload};
 pub use rewrites::{IselRewrite, SaturationLimits};
+pub use synthesis::{discover_axioms, render_axioms_file};
 pub use tir_symbolic::egraph::EMatch;
 
 use builder::SemDagBuilder;
@@ -401,6 +403,23 @@ impl InstructionSelectPass {
     /// the rule set stays free of hand-written selection rules.
     pub fn with_rewrites(mut self, rewrites: Vec<IselRewrite>) -> Self {
         self.rewrites = rewrites;
+        self
+    }
+
+    /// Install the target's discovered bridge axioms (the committed
+    /// `isel.axioms` file the `tir axioms` utility generates). An axiom whose
+    /// RHS needs a kind the rule set has no atomic instruction for is dropped —
+    /// a stale file degrades coverage, never correctness — and every applied
+    /// width instantiation is still proved first (see [`axioms`](self)).
+    pub fn with_axioms(mut self, file: &str) -> Self {
+        let atomics = pattern::atomic_kinds(&self.compiled_patterns);
+        for form in axioms::axiom_forms(file) {
+            let axiom = axioms::parse_axiom(&form)
+                .unwrap_or_else(|e| panic!("invalid axiom `{form}`: {e}"));
+            if axiom.rhs_kinds().is_subset(&atomics) {
+                self.rewrites.push(axiom.compile());
+            }
+        }
         self
     }
 

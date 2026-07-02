@@ -10,35 +10,48 @@ use crate::lang::{SymKind, SymPayload};
 /// [`SymKind::arity`]. Excludes the context-dependent forms [`build`] resolves
 /// itself (unary `sext`/`zext`/`trunc` taking the result width, `(concat
 /// iter)`, `map`/`reduce` lambdas).
+const OP_VOCABULARY: &[(&str, SymKind)] = &[
+    ("add", SymKind::Add),
+    ("sub", SymKind::Sub),
+    ("mul", SymKind::Mul),
+    ("div", SymKind::Div),
+    ("and", SymKind::And),
+    ("or", SymKind::Or),
+    ("xor", SymKind::Xor),
+    ("shl", SymKind::ShiftLeft),
+    ("lshr", SymKind::ShiftRightLogic),
+    ("ashr", SymKind::ShiftRightArithmetic),
+    ("zip", SymKind::Zip),
+    ("split", SymKind::Split),
+    ("sext", SymKind::SExt),
+    ("zext", SymKind::ZExt),
+    ("if", SymKind::If),
+    ("eq", SymKind::Eq),
+    ("ne", SymKind::Ne),
+    ("lt", SymKind::Lt),
+    ("le", SymKind::Le),
+    ("gt", SymKind::Gt),
+    ("ge", SymKind::Ge),
+    ("ult", SymKind::ULt),
+    ("ule", SymKind::ULe),
+    ("ugt", SymKind::UGt),
+    ("uge", SymKind::UGe),
+];
+
+/// The [`SymKind`] an operator atom names, if any.
 pub fn op_kind(name: &str) -> Option<SymKind> {
-    Some(match name {
-        "add" => SymKind::Add,
-        "sub" => SymKind::Sub,
-        "mul" => SymKind::Mul,
-        "div" => SymKind::Div,
-        "and" => SymKind::And,
-        "or" => SymKind::Or,
-        "xor" => SymKind::Xor,
-        "shl" => SymKind::ShiftLeft,
-        "lshr" => SymKind::ShiftRightLogic,
-        "ashr" => SymKind::ShiftRightArithmetic,
-        "zip" => SymKind::Zip,
-        "split" => SymKind::Split,
-        "sext" => SymKind::SExt,
-        "zext" => SymKind::ZExt,
-        "if" => SymKind::If,
-        "eq" => SymKind::Eq,
-        "ne" => SymKind::Ne,
-        "lt" => SymKind::Lt,
-        "le" => SymKind::Le,
-        "gt" => SymKind::Gt,
-        "ge" => SymKind::Ge,
-        "ult" => SymKind::ULt,
-        "ule" => SymKind::ULe,
-        "ugt" => SymKind::UGt,
-        "uge" => SymKind::UGe,
-        _ => return None,
-    })
+    OP_VOCABULARY
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|&(_, k)| k)
+}
+
+/// The operator atom naming a [`SymKind`]; inverse of [`op_kind`].
+pub fn op_name(kind: SymKind) -> Option<&'static str> {
+    OP_VOCABULARY
+        .iter()
+        .find(|&&(_, k)| k == kind)
+        .map(|&(n, _)| n)
 }
 
 /// Parsed s-expression: surface syntax of an op's `sem = "..."`; [`build`] lowers it.
@@ -488,6 +501,14 @@ mod tests {
         match execute(&g, &[a, b]) {
             Value::RawBits(bits) => assert_eq!(bits.bytes(), &[0x04, 0x06]),
             other => panic!("expected raw bits, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn op_vocabulary_roundtrips() {
+        for &(name, kind) in OP_VOCABULARY {
+            assert_eq!(op_kind(name), Some(kind));
+            assert_eq!(op_name(kind), Some(name));
         }
     }
 

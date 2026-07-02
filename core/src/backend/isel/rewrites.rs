@@ -4,9 +4,9 @@
 use tir::{Context, sem::SymKind};
 use tir_symbolic::egraph::{EMatch, Pattern, PatternNode};
 
-use super::axioms::{bool_materialize_axioms, extension_axioms};
+use super::axioms::bool_materialize_axioms;
 use super::node::{SemEGraph, SemNode};
-use super::pattern::{CompiledIselPattern, atomic_kinds};
+use super::pattern::CompiledIselPattern;
 
 /// The right-hand side of an [`IselRewrite`]: given the e-graph and a match, assert
 /// the proven equivalence (typically by building nodes and unioning the result with
@@ -71,22 +71,13 @@ pub fn saturate(
     eg.rebuild();
 }
 
-/// Select the target-independent [`super::axioms`] the rule set can realize. An
-/// extension bridge is included when the target has an atomic instruction for
-/// every node its RHS introduces; the boolean materializer bridges are included
-/// when the rule set has an `If`-rooted materializer (the `slt`-style "set
-/// register to comparison" instructions). Every included axiom still proves each
-/// width instantiation before it unions (see [`super::axioms`]).
+/// The target-independent axioms every rule set gets: the boolean materializer
+/// bridges, included when the rule set has an `If`-rooted materializer (the
+/// `slt`-style "set register to comparison" instructions). Target-specific
+/// bridges are discovered offline by the `tir axioms` utility and installed
+/// through [`super::InstructionSelectPass::with_axioms`]. Every axiom still
+/// proves each width instantiation before it unions (see [`super::axioms`]).
 pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRewrite> {
-    let atomics = atomic_kinds(patterns);
-    let mut rewrites = Vec::new();
-
-    for axiom in extension_axioms() {
-        if axiom.rhs_kinds().is_subset(&atomics) {
-            rewrites.push(axiom.compile());
-        }
-    }
-
     let has_if_materializer = patterns.iter().any(|compiled| {
         matches!(
             compiled.pattern.node(compiled.pattern.root()),
@@ -94,8 +85,11 @@ pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRew
         )
     });
     if has_if_materializer {
-        rewrites.extend(bool_materialize_axioms().into_iter().map(|a| a.compile()));
+        bool_materialize_axioms()
+            .into_iter()
+            .map(|a| a.compile())
+            .collect()
+    } else {
+        Vec::new()
     }
-
-    rewrites
 }

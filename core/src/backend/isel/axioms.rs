@@ -153,6 +153,39 @@ fn atom(e: &SemExpr) -> Option<&str> {
     }
 }
 
+/// Split an axiom file (`;` line comments, one `(axiom ...)` form per
+/// balanced-paren span) into its forms.
+pub(crate) fn axiom_forms(file: &str) -> Vec<String> {
+    let text: String = file
+        .lines()
+        .filter(|line| !line.trim_start().starts_with(';'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut forms = Vec::new();
+    let mut depth = 0usize;
+    let mut start = None;
+    for (i, c) in text.char_indices() {
+        match c {
+            '(' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0
+                    && let Some(s) = start.take()
+                {
+                    forms.push(text[s..=i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    forms
+}
+
 pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
     let parsed = parse(text).ok_or("malformed s-expression")?;
     let SemExpr::List(items) = &parsed else {
@@ -501,8 +534,9 @@ impl Axiom {
         widths.into_iter().collect()
     }
 
-    /// Prove this width instantiation with the [`SmtOracle`].
-    fn prove(&self, widths: &[u64]) -> bool {
+    /// Prove one width instantiation with the [`SmtOracle`]; `widths` follows
+    /// the width names' declaration order (`vars` first, then `root`).
+    pub(crate) fn prove(&self, widths: &[u64]) -> bool {
         let register_width = self.root_width.value(widths) as u32;
         let mut lhs = SemGraph::new();
         let mut rhs = SemGraph::new();
@@ -645,24 +679,6 @@ fn compile_lhs(
     }
 }
 
-/// The extension bridges: realize a sub-word `sext`/`zext` as a shift pair on
-/// the full register.
-pub(crate) fn extension_axioms() -> Vec<Axiom> {
-    [
-        "(axiom sext-via-shifts
-           (vars (x n)) (root w) (where (< n w))
-           (lhs (sext x w))
-           (rhs (ashr (shl x (- w n)) (- w n))))",
-        "(axiom zext-via-shifts
-           (vars (x n)) (root w) (where (< n w))
-           (lhs (zext x w))
-           (rhs (lshr (shl x (- w n)) (- w n))))",
-    ]
-    .iter()
-    .map(|text| parse_axiom(text).expect("builtin axiom must parse"))
-    .collect()
-}
-
 /// The boolean materializer bridges: any width-1 comparison equals the
 /// `If(c, 1, 0)` shape TMDL derives for `slt`-style instructions.
 pub(crate) fn bool_materialize_axioms() -> Vec<Axiom> {
@@ -721,14 +737,21 @@ mod tests {
         eg.nodes(class).iter().map(|n| n.kind).collect()
     }
 
+    fn shift_pair_axiom(ext: &str, shr: &str) -> Axiom {
+        parse_axiom(&format!(
+            "(axiom {ext}-via-shifts
+               (vars (x n)) (root w) (where (< n w))
+               (lhs ({ext} x w))
+               (rhs ({shr} (shl x (- w n)) (- w n))))"
+        ))
+        .unwrap()
+    }
+
     #[test]
     fn proved_extension_axiom_unions_shift_pair() {
         let ctx = Context::with_default_dialects();
         let (mut eg, root) = extension_egraph(&ctx, SymKind::ZExt);
-        let axiom = extension_axioms()
-            .into_iter()
-            .find(|a| a.name() == "zext-via-shifts")
-            .unwrap();
+        let axiom = shift_pair_axiom("zext", "lshr");
         apply_all(&ctx, &mut eg, &axiom.compile());
         assert!(class_kinds(&eg, root).contains(&SymKind::ShiftRightLogic));
     }
@@ -776,10 +799,7 @@ mod tests {
         ext.children = vec![v, width];
         let root = eg.add(ext);
 
-        let axiom = extension_axioms()
-            .into_iter()
-            .find(|a| a.name() == "sext-via-shifts")
-            .unwrap();
+        let axiom = shift_pair_axiom("sext", "ashr");
         apply_all(&ctx, &mut eg, &axiom.compile());
         assert_eq!(class_kinds(&eg, root), HashSet::from([SymKind::SExt]));
     }
@@ -814,14 +834,12 @@ mod tests {
 
     #[test]
     fn extension_axiom_reports_its_rhs_kinds() {
-        let kinds: Vec<HashSet<SymKind>> =
-            extension_axioms().iter().map(|a| a.rhs_kinds()).collect();
         assert_eq!(
-            kinds[0],
+            shift_pair_axiom("sext", "ashr").rhs_kinds(),
             HashSet::from([SymKind::ShiftRightArithmetic, SymKind::ShiftLeft])
         );
         assert_eq!(
-            kinds[1],
+            shift_pair_axiom("zext", "lshr").rhs_kinds(),
             HashSet::from([SymKind::ShiftRightLogic, SymKind::ShiftLeft])
         );
     }

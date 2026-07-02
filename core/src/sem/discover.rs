@@ -171,7 +171,7 @@ fn values_bit_eq(a: &Value, b: &Value) -> bool {
 
 /// Boundary values (0, 1, all-ones, sign bit, alternating patterns) plus a small
 /// deterministic LCG spread, all masked to `width` bits.
-fn sample_values(width: u32, extra: usize) -> Vec<APInt> {
+pub(crate) fn sample_values(width: u32, extra: usize) -> Vec<APInt> {
     let mask = if width >= 64 {
         u64::MAX
     } else {
@@ -246,10 +246,10 @@ fn shift_pair(shr_kind: SymKind, k: u32, w: u32) -> SemGraph {
     g
 }
 
-/// Representative `(source_width, register_width)` pairs the extension bridge is
-/// confirmed against. Covering several widths is what justifies generalizing the
-/// shift amount to the symbolic `w - n`.
-const EXT_WIDTH_SAMPLES: &[(u32, u32)] = &[(8, 32), (16, 32), (8, 64), (16, 64), (32, 64)];
+/// Representative `(source_width, register_width)` pairs width-parameterized
+/// identities are sampled at, spanning several source widths per register width.
+pub(crate) const EXT_WIDTH_SAMPLES: &[(u32, u32)] =
+    &[(8, 32), (16, 32), (8, 64), (16, 64), (32, 64)];
 
 /// Confirm that extending the low `n` bits of a register (`ext_kind` ∈ {`SExt`,
 /// `ZExt`}) equals `shr_kind(shl(x, w - n), w - n)` for every sampled width pair.

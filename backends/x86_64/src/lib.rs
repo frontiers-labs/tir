@@ -1,6 +1,7 @@
 //! x86-64 backend prototype, generated from the TMDL descriptions in `defs/`.
 
 pub use isa::X86_64Dialect;
+pub use isa::{Feature, get_isel_rules};
 
 mod isa {
     // Generated code: not everything is used by this asm-focused prototype.
@@ -199,6 +200,7 @@ mod isa {
 
         fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
             tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, Feature::ALL))
+                .with_axioms(include_str!("isel.axioms"))
         }
 
         fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
@@ -268,4 +270,21 @@ mod isa {
     }
 
     tir::register_target!(select_x86_64, ["x86_64"]);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn committed_isel_axioms_are_fresh() {
+        let context = tir::Context::with_default_dialects();
+        let discovered = tir::backend::isel::discover_axioms(&crate::get_isel_rules(
+            &context,
+            crate::Feature::ALL,
+        ));
+        assert_eq!(
+            include_str!("isel.axioms"),
+            tir::backend::isel::render_axioms_file(&discovered),
+            "isel.axioms is stale; run `cargo run -p tir-tools --bin tir -- axioms --write`"
+        );
+    }
 }

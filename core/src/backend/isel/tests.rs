@@ -629,11 +629,12 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
     sext_node.children = vec![v, width];
     let sext = egraph.add(sext_node);
 
-    let rewrite = super::axioms::extension_axioms()
-        .into_iter()
-        .find(|a| a.name() == "sext-via-shifts")
-        .expect("builtin sext axiom")
-        .compile();
+    let text = super::synthesis::synthesize_bridge_text(
+        SymKind::SExt,
+        &std::collections::HashSet::from([SymKind::ShiftLeft, SymKind::ShiftRightArithmetic]),
+    )
+    .expect("sext bridge discovered");
+    let rewrite = super::axioms::parse_axiom(&text).unwrap().compile();
     super::rewrites::saturate(
         &ctx,
         &mut egraph,
@@ -770,9 +771,12 @@ fn square_sign_extension_lowers_to_shift_pair() {
         .with_operand_constraints(vec![(1, OperandConstraint::Immediate)]),
     ];
 
+    // The dev-utility flow: discover the bridge axioms for this rule set
+    // offline, then install the rendered file on the pass.
+    let axioms = super::render_axioms_file(&super::discover_axioms(&rules));
     let mut pm = PassManager::new();
     pm.nest(FuncOp::name())
-        .add_pass(InstructionSelectPass::new(rules));
+        .add_pass(InstructionSelectPass::new(rules).with_axioms(&axioms));
     pm.run(&context, context.get_op(module.id()))
         .expect("square should select");
 

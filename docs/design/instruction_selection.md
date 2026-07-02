@@ -19,7 +19,8 @@ does the rest.
 | `isel/builder.rs` | `SemDagBuilder`: IR ops → semantic e-graph, including memory effects |
 | `isel/pattern.rs` | `compile_isel_pattern`: rule semantics → `tir_symbolic::egraph::Pattern`s + per-node metadata |
 | `isel/axioms.rs` | s-expression axioms and their compilation into proved rewrites |
-| `isel/rewrites.rs` | selection of applicable axioms (`discover_rewrites`), saturation driver |
+| `isel/synthesis.rs` | offline discovery of bridge axioms by enumeration (`discover_axioms`) |
+| `isel/rewrites.rs` | the built-in boolean bridges (`discover_rewrites`), saturation driver |
 | `isel/cover.rs` | PBQP construction, match dominance pruning, completeness check |
 | `isel/emit.rs` | `BlockPlan` and `EmissionBuilder`: cover → per-op decisions |
 
@@ -122,20 +123,30 @@ dominates every later use in the block.
 
 Before tiling, the e-graph is saturated with target-independent algebraic
 identities (`self.rewrites`). These are **not** hand-written selection rules — they
-are bit-vector lemmas the target's own instructions happen to realize, declared
-as s-expressions in `isel/axioms.rs`:
+are bit-vector lemmas the target's own instructions happen to realize, expressed
+as s-expression axioms (`isel/axioms.rs`):
 
 ```
-(axiom sext-via-shifts
+(axiom sext-bridge
   (vars (x n)) (root w) (where (< n w))
   (lhs (sext x w))
   (rhs (ashr (shl x (- w n)) (- w n))))
 ```
 
-`discover_rewrites` selects the axioms the rule set can realize (an extension
-bridge needs an atomic instruction for every node its RHS introduces, e.g.
-`slli` plus the matching right shift) and compiles each into a rewrite. The
-compiled applier resolves the axiom's width names from the matched classes
+Nobody writes these by hand either: the `tir axioms` developer utility
+*discovers* them (`isel/synthesis.rs`) whenever a backend's instruction set
+changes. Discovery enumerates candidate terms over the target's atomic
+instruction kinds, directly in the axiom language (constant leaves are width
+expressions, so candidates are width-parameterized by construction), prunes by
+behavioral fingerprint over sampled inputs at several `(n, w)` pairs, and
+accepts the smallest candidate the `SmtOracle` proves at every sampled pair.
+The result is committed as `backends/<t>/src/isel.axioms`, installed by the
+backend through `with_axioms`, and guarded by a per-backend freshness test
+that re-runs discovery and diffs the file. `with_axioms` drops any axiom whose
+RHS needs a kind the rule set has no atomic instruction for, so a stale file
+degrades coverage, never correctness.
+
+The compiled applier resolves the axiom's width names from the matched classes
 (`n` from `x`'s class, `w` from the root), checks the guards, and **proves the
 exact width instantiation** with the `SmtOracle` (an unsat check through
 `tir-symbolic`'s QF_BV bit-blaster, memoized per instantiation) before it
