@@ -1134,9 +1134,17 @@ impl tir::backend::TargetMachine for RiscvTarget {
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         if self.config.xlen == 64 {
-            vec![obj::lower_constant_rv64, obj::lower_constantf_rv64]
+            vec![
+                obj::lower_constant_rv64,
+                obj::lower_constantf_rv64,
+                obj::lower_addr_of,
+            ]
         } else {
-            vec![obj::lower_constant_rv32, obj::lower_constantf_rv32]
+            vec![
+                obj::lower_constant_rv32,
+                obj::lower_constantf_rv32,
+                obj::lower_addr_of,
+            ]
         }
     }
 
@@ -1157,7 +1165,7 @@ impl tir::backend::TargetMachine for RiscvTarget {
     }
 
     fn object_format(&self) -> Option<tir::backend::binary::ObjectFormatInfo> {
-        Some(obj::object_format(self.config.xlen))
+        Some(obj::object_format(self.config.xlen, &self.config.features))
     }
 
     fn binary_writer(&self, _context: &tir::Context) -> Option<tir::backend::binary::BinaryWriter> {

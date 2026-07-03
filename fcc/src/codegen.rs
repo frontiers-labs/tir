@@ -385,3 +385,119 @@ impl FnCodegen<'_> {
         Ok(*self.values.last().unwrap())
     }
 }
+
+/// Decode the C escape sequences of a string literal's source text into the
+/// bytes the program observes. `cir.string` keeps the source spelling; the
+/// hoisted data must hold real bytes.
+fn decode_c_escapes(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('0') => out.push('\0'),
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some('\'') => out.push('\''),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Hoist every `cir.string` into a module-level `.rodata` section and rewrite
+/// its use into a `builtin.addr_of` of the string's local symbol; identical
+/// literals share one symbol. Runs only ahead of the machine backend — the
+/// asm-dialect data ops it creates mean nothing to earlier stages.
+pub fn hoist_strings(context: &Context, module: &ModuleOp) -> Result<(), tir::PassError> {
+    use tir::attributes::AttributeValue;
+    use tir::backend::{
+        LiteralOpBuilder, SectionEndOpBuilder, SectionOpBuilder, SymbolEndOpBuilder,
+        SymbolOpBuilder,
+    };
+
+    let mut rewriter = tir::Rewriter::new(context.clone());
+    let mut strings: Vec<(String, String)> = Vec::new();
+    let mut labels: HashMap<String, String> = HashMap::new();
+
+    for op_id in module.body().op_ids() {
+        let op = context.get_op(op_id);
+        if op.clone().as_op::<tir::builtin::FuncOp>().is_none() {
+            continue;
+        }
+        let region = context.get_region(op.regions[0]);
+        for block in region.iter(context.clone()) {
+            for op_id in block.op_ids() {
+                let op = context.get_op(op_id);
+                let Some(string) = op.clone().as_op::<cir::StringOp>() else {
+                    continue;
+                };
+                let value = string
+                    .attributes()
+                    .iter()
+                    .find(|attr| attr.name == "value")
+                    .and_then(|attr| match &attr.value {
+                        AttributeValue::Str(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .expect("cir.string must carry a value");
+                let label = labels
+                    .entry(value.clone())
+                    .or_insert_with(|| {
+                        let label = format!(".L.str{}", strings.len());
+                        strings.push((label.clone(), decode_c_escapes(&value)));
+                        label
+                    })
+                    .clone();
+                let result_ty = context.get_value(string.result()).ty();
+                let addr = b::addr_of_op(context, &label, result_ty);
+                rewriter.replace_op(
+                    &tir::OperationRef::new(op, Some(block.clone()), None),
+                    &addr,
+                )?;
+            }
+        }
+    }
+
+    if strings.is_empty() {
+        return Ok(());
+    }
+
+    let section = SectionOpBuilder::new(context)
+        .attr("name", AttributeValue::Str(".rodata".to_string()))
+        .build();
+    let mut section_builder = IRBuilder::new(section.body());
+    for (label, value) in strings {
+        let symbol = SymbolOpBuilder::new(context)
+            .attr("name", AttributeValue::Str(label))
+            .attr("binding", AttributeValue::Str("local".to_string()))
+            .attr("kind", AttributeValue::Str("object".to_string()))
+            .build();
+        let mut symbol_builder = IRBuilder::new(symbol.body());
+        symbol_builder.insert(
+            LiteralOpBuilder::new(context)
+                .attr("kind", AttributeValue::Str("asciz".to_string()))
+                .attr("value", AttributeValue::Str(value))
+                .build(),
+        );
+        symbol_builder.insert(SymbolEndOpBuilder::new(context).build());
+        section_builder.insert(symbol);
+    }
+    section_builder.insert(SectionEndOpBuilder::new(context).build());
+
+    // Splice the section in ahead of the module terminator.
+    let body = module.body();
+    let end = body.op_ids().len().saturating_sub(1);
+    body.insert(end, section.id());
+    Ok(())
+}

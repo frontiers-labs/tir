@@ -13,10 +13,24 @@ use crate::{
 
 const R_RISCV_BRANCH: u32 = 16;
 const R_RISCV_JAL: u32 = 17;
+const R_RISCV_HI20: u32 = 26;
+const R_RISCV_LO12_I: u32 = 27;
 const R_RISCV_RVC_BRANCH: u32 = 44;
 const R_RISCV_RVC_JUMP: u32 = 45;
 
-pub(crate) fn object_format(xlen: u32) -> ObjectFormatInfo {
+const EF_RISCV_RVC: u32 = 0x1;
+const EF_RISCV_FLOAT_ABI_DOUBLE: u32 = 0x4;
+
+pub(crate) fn object_format(xlen: u32, features: &[crate::Feature]) -> ObjectFormatInfo {
+    // e_flags declare the ABI the object was built for; linkers refuse to mix
+    // float ABIs, so D-extension targets must claim lp64d/ilp32d.
+    let mut elf_flags = 0;
+    if features.contains(&crate::Feature::C) {
+        elf_flags |= EF_RISCV_RVC;
+    }
+    if features.contains(&crate::Feature::D) {
+        elf_flags |= EF_RISCV_FLOAT_ABI_DOUBLE;
+    }
     ObjectFormatInfo {
         elf_machine: EM_RISCV,
         elf_class: if xlen == 64 {
@@ -24,7 +38,7 @@ pub(crate) fn object_format(xlen: u32) -> ObjectFormatInfo {
         } else {
             ElfClass::Elf32
         },
-        elf_flags: 0,
+        elf_flags,
         reloc_for: |op| match op {
             "jal" => Some(RelocKind {
                 r_type: R_RISCV_JAL,
@@ -44,6 +58,16 @@ pub(crate) fn object_format(xlen: u32) -> ObjectFormatInfo {
             }),
             "c.beqz" | "c.bnez" => Some(RelocKind {
                 r_type: R_RISCV_RVC_BRANCH,
+                addend: 0,
+            }),
+            // Symbol-operand `lui`/`addi` only come from `lower_addr_of`'s
+            // absolute-address pair; immediate forms never carry fixups.
+            "lui" => Some(RelocKind {
+                r_type: R_RISCV_HI20,
+                addend: 0,
+            }),
+            "addi" => Some(RelocKind {
+                r_type: R_RISCV_LO12_I,
                 addend: 0,
             }),
             _ => None,
@@ -145,6 +169,38 @@ fn materialize_int(
             .build();
         Ok(Box::new(add))
     }
+}
+
+/// Pre-RA: materialize an `addr_of` symbol address as the absolute
+/// `lui rd, %hi(sym)` + `addi rd, rd, %lo(sym)` pair. Both instructions carry
+/// the symbol as their immediate; the encoder turns that into R_RISCV_HI20 and
+/// R_RISCV_LO12_I relocations (absolute addressing, so executables must link
+/// non-PIE).
+pub(crate) fn lower_addr_of(
+    context: &tir::Context,
+    op: &tir::OperationRef,
+    rewriter: &mut tir::Rewriter,
+) -> Result<bool, tir::PassError> {
+    use tir::builtin::AddressOfOp;
+
+    let Some(addr_of) = op.as_op::<AddressOfOp>() else {
+        return Ok(false);
+    };
+    let sym = addr_of.sym_name();
+    let dest = virt(addr_of.result().number(), "GPR");
+
+    let lui = crate::LoadUpperImmOpBuilder::new(context)
+        .attr("rd", dest.clone())
+        .attr("imm", AttributeValue::Str(sym.clone()))
+        .build();
+    rewriter.insert_op_before(op, &lui)?;
+    let addi = crate::AddImmOpBuilder::new(context)
+        .attr("rd", dest.clone())
+        .attr("rs1", dest)
+        .attr("imm", AttributeValue::Str(sym))
+        .build();
+    rewriter.replace_op(op, &addi)?;
+    Ok(true)
 }
 
 /// Pre-RA: materialize a `constantf` into its bit pattern in a scratch GPR

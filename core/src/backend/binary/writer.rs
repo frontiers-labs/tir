@@ -9,7 +9,7 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 
 use tir::attributes::AttributeValue;
-use tir::builtin::{ModuleEndOp, ModuleOp};
+use tir::builtin::{DeclareOp, ModuleEndOp, ModuleOp};
 use tir::{BlockId, Context, Operation};
 
 use super::format::ObjectFormatInfo;
@@ -18,7 +18,7 @@ use super::{
     ObjectFile, SectionKind, SymBinding, SymKind,
 };
 use crate::backend::{
-    BlockEndOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp,
+    BlockEndOp, LiteralOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,19 +127,29 @@ impl BinaryWriter {
                 || op.name == SectionEndOp::name()
                 || op.name == SymbolEndOp::name()
                 || op.name == BlockEndOp::name()
+                // External declarations contribute nothing to the object; their
+                // symbols materialize as undefined entries via relocations.
+                || op.name == DeclareOp::name()
             {
                 continue;
             }
 
             if let Some(section) = op.clone().as_op::<SectionOp>() {
                 let name = string_attr(&op, "name").unwrap_or(".text");
+                let enclosing = state.current_section;
                 state.current_section = Some(ensure_section(&mut state.obj, name));
                 self.walk_block(context, section.body(), state)?;
+                state.current_section = enclosing;
                 continue;
             }
 
             if op.clone().as_op::<SymbolOp>().is_some() {
                 self.walk_symbol(context, &op, state)?;
+                continue;
+            }
+
+            if op.clone().as_op::<LiteralOp>().is_some() {
+                emit_literal(&op, state)?;
                 continue;
             }
 
@@ -176,8 +186,16 @@ impl BinaryWriter {
             section: Some(section),
             value: start,
             size: end - start,
-            binding: SymBinding::Global,
-            kind: SymKind::Func,
+            binding: if string_attr(op, "binding") == Some("local") {
+                SymBinding::Local
+            } else {
+                SymBinding::Global
+            },
+            kind: if string_attr(op, "kind") == Some("object") {
+                SymKind::Object
+            } else {
+                SymKind::Func
+            },
         });
         Ok(())
     }
@@ -285,14 +303,44 @@ impl BinaryWriter {
     }
 }
 
+/// Append a data directive's bytes to the current section. Only string
+/// directives are emitted so far; numeric ones still lack an encoding.
+fn emit_literal(op: &Arc<tir::OpInstance>, state: &mut WalkState) -> Result<(), BinaryEmitError> {
+    let unsupported = || BinaryEmitError::UnsupportedOp {
+        op: LiteralOp::name().to_string(),
+    };
+    let kind = string_attr(op, "kind").ok_or_else(unsupported)?;
+    let value = string_attr(op, "value").ok_or_else(unsupported)?;
+    let mut bytes = value.as_bytes().to_vec();
+    match kind {
+        "asciz" | "string" => bytes.push(0),
+        "ascii" => {}
+        _ => return Err(unsupported()),
+    }
+
+    let section = state
+        .current_section
+        .unwrap_or_else(|| ensure_section(&mut state.obj, ".text"));
+    state.current_section = Some(section);
+    state.obj.sections[section].data.extend_from_slice(&bytes);
+    Ok(())
+}
+
 fn ensure_section(obj: &mut ObjectFile, name: &str) -> usize {
     if let Some(idx) = obj.sections.iter().position(|s| s.name == name) {
         return idx;
     }
+    // Only .text holds code; everything else (.rodata, .data) is data with
+    // byte alignment until a directive says otherwise.
+    let is_text = name == ".text" || name.starts_with(".text.");
     obj.sections.push(ObjSection {
         name: name.to_string(),
-        kind: SectionKind::Text,
-        align: 4,
+        kind: if is_text {
+            SectionKind::Text
+        } else {
+            SectionKind::Data
+        },
+        align: if is_text { 4 } else { 1 },
         data: Vec::new(),
         relocs: Vec::new(),
         insn_spans: Vec::new(),

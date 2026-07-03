@@ -4,11 +4,11 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 
 use tir::attributes::AttributeValue;
-use tir::builtin::{ModuleEndOp, ModuleOp};
+use tir::builtin::{DeclareOp, ModuleEndOp, ModuleOp};
 use tir::{Context, OpInstance, Operation};
 
 use crate::backend::{
-    BlockEndOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp,
+    BlockEndOp, LiteralOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp,
 };
 
 pub type AsmInstructionPrinter = fn(&OpInstance) -> Option<String>;
@@ -82,24 +82,51 @@ impl AsmPrinter {
                 || op.name() == SectionEndOp::name()
                 || op.name() == SymbolEndOp::name()
                 || op.name() == BlockEndOp::name()
+                // External declarations produce no assembly; references resolve
+                // at link time.
+                || op.name() == DeclareOp::name()
             {
                 continue;
             }
 
             if let Some(section) = op.clone().as_op::<SectionOp>() {
-                out.push_str(".text\n");
+                let name = string_attr(&op, "name").unwrap_or(".text");
+                if name == ".text" {
+                    out.push_str(".text\n");
+                } else {
+                    out.push_str(".section ");
+                    out.push_str(name);
+                    out.push('\n');
+                }
                 self.print_block(context, section.body(), out)?;
                 continue;
             }
 
             if let Some(symbol) = op.clone().as_op::<SymbolOp>() {
                 let name = string_attr(&op, "name").ok_or(AsmPrintError::MissingSymbolName)?;
-                out.push_str(".global ");
-                out.push_str(name);
-                out.push('\n');
+                if string_attr(&op, "binding") != Some("local") {
+                    out.push_str(".global ");
+                    out.push_str(name);
+                    out.push('\n');
+                }
                 out.push_str(name);
                 out.push_str(":\n");
                 self.print_block(context, symbol.body(), out)?;
+                continue;
+            }
+
+            if op.clone().as_op::<LiteralOp>().is_some() {
+                let kind = string_attr(&op, "kind").ok_or(AsmPrintError::UnsupportedOp {
+                    op: LiteralOp::name(),
+                })?;
+                let value = string_attr(&op, "value").ok_or(AsmPrintError::UnsupportedOp {
+                    op: LiteralOp::name(),
+                })?;
+                out.push_str("\t.");
+                out.push_str(kind);
+                out.push_str(" \"");
+                out.push_str(&escape_asm_string(value));
+                out.push_str("\"\n");
                 continue;
             }
 
@@ -122,6 +149,22 @@ impl AsmPrinter {
         }
         Ok(())
     }
+}
+
+/// Escape a literal for a quoted assembler string directive.
+fn escape_asm_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn string_attr<'a>(op: &'a OpInstance, name: &str) -> Option<&'a str> {

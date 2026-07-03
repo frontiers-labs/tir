@@ -18,6 +18,7 @@ pub(crate) const SHF_EXECINSTR: u64 = 0x4;
 pub(crate) const STB_LOCAL: u8 = 0;
 pub(crate) const STB_GLOBAL: u8 = 1;
 pub(crate) const STT_NOTYPE: u8 = 0;
+pub(crate) const STT_OBJECT: u8 = 1;
 pub(crate) const STT_FUNC: u8 = 2;
 pub(crate) const SHN_UNDEF: u16 = 0;
 
@@ -114,6 +115,7 @@ fn sym_info(sym: &ObjSymbol) -> u8 {
     let kind = match sym.kind {
         SymKind::NoType => STT_NOTYPE,
         SymKind::Func => STT_FUNC,
+        SymKind::Object => STT_OBJECT,
     };
     (bind << 4) | kind
 }
@@ -202,7 +204,10 @@ pub fn write_elf(obj: &ObjectFile, fmt: &ObjectFormatInfo) -> Vec<u8> {
         sections.push(Section {
             name: section.name.clone(),
             sh_type: SHT_PROGBITS,
-            sh_flags: SHF_ALLOC | SHF_EXECINSTR,
+            sh_flags: match section.kind {
+                super::SectionKind::Text => SHF_ALLOC | SHF_EXECINSTR,
+                super::SectionKind::Data => SHF_ALLOC,
+            },
             sh_link: 0,
             sh_info: 0,
             sh_addralign: section.align,

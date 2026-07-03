@@ -64,6 +64,8 @@ pub struct ObjectFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionKind {
     Text,
+    /// Non-executable data (`.rodata` string constants).
+    Data,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +100,7 @@ pub enum SymBinding {
 pub enum SymKind {
     NoType,
     Func,
+    Object,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

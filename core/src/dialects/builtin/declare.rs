@@ -116,6 +116,39 @@ impl DeclareOp {
     }
 }
 
+operation! {
+    AddressOfOp {
+        name: "addr_of",
+        dialect: "builtin",
+        attributes: A {
+            sym_name: "Str",
+        },
+        results: R {
+            result: "crate::ptr::PtrType",
+        },
+    }
+}
+
+impl AddressOfOp {
+    pub fn sym_name(&self) -> String {
+        self.attributes()
+            .iter()
+            .find(|attr| attr.name == "sym_name")
+            .and_then(|attr| match &attr.value {
+                AttributeValue::Str(name) => Some(name.clone()),
+                _ => None,
+            })
+            .expect("addr_of must carry sym_name")
+    }
+}
+
+pub fn addr_of_op(context: &Context, name: &str, result_type: TypeId) -> AddressOfOp {
+    AddressOfOpBuilder::new(context)
+        .attr("sym_name", AttributeValue::Str(name.to_string()))
+        .result_type(result_type)
+        .build()
+}
+
 pub fn arg_types_attr(types: &[TypeId]) -> AttributeValue {
     AttributeValue::Array(types.iter().copied().map(AttributeValue::Type).collect())
 }

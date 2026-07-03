@@ -242,6 +242,11 @@ fn emit_machine_code(args: &CompileArgs, name: &str, source: &str) -> Vec<u8> {
         std::process::exit(1);
     });
 
+    crate::codegen::hoist_strings(&context, &module).unwrap_or_else(|e| {
+        eprintln!("fcc: string lowering failed: {e}");
+        std::process::exit(1);
+    });
+
     let mut pm = build_pipeline(target.as_ref(), &context, StopAfter::Finalize);
     pm.run(&context, module_op).unwrap_or_else(|e| {
         eprintln!("fcc: backend pipeline failed: {e}");

@@ -64,6 +64,7 @@ dialect! {
             CallOp,
             IndirectCallOp,
             DeclareOp,
+            AddressOfOp,
         ],
         types: [IntegerType, FloatType, IndexType, UnitType, TokenType],
     }
