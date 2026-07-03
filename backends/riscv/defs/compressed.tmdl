@@ -1,0 +1,1119 @@
+// RISC-V C standard extension: 16-bit compressed instructions.
+//
+// Every compressed instruction expands to a base-ISA instruction; behaviors
+// mirror the expansion (link registers advance PC by 2, the compressed
+// instruction's own width). Immediates are declared at their architectural
+// byte width with the hardwired low zero bits left unencoded, exactly like
+// the base branch offsets.
+
+isa C requires [RV32I | RV64I] {}
+
+// Internal conjunctions, following the D64 pattern: the target enables these
+// automatically from the C/XLEN/F/D selection.
+isa C32 requires [C, RV32I] {}
+isa C64 requires [C, RV64I] {}
+isa Zcd requires [C, D] {}
+isa Zcf requires [C, F, RV32I] {}
+
+// The eight registers reachable from a 3-bit register field (x8..x15). The
+// architectural indices 8..15 are kept (`file = GPR` aliases them
+// index-for-index onto the integer file); the encoder's 3-bit field mask
+// yields the RVC encoding 0..7 since 8..15 already have those low bits.
+register_class GPRC for [C] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 3;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x8("s0") => { traits = [saved, callee_saved] },
+        x9("s1") => { traits = [saved, callee_saved] },
+        x10("a0") => { traits = [argument, return_value, caller_saved] },
+        x11("a1") => { traits = [argument, return_value, caller_saved] },
+        x12("a2") => { traits = [argument, caller_saved] },
+        x13("a3") => { traits = [argument, caller_saved] },
+        x14("a4") => { traits = [argument, caller_saved] },
+        x15("a5") => { traits = [argument, caller_saved] },
+    }
+}
+
+// The float registers reachable from a 3-bit register field (f8..f15), as
+// binary64 values (c.fld/c.fsd).
+register_class FPR64C for [Zcd] {
+    file = FPR32;
+    param ENCODING_LEN: Integer = 3;
+    param WIDTH: Integer = 64;
+
+    registers {
+        f8("fs0") => { traits = [float, saved, callee_saved] },
+        f9("fs1") => { traits = [float, saved, callee_saved] },
+        f10("fa0") => { traits = [float, argument, return_value, caller_saved] },
+        f11("fa1") => { traits = [float, argument, return_value, caller_saved] },
+        f12("fa2") => { traits = [float, argument, caller_saved] },
+        f13("fa3") => { traits = [float, argument, caller_saved] },
+        f14("fa4") => { traits = [float, argument, caller_saved] },
+        f15("fa5") => { traits = [float, argument, caller_saved] },
+    }
+}
+
+// The same eight registers as binary32 values (rv32 c.flw/c.fsw).
+register_class FPR32C for [Zcf] {
+    file = FPR32;
+    param ENCODING_LEN: Integer = 3;
+    param WIDTH: Integer = 32;
+
+    registers {
+        f8("fs0") => { traits = [float, saved, callee_saved] },
+        f9("fs1") => { traits = [float, saved, callee_saved] },
+        f10("fa0") => { traits = [float, argument, return_value, caller_saved] },
+        f11("fa1") => { traits = [float, argument, return_value, caller_saved] },
+        f12("fa2") => { traits = [float, argument, caller_saved] },
+        f13("fa3") => { traits = [float, argument, caller_saved] },
+        f14("fa4") => { traits = [float, argument, caller_saved] },
+        f15("fa5") => { traits = [float, argument, caller_saved] },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quadrant 0 (op = 00): stack-pointer-relative address generation and the
+// 3-bit-register loads/stores.
+
+// c.addi4spn rd', sp, nzuimm[9:2]: rd' = sp + zero-extended scaled immediate.
+instruction CAddImm4SpN for [C] {
+    param MNEMONIC: String = "c.addi4spn";
+
+    operands {
+        rd: GPRC,
+        imm: bits<10>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => rd,
+        5 => imm[3],
+        6 => imm[2],
+        7..10 => imm[6..9],
+        11..12 => imm[4..5],
+        13..15 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, sp, {imm}"
+    }
+
+    behavior {
+        rd = GPR::x2 + zext(imm, self.XLEN);
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+// CL-format loads: funct3 | uimm | rs1' | uimm | rd' | 00.
+
+instruction CLoadWord for [C] {
+    param MNEMONIC: String = "c.lw";
+
+    operands {
+        rd: GPRC,
+        rs1: GPRC,
+        imm: bits<7>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => rd,
+        5 => imm[6],
+        6 => imm[2],
+        7..9 => rs1,
+        10..12 => imm[3..5],
+        13..15 => 0b010,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}({rs1})"
+    }
+
+    behavior {
+        try {
+            rd = sext(load(rs1 + zext(imm, self.XLEN), 4, 0b1), self.XLEN);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction CLoadDouble for [C64] {
+    param MNEMONIC: String = "c.ld";
+
+    operands {
+        rd: GPRC,
+        rs1: GPRC,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => rd,
+        5..6 => imm[6..7],
+        7..9 => rs1,
+        10..12 => imm[3..5],
+        13..15 => 0b011,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}({rs1})"
+    }
+
+    behavior {
+        try {
+            rd = load(rs1 + zext(imm, self.XLEN), 8, 0b0);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction CFLoadDouble for [Zcd] {
+    param MNEMONIC: String = "c.fld";
+
+    operands {
+        fd: FPR64C,
+        rs1: GPRC,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => fd,
+        5..6 => imm[6..7],
+        7..9 => rs1,
+        10..12 => imm[3..5],
+        13..15 => 0b001,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {imm}({rs1})"
+    }
+
+    behavior {
+        fd = load(rs1 + zext(imm, self.XLEN), 8, 0b0);
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction CFLoadWord for [Zcf] {
+    param MNEMONIC: String = "c.flw";
+
+    operands {
+        fd: FPR32C,
+        rs1: GPRC,
+        imm: bits<7>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => fd,
+        5 => imm[6],
+        6 => imm[2],
+        7..9 => rs1,
+        10..12 => imm[3..5],
+        13..15 => 0b011,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {imm}({rs1})"
+    }
+
+    behavior {
+        fd = load(rs1 + zext(imm, self.XLEN), 4, 0b0);
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+// CS-format stores: same layouts with rs2' in bits 2..4.
+
+instruction CStoreWord for [C] {
+    param MNEMONIC: String = "c.sw";
+
+    operands {
+        rs1: GPRC,
+        rs2: GPRC,
+        imm: bits<7>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => rs2,
+        5 => imm[6],
+        6 => imm[2],
+        7..9 => rs1,
+        10..12 => imm[3..5],
+        13..15 => 0b110,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs2}, {imm}({rs1})"
+    }
+
+    behavior {
+        try {
+            store(rs1 + zext(imm, self.XLEN), 4, extract(rs2, 31, 0));
+        } except misaligned_store(addr) {
+            trap(6, addr);
+        }
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction CStoreDouble for [C64] {
+    param MNEMONIC: String = "c.sd";
+
+    operands {
+        rs1: GPRC,
+        rs2: GPRC,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => rs2,
+        5..6 => imm[6..7],
+        7..9 => rs1,
+        10..12 => imm[3..5],
+        13..15 => 0b111,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs2}, {imm}({rs1})"
+    }
+
+    behavior {
+        try {
+            store(rs1 + zext(imm, self.XLEN), 8, rs2);
+        } except misaligned_store(addr) {
+            trap(6, addr);
+        }
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction CFStoreDouble for [Zcd] {
+    param MNEMONIC: String = "c.fsd";
+
+    operands {
+        rs1: GPRC,
+        fs2: FPR64C,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => fs2,
+        5..6 => imm[6..7],
+        7..9 => rs1,
+        10..12 => imm[3..5],
+        13..15 => 0b101,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fs2}, {imm}({rs1})"
+    }
+
+    behavior {
+        store(rs1 + zext(imm, self.XLEN), 8, fs2);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction CFStoreWord for [Zcf] {
+    param MNEMONIC: String = "c.fsw";
+
+    operands {
+        rs1: GPRC,
+        fs2: FPR32C,
+        imm: bits<7>,
+    }
+
+    encoding {
+        0..1 => 0b00,
+        2..4 => fs2,
+        5 => imm[6],
+        6 => imm[2],
+        7..9 => rs1,
+        10..12 => imm[3..5],
+        13..15 => 0b111,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fs2}, {imm}({rs1})"
+    }
+
+    behavior {
+        store(rs1 + zext(imm, self.XLEN), 4, fs2);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+// ---------------------------------------------------------------------------
+// Quadrant 1 (op = 01): immediate ALU forms, 3-bit-register ALU forms, and
+// PC-relative control flow.
+
+instruction CNop for [C] {
+    param MNEMONIC: String = "c.nop";
+
+    encoding {
+        0..1 => 0b01,
+        2..15 => 0b00000000000000,
+    }
+
+    asm {
+        "{self.MNEMONIC}"
+    }
+
+    behavior {}
+
+    schedule { units = [WriteIALU]; }
+}
+
+// CI-format register-immediate ALU: rd is both source and destination.
+template CIALUOp for [C] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+
+    operands {
+        rd: GPR,
+        imm: bits<6>,
+    }
+
+    encoding {
+        0..1 => 0b01,
+        2..6 => imm[0..4],
+        7..11 => rd,
+        12 => imm[5],
+        13..15 => FUNCT3,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CAddImm for [C] : CIALUOp {
+    param MNEMONIC: String = "c.addi";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        rd = rd + sext(imm, self.XLEN);
+    }
+}
+
+instruction CAddImmWord for [C64] : CIALUOp {
+    param MNEMONIC: String = "c.addiw";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        rd = sext(extract(rd + sext(imm, self.XLEN), 31, 0), self.XLEN);
+    }
+}
+
+instruction CLoadImm for [C] : CIALUOp {
+    param MNEMONIC: String = "c.li";
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        rd = sext(imm, self.XLEN);
+    }
+}
+
+// c.lui rd, nzimm: the immediate operand holds bits [17:12] of the value,
+// mirroring how `lui` carries bits [31:12].
+instruction CLoadUpperImm for [C] : CIALUOp {
+    param MNEMONIC: String = "c.lui";
+    param FUNCT3: bits<3> = 0b011;
+
+    behavior {
+        rd = sext(imm, self.XLEN) << 12;
+    }
+}
+
+// c.addi16sp sp, nzimm[9:4]: shares funct3 with c.lui, distinguished by the
+// hardwired rd field = 2.
+instruction CAddImm16Sp for [C] {
+    param MNEMONIC: String = "c.addi16sp";
+
+    operands {
+        imm: bits<10>,
+    }
+
+    encoding {
+        0..1 => 0b01,
+        2 => imm[5],
+        3..4 => imm[7..8],
+        5 => imm[6],
+        6 => imm[4],
+        7..11 => 0b00010,
+        12 => imm[9],
+        13..15 => 0b011,
+    }
+
+    asm {
+        "{self.MNEMONIC} sp, {imm}"
+    }
+
+    behavior {
+        GPR::x2 = GPR::x2 + sext(imm, self.XLEN);
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+// CB-format register-immediate ALU over the 3-bit register set. The shift
+// amount is 6 bits on both bases; shamt[5] = 1 is reserved on rv32, matching
+// the base `slli`/`srli`/`srai` spare-bit convention.
+template CBALUOp for [C] {
+    param MNEMONIC: String;
+    param FUNCT2: bits<2>;
+
+    operands {
+        rd: GPRC,
+        imm: bits<6>,
+    }
+
+    encoding {
+        0..1 => 0b01,
+        2..6 => imm[0..4],
+        7..9 => rd,
+        10..11 => FUNCT2,
+        12 => imm[5],
+        13..15 => 0b100,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CShiftRightLogicalImm for [C] : CBALUOp {
+    param MNEMONIC: String = "c.srli";
+    param FUNCT2: bits<2> = 0b00;
+
+    behavior {
+        rd = rd >> extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction CShiftRightArithmeticImm for [C] : CBALUOp {
+    param MNEMONIC: String = "c.srai";
+    param FUNCT2: bits<2> = 0b01;
+
+    behavior {
+        rd = rd >>> extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction CAndImm for [C] : CBALUOp {
+    param MNEMONIC: String = "c.andi";
+    param FUNCT2: bits<2> = 0b10;
+
+    behavior {
+        rd = rd & sext(imm, self.XLEN);
+    }
+}
+
+// CA-format register-register ALU over the 3-bit register set.
+template CAOp for [C] {
+    param MNEMONIC: String;
+    param FUNCT3_HI: bits<3>;
+    param FUNCT2: bits<2>;
+
+    operands {
+        rd: GPRC,
+        rs2: GPRC,
+    }
+
+    encoding {
+        0..1 => 0b01,
+        2..4 => rs2,
+        5..6 => FUNCT2,
+        7..9 => rd,
+        10..12 => FUNCT3_HI,
+        13..15 => 0b100,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs2}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CSub for [C] : CAOp {
+    param MNEMONIC: String = "c.sub";
+    param FUNCT3_HI: bits<3> = 0b011;
+    param FUNCT2: bits<2> = 0b00;
+
+    behavior {
+        rd = rd - rs2;
+    }
+}
+
+instruction CXor for [C] : CAOp {
+    param MNEMONIC: String = "c.xor";
+    param FUNCT3_HI: bits<3> = 0b011;
+    param FUNCT2: bits<2> = 0b01;
+
+    behavior {
+        rd = rd ^ rs2;
+    }
+}
+
+instruction COr for [C] : CAOp {
+    param MNEMONIC: String = "c.or";
+    param FUNCT3_HI: bits<3> = 0b011;
+    param FUNCT2: bits<2> = 0b10;
+
+    behavior {
+        rd = rd | rs2;
+    }
+}
+
+instruction CAnd for [C] : CAOp {
+    param MNEMONIC: String = "c.and";
+    param FUNCT3_HI: bits<3> = 0b011;
+    param FUNCT2: bits<2> = 0b11;
+
+    behavior {
+        rd = rd & rs2;
+    }
+}
+
+instruction CSubWord for [C64] : CAOp {
+    param MNEMONIC: String = "c.subw";
+    param FUNCT3_HI: bits<3> = 0b111;
+    param FUNCT2: bits<2> = 0b00;
+
+    behavior {
+        rd = sext(extract(rd - rs2, 31, 0), self.XLEN);
+    }
+}
+
+instruction CAddWord for [C64] : CAOp {
+    param MNEMONIC: String = "c.addw";
+    param FUNCT3_HI: bits<3> = 0b111;
+    param FUNCT2: bits<2> = 0b01;
+
+    behavior {
+        rd = sext(extract(rd + rs2, 31, 0), self.XLEN);
+    }
+}
+
+// CJ-format jumps: 11-bit scattered offset, bit 0 implicit.
+template CJOp for [C] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+
+    operands {
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..1 => 0b01,
+        2 => imm[5],
+        3..5 => imm[1..3],
+        6 => imm[7],
+        7 => imm[6],
+        8 => imm[10],
+        9..10 => imm[8..9],
+        11 => imm[4],
+        12 => imm[11],
+        13..15 => FUNCT3,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CJumpAndLink for [C32] : CJOp {
+    param MNEMONIC: String = "c.jal";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        GPR::x1 = PC::pc + zext(0b10, self.XLEN);
+        PC::pc = PC::pc + sext(imm, self.XLEN);
+    }
+}
+
+instruction CJump for [C] : CJOp {
+    param MNEMONIC: String = "c.j";
+    param FUNCT3: bits<3> = 0b101;
+
+    behavior {
+        PC::pc = PC::pc + sext(imm, self.XLEN);
+    }
+}
+
+// CB-format conditional branches: compare a 3-bit register against zero,
+// 8-bit scattered offset, bit 0 implicit.
+template CBranchOp for [C] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+
+    operands {
+        rs1: GPRC,
+        imm: bits<9>,
+    }
+
+    encoding {
+        0..1 => 0b01,
+        2 => imm[5],
+        3..4 => imm[1..2],
+        5..6 => imm[6..7],
+        7..9 => rs1,
+        10..11 => imm[3..4],
+        12 => imm[8],
+        13..15 => FUNCT3,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs1}, {imm}"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CBranchEqZero for [C] : CBranchOp {
+    param MNEMONIC: String = "c.beqz";
+    param FUNCT3: bits<3> = 0b110;
+
+    behavior {
+        if rs1 == zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+instruction CBranchNotEqZero for [C] : CBranchOp {
+    param MNEMONIC: String = "c.bnez";
+    param FUNCT3: bits<3> = 0b111;
+
+    behavior {
+        if rs1 != zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quadrant 2 (op = 10): full-register-set forms and stack-pointer loads and
+// stores.
+
+instruction CShiftLeftLogicalImm for [C] {
+    param MNEMONIC: String = "c.slli";
+
+    operands {
+        rd: GPR,
+        imm: bits<6>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => imm[0..4],
+        7..11 => rd,
+        12 => imm[5],
+        13..15 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = rd << extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CLoadWordSp for [C] {
+    param MNEMONIC: String = "c.lwsp";
+
+    operands {
+        rd: GPR,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..3 => imm[6..7],
+        4..6 => imm[2..4],
+        7..11 => rd,
+        12 => imm[5],
+        13..15 => 0b010,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}(sp)"
+    }
+
+    behavior {
+        try {
+            rd = sext(load(GPR::x2 + zext(imm, self.XLEN), 4, 0b1), self.XLEN);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction CLoadDoubleSp for [C64] {
+    param MNEMONIC: String = "c.ldsp";
+
+    operands {
+        rd: GPR,
+        imm: bits<9>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..4 => imm[6..8],
+        5..6 => imm[3..4],
+        7..11 => rd,
+        12 => imm[5],
+        13..15 => 0b011,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}(sp)"
+    }
+
+    behavior {
+        try {
+            rd = load(GPR::x2 + zext(imm, self.XLEN), 8, 0b0);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction CFLoadDoubleSp for [Zcd] {
+    param MNEMONIC: String = "c.fldsp";
+
+    operands {
+        fd: FPR64,
+        imm: bits<9>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..4 => imm[6..8],
+        5..6 => imm[3..4],
+        7..11 => fd,
+        12 => imm[5],
+        13..15 => 0b001,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {imm}(sp)"
+    }
+
+    behavior {
+        fd = load(GPR::x2 + zext(imm, self.XLEN), 8, 0b0);
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction CFLoadWordSp for [Zcf] {
+    param MNEMONIC: String = "c.flwsp";
+
+    operands {
+        fd: FPR32,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..3 => imm[6..7],
+        4..6 => imm[2..4],
+        7..11 => fd,
+        12 => imm[5],
+        13..15 => 0b011,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {imm}(sp)"
+    }
+
+    behavior {
+        fd = load(GPR::x2 + zext(imm, self.XLEN), 4, 0b0);
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction CJumpReg for [C] {
+    param MNEMONIC: String = "c.jr";
+
+    operands {
+        rs1: GPR,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => 0b00000,
+        7..11 => rs1,
+        12 => 0b0,
+        13..15 => 0b100,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs1}"
+    }
+
+    behavior {
+        PC::pc = rs1 & ~1;
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CMove for [C] {
+    param MNEMONIC: String = "c.mv";
+
+    operands {
+        rd: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => rs2,
+        7..11 => rd,
+        12 => 0b0,
+        13..15 => 0b100,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs2}"
+    }
+
+    behavior {
+        rd = rs2;
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CEnvBreak for [C] {
+    param MNEMONIC: String = "c.ebreak";
+
+    encoding {
+        0..1 => 0b10,
+        2..11 => 0b0000000000,
+        12 => 0b1,
+        13..15 => 0b100,
+    }
+
+    asm {
+        "{self.MNEMONIC}"
+    }
+
+    behavior {
+        // mcause 3: breakpoint; mtval reports the address of the c.ebreak
+        // instruction itself.
+        trap(3, PC::pc);
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CJumpAndLinkReg for [C] {
+    param MNEMONIC: String = "c.jalr";
+
+    operands {
+        rs1: GPR,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => 0b00000,
+        7..11 => rs1,
+        12 => 0b1,
+        13..15 => 0b100,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs1}"
+    }
+
+    behavior {
+        GPR::x1 = PC::pc + zext(0b10, self.XLEN);
+        PC::pc = rs1 & ~1;
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction CAdd for [C] {
+    param MNEMONIC: String = "c.add";
+
+    operands {
+        rd: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => rs2,
+        7..11 => rd,
+        12 => 0b1,
+        13..15 => 0b100,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs2}"
+    }
+
+    behavior {
+        rd = rd + rs2;
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+// CSS-format stack-pointer-relative stores.
+
+instruction CStoreWordSp for [C] {
+    param MNEMONIC: String = "c.swsp";
+
+    operands {
+        rs2: GPR,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => rs2,
+        7..8 => imm[6..7],
+        9..12 => imm[2..5],
+        13..15 => 0b110,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs2}, {imm}(sp)"
+    }
+
+    behavior {
+        try {
+            store(GPR::x2 + zext(imm, self.XLEN), 4, extract(rs2, 31, 0));
+        } except misaligned_store(addr) {
+            trap(6, addr);
+        }
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction CStoreDoubleSp for [C64] {
+    param MNEMONIC: String = "c.sdsp";
+
+    operands {
+        rs2: GPR,
+        imm: bits<9>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => rs2,
+        7..9 => imm[6..8],
+        10..12 => imm[3..5],
+        13..15 => 0b111,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rs2}, {imm}(sp)"
+    }
+
+    behavior {
+        try {
+            store(GPR::x2 + zext(imm, self.XLEN), 8, rs2);
+        } except misaligned_store(addr) {
+            trap(6, addr);
+        }
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction CFStoreDoubleSp for [Zcd] {
+    param MNEMONIC: String = "c.fsdsp";
+
+    operands {
+        fs2: FPR64,
+        imm: bits<9>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => fs2,
+        7..9 => imm[6..8],
+        10..12 => imm[3..5],
+        13..15 => 0b101,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fs2}, {imm}(sp)"
+    }
+
+    behavior {
+        store(GPR::x2 + zext(imm, self.XLEN), 8, fs2);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction CFStoreWordSp for [Zcf] {
+    param MNEMONIC: String = "c.fswsp";
+
+    operands {
+        fs2: FPR32,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..1 => 0b10,
+        2..6 => fs2,
+        7..8 => imm[6..7],
+        9..12 => imm[2..5],
+        13..15 => 0b111,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fs2}, {imm}(sp)"
+    }
+
+    behavior {
+        store(GPR::x2 + zext(imm, self.XLEN), 4, fs2);
+    }
+
+    schedule { units = [WriteStore]; }
+}

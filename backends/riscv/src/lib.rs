@@ -1,6 +1,7 @@
 use tir::helpers::{dialect, operation};
 use tir::{Any, Operation};
 
+mod compress;
 mod obj;
 mod vsetvli;
 
@@ -29,6 +30,25 @@ impl TargetConfig {
             && !config.features.contains(&Feature::D64)
         {
             config.features.push(Feature::D64);
+        }
+        // The C conjunctions follow the same pattern: C32/C64 gate the
+        // XLEN-specific compressed forms, Zcd/Zcf the float compressed
+        // loads/stores.
+        if config.features.contains(&Feature::C) {
+            let derived = [
+                (Feature::C32, config.xlen == 32),
+                (Feature::C64, config.xlen == 64),
+                (Feature::Zcd, config.features.contains(&Feature::D)),
+                (
+                    Feature::Zcf,
+                    config.xlen == 32 && config.features.contains(&Feature::F),
+                ),
+            ];
+            for (feature, enabled) in derived {
+                if enabled && !config.features.contains(&feature) {
+                    config.features.push(feature);
+                }
+            }
         }
         validate_features(&config.features)?;
         let base = config.base_feature();
@@ -79,8 +99,8 @@ impl TargetConfig {
             .iter()
             .copied()
             .filter(|f| match f {
-                Feature::RV32I => xlen == 32,
-                Feature::RV64I | Feature::D64 => xlen == 64,
+                Feature::RV32I | Feature::C32 | Feature::Zcf => xlen == 32,
+                Feature::RV64I | Feature::D64 | Feature::C64 => xlen == 64,
                 _ => true,
             })
             .collect();
@@ -266,10 +286,14 @@ fn parse_riscv_isa_string(march: &str) -> Result<TargetConfig, String> {
                 enable(Feature::D);
                 skip_extension_version(&mut chars);
             }
+            'c' => {
+                enable(Feature::C);
+                skip_extension_version(&mut chars);
+            }
             // Standard single-letter extensions TMDL does not model yet are
             // accepted so common GNU march strings (e.g. rv64gc) keep working;
             // they contribute no instructions.
-            'a' | 'q' | 'l' | 'c' | 'b' | 'j' | 't' | 'p' | 'h' => {
+            'a' | 'q' | 'l' | 'b' | 'j' | 't' | 'p' | 'h' => {
                 skip_extension_version(&mut chars);
             }
             'z' | 's' | 'x' => {
@@ -461,6 +485,51 @@ dialect! {
             VMulOp,
             VSetVliOp,
             VSetIVliOp,
+            // C extension: quadrant 0
+            CAddImm4SpNOp,
+            CLoadWordOp,
+            CLoadDoubleOp,
+            CFLoadDoubleOp,
+            CFLoadWordOp,
+            CStoreWordOp,
+            CStoreDoubleOp,
+            CFStoreDoubleOp,
+            CFStoreWordOp,
+            // C extension: quadrant 1
+            CNopOp,
+            CAddImmOp,
+            CAddImmWordOp,
+            CLoadImmOp,
+            CLoadUpperImmOp,
+            CAddImm16SpOp,
+            CShiftRightLogicalImmOp,
+            CShiftRightArithmeticImmOp,
+            CAndImmOp,
+            CSubOp,
+            CXorOp,
+            COrOp,
+            CAndOp,
+            CSubWordOp,
+            CAddWordOp,
+            CJumpAndLinkOp,
+            CJumpOp,
+            CBranchEqZeroOp,
+            CBranchNotEqZeroOp,
+            // C extension: quadrant 2
+            CShiftLeftLogicalImmOp,
+            CLoadWordSpOp,
+            CLoadDoubleSpOp,
+            CFLoadDoubleSpOp,
+            CFLoadWordSpOp,
+            CJumpRegOp,
+            CMoveOp,
+            CEnvBreakOp,
+            CJumpAndLinkRegOp,
+            CAddOp,
+            CStoreWordSpOp,
+            CStoreDoubleSpOp,
+            CFStoreDoubleSpOp,
+            CFStoreWordSpOp,
             // Zicsr
             CSRReadWriteOp,
             CSRReadSetOp,
@@ -810,11 +879,30 @@ pub fn create_isel_pass(context: &tir::Context) -> tir::backend::isel::Instructi
     create_isel_pass_for(context, Feature::ALL)
 }
 
+/// The C extension features. Compressed instructions never take part in
+/// instruction selection: they are strictly narrower forms of base
+/// instructions (tied operands, 3-bit register fields), so selecting them
+/// directly would constrain register allocation for no gain. The
+/// finalize-stage compression pass rewrites base instructions into compressed
+/// forms after registers and immediates are known.
+const COMPRESSED_FEATURES: &[Feature] = &[
+    Feature::C,
+    Feature::C32,
+    Feature::C64,
+    Feature::Zcd,
+    Feature::Zcf,
+];
+
 fn create_isel_pass_for(
     context: &tir::Context,
     features: &[Feature],
 ) -> tir::backend::isel::InstructionSelectPass {
-    tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, features))
+    let features: Vec<Feature> = features
+        .iter()
+        .copied()
+        .filter(|f| !COMPRESSED_FEATURES.contains(f))
+        .collect();
+    tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, &features))
         .with_axioms(include_str!("isel.axioms"))
         .with_branch_emitters(tir::backend::isel::BranchEmitters {
             uncond: emit_uncond_branch,
@@ -1053,7 +1141,19 @@ impl tir::backend::TargetMachine for RiscvTarget {
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        vec![obj::finalize_virtual_ops]
+        // Compression must precede virtual-op finalization: a lowered op is
+        // not revisited within the pass, and `vret` compresses directly to
+        // `c.jr ra`.
+        if self.config.features.contains(&Feature::C) {
+            let compress = if self.config.xlen == 64 {
+                compress::compress_rv64
+            } else {
+                compress::compress_rv32
+            };
+            vec![compress, obj::finalize_virtual_ops]
+        } else {
+            vec![obj::finalize_virtual_ops]
+        }
     }
 
     fn object_format(&self) -> Option<tir::backend::binary::ObjectFormatInfo> {
@@ -2609,7 +2709,13 @@ mod target_parser_tests {
         );
         assert_eq!(
             features("rv32imac", None),
-            vec![Feature::RV32I, Feature::RVM, Feature::Zmmul]
+            vec![
+                Feature::RV32I,
+                Feature::RVM,
+                Feature::Zmmul,
+                Feature::C,
+                Feature::C32
+            ]
         );
         assert_eq!(
             features("rv32i_zmmul", None),
@@ -2645,6 +2751,9 @@ mod target_parser_tests {
                 Feature::F,
                 Feature::D,
                 Feature::D64,
+                Feature::C,
+                Feature::C64,
+                Feature::Zcd,
                 Feature::Zicsr,
                 Feature::RVV
             ]
@@ -2700,6 +2809,9 @@ mod target_parser_tests {
                 ("GPR", 32),
                 ("FPR32", 32),
                 ("FPR64", 64),
+                ("GPRC", 32),
+                ("FPR64C", 64),
+                ("FPR32C", 32),
                 ("CSR", 32),
                 ("VCSR", 32),
                 ("VCFG", 32)
@@ -2712,6 +2824,9 @@ mod target_parser_tests {
                 ("GPR", 64),
                 ("FPR32", 32),
                 ("FPR64", 64),
+                ("GPRC", 64),
+                ("FPR64C", 64),
+                ("FPR32C", 32),
                 ("CSR", 64),
                 ("VCSR", 64),
                 ("VCFG", 64)

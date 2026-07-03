@@ -1,0 +1,37 @@
+// RUN: tir mc --march=rv64ic --filetype=asm %s | filecheck %s
+// RUN: tir mc --march=rv64ic --filetype=obj-ascii %s | filecheck %s --check-prefix=ENC
+// RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s --check-prefix=NOC
+
+module {
+  func @caller(%0: !i32) -> !i32 {
+    %1 = call @callee(%0 : !i32) -> !i32
+    return %1
+  }
+  module_end
+}
+
+// The post-RA compression pass narrows the register moves to c.mv and the
+// return to c.jr; the call stays a 4-byte jal because its target is a
+// link-time fixup and compressed ranges cannot be relaxed.
+// CHECK: caller:
+// CHECK-NEXT: c.mv x5, x10
+// CHECK-NEXT: c.mv x10, x5
+// CHECK-NEXT: c.mv x8, x1
+// CHECK-NEXT: jal x1, callee
+// CHECK-NEXT: c.mv x1, x8
+// CHECK-NEXT: c.mv x10, x10
+// CHECK-NEXT: c.jr x1
+
+// ENC: [0xAA, 0x82]
+// ENC-NEXT: [0x16, 0x85]
+// ENC-NEXT: [0x06, 0x84]
+// ENC-NEXT: [0xEF, 0x00, 0x00, 0x00]
+// ENC-NEXT: [0xA2, 0x80]
+// ENC-NEXT: [0x2A, 0x85]
+// ENC-NEXT: [0x82, 0x80]
+
+// Without C the same program keeps the full-width forms.
+// NOC: caller:
+// NOC-NEXT: addi x5, x10, 0
+// NOC: jal x1, callee
+// NOC: jalr x0, 0(x1)

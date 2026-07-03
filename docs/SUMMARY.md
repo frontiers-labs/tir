@@ -7,6 +7,7 @@
   - [Instruction Selection](./design/instruction_selection.md)
   - [Cycle-Approximate Simulation](./design/simulator.md)
   - [Object Emission](./design/object_emission.md)
+  - [RISC-V Compressed Instructions](./design/riscv_compression.md)
 - [TIR Machine Description Language](./tmdl/index.md)
   - [TMDL Syntax Guide](./tmdl/syntax.md)
   - [SMT Equivalence Checking](./tmdl/smt_verification.md)

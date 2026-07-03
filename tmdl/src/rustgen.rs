@@ -1071,6 +1071,13 @@ fn emit_instructions<'a>(
             (false, false) => quote! {},
         };
 
+        // A no-op behavior (e.g. c.nop) never touches the machine context.
+        let behavior_is_empty = matches!(&inst.behavior, ast::Expr::Block(b) if b.stmts.is_empty());
+        let machine_param = if behavior_is_empty && branch_value.is_none() {
+            quote! { _machine }
+        } else {
+            quote! { machine }
+        };
         machine_instruction_impls.push(quote! {
             impl tir::backend::MachineInstruction for #name_ident {
                 fn mnemonic(&self) -> &'static str {
@@ -1083,7 +1090,7 @@ fn emit_instructions<'a>(
 
                 fn execute(
                     &self,
-                    machine: &mut dyn tir::backend::MachineContext,
+                    #machine_param: &mut dyn tir::backend::MachineContext,
                 ) -> Result<(), tir::backend::SimTrap> {
                     #execute_body
                 }
@@ -3572,9 +3579,8 @@ enum AsmAction {
     RBracket,
     Star,
     /// A literal identifier in the template (e.g. the condition in
-    /// `cset {rd}, eq`): the parser must see exactly this word. It is what
-    /// tells apart same-mnemonic instructions that differ only in such a
-    /// literal.
+    /// Literal identifier in the template (e.g. `eq` in `cset {rd}, eq` or
+    /// `sp` in `c.addi4spn {rd}, sp, {imm}`); the parser requires it verbatim.
     Keyword(String),
 }
 

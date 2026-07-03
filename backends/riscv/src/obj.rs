@@ -13,6 +13,8 @@ use crate::{
 
 const R_RISCV_BRANCH: u32 = 16;
 const R_RISCV_JAL: u32 = 17;
+const R_RISCV_RVC_BRANCH: u32 = 44;
+const R_RISCV_RVC_JUMP: u32 = 45;
 
 pub(crate) fn object_format(xlen: u32) -> ObjectFormatInfo {
     ObjectFormatInfo {
@@ -30,6 +32,18 @@ pub(crate) fn object_format(xlen: u32) -> ObjectFormatInfo {
             }),
             "beq" | "bne" | "blt" | "bge" | "bltu" | "bgeu" => Some(RelocKind {
                 r_type: R_RISCV_BRANCH,
+                addend: 0,
+            }),
+            // Compressed control flow only reaches the encoder through
+            // hand-written assembly; codegen never compresses fixup-carrying
+            // instructions (no branch relaxation exists for their short
+            // ranges).
+            "c.j" | "c.jal" => Some(RelocKind {
+                r_type: R_RISCV_RVC_JUMP,
+                addend: 0,
+            }),
+            "c.beqz" | "c.bnez" => Some(RelocKind {
+                r_type: R_RISCV_RVC_BRANCH,
                 addend: 0,
             }),
             _ => None,
