@@ -22,6 +22,14 @@ impl TargetConfig {
         if let Some(mattr) = mattr {
             apply_mattr(&mut config.features, mattr)?;
         }
+        // D64 is the internal D∧RV64 conjunction (rv64-only D instructions
+        // like fmv.d.x); it follows the D/XLEN selection automatically.
+        if config.xlen == 64
+            && config.features.contains(&Feature::D)
+            && !config.features.contains(&Feature::D64)
+        {
+            config.features.push(Feature::D64);
+        }
         validate_features(&config.features)?;
         let base = config.base_feature();
         if !config.features.contains(&base) {
@@ -72,7 +80,7 @@ impl TargetConfig {
             .copied()
             .filter(|f| match f {
                 Feature::RV32I => xlen == 32,
-                Feature::RV64I => xlen == 64,
+                Feature::RV64I | Feature::D64 => xlen == 64,
                 _ => true,
             })
             .collect();
@@ -445,6 +453,8 @@ dialect! {
             FStoreWordOp,
             FLoadDoubleOp,
             FStoreDoubleOp,
+            FMvWXOp,
+            FMvDXOp,
             // V extension (vector-vector arithmetic)
             VAddOp,
             VSubOp,
@@ -1035,12 +1045,11 @@ impl tir::backend::TargetMachine for RiscvTarget {
     }
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        let lower_constant = if self.config.xlen == 64 {
-            obj::lower_constant_rv64
+        if self.config.xlen == 64 {
+            vec![obj::lower_constant_rv64, obj::lower_constantf_rv64]
         } else {
-            obj::lower_constant_rv32
-        };
-        vec![lower_constant]
+            vec![obj::lower_constant_rv32, obj::lower_constantf_rv32]
+        }
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
@@ -2415,7 +2424,8 @@ mod tests {
     #[test]
     fn fp_encoders_match_isa_golden_words() {
         use crate::{
-            FAddDOpBuilder, FAddSOpBuilder, FLoadWordOpBuilder, FStoreDoubleOpBuilder, phys,
+            FAddDOpBuilder, FAddSOpBuilder, FLoadWordOpBuilder, FMvDXOpBuilder, FMvWXOpBuilder,
+            FStoreDoubleOpBuilder, phys,
         };
         use tir::attributes::AttributeValue;
 
@@ -2462,6 +2472,18 @@ mod tests {
             .attr("imm", AttributeValue::Int(16))
             .build();
         assert_eq!(word(fsd.id()), 0x00813827, "fsd fs0, 16(sp)");
+
+        let fmv_w_x = FMvWXOpBuilder::new(&context)
+            .attr("fd", fpr32(10))
+            .attr("rs1", gpr(10))
+            .build();
+        assert_eq!(word(fmv_w_x.id()), 0xF0050553, "fmv.w.x fa0, a0");
+
+        let fmv_d_x = FMvDXOpBuilder::new(&context)
+            .attr("fd", fpr64(10))
+            .attr("rs1", gpr(10))
+            .build();
+        assert_eq!(word(fmv_d_x.id()), 0xF2050553, "fmv.d.x fa0, a0");
     }
 
     #[test]
@@ -2595,13 +2617,18 @@ mod target_parser_tests {
         );
         // F/D select the float extensions; D implies F.
         assert_eq!(features("rv32if", None), vec![Feature::RV32I, Feature::F]);
+        // On rv64 the internal D64 conjunction follows D automatically.
         assert_eq!(
             features("rv64ifd", None),
-            vec![Feature::RV64I, Feature::F, Feature::D]
+            vec![Feature::RV64I, Feature::F, Feature::D, Feature::D64]
         );
         assert_eq!(
             features("rv64id", None),
-            vec![Feature::RV64I, Feature::F, Feature::D]
+            vec![Feature::RV64I, Feature::F, Feature::D, Feature::D64]
+        );
+        assert_eq!(
+            features("rv32ifd", None),
+            vec![Feature::RV32I, Feature::F, Feature::D]
         );
         // G abbreviates IMAFD...; M, F and D are the modeled parts.
         let g = features("rv64gc_zba_zbb", None);
@@ -2617,6 +2644,7 @@ mod target_parser_tests {
                 Feature::RVM,
                 Feature::F,
                 Feature::D,
+                Feature::D64,
                 Feature::Zicsr,
                 Feature::RVV
             ]

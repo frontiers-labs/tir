@@ -1,0 +1,19 @@
+// RUN: tir mc --march=rv64ifd --stage=regalloc %s | filecheck %s
+// RUN: not tir mc --march=rv32ifd --stage=regalloc %s
+
+// An f64 constant needs the whole binary64 pattern in one integer register
+// (fmv.d.x), so materialization is rv64-only; rv32 fails loudly.
+
+module {
+  func @zero(%0: !f64) -> !f64 {
+    %1 = constantf {value = 0.0} : !f64
+    %2 = addf %0, %1 : !f64
+    return %2
+  }
+  module_end
+}
+
+// CHECK: riscv.addi {rd = {{x[0-9]+}}, rs1 = x0, imm = 0}
+// CHECK: riscv.fmv.d.x {fd = {{f[0-9]+}}, rs1 = {{x[0-9]+}}}
+// CHECK: riscv.fadd.d {fd = f10,
+// CHECK: riscv.vret

@@ -4,6 +4,11 @@
 isa F requires [RV32I | RV64I] {}
 isa D requires [F] {}
 
+// Internal conjunction: the D instructions that move a whole binary64 value
+// through an integer register (fmv.d.x) need XLEN = 64. The target enables
+// this pseudo-extension automatically whenever D is enabled on rv64.
+isa D64 requires [D, RV64I] {}
+
 // The architectural float registers as single-precision (binary32) values.
 // The `float` trait marks the class so instruction selection types patterns
 // with float types and never mixes float and integer operands.
@@ -165,6 +170,64 @@ instruction FDivD for [D] : FPArith64 {
 
     behavior {
         fd = fdiv(fs1, fs2);
+    }
+}
+
+// Bit-pattern moves from the integer file, used to materialize float
+// constants (an integer `li` sequence followed by the move). `fmv.d.x` needs
+// the whole binary64 pattern in one integer register, so it is rv64-only.
+
+instruction FMvWX for [F] {
+    param MNEMONIC: String = "fmv.w.x";
+    param OPCODE: bits<7> = 0b1010011;
+
+    operands {
+        fd: FPR32,
+        rs1: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => fd,
+        12..14 => 0b000,
+        15..19 => rs1,
+        20..24 => 0b00000,
+        25..31 => 0b1111000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rs1}"
+    }
+
+    behavior {
+        fd = extract(rs1, 31, 0);
+    }
+}
+
+instruction FMvDX for [D64] {
+    param MNEMONIC: String = "fmv.d.x";
+    param OPCODE: bits<7> = 0b1010011;
+
+    operands {
+        fd: FPR64,
+        rs1: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => fd,
+        12..14 => 0b000,
+        15..19 => rs1,
+        20..24 => 0b00000,
+        25..31 => 0b1111001,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rs1}"
+    }
+
+    behavior {
+        fd = rs1;
     }
 }
 
