@@ -23,6 +23,7 @@ pub struct Compiler {
     output: OutputKind,
     dialect: Option<String>,
     isa: Option<String>,
+    text_only: bool,
 }
 
 pub struct CompilerBuilder {
@@ -31,6 +32,7 @@ pub struct CompilerBuilder {
     output: Option<OutputKind>,
     dialect: Option<String>,
     isa: Option<String>,
+    text_only: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +64,11 @@ pub struct Cli {
     /// Target ISA name (e.g. RV64I) for ISA-parameterized outputs.
     #[arg(long)]
     pub isa: Option<String>,
+    /// Allow objectless (text-only) targets: instructions need no `encoding`
+    /// block. For pseudo-ISAs like PTX that have an assembly syntax but no binary
+    /// representation.
+    #[arg(long)]
+    pub text_only: bool,
 }
 
 impl Compiler {
@@ -72,6 +79,7 @@ impl Compiler {
             output: None,
             dialect: None,
             isa: None,
+            text_only: false,
         }
     }
 
@@ -149,7 +157,7 @@ impl Compiler {
 
         crate::ast::resolve_register_class_inheritance(&mut parsed_files);
 
-        let sema_diags = sema_analyze(&parsed_files);
+        let sema_diags = sema_analyze(&parsed_files, self.text_only);
         if !sema_diags.is_empty() {
             print_diags(sema_diags, &self.inputs, &sources);
             return Ok(None);
@@ -257,6 +265,7 @@ impl Compiler {
                     self.dialect.as_ref().unwrap(),
                     &parsed_files,
                     &item_cache,
+                    self.text_only,
                     output,
                 )?
             }
@@ -337,6 +346,10 @@ impl CompilerBuilder {
         Self { isa, ..self }
     }
 
+    pub fn text_only(self, text_only: bool) -> Self {
+        Self { text_only, ..self }
+    }
+
     pub fn build(self) -> Compiler {
         Compiler {
             action: self.action.unwrap(),
@@ -344,6 +357,7 @@ impl CompilerBuilder {
             output: self.output.unwrap(),
             dialect: self.dialect,
             isa: self.isa,
+            text_only: self.text_only,
         }
     }
 }
@@ -362,6 +376,7 @@ pub fn compiler_main(args: Option<&ArgMatches>) -> Result<(), Box<dyn std::error
         .action(args.action)
         .dialect(args.dialect.clone())
         .isa(args.isa.clone())
+        .text_only(args.text_only)
         .output(output);
 
     for input in &args.inputs {

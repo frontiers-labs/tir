@@ -141,6 +141,33 @@ pub trait TargetMachine {
     fn hardwired_zero_registers(&self) -> &'static [(&'static str, u16)] {
         &[]
     }
+
+    /// Parse target-specific assembly text into a module, for pseudo-ISAs whose
+    /// syntax the shared flat assembler cannot represent (e.g. PTX kernels with
+    /// typed register declarations, parameter lists, predication and labels).
+    /// `None` (the default) means the target uses the shared [`AsmParser`] via
+    /// [`asm_parser`](Self::asm_parser).
+    fn parse_asm_text(
+        &self,
+        context: &Context,
+        text: &str,
+    ) -> Option<Result<crate::builtin::ModuleOp, String>> {
+        let _ = (context, text);
+        None
+    }
+
+    /// Print a module as target-specific assembly text, the counterpart of
+    /// [`parse_asm_text`](Self::parse_asm_text). `None` (the default) means the
+    /// target uses the shared [`AsmPrinter`] via
+    /// [`asm_printer`](Self::asm_printer).
+    fn print_asm_text(
+        &self,
+        context: &Context,
+        module: &crate::builtin::ModuleOp,
+    ) -> Option<Result<String, String>> {
+        let _ = (context, module);
+        None
+    }
 }
 
 /// A target made selectable by `--march`/`--mcpu`.

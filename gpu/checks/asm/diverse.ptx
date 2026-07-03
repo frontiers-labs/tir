@@ -1,0 +1,60 @@
+// A kernel exercising diverse compute families: shared memory, barriers,
+// atomics/reductions, f64, conversions, warp shuffles, predication and
+// multi-block control flow. Round-trips through the PTX front-end.
+// RUN: tir mc --march=ptx --filetype=asm %s | filecheck %s
+
+
+.visible .entry reduce(
+	.param .u64 reduce_param_0,
+	.param .u64 reduce_param_1,
+	.param .u32 reduce_param_2
+)
+{
+	.reg .pred 	%p<3>;
+	.reg .f32 	%f<8>;
+	.reg .f64 	%fd<3>;
+	.reg .b32 	%r<12>;
+	.reg .b64 	%rd<10>;
+
+	ld.param.u64 	%rd1, [reduce_param_0];
+	ld.param.u32 	%r1, [reduce_param_2];
+	mov.u32 	%r2, %tid.x;
+	mov.u32 	%r3, %ntid.x;
+	mad.lo.s32 	%r4, %r3, %r2, %r2;
+	shl.b32 	%r5, %r4, 2;
+	cvta.to.global.u64 	%rd2, %rd1;
+	mul.wide.u32 	%rd3, %r5, 4;
+	add.s64 	%rd4, %rd2, %rd3;
+	ld.global.f32 	%f1, [%rd4];
+	shfl.sync.down.b32 	%r6, %r5, %r2, %r3, %r1;
+	fma.rn.f32 	%f2, %f1, %f1, %f1;
+	cvt.f64.f32 	%fd1, %f2;
+	add.rn.f64 	%fd2, %fd1, %fd1;
+	setp.gt.f64 	%p1, %fd2, %fd1;
+	div.rn.f32 	%f3, %f2, %f1;
+	st.shared.f32 	[%r5], %f3;
+	bar.sync 	0;
+	atom.global.add.f32 	%f4, [%rd4], %f3;
+	red.global.add.u32 	[%rd4], %r5;
+	selp.f32 	%f5, %f2, %f3, %p1;
+	setp.lt.u32 	%p2, %r5, %r1;
+	@%p2 bra 	$L__BB0_2;
+	membar.gl;
+	ret;
+
+$L__BB0_2:
+	st.global.f32 	[%rd4], %f5;
+	ret;
+
+}
+
+// CHECK: shfl.sync.down.b32 %r6, %r5, %r2, %r3, %r1;
+// CHECK: cvt.f64.f32 %fd1, %f2;
+// CHECK: add.rn.f64 %fd2, %fd1, %fd1;
+// CHECK: setp.gt.f64 %p1, %fd2, %fd1;
+// CHECK: st.shared.f32 [%r5], %f3;
+// CHECK: bar.sync 0;
+// CHECK: atom.global.add.f32 %f4, [%rd4], %f3;
+// CHECK: red.global.add.u32 [%rd4], %r5;
+// CHECK: @%p2 bra $L__BB0_2;
+// CHECK: membar.gl;

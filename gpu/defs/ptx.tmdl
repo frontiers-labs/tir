@@ -1,0 +1,235 @@
+// PTX (NVIDIA Parallel Thread Execution): a text virtual ISA with assembly
+// syntax and no binary object form. Modeled as a TMDL `--text-only` target; all
+// instruction semantics are `todo()` (unmodeled), so the ops exist purely to
+// parse and print via the generated `asm_syntax()` table. The PTX assembly
+// structure (kernels, `.param`/`.reg` declarations, predication, labels) is
+// handled by the crate front-end (src/ptx_asm.rs).
+//
+// Register operands use a single nominal class in these templates: the front-end
+// derives the real class from each register's bank (`%rd`->RD, `%r`->R, `%f`->F,
+// `%fd`->FD, `%p`->P, `%rs`->RS), so one operand-shape template serves every PTX
+// type. Instructions (instructions.tmdl) are therefore just (mnemonic, shape).
+
+isa PTX {
+    param XLEN: Integer = 64;
+}
+
+register_class P for [PTX] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 1;
+    registers { p0..p15 => { traits = [caller_saved] }, }
+}
+register_class RS for [PTX] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 16;
+    registers { rs0..rs15 => { traits = [caller_saved] }, }
+}
+register_class R for [PTX] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 32;
+    registers { r0..r15 => { traits = [caller_saved] }, }
+}
+register_class RD for [PTX] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 64;
+    registers {
+        rd0..rd7 => { traits = [argument, return_value, caller_saved] },
+        rd8..rd15 => { traits = [caller_saved] },
+    }
+}
+register_class F for [PTX] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 32;
+    registers { f0..f15 => { traits = [float, caller_saved] }, }
+}
+register_class FD for [PTX] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 64;
+    registers { fd0..fd15 => { traits = [float, caller_saved] }, }
+}
+
+// ---------------------------------------------------------------------------
+// Operand-shape templates (the `%` register sigil is a literal in the format).
+// ---------------------------------------------------------------------------
+
+// Register-only shapes, by arity.
+template Reg1 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, }
+    asm { "{self.MNEMONIC} %{d};" }
+}
+template Reg2 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, }
+    asm { "{self.MNEMONIC} %{d}, %{a};" }
+}
+template Reg3 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, b: R, }
+    asm { "{self.MNEMONIC} %{d}, %{a}, %{b};" }
+}
+template Reg4 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, b: R, c: R, }
+    asm { "{self.MNEMONIC} %{d}, %{a}, %{b}, %{c};" }
+}
+template Reg5 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, b: R, c: R, e: R, }
+    asm { "{self.MNEMONIC} %{d}, %{a}, %{b}, %{c}, %{e};" }
+}
+
+// Trailing-immediate shapes (the immediate slot also accepts a symbol or special
+// register, captured verbatim by the front-end).
+template Reg1Imm for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, imm: bits<64>, }
+    asm { "{self.MNEMONIC} %{d}, {imm};" }
+}
+template Reg2Imm for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, imm: bits<64>, }
+    asm { "{self.MNEMONIC} %{d}, %{a}, {imm};" }
+}
+template Reg3Imm for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, b: R, imm: bits<64>, }
+    asm { "{self.MNEMONIC} %{d}, %{a}, %{b}, {imm};" }
+}
+template Reg4Imm for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, b: R, c: R, imm: bits<64>, }
+    asm { "{self.MNEMONIC} %{d}, %{a}, %{b}, %{c}, {imm};" }
+}
+
+// Loads: register / register+offset / symbol address.
+template LdReg for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, }
+    asm { "{self.MNEMONIC} %{d}, [%{a}];" }
+}
+template LdOff for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, off: bits<64>, }
+    asm { "{self.MNEMONIC} %{d}, [%{a}+{off}];" }
+}
+template LdSym for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, sym: bits<64>, }
+    asm { "{self.MNEMONIC} %{d}, [{sym}];" }
+}
+
+// Stores: register / register+offset / symbol address.
+template StReg for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { a: R, d: R, }
+    asm { "{self.MNEMONIC} [%{a}], %{d};" }
+}
+template StOff for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { a: R, off: bits<64>, d: R, }
+    asm { "{self.MNEMONIC} [%{a}+{off}], %{d};" }
+}
+template StSym for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { sym: bits<64>, d: R, }
+    asm { "{self.MNEMONIC} [{sym}], %{d};" }
+}
+
+// Atomics / reductions.
+template Atom3 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, b: R, }
+    asm { "{self.MNEMONIC} %{d}, [%{a}], %{b};" }
+}
+template AtomCas for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: R, b: R, c: R, }
+    asm { "{self.MNEMONIC} %{d}, [%{a}], %{b}, %{c};" }
+}
+template Red2 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { a: R, b: R, }
+    asm { "{self.MNEMONIC} [%{a}], %{b};" }
+}
+
+// Control / synchronization / misc.
+template Branch for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { target: bits<64>, }
+    asm { "{self.MNEMONIC} {target};" }
+}
+template Imm1 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { id: bits<64>, }
+    asm { "{self.MNEMONIC} {id};" }
+}
+template NoOperand for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { }
+    asm { "{self.MNEMONIC};" }
+}
+
+// Register-vector / group-operand shapes (tensor-core mma/wmma, textures,
+// surfaces). A `{...}` register vector or `[...]` address group is captured
+// verbatim by the front-end, so these operands are immediate-kind slots.
+template Grp1 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: bits<64>, }
+    asm { "{self.MNEMONIC} {d};" }
+}
+template Grp2 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: bits<64>, a: bits<64>, }
+    asm { "{self.MNEMONIC} {d}, {a};" }
+}
+template Grp3 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: bits<64>, a: bits<64>, b: bits<64>, }
+    asm { "{self.MNEMONIC} {d}, {a}, {b};" }
+}
+template Grp4 for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: bits<64>, a: bits<64>, b: bits<64>, c: bits<64>, }
+    asm { "{self.MNEMONIC} {d}, {a}, {b}, {c};" }
+}
+// wmma fragment load/store: a vector plus a register address (+ optional stride).
+template GrpLoad for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: bits<64>, a: R, }
+    asm { "{self.MNEMONIC} {d}, [%{a}];" }
+}
+template GrpLoadStride for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: bits<64>, a: R, stride: bits<64>, }
+    asm { "{self.MNEMONIC} {d}, [%{a}], {stride};" }
+}
+template GrpStore for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { a: R, d: bits<64>, }
+    asm { "{self.MNEMONIC} [%{a}], {d};" }
+}
+template GrpStoreStride for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { a: R, d: bits<64>, stride: bits<64>, }
+    asm { "{self.MNEMONIC} [%{a}], {d}, {stride};" }
+}
+// Asynchronous copy: two register addresses and a size.
+template CpAsync for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { a: R, b: R, sz: bits<64>, }
+    asm { "{self.MNEMONIC} [%{a}], [%{b}], {sz};" }
+}
+// A register destination and a group source (texture/surface queries).
+template RegGrp for [PTX] {
+    param OPNAME: String; param MNEMONIC: String;
+    operands { d: R, a: bits<64>, }
+    asm { "{self.MNEMONIC} %{d}, {a};" }
+}
+
+// A branch-target label definition (`$L__BB0_2:`).
+template LabelDef for [PTX] {
+    param OPNAME: String;
+    operands { name: bits<64>, }
+    asm { "{name}:" }
+}

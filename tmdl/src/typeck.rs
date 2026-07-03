@@ -343,6 +343,14 @@ fn infer<'a>(
                 }
                 Type::Var(tvg.fresh())
             }
+            // `todo()` stands in for unmodeled semantics; it takes no arguments
+            // and unifies with whatever context uses it.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Todo) => {
+                for arg in &call.arguments {
+                    infer(arg, env, tvg, subst, cache, diags, file_name);
+                }
+                Type::Var(tvg.fresh())
+            }
             ast::Expr::BuiltinFunction(ast::BuiltinFunction::Log2Ceil) => {
                 for arg in &call.arguments {
                     infer(arg, env, tvg, subst, cache, diags, file_name);

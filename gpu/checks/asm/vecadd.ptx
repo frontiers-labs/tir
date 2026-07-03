@@ -1,0 +1,77 @@
+// A real CUDA-compiled vector-add kernel round-trips: the PTX front-end parses
+// it into a TIR module and prints it back as PTX. Exercises parameter loads,
+// special registers, mad/setp, predicated branches, labels, cvta, mul.wide,
+// global loads/stores and float arithmetic.
+// RUN: tir mc --march=ptx --filetype=asm %s | filecheck %s
+// The parsed kernel in TIR machine-IR form (PTX dialect ops).
+// RUN: tir mc --march=ptx --stage=isel %s | filecheck %s --check-prefix=TIR
+
+.version 7.5
+.target sm_52
+.address_size 64
+
+.visible .entry vecAdd(
+	.param .u64 vecAdd_param_0,
+	.param .u64 vecAdd_param_1,
+	.param .u64 vecAdd_param_2,
+	.param .u32 vecAdd_param_3
+)
+{
+	.reg .pred 	%p<2>;
+	.reg .f32 	%f<4>;
+	.reg .b32 	%r<6>;
+	.reg .b64 	%rd<11>;
+
+	ld.param.u64 	%rd1, [vecAdd_param_0];
+	ld.param.u64 	%rd2, [vecAdd_param_1];
+	ld.param.u64 	%rd3, [vecAdd_param_2];
+	ld.param.u32 	%r2, [vecAdd_param_3];
+	mov.u32 	%r3, %ntid.x;
+	mov.u32 	%r4, %ctaid.x;
+	mov.u32 	%r5, %tid.x;
+	mad.lo.s32 	%r1, %r4, %r3, %r5;
+	setp.ge.s32 	%p1, %r1, %r2;
+	@%p1 bra 	$L__BB0_2;
+
+	cvta.to.global.u64 	%rd4, %rd3;
+	mul.wide.s32 	%rd5, %r1, 4;
+	add.s64 	%rd6, %rd4, %rd5;
+	cvta.to.global.u64 	%rd7, %rd2;
+	add.s64 	%rd8, %rd7, %rd5;
+	cvta.to.global.u64 	%rd9, %rd1;
+	add.s64 	%rd10, %rd9, %rd5;
+	ld.global.f32 	%f1, [%rd10];
+	ld.global.f32 	%f2, [%rd8];
+	add.f32 	%f3, %f1, %f2;
+	st.global.f32 	[%rd6], %f3;
+
+$L__BB0_2:
+	ret;
+
+}
+
+// CHECK: .visible .entry vecAdd(
+// CHECK: .reg .b64 	%rd<11>;
+// CHECK: ld.param.u64 %rd1, [vecAdd_param_0];
+// CHECK: mov.u32 %r3, %ntid.x;
+// CHECK: mad.lo.s32 %r1, %r4, %r3, %r5;
+// CHECK: setp.ge.s32 %p1, %r1, %r2;
+// CHECK: @%p1 bra $L__BB0_2;
+// CHECK: cvta.to.global.u64 %rd4, %rd3;
+// CHECK: mul.wide.s32 %rd5, %r1, 4;
+// CHECK: add.s64 %rd6, %rd4, %rd5;
+// CHECK: ld.global.f32 %f1, [%rd10];
+// CHECK: add.f32 %f3, %f1, %f2;
+// CHECK: st.global.f32 [%rd6], %f3;
+// CHECK: $L__BB0_2:
+// CHECK: ret;
+
+// TIR: asm.symbol {name = "vecAdd"
+// TIR: ptx.ld_param_u64_sym {d = rd1, sym = "vecAdd_param_0"}
+// TIR: ptx.mad_lo_s32 {d = r1, a = r4, b = r3, c = r5}
+// TIR: ptx.setp_ge_s32 {d = p1, a = r1, b = r2}
+// TIR: ptx.bra {target = "$L__BB0_2", pred = "%p1", pred_not = false}
+// TIR: ptx.mul_wide_s32_imm {d = rd5, a = r1, imm = "4"}
+// TIR: ptx.st_global_f32_reg {a = rd6, d = f3}
+// TIR: ptx.label {name = "$L__BB0_2"}
+// TIR: ptx.ret

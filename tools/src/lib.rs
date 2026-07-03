@@ -2,6 +2,10 @@ use std::error::Error;
 
 use clap::{Parser, Subcommand};
 
+// Force-link the PTX target registration (linkme drops crates the binary never
+// references; the other backends are pulled in by `axioms.rs`).
+use tir_gpu as _;
+
 mod common;
 
 pub mod axioms;

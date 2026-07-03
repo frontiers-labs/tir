@@ -16,6 +16,7 @@ pub fn generate_rust<'a>(
     dialect: &str,
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
+    text_only: bool,
     mut output: Box<dyn Write>,
 ) -> Result<(), TMDLError> {
     let features = emit_features(files)?;
@@ -24,7 +25,7 @@ pub fn generate_rust<'a>(
     let register_info = emit_register_info(files)?;
     let machine_models = emit_machine_models(files, item_cache)?;
     let instruction_cost = emit_instruction_cost(files, item_cache)?;
-    let instructions = emit_instructions(dialect, files, item_cache)?;
+    let instructions = emit_instructions(dialect, files, item_cache, text_only)?;
 
     let final_rust = quote! {
         #features
@@ -222,6 +223,7 @@ fn emit_instructions<'a>(
     dialect: &str,
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
+    text_only: bool,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let mut instruction_defs = vec![];
     let mut instruction_parsers_impls: Vec<proc_macro2::TokenStream> = vec![];
@@ -247,6 +249,11 @@ fn emit_instructions<'a>(
     let mut instruction_patcher_map_inits: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_dispatch: Vec<(u128, proc_macro2::Ident)> = vec![];
+    // Data-driven assembly syntax (text-only targets): one entry per instruction,
+    // consumed by a target-specific front-end to parse/print instruction bodies.
+    let mut asm_syntax_entries: Vec<proc_macro2::TokenStream> = vec![];
+    // Op struct idents, for a generated `dialect!` registration (text-only).
+    let mut dialect_op_idents: Vec<proc_macro2::Ident> = vec![];
 
     // `(class, register-name) -> encoding index` over every register class, so the
     // simulator can lower register paths that carry no numeric index in their name
@@ -334,6 +341,7 @@ fn emit_instructions<'a>(
 
     for inst in files.iter().flat_map(|f| f.instructions()) {
         let name_ident = format_ident!("{}Op", &inst.name);
+        dialect_op_idents.push(name_ident.clone());
         let builder_ident = format_ident!("{}OpBuilder", &inst.name);
         let resolved_params = resolve_params_for_instruction(inst, item_cache);
         let mnemonic = resolved_params
@@ -396,6 +404,11 @@ fn emit_instructions<'a>(
         // `execute()` binds ISA parameters (e.g. `XLEN`) from here at runtime.
         let isa_param_values: HashMap<String, i64> = resolve_isa_param_values(inst, item_cache);
 
+        // A `todo()` behavior declares the instruction's semantics unmodeled: it
+        // produces no selection rule and its `execute()` traps. The op still
+        // prints, parses, and encodes.
+        let uses_todo = behavior_uses_todo(&inst.behavior);
+
         // Value-rule semantics, computed ahead of the op declaration so the
         // registers the behavior reads implicitly (e.g. `VCSR::vl`) can surface
         // as demand attributes with a `Use` role. Instructions defining several
@@ -405,7 +418,8 @@ fn emit_instructions<'a>(
         // selection rule. The same goes for instructions touching the PC
         // (jal/jalr/auipc): their pattern would hide the control-flow effect and
         // match unrelated arithmetic.
-        let semantics = if defined_register_operands.len() <= 1
+        let semantics = if !uses_todo
+            && defined_register_operands.len() <= 1
             && !behavior_references_pc(&inst.behavior, &pc_classes)
             && !behavior_has_atomic_ops(&inst.behavior)
         {
@@ -526,13 +540,26 @@ fn emit_instructions<'a>(
             if let Type::Struct(class_name) = op_ty {
                 let attr_name_lit = proc_macro2::Literal::string(op_name);
                 let print_fn_ident = format_ident!("print_{}", class_name.to_lowercase());
-                // Print through the operand's declared class table, keyed by index.
-                // The operand position fixes the class, so the stored attribute class
-                // is not consulted: a physical register reached through an aliasing
-                // class (e.g. `("GPR", 29)` materialized by hand-written prologue code
-                // landing in a `GPRsp` operand) still prints the right name.
-                register_attr_print_arms.push(quote! {
-                    #attr_name_lit => {
+                // Text-only targets use one nominal operand class and derive the real
+                // class per register (PTX banks), so print through the attribute's
+                // stored class. Encoded targets print through the operand's declared
+                // class table: the operand position fixes the class, so an aliasing
+                // physical register (e.g. `("GPR", 29)` landing in a `GPRsp` operand)
+                // still prints the right name.
+                let print_body = if text_only {
+                    quote! {
+                        if let tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Physical { class, index }) = &attr.value {
+                            if let Some(name) = register_name(class, *index, false) {
+                                fmt.write(name)?;
+                            } else {
+                                attr.value.print(fmt, &context)?;
+                            }
+                        } else {
+                            attr.value.print(fmt, &context)?;
+                        }
+                    }
+                } else {
+                    quote! {
                         if let tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Physical { index, .. }) = &attr.value {
                             if let Some(name) = #print_fn_ident(*index, false) {
                                 fmt.write(name)?;
@@ -543,6 +570,9 @@ fn emit_instructions<'a>(
                             attr.value.print(fmt, &context)?;
                         }
                     }
+                };
+                register_attr_print_arms.push(quote! {
+                    #attr_name_lit => { #print_body }
                 });
             }
         }
@@ -890,7 +920,8 @@ fn emit_instructions<'a>(
         // conditional-branch rule: the pattern is the branch condition over the
         // encoded operands, and the target operand is emitted as a block
         // attribute bound by branch selection.
-        if defined_register_operands.is_empty()
+        if !uses_todo
+            && defined_register_operands.is_empty()
             && let Some(branch) = analyze_branch_semantics(
                 inst,
                 &ops,
@@ -1044,13 +1075,14 @@ fn emit_instructions<'a>(
         }
 
         let encoding_arms = get_encoding_arms(inst, item_cache);
-        let encoding_bits = encoding_arms
+        // With no encoding (a text-only pseudo-ISA) there is no binary width; report
+        // 0 bytes rather than the 32-bit default assumed for real ISAs.
+        let width_bytes = encoding_arms
             .iter()
             .map(|arm| arm.end.unwrap_or(arm.start))
             .max()
-            .map(|max_end| max_end + 1)
-            .unwrap_or(32);
-        let width_bytes = (encoding_bits as u32).div_ceil(8) as u64;
+            .map(|max_end| ((max_end + 1) as u32).div_ceil(8) as u64)
+            .unwrap_or(0);
         let width_bytes_lit = proc_macro2::Literal::u8_unsuffixed(width_bytes as u8);
         let mnemonic_lit = proc_macro2::Literal::string(mnemonic_name);
 
@@ -1092,6 +1124,13 @@ fn emit_instructions<'a>(
                 },
                 None => quote! { Ok(()) },
             }
+        } else if uses_todo {
+            quote! {
+                Err(tir::backend::SimTrap::InvalidInstruction {
+                    op: #mnemonic_lit,
+                    reason: "instruction semantics are not modeled (todo)".to_string(),
+                })
+            }
         } else {
             match emit_behavior_exec(
                 &inst.behavior,
@@ -1132,9 +1171,10 @@ fn emit_instructions<'a>(
             (false, false) => quote! {},
         };
 
-        // A no-op behavior (e.g. c.nop) never touches the machine context.
+        // A no-op behavior (e.g. c.nop) or an unmodeled (`todo()`) one whose
+        // `execute()` only traps never touches the machine context.
         let behavior_is_empty = matches!(&inst.behavior, ast::Expr::Block(b) if b.stmts.is_empty());
-        let machine_param = if behavior_is_empty && branch_value.is_none() {
+        let machine_param = if (behavior_is_empty || uses_todo) && branch_value.is_none() {
             quote! { _machine }
         } else {
             quote! { machine }
@@ -1339,6 +1379,47 @@ fn emit_instructions<'a>(
             }
 
             let print_parts = compile_asm_printer_template(&template, mnemonic_name);
+
+            // Accumulate the data-driven syntax entry (text-only targets consume
+            // this). Each part is either literal text or a typed operand slot.
+            if text_only {
+                let part_tokens: Vec<proc_macro2::TokenStream> = print_parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        AsmPrintPart::Text(text) if text.is_empty() => None,
+                        AsmPrintPart::Text(text) => {
+                            let lit = proc_macro2::Literal::string(text);
+                            Some(quote! { tir::backend::asm_syntax::AsmSyntaxPart::Text(#lit) })
+                        }
+                        AsmPrintPart::Operand(name) => {
+                            let name_lit = proc_macro2::Literal::string(name);
+                            let class = match ops_map.get(name) {
+                                Some(Type::Struct(class)) => {
+                                    let c = proc_macro2::Literal::string(class);
+                                    quote! { Some(#c) }
+                                }
+                                _ => quote! { None },
+                            };
+                            Some(quote! {
+                                tir::backend::asm_syntax::AsmSyntaxPart::Operand {
+                                    name: #name_lit,
+                                    class: #class,
+                                }
+                            })
+                        }
+                    })
+                    .collect();
+                let op_name_lit_s = proc_macro2::Literal::string(op_name);
+                let mnemonic_lit_s = proc_macro2::Literal::string(mnemonic_name);
+                asm_syntax_entries.push(quote! {
+                    tir::backend::asm_syntax::InstrSyntax {
+                        op_name: #op_name_lit_s,
+                        mnemonic: #mnemonic_lit_s,
+                        parts: &[#(#part_tokens),*],
+                    }
+                });
+            }
+
             let prints_operands = print_parts
                 .iter()
                 .any(|p| matches!(p, AsmPrintPart::Operand(_)));
@@ -1512,13 +1593,21 @@ fn emit_instructions<'a>(
             }
         }
 
-        if let Some((encoder, patcher)) = emit_instruction_encoder(
-            inst,
-            &encoding_arms,
-            &ops_map,
-            &resolved_params,
-            width_bytes,
-        )? {
+        // Text-only pseudo-ISAs have no binary encoding, so no encoders/patchers
+        // are emitted at all (rather than empty, unused functions).
+        if let Some((encoder, patcher)) = (!text_only)
+            .then(|| {
+                emit_instruction_encoder(
+                    inst,
+                    &encoding_arms,
+                    &ops_map,
+                    &resolved_params,
+                    width_bytes,
+                )
+            })
+            .transpose()?
+            .flatten()
+        {
             let encode_fn_ident = format_ident!("encode_{}_inst", inst.name.to_lowercase());
             instruction_encoder_impls.push(encoder);
             instruction_encoder_map_inits.push(quote! {
@@ -1597,6 +1686,56 @@ fn emit_instructions<'a>(
         .map(|(.., tokens)| tokens)
         .collect();
 
+    // Data-driven assembly syntax table plus a dialect registration, emitted only
+    // for text-only targets; their front-end parses/prints instruction bodies
+    // from the table, and the dialect makes the ops IR-printable.
+    let syntax_section = if text_only {
+        let dialect_ident =
+            format_ident!("{}{}Dialect", dialect[..1].to_uppercase(), &dialect[1..]);
+        let dialect_name = proc_macro2::Literal::string(dialect);
+        quote! {
+            /// The assembly syntax of every instruction, for a text-only target's
+            /// front-end parser and printer.
+            pub fn asm_syntax() -> &'static [tir::backend::asm_syntax::InstrSyntax] {
+                &[#(#asm_syntax_entries),*]
+            }
+
+            tir::helpers::dialect! {
+                #dialect_ident {
+                    name: #dialect_name,
+                    operations: [ #(#dialect_op_idents),* ],
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // The object-file emission interface (per-instruction encoders/patchers and
+    // their lookup maps) is emitted only for targets with a binary encoding.
+    let encoder_section = if text_only {
+        quote! {}
+    } else {
+        quote! {
+            #(#instruction_encoder_impls)*
+
+            // Consumed by object-file emission.
+            fn get_instruction_encoders() -> std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> {
+                let mut map: std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> = std::collections::HashMap::new();
+                #(#instruction_encoder_map_inits)*
+
+                map
+            }
+
+            fn get_instruction_patchers() -> std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> {
+                let mut map: std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> = std::collections::HashMap::new();
+                #(#instruction_patcher_map_inits)*
+
+                map
+            }
+        }
+    };
+
     Ok(quote! {
         #(#instruction_defs)*
         #(#instruction_custom_format_impls)*
@@ -1630,22 +1769,9 @@ fn emit_instructions<'a>(
             map
         }
 
-        #(#instruction_encoder_impls)*
+        #syntax_section
 
-        // Consumed by object-file emission.
-        fn get_instruction_encoders() -> std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> {
-            let mut map: std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> = std::collections::HashMap::new();
-            #(#instruction_encoder_map_inits)*
-
-            map
-        }
-
-        fn get_instruction_patchers() -> std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> {
-            let mut map: std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> = std::collections::HashMap::new();
-            #(#instruction_patcher_map_inits)*
-
-            map
-        }
+        #encoder_section
 
         #(#instruction_decoder_impls)*
 
@@ -1655,6 +1781,7 @@ fn emit_instructions<'a>(
         /// bits); each matches on its fixed opcode bits and reconstructs its
         /// operands from the word.
         pub fn decode_instruction(context: &tir::Context, word: u32) -> Option<tir::OpId> {
+            let _ = (&context, word);
             #(#instruction_decoder_dispatch)*
             None
         }
@@ -1668,6 +1795,7 @@ fn emit_instructions<'a>(
             // architectural width under the enabled features (e.g. XLEN).
             let __register_widths = register_widths(features);
             let _ = &__register_widths;
+            #[allow(unused_mut)]
             let mut rules = Vec::new();
             #(#isel_rule_inits)*
             rules
@@ -2107,6 +2235,22 @@ fn emit_machine_models<'a>(
         });
         lookup_arms.push(quote! {
             #(#key_lits)|* => features_enabled(features, #machine_features).then(#fn_ident)
+        });
+    }
+
+    // A target with no `machine` models (e.g. a text-only pseudo-ISA) gets
+    // trivial accessors so `features` and `names` are not spuriously unused.
+    if machine_names.is_empty() {
+        return Ok(quote! {
+            /// No machine models are declared for this target.
+            pub fn machine_model(_name: &str, _features: &[Feature]) -> Option<tir::backend::sched::MachineModel> {
+                None
+            }
+
+            /// No machine models are declared for this target.
+            pub fn machines(_features: &[Feature]) -> Vec<&'static str> {
+                Vec::new()
+            }
         });
     }
 
@@ -3004,6 +3148,10 @@ fn emit_flag_branch_rules<'a>(
     let mut definers: Vec<(FlagInst<'a>, FlagDefinerSemantics)> = Vec::new();
     let mut branches: Vec<(FlagInst<'a>, FlagBranchSemantics)> = Vec::new();
     for inst in files.iter().flat_map(|f| f.instructions()) {
+        // Unmodeled (`todo()`) semantics produce no rules of any kind.
+        if behavior_uses_todo(&inst.behavior) {
+            continue;
+        }
         let resolved_params = resolve_params_for_instruction(inst, item_cache);
         let Some(mnemonic) = resolved_params
             .get("MNEMONIC")
@@ -3677,6 +3825,35 @@ fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> boo
                     .any(|h| behavior_references_pc(&h.body, pc_classes))
         }
         ast::Expr::Lambda(l) => behavior_references_pc(&l.body, pc_classes),
+    }
+}
+
+/// Whether a behavior invokes the `todo()` builtin anywhere: its semantics are
+/// unmodeled, so it generates no selection rules and its `execute()` traps.
+fn behavior_uses_todo(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Todo) => true,
+        ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
+        ast::Expr::Path(_) | ast::Expr::Invalid => false,
+        ast::Expr::Assign(a) => behavior_uses_todo(&a.dest) || behavior_uses_todo(&a.value),
+        ast::Expr::Binary(b) => behavior_uses_todo(&b.lhs) || behavior_uses_todo(&b.rhs),
+        ast::Expr::Unary(u) => behavior_uses_todo(&u.x),
+        ast::Expr::Block(b) => b.stmts.iter().any(behavior_uses_todo),
+        ast::Expr::Call(c) => {
+            behavior_uses_todo(&c.callee) || c.arguments.iter().any(behavior_uses_todo)
+        }
+        ast::Expr::Field(f) => behavior_uses_todo(&f.base),
+        ast::Expr::If(i) => {
+            behavior_uses_todo(&i.cond)
+                || behavior_uses_todo(&i.then)
+                || i.else_.as_ref().is_some_and(|e| behavior_uses_todo(e))
+        }
+        ast::Expr::IndexAccess(i) => behavior_uses_todo(&i.base),
+        ast::Expr::Slice(s) => behavior_uses_todo(&s.base),
+        ast::Expr::Try(t) => {
+            behavior_uses_todo(&t.body) || t.handlers.iter().any(|h| behavior_uses_todo(&h.body))
+        }
+        ast::Expr::Lambda(l) => behavior_uses_todo(&l.body),
     }
 }
 

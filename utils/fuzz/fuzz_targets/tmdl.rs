@@ -38,7 +38,7 @@ fuzz_target!(|data: &[u8]| {
         };
 
         let files = [file];
-        let _ = tmdl::sema_analyze(&files);
+        let _ = tmdl::sema_analyze(&files, false);
         let _ = tmdl::type_check(&files);
     }
 });

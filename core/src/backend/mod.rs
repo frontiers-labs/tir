@@ -1,5 +1,6 @@
 use tir::helpers::dialect;
 
+pub mod asm_syntax;
 pub mod binary;
 pub mod isel;
 mod lexer;

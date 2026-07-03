@@ -91,11 +91,16 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     };
 
     let output = match filetype {
-        Some(FileType::Asm) => target
-            .asm_printer(&context)
-            .print_module(&context, &module)
-            .map_err(|e| format!("failed to print assembly: {e}"))?
-            .into_bytes(),
+        Some(FileType::Asm) => match target.print_asm_text(&context, &module) {
+            Some(result) => result
+                .map_err(|e| format!("failed to print assembly: {e}"))?
+                .into_bytes(),
+            None => target
+                .asm_printer(&context)
+                .print_module(&context, &module)
+                .map_err(|e| format!("failed to print assembly: {e}"))?
+                .into_bytes(),
+        },
         Some(FileType::Obj) | Some(FileType::ObjAscii) => {
             let fmt = target.object_format().ok_or_else(|| {
                 format!("target '{}' does not support object emission", args.march)

@@ -559,6 +559,11 @@ pub enum BuiltinFunction {
     FSub,
     FMul,
     FDiv,
+    /// `todo()`: the instruction's semantics are not modeled. It suppresses
+    /// instruction-selection rule generation (the op still exists, prints, and
+    /// parses) and its `execute()` traps. For behaviors the TMDL expression
+    /// language cannot yet express (barriers, atomics, special-register reads).
+    Todo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -1596,6 +1601,11 @@ impl Call {
                 let lhs = self.arguments[0].lower_with_ctx(ctx);
                 let rhs = self.arguments[1].lower_with_ctx(ctx);
                 ctx.add_node(kind, &[lhs, rhs])
+            }
+            // `todo()` marks unmodeled semantics; rustgen suppresses selection-rule
+            // and `execute()` lowering for such behaviors, so this is never reached.
+            BuiltinFunction::Todo => {
+                unreachable!("todo() has no semantics to lower")
             }
         }
     }

@@ -24,6 +24,7 @@ members = [
     "utils/llvm",
     "utils/jit",
     "tools",
+    "gpu",
 ]
 
 [workspace.dependencies]
@@ -44,6 +45,7 @@ tir-jit = { path = "utils/jit" }
 tir-riscv = { path = "backends/riscv" }
 tir-arm64 = { path = "backends/arm64" }
 tir-x86_64 = { path = "backends/x86_64" }
+tir-gpu = { path = "gpu" }
 
 anyhow = "1.0.102"
 ariadne = "0.6.0"

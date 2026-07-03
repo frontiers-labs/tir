@@ -1,0 +1,52 @@
+// A saxpy-style kernel round-trips: exercises float parameter loads, offset
+// global loads (`[%rd+16]`), fma, and predicated select.
+// RUN: tir mc --march=ptx --filetype=asm %s | filecheck %s
+
+.version 7.5
+.target sm_70
+.address_size 64
+
+.visible .entry saxpy(
+	.param .u32 saxpy_param_0,
+	.param .f32 saxpy_param_1,
+	.param .u64 saxpy_param_2,
+	.param .u64 saxpy_param_3
+)
+{
+	.reg .pred 	%p<3>;
+	.reg .f32 	%f<6>;
+	.reg .b32 	%r<8>;
+	.reg .b64 	%rd<9>;
+
+	ld.param.u32 	%r2, [saxpy_param_0];
+	ld.param.f32 	%f1, [saxpy_param_1];
+	ld.param.u64 	%rd1, [saxpy_param_2];
+	mov.u32 	%r3, %ntid.x;
+	mov.u32 	%r4, %ctaid.x;
+	mov.u32 	%r5, %tid.x;
+	mad.lo.s32 	%r1, %r4, %r3, %r5;
+	setp.ge.s32 	%p1, %r1, %r2;
+	@%p1 bra 	$L__BB0_3;
+
+	cvta.to.global.u64 	%rd2, %rd1;
+	mul.wide.s32 	%rd3, %r1, 4;
+	add.s64 	%rd4, %rd2, %rd3;
+	ld.global.f32 	%f2, [%rd4];
+	ld.global.f32 	%f3, [%rd4+16];
+	fma.rn.f32 	%f4, %f1, %f2, %f3;
+	selp.f32 	%f5, %f4, %f2, %p1;
+	st.global.f32 	[%rd4], %f5;
+
+$L__BB0_3:
+	ret;
+
+}
+
+// CHECK: .visible .entry saxpy(
+// CHECK: ld.param.f32 %f1, [saxpy_param_1];
+// CHECK: ld.global.f32 %f3, [%rd4+16];
+// CHECK: fma.rn.f32 %f4, %f1, %f2, %f3;
+// CHECK: selp.f32 %f5, %f4, %f2, %p1;
+// CHECK: st.global.f32 [%rd4], %f5;
+// CHECK: $L__BB0_3:
+// CHECK: ret;

@@ -1,0 +1,48 @@
+// Exercises the previously-excluded compute families now fully supported:
+// cp.async, tensor-core (wmma/mma with register vectors), textures/surfaces
+// (bracket-group addresses), and video-SIMD. Round-trips through the front-end.
+// RUN: tir mc --march=ptx --filetype=asm %s | filecheck %s
+
+
+.visible .entry advanced(
+	.param .u64 advanced_param_0
+)
+{
+	.reg .pred 	%p<2>;
+	.reg .b32 	%r<20>;
+	.reg .f32 	%f<20>;
+	.reg .b64 	%rd<8>;
+
+	ld.param.u64 	%rd1, [advanced_param_0];
+	cvta.to.global.u64 	%rd2, %rd1;
+	// async copy global -> shared
+	cp.async.cg.shared.global 	[%r1], [%rd2], 16;
+	cp.async.commit_group;
+	cp.async.wait_group 	0;
+	bar.sync 	0;
+	// tensor-core fragment load + mma + store
+	wmma.load.a.sync.aligned.m16n16k16.row.f16 	{%r2, %r3, %r4, %r5, %r6, %r7, %r8, %r9}, [%rd2];
+	wmma.load.b.sync.aligned.m16n16k16.col.f16 	{%r10, %r11, %r12, %r13}, [%rd2], 16;
+	mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 	{%f0, %f1, %f2, %f3}, {%r2, %r3, %r4, %r5}, {%r10, %r11}, {%f4, %f5, %f6, %f7};
+	wmma.store.d.sync.aligned.m16n16k16.row.f32 	[%rd2], {%f0, %f1, %f2, %f3, %f4, %f5, %f6, %f7};
+	// texture + surface
+	tex.2d.v4.f32.f32 	{%f8, %f9, %f10, %f11}, [%rd2, {%r14, %r15}];
+	sust.b.2d.v4.b32.trap 	[%rd2, {%r14, %r15}], {%f8, %f9, %f10, %f11};
+	suq.width.b32 	%r16, [%rd2];
+	// video SIMD
+	vadd.s32.s32.s32 	%r17, %r14, %r15;
+	vadd2.u32.u32.u32 	%r18, %r14, %r15, %r16;
+	vset.lt.s32.s32 	%r19, %r14, %r15;
+	ret;
+
+}
+
+// CHECK: cp.async.cg.shared.global [%r1], [%rd2], 16;
+// CHECK: cp.async.commit_group;
+// CHECK: wmma.load.a.sync.aligned.m16n16k16.row.f16 {%r2, %r3, %r4, %r5, %r6, %r7, %r8, %r9}, [%rd2];
+// CHECK: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%f0, %f1, %f2, %f3}, {%r2, %r3, %r4, %r5}, {%r10, %r11}, {%f4, %f5, %f6, %f7};
+// CHECK: wmma.store.d.sync.aligned.m16n16k16.row.f32 [%rd2], {%f0, %f1, %f2, %f3, %f4, %f5, %f6, %f7};
+// CHECK: tex.2d.v4.f32.f32 {%f8, %f9, %f10, %f11}, [%rd2, {%r14, %r15}];
+// CHECK: sust.b.2d.v4.b32.trap [%rd2, {%r14, %r15}], {%f8, %f9, %f10, %f11};
+// CHECK: suq.width.b32 %r16, [%rd2];
+// CHECK: vadd2.u32.u32.u32 %r18, %r14, %r15, %r16;

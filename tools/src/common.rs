@@ -30,7 +30,10 @@ pub fn parse_module(
     let ty = match kind {
         InputKind::Auto => {
             if let Some(inp) = input_path.and_then(|i| i.to_str())
-                && (inp.ends_with(".S") || inp.ends_with(".s") || inp.ends_with(".asm"))
+                && (inp.ends_with(".S")
+                    || inp.ends_with(".s")
+                    || inp.ends_with(".asm")
+                    || inp.ends_with(".ptx"))
             {
                 InputKind::Assembly
             } else {
@@ -41,13 +44,23 @@ pub fn parse_module(
     };
 
     match ty {
-        InputKind::Assembly => Ok((
-            target
-                .asm_parser(context)
-                .parse_asm(context, &input)
-                .map_err(|_| "failed to parse assembly input")?,
-            false,
-        )),
+        InputKind::Assembly => {
+            // A target with its own assembly syntax (e.g. PTX) parses text
+            // directly; otherwise fall back to the shared flat assembler.
+            if let Some(result) = target.parse_asm_text(context, &input) {
+                return Ok((
+                    result.map_err(|e| format!("failed to parse assembly: {e}"))?,
+                    false,
+                ));
+            }
+            Ok((
+                target
+                    .asm_parser(context)
+                    .parse_asm(context, &input)
+                    .map_err(|_| "failed to parse assembly input")?,
+                false,
+            ))
+        }
         InputKind::Tir => Ok((
             tir::parse::ir::parse_ir::<ModuleOp>(context, &input).map_err(|(span, err)| {
                 format!("failed to parse input at byte {}: {err:?}", span.0)

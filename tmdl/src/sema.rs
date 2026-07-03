@@ -12,7 +12,7 @@ use crate::{Span, Type, ast};
 type Diag = Rich<'static, String, Span>;
 
 // TODO path strings must be interned
-pub fn analyze(files: &[ast::File]) -> Vec<(String, Diag)> {
+pub fn analyze(files: &[ast::File], text_only: bool) -> Vec<(String, Diag)> {
     let mut diags = vec![];
 
     let cache = build_item_cache(files);
@@ -20,7 +20,7 @@ pub fn analyze(files: &[ast::File]) -> Vec<(String, Diag)> {
     // TODO check item names are unique
     diags.extend(check_isas(files, &cache));
     diags.extend(check_templates(files, &cache));
-    diags.extend(check_instructions(files, &cache));
+    diags.extend(check_instructions(files, &cache, text_only));
     diags.extend(check_register_classes(files, &cache));
     diags.extend(check_performance_model(files, &cache));
     for file in files {
@@ -540,12 +540,14 @@ fn check_templates(
 fn check_instructions(
     files: &[ast::File],
     item_cache: &HashMap<&str, &ast::Item>,
+    text_only: bool,
 ) -> Vec<(String, Diag)> {
     let mut diags: Vec<(String, Diag)> = files
         .iter()
         .flat_map(|f| {
-            f.instructions()
-                .flat_map(|i| check_instruction_consistent(i, item_cache, &f.file_name).into_iter())
+            f.instructions().flat_map(|i| {
+                check_instruction_consistent(i, item_cache, &f.file_name, text_only).into_iter()
+            })
         })
         .collect();
 
@@ -684,6 +686,7 @@ fn check_instruction_consistent(
     instruction: &ast::Instruction,
     item_cache: &HashMap<&str, &ast::Item>,
     file_name: &str,
+    text_only: bool,
 ) -> Vec<(String, Diag)> {
     let mut diags = vec![];
 
@@ -816,16 +819,20 @@ fn check_instruction_consistent(
         ));
     }
 
-    // Encoding must exist somewhere in the chain or instruction.
+    // Encoding must exist somewhere in the chain or instruction. Text-only
+    // targets (pseudo-ISAs like PTX) have no binary representation, so an empty
+    // encoding is allowed there and simply produces no encoder.
     let effective_encoding = resolve_effective_encoding_for_instruction(instruction, item_cache);
     if effective_encoding.is_empty() {
-        diags.push((
-            file_name.to_string(),
-            Rich::custom(
-                instruction.span,
-                format!("Instruction '{}' has no encoding defined", instruction.name),
-            ),
-        ));
+        if !text_only {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!("Instruction '{}' has no encoding defined", instruction.name),
+                ),
+            ));
+        }
     } else {
         diags.extend(check_encoding(
             instruction,
@@ -1407,7 +1414,7 @@ mod perf_model_tests {
         assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
         let (file, parse_errs) = parse(src, &tokens, "test.tmdl");
         assert!(parse_errs.is_empty(), "parse errors: {parse_errs:?}");
-        analyze(&[file.unwrap()])
+        analyze(&[file.unwrap()], false)
             .into_iter()
             .map(|(_, d)| d.to_string())
             .collect()

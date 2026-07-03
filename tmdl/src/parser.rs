@@ -1164,6 +1164,7 @@ where
                 "fsub" => Some(BuiltinFunction::FSub),
                 "fmul" => Some(BuiltinFunction::FMul),
                 "fdiv" => Some(BuiltinFunction::FDiv),
+                "todo" => Some(BuiltinFunction::Todo),
                 _ => None,
             }
         }
