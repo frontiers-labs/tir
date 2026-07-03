@@ -288,6 +288,17 @@ fn emit_instructions<'a>(
         .map(|rc| rc.name.clone())
         .collect();
 
+    // Register classes holding floating-point values (`float` registers).
+    // Their operands constrain selection to float-typed values (and integer
+    // operands to non-float ones), and a float destination types the pattern
+    // root as the class width's binary format.
+    let float_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .filter(|rc| rc.has_float_registers())
+        .map(|rc| rc.name.clone())
+        .collect();
+
     for inst in files.iter().flat_map(|f| f.instructions()) {
         let name_ident = format_ident!("{}Op", &inst.name);
         let builder_ident = format_ident!("{}OpBuilder", &inst.name);
@@ -697,17 +708,37 @@ fn emit_instructions<'a>(
             // that many bits: type the pattern root at the class width, so the
             // narrow form matches only values of its width instead of tying
             // with the full-width form on every width.
+            let dst_class = defined_register_operands
+                .first()
+                .and_then(|name| ops_map.get(name))
+                .and_then(|ty| match ty {
+                    Type::Struct(class) => Some(class.as_str()),
+                    _ => None,
+                });
             if pattern_widths[canon_root.index()].is_none()
                 && scalar_root_kind(tir::graph::Dag::get_node(&canon_pattern, canon_root))
-                && let Some(Type::Struct(dst_class)) = defined_register_operands
-                    .first()
-                    .and_then(|name| ops_map.get(name))
+                && let Some(dst_class) = dst_class
                 && let Some(width) = literal_register_class_width(files, dst_class)
             {
                 pattern_widths[canon_root.index()] = Some(width);
             }
+            // Float nodes are typed as the binary format of their width: every
+            // float-kind node, plus the root when the destination class is a
+            // float register file (so e.g. `flw`'s load pattern matches only
+            // f32-typed loads and never collides with `lw`).
+            let mut float_nodes: HashSet<usize> = (0..tir::graph::Dag::len(&canon_pattern))
+                .filter(|&index| {
+                    float_kind(tir::graph::Dag::get_node(
+                        &canon_pattern,
+                        tir::graph::NodeId::from_index(index),
+                    ))
+                })
+                .collect();
+            if dst_class.is_some_and(|class| float_classes.contains(class)) {
+                float_nodes.insert(canon_root.index());
+            }
             let (pattern_stmts, _root_var) =
-                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths, &float_nodes);
             let operand_width_call = emit_operand_width_call(
                 &ops,
                 &semantics.variable_symbols,
@@ -718,6 +749,8 @@ fn emit_instructions<'a>(
                 &ops,
                 &semantics.variable_symbols,
             ));
+            let operand_float_call =
+                emit_operand_float_call(&ops, &semantics.variable_symbols, &float_classes);
             // Cost reflects the canonical pattern's size (one machine instruction).
             let base_cost = {
                 use tir::graph::Dag;
@@ -788,7 +821,8 @@ fn emit_instructions<'a>(
                         )
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
                         #operand_width_call
-                        #operand_imm_range_call,
+                        #operand_imm_range_call
+                        #operand_float_call,
                     );
                 }
             });
@@ -889,7 +923,7 @@ fn emit_instructions<'a>(
                 }
             }
             let (pattern_stmts, _root_var) =
-                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths, &HashSet::new());
             let operand_width_call = emit_operand_width_call(
                 &ops,
                 &branch.variable_symbols,
@@ -900,6 +934,8 @@ fn emit_instructions<'a>(
                 &ops,
                 &branch.variable_symbols,
             ));
+            let operand_float_call =
+                emit_operand_float_call(&ops, &branch.variable_symbols, &float_classes);
             let base_cost = {
                 use tir::graph::Dag;
                 (canon_pattern.len() as u32).max(1)
@@ -942,7 +978,8 @@ fn emit_instructions<'a>(
                         })
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
                         #operand_width_call
-                        #operand_imm_range_call,
+                        #operand_imm_range_call
+                        #operand_float_call,
                     );
                 }
             });
@@ -2814,7 +2851,7 @@ fn emit_flag_branch_rules<'a>(
                 }
             }
             let (pattern_stmts, _root_var) =
-                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths, &HashSet::new());
             let operand_width_call = emit_operand_width_call(
                 &d.ops,
                 &d_sem.variable_symbols,
@@ -3221,6 +3258,32 @@ fn immediate_operand_ranges(
     out
 }
 
+/// Emit the `.with_operand_floats` builder call marking each register operand
+/// symbol as float (its class holds `float`-trait registers) or integer, so a
+/// float value never binds an integer operand and vice versa.
+fn emit_operand_float_call(
+    ops: &[(String, Type)],
+    variable_symbols: &HashMap<String, u32>,
+    float_classes: &HashSet<String>,
+) -> proc_macro2::TokenStream {
+    let entries: Vec<proc_macro2::TokenStream> = ops
+        .iter()
+        .filter_map(|(op_name, op_ty)| {
+            let Type::Struct(class_name) = op_ty else {
+                return None;
+            };
+            let &symbol = variable_symbols.get(op_name)?;
+            let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
+            let is_float = float_classes.contains(class_name);
+            Some(quote! { (#symbol_lit, #is_float) })
+        })
+        .collect();
+    if entries.is_empty() {
+        return quote! {};
+    }
+    quote! { .with_operand_floats(vec![#(#entries),*]) }
+}
+
 /// Emit the `.with_operand_imm_ranges` builder call for the immediate operands'
 /// encoding ranges.
 fn emit_operand_imm_range_call(ranges: &[(u32, u32, bool)]) -> proc_macro2::TokenStream {
@@ -3258,8 +3321,8 @@ fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option
 }
 
 /// Operator kinds whose result is meaningfully sized by the destination register
-/// width — scalar integer computations. Vector, memory, and control kinds carry
-/// no scalar width and are never typed from a register class.
+/// width — scalar integer and float computations. Vector, memory, and control
+/// kinds carry no scalar width and are never typed from a register class.
 fn scalar_root_kind(kind: &tir::sem::SymKind) -> bool {
     use tir::sem::SymKind as K;
     matches!(
@@ -3279,7 +3342,17 @@ fn scalar_root_kind(kind: &tir::sem::SymKind) -> bool {
             | K::ShiftLeft
             | K::ShiftRightLogic
             | K::ShiftRightArithmetic
+            | K::FAdd
+            | K::FSub
+            | K::FMul
+            | K::FDiv
     )
+}
+
+/// Whether the kind computes an IEEE binary floating-point value.
+fn float_kind(kind: &tir::sem::SymKind) -> bool {
+    use tir::sem::SymKind as K;
+    matches!(kind, K::FAdd | K::FSub | K::FMul | K::FDiv)
 }
 
 /// Whether `expr` reads or writes a program-counter register (`PC::pc`).
@@ -3700,7 +3773,7 @@ fn emit_as_sem_expr_impl(
     let lowering = rhs.lower_to_sema(&mut dag, numeric_params)?;
     // The AsSemExpr impl carries no type annotations (the program-graph builder
     // infers them), so pass no widths.
-    let (stmts, root_var) = emit_dag_as_code(&dag, lowering.root, &[]);
+    let (stmts, root_var) = emit_dag_as_code(&dag, lowering.root, &[], &HashSet::new());
 
     Some(quote! {
         impl tir::sem::AsSemExpr for #name_ident {
@@ -3930,7 +4003,7 @@ fn emit_value_eval(
     let lowering =
         rhs.lower_to_sema_with_registers(&mut dag, numeric_params, register_index_map)?;
     // Build the semantic graph inline (no type annotations, so no `_context`).
-    let (dag_stmts, _root) = emit_dag_as_code(&dag, lowering.root, &[]);
+    let (dag_stmts, _root) = emit_dag_as_code(&dag, lowering.root, &[], &HashSet::new());
     let (max_sym_id, sym_inits) = emit_sym_inits(&lowering, ops, isa_param_values, mnemonic_lit);
     let sym_count_lit = proc_macro2::Literal::usize_unsuffixed(max_sym_id + 1);
 
@@ -4119,6 +4192,7 @@ fn emit_dag_as_code(
     dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
     root: tir::graph::NodeId,
     widths: &[Option<u32>],
+    float_nodes: &HashSet<usize>,
 ) -> (Vec<proc_macro2::TokenStream>, proc_macro2::Ident) {
     let mut stmts: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut node_vars: HashMap<usize, proc_macro2::Ident> = HashMap::new();
@@ -4138,15 +4212,30 @@ fn emit_dag_as_code(
         // determined (extract result, extension target, comparison). Only
         // *operation* nodes are typed: leaf operands stay wildcards (so e.g. a
         // plain `add` matches any width), and constant leaves are matched by value
-        // rather than by a fragile value-derived width.
+        // rather than by a fragile value-derived width. Float nodes take the
+        // IEEE binary format of their width, matching how the program builder
+        // types float computations.
         if dag.get_leaf_data(node_id).is_none()
             && let Some(Some(width)) = widths.get(node_id.index()).copied()
         {
-            let width_lit = proc_macro2::Literal::u32_unsuffixed(width);
-            stmts.push(quote! {
-                g.set_actual_type(#var, tir::builtin::IntegerType::new(_context, #width_lit));
-            });
-            has_typed_node = true;
+            let ty_ts = if float_nodes.contains(&node_id.index()) {
+                match width {
+                    32 => Some(quote! { tir::builtin::FloatType::f32(_context) }),
+                    64 => Some(quote! { tir::builtin::FloatType::f64(_context) }),
+                    // Only binary32/binary64 registers exist; leave any other
+                    // width untypeable rather than mislabeling it an integer.
+                    _ => None,
+                }
+            } else {
+                let width_lit = proc_macro2::Literal::u32_unsuffixed(width);
+                Some(quote! { tir::builtin::IntegerType::new(_context, #width_lit) })
+            };
+            if let Some(ty_ts) = ty_ts {
+                stmts.push(quote! {
+                    g.set_actual_type(#var, #ty_ts);
+                });
+                has_typed_node = true;
+            }
         }
 
         let children: Vec<tir::graph::NodeId> = dag.children(node_id).collect();
@@ -4210,6 +4299,10 @@ fn emit_expr_kind_ts(kind: &tir::sem::SymKind) -> proc_macro2::TokenStream {
         SymKind::Log2Ceil => quote! { tir::sem::SymKind::Log2Ceil },
         SymKind::Sqrt => quote! { tir::sem::SymKind::Sqrt },
         SymKind::Fma => quote! { tir::sem::SymKind::Fma },
+        SymKind::FAdd => quote! { tir::sem::SymKind::FAdd },
+        SymKind::FSub => quote! { tir::sem::SymKind::FSub },
+        SymKind::FMul => quote! { tir::sem::SymKind::FMul },
+        SymKind::FDiv => quote! { tir::sem::SymKind::FDiv },
         SymKind::Map => quote! { tir::sem::SymKind::Map },
         SymKind::Zip => quote! { tir::sem::SymKind::Zip },
         SymKind::IterConcat => quote! { tir::sem::SymKind::IterConcat },

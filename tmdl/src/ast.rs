@@ -25,6 +25,10 @@ pub enum RegisterTrait {
     /// side effect by compare-style instructions and read by conditional-branch
     /// guards. Marks the class for flag-branch rule derivation.
     StatusFlag,
+    /// Holds IEEE binary floating-point values. Marks the class so instruction
+    /// selection types its patterns with float types and keeps float and
+    /// integer operands from binding across register files.
+    Float,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -496,6 +500,12 @@ pub enum BuiltinFunction {
     /// `zip(a, b)`: pair two iterators lane-wise so a `map` lambda can read both
     /// sides as separate parameters.
     Zip,
+    /// IEEE 754 binary floating-point arithmetic over register bits; the format
+    /// is the binary32/binary64 interchange format of the operand width.
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -1349,6 +1359,24 @@ impl Call {
                 let body = ctx.lower_lambda_body(&self.arguments[1]);
                 ctx.add_node(tir::sem::SymKind::Reduce, &[iter, body])
             }
+            BuiltinFunction::FAdd
+            | BuiltinFunction::FSub
+            | BuiltinFunction::FMul
+            | BuiltinFunction::FDiv => {
+                let kind = match builtin {
+                    BuiltinFunction::FAdd => tir::sem::SymKind::FAdd,
+                    BuiltinFunction::FSub => tir::sem::SymKind::FSub,
+                    BuiltinFunction::FMul => tir::sem::SymKind::FMul,
+                    _ => tir::sem::SymKind::FDiv,
+                };
+                assert!(
+                    self.arguments.len() == 2,
+                    "float arithmetic requires 2 arguments"
+                );
+                let lhs = self.arguments[0].lower_with_ctx(ctx);
+                let rhs = self.arguments[1].lower_with_ctx(ctx);
+                ctx.add_node(kind, &[lhs, rhs])
+            }
         }
     }
 }
@@ -1481,6 +1509,12 @@ impl RegisterClass {
     pub fn has_status_flags(&self) -> bool {
         self.resolve_registers()
             .any(|reg| reg.traits.contains(&RegisterTrait::StatusFlag))
+    }
+
+    /// Whether this class holds floating-point values (`float` registers).
+    pub fn has_float_registers(&self) -> bool {
+        self.resolve_registers()
+            .any(|reg| reg.traits.contains(&RegisterTrait::Float))
     }
 
     pub fn hardwired_zero_register_index(&self) -> Option<u16> {

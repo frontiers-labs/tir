@@ -162,7 +162,7 @@ operation! {
             result: "crate::builtin::FloatType",
         },
         interfaces: [Commutative, SameOperandType],
-        sem: "(set result (add lhs rhs))",
+        sem: "(set result (fadd lhs rhs))",
     }
 }
 
@@ -181,7 +181,7 @@ operation! {
             result: "crate::builtin::FloatType",
         },
         interfaces: [SameOperandType],
-        sem: "(set result (sub lhs rhs))",
+        sem: "(set result (fsub lhs rhs))",
     }
 }
 
@@ -199,7 +199,7 @@ operation! {
             result: "crate::builtin::FloatType",
         },
         interfaces: [Commutative, SameOperandType],
-        sem: "(set result (mul lhs rhs))",
+        sem: "(set result (fmul lhs rhs))",
     }
 }
 
@@ -218,7 +218,7 @@ operation! {
             result: "crate::builtin::FloatType",
         },
         interfaces: [SameOperandType],
-        sem: "(set result (div lhs rhs))",
+        sem: "(set result (fdiv lhs rhs))",
     }
 }
 

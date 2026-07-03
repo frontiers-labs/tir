@@ -173,6 +173,8 @@ fn attr_features(name: &str) -> Option<Vec<Feature>> {
     match name.as_str() {
         // The M extension implies Zmmul.
         "m" => Some(vec![Feature::RVM, Feature::Zmmul]),
+        // The D extension implies F.
+        "d" => Some(vec![Feature::D, Feature::F]),
         _ => Feature::from_name(&name).map(|f| vec![f]),
     }
 }
@@ -215,6 +217,8 @@ fn parse_riscv_isa_string(march: &str) -> Result<TargetConfig, String> {
             enable(base_feature);
             enable(Feature::RVM);
             enable(Feature::Zmmul);
+            enable(Feature::F);
+            enable(Feature::D);
             enable(Feature::Zicsr);
             skip_extension_version(&mut chars);
         }
@@ -244,10 +248,20 @@ fn parse_riscv_isa_string(march: &str) -> Result<TargetConfig, String> {
                 enable(Feature::RVV);
                 skip_extension_version(&mut chars);
             }
+            'f' => {
+                enable(Feature::F);
+                skip_extension_version(&mut chars);
+            }
+            // D implies F.
+            'd' => {
+                enable(Feature::F);
+                enable(Feature::D);
+                skip_extension_version(&mut chars);
+            }
             // Standard single-letter extensions TMDL does not model yet are
             // accepted so common GNU march strings (e.g. rv64gc) keep working;
             // they contribute no instructions.
-            'a' | 'f' | 'd' | 'q' | 'l' | 'c' | 'b' | 'j' | 't' | 'p' | 'h' => {
+            'a' | 'q' | 'l' | 'c' | 'b' | 'j' | 't' | 'p' | 'h' => {
                 skip_extension_version(&mut chars);
             }
             'z' | 's' | 'x' => {
@@ -418,6 +432,19 @@ dialect! {
             // M extension (Zmmul subset)
             MulOp,
             MulHOp,
+            // F/D extensions (fp32/fp64 arithmetic and loads/stores)
+            FAddSOp,
+            FSubSOp,
+            FMulSOp,
+            FDivSOp,
+            FAddDOp,
+            FSubDOp,
+            FMulDOp,
+            FDivDOp,
+            FLoadWordOp,
+            FStoreWordOp,
+            FLoadDoubleOp,
+            FStoreDoubleOp,
             // V extension (vector-vector arithmetic)
             VAddOp,
             VSubOp,
@@ -511,25 +538,34 @@ fn lower_func_and_return_to_asm_symbol(
 
         // Argument register class follows the value's type: vectors live in the
         // vector register file (in the LMUL group class their size implies),
-        // everything else in GPRs.
+        // floats in the FPR file at their format's width, everything else in
+        // GPRs.
         let mut arg_regs = Vec::new();
         for arg in func.body().arguments().iter() {
             let ty = context.get_type_data(arg.ty());
-            let class = match (ty.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<tir::vector::VectorType>()
-            {
-                Some(vec_ty) => {
-                    let elem = context.get_type_data(vec_ty.element(context));
-                    let elem_bits = (elem.as_ref() as &dyn std::any::Any)
-                        .downcast_ref::<tir::builtin::IntegerType>()
-                        .map(|i| i.width())
-                        .unwrap_or(0) as i64;
-                    match vec_ty.length() {
-                        Some(lanes) => vsetvli::vr_class_for_bits(lanes as i64 * elem_bits)?,
-                        None => "VR",
+            let ty_any = ty.as_ref() as &dyn std::any::Any;
+            let class = if let Some(vec_ty) = ty_any.downcast_ref::<tir::vector::VectorType>() {
+                let elem = context.get_type_data(vec_ty.element(context));
+                let elem_bits = (elem.as_ref() as &dyn std::any::Any)
+                    .downcast_ref::<tir::builtin::IntegerType>()
+                    .map(|i| i.width())
+                    .unwrap_or(0) as i64;
+                match vec_ty.length() {
+                    Some(lanes) => vsetvli::vr_class_for_bits(lanes as i64 * elem_bits)?,
+                    None => "VR",
+                }
+            } else if let Some(float_ty) = ty_any.downcast_ref::<tir::builtin::FloatType>() {
+                match float_ty.bit_width() {
+                    32 => "FPR32",
+                    64 => "FPR64",
+                    other => {
+                        return Err(tir::PassError::InvalidRuleSet(format!(
+                            "{other}-bit float arguments are not supported (only f32/f64)"
+                        )));
                     }
                 }
-                None => "GPR",
+            } else {
+                "GPR"
             };
             arg_regs.push(AttributeValue::Register(RegisterAttr::Virtual {
                 id: arg.id().number(),
@@ -817,13 +853,30 @@ impl tir::backend::regalloc::TargetRegAlloc for RiscvRegAlloc {
         frame: &(String, u16),
         offset: i64,
     ) -> Box<dyn Operation> {
-        Box::new(
-            StoreDoubleWordOpBuilder::new(context)
-                .attr("rs1", phys(frame))
-                .attr("rs2", virt(value, class))
-                .attr("imm", tir::attributes::AttributeValue::Int(offset))
-                .build(),
-        )
+        let offset = tir::attributes::AttributeValue::Int(offset);
+        match class {
+            "FPR32" => Box::new(
+                FStoreWordOpBuilder::new(context)
+                    .attr("rs1", phys(frame))
+                    .attr("fs2", virt(value, class))
+                    .attr("imm", offset)
+                    .build(),
+            ),
+            "FPR64" => Box::new(
+                FStoreDoubleOpBuilder::new(context)
+                    .attr("rs1", phys(frame))
+                    .attr("fs2", virt(value, class))
+                    .attr("imm", offset)
+                    .build(),
+            ),
+            _ => Box::new(
+                StoreDoubleWordOpBuilder::new(context)
+                    .attr("rs1", phys(frame))
+                    .attr("rs2", virt(value, class))
+                    .attr("imm", offset)
+                    .build(),
+            ),
+        }
     }
 
     fn emit_spill_reload(
@@ -834,13 +887,30 @@ impl tir::backend::regalloc::TargetRegAlloc for RiscvRegAlloc {
         frame: &(String, u16),
         offset: i64,
     ) -> Box<dyn Operation> {
-        Box::new(
-            LoadDoubleWordOpBuilder::new(context)
-                .attr("rd", virt(value, class))
-                .attr("rs1", phys(frame))
-                .attr("imm", tir::attributes::AttributeValue::Int(offset))
-                .build(),
-        )
+        let offset = tir::attributes::AttributeValue::Int(offset);
+        match class {
+            "FPR32" => Box::new(
+                FLoadWordOpBuilder::new(context)
+                    .attr("fd", virt(value, class))
+                    .attr("rs1", phys(frame))
+                    .attr("imm", offset)
+                    .build(),
+            ),
+            "FPR64" => Box::new(
+                FLoadDoubleOpBuilder::new(context)
+                    .attr("fd", virt(value, class))
+                    .attr("rs1", phys(frame))
+                    .attr("imm", offset)
+                    .build(),
+            ),
+            _ => Box::new(
+                LoadDoubleWordOpBuilder::new(context)
+                    .attr("rd", virt(value, class))
+                    .attr("rs1", phys(frame))
+                    .attr("imm", offset)
+                    .build(),
+            ),
+        }
     }
 
     fn emit_prologue(&self, context: &tir::Context, size: u32) -> Vec<Box<dyn Operation>> {
@@ -1314,6 +1384,17 @@ mod tests {
         assert!(rv32i.contains(&"add"));
         assert!(!rv32i.contains(&"addword"));
         assert!(!rv32i.contains(&"loaddoubleword"));
+
+        // F gates the single-precision rules, D the double-precision ones.
+        assert!(!rv32i.contains(&"fadds"));
+        let rv32if = rule_names(&[crate::Feature::RV32I, crate::Feature::F]);
+        assert!(rv32if.contains(&"fadds"));
+        assert!(rv32if.contains(&"floadword"));
+        assert!(!rv32if.contains(&"faddd"));
+        let rv64ifd = rule_names(&[crate::Feature::RV64I, crate::Feature::F, crate::Feature::D]);
+        assert!(rv64ifd.contains(&"fadds"));
+        assert!(rv64ifd.contains(&"faddd"));
+        assert!(rv64ifd.contains(&"fstoredouble"));
     }
 
     #[test]
@@ -2082,6 +2163,172 @@ mod tests {
         );
     }
 
+    /// A RISC-V target whose FPR32 file has only three allocatable registers,
+    /// so a handful of live floats overflow it and exercise FP spilling (fsw
+    /// stores, flw reloads). Spill code emission delegates to the real target.
+    struct TinyFprRiscv(crate::RiscvRegAlloc);
+
+    impl tir::backend::regalloc::TargetRegAlloc for TinyFprRiscv {
+        fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
+            tir::backend::regalloc::RegisterInfo {
+                classes: &[
+                    tir::backend::regalloc::RegClassInfo {
+                        name: "GPR",
+                        file: "GPR",
+                        allocation_order: &[10, 11],
+                        caller_saved: &[10, 11],
+                        callee_saved: &[],
+                        arguments: &[10, 11],
+                        return_values: &[10],
+                        reserved: &[0, 1, 2, 3, 4],
+                        group_width: 1,
+                    },
+                    tir::backend::regalloc::RegClassInfo {
+                        name: "FPR32",
+                        file: "FPR32",
+                        allocation_order: &[10, 0, 1],
+                        caller_saved: &[10, 0, 1],
+                        callee_saved: &[],
+                        arguments: &[10],
+                        return_values: &[10],
+                        reserved: &[],
+                        group_width: 1,
+                    },
+                ],
+            }
+        }
+        fn frame_register(&self) -> (String, u16) {
+            self.0.frame_register()
+        }
+        fn emit_spill_store(
+            &self,
+            c: &tir::Context,
+            v: u32,
+            class: &str,
+            f: &(String, u16),
+            o: i64,
+        ) -> Box<dyn Operation> {
+            self.0.emit_spill_store(c, v, class, f, o)
+        }
+        fn emit_spill_reload(
+            &self,
+            c: &tir::Context,
+            v: u32,
+            class: &str,
+            f: &(String, u16),
+            o: i64,
+        ) -> Box<dyn Operation> {
+            self.0.emit_spill_reload(c, v, class, f, o)
+        }
+        fn emit_prologue(&self, c: &tir::Context, s: u32) -> Vec<Box<dyn Operation>> {
+            self.0.emit_prologue(c, s)
+        }
+        fn emit_epilogue(&self, c: &tir::Context, s: u32) -> Vec<Box<dyn Operation>> {
+            self.0.emit_epilogue(c, s)
+        }
+    }
+
+    #[test]
+    fn regalloc_spills_fp_values_through_fp_loads_and_stores() {
+        use crate::{FAddSOpBuilder, VirtualReturnOpBuilder, virt};
+        use tir::builtin::FloatType;
+
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let f32_ty = FloatType::f32(&context);
+        let module = ops::module(&context, None).build();
+
+        // Machine IR: 6 simultaneously-live f32 values chained down to one, in a
+        // 3-register FPR32 file, forcing FP spills.
+        let a_val = context.create_value(f32_ty, None);
+        let a = a_val.id().number();
+        let region = context.create_region();
+        let block = context.create_block(vec![a_val]);
+        region.add_block(block.id());
+
+        let mut bb = IRBuilder::new(context.get_block(block.id()));
+        let mut producers = Vec::new();
+        for _ in 0..6 {
+            let v = context.create_value(f32_ty, None).id().number();
+            bb.insert(
+                FAddSOpBuilder::new(&context)
+                    .attr("fd", virt(v, "FPR32"))
+                    .attr("fs1", virt(a, "FPR32"))
+                    .attr("fs2", virt(a, "FPR32"))
+                    .build(),
+            );
+            producers.push(v);
+        }
+        let mut acc = producers[0];
+        for &p in &producers[1..] {
+            let s = context.create_value(f32_ty, None).id().number();
+            bb.insert(
+                FAddSOpBuilder::new(&context)
+                    .attr("fd", virt(s, "FPR32"))
+                    .attr("fs1", virt(acc, "FPR32"))
+                    .attr("fs2", virt(p, "FPR32"))
+                    .build(),
+            );
+            acc = s;
+        }
+        bb.insert(
+            VirtualReturnOpBuilder::new(&context)
+                .value(tir::ValueId::from_number(acc))
+                .build(),
+        );
+        bb.insert(tir::backend::SymbolEndOpBuilder::new(&context).build());
+
+        let symbol = tir::backend::SymbolOpBuilder::new(&context)
+            .body(region.id())
+            .attr(
+                "name",
+                tir::attributes::AttributeValue::Str("demo".to_string()),
+            )
+            .build();
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(symbol);
+        mb.insert(ops::module_end(&context).build());
+
+        let mut pm = PassManager::new();
+        pm.add_pass(tir::backend::regalloc::RegisterAllocationPass::new(
+            Box::new(TinyFprRiscv(crate::RiscvRegAlloc)),
+        ));
+        pm.run(&context, context.get_op(module.id()))
+            .expect("register allocation should converge with FP spilling");
+
+        body_blocks_have_no_virtual(&context, region.id());
+
+        let block = context
+            .get_region(region.id())
+            .iter(context.clone())
+            .next()
+            .unwrap();
+        let names: Vec<&str> = block
+            .op_ids()
+            .into_iter()
+            .map(|id| context.get_op(id).name)
+            .collect();
+        assert!(
+            names.contains(&"fsw"),
+            "expected FP spill stores, got {names:?}"
+        );
+        assert!(
+            names.contains(&"flw"),
+            "expected FP spill reloads, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"sd") && !names.contains(&"ld"),
+            "FP values must spill through the FP file, got {names:?}"
+        );
+        assert_eq!(
+            names.first(),
+            Some(&"addi"),
+            "the frame prologue (addi sp) should lead the block, got {names:?}"
+        );
+    }
+
     #[test]
     fn encoders_match_isa_golden_words() {
         use crate::{
@@ -2163,6 +2410,58 @@ mod tests {
             .attr("imm", AttributeValue::Int(1))
             .build();
         assert_eq!(word(lui.id()), 0x000013B7, "lui x7, 1");
+    }
+
+    #[test]
+    fn fp_encoders_match_isa_golden_words() {
+        use crate::{
+            FAddDOpBuilder, FAddSOpBuilder, FLoadWordOpBuilder, FStoreDoubleOpBuilder, phys,
+        };
+        use tir::attributes::AttributeValue;
+
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let encoders = crate::get_instruction_encoders();
+        let gpr = |i: u16| phys(&("GPR".to_string(), i));
+        let fpr32 = |i: u16| phys(&("FPR32".to_string(), i));
+        let fpr64 = |i: u16| phys(&("FPR64".to_string(), i));
+        let word = |id: tir::OpId| -> u32 {
+            let inst = context.get_op(id);
+            let enc = encoders[inst.name](&inst)
+                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name));
+            u32::from_le_bytes(enc.bytes.try_into().unwrap())
+        };
+
+        // Golden words produced by clang/llvm-mc for riscv64 (dynamic rounding).
+        let fadd_s = FAddSOpBuilder::new(&context)
+            .attr("fd", fpr32(10))
+            .attr("fs1", fpr32(10))
+            .attr("fs2", fpr32(11))
+            .build();
+        assert_eq!(word(fadd_s.id()), 0x00B57553, "fadd.s fa0, fa0, fa1");
+
+        let fadd_d = FAddDOpBuilder::new(&context)
+            .attr("fd", fpr64(10))
+            .attr("fs1", fpr64(10))
+            .attr("fs2", fpr64(11))
+            .build();
+        assert_eq!(word(fadd_d.id()), 0x02B57553, "fadd.d fa0, fa0, fa1");
+
+        let flw = FLoadWordOpBuilder::new(&context)
+            .attr("fd", fpr32(10))
+            .attr("rs1", gpr(2))
+            .attr("imm", AttributeValue::Int(16))
+            .build();
+        assert_eq!(word(flw.id()), 0x01012507, "flw fa0, 16(sp)");
+
+        let fsd = FStoreDoubleOpBuilder::new(&context)
+            .attr("rs1", gpr(2))
+            .attr("fs2", fpr64(8))
+            .attr("imm", AttributeValue::Int(16))
+            .build();
+        assert_eq!(word(fsd.id()), 0x00813827, "fsd fs0, 16(sp)");
     }
 
     #[test]
@@ -2294,8 +2593,21 @@ mod target_parser_tests {
             features("rv32i_zmmul", None),
             vec![Feature::RV32I, Feature::Zmmul]
         );
-        // G abbreviates IMAFD...; M is the modeled part.
-        assert!(features("rv64gc_zba_zbb", None).contains(&Feature::RVM));
+        // F/D select the float extensions; D implies F.
+        assert_eq!(features("rv32if", None), vec![Feature::RV32I, Feature::F]);
+        assert_eq!(
+            features("rv64ifd", None),
+            vec![Feature::RV64I, Feature::F, Feature::D]
+        );
+        assert_eq!(
+            features("rv64id", None),
+            vec![Feature::RV64I, Feature::F, Feature::D]
+        );
+        // G abbreviates IMAFD...; M, F and D are the modeled parts.
+        let g = features("rv64gc_zba_zbb", None);
+        assert!(g.contains(&Feature::RVM));
+        assert!(g.contains(&Feature::F));
+        assert!(g.contains(&Feature::D));
         // Bare architecture names select the generic, everything-on profile.
         assert_eq!(
             features("riscv64", None),
@@ -2303,6 +2615,8 @@ mod target_parser_tests {
                 Feature::RV64I,
                 Feature::Zmmul,
                 Feature::RVM,
+                Feature::F,
+                Feature::D,
                 Feature::Zicsr,
                 Feature::RVV
             ]
@@ -2356,6 +2670,8 @@ mod target_parser_tests {
             vec![
                 ("PC", 32),
                 ("GPR", 32),
+                ("FPR32", 32),
+                ("FPR64", 64),
                 ("CSR", 32),
                 ("VCSR", 32),
                 ("VCFG", 32)
@@ -2366,6 +2682,8 @@ mod target_parser_tests {
             vec![
                 ("PC", 64),
                 ("GPR", 64),
+                ("FPR32", 32),
+                ("FPR64", 64),
                 ("CSR", 64),
                 ("VCSR", 64),
                 ("VCFG", 64)

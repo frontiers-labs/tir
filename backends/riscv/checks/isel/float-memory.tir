@@ -1,0 +1,37 @@
+// RUN: tir mc --march=rv64ifd --stage=isel %s | filecheck %s
+// RUN: tir mc --march=rv32ifd --stage=isel %s | filecheck %s
+
+// FP loads and stores select through the same MemoryRead/MemoryWrite
+// interfaces as integer ones, but the float register classes keep the two
+// register files apart: an f32 store picks fsw (never sw, whose value operand
+// refuses float-typed values), an i32 store next to it still picks sw, and
+// the loads pick flw/fld typed by the loaded float format.
+
+module {
+  func @roundtrip(%0: !f32, %1: !f64, %2: !i32) -> !f64 {
+    %3 = ptr.alloca : !ptr.p<!f32>
+    ptr.store %0, %3
+    %4 = ptr.alloca : !ptr.p<!i32>
+    ptr.store %2, %4
+    %5 = ptr.load %3 : !f32
+    %6 = addf %5, %0 : !f32
+    ptr.store %6, %3
+    %7 = ptr.alloca : !ptr.p<!f64>
+    ptr.store %1, %7
+    %8 = ptr.load %7 : !f64
+    %9 = addf %8, %1 : !f64
+    return %9
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "roundtrip", arg_regs = [%virt0:FPR32, %virt1:FPR64, %virt2:GPR]}
+// CHECK: riscv.fsw {rs1 = %virt3:GPR, fs2 = %virt0:FPR32, imm = 0}
+// CHECK: riscv.sw {rs1 = %virt4:GPR, rs2 = %virt2:GPR, imm = 0}
+// CHECK: riscv.flw {fd = %virt5:FPR32, rs1 = %virt3:GPR, imm = 0}
+// CHECK: riscv.fadd.s {fd = %virt6:FPR32, fs1 = %virt0:FPR32, fs2 = %virt5:FPR32}
+// CHECK: riscv.fsw {rs1 = %virt3:GPR, fs2 = %virt6:FPR32, imm = 0}
+// CHECK: riscv.fsd {rs1 = %virt7:GPR, fs2 = %virt1:FPR64, imm = 0}
+// CHECK: riscv.fld {fd = %virt8:FPR64, rs1 = %virt7:GPR, imm = 0}
+// CHECK: riscv.fadd.d {fd = %virt9:FPR64, fs1 = %virt1:FPR64, fs2 = %virt8:FPR64}
+// CHECK: riscv.vret

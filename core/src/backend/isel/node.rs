@@ -208,12 +208,30 @@ pub(crate) fn is_comparison(kind: SymKind) -> bool {
     complement_comparison(kind).is_some()
 }
 
-/// The integer bit-width of an IR type, or `None` if it is not an integer type.
+/// The bit-width of an IR integer or float type, or `None` for any other type.
 pub(crate) fn type_width(context: &Context, ty: TypeId) -> Option<u32> {
     let data = context.get_type_data(ty);
-    (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<IntegerType>()
+    let any = data.as_ref() as &dyn std::any::Any;
+    any.downcast_ref::<IntegerType>()
         .map(IntegerType::width)
+        .or_else(|| {
+            any.downcast_ref::<tir::builtin::FloatType>()
+                .map(tir::builtin::FloatType::bit_width)
+        })
+}
+
+/// The IR type of a `width`-bit value computed by a `kind` node: the IEEE
+/// binary format for the float kinds, an integer type otherwise.
+pub(crate) fn type_for_kind_width(context: &Context, kind: SymKind, width: u32) -> Option<TypeId> {
+    use tir::builtin::FloatType;
+    match kind {
+        SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv => match width {
+            32 => Some(FloatType::f32(context)),
+            64 => Some(FloatType::f64(context)),
+            _ => None,
+        },
+        _ => Some(IntegerType::new(context, width)),
+    }
 }
 
 pub(crate) fn minimal_unsigned_apint(value: u64) -> APInt {
@@ -257,4 +275,21 @@ pub(crate) fn class_width(ctx: &Context, egraph: &SemEGraph, class: Id) -> Optio
         .nodes(class)
         .iter()
         .find_map(|n| n.ty.and_then(|ty| type_width(ctx, ty)))
+}
+
+/// Whether an e-class holds a float (`Some(true)`) or integer (`Some(false)`)
+/// value, from whichever member carries one of those types. `None` when no
+/// member's type says either (rewrite-introduced intermediates, pointers).
+pub(crate) fn class_is_float(ctx: &Context, egraph: &SemEGraph, class: Id) -> Option<bool> {
+    egraph.nodes(class).iter().find_map(|n| {
+        let data = ctx.get_type_data(n.ty?);
+        let any = data.as_ref() as &dyn std::any::Any;
+        if any.downcast_ref::<tir::builtin::FloatType>().is_some() {
+            Some(true)
+        } else if any.downcast_ref::<IntegerType>().is_some() {
+            Some(false)
+        } else {
+            None
+        }
+    })
 }

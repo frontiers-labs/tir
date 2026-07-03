@@ -1,0 +1,22 @@
+// RUN: tir mc --march=rv64ifd --stage=regalloc %s | filecheck %s
+// RUN: tir mc --march=rv32ifd --stage=regalloc %s | filecheck %s
+
+// FP register allocation honors the hardware floating-point calling
+// convention: float arguments take fa0..fa7 in order from one sequence shared
+// by FPR32 and FPR64 (f10 = fa0, f12 = fa2 here, with the f64 argument in
+// fa1), integer arguments draw a0.. independently, and the returned float
+// lands in fa0.
+
+module {
+  func @mix(%0: !f32, %1: !i32, %2: !f64, %3: !f32) -> !f32 {
+    %4 = addf %0, %3 : !f32
+    %5 = mulf %4, %0 : !f32
+    return %5
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "mix", arg_regs = [%virt0:FPR32, %virt1:GPR, %virt2:FPR64, %virt3:FPR32]}
+// CHECK: riscv.fadd.s {fd = {{f[0-9]+}}, fs1 = f10, fs2 = f12}
+// CHECK: riscv.fmul.s {fd = f10,
+// CHECK: riscv.vret

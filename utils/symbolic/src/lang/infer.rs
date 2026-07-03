@@ -46,7 +46,11 @@ pub fn infer_widths<V>(
             | SymKind::Clamp
             | SymKind::Log2Ceil
             | SymKind::Sqrt
-            | SymKind::Fma => child_width(0),
+            | SymKind::Fma
+            | SymKind::FAdd
+            | SymKind::FSub
+            | SymKind::FMul
+            | SymKind::FDiv => child_width(0),
 
             SymKind::Eq
             | SymKind::Ne

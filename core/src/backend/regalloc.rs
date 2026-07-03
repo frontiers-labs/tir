@@ -786,8 +786,10 @@ fn abi_precolor(
 
     // Argument vregs: the symbol's `arg_regs` attribute carries each argument's
     // register class (assigned by the target's function lowering, e.g. vectors
-    // in `VR`, everything else in `GPR`). Each argument takes the next
-    // calling-convention register of its class.
+    // in `VR`, floats in `FPR32`/`FPR64`, everything else in `GPR`). Each
+    // argument takes the next calling-convention register of its class, with
+    // the slot counter shared across classes of one register *file*: an f32 and
+    // an f64 argument draw fa0 and fa1 from the same fa0..fa7 sequence.
     let mut next_slot: HashMap<&str, usize> = HashMap::new();
     if let Some(AttributeValue::Array(args)) = op
         .op()
@@ -807,7 +809,7 @@ fn abi_precolor(
             else {
                 continue;
             };
-            let slot = next_slot.entry(rc.name).or_insert(0);
+            let slot = next_slot.entry(rc.file).or_insert(0);
             if let Some(&reg) = rc.arguments.get(*slot) {
                 precolor.insert(*id, (rc.name.to_string(), reg));
                 *slot += 1;

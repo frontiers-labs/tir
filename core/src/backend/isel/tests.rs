@@ -755,6 +755,7 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
         &[(1, OperandConstraint::Immediate)],
         &[(0, 64)],
         &[],
+        &[],
     )
     .expect("srai pattern should compile");
 

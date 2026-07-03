@@ -1,4 +1,4 @@
-use tir_adt::{APInt, RawBits};
+use tir_adt::{APFloat, APInt, RawBits};
 use tir_graph::{Dag, NodeId};
 
 use crate::lang::{SymKind, SymPayload, Value};
@@ -166,6 +166,33 @@ fn coerce_ints(a: APInt, b: APInt) -> (APInt, APInt) {
 fn ints_equal(a: APInt, b: APInt) -> bool {
     let (a, b) = coerce_ints(a, b);
     a.with_signed(false) == b.with_signed(false)
+}
+
+/// The IEEE binary format of a `width`-bit register value, for the float kinds'
+/// bit-reinterpreting integer path. Only binary32/binary64 registers exist.
+fn float_format(width: u32, op: &str) -> (u32, u32) {
+    match width {
+        32 => (8, 23),
+        64 => (11, 52),
+        other => panic!("{op} requires a 32- or 64-bit operand, got {other} bits"),
+    }
+}
+
+/// Binary IEEE arithmetic: over `Float` operands directly (constant folding);
+/// over `Int` operands the register bits are reinterpreted in the binary format
+/// of the operand width and the result is returned as bits of the same width.
+fn float_binop(lhs: Value, rhs: Value, f: fn(&APFloat, &APFloat) -> APFloat, op: &str) -> Value {
+    match (lhs, rhs) {
+        (Value::Float(a), Value::Float(b)) => Value::Float(f(&a, &b)),
+        (Value::Int(a), Value::Int(b)) => {
+            let width = a.width().max(b.width());
+            let (exp, mant) = float_format(width, op);
+            let a = APFloat::from_bits(exp, mant, false, a.to_u64() as u128);
+            let b = APFloat::from_bits(exp, mant, false, b.to_u64() as u128);
+            Value::Int(APInt::new(width, f(&a, &b).to_bits() as u64))
+        }
+        _ => panic!("{op} requires two float or two integer operands"),
+    }
 }
 
 /// Evaluate `body` with `binding` pushed as the innermost lambda argument, under a
@@ -393,6 +420,12 @@ fn eval_node<V, M: Memory>(
         SymKind::SRem => int_binop!(c, srem, "srem"),
         SymKind::URem => int_binop!(c, urem, "urem"),
         SymKind::Neg => Value::Int(as_int!(c(0), "neg").neg()),
+
+        // ── Floating point ─────────────────────────────────────────────────
+        SymKind::FAdd => float_binop(c(0), c(1), APFloat::add, "fadd"),
+        SymKind::FSub => float_binop(c(0), c(1), APFloat::sub, "fsub"),
+        SymKind::FMul => float_binop(c(0), c(1), APFloat::mul, "fmul"),
+        SymKind::FDiv => float_binop(c(0), c(1), APFloat::div, "fdiv"),
 
         // ── Bitwise (int only) ─────────────────────────────────────────────
         SymKind::And => int_binop!(c, and, "and"),

@@ -1073,6 +1073,7 @@ where
                     "temporary" => Some(RegisterTrait::Temporary),
                     "saved" => Some(RegisterTrait::Saved),
                     "status_flag" => Some(RegisterTrait::StatusFlag),
+                    "float" => Some(RegisterTrait::Float),
                     _ => {
                         emitter.emit(Rich::custom(
                             e.span(),
@@ -1140,6 +1141,10 @@ where
                 "map" => Some(BuiltinFunction::Map),
                 "reduce" => Some(BuiltinFunction::Reduce),
                 "zip" => Some(BuiltinFunction::Zip),
+                "fadd" => Some(BuiltinFunction::FAdd),
+                "fsub" => Some(BuiltinFunction::FSub),
+                "fmul" => Some(BuiltinFunction::FMul),
+                "fdiv" => Some(BuiltinFunction::FDiv),
                 _ => None,
             }
         }

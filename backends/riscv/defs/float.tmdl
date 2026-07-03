@@ -1,0 +1,295 @@
+// RISC-V F and D standard extensions: single/double-precision IEEE 754
+// binary floating point over the f0..f31 register file.
+
+isa F requires [RV32I | RV64I] {}
+isa D requires [F] {}
+
+// The architectural float registers as single-precision (binary32) values.
+// The `float` trait marks the class so instruction selection types patterns
+// with float types and never mixes float and integer operands.
+//
+// Calling convention (RISC-V psABI, hardware FP convention): arguments in
+// fa0..fa7 (f10..f17), results in fa0/fa1, ft* caller-saved scratch,
+// fs* callee-saved.
+register_class FPR32 for [F] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 32;
+
+    registers {
+        f0..f7("ft{}") => { traits = [float, temporary, caller_saved] },
+        f8..f9("fs{}") => { traits = [float, saved, callee_saved] },
+        f10..f17("fa{}") => { traits = [float, argument, return_value, caller_saved] },
+        f18..f27("fs{}") => { traits = [float, saved, callee_saved] },
+        f28..f31("ft{}") => { traits = [float, temporary, caller_saved] },
+    }
+}
+
+// The same physical registers viewed as double-precision (binary64) values.
+// `file = FPR32` makes the allocator treat f5-as-FPR32 and f5-as-FPR64 as the
+// same register, exactly like the RVV LMUL group classes over VR.
+register_class FPR64 for [D] {
+    file = FPR32;
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+
+    registers {
+        f0..f7("ft{}") => { traits = [float, temporary, caller_saved] },
+        f8..f9("fs{}") => { traits = [float, saved, callee_saved] },
+        f10..f17("fa{}") => { traits = [float, argument, return_value, caller_saved] },
+        f18..f27("fs{}") => { traits = [float, saved, callee_saved] },
+        f28..f31("ft{}") => { traits = [float, temporary, caller_saved] },
+    }
+}
+
+// R-type FP arithmetic, single precision. Bits 12..14 hold the rounding mode;
+// only dynamic rounding (rm=0b111, the default `frm`) is modeled.
+template FPArith32 for [F] {
+    param MNEMONIC: String;
+    param FUNCT7: bits<7>;
+    param RM: bits<3> = 0b111;
+    param OPCODE: bits<7> = 0b1010011;
+
+    operands {
+        fd: FPR32,
+        fs1: FPR32,
+        fs2: FPR32,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => fd,
+        12..14 => RM,
+        15..19 => fs1,
+        20..24 => fs2,
+        25..31 => FUNCT7,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {fs1}, {fs2}"
+    }
+}
+
+// R-type FP arithmetic, double precision.
+template FPArith64 for [D] {
+    param MNEMONIC: String;
+    param FUNCT7: bits<7>;
+    param RM: bits<3> = 0b111;
+    param OPCODE: bits<7> = 0b1010011;
+
+    operands {
+        fd: FPR64,
+        fs1: FPR64,
+        fs2: FPR64,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => fd,
+        12..14 => RM,
+        15..19 => fs1,
+        20..24 => fs2,
+        25..31 => FUNCT7,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {fs1}, {fs2}"
+    }
+}
+
+instruction FAddS for [F] : FPArith32 {
+    param MNEMONIC: String = "fadd.s";
+    param FUNCT7: bits<7> = 0b0000000;
+
+    behavior {
+        fd = fadd(fs1, fs2);
+    }
+}
+
+instruction FSubS for [F] : FPArith32 {
+    param MNEMONIC: String = "fsub.s";
+    param FUNCT7: bits<7> = 0b0000100;
+
+    behavior {
+        fd = fsub(fs1, fs2);
+    }
+}
+
+instruction FMulS for [F] : FPArith32 {
+    param MNEMONIC: String = "fmul.s";
+    param FUNCT7: bits<7> = 0b0001000;
+
+    behavior {
+        fd = fmul(fs1, fs2);
+    }
+}
+
+instruction FDivS for [F] : FPArith32 {
+    param MNEMONIC: String = "fdiv.s";
+    param FUNCT7: bits<7> = 0b0001100;
+
+    behavior {
+        fd = fdiv(fs1, fs2);
+    }
+}
+
+instruction FAddD for [D] : FPArith64 {
+    param MNEMONIC: String = "fadd.d";
+    param FUNCT7: bits<7> = 0b0000001;
+
+    behavior {
+        fd = fadd(fs1, fs2);
+    }
+}
+
+instruction FSubD for [D] : FPArith64 {
+    param MNEMONIC: String = "fsub.d";
+    param FUNCT7: bits<7> = 0b0000101;
+
+    behavior {
+        fd = fsub(fs1, fs2);
+    }
+}
+
+instruction FMulD for [D] : FPArith64 {
+    param MNEMONIC: String = "fmul.d";
+    param FUNCT7: bits<7> = 0b0001001;
+
+    behavior {
+        fd = fmul(fs1, fs2);
+    }
+}
+
+instruction FDivD for [D] : FPArith64 {
+    param MNEMONIC: String = "fdiv.d";
+    param FUNCT7: bits<7> = 0b0001101;
+
+    behavior {
+        fd = fdiv(fs1, fs2);
+    }
+}
+
+// FP loads/stores. Besides load/store selection (the float destination class
+// types `flw`'s pattern as f32, so it never overlaps `lw`), these are the
+// spill/reload instructions register allocation emits for FPR values.
+
+instruction FLoadWord for [F] {
+    param MNEMONIC: String = "flw";
+    param OPCODE: bits<7> = 0b0000111;
+    param FUNCT3: bits<3> = 0b010;
+
+    operands {
+        fd: FPR32,
+        rs1: GPR,
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => fd,
+        12..14 => FUNCT3,
+        15..19 => rs1,
+        20..31 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {imm}({rs1})"
+    }
+
+    behavior {
+        fd = load(rs1 + sext(imm, self.XLEN), 4, 0b0);
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction FStoreWord for [F] {
+    param MNEMONIC: String = "fsw";
+    param OPCODE: bits<7> = 0b0100111;
+    param FUNCT3: bits<3> = 0b010;
+
+    operands {
+        rs1: GPR,
+        fs2: FPR32,
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => imm[0..4],
+        12..14 => FUNCT3,
+        15..19 => rs1,
+        20..24 => fs2,
+        25..31 => imm[5..11],
+    }
+
+    asm {
+        "{self.MNEMONIC} {fs2}, {imm}({rs1})"
+    }
+
+    behavior {
+        store(rs1 + sext(imm, self.XLEN), 4, fs2);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction FLoadDouble for [D] {
+    param MNEMONIC: String = "fld";
+    param OPCODE: bits<7> = 0b0000111;
+    param FUNCT3: bits<3> = 0b011;
+
+    operands {
+        fd: FPR64,
+        rs1: GPR,
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => fd,
+        12..14 => FUNCT3,
+        15..19 => rs1,
+        20..31 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {imm}({rs1})"
+    }
+
+    behavior {
+        fd = load(rs1 + sext(imm, self.XLEN), 8, 0b0);
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+instruction FStoreDouble for [D] {
+    param MNEMONIC: String = "fsd";
+    param OPCODE: bits<7> = 0b0100111;
+    param FUNCT3: bits<3> = 0b011;
+
+    operands {
+        rs1: GPR,
+        fs2: FPR64,
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => imm[0..4],
+        12..14 => FUNCT3,
+        15..19 => rs1,
+        20..24 => fs2,
+        25..31 => imm[5..11],
+    }
+
+    asm {
+        "{self.MNEMONIC} {fs2}, {imm}({rs1})"
+    }
+
+    behavior {
+        store(rs1 + sext(imm, self.XLEN), 8, fs2);
+    }
+
+    schedule { units = [WriteStore]; }
+}

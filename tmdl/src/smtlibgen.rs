@@ -1001,6 +1001,8 @@ fn emit_sem_expr(
         }
         // Stores are effect statements, handled by `BehaviorEmitter::store`.
         SymKind::StoreMemory | SymKind::Sqrt | SymKind::Fma => None,
+        // IEEE float arithmetic has no bit-vector model here.
+        SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv => None,
         SymKind::Map | SymKind::Zip | SymKind::IterConcat => None,
         SymKind::Split | SymKind::Reduce | SymKind::Arg => None,
         // The TMDL frontend never lowers to these (no remainder/negation/`Le`/bit

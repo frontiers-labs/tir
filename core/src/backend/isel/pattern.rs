@@ -10,7 +10,7 @@ use tir::{
 use tir_symbolic::egraph::{Id, Pattern, PatternNode, Var};
 
 use super::ImmRange;
-use super::node::{SemEGraph, SemNode, class_int_binding, class_width};
+use super::node::{SemEGraph, SemNode, class_int_binding, class_is_float, class_width};
 
 /// A rule's pattern compiled for e-matching: the [`Pattern`] itself plus the
 /// per-pattern-node metadata the matcher and the PBQP cover consult.
@@ -42,6 +42,9 @@ pub(crate) struct PatternNodeMeta {
     pub(crate) width: Option<u32>,
     /// Encoding range of an immediate operand (see `Rule::operand_imm_ranges`).
     pub(crate) imm_range: Option<ImmRange>,
+    /// Whether the bound value must (`true`) or must not (`false`) be a float
+    /// (see `Rule::operand_floats`).
+    pub(crate) float: Option<bool>,
 }
 
 impl CompiledIselPattern {
@@ -68,6 +71,12 @@ impl CompiledIselPattern {
         if let Some(range) = meta.imm_range
             && let Some(value) = class_int_binding(egraph, class)
             && !range.contains(&value)
+        {
+            return false;
+        }
+        if let Some(required) = meta.float
+            && let Some(actual) = class_is_float(ctx, egraph, class)
+            && actual != required
         {
             return false;
         }
@@ -104,6 +113,7 @@ pub(crate) fn compile_isel_pattern(
     operand_constraints: &[(u32, OperandConstraint)],
     operand_widths: &[(u32, u32)],
     operand_imm_ranges: &[(u32, ImmRange)],
+    operand_floats: &[(u32, bool)],
 ) -> Option<CompiledIselPattern> {
     let root = expr.root()?;
     let mut pattern = Pattern::new();
@@ -118,6 +128,7 @@ pub(crate) fn compile_isel_pattern(
         operand_constraints,
         operand_widths,
         operand_imm_ranges,
+        operand_floats,
     )?;
     pattern.set_root(pattern_root);
 
@@ -151,6 +162,7 @@ fn compile_isel_pattern_node(
     operand_constraints: &[(u32, OperandConstraint)],
     operand_widths: &[(u32, u32)],
     operand_imm_ranges: &[(u32, ImmRange)],
+    operand_floats: &[(u32, bool)],
 ) -> Option<Id> {
     if let Some(compiled) = memo.get(&node).copied() {
         return Some(compiled);
@@ -177,6 +189,10 @@ fn compile_isel_pattern_node(
                     .iter()
                     .find(|(s, _)| s == symbol)
                     .map(|(_, r)| *r),
+                float: operand_floats
+                    .iter()
+                    .find(|(s, _)| s == symbol)
+                    .map(|(_, f)| *f),
                 ..Default::default()
             });
             compiled
@@ -215,6 +231,7 @@ fn compile_isel_pattern_node(
                         operand_constraints,
                         operand_widths,
                         operand_imm_ranges,
+                        operand_floats,
                     )
                 })
                 .collect::<Option<Vec<Id>>>()?;

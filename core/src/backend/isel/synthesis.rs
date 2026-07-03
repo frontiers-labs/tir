@@ -485,6 +485,7 @@ pub fn discover_axioms(rules: &[Rule]) -> Vec<String> {
                 &rule.operand_constraints,
                 &rule.operand_widths,
                 &rule.operand_imm_ranges,
+                &rule.operand_floats,
             )
         })
         .collect();

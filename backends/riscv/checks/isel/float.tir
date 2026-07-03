@@ -1,0 +1,40 @@
+// RUN: tir mc --march=rv64ifd --stage=isel %s | filecheck %s
+// RUN: tir mc --march=rv32ifd --stage=isel %s | filecheck %s
+// RUN: not tir mc --march=rv64i --stage=isel %s
+
+// Builtin float arithmetic selects the F/D instructions: f32 values live in
+// FPR32 and pick the .s forms, f64 values in FPR64 and pick the .d forms,
+// identically on rv32 and rv64. Without the F extension selection fails
+// loudly instead of miscompiling through integer rules.
+
+module {
+  func @fp32(%0: !f32, %1: !f32) -> !f32 {
+    %2 = addf %0, %1 : !f32
+    %3 = subf %2, %1 : !f32
+    %4 = mulf %3, %0 : !f32
+    %5 = divf %4, %1 : !f32
+    return %5
+  }
+  func @fp64(%0: !f64, %1: !f64) -> !f64 {
+    %2 = addf %0, %1 : !f64
+    %3 = subf %2, %1 : !f64
+    %4 = mulf %3, %0 : !f64
+    %5 = divf %4, %1 : !f64
+    return %5
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "fp32", arg_regs = [%virt0:FPR32, %virt1:FPR32]}
+// CHECK: riscv.fadd.s {fd = %virt2:FPR32, fs1 = %virt0:FPR32, fs2 = %virt1:FPR32}
+// CHECK: riscv.fsub.s {fd = %virt3:FPR32, fs1 = %virt2:FPR32, fs2 = %virt1:FPR32}
+// CHECK: riscv.fmul.s {fd = %virt4:FPR32, fs1 = %virt0:FPR32, fs2 = %virt3:FPR32}
+// CHECK: riscv.fdiv.s {fd = %virt5:FPR32, fs1 = %virt4:FPR32, fs2 = %virt1:FPR32}
+// CHECK: riscv.vret
+
+// CHECK: asm.symbol {name = "fp64", arg_regs = [%virt{{[0-9]+}}:FPR64, %virt{{[0-9]+}}:FPR64]}
+// CHECK: riscv.fadd.d {fd = %virt{{[0-9]+}}:FPR64, fs1 = %virt{{[0-9]+}}:FPR64, fs2 = %virt{{[0-9]+}}:FPR64}
+// CHECK: riscv.fsub.d
+// CHECK: riscv.fmul.d
+// CHECK: riscv.fdiv.d
+// CHECK: riscv.vret

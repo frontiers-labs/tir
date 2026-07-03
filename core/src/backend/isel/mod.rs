@@ -210,6 +210,12 @@ pub struct Rule {
     /// representable range must not bind (its encoding would truncate). Symbols
     /// absent here accept any constant.
     pub operand_imm_ranges: Vec<(u32, ImmRange)>,
+    /// Per-operand-symbol float requirement: `true` for operands living in a
+    /// float register class, `false` for integer ones. A value whose IR type is
+    /// known to be of the other kind must not bind — an integer store must not
+    /// consume a float value and vice versa. Symbols absent here (and values of
+    /// unknown type) match either.
+    pub operand_floats: Vec<(u32, bool)>,
     pub emit_fn: RuleEmitFn,
 }
 
@@ -224,6 +230,7 @@ impl Rule {
             operand_constraints: Vec::new(),
             operand_widths: Vec::new(),
             operand_imm_ranges: Vec::new(),
+            operand_floats: Vec::new(),
             emit_fn,
         }
     }
@@ -247,6 +254,13 @@ impl Rule {
     /// represent (see [`Rule::operand_imm_ranges`]).
     pub fn with_operand_imm_ranges(mut self, ranges: Vec<(u32, ImmRange)>) -> Self {
         self.operand_imm_ranges = ranges;
+        self
+    }
+
+    /// Require operand symbols to bind float (or non-float) values (see
+    /// [`Rule::operand_floats`]).
+    pub fn with_operand_floats(mut self, floats: Vec<(u32, bool)>) -> Self {
+        self.operand_floats = floats;
         self
     }
 
@@ -389,6 +403,7 @@ impl InstructionSelectPass {
                     &rule.operand_constraints,
                     &rule.operand_widths,
                     &rule.operand_imm_ranges,
+                    &rule.operand_floats,
                 )
             })
             .collect();
