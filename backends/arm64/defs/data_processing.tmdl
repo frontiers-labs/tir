@@ -140,3 +140,706 @@ instruction MoveWideZero for [ARMv8A64] {
         rd = zext(imm, self.XLEN);
     }
 }
+
+instruction Bic for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "bic";
+    param OPC: bits<2> = 0b00;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn & ~rm;
+    }
+}
+
+instruction Orn for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "orn";
+    param OPC: bits<2> = 0b01;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn | ~rm;
+    }
+}
+
+instruction Eon for [ARMv8A64] : LogicalReg {
+    param MNEMONIC: String = "eon";
+    param OPC: bits<2> = 0b10;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn ^ ~rm;
+    }
+}
+
+instruction RotateRightVariable for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "rorv";
+    param OPCODE: bits<6> = 0b001011;
+
+    behavior {
+        rd = (rn >> extract(rm, log2Ceil(self.XLEN) - 1, 0))
+            | (rn << ((zext(0b0, self.XLEN) - zext(extract(rm, log2Ceil(self.XLEN) - 1, 0), self.XLEN))
+                & zext(0b111111, self.XLEN)));
+    }
+}
+
+// Flag-setting compare-negative: the flags of rn + rm (`adds xzr`).
+instruction CompareNegative for [ARMv8A64] : CmpRegTemplate {
+    param MNEMONIC: String = "cmn";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        PSTATE::n = extract(rn + rm, self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn + rm == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        // Carry out of the addition: the truncated sum wrapped below rn.
+        PSTATE::c = if rn + rm ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        // Signed overflow of rn + rm: operands share a sign and the result's
+        // sign differs from rn's.
+        PSTATE::v = extract(~(rn ^ rm) & (rn ^ (rn + rm)), self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+// Flag-setting logical compare: the flags of rn & rm (`ands xzr`); C and V
+// are cleared.
+instruction Test for [ARMv8A64] : TstRegTemplate {
+    param MNEMONIC: String = "tst";
+
+    behavior {
+        PSTATE::n = extract(rn & rm, self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if (rn & rm) == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = zext(0b0, 1);
+        PSTATE::v = zext(0b0, 1);
+    }
+}
+
+instruction CompareImmediate for [ARMv8A64] : CmpImmTemplate {
+    param MNEMONIC: String = "cmp";
+    param OPNAME: String = "cmp_imm";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn - zext(imm, self.XLEN), self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn == zext(imm, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= zext(imm, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            (rn ^ zext(imm, self.XLEN)) & (rn ^ (rn - zext(imm, self.XLEN))),
+            self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction CompareNegImmediate for [ARMv8A64] : CmpImmTemplate {
+    param MNEMONIC: String = "cmn";
+    param OPNAME: String = "cmn_imm";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        PSTATE::n = extract(rn + zext(imm, self.XLEN), self.XLEN - 1, self.XLEN - 1);
+        PSTATE::z = if rn + zext(imm, self.XLEN) == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + zext(imm, self.XLEN) ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            ~(rn ^ zext(imm, self.XLEN)) & (rn ^ (rn + zext(imm, self.XLEN))),
+            self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+// MOVN with hw = 0 (no shift): rd = NOT(imm16).
+instruction MoveWideNot for [ARMv8A64] {
+    param MNEMONIC: String = "movn";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR,
+        imm: bits<16>,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..20 => imm,
+        21..22 => 0b00,
+        23..28 => 0b100101,
+        29..30 => 0b00,
+        31 => 0b1,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = ~zext(imm, self.XLEN);
+    }
+}
+
+// MOVK with hw = 0 (no shift): insert imm16 into rd[15:0], keeping the rest.
+instruction MoveWideKeep for [ARMv8A64] {
+    param MNEMONIC: String = "movk";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR,
+        imm: bits<16>,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..20 => imm,
+        21..22 => 0b00,
+        23..28 => 0b100101,
+        29..30 => 0b11,
+        31 => 0b1,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = (rd & ~zext(0b1111111111111111, self.XLEN)) | zext(imm, self.XLEN);
+    }
+}
+
+instruction MultiplyAdd for [ARMv8A64] : DataProc3Src {
+    param MNEMONIC: String = "madd";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = ra + extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+instruction MultiplySub for [ARMv8A64] : DataProc3Src {
+    param MNEMONIC: String = "msub";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rd = ra - extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+// MUL is MADD with ra = xzr.
+instruction Multiply for [ARMv8A64] : DataProc3SrcZr {
+    param MNEMONIC: String = "mul";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+// MNEG is MSUB with ra = xzr.
+instruction MultiplyNeg for [ARMv8A64] : DataProc3SrcZr {
+    param MNEMONIC: String = "mneg";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rd = zext(0b0, self.XLEN) - extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+// The high 64 bits of the signed 128-bit product. (`umulh` has no faithful
+// representation: the semantic language's widening multiply is signed-only.)
+instruction SignedMultiplyHigh for [ARMv8A64] : DataProc3SrcZr {
+    param MNEMONIC: String = "smulh";
+    param OP31: bits<3> = 0b010;
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = extract(rn * rm, (2 * self.XLEN) - 1, self.XLEN);
+    }
+}
+
+// A64 division: division by zero yields 0 (no trap); INT_MIN / -1 wraps.
+// Both arms of an if-expression are evaluated, so the divisor is patched to 1
+// in the zero case (`~(rm | -rm) >> 63` is 1 exactly when rm == 0); the
+// select then discards that dummy quotient.
+instruction SignedDivide for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "sdiv";
+    param OPCODE: bits<6> = 0b000011;
+    schedule { units = [WriteIDiv]; }
+
+    behavior {
+        rd = if rm == zext(0b0, self.XLEN) {
+            zext(0b0, self.XLEN)
+        } else {
+            rn / (rm | zext(extract(~(rm | (zext(0b0, self.XLEN) - rm)),
+                self.XLEN - 1, self.XLEN - 1), self.XLEN))
+        };
+    }
+}
+
+instruction UnsignedDivide for [ARMv8A64] : ShiftReg {
+    param MNEMONIC: String = "udiv";
+    param OPCODE: bits<6> = 0b000010;
+    schedule { units = [WriteIDiv]; }
+
+    behavior {
+        rd = if rm == zext(0b0, self.XLEN) {
+            zext(0b0, self.XLEN)
+        } else {
+            rn ~/ (rm | zext(extract(~(rm | (zext(0b0, self.XLEN) - rm)),
+                self.XLEN - 1, self.XLEN - 1), self.XLEN))
+        };
+    }
+}
+
+// `lsr`/`asr` immediate (UBFM/SBFM with immr = shift, imms = 63).
+instruction LogicalShiftRightImm for [ARMv8A64] : ShiftRightImmTemplate {
+    param MNEMONIC: String = "lsr";
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rd = rn >> extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction ArithmeticShiftRightImm for [ARMv8A64] : ShiftRightImmTemplate {
+    param MNEMONIC: String = "asr";
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        rd = rn >>> extract(imm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+// Sign-extend aliases of SBFM (immr = 0, imms = width - 1).
+instruction SignExtendByte for [ARMv8A64] : BitfieldFixed {
+    param MNEMONIC: String = "sxtb";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b000111;
+
+    behavior {
+        rd = sext(extract(rn, 7, 0), self.XLEN);
+    }
+}
+
+instruction SignExtendHalfword for [ARMv8A64] : BitfieldFixed {
+    param MNEMONIC: String = "sxth";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b001111;
+
+    behavior {
+        rd = sext(extract(rn, 15, 0), self.XLEN);
+    }
+}
+
+instruction SignExtendWord for [ARMv8A64] : BitfieldFixed {
+    param MNEMONIC: String = "sxtw";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b011111;
+
+    behavior {
+        rd = sext(extract(rn, 31, 0), self.XLEN);
+    }
+}
+
+// PC-relative addressing. The operand is the raw signed offset: bytes for
+// `adr`, 4KiB pages for `adrp` (which also clears the PC's page offset).
+instruction AddressPCRel for [ARMv8A64] : PCRelAddr {
+    param MNEMONIC: String = "adr";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        rd = PC::pc + sext(imm, self.XLEN);
+    }
+}
+
+instruction AddressPCRelPage for [ARMv8A64] : PCRelAddr {
+    param MNEMONIC: String = "adrp";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        rd = ((PC::pc >> 12) << 12) + (sext(imm, self.XLEN) << 12);
+    }
+}
+
+// Conditional set (`cset rd, <cond>`, alias of csinc with inverted condition)
+// and conditional select (`csel rd, rn, rm, <cond>`). The condition is spelled
+// in each instruction's asm string; COND holds the hardware-encoded code
+// (already inverted for cset).
+
+instruction ConditionalSetEq for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_eq";
+    param COND: bits<4> = 0b0001;
+
+    asm {
+        "{self.MNEMONIC} {rd}, eq"
+    }
+
+    behavior {
+        rd = if PSTATE::z == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectEq for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_eq";
+    param COND: bits<4> = 0b0000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, eq"
+    }
+
+    behavior {
+        rd = if PSTATE::z == zext(0b1, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetNe for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_ne";
+    param COND: bits<4> = 0b0000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, ne"
+    }
+
+    behavior {
+        rd = if PSTATE::z == zext(0b0, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectNe for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_ne";
+    param COND: bits<4> = 0b0001;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, ne"
+    }
+
+    behavior {
+        rd = if PSTATE::z == zext(0b0, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetLt for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_lt";
+    param COND: bits<4> = 0b1010;
+
+    asm {
+        "{self.MNEMONIC} {rd}, lt"
+    }
+
+    behavior {
+        rd = if PSTATE::n != PSTATE::v {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectLt for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_lt";
+    param COND: bits<4> = 0b1011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, lt"
+    }
+
+    behavior {
+        rd = if PSTATE::n != PSTATE::v {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetGe for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_ge";
+    param COND: bits<4> = 0b1011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, ge"
+    }
+
+    behavior {
+        rd = if PSTATE::n == PSTATE::v {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectGe for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_ge";
+    param COND: bits<4> = 0b1010;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, ge"
+    }
+
+    behavior {
+        rd = if PSTATE::n == PSTATE::v {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetGt for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_gt";
+    param COND: bits<4> = 0b1101;
+
+    asm {
+        "{self.MNEMONIC} {rd}, gt"
+    }
+
+    behavior {
+        rd = if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b0, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectGt for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_gt";
+    param COND: bits<4> = 0b1100;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, gt"
+    }
+
+    behavior {
+        rd = if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b0, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetLe for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_le";
+    param COND: bits<4> = 0b1100;
+
+    asm {
+        "{self.MNEMONIC} {rd}, le"
+    }
+
+    behavior {
+        rd = if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectLe for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_le";
+    param COND: bits<4> = 0b1101;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, le"
+    }
+
+    behavior {
+        rd = if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b1, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetLo for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_lo";
+    param COND: bits<4> = 0b0010;
+
+    asm {
+        "{self.MNEMONIC} {rd}, lo"
+    }
+
+    behavior {
+        rd = if PSTATE::c == zext(0b0, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectLo for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_lo";
+    param COND: bits<4> = 0b0011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, lo"
+    }
+
+    behavior {
+        rd = if PSTATE::c == zext(0b0, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetHs for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_hs";
+    param COND: bits<4> = 0b0011;
+
+    asm {
+        "{self.MNEMONIC} {rd}, hs"
+    }
+
+    behavior {
+        rd = if PSTATE::c == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectHs for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_hs";
+    param COND: bits<4> = 0b0010;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, hs"
+    }
+
+    behavior {
+        rd = if PSTATE::c == zext(0b1, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetHi for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_hi";
+    param COND: bits<4> = 0b1001;
+
+    asm {
+        "{self.MNEMONIC} {rd}, hi"
+    }
+
+    behavior {
+        rd = if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b0, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectHi for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_hi";
+    param COND: bits<4> = 0b1000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, hi"
+    }
+
+    behavior {
+        rd = if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b0, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}
+
+instruction ConditionalSetLs for [ARMv8A64] : CondSet {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_ls";
+    param COND: bits<4> = 0b1000;
+
+    asm {
+        "{self.MNEMONIC} {rd}, ls"
+    }
+
+    behavior {
+        rd = if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction ConditionalSelectLs for [ARMv8A64] : CondSelect {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_ls";
+    param COND: bits<4> = 0b1001;
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, ls"
+    }
+
+    behavior {
+        rd = if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b1, 1) {
+            rn
+        } else {
+            rm
+        };
+    }
+}

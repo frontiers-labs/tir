@@ -1107,6 +1107,7 @@ fn emit_instructions<'a>(
                         | AsmAction::RBracket
                         | AsmAction::Star
                         | AsmAction::Operand(_)
+                        | AsmAction::Keyword(_)
                 )
             });
 
@@ -1224,6 +1225,15 @@ fn emit_instructions<'a>(
                         parse_steps.push(quote! {
                             match parser.bump() {
                                 Some(tir::backend::Token::Star) => {}
+                                _ => return Err(()),
+                            }
+                        });
+                    }
+                    AsmAction::Keyword(kw) => {
+                        let kw_lit = proc_macro2::Literal::string(&kw);
+                        parse_steps.push(quote! {
+                            match parser.bump() {
+                                Some(tir::backend::Token::Ident(s)) if *s == #kw_lit => {}
                                 _ => return Err(()),
                             }
                         });
@@ -3561,6 +3571,11 @@ enum AsmAction {
     LBracket,
     RBracket,
     Star,
+    /// A literal identifier in the template (e.g. the condition in
+    /// `cset {rd}, eq`): the parser must see exactly this word. It is what
+    /// tells apart same-mnemonic instructions that differ only in such a
+    /// literal.
+    Keyword(String),
 }
 
 enum AsmPrintPart {
@@ -3616,6 +3631,15 @@ fn compile_asm_template(template: &str) -> Vec<AsmAction> {
             '*' => {
                 actions.push(AsmAction::Star);
                 i += 1;
+            }
+            c if c.is_ascii_alphabetic() || c == '_' => {
+                let start = i;
+                while i < bytes.len()
+                    && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] as char == '_')
+                {
+                    i += 1;
+                }
+                actions.push(AsmAction::Keyword(template[start..i].to_string()));
             }
             _ => {
                 i += 1;

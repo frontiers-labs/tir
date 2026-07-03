@@ -198,11 +198,55 @@ dialect! {
             AndOp,
             OrOp,
             XorOp,
+            BicOp,
+            OrnOp,
+            EonOp,
             LogicalShiftLeftVariableOp,
             LogicalShiftRightVariableOp,
             ArithmeticShiftRightVariableOp,
+            RotateRightVariableOp,
+            LogicalShiftRightImmOp,
+            ArithmeticShiftRightImmOp,
+            SignExtendByteOp,
+            SignExtendHalfwordOp,
+            SignExtendWordOp,
             CompareOp,
+            CompareNegativeOp,
+            TestOp,
+            CompareImmediateOp,
+            CompareNegImmediateOp,
             MoveWideZeroOp,
+            MoveWideNotOp,
+            MoveWideKeepOp,
+            AddressPCRelOp,
+            AddressPCRelPageOp,
+            MultiplyAddOp,
+            MultiplySubOp,
+            MultiplyOp,
+            MultiplyNegOp,
+            SignedMultiplyHighOp,
+            SignedDivideOp,
+            UnsignedDivideOp,
+            ConditionalSetEqOp,
+            ConditionalSetNeOp,
+            ConditionalSetLtOp,
+            ConditionalSetGeOp,
+            ConditionalSetGtOp,
+            ConditionalSetLeOp,
+            ConditionalSetLoOp,
+            ConditionalSetHsOp,
+            ConditionalSetHiOp,
+            ConditionalSetLsOp,
+            ConditionalSelectEqOp,
+            ConditionalSelectNeOp,
+            ConditionalSelectLtOp,
+            ConditionalSelectGeOp,
+            ConditionalSelectGtOp,
+            ConditionalSelectLeOp,
+            ConditionalSelectLoOp,
+            ConditionalSelectHsOp,
+            ConditionalSelectHiOp,
+            ConditionalSelectLsOp,
             LoadByteUnsignedOp,
             LoadHalfwordUnsignedOp,
             LoadWordUnsignedOp,
@@ -214,6 +258,19 @@ dialect! {
             StoreHalfwordOp,
             StoreWordOp,
             StoreDoublewordOp,
+            LoadByteUnsignedUnscaledOp,
+            LoadHalfwordUnsignedUnscaledOp,
+            LoadWordUnsignedUnscaledOp,
+            LoadDoublewordUnscaledOp,
+            LoadByteSignedUnscaledOp,
+            LoadHalfwordSignedUnscaledOp,
+            LoadWordSignedUnscaledOp,
+            StoreByteUnscaledOp,
+            StoreHalfwordUnscaledOp,
+            StoreWordUnscaledOp,
+            StoreDoublewordUnscaledOp,
+            LoadPairOp,
+            StorePairOp,
             BranchImmediateOp,
             BranchLinkOp,
             BranchRegisterOp,
@@ -225,6 +282,18 @@ dialect! {
             BranchGreaterEqOp,
             BranchLowerUnsignedOp,
             BranchHigherOrSameUnsignedOp,
+            BranchGreaterThanOp,
+            BranchLessEqOp,
+            BranchHigherUnsignedOp,
+            BranchLowerOrSameUnsignedOp,
+            BranchMinusOp,
+            BranchPlusOp,
+            BranchOverflowSetOp,
+            BranchOverflowClearOp,
+            CompareBranchZeroOp,
+            CompareBranchNonZeroOp,
+            TestBitBranchZeroOp,
+            TestBitBranchNonZeroOp,
         ],
     }
 }
@@ -1272,6 +1341,280 @@ mod tests {
             .attr("imm", AttributeValue::Int(42))
             .build();
         assert_eq!(word(movz.id()), 0xD2800540, "movz x0, #42");
+    }
+
+    #[test]
+    fn extended_encoders_match_isa_golden_words() {
+        use crate::phys;
+        use tir::attributes::AttributeValue;
+
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<Arm64Dialect>();
+
+        let encoders = crate::get_instruction_encoders();
+        let gpr = |i: u16| phys(&("GPR".to_string(), i));
+        let gprsp = |i: u16| phys(&("GPRsp".to_string(), i));
+        let word = |id: tir::OpId| -> u32 {
+            let inst = context.get_op(id);
+            let enc = encoders[inst.name](&inst)
+                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name));
+            assert!(
+                enc.fixups.is_empty(),
+                "unexpected fixups for '{}'",
+                inst.name
+            );
+            u32::from_le_bytes(enc.bytes.try_into().unwrap())
+        };
+
+        // Golden words produced by clang/llvm-mc for aarch64.
+        let bic = crate::BicOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(bic.id()), 0x8A220020, "bic x0, x1, x2");
+
+        let orn = crate::OrnOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(orn.id()), 0xAA220020, "orn x0, x1, x2");
+
+        let eon = crate::EonOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(eon.id()), 0xCA220020, "eon x0, x1, x2");
+
+        let rorv = crate::RotateRightVariableOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(rorv.id()), 0x9AC22C20, "rorv x0, x1, x2");
+
+        let sdiv = crate::SignedDivideOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(sdiv.id()), 0x9AC20C20, "sdiv x0, x1, x2");
+
+        let udiv = crate::UnsignedDivideOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(udiv.id()), 0x9AC20820, "udiv x0, x1, x2");
+
+        let cmn = crate::CompareNegativeOpBuilder::new(&context)
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(cmn.id()), 0xAB02003F, "cmn x1, x2");
+
+        let tst = crate::TestOpBuilder::new(&context)
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(tst.id()), 0xEA02003F, "tst x1, x2");
+
+        let cmp_imm = crate::CompareImmediateOpBuilder::new(&context)
+            .attr("rn", gprsp(1))
+            .attr("imm", AttributeValue::Int(5))
+            .build();
+        assert_eq!(word(cmp_imm.id()), 0xF100143F, "cmp x1, #5");
+
+        let cmn_imm = crate::CompareNegImmediateOpBuilder::new(&context)
+            .attr("rn", gprsp(1))
+            .attr("imm", AttributeValue::Int(5))
+            .build();
+        assert_eq!(word(cmn_imm.id()), 0xB100143F, "cmn x1, #5");
+
+        let movn = crate::MoveWideNotOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("imm", AttributeValue::Int(42))
+            .build();
+        assert_eq!(word(movn.id()), 0x92800540, "movn x0, #42");
+
+        let movk = crate::MoveWideKeepOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("imm", AttributeValue::Int(42))
+            .build();
+        assert_eq!(word(movk.id()), 0xF2800540, "movk x0, #42");
+
+        let madd = crate::MultiplyAddOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .attr("ra", gpr(3))
+            .build();
+        assert_eq!(word(madd.id()), 0x9B020C20, "madd x0, x1, x2, x3");
+
+        let msub = crate::MultiplySubOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .attr("ra", gpr(3))
+            .build();
+        assert_eq!(word(msub.id()), 0x9B028C20, "msub x0, x1, x2, x3");
+
+        let mul = crate::MultiplyOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(mul.id()), 0x9B027C20, "mul x0, x1, x2");
+
+        let mneg = crate::MultiplyNegOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(mneg.id()), 0x9B02FC20, "mneg x0, x1, x2");
+
+        let smulh = crate::SignedMultiplyHighOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(smulh.id()), 0x9B427C20, "smulh x0, x1, x2");
+
+        let lsr = crate::LogicalShiftRightImmOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("imm", AttributeValue::Int(4))
+            .build();
+        assert_eq!(word(lsr.id()), 0xD344FC20, "lsr x0, x1, #4");
+
+        let asr = crate::ArithmeticShiftRightImmOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("imm", AttributeValue::Int(4))
+            .build();
+        assert_eq!(word(asr.id()), 0x9344FC20, "asr x0, x1, #4");
+
+        let sxtb = crate::SignExtendByteOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .build();
+        assert_eq!(word(sxtb.id()), 0x93401C20, "sxtb x0, w1");
+
+        let sxth = crate::SignExtendHalfwordOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .build();
+        assert_eq!(word(sxth.id()), 0x93403C20, "sxth x0, w1");
+
+        let sxtw = crate::SignExtendWordOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .build();
+        assert_eq!(word(sxtw.id()), 0x93407C20, "sxtw x0, w1");
+
+        let adr = crate::AddressPCRelOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("imm", AttributeValue::Int(16))
+            .build();
+        assert_eq!(word(adr.id()), 0x10000080, "adr x0, #16");
+
+        let adrp = crate::AddressPCRelPageOpBuilder::new(&context)
+            .attr("rd", gpr(1))
+            .attr("imm", AttributeValue::Int(5))
+            .build();
+        assert_eq!(word(adrp.id()), 0xB0000021, "adrp x1, #0x5000");
+
+        let cset = crate::ConditionalSetEqOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .build();
+        assert_eq!(word(cset.id()), 0x9A9F17E0, "cset x0, eq");
+
+        let csel = crate::ConditionalSelectEqOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .build();
+        assert_eq!(word(csel.id()), 0x9A820020, "csel x0, x1, x2, eq");
+
+        // Branch immediates hold word offsets (the pc-relative byte delta >> 2).
+        let bgt = crate::BranchGreaterThanOpBuilder::new(&context)
+            .attr("imm", AttributeValue::Int(4))
+            .build();
+        assert_eq!(word(bgt.id()), 0x5400008C, "b.gt +16");
+
+        let cbz = crate::CompareBranchZeroOpBuilder::new(&context)
+            .attr("rt", gpr(1))
+            .attr("imm", AttributeValue::Int(4))
+            .build();
+        assert_eq!(word(cbz.id()), 0xB4000081, "cbz x1, +16");
+
+        let cbnz = crate::CompareBranchNonZeroOpBuilder::new(&context)
+            .attr("rt", gpr(1))
+            .attr("imm", AttributeValue::Int(4))
+            .build();
+        assert_eq!(word(cbnz.id()), 0xB5000081, "cbnz x1, +16");
+
+        let tbz = crate::TestBitBranchZeroOpBuilder::new(&context)
+            .attr("rt", gpr(1))
+            .attr("bit", AttributeValue::Int(3))
+            .attr("imm", AttributeValue::Int(4))
+            .build();
+        assert_eq!(word(tbz.id()), 0x36180081, "tbz x1, #3, +16");
+
+        // The bit number's high bit lands in word bit 31 (b5).
+        let tbz_hi = crate::TestBitBranchZeroOpBuilder::new(&context)
+            .attr("rt", gpr(1))
+            .attr("bit", AttributeValue::Int(35))
+            .attr("imm", AttributeValue::Int(4))
+            .build();
+        assert_eq!(word(tbz_hi.id()), 0xB6180081, "tbz x1, #35, +16");
+
+        let tbnz = crate::TestBitBranchNonZeroOpBuilder::new(&context)
+            .attr("rt", gpr(1))
+            .attr("bit", AttributeValue::Int(3))
+            .attr("imm", AttributeValue::Int(4))
+            .build();
+        assert_eq!(word(tbnz.id()), 0x37180081, "tbnz x1, #3, +16");
+
+        let ldur = crate::LoadDoublewordUnscaledOpBuilder::new(&context)
+            .attr("rt", gpr(0))
+            .attr("rn", gprsp(1))
+            .attr("imm", AttributeValue::Int(-8))
+            .build();
+        assert_eq!(word(ldur.id()), 0xF85F8020, "ldur x0, [x1, #-8]");
+
+        let stur = crate::StoreDoublewordUnscaledOpBuilder::new(&context)
+            .attr("rt", gpr(2))
+            .attr("rn", gprsp(3))
+            .attr("imm", AttributeValue::Int(-8))
+            .build();
+        assert_eq!(word(stur.id()), 0xF81F8062, "stur x2, [x3, #-8]");
+
+        let ldursw = crate::LoadWordSignedUnscaledOpBuilder::new(&context)
+            .attr("rt", gpr(0))
+            .attr("rn", gprsp(1))
+            .attr("imm", AttributeValue::Int(-4))
+            .build();
+        assert_eq!(word(ldursw.id()), 0xB89FC020, "ldursw x0, [x1, #-4]");
+
+        let ldp = crate::LoadPairOpBuilder::new(&context)
+            .attr("rt", gpr(0))
+            .attr("rt2", gpr(1))
+            .attr("rn", gprsp(2))
+            .attr("imm", AttributeValue::Int(16))
+            .build();
+        assert_eq!(word(ldp.id()), 0xA9410440, "ldp x0, x1, [x2, #16]");
+
+        let stp = crate::StorePairOpBuilder::new(&context)
+            .attr("rt", gpr(0))
+            .attr("rt2", gpr(1))
+            .attr("rn", gprsp(2))
+            .attr("imm", AttributeValue::Int(16))
+            .build();
+        assert_eq!(word(stp.id()), 0xA9010440, "stp x0, x1, [x2, #16]");
     }
 
     #[test]

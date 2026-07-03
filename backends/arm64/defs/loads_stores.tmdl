@@ -23,17 +23,10 @@ instruction LoadHalfwordUnsigned for [ARMv8A64] : LoadStoreImmUnsignedH {
     }
 }
 
-instruction LoadWordUnsigned for [ARMv8A64] : LoadStoreImmUnsignedW {
-    param MNEMONIC: String = "ldr";
-    param OPNAME: String = "load_word_unsigned";
-    param SIZE: bits<2> = 0b10;
-    param OPC: bits<2> = 0b01;
-
-    behavior {
-        rt = zext(load(rn + zext(imm, self.XLEN), 4, 0b0), self.XLEN);
-    }
-}
-
+// The doubleword form is declared before the word form: they share the `ldr`
+// mnemonic and register names carry no width (all registers print as `xN`),
+// so the parser resolves the ambiguity by declaration order and `ldr xN` must
+// mean the 64-bit access.
 instruction LoadDoubleword for [ARMv8A64] : LoadStoreImmUnsignedD {
     param MNEMONIC: String = "ldr";
     param OPNAME: String = "load_doubleword";
@@ -42,6 +35,17 @@ instruction LoadDoubleword for [ARMv8A64] : LoadStoreImmUnsignedD {
 
     behavior {
         rt = load(rn + zext(imm, self.XLEN), 8, 0b0);
+    }
+}
+
+instruction LoadWordUnsigned for [ARMv8A64] : LoadStoreImmUnsignedW {
+    param MNEMONIC: String = "ldr";
+    param OPNAME: String = "load_word_unsigned";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = zext(load(rn + zext(imm, self.XLEN), 4, 0b0), self.XLEN);
     }
 }
 
@@ -99,6 +103,21 @@ instruction StoreHalfword for [ARMv8A64] : LoadStoreImmUnsignedH {
     schedule { units = [WriteStore]; }
 }
 
+// As with `ldr`, the doubleword `str` is declared first so it owns the shared
+// mnemonic when parsing.
+instruction StoreDoubleword for [ARMv8A64] : LoadStoreImmUnsignedD {
+    param MNEMONIC: String = "str";
+    param OPNAME: String = "store_doubleword";
+    param SIZE: bits<2> = 0b11;
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + zext(imm, self.XLEN), 8, rt);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
 instruction StoreWord for [ARMv8A64] : LoadStoreImmUnsignedW {
     param MNEMONIC: String = "str";
     param OPNAME: String = "store_word";
@@ -112,14 +131,152 @@ instruction StoreWord for [ARMv8A64] : LoadStoreImmUnsignedW {
     schedule { units = [WriteStore]; }
 }
 
-instruction StoreDoubleword for [ARMv8A64] : LoadStoreImmUnsignedD {
-    param MNEMONIC: String = "str";
-    param OPNAME: String = "store_doubleword";
+// Unscaled 9-bit signed offset family (`ldur`/`stur`): the same access sizes
+// as the scaled forms, but with a byte-granular offset in [-256, 255].
+
+instruction LoadByteUnsignedUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "ldurb";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = zext(load(rn + sext(imm, self.XLEN), 1, 0b0), self.XLEN);
+    }
+}
+
+instruction LoadHalfwordUnsignedUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "ldurh";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = zext(load(rn + sext(imm, self.XLEN), 2, 0b0), self.XLEN);
+    }
+}
+
+// The doubleword form is declared first so `ldur xN` parses as the 64-bit
+// access (register names carry no width in this model).
+instruction LoadDoublewordUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "ldur";
+    param OPNAME: String = "load_doubleword_unscaled";
+    param SIZE: bits<2> = 0b11;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = load(rn + sext(imm, self.XLEN), 8, 0b0);
+    }
+}
+
+instruction LoadWordUnsignedUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "ldur";
+    param OPNAME: String = "load_word_unsigned_unscaled";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = zext(load(rn + sext(imm, self.XLEN), 4, 0b0), self.XLEN);
+    }
+}
+
+instruction LoadByteSignedUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "ldursb";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rt = sext(load(rn + sext(imm, self.XLEN), 1, 0b1), self.XLEN);
+    }
+}
+
+instruction LoadHalfwordSignedUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "ldursh";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rt = sext(load(rn + sext(imm, self.XLEN), 2, 0b1), self.XLEN);
+    }
+}
+
+instruction LoadWordSignedUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "ldursw";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rt = sext(load(rn + sext(imm, self.XLEN), 4, 0b1), self.XLEN);
+    }
+}
+
+instruction StoreByteUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "sturb";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + sext(imm, self.XLEN), 1, extract(rt, 7, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreHalfwordUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "sturh";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + sext(imm, self.XLEN), 2, extract(rt, 15, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreDoublewordUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "stur";
+    param OPNAME: String = "store_doubleword_unscaled";
     param SIZE: bits<2> = 0b11;
     param OPC: bits<2> = 0b00;
 
     behavior {
-        store(rn + zext(imm, self.XLEN), 8, rt);
+        store(rn + sext(imm, self.XLEN), 8, rt);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreWordUnscaled for [ARMv8A64] : LoadStoreUnscaled {
+    param MNEMONIC: String = "stur";
+    param OPNAME: String = "store_word_unscaled";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + sext(imm, self.XLEN), 4, extract(rt, 31, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+// 64-bit register pair, signed scaled offset, no writeback.
+
+instruction LoadPair for [ARMv8A64] : LoadStorePair {
+    param MNEMONIC: String = "ldp";
+    param L: bits<1> = 0b1;
+
+    behavior {
+        rt = load(rn + sext(imm, self.XLEN), 8, 0b0);
+        rt2 = load(rn + sext(imm, self.XLEN) + zext(0b1000, self.XLEN), 8, 0b0);
+    }
+}
+
+instruction StorePair for [ARMv8A64] : LoadStorePair {
+    param MNEMONIC: String = "stp";
+    param L: bits<1> = 0b0;
+
+    behavior {
+        store(rn + sext(imm, self.XLEN), 8, rt);
+        store(rn + sext(imm, self.XLEN) + zext(0b1000, self.XLEN), 8, rt2);
     }
 
     schedule { units = [WriteStore]; }

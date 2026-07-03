@@ -6,6 +6,8 @@
 // something to drive under `--timing` without claiming to model any real
 // silicon.
 sched_class WriteIALU { latency = 1; }
+sched_class WriteIMul { latency = 3; }
+sched_class WriteIDiv { latency = 12; }
 sched_class WriteLoad { latency = 3; }
 sched_class WriteStore { latency = 1; }
 
@@ -30,6 +32,8 @@ machine InOrderCore ("arm64-in-order") for [ARMv8A64] {
     unit LSU { count = 1; }
 
     bind WriteIALU { reads = ID; writes = EX;  uses = [ALU]; }
+    bind WriteIMul { reads = ID; writes = MEM; uses = [ALU]; }
+    bind WriteIDiv { reads = ID; writes = WB;  uses = [ALU]; }
     bind WriteLoad { reads = ID; writes = MEM; uses = [LSU]; }
     bind WriteStore { reads = ID; writes = MEM; uses = [LSU]; }
 
@@ -58,6 +62,8 @@ machine OutOfOrderCore ("arm64-ooo") for [ARMv8A64] {
     unit LSU { count = 2; }
 
     bind WriteIALU { latency = 1; uses = [ALU]; }
+    bind WriteIMul { latency = 3; uses = [ALU]; }
+    bind WriteIDiv { latency = 12; uses = [ALU]; }
     bind WriteLoad { latency = 4; uses = [LSU]; }
     bind WriteStore { latency = 1; uses = [LSU]; }
 }

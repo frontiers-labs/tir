@@ -86,6 +86,7 @@ template CmpRegTemplate for [ARMv8A64] {
     schedule { units = [WriteIALU]; }
     param MNEMONIC: String;
     param SF: bits<1> = 0b1;
+    param OP: bits<1> = 0b1;
     param SHIFT: bits<2> = 0b00;
 
     operands {
@@ -102,7 +103,66 @@ template CmpRegTemplate for [ARMv8A64] {
         22..23 => SHIFT,
         24..28 => 0b01011,
         29 => 0b1,
-        30 => 0b1,
+        30 => OP,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rn}, {rm}"
+    }
+}
+
+// Flag-setting compare with immediate: `subs`/`adds` with rd = xzr. The base
+// register can be the stack pointer, as in add/sub (immediate).
+template CmpImmTemplate for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param OP: bits<1>;
+    param SH: bits<1> = 0b0;
+
+    operands {
+        rn: GPRsp,
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..4 => 0b11111,
+        5..9 => rn,
+        10..21 => imm,
+        22 => SH,
+        23..28 => 0b100010,
+        29 => 0b1,
+        30 => OP,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rn}, {imm}"
+    }
+}
+
+// Flag-setting logical compare: `ands` with rd = xzr.
+template TstRegTemplate for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param SHIFT: bits<2> = 0b00;
+
+    operands {
+        rn: GPR,
+        rm: GPR,
+    }
+
+    encoding {
+        0..4 => 0b11111,
+        5..9 => rn,
+        10..15 => 0b000000,
+        16..20 => rm,
+        21 => 0b0,
+        22..23 => SHIFT,
+        24..28 => 0b01010,
+        29..30 => 0b11,
         31 => SF,
     }
 
@@ -143,12 +203,14 @@ template AddSubImm for [ARMv8A64] {
     }
 }
 
-// Data Processing -- Register (logical shifted register)
+// Data Processing -- Register (logical shifted register). N inverts the
+// shifted operand (`bic`/`orn`/`eon`).
 template LogicalReg for [ARMv8A64] {
     schedule { units = [WriteIALU]; }
     param MNEMONIC: String;
     param SF: bits<1> = 0b1;
     param OPC: bits<2>;
+    param N: bits<1> = 0b0;
     param SHIFT: bits<2> = 0b00;
 
     operands {
@@ -162,7 +224,7 @@ template LogicalReg for [ARMv8A64] {
         5..9 => rn,
         10..15 => 0b000000,
         16..20 => rm,
-        21 => 0b0,
+        21 => N,
         22..23 => SHIFT,
         24..28 => 0b01010,
         29..30 => OPC,
@@ -406,5 +468,334 @@ template CondBranchImm for [ARMv8A64] {
 
     asm {
         "{self.MNEMONIC} {imm}"
+    }
+}
+
+// Data Processing -- 3 source (multiply-add family)
+template DataProc3Src for [ARMv8A64] {
+    schedule { units = [WriteIMul]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param OP31: bits<3> = 0b000;
+    param O0: bits<1>;
+
+    operands {
+        rd: GPR,
+        rn: GPR,
+        rm: GPR,
+        ra: GPR,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => rn,
+        10..14 => ra,
+        15 => O0,
+        16..20 => rm,
+        21..23 => OP31,
+        24..28 => 0b11011,
+        29..30 => 0b00,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}, {ra}"
+    }
+}
+
+// As DataProc3Src, but the addend register is hardwired to xzr (the `mul`,
+// `mneg`, `smulh` forms).
+template DataProc3SrcZr for [ARMv8A64] {
+    schedule { units = [WriteIMul]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param OP31: bits<3> = 0b000;
+    param O0: bits<1>;
+
+    operands {
+        rd: GPR,
+        rn: GPR,
+        rm: GPR,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => rn,
+        10..14 => 0b11111,
+        15 => O0,
+        16..20 => rm,
+        21..23 => OP31,
+        24..28 => 0b11011,
+        29..30 => 0b00,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}"
+    }
+}
+
+// Bitfield instructions with fixed immr/imms (`lsr`/`asr` immediate and the
+// sign-extend aliases of SBFM/UBFM). The x-form has N = 1.
+template BitfieldFixed for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param OPC: bits<2>;
+    param IMMR: bits<6> = 0b000000;
+    param IMMS: bits<6>;
+
+    operands {
+        rd: GPR,
+        rn: GPR,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => rn,
+        10..15 => IMMS,
+        16..21 => IMMR,
+        22 => 0b1,
+        23..28 => 0b100110,
+        29..30 => OPC,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}"
+    }
+}
+
+// `lsr`/`asr` immediate: SBFM/UBFM with immr = shift, imms = 63. (`lsl`
+// immediate is not representable: its immr/imms are both derived from the
+// shift amount, which the encoding language cannot express.)
+template ShiftRightImmTemplate for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param OPC: bits<2>;
+
+    operands {
+        rd: GPR,
+        rn: GPR,
+        imm: bits<6>,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => rn,
+        10..15 => 0b111111,
+        16..21 => imm,
+        22 => 0b1,
+        23..28 => 0b100110,
+        29..30 => OPC,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {imm}"
+    }
+}
+
+// PC-relative address computation (`adr`/`adrp`). The operand is the 21-bit
+// signed offset (in bytes for adr, in 4KiB pages for adrp), stored split as
+// immhi:immlo.
+template PCRelAddr for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param OP: bits<1>;
+
+    operands {
+        rd: GPR,
+        imm: bits<21>,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..23 => imm[2..20],
+        24..28 => 0b10000,
+        29..30 => imm[0..1],
+        31 => OP,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+}
+
+// Conditional select (`csel`). COND holds the A64 condition code; each
+// instruction fixes it and spells the condition in its asm string.
+template CondSelect for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param COND: bits<4>;
+
+    operands {
+        rd: GPR,
+        rn: GPR,
+        rm: GPR,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => rn,
+        10..11 => 0b00,
+        12..15 => COND,
+        16..20 => rm,
+        21..28 => 0b11010100,
+        29..30 => 0b00,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {rm}"
+    }
+}
+
+// Conditional set (`cset`): csinc rd, xzr, xzr, invert(cond). COND holds the
+// already-inverted condition code, as encoded in hardware.
+template CondSet for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param COND: bits<4>;
+
+    operands {
+        rd: GPR,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => 0b11111,
+        10..11 => 0b01,
+        12..15 => COND,
+        16..20 => 0b11111,
+        21..28 => 0b11010100,
+        29..30 => 0b00,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}"
+    }
+}
+
+// Compare-and-branch on zero (`cbz`/`cbnz`). As with the other branches, the
+// immediate holds the pc-relative word offset (byte delta >> 2).
+template CompareBranch for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param OP: bits<1>;
+
+    operands {
+        rt: GPR,
+        imm: bits<19>,
+    }
+
+    encoding {
+        0..4 => rt,
+        5..23 => imm,
+        24 => OP,
+        25..30 => 0b011010,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rt}, {imm}"
+    }
+}
+
+// Test-bit-and-branch (`tbz`/`tbnz`). The 6-bit bit number is stored split as
+// b5:b40; the immediate holds the pc-relative word offset.
+template TestBitBranch for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param OP: bits<1>;
+
+    operands {
+        rt: GPR,
+        bit: bits<6>,
+        imm: bits<14>,
+    }
+
+    encoding {
+        0..4 => rt,
+        5..18 => imm,
+        19..23 => bit[0..4],
+        24 => OP,
+        25..30 => 0b011011,
+        31 => bit[5],
+    }
+
+    asm {
+        "{self.MNEMONIC} {rt}, {bit}, {imm}"
+    }
+}
+
+// Loads/Stores -- unscaled 9-bit signed byte offset (`ldur`/`stur` family).
+template LoadStoreUnscaled for [ARMv8A64] {
+    schedule { units = [WriteLoad]; }
+    param MNEMONIC: String;
+    param SIZE: bits<2>;
+    param OPC: bits<2>;
+    param V: bits<1> = 0b0;
+
+    operands {
+        rt: GPR,
+        rn: GPRsp,
+        imm: bits<9>,
+    }
+
+    encoding {
+        0..4 => rt,
+        5..9 => rn,
+        10..11 => 0b00,
+        12..20 => imm,
+        21 => 0b0,
+        22..23 => OPC,
+        24..25 => 0b00,
+        26 => V,
+        27..29 => 0b111,
+        30..31 => SIZE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rt}, [{rn}, {imm}]"
+    }
+}
+
+// Loads/Stores -- register pair, signed 7-bit scaled offset (`ldp`/`stp`,
+// 64-bit, no writeback). The operand is the byte offset; the field stores it
+// scaled down by 8, so only multiples of 8 in [-512, 504] are representable,
+// as in hardware.
+template LoadStorePair for [ARMv8A64] {
+    schedule { units = [WriteLoad]; }
+    param MNEMONIC: String;
+    param L: bits<1>;
+    param V: bits<1> = 0b0;
+
+    operands {
+        rt: GPR,
+        rt2: GPR,
+        rn: GPRsp,
+        imm: bits<10>,
+    }
+
+    encoding {
+        0..4 => rt,
+        5..9 => rn,
+        10..14 => rt2,
+        15..21 => imm[3..9],
+        22 => L,
+        23..25 => 0b010,
+        26 => V,
+        27..29 => 0b101,
+        30..31 => 0b10,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rt}, {rt2}, [{rn}, {imm}]"
     }
 }

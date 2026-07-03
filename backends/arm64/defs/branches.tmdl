@@ -110,3 +110,135 @@ instruction BranchHigherOrSameUnsigned for [ARMv8A64] : CondBranchImm {
         }
     }
 }
+
+instruction BranchGreaterThan for [ARMv8A64] : CondBranchImm {
+    param MNEMONIC: String = "b.gt";
+    param COND: bits<4> = 0b1100;
+
+    behavior {
+        if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b0, 1) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction BranchLessEq for [ARMv8A64] : CondBranchImm {
+    param MNEMONIC: String = "b.le";
+    param COND: bits<4> = 0b1101;
+
+    behavior {
+        if (PSTATE::z | (PSTATE::n ^ PSTATE::v)) == zext(0b1, 1) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction BranchHigherUnsigned for [ARMv8A64] : CondBranchImm {
+    param MNEMONIC: String = "b.hi";
+    param COND: bits<4> = 0b1000;
+
+    behavior {
+        if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b0, 1) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction BranchLowerOrSameUnsigned for [ARMv8A64] : CondBranchImm {
+    param MNEMONIC: String = "b.ls";
+    param COND: bits<4> = 0b1001;
+
+    behavior {
+        if ((PSTATE::c ^ zext(0b1, 1)) | PSTATE::z) == zext(0b1, 1) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction BranchMinus for [ARMv8A64] : CondBranchImm {
+    param MNEMONIC: String = "b.mi";
+    param COND: bits<4> = 0b0100;
+
+    behavior {
+        if PSTATE::n == zext(0b1, 1) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction BranchPlus for [ARMv8A64] : CondBranchImm {
+    param MNEMONIC: String = "b.pl";
+    param COND: bits<4> = 0b0101;
+
+    behavior {
+        if PSTATE::n == zext(0b0, 1) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction BranchOverflowSet for [ARMv8A64] : CondBranchImm {
+    param MNEMONIC: String = "b.vs";
+    param COND: bits<4> = 0b0110;
+
+    behavior {
+        if PSTATE::v == zext(0b1, 1) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction BranchOverflowClear for [ARMv8A64] : CondBranchImm {
+    param MNEMONIC: String = "b.vc";
+    param COND: bits<4> = 0b0111;
+
+    behavior {
+        if PSTATE::v == zext(0b0, 1) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction CompareBranchZero for [ARMv8A64] : CompareBranch {
+    param MNEMONIC: String = "cbz";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        if rt == zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction CompareBranchNonZero for [ARMv8A64] : CompareBranch {
+    param MNEMONIC: String = "cbnz";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        if rt != zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction TestBitBranchZero for [ARMv8A64] : TestBitBranch {
+    param MNEMONIC: String = "tbz";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        if ((rt >> zext(bit, self.XLEN)) & zext(0b1, self.XLEN)) == zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction TestBitBranchNonZero for [ARMv8A64] : TestBitBranch {
+    param MNEMONIC: String = "tbnz";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        if ((rt >> zext(bit, self.XLEN)) & zext(0b1, self.XLEN)) == zext(0b1, self.XLEN) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
