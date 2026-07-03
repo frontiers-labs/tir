@@ -152,6 +152,81 @@ mod isa {
                 SarImm8HOp,
                 ImulOp,
                 Imul32Op,
+                // Immediate flag definers and ALU extensions
+                CmpImmOp,
+                TestImmOp,
+                SubImmOp,
+                NegOp,
+                NotOp,
+                ImulWideOp,
+                ShlClOp,
+                ShrClOp,
+                SarClOp,
+                RolImmOp,
+                RorImmOp,
+                Movzx8Op,
+                Movzx16Op,
+                Movsx8Op,
+                Movsx16Op,
+                MovsxdOp,
+                MovAbsOp,
+                Cmp32Op,
+                Test32Op,
+                CmpImm32Op,
+                TestImm32Op,
+                SubImm32Op,
+                Neg32Op,
+                Not32Op,
+                ShlCl32Op,
+                ShrCl32Op,
+                SarCl32Op,
+                RolImm32Op,
+                RorImm32Op,
+                // Remaining conditional jumps
+                JumpLessEqOp,
+                JumpGreaterOp,
+                JumpBelowEqOp,
+                JumpAboveOp,
+                JumpSignOp,
+                JumpNoSignOp,
+                JumpOverflowOp,
+                JumpNoOverflowOp,
+                // setcc
+                SetEqOp,
+                SetNotEqOp,
+                SetLessOp,
+                SetGreaterEqOp,
+                SetLessEqOp,
+                SetGreaterOp,
+                SetBelowOp,
+                SetAboveEqOp,
+                SetBelowEqOp,
+                SetAboveOp,
+                // cmovcc
+                CmovEqOp,
+                CmovNotEqOp,
+                CmovLessOp,
+                CmovGreaterEqOp,
+                CmovLessEqOp,
+                CmovGreaterOp,
+                CmovBelowOp,
+                CmovAboveEqOp,
+                CmovBelowEqOp,
+                CmovAboveOp,
+                // Memory extensions
+                Movzx8LoadOp,
+                Movzx16LoadOp,
+                Movsx8LoadOp,
+                Movsx16LoadOp,
+                MovsxdLoadOp,
+                Mov32LoadOp,
+                Mov32StoreOp,
+                Mov16StoreOp,
+                Mov8StoreOp,
+                MovLoadDispOp,
+                MovStoreDispOp,
+                PushOp,
+                PopOp,
                 VirtualReturnOp
             ],
         }
@@ -468,7 +543,22 @@ mod isa {
             pc_rel_from_end: |op| {
                 matches!(
                     op,
-                    "jmp" | "je" | "jne" | "jl" | "jge" | "jb" | "jae" | "call"
+                    "jmp"
+                        | "je"
+                        | "jne"
+                        | "jl"
+                        | "jge"
+                        | "jb"
+                        | "jae"
+                        | "jle"
+                        | "jg"
+                        | "jbe"
+                        | "ja"
+                        | "js"
+                        | "jns"
+                        | "jo"
+                        | "jno"
+                        | "call"
                 )
             },
         }

@@ -233,6 +233,61 @@ template RegShift for [X86_64] {
     }
 }
 
+// `op dst, cl`: REX.W + 0xD3 + ModR/M(mod=11, reg=EXT, rm=dst). The count is
+// the low bits of rcx, masked to the operand width as in hardware. The cl
+// forms must be declared before the matching immediate forms: an immediate
+// operand also accepts a bare identifier (as a symbol reference), so the
+// immediate form would otherwise swallow the literal `cl`.
+template RegShiftCl for [X86_64] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0xD3,
+        16..18 => dst[0..2],
+        19..21 => EXT,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, cl"
+    }
+}
+
+template RegShiftCl32 for [X86] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR32,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0xD3,
+        16..18 => dst[0..2],
+        19..21 => EXT,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, cl"
+    }
+}
+
 // `op dst, src` behind the 0x0F opcode escape, with the ModR/M fields swapped
 // relative to `RegReg`: reg carries dst (REX.R), rm carries src (REX.B) — the
 // `imul r64, r/m64` layout.

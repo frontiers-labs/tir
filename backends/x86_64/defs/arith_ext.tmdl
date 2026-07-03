@@ -1,0 +1,460 @@
+// Scalar integer extensions beyond the base ALU set: immediate compare/test,
+// group-3 unary ops, CL-count and rotate shifts, widening multiply, and the
+// movzx/movsx register extensions. Division is not modeled: idiv's 128-bit
+// rdx:rax dividend has no faithful representation in the semantic language.
+
+// Group-3 unary `op r/m64`: REX.W + 0xF7 + ModR/M(mod=11, reg=EXT, rm=dst).
+template RegUnary for [X86_64] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0xF7,
+        16..18 => dst[0..2],
+        19..21 => EXT,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}"
+    }
+}
+
+template RegUnary32 for [X86] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+
+    operands {
+        dst: GPR32,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0xF7,
+        16..18 => dst[0..2],
+        19..21 => EXT,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}"
+    }
+}
+
+// `movzx/movsx r64, r/m8`: REX.W + 0x0F + opcode, dst in ModR/M.reg, the
+// narrow source in rm (the `RegRegExt` field layout with a GPR8 source).
+template ExtendReg8 for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR,
+        src: GPR8,
+    }
+
+    encoding {
+        0 => src[3],
+        1 => 0b0,
+        2 => dst[3],
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0x0F,
+        16..23 => OPCODE,
+        24..26 => src[0..2],
+        27..29 => dst[0..2],
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+template ExtendReg16 for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR,
+        src: GPR16,
+    }
+
+    encoding {
+        0 => src[3],
+        1 => 0b0,
+        2 => dst[3],
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0x0F,
+        16..23 => OPCODE,
+        24..26 => src[0..2],
+        27..29 => dst[0..2],
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+// Immediate flag definers: the group-1 /digit layout of `RegImm`, writing
+// EFLAGS only.
+
+instruction CmpImm for [X86_64] : RegImm {
+    param OPNAME: String = "cmp_imm";
+    param MNEMONIC: String = "cmp";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b111;
+
+    behavior {
+        EFLAGS::cf = if dst ~< sext(imm, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if dst == sext(imm, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst - sext(imm, self.XLEN), self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = extract((dst ^ sext(imm, self.XLEN)) & (dst ^ (dst - sext(imm, self.XLEN))),
+            self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction TestImm for [X86_64] : RegImm {
+    param OPNAME: String = "test_imm";
+    param MNEMONIC: String = "test";
+    param OPCODE: bits<8> = 0xF7;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = if (dst & sext(imm, self.XLEN)) == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst & sext(imm, self.XLEN), self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = zext(0b0, 1);
+    }
+}
+
+instruction SubImm for [X86_64] : RegImm {
+    param OPNAME: String = "sub_imm";
+    param MNEMONIC: String = "sub";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        dst = dst - sext(imm, self.XLEN);
+    }
+}
+
+instruction Neg for [X86_64] : RegUnary {
+    param MNEMONIC: String = "neg";
+    param EXT: bits<3> = 0b011;
+
+    behavior {
+        dst = zext(0b0, self.XLEN) - dst;
+    }
+}
+
+instruction Not for [X86_64] : RegUnary {
+    param MNEMONIC: String = "not";
+    param EXT: bits<3> = 0b010;
+
+    behavior {
+        dst = ~dst;
+    }
+}
+
+// One-operand imul (0xF7 /5): rdx:rax = rax * r/m64, the signed widening
+// multiply (mulh parity; unsigned `mul`'s high half is not expressible, the
+// semantic language's widening multiply is signed-only).
+instruction ImulWide for [X86_64] : RegUnary {
+    param OPNAME: String = "imul_wide";
+    param MNEMONIC: String = "imul";
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        GPR::rdx = extract(GPR::rax * dst, (2 * self.XLEN) - 1, self.XLEN);
+        GPR::rax = extract(GPR::rax * dst, self.XLEN - 1, 0);
+    }
+}
+
+// Rotates share the 0xC1 shift-immediate layout. Both shifts of the rotate pair
+// are computed with the count masked to the operand width, so a zero count
+// degenerates to `dst | dst`.
+
+instruction RolImm for [X86_64] : RegShift {
+    param MNEMONIC: String = "rol";
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = (dst << extract(imm, 5, 0))
+            | (dst >> ((zext(0b0, self.XLEN) - zext(extract(imm, 5, 0), self.XLEN))
+                & zext(0b111111, self.XLEN)));
+    }
+}
+
+instruction RorImm for [X86_64] : RegShift {
+    param MNEMONIC: String = "ror";
+    param EXT: bits<3> = 0b001;
+
+    behavior {
+        dst = (dst >> extract(imm, 5, 0))
+            | (dst << ((zext(0b0, self.XLEN) - zext(extract(imm, 5, 0), self.XLEN))
+                & zext(0b111111, self.XLEN)));
+    }
+}
+
+// Register-to-register zero/sign extensions (sxtb/sxth/sxtw parity).
+
+instruction Movzx8 for [X86] : ExtendReg8 {
+    param OPNAME: String = "movzx8";
+    param MNEMONIC: String = "movzx";
+    param OPCODE: bits<8> = 0xB6;
+
+    behavior {
+        dst = zext(src, self.XLEN);
+    }
+}
+
+instruction Movzx16 for [X86] : ExtendReg16 {
+    param OPNAME: String = "movzx16";
+    param MNEMONIC: String = "movzx";
+    param OPCODE: bits<8> = 0xB7;
+
+    behavior {
+        dst = zext(src, self.XLEN);
+    }
+}
+
+instruction Movsx8 for [X86] : ExtendReg8 {
+    param OPNAME: String = "movsx8";
+    param MNEMONIC: String = "movsx";
+    param OPCODE: bits<8> = 0xBE;
+
+    behavior {
+        dst = sext(src, self.XLEN);
+    }
+}
+
+instruction Movsx16 for [X86] : ExtendReg16 {
+    param OPNAME: String = "movsx16";
+    param MNEMONIC: String = "movsx";
+    param OPCODE: bits<8> = 0xBF;
+
+    behavior {
+        dst = sext(src, self.XLEN);
+    }
+}
+
+// `movsxd r64, r/m32` (0x63): no 0x0F escape.
+instruction Movsxd for [X86] {
+    param MNEMONIC: String = "movsxd";
+
+    operands {
+        dst: GPR,
+        src: GPR32,
+    }
+
+    encoding {
+        0 => src[3],
+        1 => 0b0,
+        2 => dst[3],
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0x63,
+        16..18 => src[0..2],
+        19..21 => dst[0..2],
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = sext(src, self.XLEN);
+    }
+}
+
+// `movabs r64, imm64` (REX.W + 0xB8+rd io): the full-width constant
+// materializer (lui/movz parity); the register number's low bits live in the
+// opcode byte.
+instruction MovAbs for [X86_64] {
+    param MNEMONIC: String = "movabs";
+
+    operands {
+        dst: GPR,
+        imm: bits<64>,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..10 => dst[0..2],
+        11..15 => 0b10111,
+        16..79 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+
+    behavior {
+        dst = imm;
+    }
+}
+
+// 32-bit forms.
+
+instruction Cmp32 for [X86] : RegReg32 {
+    param OPNAME: String = "cmp32";
+    param MNEMONIC: String = "cmp";
+    param OPCODE: bits<8> = 0x39;
+
+    behavior {
+        EFLAGS::cf = if dst ~< src {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if dst == src {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst - src, 31, 31);
+        EFLAGS::of = extract((dst ^ src) & (dst ^ (dst - src)), 31, 31);
+    }
+}
+
+instruction Test32 for [X86] : RegReg32 {
+    param OPNAME: String = "test32";
+    param MNEMONIC: String = "test";
+    param OPCODE: bits<8> = 0x85;
+
+    behavior {
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = if (dst & src) == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst & src, 31, 31);
+        EFLAGS::of = zext(0b0, 1);
+    }
+}
+
+instruction CmpImm32 for [X86] : RegImm32 {
+    param OPNAME: String = "cmp_imm32";
+    param MNEMONIC: String = "cmp";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b111;
+
+    behavior {
+        EFLAGS::cf = if dst ~< sext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if dst == sext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst - sext(imm, 32), 31, 31);
+        EFLAGS::of = extract((dst ^ sext(imm, 32)) & (dst ^ (dst - sext(imm, 32))), 31, 31);
+    }
+}
+
+instruction TestImm32 for [X86] : RegImm32 {
+    param OPNAME: String = "test_imm32";
+    param MNEMONIC: String = "test";
+    param OPCODE: bits<8> = 0xF7;
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = if (dst & sext(imm, 32)) == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst & sext(imm, 32), 31, 31);
+        EFLAGS::of = zext(0b0, 1);
+    }
+}
+
+instruction SubImm32 for [X86] : RegImm32 {
+    param OPNAME: String = "sub_imm32";
+    param MNEMONIC: String = "sub";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        dst = dst - sext(imm, 32);
+    }
+}
+
+instruction Neg32 for [X86] : RegUnary32 {
+    param OPNAME: String = "neg32";
+    param MNEMONIC: String = "neg";
+    param EXT: bits<3> = 0b011;
+
+    behavior {
+        dst = zext(0b0, 32) - dst;
+    }
+}
+
+instruction Not32 for [X86] : RegUnary32 {
+    param OPNAME: String = "not32";
+    param MNEMONIC: String = "not";
+    param EXT: bits<3> = 0b010;
+
+    behavior {
+        dst = ~dst;
+    }
+}
+
+instruction RolImm32 for [X86] : RegShift32 {
+    param OPNAME: String = "rol32";
+    param MNEMONIC: String = "rol";
+    param EXT: bits<3> = 0b000;
+
+    behavior {
+        dst = (dst << extract(imm, 4, 0))
+            | (dst >> ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
+    }
+}
+
+instruction RorImm32 for [X86] : RegShift32 {
+    param OPNAME: String = "ror32";
+    param MNEMONIC: String = "ror";
+    param EXT: bits<3> = 0b001;
+
+    behavior {
+        dst = (dst >> extract(imm, 4, 0))
+            | (dst << ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
+    }
+}

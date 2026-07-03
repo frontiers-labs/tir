@@ -1106,6 +1106,7 @@ fn emit_instructions<'a>(
                         | AsmAction::LBracket
                         | AsmAction::RBracket
                         | AsmAction::Star
+                        | AsmAction::Plus
                         | AsmAction::Operand(_)
                         | AsmAction::Keyword(_)
                 )
@@ -1225,6 +1226,14 @@ fn emit_instructions<'a>(
                         parse_steps.push(quote! {
                             match parser.bump() {
                                 Some(tir::backend::Token::Star) => {}
+                                _ => return Err(()),
+                            }
+                        });
+                    }
+                    AsmAction::Plus => {
+                        parse_steps.push(quote! {
+                            match parser.bump() {
+                                Some(tir::backend::Token::Plus) => {}
                                 _ => return Err(()),
                             }
                         });
@@ -3571,6 +3580,7 @@ enum AsmAction {
     LBracket,
     RBracket,
     Star,
+    Plus,
     /// A literal identifier in the template (e.g. the condition in
     /// `cset {rd}, eq`): the parser must see exactly this word. It is what
     /// tells apart same-mnemonic instructions that differ only in such a
@@ -3630,6 +3640,10 @@ fn compile_asm_template(template: &str) -> Vec<AsmAction> {
             }
             '*' => {
                 actions.push(AsmAction::Star);
+                i += 1;
+            }
+            '+' => {
+                actions.push(AsmAction::Plus);
                 i += 1;
             }
             c if c.is_ascii_alphabetic() || c == '_' => {
@@ -4556,6 +4570,9 @@ fn emit_instruction_encoder(
         // Immediates written in assembly may be spelled signed or unsigned
         // (`-1` vs `0xFFF`), so accept either fit within the declared width.
         let (int_check, uint_check) = match ops_map.get(name.as_str()) {
+            // Any attribute value fits a full-width field, and the shifts
+            // below would overflow at 64 bits.
+            Some(Type::Bits(n)) if *n >= 64 => (quote! {}, quote! {}),
             Some(Type::Bits(n)) => {
                 let min = proc_macro2::Literal::i64_suffixed(-(1i64 << (n - 1)));
                 let max = proc_macro2::Literal::i64_suffixed(1i64 << n);
@@ -4642,8 +4659,18 @@ fn emit_instruction_encoder(
         && let Some(Type::Bits(n)) = ops_map.get(name.as_str())
     {
         let patch_fn_ident = format_ident!("patch_{}_inst", inst.name.to_lowercase());
-        let min = proc_macro2::Literal::i64_suffixed(-(1i64 << (n - 1)));
-        let max = proc_macro2::Literal::i64_suffixed(1i64 << (n - 1));
+        // A full-width field admits any i64 (and the shifts would overflow).
+        let range_check = if *n < 64 {
+            let min = proc_macro2::Literal::i64_suffixed(-(1i64 << (n - 1)));
+            let max = proc_macro2::Literal::i64_suffixed(1i64 << (n - 1));
+            quote! {
+                if !(#min..#max).contains(&value) {
+                    return None;
+                }
+            }
+        } else {
+            quote! {}
+        };
         let lowest_bit = fields.iter().map(|f| f.op_lo).min().unwrap_or(0);
         // Operand bits below the lowest encoded bit are silently dropped by the
         // scatter (e.g. bit 0 of RISC-V branch offsets); a value with any of
@@ -4657,9 +4684,7 @@ fn emit_instruction_encoder(
         let ors = scatter(fields);
         Some(quote! {
             fn #patch_fn_ident(bytes: &mut [u8], value: i64) -> Option<()> {
-                if !(#min..#max).contains(&value) {
-                    return None;
-                }
+                #range_check
                 #dropped_check
                 if bytes.len() < #wb_lit {
                     return None;

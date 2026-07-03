@@ -1,0 +1,385 @@
+// The rest of the EFLAGS consumers: the remaining jcc conditions, setcc
+// (cset/slt parity) and cmovcc (csel parity). Condition guards mirror the
+// jcc family in base.tmdl; only cf/zf/sf/of are modeled.
+
+// `setcc r/m8`: REX + 0x0F + 0x90|cc + ModR/M(mod=11, reg=0, rm=dst).
+template SetccReg for [X86] {
+    param MNEMONIC: String;
+    param CC: bits<8>;
+
+    operands {
+        dst: GPR8,
+    }
+
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0x0F,
+        16..23 => CC,
+        24..26 => dst[0..2],
+        27..29 => 0b000,
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}"
+    }
+}
+
+// Remaining conditional jumps.
+
+instruction JumpLessEq for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jle";
+    param CC: bits<8> = 0x8E;
+
+    behavior {
+        if (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpGreater for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jg";
+    param CC: bits<8> = 0x8F;
+
+    behavior {
+        if (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b0, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpBelowEq for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jbe";
+    param CC: bits<8> = 0x86;
+
+    behavior {
+        if (EFLAGS::cf | EFLAGS::zf) == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpAbove for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "ja";
+    param CC: bits<8> = 0x87;
+
+    behavior {
+        if (EFLAGS::cf | EFLAGS::zf) == zext(0b0, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpSign for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "js";
+    param CC: bits<8> = 0x88;
+
+    behavior {
+        if EFLAGS::sf == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpNoSign for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jns";
+    param CC: bits<8> = 0x89;
+
+    behavior {
+        if EFLAGS::sf == zext(0b0, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpOverflow for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jo";
+    param CC: bits<8> = 0x80;
+
+    behavior {
+        if EFLAGS::of == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+instruction JumpNoOverflow for [X86_64] : JccRel32 {
+    param MNEMONIC: String = "jno";
+    param CC: bits<8> = 0x81;
+
+    behavior {
+        if EFLAGS::of == zext(0b0, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+        }
+    }
+}
+
+// setcc family.
+
+instruction SetEq for [X86] : SetccReg {
+    param MNEMONIC: String = "sete";
+    param CC: bits<8> = 0x94;
+
+    behavior {
+        dst = if EFLAGS::zf == zext(0b1, 1) {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetNotEq for [X86] : SetccReg {
+    param MNEMONIC: String = "setne";
+    param CC: bits<8> = 0x95;
+
+    behavior {
+        dst = if EFLAGS::zf == zext(0b0, 1) {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetLess for [X86] : SetccReg {
+    param MNEMONIC: String = "setl";
+    param CC: bits<8> = 0x9C;
+
+    behavior {
+        dst = if EFLAGS::sf != EFLAGS::of {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetGreaterEq for [X86] : SetccReg {
+    param MNEMONIC: String = "setge";
+    param CC: bits<8> = 0x9D;
+
+    behavior {
+        dst = if EFLAGS::sf == EFLAGS::of {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetLessEq for [X86] : SetccReg {
+    param MNEMONIC: String = "setle";
+    param CC: bits<8> = 0x9E;
+
+    behavior {
+        dst = if (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b1, 1) {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetGreater for [X86] : SetccReg {
+    param MNEMONIC: String = "setg";
+    param CC: bits<8> = 0x9F;
+
+    behavior {
+        dst = if (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b0, 1) {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetBelow for [X86] : SetccReg {
+    param MNEMONIC: String = "setb";
+    param CC: bits<8> = 0x92;
+
+    behavior {
+        dst = if EFLAGS::cf == zext(0b1, 1) {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetAboveEq for [X86] : SetccReg {
+    param MNEMONIC: String = "setae";
+    param CC: bits<8> = 0x93;
+
+    behavior {
+        dst = if EFLAGS::cf == zext(0b0, 1) {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetBelowEq for [X86] : SetccReg {
+    param MNEMONIC: String = "setbe";
+    param CC: bits<8> = 0x96;
+
+    behavior {
+        dst = if (EFLAGS::cf | EFLAGS::zf) == zext(0b1, 1) {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+instruction SetAbove for [X86] : SetccReg {
+    param MNEMONIC: String = "seta";
+    param CC: bits<8> = 0x97;
+
+    behavior {
+        dst = if (EFLAGS::cf | EFLAGS::zf) == zext(0b0, 1) {
+            zext(0b1, 8)
+        } else {
+            zext(0b0, 8)
+        };
+    }
+}
+
+// cmovcc family: `cmovcc r64, r/m64` (0x0F 0x40|cc), the `RegRegExt` layout.
+// The destination is read on the not-taken path, so it stays tied.
+
+instruction CmovEq for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmove";
+    param OPCODE: bits<8> = 0x44;
+
+    behavior {
+        dst = if EFLAGS::zf == zext(0b1, 1) {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovNotEq for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmovne";
+    param OPCODE: bits<8> = 0x45;
+
+    behavior {
+        dst = if EFLAGS::zf == zext(0b0, 1) {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovLess for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmovl";
+    param OPCODE: bits<8> = 0x4C;
+
+    behavior {
+        dst = if EFLAGS::sf != EFLAGS::of {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovGreaterEq for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmovge";
+    param OPCODE: bits<8> = 0x4D;
+
+    behavior {
+        dst = if EFLAGS::sf == EFLAGS::of {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovLessEq for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmovle";
+    param OPCODE: bits<8> = 0x4E;
+
+    behavior {
+        dst = if (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b1, 1) {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovGreater for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmovg";
+    param OPCODE: bits<8> = 0x4F;
+
+    behavior {
+        dst = if (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b0, 1) {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovBelow for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmovb";
+    param OPCODE: bits<8> = 0x42;
+
+    behavior {
+        dst = if EFLAGS::cf == zext(0b1, 1) {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovAboveEq for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmovae";
+    param OPCODE: bits<8> = 0x43;
+
+    behavior {
+        dst = if EFLAGS::cf == zext(0b0, 1) {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovBelowEq for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmovbe";
+    param OPCODE: bits<8> = 0x46;
+
+    behavior {
+        dst = if (EFLAGS::cf | EFLAGS::zf) == zext(0b1, 1) {
+            src
+        } else {
+            dst
+        };
+    }
+}
+
+instruction CmovAbove for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "cmova";
+    param OPCODE: bits<8> = 0x47;
+
+    behavior {
+        dst = if (EFLAGS::cf | EFLAGS::zf) == zext(0b0, 1) {
+            src
+        } else {
+            dst
+        };
+    }
+}

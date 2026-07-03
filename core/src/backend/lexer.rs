@@ -19,6 +19,8 @@ pub enum Token<'src> {
     RBracket,
     #[token("*")]
     Star,
+    #[token("+")]
+    Plus,
 
     #[token(".section")]
     Section,

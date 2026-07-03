@@ -177,7 +177,38 @@ instruction MovImm for [X86_64] : RegImm {
     }
 }
 
-// Shift count masked to 6 bits for a 64-bit operand.
+// Shift count masked to 6 bits for a 64-bit operand. The cl-count forms come
+// first so the immediate forms don't parse `cl` as a symbol immediate.
+
+instruction ShlCl for [X86_64] : RegShiftCl {
+    param OPNAME: String = "shl_cl";
+    param MNEMONIC: String = "shl";
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst << extract(GPR::rcx, 5, 0);
+    }
+}
+
+instruction ShrCl for [X86_64] : RegShiftCl {
+    param OPNAME: String = "shr_cl";
+    param MNEMONIC: String = "shr";
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        dst = dst >> extract(GPR::rcx, 5, 0);
+    }
+}
+
+instruction SarCl for [X86_64] : RegShiftCl {
+    param OPNAME: String = "sar_cl";
+    param MNEMONIC: String = "sar";
+    param EXT: bits<3> = 0b111;
+
+    behavior {
+        dst = dst >>> extract(GPR::rcx, 5, 0);
+    }
+}
 
 instruction ShlImm for [X86_64] : RegShift {
     param MNEMONIC: String = "shl";
@@ -573,6 +604,36 @@ instruction MovImm32 for [X86] : RegImm32 {
 
     behavior {
         dst = sext(imm, 32);
+    }
+}
+
+instruction ShlCl32 for [X86] : RegShiftCl32 {
+    param OPNAME: String = "shl_cl32";
+    param MNEMONIC: String = "shl";
+    param EXT: bits<3> = 0b100;
+
+    behavior {
+        dst = dst << extract(GPR::rcx, 4, 0);
+    }
+}
+
+instruction ShrCl32 for [X86] : RegShiftCl32 {
+    param OPNAME: String = "shr_cl32";
+    param MNEMONIC: String = "shr";
+    param EXT: bits<3> = 0b101;
+
+    behavior {
+        dst = dst >> extract(GPR::rcx, 4, 0);
+    }
+}
+
+instruction SarCl32 for [X86] : RegShiftCl32 {
+    param OPNAME: String = "sar_cl32";
+    param MNEMONIC: String = "sar";
+    param EXT: bits<3> = 0b111;
+
+    behavior {
+        dst = dst >>> extract(GPR::rcx, 4, 0);
     }
 }
 
