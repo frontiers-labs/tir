@@ -1,0 +1,10 @@
+// PTX Asynchronous copy (cp.async) instructions.
+// Behaviors are `todo()`; ops exist to parse and print via asm_syntax().
+// Each instruction is scoped to the PTX ISA version that introduced it.
+
+// --- PTX ISA 7.0 ---
+instruction CpAsyncCaSharedGlobal for [PTX_7_0] : CpAsync { param OPNAME: String = "cp_async_ca_shared_global"; param MNEMONIC: String = "cp.async.ca.shared.global"; behavior { todo(); } }
+instruction CpAsyncCgSharedGlobal for [PTX_7_0] : CpAsync { param OPNAME: String = "cp_async_cg_shared_global"; param MNEMONIC: String = "cp.async.cg.shared.global"; behavior { todo(); } }
+instruction CpAsyncCommitGroup for [PTX_7_0] : NoOperand { param OPNAME: String = "cp_async_commit_group"; param MNEMONIC: String = "cp.async.commit_group"; behavior { todo(); } }
+instruction CpAsyncWaitGroup for [PTX_7_0] : Imm1 { param OPNAME: String = "cp_async_wait_group"; param MNEMONIC: String = "cp.async.wait_group"; behavior { todo(); } }
+instruction CpAsyncWaitAll for [PTX_7_0] : NoOperand { param OPNAME: String = "cp_async_wait_all"; param MNEMONIC: String = "cp.async.wait_all"; behavior { todo(); } }

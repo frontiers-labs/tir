@@ -1,0 +1,52 @@
+// PTX ISA version ladder. Each `isa PTX_x_y` is a selectable feature
+// (a spec-defined PTX ISA version); instructions are scoped to the version
+// that introduced them, so a target can enable support up to any generation
+// from 1.0 to the latest. Versions form a cumulative chain via `requires`,
+// rooted at the base `PTX` isa (register classes + operand templates).
+
+isa PTX_1_0 requires PTX {}
+isa PTX_1_1 requires PTX_1_0 {}
+isa PTX_1_2 requires PTX_1_1 {}
+isa PTX_1_3 requires PTX_1_2 {}
+isa PTX_1_4 requires PTX_1_3 {}
+isa PTX_1_5 requires PTX_1_4 {}
+isa PTX_2_0 requires PTX_1_5 {}
+isa PTX_2_1 requires PTX_2_0 {}
+isa PTX_2_2 requires PTX_2_1 {}
+isa PTX_2_3 requires PTX_2_2 {}
+isa PTX_3_0 requires PTX_2_3 {}
+isa PTX_3_1 requires PTX_3_0 {}
+isa PTX_3_2 requires PTX_3_1 {}
+isa PTX_4_0 requires PTX_3_2 {}
+isa PTX_4_1 requires PTX_4_0 {}
+isa PTX_4_2 requires PTX_4_1 {}
+isa PTX_4_3 requires PTX_4_2 {}
+isa PTX_5_0 requires PTX_4_3 {}
+isa PTX_6_0 requires PTX_5_0 {}
+isa PTX_6_1 requires PTX_6_0 {}
+isa PTX_6_2 requires PTX_6_1 {}
+isa PTX_6_3 requires PTX_6_2 {}
+isa PTX_6_4 requires PTX_6_3 {}
+isa PTX_6_5 requires PTX_6_4 {}
+isa PTX_7_0 requires PTX_6_5 {}
+isa PTX_7_1 requires PTX_7_0 {}
+isa PTX_7_2 requires PTX_7_1 {}
+isa PTX_7_3 requires PTX_7_2 {}
+isa PTX_7_4 requires PTX_7_3 {}
+isa PTX_7_5 requires PTX_7_4 {}
+isa PTX_7_6 requires PTX_7_5 {}
+isa PTX_7_7 requires PTX_7_6 {}
+isa PTX_7_8 requires PTX_7_7 {}
+isa PTX_8_0 requires PTX_7_8 {}
+isa PTX_8_1 requires PTX_8_0 {}
+isa PTX_8_2 requires PTX_8_1 {}
+isa PTX_8_3 requires PTX_8_2 {}
+isa PTX_8_4 requires PTX_8_3 {}
+isa PTX_8_5 requires PTX_8_4 {}
+isa PTX_8_6 requires PTX_8_5 {}
+isa PTX_8_7 requires PTX_8_6 {}
+isa PTX_8_8 requires PTX_8_7 {}
+isa PTX_9_0 requires PTX_8_8 {}
+isa PTX_9_1 requires PTX_9_0 {}
+isa PTX_9_2 requires PTX_9_1 {}
+isa PTX_9_3 requires PTX_9_2 {}

@@ -1,0 +1,13 @@
+// PTX Control flow (9.7.9) instructions.
+// Behaviors are `todo()`; ops exist to parse and print via asm_syntax().
+// Each instruction is scoped to the PTX ISA version that introduced it.
+
+// --- PTX ISA 1.0 ---
+instruction Bra for [PTX_1_0] : Branch { param OPNAME: String = "bra"; param MNEMONIC: String = "bra"; behavior { todo(); } }
+instruction BraUni for [PTX_1_0] : Branch { param OPNAME: String = "bra_uni"; param MNEMONIC: String = "bra.uni"; behavior { todo(); } }
+instruction Ret for [PTX_1_0] : NoOperand { param OPNAME: String = "ret"; param MNEMONIC: String = "ret"; behavior { todo(); } }
+instruction RetUni for [PTX_1_0] : NoOperand { param OPNAME: String = "ret_uni"; param MNEMONIC: String = "ret.uni"; behavior { todo(); } }
+instruction Exit for [PTX_1_0] : NoOperand { param OPNAME: String = "exit"; param MNEMONIC: String = "exit"; behavior { todo(); } }
+instruction Trap for [PTX_1_0] : NoOperand { param OPNAME: String = "trap"; param MNEMONIC: String = "trap"; behavior { todo(); } }
+instruction Brkpt for [PTX_1_0] : NoOperand { param OPNAME: String = "brkpt"; param MNEMONIC: String = "brkpt"; behavior { todo(); } }
+instruction Label for [PTX_1_0] : LabelDef { param OPNAME: String = "label"; behavior { todo(); } }

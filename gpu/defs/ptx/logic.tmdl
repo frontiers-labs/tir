@@ -1,0 +1,63 @@
+// PTX Logic and shift (9.7.6) instructions.
+// Behaviors are `todo()`; ops exist to parse and print via asm_syntax().
+// Each instruction is scoped to the PTX ISA version that introduced it.
+
+// --- PTX ISA 1.0 ---
+instruction AndB16 for [PTX_1_0] : Reg3 { param OPNAME: String = "and_b16"; param MNEMONIC: String = "and.b16"; behavior { todo(); } }
+instruction AndB16Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "and_b16_imm"; param MNEMONIC: String = "and.b16"; behavior { todo(); } }
+instruction AndB32 for [PTX_1_0] : Reg3 { param OPNAME: String = "and_b32"; param MNEMONIC: String = "and.b32"; behavior { todo(); } }
+instruction AndB32Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "and_b32_imm"; param MNEMONIC: String = "and.b32"; behavior { todo(); } }
+instruction AndB64 for [PTX_1_0] : Reg3 { param OPNAME: String = "and_b64"; param MNEMONIC: String = "and.b64"; behavior { todo(); } }
+instruction AndB64Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "and_b64_imm"; param MNEMONIC: String = "and.b64"; behavior { todo(); } }
+instruction OrB16 for [PTX_1_0] : Reg3 { param OPNAME: String = "or_b16"; param MNEMONIC: String = "or.b16"; behavior { todo(); } }
+instruction OrB16Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "or_b16_imm"; param MNEMONIC: String = "or.b16"; behavior { todo(); } }
+instruction OrB32 for [PTX_1_0] : Reg3 { param OPNAME: String = "or_b32"; param MNEMONIC: String = "or.b32"; behavior { todo(); } }
+instruction OrB32Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "or_b32_imm"; param MNEMONIC: String = "or.b32"; behavior { todo(); } }
+instruction OrB64 for [PTX_1_0] : Reg3 { param OPNAME: String = "or_b64"; param MNEMONIC: String = "or.b64"; behavior { todo(); } }
+instruction OrB64Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "or_b64_imm"; param MNEMONIC: String = "or.b64"; behavior { todo(); } }
+instruction XorB16 for [PTX_1_0] : Reg3 { param OPNAME: String = "xor_b16"; param MNEMONIC: String = "xor.b16"; behavior { todo(); } }
+instruction XorB16Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "xor_b16_imm"; param MNEMONIC: String = "xor.b16"; behavior { todo(); } }
+instruction XorB32 for [PTX_1_0] : Reg3 { param OPNAME: String = "xor_b32"; param MNEMONIC: String = "xor.b32"; behavior { todo(); } }
+instruction XorB32Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "xor_b32_imm"; param MNEMONIC: String = "xor.b32"; behavior { todo(); } }
+instruction XorB64 for [PTX_1_0] : Reg3 { param OPNAME: String = "xor_b64"; param MNEMONIC: String = "xor.b64"; behavior { todo(); } }
+instruction XorB64Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "xor_b64_imm"; param MNEMONIC: String = "xor.b64"; behavior { todo(); } }
+instruction NotB16 for [PTX_1_0] : Reg2 { param OPNAME: String = "not_b16"; param MNEMONIC: String = "not.b16"; behavior { todo(); } }
+instruction NotB32 for [PTX_1_0] : Reg2 { param OPNAME: String = "not_b32"; param MNEMONIC: String = "not.b32"; behavior { todo(); } }
+instruction NotB64 for [PTX_1_0] : Reg2 { param OPNAME: String = "not_b64"; param MNEMONIC: String = "not.b64"; behavior { todo(); } }
+instruction NotPred for [PTX_1_0] : Reg2 { param OPNAME: String = "not_pred"; param MNEMONIC: String = "not.pred"; behavior { todo(); } }
+instruction CnotB16 for [PTX_1_0] : Reg2 { param OPNAME: String = "cnot_b16"; param MNEMONIC: String = "cnot.b16"; behavior { todo(); } }
+instruction CnotB32 for [PTX_1_0] : Reg2 { param OPNAME: String = "cnot_b32"; param MNEMONIC: String = "cnot.b32"; behavior { todo(); } }
+instruction CnotB64 for [PTX_1_0] : Reg2 { param OPNAME: String = "cnot_b64"; param MNEMONIC: String = "cnot.b64"; behavior { todo(); } }
+instruction ShlB16 for [PTX_1_0] : Reg3 { param OPNAME: String = "shl_b16"; param MNEMONIC: String = "shl.b16"; behavior { todo(); } }
+instruction ShlB16Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shl_b16_imm"; param MNEMONIC: String = "shl.b16"; behavior { todo(); } }
+instruction ShlB32 for [PTX_1_0] : Reg3 { param OPNAME: String = "shl_b32"; param MNEMONIC: String = "shl.b32"; behavior { todo(); } }
+instruction ShlB32Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shl_b32_imm"; param MNEMONIC: String = "shl.b32"; behavior { todo(); } }
+instruction ShlB64 for [PTX_1_0] : Reg3 { param OPNAME: String = "shl_b64"; param MNEMONIC: String = "shl.b64"; behavior { todo(); } }
+instruction ShlB64Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shl_b64_imm"; param MNEMONIC: String = "shl.b64"; behavior { todo(); } }
+instruction ShrU16 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_u16"; param MNEMONIC: String = "shr.u16"; behavior { todo(); } }
+instruction ShrU16Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_u16_imm"; param MNEMONIC: String = "shr.u16"; behavior { todo(); } }
+instruction ShrS16 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_s16"; param MNEMONIC: String = "shr.s16"; behavior { todo(); } }
+instruction ShrS16Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_s16_imm"; param MNEMONIC: String = "shr.s16"; behavior { todo(); } }
+instruction ShrU32 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_u32"; param MNEMONIC: String = "shr.u32"; behavior { todo(); } }
+instruction ShrU32Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_u32_imm"; param MNEMONIC: String = "shr.u32"; behavior { todo(); } }
+instruction ShrS32 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_s32"; param MNEMONIC: String = "shr.s32"; behavior { todo(); } }
+instruction ShrS32Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_s32_imm"; param MNEMONIC: String = "shr.s32"; behavior { todo(); } }
+instruction ShrU64 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_u64"; param MNEMONIC: String = "shr.u64"; behavior { todo(); } }
+instruction ShrU64Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_u64_imm"; param MNEMONIC: String = "shr.u64"; behavior { todo(); } }
+instruction ShrS64 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_s64"; param MNEMONIC: String = "shr.s64"; behavior { todo(); } }
+instruction ShrS64Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_s64_imm"; param MNEMONIC: String = "shr.s64"; behavior { todo(); } }
+instruction ShrB16 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_b16"; param MNEMONIC: String = "shr.b16"; behavior { todo(); } }
+instruction ShrB16Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_b16_imm"; param MNEMONIC: String = "shr.b16"; behavior { todo(); } }
+instruction ShrB32 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_b32"; param MNEMONIC: String = "shr.b32"; behavior { todo(); } }
+instruction ShrB32Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_b32_imm"; param MNEMONIC: String = "shr.b32"; behavior { todo(); } }
+instruction ShrB64 for [PTX_1_0] : Reg3 { param OPNAME: String = "shr_b64"; param MNEMONIC: String = "shr.b64"; behavior { todo(); } }
+instruction ShrB64Imm for [PTX_1_0] : Reg2Imm { param OPNAME: String = "shr_b64_imm"; param MNEMONIC: String = "shr.b64"; behavior { todo(); } }
+
+// --- PTX ISA 3.1 ---
+instruction ShfLClampB32 for [PTX_3_1] : Reg4 { param OPNAME: String = "shf_l_clamp_b32"; param MNEMONIC: String = "shf.l.clamp.b32"; behavior { todo(); } }
+instruction ShfLWrapB32 for [PTX_3_1] : Reg4 { param OPNAME: String = "shf_l_wrap_b32"; param MNEMONIC: String = "shf.l.wrap.b32"; behavior { todo(); } }
+instruction ShfRClampB32 for [PTX_3_1] : Reg4 { param OPNAME: String = "shf_r_clamp_b32"; param MNEMONIC: String = "shf.r.clamp.b32"; behavior { todo(); } }
+instruction ShfRWrapB32 for [PTX_3_1] : Reg4 { param OPNAME: String = "shf_r_wrap_b32"; param MNEMONIC: String = "shf.r.wrap.b32"; behavior { todo(); } }
+
+// --- PTX ISA 4.3 ---
+instruction Lop3B32 for [PTX_4_3] : Reg4Imm { param OPNAME: String = "lop3_b32"; param MNEMONIC: String = "lop3.b32"; behavior { todo(); } }

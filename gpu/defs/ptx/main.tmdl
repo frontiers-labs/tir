@@ -8,8 +8,13 @@
 // Register operands use a single nominal class in these templates: the front-end
 // derives the real class from each register's bank (`%rd`->RD, `%r`->R, `%f`->F,
 // `%fd`->FD, `%p`->P, `%rs`->RS), so one operand-shape template serves every PTX
-// type. Instructions (instructions.tmdl) are therefore just (mnemonic, shape).
+// type. Instructions are therefore just (mnemonic, shape); they live in the
+// per-family files (integer/logic/float/compare/movement/memory/control/sync/
+// video/async/tensor/texture.tmdl), each op scoped to the PTX ISA version that
+// introduced it. The version ladder (`isa PTX_x_y`) is declared in versions.tmdl.
 
+// Base isa: carries the register classes and operand templates shared by every
+// PTX version. The per-version features in versions.tmdl `require` it.
 isa PTX {
     param XLEN: Integer = 64;
 }

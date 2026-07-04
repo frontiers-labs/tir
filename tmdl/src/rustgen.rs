@@ -140,6 +140,9 @@ fn emit_features(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLEr
     }
 
     Ok(quote! {
+        // Variants take their ISA's TMDL name verbatim (e.g. `PTX_7_0`, `X86_64`),
+        // which is not upper-camel-case.
+        #[allow(non_camel_case_types)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum Feature {
             #(#enum_variants,)*
