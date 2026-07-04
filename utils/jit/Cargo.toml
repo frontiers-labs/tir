@@ -1,0 +1,13 @@
+[package]
+name = "tir-jit"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tir.workspace = true
+# Backend crates are linked purely for their `register_target!` entries, so the
+# host target resolves through `select_target` at runtime.
+tir-x86_64.workspace = true
+tir-arm64.workspace = true
+tir-riscv.workspace = true
+libc = "0.2"

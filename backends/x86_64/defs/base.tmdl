@@ -119,6 +119,29 @@ instruction Imul32 for [X86] : RegRegExt32 {
     }
 }
 
+// Immediate multiply: `imul dst, src, imm` folds a constant factor. Unlike the
+// group-1 immediate ops it is non-destructive (dst = src * imm), so it selects
+// `muli` against a constant without first materializing the constant.
+instruction ImulImm for [X86_64] : RegRegImm {
+    param OPNAME: String = "imul_imm";
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0x69;
+
+    behavior {
+        dst = src * sext(imm, self.XLEN);
+    }
+}
+
+instruction ImulImm32 for [X86] : RegRegImm32 {
+    param OPNAME: String = "imul_imm32";
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0x69;
+
+    behavior {
+        dst = src * sext(imm, 32);
+    }
+}
+
 // Group-1 ops share opcode 0x81 and select via the ModR/M EXT (/digit); mov
 // uses 0xC7.
 

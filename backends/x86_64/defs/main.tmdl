@@ -205,6 +205,37 @@ template RegImm for [X86_64] {
     }
 }
 
+// Three-operand `imul r64, r/m64, imm32` (0x69 /r id): the non-destructive
+// immediate multiply. ModR/M.reg carries dst (REX.R), rm carries src (REX.B) —
+// the `RegRegExt` layout, but with a single-byte opcode and a trailing imm32.
+template RegRegImm for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR,
+        src: GPR,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0 => src[3],
+        1 => 0b0,
+        2 => dst[3],
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => OPCODE,
+        16..18 => src[0..2],
+        19..21 => dst[0..2],
+        22..23 => 0b11,
+        24..55 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}, {imm}"
+    }
+}
+
 // `op dst, imm8`: REX.W + 0xC1 + ModR/M(mod=11, reg=EXT, rm=dst) + imm8.
 template RegShift for [X86_64] {
     param MNEMONIC: String;
@@ -396,6 +427,35 @@ template RegImm32 for [X86] {
 
     asm {
         "{self.MNEMONIC} {dst}, {imm}"
+    }
+}
+
+// 32-bit `imul r32, r/m32, imm32` (0x69 /r id, no REX.W).
+template RegRegImm32 for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR32,
+        src: GPR32,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0 => src[3],
+        1 => 0b0,
+        2 => dst[3],
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => OPCODE,
+        16..18 => src[0..2],
+        19..21 => dst[0..2],
+        22..23 => 0b11,
+        24..55 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}, {imm}"
     }
 }
 
