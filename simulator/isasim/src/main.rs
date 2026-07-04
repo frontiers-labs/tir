@@ -245,19 +245,21 @@ fn report_timing(
         });
     let config = TimingConfig::for_model(model);
     let prf = Prf::for_target(register_info, model);
+    let printer = target.asm_printer(context);
+    let disasm = |id: tir::OpId, pc: u64| {
+        let op = context.get_op(id);
+        let text = printer
+            .print_instruction(&op)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| op.name().to_string());
+        format!("{pc:#x}: {text}")
+    };
     let mut konata_view = args.konata.as_ref().map(|_| {
-        let printer = target.asm_printer(context);
         let labels = executor
             .trace()
             .iter()
-            .map(|(id, pc)| {
-                let op = context.get_op(*id);
-                let text = printer
-                    .print_instruction(&op)
-                    .expect("failed to print instruction")
-                    .unwrap_or_else(|| op.name().to_string());
-                format!("{pc:#x}: {text}")
-            })
+            .map(|(id, pc)| disasm(*id, *pc))
             .collect();
         konata::KonataView::new(labels)
     });
@@ -270,6 +272,9 @@ fn report_timing(
         Some(&prf),
         konata_view.as_mut().map(|v| v as &mut dyn EventHandler),
     );
+    if let Some(view) = konata_view.as_mut() {
+        build_speculation(view, executor, context, model, &disasm);
+    }
     if let (Some(path), Some(view)) = (&args.konata, &konata_view) {
         let log = view.render();
         if path == "-" {
@@ -287,6 +292,93 @@ fn report_timing(
         result.ipc(),
         result.mispredicts,
     );
+}
+
+/// Recover the wrong-path (speculative) instruction stream under each
+/// mispredicted branch and hand it to the Konata view. A trace replay only holds
+/// the committed path, so we re-derive what the front end *would* have fetched:
+/// starting from the predicted (wrong) direction, we decode straight down the
+/// instruction stream, following taken branches/jumps through the learned target
+/// table (a backward conditional is assumed taken, i.e. a loop continuing). These
+/// instructions are squashed when the branch resolves, so their values never
+/// matter — only their shape and cost, which is all the timeline needs.
+fn build_speculation(
+    view: &mut konata::KonataView,
+    executor: &Executor,
+    context: &tir::Context,
+    model: &tir::backend::sched::MachineModel,
+    disasm: &dyn Fn(tir::OpId, u64) -> String,
+) {
+    use std::collections::HashMap;
+    use tir::backend::{ControlFlow, MachineInstruction};
+
+    let trace = executor.trace();
+    let width_of = |id: tir::OpId| {
+        context
+            .get_op(id)
+            .as_interface::<dyn MachineInstruction>()
+            .map(|mi| u64::from(mi.width_bytes()))
+            .unwrap_or(4)
+    };
+    // Learned targets: every taken control transfer seen in the committed trace.
+    let mut btb: HashMap<u64, u64> = HashMap::new();
+    for pair in trace.windows(2) {
+        let (id, pc) = pair[0];
+        if pair[1].1 != pc.wrapping_add(width_of(id)) {
+            btb.insert(pc, pair[1].1);
+        }
+    }
+
+    for branch in view.mispredicted_branches() {
+        let cap = view.spec_window(branch);
+        if cap == 0 {
+            continue;
+        }
+        let (branch_id, branch_pc) = trace[branch];
+        let fallthrough = branch_pc.wrapping_add(width_of(branch_id));
+        let actual_taken = trace
+            .get(branch + 1)
+            .is_some_and(|&(_, pc)| pc != fallthrough);
+        // The wrong path is the direction the branch did *not* go.
+        let mut pc = if actual_taken {
+            fallthrough
+        } else {
+            match btb.get(&branch_pc) {
+                Some(&target) => target,
+                None => continue, // never saw it taken, so the target is unknown
+            }
+        };
+
+        let mut instrs = Vec::with_capacity(cap);
+        while instrs.len() < cap {
+            let Some(id) = executor.decode_at(pc) else {
+                break;
+            };
+            let Some(mi) = context.get_op(id).as_interface::<dyn MachineInstruction>() else {
+                break;
+            };
+            let class = model.sched_class(mi.mnemonic());
+            instrs.push(konata::SpecInstr {
+                label: disasm(id, pc),
+                is_memory: konata::is_memory_class(class.resources),
+            });
+            let width = u64::from(mi.width_bytes());
+            pc = match mi.control_flow() {
+                ControlFlow::Unconditional => match btb.get(&pc) {
+                    Some(&target) => target,
+                    None => break,
+                },
+                // Assume backward conditionals taken (loop continues), forward
+                // ones fall through — the usual speculative guess.
+                ControlFlow::Conditional => match btb.get(&pc) {
+                    Some(&target) if target < pc => target,
+                    _ => pc.wrapping_add(width),
+                },
+                ControlFlow::None => pc.wrapping_add(width),
+            };
+        }
+        view.add_speculation(branch, instrs);
+    }
 }
 
 /// Load a statically-linked ELF64 executable into guest memory and run it by

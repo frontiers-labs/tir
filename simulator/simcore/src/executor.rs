@@ -316,6 +316,37 @@ impl Executor {
         &self.trace
     }
 
+    /// Decode the instruction at `pc` without executing it, using whichever fetch
+    /// path is configured (decode-on-fetch memory + decoder, or a loaded
+    /// [`ProgramImage`]). Lets a timing model walk down a *mispredicted* (never
+    /// executed) path to recover the speculative instruction stream a real core
+    /// would have fetched. Returns `None` if `pc` is unmapped or does not sit on
+    /// an instruction boundary.
+    pub fn decode_at(&self, pc: u64) -> Option<tir::OpId> {
+        if let (Some(decoder), Some(context)) = (self.decoder, &self.decode_context) {
+            let word = self.read_memory(pc, 4).ok()? as u32;
+            return decoder(context, word);
+        }
+        let program = self.program.as_ref()?;
+        let block = program
+            .blocks
+            .iter()
+            .find(|b| pc >= b.start_address && pc < b.start_address + b.byte_len)?;
+        let mut addr = block.start_address;
+        for &op_id in &block.instructions {
+            if addr == pc {
+                return Some(op_id);
+            }
+            let width = program
+                .context
+                .get_op(op_id)
+                .as_interface::<dyn MachineInstruction>()?
+                .width_bytes();
+            addr += u64::from(width);
+        }
+        None
+    }
+
     pub fn run(&mut self, until_pc: u64, max_cycles: u64) -> Result<(), Error> {
         let mut sink = std::io::sink();
         self.run_with_trace(until_pc, max_cycles, TraceOptions::default(), &mut sink)

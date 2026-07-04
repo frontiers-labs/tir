@@ -179,6 +179,10 @@ pub trait EventHandler {
     fn dispatched(&mut self, _cycle: u64, _i: usize) {}
     fn issued(&mut self, _cycle: u64, _i: usize) {}
     fn retired(&mut self, _cycle: u64, _i: usize) {}
+    /// Branch `i` was mispredicted: it resolved its true direction at `resolved`,
+    /// and the front end cannot deliver the correct-path successor until
+    /// `redirect` (`resolved` + refetch penalty).
+    fn mispredicted(&mut self, _i: usize, _resolved: u64, _redirect: u64) {}
     fn finish(&mut self, _total_cycles: u64) {}
     fn render(&self) -> String;
 }
@@ -371,6 +375,9 @@ pub fn run(
                 mispredicts += 1;
                 let resolved = issue[i] + u64::from(slot.class.latency);
                 redirect = redirect.max(resolved + config.mispredict_penalty);
+                if let Some(h) = handler.as_mut() {
+                    h.mispredicted(i, resolved, redirect);
+                }
             }
             p.update(br.pc, br.target, br.taken);
         }
