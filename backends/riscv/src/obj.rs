@@ -43,10 +43,12 @@ pub(crate) fn object_format(xlen: u32, features: &[crate::Feature]) -> ObjectFor
             "jal" => Some(RelocKind {
                 r_type: R_RISCV_JAL,
                 addend: 0,
+                field_offset: 0,
             }),
             "beq" | "bne" | "blt" | "bge" | "bltu" | "bgeu" => Some(RelocKind {
                 r_type: R_RISCV_BRANCH,
                 addend: 0,
+                field_offset: 0,
             }),
             // Compressed control flow only reaches the encoder through
             // hand-written assembly; codegen never compresses fixup-carrying
@@ -55,20 +57,24 @@ pub(crate) fn object_format(xlen: u32, features: &[crate::Feature]) -> ObjectFor
             "c.j" | "c.jal" => Some(RelocKind {
                 r_type: R_RISCV_RVC_JUMP,
                 addend: 0,
+                field_offset: 0,
             }),
             "c.beqz" | "c.bnez" => Some(RelocKind {
                 r_type: R_RISCV_RVC_BRANCH,
                 addend: 0,
+                field_offset: 0,
             }),
             // Symbol-operand `lui`/`addi` only come from `lower_addr_of`'s
             // absolute-address pair; immediate forms never carry fixups.
             "lui" => Some(RelocKind {
                 r_type: R_RISCV_HI20,
                 addend: 0,
+                field_offset: 0,
             }),
             "addi" => Some(RelocKind {
                 r_type: R_RISCV_LO12_I,
                 addend: 0,
+                field_offset: 0,
             }),
             _ => None,
         },

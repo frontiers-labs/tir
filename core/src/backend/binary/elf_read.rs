@@ -6,7 +6,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use super::elf::{EM_AARCH64, EM_RISCV, SHT_RELA, SHT_SYMTAB};
+use super::elf::{EM_AARCH64, EM_RISCV, EM_X86_64, SHT_RELA, SHT_SYMTAB};
 use super::format::ElfClass;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -357,6 +357,8 @@ pub fn reloc_name(machine: u16, r_type: u32) -> Option<&'static str> {
         (EM_AARCH64, 280) => Some("R_AARCH64_CONDBR19"),
         (EM_AARCH64, 282) => Some("R_AARCH64_JUMP26"),
         (EM_AARCH64, 283) => Some("R_AARCH64_CALL26"),
+        (EM_X86_64, 2) => Some("R_X86_64_PC32"),
+        (EM_X86_64, 4) => Some("R_X86_64_PLT32"),
         _ => None,
     }
 }

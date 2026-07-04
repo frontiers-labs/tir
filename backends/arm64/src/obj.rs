@@ -26,18 +26,22 @@ pub(crate) fn object_format() -> ObjectFormatInfo {
             "adr" => Some(RelocKind {
                 r_type: R_AARCH64_ADR_PREL_LO21,
                 addend: 0,
+                field_offset: 0,
             }),
             "bl" => Some(RelocKind {
                 r_type: R_AARCH64_CALL26,
                 addend: 0,
+                field_offset: 0,
             }),
             "b" => Some(RelocKind {
                 r_type: R_AARCH64_JUMP26,
                 addend: 0,
+                field_offset: 0,
             }),
             "b.eq" | "b.ne" | "b.lt" | "b.ge" | "b.lo" | "b.hs" => Some(RelocKind {
                 r_type: R_AARCH64_CONDBR19,
                 addend: 0,
+                field_offset: 0,
             }),
             _ => None,
         },

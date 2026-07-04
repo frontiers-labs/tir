@@ -7,6 +7,7 @@ use super::{ObjSymbol, ObjectFile, SymBinding, SymKind};
 
 pub const EM_RISCV: u16 = 243;
 pub const EM_AARCH64: u16 = 183;
+pub const EM_X86_64: u16 = 62;
 
 pub(crate) const ET_REL: u16 = 1;
 pub(crate) const SHT_PROGBITS: u32 = 1;

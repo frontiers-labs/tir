@@ -1010,20 +1010,32 @@ where
         .then_ignore(just(Token::Comma).or_not())
         .or_not();
 
+    // Optional explicit calling-convention argument position: `arg = 0`, for ABIs
+    // whose argument order does not follow register-index order (x86-64 System V).
+    let reg_arg = just(Token::Identifier("arg"))
+        .then_ignore(just(Token::Equals))
+        .ignore_then(select! { Token::Number(n) => n.to_string() })
+        .then_ignore(just(Token::Comma).or_not())
+        .or_not();
+
     let single = ident
         .then(alias)
         .then_ignore(just(Token::FatArrow))
         .then_ignore(just(Token::LBrace))
         .then(reg_index)
+        .then(reg_arg)
         .then(reg_traits.or_not())
         .then_ignore(just(Token::RBrace))
-        .map_with(|(((name, alias), index), traits), e| {
+        .map_with(|((((name, alias), index), arg_order), traits), e| {
             let index = index
+                .map(|n| crate::utils::parse_literal_value(&ast::LitInt::new(n, e.span())) as u16);
+            let arg_order = arg_order
                 .map(|n| crate::utils::parse_literal_value(&ast::LitInt::new(n, e.span())) as u16);
             RegisterDef::Single(Register {
                 name,
                 alias,
                 index,
+                arg_order,
                 traits: traits.unwrap_or_default(),
                 subregisters: Vec::new(),
                 span: e.span(),

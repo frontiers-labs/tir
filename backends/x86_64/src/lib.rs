@@ -41,6 +41,38 @@ mod isa {
         }
     }
 
+    // Virtual call ops: the lowered form of `builtin.call`/`builtin.indirect_call`.
+    // Arguments and results travel through the ABI registers via copies emitted by
+    // `lower_calls`; the ops only carry the callee (a symbol relocated at link time,
+    // or an already-colored register) plus the caller-saved clobber list, deferring
+    // the actual `call` encoding to a post-RA pass.
+    operation! {
+        VirtualCallOp {
+            name: "vcall",
+            dialect: "x86_64",
+            attributes: A {
+                callee: "Str",
+            },
+            roles: R {
+                clobbers: Clobber,
+            },
+        }
+    }
+
+    operation! {
+        VirtualIndirectCallOp {
+            name: "vcall_indirect",
+            dialect: "x86_64",
+            attributes: A {
+                callee_reg: "Register",
+            },
+            roles: R {
+                callee_reg: Use,
+                clobbers: Clobber,
+            },
+        }
+    }
+
     impl VirtualBranchOp {
         fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
             tir::backend::print_branch(fmt, self, "x86_64.vbr")
@@ -227,6 +259,9 @@ mod isa {
                 MovStoreDispOp,
                 PushOp,
                 PopOp,
+                LeaRipOp,
+                VirtualCallOp,
+                VirtualIndirectCallOp,
                 VirtualReturnOp
             ],
         }
@@ -376,6 +411,146 @@ mod isa {
         Ok(true)
     }
 
+    /// Pre-RA: materialize an `addr_of` symbol address as `lea rd, [rip + sym]`.
+    /// The encoder leaves the disp32 as a fixup emitted with R_X86_64_PC32.
+    fn lower_addr_of(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        use tir::builtin::AddressOfOp;
+
+        let Some(addr_of) = op.as_op::<AddressOfOp>() else {
+            return Ok(false);
+        };
+        let lea = LeaRipOpBuilder::new(context)
+            .attr("dst", virt(addr_of.result().number(), "GPR"))
+            .attr("imm", AttributeValue::Str(addr_of.sym_name()))
+            .build();
+        rewriter.replace_op(op, &lea)?;
+        Ok(true)
+    }
+
+    /// A register-to-register `mov dst, src`.
+    fn mv(context: &tir::Context, dst: AttributeValue, src: AttributeValue) -> Box<dyn Operation> {
+        Box::new(
+            MovOpBuilder::new(context)
+                .attr("dst", dst)
+                .attr("src", src)
+                .build(),
+        )
+    }
+
+    /// The caller-saved registers a call clobbers, as a register-array attribute.
+    fn caller_saved_clobbers() -> AttributeValue {
+        let info = register_info();
+        let class = info.class("GPR").expect("x86-64 register info defines GPR");
+        AttributeValue::Array(
+            class
+                .caller_saved
+                .iter()
+                .map(|&index| phys("GPR", index))
+                .collect(),
+        )
+    }
+
+    /// Lower the builtin call ops to x86-64 virtual calls. Arguments are moved into
+    /// the System V argument registers and the result copied out of `rax`. The call
+    /// is bracketed with an 8-byte stack adjustment so `rsp` is 16-byte aligned at
+    /// the `call` (entry leaves `rsp` ≡ 8 mod 16, and the frame is 16-aligned), and
+    /// `eax` is zeroed to satisfy the variadic ABI's vector-count register.
+    fn lower_calls(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        use tir::builtin::{CallOp, IndirectCallOp, UnitType};
+
+        let (callee_value, args, result) = if let Some(call) = op.as_op::<CallOp>() {
+            (None, call.args(), call.result())
+        } else if let Some(call) = op.as_op::<IndirectCallOp>() {
+            (Some(call.callee()), call.args(), call.result())
+        } else {
+            return Ok(false);
+        };
+
+        let info = register_info();
+        let class = info.class("GPR").expect("x86-64 register info defines GPR");
+        if args.len() > class.arguments.len() {
+            return Err(tir::PassError::InvalidRuleSet(
+                "stack-passed call arguments are not supported by codegen yet".to_string(),
+            ));
+        }
+
+        // Detach the callee and every argument into fresh virtual registers before
+        // any argument register is written: an operand may itself live in an
+        // argument register, so it must be read before the moves below clobber it.
+        let detach = |rewriter: &mut tir::Rewriter, value: tir::ValueId| {
+            let ty = context.get_value(value).ty();
+            let fresh = context.create_value(ty, None).id().number();
+            let copy = mv(context, virt(fresh, "GPR"), virt(value.number(), "GPR"));
+            rewriter.insert_op_before(op, copy.as_ref()).map(|()| fresh)
+        };
+        let fresh_callee = callee_value
+            .map(|value| detach(rewriter, value))
+            .transpose()?;
+        let mut fresh_args = Vec::with_capacity(args.len());
+        for arg in &args {
+            fresh_args.push(detach(rewriter, *arg)?);
+        }
+
+        // Reserve 8 bytes to realign the stack for the call.
+        let realign = |rewriter: &mut tir::Rewriter, delta: i64| -> Result<(), tir::PassError> {
+            let adj = AddImmOpBuilder::new(context)
+                .attr("dst", phys(SP.0, SP.1))
+                .attr("imm", AttributeValue::Int(delta))
+                .build();
+            rewriter.insert_op_before(op, &adj)
+        };
+        realign(rewriter, -8)?;
+
+        for (&fresh, &reg) in fresh_args.iter().zip(class.arguments.iter()) {
+            let copy = mv(context, phys("GPR", reg), virt(fresh, "GPR"));
+            rewriter.insert_op_before(op, copy.as_ref())?;
+        }
+
+        // Variadic ABI: `al` counts vector registers used; zero it (no float args).
+        let zero_eax = MovImm32OpBuilder::new(context)
+            .attr("dst", phys("GPR32", 0))
+            .attr("imm", AttributeValue::Int(0))
+            .build();
+        rewriter.insert_op_before(op, &zero_eax)?;
+
+        let virtual_call: Box<dyn Operation> = match fresh_callee {
+            None => {
+                let name = op.as_op::<CallOp>().expect("matched above").callee();
+                Box::new(
+                    VirtualCallOpBuilder::new(context)
+                        .attr("callee", AttributeValue::Str(name))
+                        .attr("clobbers", caller_saved_clobbers())
+                        .build(),
+                )
+            }
+            Some(fresh) => Box::new(
+                VirtualIndirectCallOpBuilder::new(context)
+                    .attr("callee_reg", virt(fresh, "GPR"))
+                    .attr("clobbers", caller_saved_clobbers())
+                    .build(),
+            ),
+        };
+        rewriter.insert_op_before(op, virtual_call.as_ref())?;
+        realign(rewriter, 8)?;
+
+        let ret_reg = class.return_values[0];
+        if context.get_value(result).ty() == UnitType::new(context) {
+            rewriter.erase_op(op)?;
+        } else {
+            let copy = mv(context, virt(result.number(), "GPR"), phys("GPR", ret_reg));
+            rewriter.replace_op(op, copy.as_ref())?;
+        }
+        Ok(true)
+    }
+
     /// Post-RA: `vret` becomes `ret`; `vbr` becomes `jmp dest`.
     fn finalize_virtual_ops(
         context: &tir::Context,
@@ -413,6 +588,49 @@ mod isa {
             return Ok(true);
         }
 
+        // `vcall callee` becomes `call callee`: the symbol operand survives into
+        // the encoder as a fixup, emitted as an R_X86_64_PLT32 relocation since the
+        // callee's address is unknown until link time.
+        if let Some(call) = op.as_op::<VirtualCallOp>() {
+            let callee = call
+                .attributes()
+                .iter()
+                .find_map(|attr| match (&attr.value, attr.name == "callee") {
+                    (AttributeValue::Str(s), true) => Some(s.clone()),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    tir::PassError::InvalidRuleSet("vcall is missing its 'callee'".to_string())
+                })?;
+            let real = CallOpBuilder::new(context)
+                .attr("imm", AttributeValue::Str(callee))
+                .build();
+            rewriter.replace_op(op, &real)?;
+            return Ok(true);
+        }
+
+        // `vcall_indirect` becomes `call *target`; the target register was colored
+        // by the allocator through the op's `callee_reg` attribute.
+        if let Some(call) = op.as_op::<VirtualIndirectCallOp>() {
+            let target = call
+                .attributes()
+                .iter()
+                .find_map(|attr| match (&attr.value, attr.name == "callee_reg") {
+                    (value @ AttributeValue::Register(_), true) => Some(value.clone()),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    tir::PassError::InvalidRuleSet(
+                        "vcall_indirect is missing its 'callee_reg'".to_string(),
+                    )
+                })?;
+            let real = CallIndirectOpBuilder::new(context)
+                .attr("target", target)
+                .build();
+            rewriter.replace_op(op, &real)?;
+            return Ok(true);
+        }
+
         Ok(false)
     }
 
@@ -438,6 +656,12 @@ mod isa {
 
         fn frame_register(&self) -> (String, u16) {
             (SP.0.to_string(), SP.1)
+        }
+
+        // Keep the frame a multiple of 16 so `rsp` stays ≡ 8 mod 16 at call sites
+        // (entry value); `lower_calls` subtracts the final 8 to align each call.
+        fn frame_align(&self) -> u32 {
+            16
         }
 
         fn emit_spill_store(
@@ -529,14 +753,33 @@ mod isa {
         }
     }
 
+    // R_X86_64_PC32 = 2, R_X86_64_PLT32 = 4. Both scatter `S + A - P` into a
+    // 4-byte pc-relative field; the addend is -4 because `P` addresses the field
+    // start while the displacement is measured from the instruction's end.
+    const R_X86_64_PC32: u32 = 2;
+    const R_X86_64_PLT32: u32 = 4;
+
     fn object_format() -> tir::backend::binary::ObjectFormatInfo {
-        use tir::backend::binary::{ElfClass, ObjectFormatInfo};
-        // EM_X86_64.
+        use tir::backend::binary::{EM_X86_64, ElfClass, ObjectFormatInfo, RelocKind};
         ObjectFormatInfo {
-            elf_machine: 62,
+            elf_machine: EM_X86_64,
             elf_class: ElfClass::Elf64,
             elf_flags: 0,
-            reloc_for: |_| None,
+            reloc_for: |op| match op {
+                // `call rel32`: the disp32 follows the 1-byte opcode.
+                "call" => Some(RelocKind {
+                    r_type: R_X86_64_PLT32,
+                    addend: -4,
+                    field_offset: 1,
+                }),
+                // `lea r64, [rip + disp32]`: the disp32 follows REX, opcode, ModR/M.
+                "lea" => Some(RelocKind {
+                    r_type: R_X86_64_PC32,
+                    addend: -4,
+                    field_offset: 3,
+                }),
+                _ => None,
+            },
             pc_rel_scale: |_| 0,
             // rel32 displacements are measured from the end of the instruction
             // (RIP points past the branch when the displacement applies).
@@ -584,6 +827,7 @@ mod isa {
                     cond_nonzero: emit_branch_nonzero,
                 })
                 .with_op_lowering(lower_func_and_return_to_asm_symbol)
+                .with_op_lowering(lower_calls)
         }
 
         fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
@@ -591,7 +835,7 @@ mod isa {
         }
 
         fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![lower_constant]
+            vec![lower_constant, lower_addr_of]
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {

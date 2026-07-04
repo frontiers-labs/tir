@@ -103,6 +103,7 @@ fn render(elf: &ElfFile) -> String {
 
 fn machine_name(machine: u16) -> String {
     match machine {
+        62 => "EM_X86_64".to_string(),
         183 => "EM_AARCH64".to_string(),
         243 => "EM_RISCV".to_string(),
         other => format!("machine({other})"),

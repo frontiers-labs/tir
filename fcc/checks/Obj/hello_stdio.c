@@ -2,6 +2,8 @@
 // RUN: fcc compile --stage asm --march riscv64 -o - %S/../Inputs/hello_stdio.c | filecheck %s --check-prefix=ASM
 // RUN: fcc compile --stage obj --march arm64 -o - %S/../Inputs/hello_stdio.c | tir readobj - | filecheck %s --check-prefix=ARM
 // RUN: fcc compile --stage asm --march arm64 -o - %S/../Inputs/hello_stdio.c | filecheck %s --check-prefix=ARMASM
+// RUN: fcc compile --stage obj --march x86_64 -o - %S/../Inputs/hello_stdio.c | tir readobj - | filecheck %s --check-prefix=X86
+// RUN: fcc compile --stage asm --march x86_64 -o - %S/../Inputs/hello_stdio.c | filecheck %s --check-prefix=X86ASM
 
 // The string literal lands in .rodata as a local object symbol; its address
 // materializes as an absolute lui/addi pair relocated against the symbol, and
@@ -43,3 +45,24 @@
 // ARMASM: .section .rodata
 // ARMASM: .L.str0:
 // ARMASM: .asciz "hello, world\n"
+
+// The string address materializes as a rip-relative lea relocated against the
+// local symbol; the printf call relocates as PLT32. The call is bracketed by an
+// 8-byte stack adjustment that realigns rsp to 16 bytes at the call site.
+// X86: File: ELF64 LSB REL
+// X86: Machine: EM_X86_64 (62)
+// X86: Section .text: type=PROGBITS flags=AX
+// X86: Section .rodata: type=PROGBITS flags=A size=0xe align=1
+// X86: Symbol .L.str0: value=0x0 size=0xe bind=LOCAL type=OBJECT section=.rodata
+// X86: Symbol main: value=0x0 size={{0x[0-9a-f]+}} bind=GLOBAL type=FUNC section=.text
+// X86: Symbol printf: value=0x0 size=0x0 bind=GLOBAL type=NOTYPE section=UND
+// X86: Reloc .text+0x3: R_X86_64_PC32 .L.str0 + -4
+// X86: Reloc .text+{{0x[0-9a-f]+}}: R_X86_64_PLT32 printf + -4
+
+// X86ASM: .global main
+// X86ASM: main:
+// X86ASM: lea {{r[a-z0-9]+}}, [rip + .L.str0]
+// X86ASM: call printf
+// X86ASM: .section .rodata
+// X86ASM: .L.str0:
+// X86ASM: .asciz "hello, world\n"

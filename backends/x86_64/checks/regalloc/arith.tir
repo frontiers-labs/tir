@@ -22,15 +22,15 @@ module {
 // ISEL-NEXT: x86_64.or {dst = %virt5:GPR, dst_tied = %virt0:GPR, src = %virt4:GPR}
 // ISEL-NEXT: x86_64.vret
 
-// %0 and %1 arrive in rcx and rdx. Each two-address op is preceded by a copy of
+// %0 and %1 arrive in rdi and rsi. Each two-address op is preceded by a copy of
 // its tied value into its destination register; %0 stays live to the last op,
-// so no destination may take rcx. The result is pinned to rax by the return.
-// CHECK:      x86_64.mov {dst = [[T1:(?:rax|rbx|rdx|rsi|rdi|rbp|r8|r9|r1[0-5])]], src = rcx}
-// CHECK-NEXT: x86_64.add {dst = [[T1]], src = rdx}
-// CHECK-NEXT: x86_64.mov {dst = [[T2:(?:rax|rbx|rdx|rsi|rdi|rbp|r8|r9|r1[0-5])]], src = rcx}
+// so no destination may take rdi. The result is pinned to rax by the return.
+// CHECK:      x86_64.mov {dst = [[T1:(?:rax|rbx|rcx|rdx|rsi|rbp|r8|r9|r1[0-5])]], src = rdi}
+// CHECK-NEXT: x86_64.add {dst = [[T1]], src = rsi}
+// CHECK-NEXT: x86_64.mov {dst = [[T2:(?:rax|rbx|rcx|rdx|rsi|rbp|r8|r9|r1[0-5])]], src = rdi}
 // CHECK-NEXT: x86_64.sub {dst = [[T2]], src = [[T1]]}
-// CHECK-NEXT: x86_64.mov {dst = [[T3:(?:rax|rbx|rdx|rsi|rdi|rbp|r8|r9|r1[0-5])]], src = rdx}
+// CHECK-NEXT: x86_64.mov {dst = [[T3:(?:rax|rbx|rcx|rdx|rsi|rbp|r8|r9|r1[0-5])]], src = rsi}
 // CHECK-NEXT: x86_64.imul {dst = [[T3]], src = [[T2]]}
-// CHECK-NEXT: x86_64.mov {dst = rax, src = rcx}
+// CHECK-NEXT: x86_64.mov {dst = rax, src = rdi}
 // CHECK-NEXT: x86_64.or {dst = rax, src = [[T3]]}
 // CHECK-NEXT: x86_64.vret

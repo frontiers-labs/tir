@@ -38,6 +38,11 @@ pub struct Register {
     /// Explicit encoding index (`index = 0xC00`), for registers whose
     /// architectural number is not derivable from the name (e.g. CSRs).
     pub index: Option<u16>,
+    /// Explicit calling-convention argument position (`arg = 0`), for ABIs whose
+    /// argument order does not match register-index order (e.g. the x86-64 System V
+    /// order rdi, rsi, rdx, rcx, r8, r9). When any argument register in a class sets
+    /// this, the class's argument list is ordered by it instead of by index.
+    pub arg_order: Option<u16>,
     pub traits: Vec<RegisterTrait>,
     pub subregisters: Vec<Register>,
     #[serde(skip_serializing)]
@@ -1605,6 +1610,20 @@ impl RegisterClass {
             }
         }
 
+        // Order argument registers by explicit `arg = N` positions when a class
+        // declares them (the x86-64 System V order differs from index order); fall
+        // back to index order otherwise.
+        let arg_orders: HashMap<u16, u16> = self
+            .resolve_registers()
+            .filter_map(|reg| match (reg.encoding_index(), reg.arg_order) {
+                (Some(idx), Some(order)) => Some((idx, order)),
+                _ => None,
+            })
+            .collect();
+        if !arg_orders.is_empty() {
+            arguments.sort_by_key(|idx| arg_orders.get(idx).copied().unwrap_or(u16::MAX));
+        }
+
         // Allocate caller-saved (scratch) registers first so short-lived values
         // avoid forcing a callee-saved register's save/restore.
         let allocation_order = caller_saved
@@ -1666,6 +1685,7 @@ impl RegisterClass {
                             name: format!("{prefix}{idx}"),
                             alias: range.alias_pattern.clone(),
                             index: None,
+                            arg_order: None,
                             traits: range.traits.clone(),
                             subregisters: Vec::new(),
                             span: range.span,

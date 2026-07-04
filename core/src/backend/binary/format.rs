@@ -12,6 +12,11 @@ pub struct RelocKind {
     /// ELF relocation type (`r_type`).
     pub r_type: u32,
     pub addend: i64,
+    /// Byte offset of the relocated field within the instruction. Zero when the
+    /// relocation applies to the whole fixed-width instruction word (RISC-V,
+    /// AArch64); nonzero on x86, where the displacement follows opcode and
+    /// ModR/M bytes (e.g. 1 for `call rel32`, 3 for `lea r64, [rip+disp32]`).
+    pub field_offset: u64,
 }
 
 /// Everything the generic object writer needs to know about a target's

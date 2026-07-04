@@ -291,7 +291,7 @@ impl BinaryWriter {
                         }
                     })?;
                     state.obj.sections[fixup.section].relocs.push(ObjReloc {
-                        offset: fixup.offset,
+                        offset: fixup.offset + kind.field_offset,
                         symbol: symbol.clone(),
                         r_type: kind.r_type,
                         addend: kind.addend,

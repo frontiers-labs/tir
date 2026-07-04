@@ -125,6 +125,7 @@
 // CHECK-NEXT:                                 "zero",
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             arg_order: None,
 // CHECK-NEXT:                             traits: [
 // CHECK-NEXT:                                 HardwiredZero,
 // CHECK-NEXT:                             ],
@@ -139,6 +140,7 @@
 // CHECK-NEXT:                                 "ra",
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             arg_order: None,
 // CHECK-NEXT:                             traits: [
 // CHECK-NEXT:                                 ReturnAddress,
 // CHECK-NEXT:                                 CallerSaved,
