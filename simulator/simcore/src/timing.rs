@@ -435,4 +435,75 @@ mod tests {
         assert_eq!(oo.instructions, 4);
         assert!(oo.cycles >= 8, "dependent chain too short: {}", oo.cycles);
     }
+
+    /// End-to-end through `simulate`: a single static branch driven by a
+    /// period-8 pattern is unlearnable by a static predictor but memorized by
+    /// the history-based TAGE and BATAGE, which drive steady-state
+    /// mispredictions to zero.
+    #[test]
+    fn tage_and_batage_learn_periodic_branch() {
+        use crate::predictor::{Batage, Tage, TageParams};
+        use tir::OpId;
+
+        let context = tir::Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+        let dialect = context.find_dialect::<RiscvDialect>().unwrap();
+        // A conditional branch op and a non-branch filler op, taken verbatim
+        // from the parser so their scheduling class and width are real.
+        let module = dialect
+            .get_asm_parser()
+            .parse_asm(
+                &context,
+                "
+                .global blk
+                blk:
+                  beq a0, a0, 0
+                  add a1, a2, a3
+                ",
+            )
+            .unwrap();
+        let program =
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("blk")).unwrap();
+        let ops: Vec<OpId> = program
+            .blocks
+            .iter()
+            .flat_map(|b| b.instructions.iter().copied())
+            .collect();
+        let (branch, filler) = (ops[0], ops[1]);
+
+        // Build a trace of one static branch at 0x100 (width 4). Each occurrence
+        // is followed by a filler whose PC encodes the outcome: a backward PC is
+        // a taken branch, the fall-through is not-taken.
+        let pattern = [true, true, false, true, false, false, true, false];
+        let mut trace = Vec::new();
+        for _ in 0..300 {
+            for &taken in &pattern {
+                trace.push((branch, 0x100u64));
+                trace.push((filler, if taken { 0x080 } else { 0x104 }));
+            }
+        }
+
+        let model = tir_riscv::out_of_order_core_model();
+        let config = TimingConfig::for_model(&model);
+        let run = |p: &mut dyn BranchPredictor| {
+            simulate(&model, &context, &trace, &config, p, None, None).mispredicts
+        };
+
+        let params = TageParams {
+            num_tables: 6,
+            min_hist: 2,
+            max_hist: 64,
+            ..Default::default()
+        };
+        let ant = run(&mut AlwaysNotTaken);
+        let tage = run(&mut Tage::new(params.clone()));
+        let batage = run(&mut Batage::new(params));
+
+        // The static predictor mispredicts every taken branch of every period.
+        assert!(ant > 1000, "not-taken should mispredict heavily: {ant}");
+        // The history predictors learn the period-8 pattern and settle to zero.
+        assert!(tage < 20, "TAGE should learn the pattern: {tage}");
+        assert!(batage < 20, "BATAGE should learn the pattern: {batage}");
+    }
 }

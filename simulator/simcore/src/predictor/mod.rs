@@ -4,6 +4,14 @@
 //! misprediction penalty when the guess is wrong. New predictors are added by
 //! implementing [`BranchPredictor`] in Rust — no TMDL involved.
 
+mod batage;
+mod common;
+mod tage;
+
+pub use batage::Batage;
+pub use common::TageParams;
+pub use tage::Tage;
+
 /// A conditional-branch direction predictor.
 pub trait BranchPredictor {
     /// Predict whether the branch at `pc` with destination `target` is taken.
@@ -50,12 +58,23 @@ impl BranchPredictor for BackwardTaken {
     }
 }
 
-/// Construct a predictor by name (`not-taken` / `btfn`), for CLI selection.
-pub fn by_name(name: &str) -> Option<Box<dyn BranchPredictor>> {
+/// Construct a predictor by name, for CLI selection. `config` is a
+/// `key=value,...` string applied to the tunable predictors (`tage` / `batage`),
+/// empty for the parameter-free static ones. Returns an error message on an
+/// unknown name or a bad config.
+pub fn by_name(name: &str, config: &str) -> Result<Box<dyn BranchPredictor>, String> {
+    let dynamic = |mut params: TageParams| -> Result<TageParams, String> {
+        params.apply(config)?;
+        Ok(params)
+    };
     match name {
-        "not-taken" | "always-not-taken" => Some(Box::new(AlwaysNotTaken)),
-        "btfn" | "backward-taken" => Some(Box::new(BackwardTaken)),
-        _ => None,
+        "not-taken" | "always-not-taken" => Ok(Box::new(AlwaysNotTaken)),
+        "btfn" | "backward-taken" => Ok(Box::new(BackwardTaken)),
+        "tage" => Ok(Box::new(Tage::new(dynamic(TageParams::default())?))),
+        "batage" => Ok(Box::new(Batage::new(dynamic(TageParams::default())?))),
+        _ => Err(format!(
+            "unknown predictor '{name}' (expected: not-taken, btfn, tage, batage)"
+        )),
     }
 }
 
@@ -84,8 +103,18 @@ mod tests {
 
     #[test]
     fn by_name_selects_predictors() {
-        assert_eq!(by_name("not-taken").unwrap().name(), "always-not-taken");
-        assert_eq!(by_name("btfn").unwrap().name(), "btfn");
-        assert!(by_name("nope").is_none());
+        assert_eq!(by_name("not-taken", "").unwrap().name(), "always-not-taken");
+        assert_eq!(by_name("btfn", "").unwrap().name(), "btfn");
+        assert_eq!(by_name("tage", "").unwrap().name(), "tage");
+        assert_eq!(by_name("batage", "").unwrap().name(), "batage");
+        assert!(by_name("nope", "").is_err());
+    }
+
+    #[test]
+    fn by_name_applies_and_validates_config() {
+        assert!(by_name("tage", "tables=8,max_hist=1000").is_ok());
+        assert!(by_name("batage", "ctr_bits=4,cat_max=4096").is_ok());
+        assert!(by_name("tage", "bogus=1").is_err());
+        assert!(by_name("batage", "tables=0").is_err());
     }
 }

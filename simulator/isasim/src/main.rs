@@ -61,9 +61,13 @@ struct Cli {
     /// Machine model for `--timing` (target-specific, e.g. `rv64-ooo`).
     #[arg(long)]
     machine: Option<String>,
-    /// Branch predictor for `--timing`: `not-taken` or `btfn`.
+    /// Branch predictor for `--timing`: `not-taken`, `btfn`, `tage`, or `batage`.
     #[arg(long, default_value = "btfn")]
     predictor: String,
+    /// Tunable parameters for `tage`/`batage`, as `key=value,...` (e.g.
+    /// `tables=12,min_hist=4,max_hist=640,log_table=10,tag_bits=12,ctr_bits=3`).
+    #[arg(long, default_value = "")]
+    predictor_config: String,
     /// Write a Konata/Kanata pipeline log of the `--timing` run to this path
     /// (`-` for stdout). View it with <https://github.com/shioyadan/Konata>.
     #[arg(long, requires = "timing")]
@@ -234,13 +238,11 @@ fn report_timing(
     model: &tir::backend::sched::MachineModel,
     executor: &Executor,
 ) {
-    let mut predictor = tir_sim::predictor::by_name(&args.predictor).unwrap_or_else(|| {
-        eprintln!(
-            "unknown predictor '{}' (expected: not-taken, btfn)",
-            args.predictor
-        );
-        std::process::exit(2);
-    });
+    let mut predictor = tir_sim::predictor::by_name(&args.predictor, &args.predictor_config)
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(2);
+        });
     let config = TimingConfig::for_model(model);
     let prf = Prf::for_target(register_info, model);
     let mut konata_view = args.konata.as_ref().map(|_| {
