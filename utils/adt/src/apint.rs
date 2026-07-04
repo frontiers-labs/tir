@@ -122,6 +122,19 @@ impl APInt {
         }
     }
 
+    /// Interpret the bit pattern as two's-complement at this width, regardless
+    /// of the `signed` flag. Signed division/remainder are defined on the bits,
+    /// so a value produced without the flag set (e.g. an `extract`) must still
+    /// divide with its high bit as the sign.
+    fn signed_at_width(&self) -> i64 {
+        if self.width >= 64 {
+            self.value as i64
+        } else {
+            let shift = 64 - self.width;
+            ((self.value << shift) as i64) >> shift
+        }
+    }
+
     /// Check if the value is zero
     pub fn is_zero(&self) -> bool {
         self.value == 0
@@ -415,7 +428,7 @@ impl APInt {
         assert_eq!(self.width, other.width, "Widths must match");
         assert!(!other.is_zero(), "Division by zero");
         let mask = Self::mask_for_width(self.width);
-        let result = self.to_i64().wrapping_div(other.to_i64());
+        let result = self.signed_at_width().wrapping_div(other.signed_at_width());
         APInt {
             width: self.width,
             signed: true,
@@ -439,7 +452,7 @@ impl APInt {
         assert_eq!(self.width, other.width, "Widths must match");
         assert!(!other.is_zero(), "Division by zero");
         let mask = Self::mask_for_width(self.width);
-        let result = self.to_i64().wrapping_rem(other.to_i64());
+        let result = self.signed_at_width().wrapping_rem(other.signed_at_width());
         APInt {
             width: self.width,
             signed: true,

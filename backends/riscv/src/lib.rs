@@ -31,6 +31,19 @@ impl TargetConfig {
         {
             config.features.push(Feature::D64);
         }
+        // The M *W forms follow the same pattern: Zmmul64/RVM64 gate the
+        // rv64-only word multiply/divide instructions.
+        for (conj, base) in [
+            (Feature::Zmmul64, Feature::Zmmul),
+            (Feature::RVM64, Feature::RVM),
+        ] {
+            if config.xlen == 64
+                && config.features.contains(&base)
+                && !config.features.contains(&conj)
+            {
+                config.features.push(conj);
+            }
+        }
         // The C conjunctions follow the same pattern: C32/C64 gate the
         // XLEN-specific compressed forms, Zcd/Zcf the float compressed
         // loads/stores.
@@ -100,7 +113,11 @@ impl TargetConfig {
             .copied()
             .filter(|f| match f {
                 Feature::RV32I | Feature::C32 | Feature::Zcf => xlen == 32,
-                Feature::RV64I | Feature::D64 | Feature::C64 => xlen == 64,
+                Feature::RV64I
+                | Feature::D64
+                | Feature::C64
+                | Feature::Zmmul64
+                | Feature::RVM64 => xlen == 64,
                 _ => true,
             })
             .collect();
@@ -461,9 +478,21 @@ dialect! {
             ShiftLeftLogicalImmWordOp,
             ShiftRightLogicalImmWordOp,
             ShiftRightArithmeticImmWordOp,
-            // M extension (Zmmul subset)
+            // M extension (Zmmul subset: multiply)
             MulOp,
             MulHOp,
+            MulHSUOp,
+            MulHUOp,
+            MulWordOp,
+            // M extension (divide/remainder)
+            DivOp,
+            DivUOp,
+            RemOp,
+            RemUOp,
+            DivWordOp,
+            DivUWordOp,
+            RemWordOp,
+            RemUWordOp,
             // F/D extensions (fp32/fp64 arithmetic and loads/stores)
             FAddSOp,
             FSubSOp,
@@ -2711,9 +2740,16 @@ mod target_parser_tests {
     #[test]
     fn march_selects_extension_features() {
         assert_eq!(features("rv64i", None), vec![Feature::RV64I]);
+        // On rv64 the M *W conjunctions (Zmmul64/RVM64) follow M automatically.
         assert_eq!(
             features("rv64im", None),
-            vec![Feature::RV64I, Feature::RVM, Feature::Zmmul]
+            vec![
+                Feature::RV64I,
+                Feature::RVM,
+                Feature::Zmmul,
+                Feature::Zmmul64,
+                Feature::RVM64
+            ]
         );
         assert_eq!(
             features("rv32imac", None),
@@ -2756,6 +2792,8 @@ mod target_parser_tests {
                 Feature::RV64I,
                 Feature::Zmmul,
                 Feature::RVM,
+                Feature::Zmmul64,
+                Feature::RVM64,
                 Feature::F,
                 Feature::D,
                 Feature::D64,
@@ -2773,11 +2811,17 @@ mod target_parser_tests {
     fn mattr_toggles_features() {
         assert_eq!(
             features("rv64i", Some("+m")),
-            vec![Feature::RV64I, Feature::RVM, Feature::Zmmul]
+            vec![
+                Feature::RV64I,
+                Feature::RVM,
+                Feature::Zmmul,
+                Feature::Zmmul64,
+                Feature::RVM64
+            ]
         );
         assert_eq!(
             features("rv64im", Some("-m,+zmmul")),
-            vec![Feature::RV64I, Feature::Zmmul]
+            vec![Feature::RV64I, Feature::Zmmul, Feature::Zmmul64]
         );
         assert!(TargetConfig::parse("rv64i", None, Some("+vector")).is_err());
         assert!(TargetConfig::parse("rv64i", None, Some("m")).is_err());

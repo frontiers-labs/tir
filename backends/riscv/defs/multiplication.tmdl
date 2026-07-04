@@ -1,20 +1,177 @@
 isa Zmmul requires [RV32I | RV64I] {}
 isa RVM requires [RV32I | RV64I] {}
 
+// RV64-only *W forms of the M extension. Scoped to RV64I so the generated
+// SMT/decoder never offers these OP-32 encodings on RV32; the backend ties
+// them to Zmmul/RVM through feature enabling (see TargetConfig::parse).
+isa Zmmul64 requires [RV64I] {}
+isa RVM64 requires [RV64I] {}
+
 // Common template for R-type multiply/divide instructions
 template MulDivOp for [Zmmul, RVM] : RType {
     param OPCODE: bits<7> = 0b0110011;
     param FUNCT7: bits<7> = 0b0000001;
 }
 
+// R-type *W multiply/divide instructions (RV64 only).
+template MulDivOpWord for [Zmmul64, RVM64] : RTypeWord {
+    param OPCODE: bits<7> = 0b0111011;
+    param FUNCT7: bits<7> = 0b0000001;
+}
+
 instruction Mul for [Zmmul, RVM] : MulDivOp {
     param MNEMONIC: String = "mul";
     param FUNCT3: bits<3> = 0b000;
-    behavior { rd = extract(rs1 * rs2, self.XLEN - 1, 0); }
+    behavior { rd = rs1 * rs2; }
 }
 
 instruction MulH for [Zmmul, RVM] : MulDivOp {
     param MNEMONIC: String = "mulh";
     param FUNCT3: bits<3> = 0b001;
     behavior { rd = extract(rs1 * rs2, (2 * self.XLEN) - 1, self.XLEN); }
+}
+
+// High half of the signed-by-unsigned product. A double-width multiply is not
+// expressible (the operand-width doubling truncates), so it is built from the
+// signed mul-high plus a correction for rs2's unsigned bias: taking rs2 as
+// unsigned adds rs1 to the high word exactly when rs2's top bit is set, modulo
+// 2^XLEN. `sext(bit, XLEN) & x` selects x when the bit is set, 0 otherwise.
+instruction MulHSU for [Zmmul, RVM] : MulDivOp {
+    param MNEMONIC: String = "mulhsu";
+    param FUNCT3: bits<3> = 0b010;
+    behavior {
+        rd = extract(rs1 * rs2, (2 * self.XLEN) - 1, self.XLEN)
+             + (sext(extract(rs2, self.XLEN - 1, self.XLEN - 1), self.XLEN) & rs1);
+    }
+}
+
+// High half of the unsigned product: the signed mul-high plus a correction for
+// each operand's unsigned bias (add the other operand when the top bit is set),
+// modulo 2^XLEN.
+instruction MulHU for [Zmmul, RVM] : MulDivOp {
+    param MNEMONIC: String = "mulhu";
+    param FUNCT3: bits<3> = 0b011;
+    behavior {
+        rd = extract(rs1 * rs2, (2 * self.XLEN) - 1, self.XLEN)
+             + (sext(extract(rs1, self.XLEN - 1, self.XLEN - 1), self.XLEN) & rs2)
+             + (sext(extract(rs2, self.XLEN - 1, self.XLEN - 1), self.XLEN) & rs1);
+    }
+}
+
+// Signed division rounds toward zero. Division by zero yields all-ones (-1);
+// the MIN/-1 overflow case falls out of two's-complement bvsdiv (= MIN).
+instruction Div for [RVM] : MulDivOp {
+    param MNEMONIC: String = "div";
+    param FUNCT3: bits<3> = 0b100;
+    behavior {
+        if rs2 == zext(0b0, self.XLEN) {
+            rd = sext(0b1, self.XLEN);
+        } else {
+            rd = rs1 / rs2;
+        }
+    }
+}
+
+// Unsigned division; division by zero yields all-ones (2^XLEN - 1).
+instruction DivU for [RVM] : MulDivOp {
+    param MNEMONIC: String = "divu";
+    param FUNCT3: bits<3> = 0b101;
+    behavior {
+        if rs2 == zext(0b0, self.XLEN) {
+            rd = sext(0b1, self.XLEN);
+        } else {
+            rd = rs1 ~/ rs2;
+        }
+    }
+}
+
+// Signed remainder; remainder by zero yields the dividend. The MIN/-1 case
+// (remainder 0) falls out of the `rs1 - (rs1 / rs2) * rs2` identity.
+instruction Rem for [RVM] : MulDivOp {
+    param MNEMONIC: String = "rem";
+    param FUNCT3: bits<3> = 0b110;
+    behavior {
+        if rs2 == zext(0b0, self.XLEN) {
+            rd = rs1;
+        } else {
+            rd = rs1 - (rs1 / rs2) * rs2;
+        }
+    }
+}
+
+// Unsigned remainder; remainder by zero yields the dividend.
+instruction RemU for [RVM] : MulDivOp {
+    param MNEMONIC: String = "remu";
+    param FUNCT3: bits<3> = 0b111;
+    behavior {
+        if rs2 == zext(0b0, self.XLEN) {
+            rd = rs1;
+        } else {
+            rd = rs1 - (rs1 ~/ rs2) * rs2;
+        }
+    }
+}
+
+// Low 32 bits multiplied, result sign-extended to XLEN.
+instruction MulWord for [Zmmul64, RVM64] : MulDivOpWord {
+    param MNEMONIC: String = "mulw";
+    param FUNCT3: bits<3> = 0b000;
+    behavior { rd = sext(extract(rs1 * rs2, 31, 0), self.XLEN); }
+}
+
+// 32-bit signed division; the sign-extended 32-bit result is written back.
+instruction DivWord for [RVM64] : MulDivOpWord {
+    param MNEMONIC: String = "divw";
+    param FUNCT3: bits<3> = 0b100;
+    behavior {
+        if extract(rs2, 31, 0) == zext(0b0, 32) {
+            rd = sext(0b1, self.XLEN);
+        } else {
+            rd = sext(extract(rs1, 31, 0) / extract(rs2, 31, 0), self.XLEN);
+        }
+    }
+}
+
+// 32-bit unsigned division; division by zero yields all-ones (2^32 - 1),
+// which sign-extends to -1.
+instruction DivUWord for [RVM64] : MulDivOpWord {
+    param MNEMONIC: String = "divuw";
+    param FUNCT3: bits<3> = 0b101;
+    behavior {
+        if extract(rs2, 31, 0) == zext(0b0, 32) {
+            rd = sext(0b1, self.XLEN);
+        } else {
+            rd = sext(extract(rs1, 31, 0) ~/ extract(rs2, 31, 0), self.XLEN);
+        }
+    }
+}
+
+// 32-bit signed remainder.
+instruction RemWord for [RVM64] : MulDivOpWord {
+    param MNEMONIC: String = "remw";
+    param FUNCT3: bits<3> = 0b110;
+    behavior {
+        if extract(rs2, 31, 0) == zext(0b0, 32) {
+            rd = sext(extract(rs1, 31, 0), self.XLEN);
+        } else {
+            rd = sext(extract(rs1, 31, 0)
+                      - (extract(rs1, 31, 0) / extract(rs2, 31, 0)) * extract(rs2, 31, 0),
+                      self.XLEN);
+        }
+    }
+}
+
+// 32-bit unsigned remainder.
+instruction RemUWord for [RVM64] : MulDivOpWord {
+    param MNEMONIC: String = "remuw";
+    param FUNCT3: bits<3> = 0b111;
+    behavior {
+        if extract(rs2, 31, 0) == zext(0b0, 32) {
+            rd = sext(extract(rs1, 31, 0), self.XLEN);
+        } else {
+            rd = sext(extract(rs1, 31, 0)
+                      - (extract(rs1, 31, 0) ~/ extract(rs2, 31, 0)) * extract(rs2, 31, 0),
+                      self.XLEN);
+        }
+    }
 }
