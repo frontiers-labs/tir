@@ -498,7 +498,7 @@ fn match_syntax(syntax: &InstrSyntax, toks: &[Tok]) -> Option<Vec<NamedAttribute
 /// Index of syntax entries by their leading mnemonic token.
 fn syntax_index() -> HashMap<String, Vec<&'static InstrSyntax>> {
     let mut map: HashMap<String, Vec<&'static InstrSyntax>> = HashMap::new();
-    for entry in crate::asm_syntax() {
+    for entry in crate::ptx::asm_syntax() {
         if let Some(Tok::Ident(first)) = lex_first(entry) {
             map.entry(first).or_default().push(entry);
         }
@@ -690,8 +690,10 @@ fn print_instruction(
 
 /// Print a module as PTX assembly text.
 pub fn print(context: &Context, module: &ModuleOp) -> Result<String, String> {
-    let by_op: HashMap<&'static str, &'static InstrSyntax> =
-        crate::asm_syntax().iter().map(|s| (s.op_name, s)).collect();
+    let by_op: HashMap<&'static str, &'static InstrSyntax> = crate::ptx::asm_syntax()
+        .iter()
+        .map(|s| (s.op_name, s))
+        .collect();
 
     let mut out = String::new();
     for op_id in module.body().op_ids() {

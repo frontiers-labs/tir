@@ -5,8 +5,8 @@ use tmdl::{Action, Compiler, OutputKind};
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=defs");
     let compiler = Compiler::builder()
-        .add_input("./defs/ptx.tmdl")
-        .add_input("./defs/instructions.tmdl")
+        .add_input("./defs/ptx/main.tmdl")
+        .add_input("./defs/ptx/instructions.tmdl")
         .output(OutputKind::File(format!(
             "{}/ptx.rs",
             std::env::var("OUT_DIR")?
