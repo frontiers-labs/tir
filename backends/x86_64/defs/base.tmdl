@@ -371,8 +371,11 @@ instruction Call for [X86_64] {
     }
 
     behavior {
+        // Push the return address to the new top of stack. Behaviors are
+        // parallel-assignment, so the store must name `rsp - 8` explicitly
+        // rather than read `rsp` after its own decrement.
+        store(GPR::rsp - zext(0b1000, self.XLEN), 8, PC::pc + zext(0b101, self.XLEN));
         GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
-        store(GPR::rsp, 8, PC::pc + zext(0b101, self.XLEN));
         PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
     }
 }
@@ -508,9 +511,11 @@ instruction CallIndirect for [X86_64] {
     }
 
     behavior {
-        GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
         // The pushed return address is the next instruction (3 encoded bytes).
-        store(GPR::rsp, 8, PC::pc + zext(0b11, self.XLEN));
+        // Parallel assignment: name `rsp - 8` in the store rather than read
+        // `rsp` after its own decrement.
+        store(GPR::rsp - zext(0b1000, self.XLEN), 8, PC::pc + zext(0b11, self.XLEN));
+        GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
         PC::pc = target;
     }
 }

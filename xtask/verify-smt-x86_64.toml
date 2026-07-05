@@ -1,0 +1,51 @@
+# isla config for the Sail x86 model (translated from the ACL2 X86ISA model)
+# used by `cargo xtask verify x86_64`. The footprint wrapper (spliced into the
+# snapshot) puts the model in the application view and 64-bit mode; here we pin
+# the instruction pointer to a concrete, canonical address so the fetch reads
+# and opcode writes land at concrete addresses (told apart from the symbolic,
+# register-derived data accesses) and disable register-write logging so it does
+# not fork every path.
+
+pc = "rip"
+
+ifetch = "Read_ifetch"
+
+read_exclusives = []
+write_exclusives = []
+
+# Unused (instructions are supplied as opcodes via -i), but isla requires a
+# toolchain entry to be present.
+[[toolchain]]
+name = "default"
+assembler = "as"
+objdump = "objdump"
+nm = "nm"
+linker = "ld"
+
+[mmu]
+page_table_base = "0x300000"
+page_size = "4096"
+s2_page_table_base = "0x300000"
+s2_page_size = "4096"
+
+[threads]
+base = "0x0000000000001000"
+top = "0x0000000000001000"
+stride = "0x1000"
+
+[symbolic_addrs]
+base = "0x0000000000002000"
+top = "0x0000000000002000"
+stride = "0x10"
+
+[registers]
+ignore = []
+
+[registers.defaults]
+# Fetch/opcode-write base. Canonical and page-aligned; keeping it small keeps
+# it clear of the (symbolic) stack and data addresses the instructions form.
+rip = "0x0000000000001000"
+# Symbolic write logging would fork every register-writing path.
+log_register_writes = false
+
+[registers.renames]

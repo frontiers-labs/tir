@@ -37,6 +37,26 @@
 //! the isla checkout (default master) and `TIR_ISLA_SNAPSHOTS_REF` the
 //! snapshot ref (default: a pinned commit; see `ISLA_SNAPSHOTS_PIN`).
 //! `TIR_VERIFY_SMT_FILTER=add,sub` restricts the instruction set.
+//!
+//! x86 modeling notes. There is no published Sail snapshot for x86, so it is
+//! built locally from the ACL2-derived `sail-x86-from-acl2` model (see that
+//! repo's `model/Makefile` `x86.ir` target, spliced with
+//! `test-generation-patches/isla_footprint.sail`) and read from the hard-coded
+//! `IsaSpec::local_snapshot`. TO PUBLISH IT AND USE A URL: upload the built
+//! `x86.ir` to the isla-snapshots repository under `snapshot = "x86.ir"`, then
+//! set `local_snapshot: None` in the x86_64 `IsaSpec` — the download path
+//! (base URL in `ensure_snapshot`, ref via `TIR_ISLA_SNAPSHOTS_REF`) then
+//! serves it exactly like the RISC-V/ARM snapshots. Additional x86 assumptions
+//! beyond machine-mode/no-trap:
+//!   - the PC (`rip`) is pinned to a concrete canonical address by the config,
+//!     and the fetch/decode is served from a concrete instruction-byte register
+//!     (the spliced `rb`) so isla does not fork the byte-at-a-time decoder;
+//!   - data-access and branch-target addresses are assumed canonical (the
+//!     model masks linear addresses to 48 bits, TMDL's flat memory is 64-bit),
+//!     the analogue of the RISC-V aligned-address assumption;
+//!   - flags (`rflags` cf/zf/sf/of) are compared only for instructions whose
+//!     TMDL behavior writes them; the ALU ops deliberately leave flags
+//!     unmodeled, so their flag writes are ignored.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -46,6 +66,10 @@ use std::process::Command;
 use crate::utils::{download_file, git_checkout, project_root};
 use anyhow::anyhow;
 use xshell::{cmd, Shell};
+
+/// A Sail bitfield flag register mapped to TMDL flag slots:
+/// `(sail register, tmdl class, [(slot, bit index)])`.
+type FlagReg = (&'static str, &'static str, &'static [(u64, u32)]);
 
 pub struct IsaSpec {
     name: &'static str,
@@ -92,13 +116,64 @@ pub struct IsaSpec {
     /// written value is a path expression.
     trap_cause: Option<(&'static str, &'static [u64])>,
     isla_args: &'static [&'static str],
+    /// Sail GPR register name -> encoding index, for ISAs whose registers are
+    /// named individually rather than `{prefix}{n}` (x86 `rax`..`r15`). Empty
+    /// for `{prefix}{n}` ISAs.
+    reg_names: &'static [(&'static str, u32)],
+    /// A Sail bitfield register whose bits carry TMDL flag slots:
+    /// `(sail register, tmdl class, [(slot, bit index)])`. The whole-register
+    /// read/write is decomposed into per-flag bits (x86 `rflags`), unlike a
+    /// field-accessor struct register. Flags are only compared for
+    /// instructions whose TMDL behavior writes them (`x86` ALU ops deliberately
+    /// leave flags unmodeled).
+    flag_reg: Option<FlagReg>,
+    /// Pass `-s` (simplify) to isla-footprint. The x86 traces must stay
+    /// unsimplified: the simplifier mishandles the model's wide struct values.
+    simplify: bool,
+    /// Assert the initial PC is 4-byte aligned (fixed-width fetch). x86 pins the
+    /// PC to a concrete aligned value via the config instead.
+    align_pc: bool,
+    /// Assume data-access and indirect-jump-target addresses are canonical
+    /// (bits 63..47 sign-extended), so the model's non-canonical `#GP` paths are
+    /// vacuous. x86 only; the analogue of the RISC-V aligned-address assumption.
+    canonical_addrs: bool,
+    /// Every completing instruction advances the PC (x86 always writes `rip`
+    /// via the fetch-decode-execute epilogue), so a path that does not write it
+    /// faulted or decoded to something else and is excluded.
+    requires_pc_write: bool,
+    /// Local snapshot path, bypassing the download (x86 has no published
+    /// snapshot). See the module docs for swapping in a URL.
+    local_snapshot: Option<&'static str>,
+    /// Sub-register view classes that alias the GPR file (x86
+    /// `gpr8`/`gpr16`/`gpr32`/`gpr8h`), treated as mapped like `gpr`.
+    gpr_view_classes: &'static [&'static str],
 }
 
 impl IsaSpec {
-    /// TMDL register classes the driver can relate to Sail state.
+    /// TMDL register classes the driver can relate to Sail state. The x86
+    /// sub-register views (`gpr8`/`gpr16`/`gpr32`/`gpr8h`) alias the GPR file
+    /// and are named by the same Sail registers, so they map like `gpr`.
     fn class_is_mapped(&self, class: &str) -> bool {
-        class == "gpr" || self.extra_regs.iter().any(|(_, c, _, _)| *c == class)
+        class == "gpr"
+            || self.gpr_view_classes.contains(&class)
+            || self.extra_regs.iter().any(|(_, c, _, _)| *c == class)
     }
+
+    /// Bit width of the GPR file's encoding index (`read_gpr` parameter): the
+    /// bits needed to name `reg_count` registers (RISC-V/AArch64: 5, x86: 4).
+    fn gpr_idx_width(&self) -> u32 {
+        32 - (self.reg_count - 1).leading_zeros()
+    }
+}
+
+/// Whether the TMDL behavior of `instr` writes the flag register's class (x86
+/// `cmp`/`test` do; the ALU ops deliberately do not), found by scanning the
+/// emitted `execute_*` body for a `write_<class>` call.
+fn tmdl_writes_flags(smt: &str, instr: &Instruction, class: &str) -> bool {
+    let Some(start) = smt.find(&format!("(define-fun execute_{} ", instr.name)) else {
+        return false;
+    };
+    sexpr_at(&smt[start..]).contains(&format!("(write_{} ", class))
 }
 
 /// Plain read-write CSR storage (`mscratch`) plus the machine-mode trap setup
@@ -159,6 +234,14 @@ const ISA_SPECS: &[IsaSpec] = &[
         // misaligned, 11: environment call from M-mode.
         trap_cause: Some(("mcause", &[3, 4, 6, 11])),
         isla_args: &["-I", "cur_privilege=Machine"],
+        reg_names: &[],
+        flag_reg: None,
+        simplify: true,
+        align_pc: true,
+        canonical_addrs: false,
+        requires_pc_write: false,
+        local_snapshot: None,
+        gpr_view_classes: &[],
     },
     IsaSpec {
         name: "riscv32",
@@ -182,6 +265,14 @@ const ISA_SPECS: &[IsaSpec] = &[
         // misaligned, 11: environment call from M-mode.
         trap_cause: Some(("mcause", &[3, 4, 6, 11])),
         isla_args: &["-I", "cur_privilege=Machine"],
+        reg_names: &[],
+        flag_reg: None,
+        simplify: true,
+        align_pc: true,
+        canonical_addrs: false,
+        requires_pc_write: false,
+        local_snapshot: None,
+        gpr_view_classes: &[],
     },
     IsaSpec {
         name: "armv8",
@@ -213,14 +304,94 @@ const ISA_SPECS: &[IsaSpec] = &[
         fixed_reg_values: &[],
         trap_cause: None,
         isla_args: &[],
+        reg_names: &[],
+        flag_reg: None,
+        simplify: true,
+        align_pc: true,
+        canonical_addrs: false,
+        requires_pc_write: false,
+        local_snapshot: None,
+        gpr_view_classes: &[],
+    },
+    IsaSpec {
+        name: "x86_64",
+        tmdl_isa: "X86_64",
+        dialect: "x86_64",
+        defs_dir: "backends/x86_64/defs",
+        // No published snapshot: built locally from the sail-x86-from-acl2 model
+        // (see module docs and local_snapshot below).
+        snapshot: "x86.ir",
+        config: "verify-smt-x86_64.toml",
+        xlen: 64,
+        // x86 GPRs are named individually; see reg_names.
+        reg_prefix: "",
+        reg_count: 16,
+        zero_reg: None,
+        pc: "rip",
+        next_pc: None,
+        // Footprint-setup and model-bookkeeping registers: their reads/writes
+        // (application view, 64-bit mode, the fetch buffer) carry no
+        // architectural meaning the TMDL model tracks.
+        ignore_regs: &[
+            "app_view",
+            "marking_view",
+            "ms_reg",
+            "fault_reg",
+            "msrs",
+            "seg_hidden_attrs",
+            "seg_hidden_bases",
+            "seg_hidden_limits",
+            "seg_visibles",
+            "isla_ifetch_buf",
+            "log_register_writes",
+            // Control registers (CR0/CR3/CR4): read during memory access checks
+            // even in the application view, where paging is bypassed.
+            "ctrs",
+            "os",
+        ],
+        mmio_regs: &[],
+        extra_regs: &[],
+        struct_reg: None,
+        fixed_reg_values: &[],
+        trap_cause: None,
+        isla_args: &[],
+        reg_names: X86_REG_NAMES,
+        // rflags bit layout: cf=0, zf=6, sf=7, of=11 (Intel SDM). TMDL EFLAGS
+        // slots cf=0, zf=1, sf=2, of=3 (declaration order).
+        flag_reg: Some(("rflags", "eflags", &[(0, 0), (1, 6), (2, 7), (3, 11)])),
+        simplify: false,
+        align_pc: false,
+        canonical_addrs: true,
+        requires_pc_write: true,
+        local_snapshot: Some("/home/alex/Projects/frontiers/sail_workspace/isla-snapshots/x86.ir"),
+        gpr_view_classes: &["gpr8", "gpr16", "gpr32", "gpr8h"],
     },
 ];
 
+/// x86 Sail GPR names in TMDL encoding-index order (`rax`=0 .. `r15`=15).
+const X86_REG_NAMES: &[(&str, u32)] = &[
+    ("rax", 0),
+    ("rcx", 1),
+    ("rdx", 2),
+    ("rbx", 3),
+    ("rsp", 4),
+    ("rbp", 5),
+    ("rsi", 6),
+    ("rdi", 7),
+    ("r8", 8),
+    ("r9", 9),
+    ("r10", 10),
+    ("r11", 11),
+    ("r12", 12),
+    ("r13", 13),
+    ("r14", 14),
+    ("r15", 15),
+];
+
 pub fn verify_smt(sh: &Shell, isa: &str) -> anyhow::Result<()> {
-    let spec = ISA_SPECS
-        .iter()
-        .find(|s| s.name == isa)
-        .ok_or_else(|| anyhow!("unsupported ISA {isa}; available: riscv64, riscv32, armv8"))?;
+    let spec = ISA_SPECS.iter().find(|s| s.name == isa).ok_or_else(|| {
+        anyhow!("unsupported ISA {isa}; available: riscv64, riscv32, armv8, x86_64")
+    })?;
     let tools = Tools::ensure(sh, spec)?;
     let root = project_root();
     let out_dir = root.join("target/verify/smt").join(spec.name);
@@ -286,9 +457,13 @@ impl Tools {
             Ok(path) => path.into(),
             Err(_) => ensure_isla_footprint(sh)?,
         };
-        let snapshot = match std::env::var("TIR_ISLA_SNAPSHOT") {
-            Ok(path) => path.into(),
-            Err(_) => ensure_snapshot(sh, spec.snapshot)?,
+        let snapshot = match (std::env::var("TIR_ISLA_SNAPSHOT"), spec.local_snapshot) {
+            (Ok(path), _) => path.into(),
+            // No published snapshot: use the locally built model. To publish it,
+            // upload the `.ir` and clear `local_snapshot` so the download path
+            // (governed by `TIR_ISLA_SNAPSHOTS_REF`) is used instead.
+            (Err(_), Some(local)) => PathBuf::from(local),
+            (Err(_), None) => ensure_snapshot(sh, spec.snapshot)?,
         };
         Ok(Tools {
             isla_footprint,
@@ -373,8 +548,17 @@ enum OperandKind {
 struct Instruction {
     name: String,
     writes_pc: bool,
+    /// Instruction encoding width in bits (a byte multiple). Fixed-width ISAs
+    /// are always 32; x86 varies per instruction.
+    width_bits: u32,
     operands: Vec<(String, OperandKind)>,
     supported: bool,
+}
+
+impl Instruction {
+    fn width_bytes(&self) -> u32 {
+        self.width_bits / 8
+    }
 }
 
 fn parse_inventory(smt: &str) -> Vec<Instruction> {
@@ -386,9 +570,19 @@ fn parse_inventory(smt: &str) -> Vec<Instruction> {
     smt.lines()
         .filter_map(|l| l.strip_prefix("; INSTRUCTION: "))
         .filter_map(|l| {
-            let mut parts = l.split_whitespace();
+            let mut parts = l.split_whitespace().peekable();
             let name = parts.next()?.to_string();
             let writes_pc = parts.next()? == "writes-pc=true";
+            // `width=<bits>` sits between writes-pc and the operands (older
+            // snapshots without it default to 32-bit fixed-width).
+            let width_bits = match parts.peek().and_then(|p| p.strip_prefix("width=")) {
+                Some(w) => {
+                    let w = w.parse().ok()?;
+                    parts.next();
+                    w
+                }
+                None => 32,
+            };
             let operands = parts
                 .map(|op| {
                     let (op_name, kind) = op.split_once(':')?;
@@ -411,6 +605,7 @@ fn parse_inventory(smt: &str) -> Vec<Instruction> {
             Some(Instruction {
                 name,
                 writes_pc,
+                width_bits,
                 operands,
                 supported,
             })
@@ -576,6 +771,62 @@ fn pc_source_reg_operands(smt: &str, instr: &Instruction) -> Vec<usize> {
     sources
 }
 
+/// Replace whole-word occurrences of `word` in `s` (identifier boundaries).
+fn replace_word(s: &str, word: &str, repl: &str) -> String {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find(word) {
+        let before_ok = rest[..pos].chars().last().is_none_or(|c| !is_ident(c));
+        let after = &rest[pos + word.len()..];
+        let after_ok = after.chars().next().is_none_or(|c| !is_ident(c));
+        out.push_str(&rest[..pos]);
+        if before_ok && after_ok {
+            out.push_str(repl);
+        } else {
+            out.push_str(word);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// TMDL memory-access address expressions (rewritten to `st0` and concrete
+/// operand values), found by scanning the `execute_*` body for `read_mem_*` /
+/// `write_mem_*`. On x86 these are constrained canonical: the model masks
+/// linear addresses to 48 bits while TMDL's flat memory is 64-bit-addressed, so
+/// the two agree only on canonical addresses.
+fn mem_addr_exprs(smt: &str, instr: &Instruction, case: &[u64], spec: &IsaSpec) -> Vec<String> {
+    let Some(start) = smt.find(&format!("(define-fun execute_{} ", instr.name)) else {
+        return vec![];
+    };
+    let body = sexpr_at(&smt[start..]);
+    let mut exprs = vec![];
+    for prefix in ["(read_mem_", "(write_mem_"] {
+        let mut rest = body;
+        while let Some(pos) = rest.find(prefix) {
+            rest = &rest[pos + prefix.len()..];
+            // "<width> st <address> ..." — skip the width and state parameter.
+            let after = rest
+                .trim_start_matches(|c: char| c.is_ascii_digit())
+                .trim_start();
+            let after = after.strip_prefix("st").unwrap_or(after).trim_start();
+            let addr = sexpr_at(after);
+            let mut expr = addr.to_string();
+            for ((name, kind), value) in instr.operands.iter().zip(case) {
+                let lit = match kind {
+                    OperandKind::Reg { idx_width, .. } => format!("(_ bv{} {})", value, idx_width),
+                    _ => format!("(_ bv{} {})", value, spec.xlen),
+                };
+                expr = replace_word(&expr, name, &lit);
+            }
+            exprs.push(replace_word(&expr, "st", "st0"));
+        }
+    }
+    exprs
+}
+
 fn operand_smt_args(spec: &IsaSpec, instr: &Instruction, case: &[u64]) -> String {
     instr
         .operands
@@ -600,7 +851,7 @@ fn encode_words(
     smt: &str,
     instr: &Instruction,
     cases: &[Vec<u64>],
-) -> anyhow::Result<Vec<u32>> {
+) -> anyhow::Result<Vec<u128>> {
     let mut query = String::from(smt);
     query.push_str("\n(check-sat)\n");
     for case in cases {
@@ -618,10 +869,13 @@ fn encode_words(
     std::fs::write(&path, query)?;
     let output = Command::new(&tools.z3).arg("-smt2").arg(&path).output()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let words: Vec<u32> = stdout
+    // z3 prints a width-W bitvector as `#x` + W/4 hex digits (all encoding
+    // widths are byte multiples, so divisible by 4).
+    let hex_digits = (instr.width_bits / 4) as usize;
+    let words: Vec<u128> = stdout
         .split("#x")
         .skip(1)
-        .filter_map(|chunk| u32::from_str_radix(chunk.get(..8)?, 16).ok())
+        .filter_map(|chunk| u128::from_str_radix(chunk.get(..hex_digits)?, 16).ok())
         .collect();
     anyhow::ensure!(
         words.len() == cases.len(),
@@ -644,7 +898,7 @@ fn decode_operands(
     out_dir: &Path,
     smt: &str,
     instr: &Instruction,
-    words: &[u32],
+    words: &[u128],
 ) -> anyhow::Result<Vec<Vec<u64>>> {
     if instr.operands.is_empty() {
         return Ok(words.iter().map(|_| vec![]).collect());
@@ -730,19 +984,20 @@ fn sail_traces(
     tools: &Tools,
     spec: &IsaSpec,
     out_dir: &Path,
-    word: u32,
+    instr: &Instruction,
+    word: u128,
 ) -> anyhow::Result<Option<String>> {
     let cache = out_dir.join("cache").join(format!(
-        "{:08x}-{:016x}.trace",
+        "{:020x}-{:016x}.trace",
         word,
         cache_fingerprint(tools)
     ));
     if let Ok(cached) = std::fs::read_to_string(&cache) {
         return Ok(Some(cached));
     }
-    let bits = format!("{:032b}", word);
-    let mut child = Command::new(&tools.isla_footprint)
-        .args(["-A"])
+    let bits = format!("{:0width$b}", word, width = instr.width_bits as usize);
+    let mut cmd = Command::new(&tools.isla_footprint);
+    cmd.args(["-A"])
         .arg(&tools.snapshot)
         .arg("-C")
         .arg(&tools.isla_config)
@@ -756,8 +1011,11 @@ fn sail_traces(
             "--partial",
             "-i",
             &bits,
-            "-s",
-        ])
+        ]);
+    if spec.simplify {
+        cmd.arg("-s");
+    }
+    let mut child = cmd
         .args(spec.isla_args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -899,6 +1157,13 @@ fn map_register(spec: &IsaSpec, name: &str) -> Option<MappedReg> {
     if let Some(i) = spec.extra_regs.iter().position(|(n, _, _, _)| *n == name) {
         return Some(MappedReg::Slot(i));
     }
+    if !spec.reg_names.is_empty() {
+        return spec
+            .reg_names
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, idx)| MappedReg::X(*idx));
+    }
     name.strip_prefix(spec.reg_prefix)
         .and_then(|n| n.parse::<u32>().ok())
         .filter(|n| *n < spec.reg_count)
@@ -1000,6 +1265,13 @@ struct TraceInfo {
     /// Ordered `define-const` bindings, replayed as a `let` chain.
     defines: Vec<(String, String)>,
     asserts: Vec<String>,
+    /// `(flag slot, whole-register value, bit index)` for symbolic reads of a
+    /// bitfield flag register (x86 `rflags`): each bit relates to a flag slot's
+    /// initial state.
+    flag_reads: Vec<(u64, String, u32)>,
+    /// `flag slot -> bit expression` from a write of the flag register (last
+    /// write wins). Only compared when the TMDL behavior also writes flags.
+    flag_writes: HashMap<u64, String>,
     /// Why this path cannot be checked against the TMDL state (trap paths,
     /// CSR accesses, ...), if so.
     excluded: Option<String>,
@@ -1030,6 +1302,20 @@ fn analyze_trace(spec: &IsaSpec, events: &[Sexp]) -> TraceInfo {
                 let trimmed = name.trim_matches('|');
                 if spec.ignore_regs.contains(&trimmed) {
                     continue;
+                }
+                // A bitfield flag register (x86 `rflags`) read: each mapped bit
+                // of the symbolic initial value relates to a flag slot.
+                if let Some((flag_name, _, bit_map)) = spec.flag_reg {
+                    if trimmed == flag_name {
+                        if let Sexp::Atom(var) = unwrap_bits_struct(value) {
+                            if var.starts_with('v') && !defined_vars.contains(var) {
+                                for (slot, bit) in bit_map {
+                                    info.flag_reads.push((*slot, var.clone(), *bit));
+                                }
+                            }
+                        }
+                        continue;
+                    }
                 }
                 if spec.mmio_regs.contains(&trimmed) {
                     exclude(
@@ -1092,6 +1378,18 @@ fn analyze_trace(spec: &IsaSpec, events: &[Sexp]) -> TraceInfo {
                 let trimmed = name.trim_matches('|');
                 if spec.ignore_regs.contains(&trimmed) {
                     continue;
+                }
+                // A write of the bitfield flag register: record each mapped bit
+                // as that flag slot's final value (last write wins).
+                if let Some((flag_name, _, bit_map)) = spec.flag_reg {
+                    if trimmed == flag_name {
+                        let value = unwrap_bits_struct(value);
+                        for (slot, bit) in bit_map {
+                            info.flag_writes
+                                .insert(*slot, format!("((_ extract {bit} {bit}) {value})"));
+                        }
+                        continue;
+                    }
                 }
                 if spec.struct_reg == Some(trimmed) {
                     let mapped = accessor_field(items).and_then(|field| {
@@ -1191,6 +1489,16 @@ fn analyze_trace(spec: &IsaSpec, events: &[Sexp]) -> TraceInfo {
             _ => {}
         }
     }
+    // A completing x86 instruction always advances the PC; a path that never
+    // writes it faulted or decoded to a different instruction (an artifact of
+    // the model's forking address decode), so it cannot be checked against TMDL.
+    if spec.requires_pc_write
+        && info.excluded.is_none()
+        && !info.writes.contains_key(&MappedReg::Pc)
+        && !info.writes.contains_key(&MappedReg::NextPc)
+    {
+        exclude(&mut info, "incomplete path (no PC write)".to_string());
+    }
     info
 }
 
@@ -1225,20 +1533,42 @@ fn build_query(
     };
     let _ = writeln!(q, "(define-fun st1 () TMDLState {})", call);
 
-    // Fetch invariant: PC is 4-byte aligned (no compressed instructions).
-    q.push_str("(assert (= ((_ extract 1 0) (pc st0)) #b00))\n");
+    // Fetch invariant: PC is 4-byte aligned (no compressed instructions). x86
+    // pins the PC to a concrete aligned value in its config instead.
+    if spec.align_pc {
+        q.push_str("(assert (= ((_ extract 1 0) (pc st0)) #b00))\n");
+    }
 
-    // TEMPORARY until the C extension is modeled: registers feeding an
-    // indirect jump are assumed 4-byte aligned, so Sail's misaligned-fetch
-    // trap paths are vacuous. Direct jumps and branches are already covered
-    // by the aligned-PC and aligned-immediate assumptions.
-    for i in pc_source_reg_operands(smt, instr) {
-        if let OperandKind::Reg { class, idx_width } = &instr.operands[i].1 {
-            let _ = writeln!(
-                q,
-                "(assert (= ((_ extract 1 0) (read_{} st0 (_ bv{} {}))) #b00))",
-                class, case[i], idx_width
-            );
+    // A value is (low-half) canonical when bits 63..47 are all zero: a valid
+    // user x86-64 linear address that the model's 52-bit physical masking leaves
+    // unchanged. Non-canonical accesses/jumps `#GP`, which TMDL's flat model
+    // does not track.
+    let canonical = |v: &str| format!("(= ((_ extract 63 47) {v}) (_ bv0 17))");
+
+    if spec.canonical_addrs {
+        // Any address the branch target resolves to (an indirect jump register,
+        // a `ret`'s loaded return address, a `call` displacement) is assumed
+        // canonical, so the model's 48-bit-truncated PC equals TMDL's full one.
+        if instr.writes_pc {
+            let _ = writeln!(q, "(assert {})", canonical("(pc st1)"));
+        }
+        // Each memory-access effective address is assumed to sit below 2^46 (a
+        // stricter canonical form): the model's 48-bit sign-masking then leaves
+        // it unchanged, and a multi-byte access cannot straddle the 2^47
+        // canonical boundary (where the model sign-extends but TMDL's flat
+        // 64-bit memory does not).
+        for addr in mem_addr_exprs(smt, instr, case, spec) {
+            let _ = writeln!(q, "(assert (= ((_ extract 63 46) {addr}) (_ bv0 18)))");
+        }
+    } else {
+        // RISC-V (until the C extension is modeled): registers feeding an
+        // indirect jump are assumed 4-byte aligned, so misaligned-fetch trap
+        // paths are vacuous.
+        for i in pc_source_reg_operands(smt, instr) {
+            if let OperandKind::Reg { class, idx_width } = &instr.operands[i].1 {
+                let reg = format!("(read_{} st0 (_ bv{} {}))", class, case[i], idx_width);
+                let _ = writeln!(q, "(assert (= ((_ extract 1 0) {reg}) #b00))");
+            }
         }
     }
 
@@ -1246,15 +1576,32 @@ fn build_query(
         q.push_str(decl);
         q.push('\n');
     }
+    let gw = spec.gpr_idx_width();
+    let width_bytes = instr.width_bytes();
     let slot_access = |i: usize, state: &str| {
         let (_, class, slot, w) = spec.extra_regs[i];
         format!("(read_{} {} (_ bv{} {}))", class, state, slot, w)
     };
+    // A read of a bitfield flag register pins each mapped bit of the symbolic
+    // initial value to that flag slot's initial TMDL state.
+    if let Some((_, class, bit_map)) = spec.flag_reg {
+        let idx_w = bit_map
+            .iter()
+            .map(|(s, _)| 64 - s.leading_zeros())
+            .max()
+            .unwrap_or(1);
+        for (slot, var, bit) in &trace.flag_reads {
+            let _ = writeln!(
+                q,
+                "(assert (= ((_ extract {bit} {bit}) {var}) (read_{class} st0 (_ bv{slot} {idx_w}))))",
+            );
+        }
+    }
     for (reg, var) in &trace.reads {
         let init = match reg {
-            MappedReg::X(n) => format!("(read_gpr st0 (_ bv{} 5))", n),
+            MappedReg::X(n) => format!("(read_gpr st0 (_ bv{} {}))", n, gw),
             MappedReg::Pc => "(pc st0)".to_string(),
-            MappedReg::NextPc => format!("(bvadd (pc st0) (_ bv4 {xlen}))"),
+            MappedReg::NextPc => format!("(bvadd (pc st0) (_ bv{width_bytes} {xlen}))"),
             MappedReg::Slot(i) => slot_access(*i, "st0"),
         };
         let _ = writeln!(q, "(assert (= {} {}))", var, init);
@@ -1267,10 +1614,32 @@ fn build_query(
                 .writes
                 .get(&MappedReg::X(n))
                 .cloned()
-                .unwrap_or_else(|| format!("(read_gpr st0 (_ bv{} 5))", n));
-            format!("(= (read_gpr st1 (_ bv{} 5)) {})", n, sail)
+                .unwrap_or_else(|| format!("(read_gpr st0 (_ bv{} {}))", n, gw));
+            format!("(= (read_gpr st1 (_ bv{} {})) {})", n, gw, sail)
         })
         .collect();
+    // Flag equivalence, only where the TMDL behavior models flags (its
+    // execute writes the flag class). The ALU ops deliberately leave flags
+    // unmodeled, so Sail's flag writes are ignored for them.
+    if let Some((_, class, bit_map)) = spec.flag_reg {
+        if tmdl_writes_flags(smt, instr, class) {
+            let idx_w = bit_map
+                .iter()
+                .map(|(s, _)| 64 - s.leading_zeros())
+                .max()
+                .unwrap_or(1);
+            for (slot, _) in bit_map {
+                let sail = trace
+                    .flag_writes
+                    .get(slot)
+                    .cloned()
+                    .unwrap_or_else(|| format!("(read_{class} st0 (_ bv{slot} {idx_w}))"));
+                final_eq.push(format!(
+                    "(= (read_{class} st1 (_ bv{slot} {idx_w})) {sail})"
+                ));
+            }
+        }
+    }
     // Extra mapped state, deduplicated by underlying TMDL slot since several
     // Sail names may alias one slot (SP_ELx); a write through any alias is
     // the slot's final value.
@@ -1364,7 +1733,7 @@ fn build_query(
             // assume it away rather than reporting a fake divergence.
             asserts.push(format!("(distinct {} (pc st0))", target));
             final_eq.push(format!(
-                "(= (ite (= (pc st1) (pc st0)) (bvadd (pc st0) (_ bv4 {xlen})) (pc st1)) {})",
+                "(= (ite (= (pc st1) (pc st0)) (bvadd (pc st0) (_ bv{width_bytes} {xlen})) (pc st1)) {})",
                 target
             ));
         }
@@ -1401,7 +1770,7 @@ fn build_query(
         // Counterexample probes, only evaluated on `sat`.
         let mut probes: Vec<String> = vec!["(pc st0)".into(), "(pc st1)".into()];
         for n in (0..spec.reg_count).filter(|n| Some(*n) != spec.zero_reg) {
-            probes.push(format!("(read_gpr st0 (_ bv{} 5))", n));
+            probes.push(format!("(read_gpr st0 (_ bv{} {}))", n, gw));
         }
         let _ = writeln!(q, "(get-value ({}))", probes.join(" "));
     }
@@ -1460,17 +1829,24 @@ fn verify_instruction(
 ) -> anyhow::Result<()> {
     let cases = operand_cases(spec, instr);
     let words = encode_words(tools, spec, out_dir, smt, instr, &cases)?;
-    let cases = decode_operands(tools, spec, out_dir, smt, instr, &words)?;
+    // x86 encodings are lossless (register indices and immediates are stored
+    // verbatim), so the decoded operands equal the inputs; the wide, variable
+    // `decode_*` round-trip is only needed for the lossy fixed-width ISAs.
+    let cases = if spec.reg_names.is_empty() {
+        decode_operands(tools, spec, out_dir, smt, instr, &words)?
+    } else {
+        cases
+    };
     print!("{:24}", instr.name);
     let mut line = String::new();
 
     for (case, word) in cases.iter().zip(&words) {
-        let Some(raw) = sail_traces(tools, spec, out_dir, *word)? else {
+        let Some(raw) = sail_traces(tools, spec, out_dir, instr, *word)? else {
             report.excluded_paths += 1;
             *report
                 .excluded_reasons
                 .entry(format!(
-                    "{}: isla-footprint failed or timed out ({:#010x})",
+                    "{}: isla-footprint failed or timed out ({:#014x})",
                     instr.name, word
                 ))
                 .or_default() += 1;

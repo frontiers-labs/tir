@@ -35,6 +35,10 @@ struct SmtCtx<'a> {
     isa: &'a str,
     /// Register value width of the target ISA; immediates and the PC use it.
     xlen: u16,
+    /// Widest instruction encoding in the ISA (bits). Fixed-width ISAs use one
+    /// value (RISC-V/AArch64: 32); variable-length ISAs (x86) use the maximum,
+    /// so the shared `decode_*`/`encode_*` word type holds every instruction.
+    word_width: u16,
     /// Lowercase class name -> layout. BTreeMap so the emitted state datatype
     /// has a deterministic field order.
     classes: BTreeMap<String, ClassInfo>,
@@ -129,13 +133,39 @@ pub fn generate_smtlib<'a>(
 
     let mut classes = BTreeMap::new();
     let mut pc_classes = std::collections::HashSet::new();
+    let class_param = |name: &str, rc: &ast::RegisterClass, default: u16| {
+        eval_class_param(rc, name, &isa_params).unwrap_or(default as i64) as u16
+    };
+    let enc_len_of: HashMap<String, u16> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .map(|rc| (rc.name.to_lowercase(), class_param("ENCODING_LEN", rc, 5)))
+        .collect();
+    let width_of: HashMap<String, u16> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .map(|rc| (rc.name.to_lowercase(), class_param("WIDTH", rc, xlen)))
+        .collect();
+    // A class draws its physical storage from its `base` (inheritance shares the
+    // file with identical indices; a narrower base is a sub-register view, e.g.
+    // x86 `eax` in `rax`) or an explicit `file` alias. A `file` alias folds into
+    // the file's storage only as a strictly narrower sub-view sharing the index
+    // width (x86 `ah` -> `GPR`, 8-bit in a 4-indexed 64-bit file). Same-width
+    // groupings (RISC-V `VRM2` over `VR`), narrower-indexed aliases (compressed
+    // 3-bit -> 5-bit) and wider ones (`FPR64` over `FPR32`) keep their own
+    // storage, preserving the pre-existing per-file arrays.
     let base_of: HashMap<String, String> = files
         .iter()
         .flat_map(|f| f.register_classes())
         .filter_map(|rc| {
-            rc.base
-                .as_ref()
-                .map(|b| (rc.name.to_lowercase(), b.to_lowercase()))
+            let child = rc.name.to_lowercase();
+            if let Some(b) = &rc.base {
+                return Some((child, b.to_lowercase()));
+            }
+            let file = rc.file.as_ref()?.to_lowercase();
+            let compatible = enc_len_of.get(&child) == enc_len_of.get(&file)
+                && width_of.get(&child) < width_of.get(&file);
+            compatible.then_some((child, file))
         })
         .collect();
     let storage_of = |name: &str| {
@@ -157,19 +187,41 @@ pub fn generate_smtlib<'a>(
             pc_classes.insert(name);
             continue;
         }
+        // A class with no encoding slots (x86 EFLAGS: read/written by name, never
+        // encoded in an instruction) still needs a nonzero index width to hold
+        // its per-register slot number, since a `(_ BitVec 0)` array index is
+        // illegal in SMT.
+        let mut idx_width = eval_class_param(rc, "ENCODING_LEN", &isa_params).unwrap_or(5) as u16;
+        if idx_width == 0 {
+            let max_idx = rc
+                .register_indices()
+                .into_iter()
+                .map(|(_, i)| i)
+                .max()
+                .unwrap_or(0);
+            idx_width = (16 - max_idx.leading_zeros() as u16).max(1);
+        }
         classes.insert(
             name.clone(),
             ClassInfo {
-                idx_width: eval_class_param(rc, "ENCODING_LEN", &isa_params).unwrap_or(5) as u16,
+                idx_width,
                 val_width: eval_class_param(rc, "WIDTH", &isa_params).unwrap_or(xlen as i64) as u16,
                 zero_index: rc.hardwired_zero_register_index(),
                 storage: storage_of(&name),
             },
         );
     }
+    let word_width = files
+        .iter()
+        .flat_map(|f| f.instructions())
+        .filter(|i| item_supports_isa(&i.for_isas, isa, item_cache))
+        .map(|i| encoding_width(i, item_cache))
+        .max()
+        .unwrap_or(32);
     let ctx = SmtCtx {
         isa,
         xlen,
+        word_width,
         classes,
         pc_classes,
         isa_params,
@@ -228,7 +280,17 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
         let idx_width = info.idx_width;
         let val_width = info.val_width;
         let storage = &info.storage;
-        let select = format!("(select ({storage} st) r)");
+        // A class narrower than its storage file is a sub-register view of it
+        // (x86 `eax`/`ax`/`al` in `rax`): reads truncate the file element and
+        // writes zero-extend into it — matching the interpreter, which stores at
+        // the class byte width and zero-pads on a wider read-back.
+        let storage_val_width = ctx.classes.get(storage).map_or(val_width, |c| c.val_width);
+        let selected = format!("(select ({storage} st) r)");
+        let select = if val_width < storage_val_width {
+            format!("((_ extract {} 0) {selected})", val_width - 1)
+        } else {
+            selected
+        };
         let read_body = match info.zero_index {
             Some(z) => {
                 format!("(ite (= r (_ bv{z} {idx_width}))\n    (_ bv0 {val_width})\n    {select})")
@@ -240,10 +302,15 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
             "\n(define-fun read_{name} ((st TMDLState) (r (_ BitVec {idx_width}))) (_ BitVec {val_width})\n  {read_body})",
         )?;
 
+        let stored_val = if val_width < storage_val_width {
+            format!("((_ zero_extend {}) val)", storage_val_width - val_width)
+        } else {
+            "val".to_string()
+        };
         let mut fields = Vec::new();
         for n2 in &arrays {
             if *n2 == storage {
-                fields.push(format!("(store ({} st) r val)", n2));
+                fields.push(format!("(store ({} st) r {stored_val})", n2));
             } else {
                 fields.push(format!("({} st)", n2));
             }
@@ -373,7 +440,7 @@ fn build_instructions<'a>(
         } else {
             format!("((st TMDLState) {smt_operands_joined})")
         };
-        let smt_encoding = build_smt_encoding(ctx, item_cache, i, &operands);
+        let (smt_encoding, enc_width) = build_smt_encoding(ctx, item_cache, i, &operands);
         let smt_behavior = build_smt_behavior(ctx, item_cache, i, &operands, &register_index_map);
         // Untranslatable behaviors (e.g. memory accesses) get an identity body
         // plus a machine-readable marker so verification tooling can tell
@@ -405,8 +472,8 @@ fn build_instructions<'a>(
             .join(" ");
         writeln!(
             output,
-            "\n; INSTRUCTION: {} writes-pc={} {}",
-            name, writes_pc, operand_meta
+            "\n; INSTRUCTION: {} writes-pc={} width={} {}",
+            name, writes_pc, enc_width, operand_meta
         )?;
 
         let operand_names = operands
@@ -417,8 +484,18 @@ fn build_instructions<'a>(
 
         writeln!(
             output,
-            "\n(define-fun encode_{name} {operand_params} (_ BitVec 32)\n  {smt_encoding})\n\n(define-fun execute_{name} {execute_params} TMDLState\n  {smt_behavior})"
+            "\n(define-fun encode_{name} {operand_params} (_ BitVec {enc_width})\n  {smt_encoding})\n\n(define-fun execute_{name} {execute_params} TMDLState\n  {smt_behavior})"
         )?;
+
+        // The shared `encode_{dialect}` returns the ISA's widest encoding, so a
+        // narrower instruction's word is zero-extended into it.
+        let pad = |call: String| {
+            if enc_width < ctx.word_width {
+                format!("((_ zero_extend {}) {call})", ctx.word_width - enc_width)
+            } else {
+                call
+            }
+        };
 
         // SMT-LIB requires datatype accessor names to be unique within the
         // whole datatype.  Prefix each accessor with the instruction name so
@@ -454,13 +531,17 @@ fn build_instructions<'a>(
 
         if operand_list.is_empty() {
             // Nullary functions and constructors are referenced bare in SMT-LIB.
-            encode_arms.push(format!("((_ is {uppercase_name}) instr) encode_{name}"));
+            encode_arms.push(format!(
+                "((_ is {uppercase_name}) instr) {}",
+                pad(format!("encode_{name}"))
+            ));
             execute_arms.push(format!(
                 "((_ is {uppercase_name}) instr) (execute_{name} state)"
             ));
         } else {
             encode_arms.push(format!(
-                "((_ is {uppercase_name}) instr) (encode_{name} {accessor_args})"
+                "((_ is {uppercase_name}) instr) {}",
+                pad(format!("(encode_{name} {accessor_args})"))
             ));
             execute_arms.push(format!(
                 "((_ is {uppercase_name}) instr) (execute_{name} state {accessor_args})"
@@ -476,15 +557,16 @@ fn build_instructions<'a>(
 
     // Fold arms into nested ites; the last instruction is the fallback.
     // encode_* and execute_* already exist at this point so the ite can call them.
+    let word_width = ctx.word_width;
     let encode_body = encode_arms
         .iter()
         .rev()
-        .fold("(_ bv0 32)".to_string(), |else_branch, arm| {
+        .fold(format!("(_ bv0 {word_width})"), |else_branch, arm| {
             format!("(ite {} {})", arm, else_branch)
         });
     writeln!(
         output,
-        "\n(define-fun encode_{dialect} ((instr TMDLInstr)) (_ BitVec 32)\n  {encode_body})"
+        "\n(define-fun encode_{dialect} ((instr TMDLInstr)) (_ BitVec {word_width})\n  {encode_body})"
     )?;
 
     let execute_body = execute_arms
@@ -521,12 +603,25 @@ fn smt_ty_of(ctx: &SmtCtx<'_>, ty: &Type) -> String {
     }
 }
 
+/// Total bit width of an instruction's encoding (highest covered bit + 1).
+fn encoding_width<'a>(
+    instruction: &'a ast::Instruction,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> u16 {
+    get_encoding_arms(instruction, item_cache)
+        .iter()
+        .map(|arm| arm.end.unwrap_or(arm.start) + 1)
+        .max()
+        .unwrap_or(32)
+}
+
+/// Returns the encoding expression and its bit width.
 fn build_smt_encoding<'a>(
     ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     instruction: &'a ast::Instruction,
     operands: &[(String, Type)],
-) -> String {
+) -> (String, u16) {
     let operands = operands.iter().cloned().collect::<HashMap<_, _>>();
     let params = resolve_params_for_instruction(instruction, item_cache);
     let encoding_arms = get_encoding_arms(instruction, item_cache);
@@ -584,10 +679,13 @@ fn build_smt_encoding<'a>(
 
     pieces.sort_by_key(|piece| std::cmp::Reverse(piece.0));
 
+    let width = pieces.iter().map(|(hi, _)| hi + 1).max().unwrap_or(32);
     let mut iter = pieces.into_iter().map(|(_, piece)| piece);
-    iter.next()
+    let expr = iter
+        .next()
         .map(|first| iter.fold(first, |acc, piece| format!("(concat {} {})", acc, piece)))
-        .unwrap_or_else(|| "(_ bv0 32)".to_string())
+        .unwrap_or_else(|| format!("(_ bv0 {width})"));
+    (expr, width)
 }
 
 // ---------------------------------------------------------------------------
@@ -1127,6 +1225,11 @@ impl BehaviorEmitter<'_> {
             symbols,
             operands: self.operands,
             locals: &locals,
+            // TMDL behaviors use parallel-assignment semantics: every read
+            // observes the instruction's entry state, not prior statements'
+            // writes (so RISC-V `jalr` with `rd == rs1` targets the original
+            // `rs1`). Reads therefore always come from the entry state `st`,
+            // even though writes thread through `st_name`.
             state_name: "st",
             ctx: self.ctx,
         };
@@ -1558,15 +1661,16 @@ fn build_decoder<'a>(
             format!("(ite {}\n    {}\n    {})", guard, then_branch, else_branch)
         });
 
+    let word_width = ctx.word_width;
     writeln!(
         output,
-        "\n(define-fun decode_{dialect} ((word (_ BitVec 32))) TMDLInstr\n  {})",
+        "\n(define-fun decode_{dialect} ((word (_ BitVec {word_width}))) TMDLInstr\n  {})",
         body
     )?;
 
     writeln!(
         output,
-        "\n(define-fun execute_by_word_{dialect} ((state TMDLState) (word (_ BitVec 32))) TMDLState\n  (execute_{dialect} state (decode_{dialect} word)))"
+        "\n(define-fun execute_by_word_{dialect} ((state TMDLState) (word (_ BitVec {word_width}))) TMDLState\n  (execute_{dialect} state (decode_{dialect} word)))"
     )?;
 
     Ok(())
