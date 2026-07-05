@@ -27,6 +27,7 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, OnceLock};
 
 use libtest_mimic::{Arguments, Failed, Trial};
 
@@ -81,18 +82,59 @@ pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
     dest
 }
 
+#[derive(Clone)]
+pub enum Tool {
+    Path(PathBuf),
+    CargoTestBin {
+        package: &'static str,
+        bin: &'static str,
+        path: Arc<OnceLock<PathBuf>>,
+    },
+}
+
+impl Tool {
+    pub fn path(path: impl Into<PathBuf>) -> Self {
+        Self::Path(path.into())
+    }
+
+    pub fn cargo_test_bin(package: &'static str, bin: &'static str) -> Self {
+        Self::CargoTestBin {
+            package,
+            bin,
+            path: Arc::new(OnceLock::new()),
+        }
+    }
+
+    fn resolve(&self) -> PathBuf {
+        match self {
+            Self::Path(path) => path.clone(),
+            Self::CargoTestBin { package, bin, path } => {
+                path.get_or_init(|| cargo_test_bin(package, bin)).clone()
+            }
+        }
+    }
+}
+
 /// Collect tests, run them through libtest-mimic and exit the process.
 ///
 /// `manifest_dir` is typically `env!("CARGO_MANIFEST_DIR")`, `checks_subdir`
 /// the directory (relative to it) that holds the tests, and `tools` a mapping
 /// from the tool name used in `RUN:` lines to its built executable path.
 pub fn harness_main(manifest_dir: &str, checks_subdir: &str, tools: &[(&str, &str)]) {
+    let tools: Vec<(&str, Tool)> = tools
+        .iter()
+        .map(|(name, path)| (*name, Tool::path(*path)))
+        .collect();
+    harness_main_with_tools(manifest_dir, checks_subdir, &tools);
+}
+
+pub fn harness_main_with_tools(manifest_dir: &str, checks_subdir: &str, tools: &[(&str, Tool)]) {
     let args = Arguments::from_args();
     let checks_dir = Path::new(manifest_dir).join(checks_subdir);
 
-    let tool_map: HashMap<String, PathBuf> = tools
+    let tool_map: HashMap<String, Tool> = tools
         .iter()
-        .map(|(k, v)| (k.to_string(), PathBuf::from(v)))
+        .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
 
     let cases = match discover(&checks_dir) {
@@ -209,7 +251,7 @@ fn has_unconditional_xfail(contents: &str) -> bool {
     })
 }
 
-fn run_case(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Result<(), Failed> {
+fn run_case(case: &TestCase, tools: &HashMap<String, Tool>) -> Result<(), Failed> {
     let result = run_case_commands(case, tools);
     if !case.xfail {
         return result;
@@ -221,7 +263,7 @@ fn run_case(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Result<(), Fai
     }
 }
 
-fn run_case_commands(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Result<(), Failed> {
+fn run_case_commands(case: &TestCase, tools: &HashMap<String, Tool>) -> Result<(), Failed> {
     for run in &case.run_lines {
         run_pipeline(run, &case.path, tools)?;
     }
@@ -229,11 +271,7 @@ fn run_case_commands(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Resul
 }
 
 /// Execute a single `RUN:` pipeline.
-fn run_pipeline(
-    run: &str,
-    test_path: &Path,
-    tools: &HashMap<String, PathBuf>,
-) -> Result<(), Failed> {
+fn run_pipeline(run: &str, test_path: &Path, tools: &HashMap<String, Tool>) -> Result<(), Failed> {
     let s = test_path.to_string_lossy().to_string();
     let dir = test_path
         .parent()
@@ -284,7 +322,7 @@ fn run_pipeline(
         } else {
             let resolved = tools
                 .get(&program)
-                .cloned()
+                .map(Tool::resolve)
                 .unwrap_or_else(|| PathBuf::from(&program));
             let output = run_subprocess(&resolved, &tokens, &piped_input).map_err(|e| {
                 Failed::from(format!("failed to spawn `{program}`: {e}\nRUN: {run}"))

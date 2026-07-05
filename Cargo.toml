@@ -66,3 +66,11 @@ proptest = "1.11.0"
 [profile.bench]
 debug = true
 lto = true
+
+[profile.dev.package.filecheck]
+debug = false
+opt-level = 3
+
+[profile.dev.package.tir-lit]
+debug = false
+opt-level = 3

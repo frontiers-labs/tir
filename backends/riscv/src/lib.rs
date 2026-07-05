@@ -1496,6 +1496,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "run with `cargo xtask axioms`"]
     fn committed_isel_axioms_are_fresh() {
         let context = Context::with_default_dialects();
         let discovered = tir::backend::isel::discover_axioms(&crate::get_isel_rules(
