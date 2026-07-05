@@ -260,6 +260,12 @@ mod isa {
                 PushOp,
                 PopOp,
                 LeaRipOp,
+                // SSE2 scalar double-precision floating point
+                AddsdOp,
+                SubsdOp,
+                MulsdOp,
+                DivsdOp,
+                MovsdOp,
                 VirtualCallOp,
                 VirtualIndirectCallOp,
                 VirtualReturnOp
@@ -726,6 +732,12 @@ mod isa {
                 ),
                 "GPR8H" => Box::new(
                     Mov8HOpBuilder::new(context)
+                        .attr("dst", virt(dst))
+                        .attr("src", virt(src))
+                        .build(),
+                ),
+                "XMM" => Box::new(
+                    MovsdOpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
                         .build(),

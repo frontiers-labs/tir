@@ -1,0 +1,21 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s --check-prefixes=ISEL
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+// The SSE2 arithmetic ops are two-address like the integer ALU: selection ties
+// dst to its first source and register allocation lowers the tie to a `movsd`
+// copy ahead of the op. Values are colored out of the XMM file.
+
+module {
+  func @add(%0: !f64, %1: !f64) -> !f64 {
+    %2 = addf %0, %1 : !f64
+    return %2
+  }
+  module_end
+}
+
+// ISEL:      x86_64.addsd {dst = %virt2:XMM, dst_tied = %virt0:XMM, src = %virt1:XMM}
+// ISEL-NEXT: x86_64.vret
+
+// CHECK:      x86_64.movsd {dst = [[D:xmm[0-9]+]], src = xmm{{[0-9]+}}}
+// CHECK-NEXT: x86_64.addsd {dst = [[D]], src = xmm{{[0-9]+}}}
+// CHECK-NEXT: x86_64.vret

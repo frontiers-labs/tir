@@ -10,6 +10,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .add_input("./defs/arith_ext.tmdl")
         .add_input("./defs/conditional.tmdl")
         .add_input("./defs/memory_ext.tmdl")
+        .add_input("./defs/float.tmdl")
         .output(OutputKind::File(format!(
             "{}/x86_64.rs",
             std::env::var("OUT_DIR")?

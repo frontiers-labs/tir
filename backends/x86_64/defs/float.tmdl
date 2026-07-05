@@ -1,0 +1,117 @@
+// SSE2 scalar double-precision floating point. The sixteen XMM registers are
+// modeled at their low 64 bits only (the scalar-double view); the semantic
+// engine reads a float-typed register's bits as a binary64 APFloat, so
+// `fadd`/`fmul` on XMM operands compute real double results. Upper lanes are
+// never read by a scalar op, so tracking them is unnecessary (as with the
+// AArch64 `FPR64` view of its 128-bit `v` registers).
+
+register_class XMM for [X86_64] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 64;
+
+    registers {
+        xmm0..xmm15 => { traits = [float, caller_saved] },
+    }
+}
+
+// `op xmm_dst, xmm_src`: the F2 mandatory prefix, REX (W=0; R/B carry the 4th
+// register-number bits), the 0x0F escape, the opcode, then ModR/M(mod=11,
+// reg=dst, rm=src). The op is two-address — dst is also the first source — so
+// selection ties it to the destination, matching the `addf`/`subf` shape.
+template FpArith for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: XMM,
+        src: XMM,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => OPCODE,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+instruction Addsd for [X86_64] : FpArith {
+    param MNEMONIC: String = "addsd";
+    param OPCODE: bits<8> = 0x58;
+
+    behavior {
+        dst = fadd(dst, src);
+    }
+}
+
+instruction Subsd for [X86_64] : FpArith {
+    param MNEMONIC: String = "subsd";
+    param OPCODE: bits<8> = 0x5C;
+
+    behavior {
+        dst = fsub(dst, src);
+    }
+}
+
+instruction Mulsd for [X86_64] : FpArith {
+    param MNEMONIC: String = "mulsd";
+    param OPCODE: bits<8> = 0x59;
+
+    behavior {
+        dst = fmul(dst, src);
+    }
+}
+
+instruction Divsd for [X86_64] : FpArith {
+    param MNEMONIC: String = "divsd";
+    param OPCODE: bits<8> = 0x5E;
+
+    behavior {
+        dst = fdiv(dst, src);
+    }
+}
+
+// `movsd xmm_dst, xmm_src` (F2 0F 10 /r): register-to-register scalar-double
+// move. Emitted by register allocation to copy a value before a two-address FP
+// op overwrites it; the reg/rm layout matches `FpArith`.
+instruction Movsd for [X86_64] {
+    param MNEMONIC: String = "movsd";
+
+    operands {
+        dst: XMM,
+        src: XMM,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x10,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = src;
+    }
+}
