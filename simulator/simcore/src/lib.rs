@@ -11,7 +11,9 @@
 
 pub mod error;
 mod executor;
+pub mod memsys;
 pub mod predictor;
+pub mod prefetch;
 mod program;
 pub mod scoreboard;
 pub mod timing;

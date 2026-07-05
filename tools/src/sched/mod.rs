@@ -90,6 +90,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     // Collect the region's machine instructions in program order, resolving each to
     // its scheduling class and the physical registers it reads/writes.
     let asm_printer = target.asm_printer(&context);
+    let prf = Prf::for_target(&target.register_info(), &model);
     let mut op_ids = Vec::new();
     collect_instructions(&context, module.body(), &mut op_ids);
 
@@ -107,9 +108,11 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         base.push(ScoreboardInstr {
             text,
             class: model.sched_class(mnemonic),
-            defs: phys_regs(&regs.defs),
-            uses: phys_regs(&regs.uses),
+            defs: phys_regs(&regs.defs, Some(&prf)),
+            uses: phys_regs(&regs.uses, Some(&prf)),
             branch: None,
+            pc: 0,
+            mem: Vec::new(),
         });
     }
 
@@ -117,7 +120,6 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         return Err("no machine instructions found in input".into());
     }
 
-    let prf = Prf::for_target(&target.register_info(), &model);
     let mut handler = event::make(args.view);
     scoreboard::run(
         &model,
@@ -126,6 +128,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         &TimingConfig::for_model(&model),
         None,
         Some(&prf),
+        None,
         Some(handler.as_mut()),
     );
     print!("{}", handler.render());

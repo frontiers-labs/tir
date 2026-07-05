@@ -25,6 +25,15 @@ enum BlockExit {
     Halted,
 }
 
+/// A single data-memory access performed by a retired instruction, captured
+/// into the trace so a timing model can drive a memory hierarchy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MemAccess {
+    pub addr: u64,
+    pub size: u8,
+    pub is_write: bool,
+}
+
 /// What the simulation should do after an exception handler ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExceptionAction {
@@ -69,6 +78,15 @@ pub struct Executor {
     pc_explicitly_written: bool,
     record_trace: bool,
     trace: Vec<(tir::OpId, u64)>,
+    /// Data-memory accesses per retired instruction, kept exactly parallel to
+    /// `trace` (empty inner vec for non-memory instructions).
+    mem_trace: Vec<Vec<MemAccess>>,
+    /// Accesses of the instruction currently executing. Interior-mutable because
+    /// `read_memory` takes `&self`; drained into `mem_trace` after each execute.
+    mem_stage: std::cell::RefCell<Vec<MemAccess>>,
+    /// Set only around a machine instruction's `execute`, so instruction-fetch
+    /// reads in the decode-on-fetch path are not captured.
+    capturing_mem: bool,
     /// Registers backed by performance counters (e.g. the RISC-V `cycle` CSR):
     /// reads return the counter value, writes are ignored.
     counter_registers: HashMap<(String, u16), PerfCounter>,
@@ -316,6 +334,24 @@ impl Executor {
         &self.trace
     }
 
+    /// Data-memory accesses per retired instruction, parallel to [`Executor::trace`].
+    pub fn mem_trace(&self) -> &[Vec<MemAccess>] {
+        &self.mem_trace
+    }
+
+    /// Run `execute`, capturing its data-memory accesses, then drain them into
+    /// `mem_trace` (in lockstep with the `trace` push) when recording.
+    fn execute_capturing(&mut self, machine_inst: &dyn MachineInstruction) -> Result<(), SimTrap> {
+        self.capturing_mem = true;
+        let result = machine_inst.execute(self);
+        self.capturing_mem = false;
+        let accesses: Vec<MemAccess> = self.mem_stage.get_mut().drain(..).collect();
+        if self.record_trace {
+            self.mem_trace.push(accesses);
+        }
+        result
+    }
+
     /// Decode the instruction at `pc` without executing it, using whichever fetch
     /// path is configured (decode-on-fetch memory + decoder, or a loaded
     /// [`ProgramImage`]). Lets a timing model walk down a *mispredicted* (never
@@ -420,7 +456,7 @@ impl Executor {
             }
             self.pc = pc;
             self.pc_explicitly_written = false;
-            machine_inst.execute(self)?;
+            self.execute_capturing(machine_inst.as_ref())?;
             self.retired_instructions += 1;
             if trace.registers_after_each_instruction {
                 self.emit_register_dump(out, "registers");
@@ -508,7 +544,7 @@ impl Executor {
             // (`PC::pc`) resolve correctly even mid-block.
             self.pc = inst_pc;
             self.pc_explicitly_written = false;
-            machine_inst.execute(self)?;
+            self.execute_capturing(machine_inst.as_ref())?;
             self.retired_instructions += 1;
             if trace.registers_after_each_instruction {
                 self.emit_register_dump(out, "registers");
@@ -664,6 +700,13 @@ impl MachineContext for Executor {
         for (offset, byte) in self.memory[start..end].iter().enumerate() {
             value |= u64::from(*byte) << (offset * 8);
         }
+        if self.record_trace && self.capturing_mem {
+            self.mem_stage.borrow_mut().push(MemAccess {
+                addr: address,
+                size: size as u8,
+                is_write: false,
+            });
+        }
         Ok(value)
     }
 
@@ -680,6 +723,13 @@ impl MachineContext for Executor {
         }
         for offset in 0..size {
             self.memory[start + offset] = ((value >> (offset * 8)) & 0xFF) as u8;
+        }
+        if self.record_trace && self.capturing_mem {
+            self.mem_stage.get_mut().push(MemAccess {
+                addr: address,
+                size: size as u8,
+                is_write: true,
+            });
         }
         Ok(())
     }
@@ -955,6 +1005,60 @@ mod tests {
             MachineContext::read_memory(&executor, data + 4, 4).unwrap(),
             0x1234_5678
         );
+    }
+
+    #[test]
+    fn mem_trace_records_loads_and_stores_parallel_to_trace() {
+        use tir::backend::MachineContext;
+
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let dialect = context.find_dialect::<RiscvDialect>().unwrap();
+        // Reverse declaration order: `first` executes at 0x8000_0000 and falls
+        // through to `last` at 0x8000_000c after three instructions.
+        let asm = "
+            .global last
+            last:
+              add x0, x0, x0
+            .global first
+            first:
+              lw  x2, 0(x1)
+              sw  x2, 4(x1)
+              add x3, x2, x2
+        ";
+        let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
+        let base = 0x8000_0000;
+        let program = ProgramImage::from_module(&context, module, base, Some("first")).unwrap();
+
+        let data = base + 0x100;
+        let mut executor = Executor::new_at(4096, base);
+        executor.enable_trace_recording();
+        MachineContext::write_register(&mut executor, "GPR", 1, APInt::new(64, data)).unwrap();
+        MachineContext::write_memory(&mut executor, data, 4, 0x1234_5678).unwrap();
+        executor.load(program).unwrap();
+        executor.run(0x8000_000c, 10).unwrap();
+
+        assert_eq!(executor.trace().len(), 3);
+        assert_eq!(executor.mem_trace().len(), executor.trace().len());
+        assert_eq!(
+            executor.mem_trace()[0],
+            vec![crate::MemAccess {
+                addr: data,
+                size: 4,
+                is_write: false,
+            }]
+        );
+        assert_eq!(
+            executor.mem_trace()[1],
+            vec![crate::MemAccess {
+                addr: data + 4,
+                size: 4,
+                is_write: true,
+            }]
+        );
+        assert!(executor.mem_trace()[2].is_empty(), "add touches no memory");
     }
 
     #[test]

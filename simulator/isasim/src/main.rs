@@ -4,6 +4,7 @@
 //! report. See `docs/design/simulator.md`.
 
 use clap::Parser;
+use tir_sim::memsys::{CacheParams, MemParams, MemStats, MemorySystem};
 use tir_sim::scoreboard::{EventHandler, Prf};
 use tir_sim::timing::{self, TimingConfig};
 use tir_sim::{Executor, ProgramImage, TraceOptions};
@@ -64,6 +65,14 @@ struct Cli {
     /// Branch predictor for `--timing`: `not-taken`, `btfn`, `tage`, or `batage`.
     #[arg(long, default_value = "btfn")]
     predictor: String,
+    /// Memory hierarchy for `--timing`: `none` (fixed latency, default),
+    /// `a720-like`, `a520-like`, or `test` (a tiny hierarchy for lit tests).
+    #[arg(long, default_value = "none")]
+    mem_model: String,
+    /// Data prefetcher for `--timing` (requires `--mem-model`): `none` (default),
+    /// `next-line`, or `stride`.
+    #[arg(long, default_value = "none")]
+    prefetcher: String,
     /// Tunable parameters for `tage`/`batage`, as `key=value,...` (e.g.
     /// `tables=12,min_hist=4,max_hist=640,log_table=10,tag_bits=12,ctr_bits=3`).
     #[arg(long, default_value = "")]
@@ -263,6 +272,25 @@ fn report_timing(
             .collect();
         konata::KonataView::new(labels)
     });
+    let mut mem = mem_model(&args.mem_model);
+    match (mem.as_mut(), args.prefetcher.as_str()) {
+        (Some(mem), name) => {
+            if let Some(pf) = tir_sim::prefetch::prefetcher_by_name(name, mem.line())
+                .unwrap_or_else(|error| {
+                    eprintln!("{error}");
+                    std::process::exit(2);
+                })
+            {
+                mem.set_prefetcher(pf);
+            }
+        }
+        (None, "none") => {}
+        (None, _) => {
+            eprintln!("--prefetcher requires --mem-model");
+            std::process::exit(2);
+        }
+    }
+    let mem_trace = mem.as_ref().map(|_| executor.mem_trace());
     let result = timing::simulate(
         model,
         context,
@@ -270,6 +298,8 @@ fn report_timing(
         &config,
         predictor.as_mut(),
         Some(&prf),
+        mem_trace,
+        mem.as_mut(),
         konata_view.as_mut().map(|v| v as &mut dyn EventHandler),
     );
     if let Some(view) = konata_view.as_mut() {
@@ -292,6 +322,80 @@ fn report_timing(
         result.ipc(),
         result.mispredicts,
     );
+    if let Some(mem) = &mem {
+        print_mem_stats(mem.stats(), args.prefetcher != "none");
+    }
+}
+
+/// Print one line per cache level plus DRAM and writeback totals, in a stable
+/// FileCheck-friendly format.
+fn print_mem_stats(stats: &MemStats, prefetching: bool) {
+    let line = |name: &str, s: &tir_sim::memsys::LevelStats| {
+        println!(
+            "mem[{name}]: {} accesses, {} hits, {} misses",
+            s.accesses, s.hits, s.misses
+        );
+    };
+    line("l1i", &stats.l1i);
+    line("l1d", &stats.l1d);
+    line("l2", &stats.l2);
+    line("l3", &stats.l3);
+    println!("mem[dram]: {} accesses", stats.dram_accesses);
+    println!("mem[writebacks]: {}", stats.writebacks);
+    if prefetching {
+        let p = stats.prefetch;
+        println!(
+            "mem[pf]: {} issued, {} useful, {} late",
+            p.issued, p.useful, p.late
+        );
+    }
+}
+
+/// Build the memory hierarchy for `--mem-model`, or `None` for the default
+/// fixed-latency model. Presets approximate measured Cortex-A720/A520 caches
+/// (64-byte lines throughout); `test` is a tiny hierarchy so lit tests can force
+/// misses with small footprints. Exits on an unknown name.
+fn mem_model(name: &str) -> Option<MemorySystem> {
+    let c = |size, ways, latency, banks, mshrs| CacheParams {
+        size,
+        ways,
+        line: 64,
+        latency,
+        banks,
+        mshrs,
+    };
+    let params = match name {
+        "none" => return None,
+        "a720-like" => MemParams {
+            l1i: c(64 << 10, 4, 4, 2, 8),
+            l1d: c(64 << 10, 4, 4, 4, 12),
+            l2: Some(c(512 << 10, 8, 9, 4, 24)),
+            l3: Some(c(6 << 20, 12, 16, 8, 32)),
+            dram_latency: 439,
+            dram_streams: 20,
+        },
+        "a520-like" => MemParams {
+            l1i: c(32 << 10, 4, 5, 2, 4),
+            l1d: c(32 << 10, 4, 5, 2, 8),
+            l2: Some(c(4 << 20, 8, 74, 4, 16)),
+            l3: None,
+            dram_latency: 453,
+            dram_streams: 24,
+        },
+        "test" => MemParams {
+            l1i: c(4 << 10, 4, 2, 1, 4),
+            l1d: c(4 << 10, 4, 2, 1, 4),
+            l2: Some(c(16 << 10, 8, 8, 1, 8)),
+            l3: None,
+            dram_latency: 50,
+            dram_streams: 4,
+        },
+        other => {
+            eprintln!("unknown --mem-model '{other}' (one of: none, a720-like, a520-like, test)");
+            std::process::exit(2);
+        }
+    };
+    Some(MemorySystem::new(params))
 }
 
 /// Recover the wrong-path (speculative) instruction stream under each

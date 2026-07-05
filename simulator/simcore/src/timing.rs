@@ -12,6 +12,8 @@ use tir::backend::sched::{InstrSchedClass, MachineModel};
 use tir::backend::{ControlFlow, MachineInstruction};
 use tir::{Context, OpId};
 
+use crate::MemAccess;
+use crate::memsys::MemorySystem;
 use crate::predictor::BranchPredictor;
 use crate::scoreboard::{self, BranchOutcome, EventHandler, Prf, ScoreboardInstr, phys_regs};
 
@@ -26,6 +28,11 @@ pub use crate::scoreboard::{TimingConfig, TimingResult};
 /// Only [`ControlFlow::Conditional`] instructions are predictor-scored: an
 /// unconditional transfer's target is known at decode, so it flows through the
 /// scoreboard as an ordinary instruction with its scheduled cost.
+/// `mem_trace`, when supplied, holds the data-memory accesses per trace entry
+/// (same length as `trace`) recorded by the executor; together with `mem` (the
+/// hierarchy) it makes load/store latency state-dependent. Both `None` keeps the
+/// fixed-latency behavior.
+#[allow(clippy::too_many_arguments)]
 pub fn simulate(
     model: &MachineModel,
     context: &Context,
@@ -33,6 +40,8 @@ pub fn simulate(
     config: &TimingConfig,
     predictor: &mut dyn BranchPredictor,
     prf: Option<&Prf>,
+    mem_trace: Option<&[Vec<MemAccess>]>,
+    mem: Option<&mut MemorySystem>,
     handler: Option<&mut dyn EventHandler>,
 ) -> TimingResult {
     // Pre-resolve each trace entry to its scheduling class, registers, and
@@ -45,7 +54,7 @@ pub fn simulate(
     }
     let mut pre = Vec::with_capacity(trace.len());
     let mut slots: Vec<ScoreboardInstr> = Vec::with_capacity(trace.len());
-    for (id, pc) in trace {
+    for (i, (id, pc)) in trace.iter().enumerate() {
         let op = context.get_op(*id);
         let mi = op.clone().as_interface::<dyn MachineInstruction>();
         let (class, width, is_branch) = match &mi {
@@ -65,9 +74,11 @@ pub fn simulate(
         slots.push(ScoreboardInstr {
             text: String::new(),
             class,
-            defs: phys_regs(&regs.defs),
-            uses: phys_regs(&regs.uses),
+            defs: phys_regs(&regs.defs, prf),
+            uses: phys_regs(&regs.uses, prf),
             branch: None,
+            pc: *pc,
+            mem: mem_trace.map(|mt| mt[i].clone()).unwrap_or_default(),
         });
     }
 
@@ -93,7 +104,7 @@ pub fn simulate(
         slots[i].branch = Some(BranchOutcome { pc, target, taken });
     }
 
-    scoreboard::run(model, &slots, 1, config, Some(predictor), prf, handler)
+    scoreboard::run(model, &slots, 1, config, Some(predictor), prf, mem, handler)
 }
 
 #[cfg(test)]
@@ -210,6 +221,8 @@ mod tests {
             &mut AlwaysNotTaken,
             None,
             None,
+            None,
+            None,
         )
     }
 
@@ -299,6 +312,8 @@ mod tests {
             &mut AlwaysNotTaken,
             None,
             None,
+            None,
+            None,
         );
         let btfn = simulate(
             &model,
@@ -306,6 +321,8 @@ mod tests {
             &trace,
             &config,
             &mut BackwardTaken,
+            None,
+            None,
             None,
             None,
         );
@@ -390,6 +407,8 @@ mod tests {
             &mut AlwaysNotTaken,
             None,
             None,
+            None,
+            None,
         );
         let btfn = simulate(
             &model,
@@ -397,6 +416,8 @@ mod tests {
             &trace,
             &config,
             &mut BackwardTaken,
+            None,
+            None,
             None,
             None,
         );
@@ -487,7 +508,7 @@ mod tests {
         let model = tir_riscv::out_of_order_core_model();
         let config = TimingConfig::for_model(&model);
         let run = |p: &mut dyn BranchPredictor| {
-            simulate(&model, &context, &trace, &config, p, None, None).mispredicts
+            simulate(&model, &context, &trace, &config, p, None, None, None, None).mispredicts
         };
 
         let params = TageParams {

@@ -23,7 +23,7 @@ describes the dynamics.*
 |---|---|---|
 | Instruction semantics | TMDL `behavior` | What an instruction does: register/memory/PC effects. Drives the functional executor (and isel — same single source of truth). |
 | Performance model | TMDL `unit`/`machine`/`schedule` | What the device offers (functional units, issue width, buffers, pipeline phases, forwarding) and what each instruction consumes (latency, rthroughput, units). Compiled to a `MachineModel` per machine. |
-| Microarchitecture dynamics | Rust (`tir-sim`) | How resources are scheduled over time: in-order vs. OOO windows, branch predictors, (future) caches and prefetchers. Swappable policies — the experiment surface. |
+| Microarchitecture dynamics | Rust (`tir-sim`) | How resources are scheduled over time: in-order vs. OOO windows, branch predictors, caches and prefetchers. Swappable policies — the experiment surface. |
 
 Adding an instruction to TMDL (semantics + `schedule` block) yields a working
 compiler *and* simulator with no Rust changes. Sweeping a microarchitecture
@@ -44,6 +44,8 @@ simulator/simcore   (tir-sim)   the simulation library
 ├── scoreboard.rs   shared cycle-assignment engine + Prf + TimingConfig
 ├── timing.rs       trace-replay adapter over the scoreboard
 ├── predictor.rs    BranchPredictor trait + static policies (not-taken, BTFN)
+├── memsys.rs       memory hierarchy (caches, MSHRs, banks, DRAM)
+├── prefetch.rs     Prefetcher trait + next-line / stride-RPT policies
 └── error.rs
 
 simulator/isasim    (tir-isasim) the dynamic CLI
@@ -119,6 +121,31 @@ The two callers differ only in how they construct the instruction stream:
 | Dependencies | reconstructed from phys regs | same |
 | Result | report views | one summary line |
 
+## Memory hierarchy
+
+`--mem-model` (dynamic mode only) swaps the fixed per-class load latency for a
+stateful hierarchy (`memsys.rs`) fed by the real addresses the functional run
+recorded: split L1I/L1D, optional L2/L3, then DRAM. Each level is
+set-associative with LRU replacement and write-back/write-allocate; misses
+occupy MSHRs (same-line misses merge onto the outstanding fill), banks
+serialize concurrent accesses, and DRAM bounds memory-level parallelism to a
+stream count. Lookups are speculative, as on ARM cores: each level forwards
+the request downward at probe start and cancels it on a hit, so a level's
+latency is its absolute load-to-use latency and hardware-measured plateaus
+plug in directly. A load's completion
+extends to its fill cycle (never below its scheduled latency); stores are
+charged for bank/writeback effects but retire at their static latency. The
+front end consults L1I per fetched line — only a miss stalls dispatch — and
+always fetches one line ahead (hardware-style instruction prefetch, dropped
+when redundant).
+Presets: `a720-like`, `a520-like` (approximating measured Cortex-A720/A520
+hierarchies), `test` (tiny, for lit tests); `none` (default) keeps the fixed
+latency. `--prefetcher=next-line|stride` attaches a data prefetcher
+(`prefetch.rs`) trained on the demand stream; its speculative fills compete
+for the same MSHRs/banks and are dropped when the table is full. Per-level
+hit/miss counters plus prefetch issued/useful/late are printed after the
+timing line.
+
 ## CLI conventions (snippet mode)
 
 Today's input is a bare `.S` snippet, not an ELF. The conventions exist to
@@ -138,8 +165,11 @@ make small tests writable:
 
 - Indirect transfers (`jalr`/`br`/`ret`) are costed like direct ones: no
   BTB/RAS modeling, so an indirect-target mispredict is never charged.
-- No cache or memory-latency modeling: loads cost their scheduled latency
-  regardless of address, although the trace already carries real addresses.
+- The memory hierarchy is cycle-approximate, not faithful: coarse bank
+  occupancy, a store buffer approximated by retiring stores at their static
+  latency, and instruction fetch-ahead fixed at one line (deep-level code
+  streams slower than hardware's deeper fetch queues). `--mem-model=none`
+  remains the default.
 - Timing is replay-only — no wrong-path effects, no speculative state.
 - Memory is one flat region at `--mem-start-address`; no permissions, no
   sparse segments.
@@ -152,9 +182,9 @@ make small tests writable:
 1. **Indirect-branch prediction** — BTB + return-address stack policies in
    `predictor.rs`, scored on `Unconditional` transfers whose target comes from
    a register.
-2. **Caches & prefetchers** — swappable Rust policies (set-associative, RRIP,
-   stride prefetch) fed by the trace's real addresses; stall attribution in
-   the report.
+2. ~~**Caches & prefetchers**~~ — done: `--mem-model` / `--prefetcher` (see
+   *Memory hierarchy*). Remaining: alternative replacement policies (RRIP)
+   and stall attribution in the report.
 3. **Syscall-emulation mode** — load static ELF executables (segments →
    sparse memory regions, entry from the header), emulate a small Linux
    syscall surface (`exit`, `write`, `brk`, …) so real `main()`s run; replaces
