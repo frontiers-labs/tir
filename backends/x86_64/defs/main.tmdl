@@ -151,6 +151,37 @@ register_class GPR8H for [X86] {
     }
 }
 
+// Memory-base operand views over the GPR file, selected post-RA when a base
+// register lands on a ModR/M escape. Neither carries `argument` traits, so
+// `default_integer_class` still resolves to GPR; they share the file
+// (`file = GPR`) and alias index-for-index, and are never allocation classes.
+
+// rsp (4) and r12 (12) share ModR/M low bits 100, which as a memory operand's rm
+// field means "a SIB byte follows". A base here selects a `_sib` variant.
+register_class GPRsib for [X86_64] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rsp => { index = 4, traits = [stack_pointer, callee_saved] },
+        r12 => { index = 12, traits = [callee_saved] },
+    }
+}
+
+// rbp (5) and r13 (13) share ModR/M low bits 101, which with mod=00 means
+// RIP-relative disp32. A base here selects a `_rbp` variant (mod=01, disp8=0).
+register_class GPRrbp for [X86_64] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rbp => { index = 5, traits = [callee_saved] },
+        r13 => { index = 13, traits = [callee_saved] },
+    }
+}
+
 // `op dst, src`: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst). The REX byte
 // is 0100 WRXB: REX.B carries dst's 4th bit, REX.R carries src's.
 tmpl_rr!(RegReg, X86_64, GPR, rexw = 0b1)

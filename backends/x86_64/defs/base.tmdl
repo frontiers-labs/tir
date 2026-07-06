@@ -185,6 +185,120 @@ instruction Ret for [X86_64] {
     }
 }
 
+// ModR/M-escape variants of the mov load/store. Declared before the generic
+// forms so the assembler tries them first: a `_sib`/`_rbp` candidate parses its
+// base only in the narrow class (rsp/r12, rbp/r13), falling through to the
+// generic for every other base. Post-RA `canonicalize_encodings` selects them
+// for codegen. Behaviors match the generic forms.
+
+instruction MovLoadSib for [X86_64] {
+    param OPNAME: String = "mov_load_sib";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR,
+        base: GPRsib,
+    }
+
+    encoding {
+        rex!({ base[3] }, { dst[3] }, 0b1)
+        8..15 => 0x8B,
+        16..18 => 0b100,
+        19..21 => dst[0..2],
+        22..23 => 0b00,
+        24..31 => 0x24,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base}]"
+    }
+
+    behavior {
+        dst = load(base, 8, 0b0);
+    }
+}
+
+instruction MovLoadRbp for [X86_64] {
+    param OPNAME: String = "mov_load_rbp";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR,
+        base: GPRrbp,
+    }
+
+    encoding {
+        rex!({ base[3] }, { dst[3] }, 0b1)
+        8..15 => 0x8B,
+        16..18 => 0b101,
+        19..21 => dst[0..2],
+        22..23 => 0b01,
+        24..31 => 0x00,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base}]"
+    }
+
+    behavior {
+        dst = load(base, 8, 0b0);
+    }
+}
+
+instruction MovStoreSib for [X86_64] {
+    param OPNAME: String = "mov_store_sib";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        base: GPRsib,
+        src: GPR,
+    }
+
+    encoding {
+        rex!({ base[3] }, { src[3] }, 0b1)
+        8..15 => 0x89,
+        16..18 => 0b100,
+        19..21 => src[0..2],
+        22..23 => 0b00,
+        24..31 => 0x24,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base}], {src}"
+    }
+
+    behavior {
+        store(base, 8, src);
+    }
+}
+
+instruction MovStoreRbp for [X86_64] {
+    param OPNAME: String = "mov_store_rbp";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        base: GPRrbp,
+        src: GPR,
+    }
+
+    encoding {
+        rex!({ base[3] }, { src[3] }, 0b1)
+        8..15 => 0x89,
+        16..18 => 0b101,
+        19..21 => src[0..2],
+        22..23 => 0b01,
+        24..31 => 0x00,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base}], {src}"
+    }
+
+    behavior {
+        store(base, 8, src);
+    }
+}
+
 instruction MovLoad for [X86_64] {
     param OPNAME: String = "mov_load";
     param MNEMONIC: String = "mov";

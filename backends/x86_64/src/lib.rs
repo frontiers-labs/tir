@@ -120,6 +120,10 @@ mod isa {
                 // Memory operands
                 MovLoadOp,
                 MovStoreOp,
+                MovLoadSibOp,
+                MovLoadRbpOp,
+                MovStoreSibOp,
+                MovStoreRbpOp,
                 // EFLAGS definers
                 CmpOp,
                 TestOp,
@@ -267,6 +271,27 @@ mod isa {
                 Mov8StoreOp,
                 MovLoadDispOp,
                 MovStoreDispOp,
+                // ModR/M-escape variants (base rsp/rbp/r12/r13)
+                Movzx8LoadSibOp,
+                Movzx8LoadRbpOp,
+                Movzx16LoadSibOp,
+                Movzx16LoadRbpOp,
+                Movsx8LoadSibOp,
+                Movsx8LoadRbpOp,
+                Movsx16LoadSibOp,
+                Movsx16LoadRbpOp,
+                MovsxdLoadSibOp,
+                MovsxdLoadRbpOp,
+                Mov32LoadSibOp,
+                Mov32LoadRbpOp,
+                Mov32StoreSibOp,
+                Mov32StoreRbpOp,
+                Mov16StoreSibOp,
+                Mov16StoreRbpOp,
+                Mov8StoreSibOp,
+                Mov8StoreRbpOp,
+                MovLoadDispSibOp,
+                MovStoreDispSibOp,
                 PushOp,
                 PopOp,
                 LeaRipOp,
@@ -569,6 +594,141 @@ mod isa {
             rewriter.replace_op(op, copy.as_ref())?;
         }
         Ok(true)
+    }
+
+    /// Post-RA: a memory operand whose allocated base is rsp/r12 (ModR/M rm=100)
+    /// or rbp/r13 with mod=00 (rm=101) needs an escape the generic encoding
+    /// omits — a SIB byte for the former, a mod=01 zero disp8 for the latter —
+    /// or the byte stream desyncs. Rewrite each affected op to its `_sib`/`_rbp`
+    /// variant now that the base is physical. The disp (mod=10) forms only need
+    /// the SIB variant; rbp/r13 are already legal there.
+    fn canonicalize_encodings(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        fn base_index(op: &dyn Operation) -> Option<u16> {
+            op.attributes().iter().find_map(|a| match &a.value {
+                AttributeValue::Register(RegisterAttr::Physical { index, .. })
+                    if a.name == "base" =>
+                {
+                    Some(*index)
+                }
+                _ => None,
+            })
+        }
+        fn attr(op: &dyn Operation, name: &str) -> AttributeValue {
+            op.attributes()
+                .iter()
+                .find(|a| a.name == name)
+                .map(|a| a.value.clone())
+                .expect("memory op operand attribute present")
+        }
+        let replace = |rewriter: &mut tir::Rewriter, new_op: Box<dyn Operation>| {
+            rewriter.replace_op(op, new_op.as_ref()).map(|()| true)
+        };
+
+        macro_rules! escape {
+            ($Op:ty, $Sib:ident, $Rbp:ident, [$($a:literal),*]) => {
+                if let Some(inner) = op.as_op::<$Op>() {
+                    let Some(idx) = base_index(&inner) else { return Ok(false); };
+                    return match idx {
+                        4 | 12 => replace(
+                            rewriter,
+                            Box::new($Sib::new(context)$(.attr($a, attr(&inner, $a)))*.build()),
+                        ),
+                        5 | 13 => replace(
+                            rewriter,
+                            Box::new($Rbp::new(context)$(.attr($a, attr(&inner, $a)))*.build()),
+                        ),
+                        _ => Ok(false),
+                    };
+                }
+            };
+            (sib $Op:ty, $Sib:ident, [$($a:literal),*]) => {
+                if let Some(inner) = op.as_op::<$Op>() {
+                    let Some(idx) = base_index(&inner) else { return Ok(false); };
+                    if matches!(idx, 4 | 12) {
+                        return replace(
+                            rewriter,
+                            Box::new($Sib::new(context)$(.attr($a, attr(&inner, $a)))*.build()),
+                        );
+                    }
+                    return Ok(false);
+                }
+            };
+        }
+
+        escape!(
+            MovLoadOp,
+            MovLoadSibOpBuilder,
+            MovLoadRbpOpBuilder,
+            ["dst", "base"]
+        );
+        escape!(
+            MovStoreOp,
+            MovStoreSibOpBuilder,
+            MovStoreRbpOpBuilder,
+            ["base", "src"]
+        );
+        escape!(
+            Movzx8LoadOp,
+            Movzx8LoadSibOpBuilder,
+            Movzx8LoadRbpOpBuilder,
+            ["dst", "base"]
+        );
+        escape!(
+            Movzx16LoadOp,
+            Movzx16LoadSibOpBuilder,
+            Movzx16LoadRbpOpBuilder,
+            ["dst", "base"]
+        );
+        escape!(
+            Movsx8LoadOp,
+            Movsx8LoadSibOpBuilder,
+            Movsx8LoadRbpOpBuilder,
+            ["dst", "base"]
+        );
+        escape!(
+            Movsx16LoadOp,
+            Movsx16LoadSibOpBuilder,
+            Movsx16LoadRbpOpBuilder,
+            ["dst", "base"]
+        );
+        escape!(
+            MovsxdLoadOp,
+            MovsxdLoadSibOpBuilder,
+            MovsxdLoadRbpOpBuilder,
+            ["dst", "base"]
+        );
+        escape!(
+            Mov32LoadOp,
+            Mov32LoadSibOpBuilder,
+            Mov32LoadRbpOpBuilder,
+            ["dst", "base"]
+        );
+        escape!(
+            Mov32StoreOp,
+            Mov32StoreSibOpBuilder,
+            Mov32StoreRbpOpBuilder,
+            ["base", "src"]
+        );
+        escape!(
+            Mov16StoreOp,
+            Mov16StoreSibOpBuilder,
+            Mov16StoreRbpOpBuilder,
+            ["base", "src"]
+        );
+        escape!(
+            Mov8StoreOp,
+            Mov8StoreSibOpBuilder,
+            Mov8StoreRbpOpBuilder,
+            ["base", "src"]
+        );
+        escape!(sib MovLoadDispOp, MovLoadDispSibOpBuilder, ["dst", "base", "imm"]);
+        escape!(sib MovStoreDispOp, MovStoreDispSibOpBuilder, ["base", "imm", "src"]);
+
+        Ok(false)
     }
 
     /// Post-RA: `vret` becomes `ret`; `vbr` becomes `jmp dest`.
@@ -925,7 +1085,7 @@ mod isa {
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![finalize_virtual_ops]
+            vec![canonicalize_encodings, finalize_virtual_ops]
         }
 
         fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
@@ -995,6 +1155,63 @@ mod isa {
     }
 
     tir::register_target!(select_x86_64, ["x86_64"]);
+
+    #[cfg(test)]
+    mod canonicalize_tests {
+        use super::*;
+        use tir::backend::lower::OpLoweringPass;
+        use tir::builtin::{ModuleEndOpBuilder, ModuleOpBuilder};
+        use tir::{IRBuilder, IRFormatter, PassManager};
+
+        /// Rewrite a `mov_load` whose base is the physical register `base_index`
+        /// and return the printed IR of the (single) resulting op.
+        fn rewrite_load(base_index: u16) -> String {
+            let context = tir::Context::with_default_dialects();
+            context.register_dialect::<X86_64Dialect>();
+            let module = ModuleOpBuilder::new(&context).build();
+            let mut b = IRBuilder::new(module.body());
+            b.insert(
+                MovLoadOpBuilder::new(&context)
+                    .attr("dst", phys("GPR", 0))
+                    .attr("base", phys("GPR", base_index))
+                    .build(),
+            );
+            b.insert(ModuleEndOpBuilder::new(&context).build());
+
+            let mut pm = PassManager::new();
+            pm.add_pass(OpLoweringPass::new(
+                "canonicalize-encodings",
+                vec![canonicalize_encodings],
+            ));
+            pm.run(&context, context.get_op(module.id()))
+                .expect("canonicalize pass runs");
+
+            let mut buf = String::new();
+            let mut fmt = IRFormatter::new(&mut buf);
+            module.print(&mut fmt).expect("print module");
+            buf
+        }
+
+        #[test]
+        fn rsp_and_r12_bases_take_the_sib_form() {
+            assert!(rewrite_load(4).contains("mov_load_sib"));
+            assert!(rewrite_load(12).contains("mov_load_sib"));
+        }
+
+        #[test]
+        fn rbp_and_r13_bases_take_the_rbp_form() {
+            assert!(rewrite_load(5).contains("mov_load_rbp"));
+            assert!(rewrite_load(13).contains("mov_load_rbp"));
+        }
+
+        #[test]
+        fn ordinary_bases_are_left_generic() {
+            let ir = rewrite_load(3);
+            assert!(ir.contains("mov_load"));
+            assert!(!ir.contains("mov_load_sib"));
+            assert!(!ir.contains("mov_load_rbp"));
+        }
+    }
 }
 
 #[cfg(test)]
