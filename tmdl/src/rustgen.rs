@@ -237,7 +237,7 @@ fn emit_instructions<'a>(
     let mut instruction_encoder_map_inits: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_patcher_map_inits: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_impls: Vec<proc_macro2::TokenStream> = vec![];
-    let mut instruction_decoder_dispatch: Vec<proc_macro2::TokenStream> = vec![];
+    let mut instruction_decoder_dispatch: Vec<(u128, proc_macro2::Ident)> = vec![];
 
     // `(class, register-name) -> encoding index` over every register class, so the
     // simulator can lower register paths that carry no numeric index in their name
@@ -1457,7 +1457,7 @@ fn emit_instructions<'a>(
             }
         }
 
-        if let Some((decoder, decode_fn_ident)) = emit_instruction_decoder(
+        if let Some((decoder, decode_fn_ident, fixed_mask)) = emit_instruction_decoder(
             inst,
             &encoding_arms,
             &ops_map,
@@ -1465,11 +1465,7 @@ fn emit_instructions<'a>(
             width_bytes,
         ) {
             instruction_decoder_impls.push(decoder);
-            instruction_decoder_dispatch.push(quote! {
-                if let Some(id) = #decode_fn_ident(context, word) {
-                    return Some(id);
-                }
-            });
+            instruction_decoder_dispatch.push((fixed_mask, decode_fn_ident));
         }
     }
 
@@ -1484,6 +1480,22 @@ fn emit_instructions<'a>(
         &mut isel_rule_emitters,
         &mut isel_rule_inits,
     )?;
+
+    // Most-specific-wins: try encodings that fix more opcode bits first, so a
+    // more-general encoding declared earlier cannot shadow a specific one that
+    // should claim the word. `sort_by` is stable, preserving declaration order
+    // among equally-specific encodings.
+    instruction_decoder_dispatch.sort_by(|a, b| b.0.count_ones().cmp(&a.0.count_ones()));
+    let instruction_decoder_dispatch: Vec<proc_macro2::TokenStream> = instruction_decoder_dispatch
+        .into_iter()
+        .map(|(_, ident)| {
+            quote! {
+                if let Some(id) = #ident(context, word) {
+                    return Some(id);
+                }
+            }
+        })
+        .collect();
 
     Ok(quote! {
         #(#instruction_defs)*
@@ -1539,8 +1551,9 @@ fn emit_instructions<'a>(
 
         /// Decode a 32-bit little-endian machine word into a freshly-built op in
         /// `context`, returning its id, or `None` if no instruction matches.
-        /// Instructions are tried in declaration order; each matches on its fixed
-        /// opcode bits and reconstructs its operands from the word.
+        /// Instructions are tried most-specific-first (by count of fixed opcode
+        /// bits); each matches on its fixed opcode bits and reconstructs its
+        /// operands from the word.
         pub fn decode_instruction(context: &tir::Context, word: u32) -> Option<tir::OpId> {
             #(#instruction_decoder_dispatch)*
             None
@@ -4848,7 +4861,7 @@ fn emit_instruction_decoder(
     ops_map: &HashMap<String, Type>,
     resolved_params: &HashMap<String, (Type, Option<ast::Expr>)>,
     width_bytes: u64,
-) -> Option<(proc_macro2::TokenStream, proc_macro2::Ident)> {
+) -> Option<(proc_macro2::TokenStream, proc_macro2::Ident, u128)> {
     if encoding_arms.is_empty() || width_bytes != 4 {
         return None;
     }
@@ -5020,5 +5033,5 @@ fn emit_instruction_decoder(
         }
     };
 
-    Some((decoder, decode_fn_ident))
+    Some((decoder, decode_fn_ident, fixed_mask))
 }

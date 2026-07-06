@@ -1,0 +1,80 @@
+// Decoder dispatch must be most-specific-first: an encoding that fixes more
+// opcode bits is tried before a more-general one that overlaps it, regardless
+// of declaration order. OpGeneral (declared first) fixes only the 7 opcode
+// bits; OpSpecific (declared second) fixes the opcode bits AND bits 12..14, so
+// its word is a strict subset of OpGeneral's. Without specificity ordering the
+// earlier, more-general OpGeneral would shadow OpSpecific.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa DecIsa {
+    param XLEN: Integer = 32;
+}
+
+register_class GPR for [DecIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0..x3 => { traits = [caller_saved] },
+    }
+}
+
+instruction OpGeneral for [DecIsa] {
+    param MNEMONIC: String = "opg";
+
+    operands {
+        rd: GPR,
+        f3: bits<3>,
+        rs1: GPR,
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..6 => 0b0010011,
+        7..11 => rd,
+        12..14 => f3,
+        15..19 => rs1,
+        20..31 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {imm}"
+    }
+
+    behavior {
+        rd = rs1 + sext(imm, self.XLEN);
+    }
+}
+
+instruction OpSpecific for [DecIsa] {
+    param MNEMONIC: String = "ops";
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..6 => 0b0010011,
+        7..11 => rd,
+        12..14 => 0,
+        15..19 => rs1,
+        20..31 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs1}, {imm}"
+    }
+
+    behavior {
+        rd = rs1 - sext(imm, self.XLEN);
+    }
+}
+
+// OpSpecific fixes more opcode bits, so the dispatcher tries it before the
+// more-general OpGeneral even though OpGeneral is declared first.
+// CHECK: fn decode_instruction(
+// CHECK: if let Some(id) = decode_opspecific_inst(context, word)
+// CHECK: if let Some(id) = decode_opgeneral_inst(context, word)
