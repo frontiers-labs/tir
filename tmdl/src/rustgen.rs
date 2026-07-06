@@ -552,7 +552,7 @@ fn emit_instructions<'a>(
                 let print_body = if text_only {
                     quote! {
                         if let tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Physical { class, index }) = &attr.value {
-                            if let Some(name) = register_name(class, *index, false) {
+                            if let Some(name) = register_name(class.name(), *index, false) {
                                 fmt.write(name)?;
                             } else {
                                 attr.value.print(fmt, &context)?;

@@ -87,16 +87,16 @@ impl tir::backend::regalloc::TargetRegAlloc for PtxRegAlloc {
         register_info()
     }
 
-    fn frame_register(&self) -> (String, u16) {
-        ("RD".to_string(), 15)
+    fn frame_register(&self) -> tir::backend::liveness::PhysReg {
+        (RegClass::RD.id(), 15)
     }
 
     fn emit_spill_store(
         &self,
         _context: &tir::Context,
         _value: u32,
-        _class: &str,
-        _frame: &(String, u16),
+        _class: tir::backend::regalloc::RegClassId,
+        _frame: &tir::backend::liveness::PhysReg,
         _offset: i64,
     ) -> Box<dyn tir::Operation> {
         panic!("PTX has no stack; register spilling is unsupported")
@@ -106,18 +106,28 @@ impl tir::backend::regalloc::TargetRegAlloc for PtxRegAlloc {
         &self,
         _context: &tir::Context,
         _value: u32,
-        _class: &str,
-        _frame: &(String, u16),
+        _class: tir::backend::regalloc::RegClassId,
+        _frame: &tir::backend::liveness::PhysReg,
         _offset: i64,
     ) -> Box<dyn tir::Operation> {
         panic!("PTX has no stack; register spilling is unsupported")
     }
 
-    fn emit_prologue(&self, _context: &tir::Context, _size: u32) -> Vec<Box<dyn tir::Operation>> {
+    fn emit_prologue(
+        &self,
+        _context: &tir::Context,
+        _size: u32,
+        _saves: &[(tir::backend::liveness::PhysReg, i64)],
+    ) -> Vec<Box<dyn tir::Operation>> {
         Vec::new()
     }
 
-    fn emit_epilogue(&self, _context: &tir::Context, _size: u32) -> Vec<Box<dyn tir::Operation>> {
+    fn emit_epilogue(
+        &self,
+        _context: &tir::Context,
+        _size: u32,
+        _saves: &[(tir::backend::liveness::PhysReg, i64)],
+    ) -> Vec<Box<dyn tir::Operation>> {
         Vec::new()
     }
 }

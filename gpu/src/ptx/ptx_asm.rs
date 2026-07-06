@@ -448,12 +448,10 @@ fn match_syntax(syntax: &InstrSyntax, toks: &[Tok]) -> Option<Vec<NamedAttribute
                         return None;
                     };
                     let (bank, index) = split_reg(reg)?;
+                    let class = super::register_info().class(&bank.to_uppercase())?;
                     attrs.push(NamedAttribute::new(
                         *name,
-                        AttributeValue::Register(RegisterAttr::Physical {
-                            class: bank.to_uppercase(),
-                            index,
-                        }),
+                        AttributeValue::Register(RegisterAttr::Physical { class, index }),
                     ));
                     pos += 1;
                 }
@@ -655,7 +653,7 @@ fn render_operand(op: &OpInstance, name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("op `{}` missing operand `{name}`", op.name))?;
     Ok(match value {
         AttributeValue::Register(RegisterAttr::Physical { class, index }) => {
-            format!("{}{}", class.to_lowercase(), index)
+            format!("{}{}", class.name().to_lowercase(), index)
         }
         AttributeValue::Register(RegisterAttr::Virtual { id, .. }) => format!("%virt{id}"),
         AttributeValue::Str(s) => s.clone(),
