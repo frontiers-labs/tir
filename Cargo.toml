@@ -73,6 +73,7 @@ lto = true
 # in backtraces, which is enough outside an interactive debugger session.
 [profile.dev]
 debug = "line-tables-only"
+split-debuginfo = "unpacked"
 
 # Backend build scripts link all of tmdl; without this each one is a ~220 MB
 # executable.
