@@ -4052,27 +4052,29 @@ fn emit_behavior_exec(
                 register_index_map,
                 reg_kinds,
             )?;
-            let else_body = if let Some(else_expr) = &i.else_ {
-                emit_behavior_exec(
-                    else_expr.as_ref(),
-                    ops,
-                    numeric_params,
-                    isa_param_values,
-                    mnemonic_lit,
-                    register_index_map,
-                    reg_kinds,
-                )?
-            } else {
-                quote! {}
+            // Omit the `else` arm for a guard with no else clause (e.g. a
+            // guarded CSR write), so codegen emits no empty `else {}`.
+            let else_arm = match &i.else_ {
+                Some(else_expr) => {
+                    let else_body = emit_behavior_exec(
+                        else_expr.as_ref(),
+                        ops,
+                        numeric_params,
+                        isa_param_values,
+                        mnemonic_lit,
+                        register_index_map,
+                        reg_kinds,
+                    )?;
+                    quote! { else { #else_body } }
+                }
+                None => quote! {},
             };
             Some(quote! {
                 {
                     #cond_eval
                     if value.to_u64() != 0 {
                         #then_body
-                    } else {
-                        #else_body
-                    }
+                    } #else_arm
                 }
             })
         }
@@ -4224,6 +4226,7 @@ fn emit_sym_inits(
     let max_sym_id = [
         lowering.variable_symbols.values().copied().max(),
         lowering.register_symbols.values().copied().max(),
+        lowering.regnum_symbols.values().copied().max(),
     ]
     .into_iter()
     .flatten()
@@ -4307,6 +4310,24 @@ fn emit_sym_inits(
         let number_lit = proc_macro2::Literal::u16_unsuffixed(*number as u16);
         steps.push(quote! {
             __syms[#sym_lit] = Some(tir::sem::value_from_register(machine.read_register(#class_lit, #number_lit)?));
+        });
+    }
+
+    // `regnum(op)` binds a symbol to the operand's encoding index. The index is
+    // an identity, not an arithmetic value; comparisons coerce by value and
+    // ignore width, so a plain 64-bit integer holds it.
+    for (name, &sym_id) in &lowering.regnum_symbols {
+        let sym_lit = proc_macro2::Literal::usize_unsuffixed(sym_id as usize);
+        let name_lit = proc_macro2::Literal::string(name);
+        steps.push(quote! {
+            {
+                let (_, index) = tir::backend::register_attr(self.attributes(), #name_lit)
+                    .ok_or(tir::backend::SimTrap::MissingAttribute {
+                        op: #mnemonic_lit,
+                        attribute: #name_lit,
+                    })?;
+                __syms[#sym_lit] = Some(tir::sem::int_value(64, index as u64));
+            }
         });
     }
 

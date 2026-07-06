@@ -781,8 +781,19 @@ fn coerce_smt(a: &SmtVal, b: &SmtVal) -> (String, String, u32, bool, bool) {
 }
 
 enum SmtSymbolInfo {
-    Register { class: String, number: u32 },
-    Variable { name: String },
+    Register {
+        class: String,
+        number: u32,
+    },
+    Variable {
+        name: String,
+    },
+    /// `regnum(op)`: the operand's encoding index. In the SMT encoding a
+    /// register operand is already passed as its index parameter, so this
+    /// resolves to that parameter directly (width `ENCODING_LEN`).
+    RegNum {
+        name: String,
+    },
 }
 
 struct SmtSymbolResolver<'a> {
@@ -825,6 +836,14 @@ impl SmtSymbolResolver<'_> {
             SmtSymbolInfo::Variable { name } if self.locals.contains_key(name) => {
                 Some(self.locals[name].clone())
             }
+            SmtSymbolInfo::RegNum { name } => match self.operands.get(name)? {
+                Type::Struct(rc) => Some(SmtVal::bv(
+                    name.to_lowercase(),
+                    ctx.idx_width(rc) as u32,
+                    false,
+                )),
+                _ => None,
+            },
             SmtSymbolInfo::Variable { name } => match self.operands.get(name)? {
                 Type::Struct(rc) => {
                     let rc = rc.to_lowercase();
@@ -1219,6 +1238,9 @@ impl BehaviorEmitter<'_> {
                     number: *number,
                 },
             );
+        }
+        for (name, id) in &lowering.regnum_symbols {
+            symbols.insert(*id, SmtSymbolInfo::RegNum { name: name.clone() });
         }
         let locals = self.locals.borrow();
         let resolver = SmtSymbolResolver {

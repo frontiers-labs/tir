@@ -488,6 +488,11 @@ pub enum BuiltinFunction {
     Clamp,
     Extract,
     Log2Ceil,
+    /// `regnum(op)`: the encoding index (architectural register number) of a
+    /// register operand, as `bits<ENCODING_LEN>` of the operand's class. Reads
+    /// the operand's identity, not the value it holds, so `regnum(rs1) != 0`
+    /// distinguishes `x0` from any other register regardless of its contents.
+    Regnum,
     SExt,
     ZExt,
     Load,
@@ -577,6 +582,11 @@ pub struct SemaLowering {
     pub root: tir::graph::NodeId,
     pub variable_symbols: HashMap<String, u32>,
     pub register_symbols: HashMap<(String, u32), u32>,
+    /// Operand name -> symbol id for `regnum(op)`: a symbol bound to the
+    /// operand's encoding index rather than its value. Kept apart from
+    /// `variable_symbols` so the same operand can appear both by value and by
+    /// index within one behavior.
+    pub regnum_symbols: HashMap<String, u32>,
 }
 
 struct SemaExprLoweringCtx<
@@ -598,6 +608,7 @@ struct SemaExprLoweringCtx<
     next_symbol_id: u32,
     register_symbols: HashMap<(String, u32), u32>,
     variable_symbols: HashMap<String, u32>,
+    regnum_symbols: HashMap<String, u32>,
     had_error: bool,
     /// Stack of `map`/`reduce` lambda parameter names, innermost last. An `Ident`
     /// matching a parameter of the innermost lambda lowers to an `Arg` node whose
@@ -617,6 +628,7 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPay
             next_symbol_id: 0,
             register_symbols: HashMap::new(),
             variable_symbols: HashMap::new(),
+            regnum_symbols: HashMap::new(),
             had_error: false,
             lambda_params: Vec::new(),
         }
@@ -635,6 +647,7 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPay
             next_symbol_id: 0,
             register_symbols: HashMap::new(),
             variable_symbols: HashMap::new(),
+            regnum_symbols: HashMap::new(),
             had_error: false,
             lambda_params: Vec::new(),
         }
@@ -695,6 +708,15 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPay
 
         let id = self.alloc_variable_symbol();
         self.register_symbols.insert((class, number), id);
+        id
+    }
+
+    fn get_or_create_regnum_symbol(&mut self, name: String) -> u32 {
+        if let Some(&id) = self.regnum_symbols.get(&name) {
+            return id;
+        }
+        let id = self.alloc_variable_symbol();
+        self.regnum_symbols.insert(name, id);
         id
     }
 
@@ -885,6 +907,7 @@ impl Expr {
             root,
             variable_symbols: ctx.variable_symbols,
             register_symbols: ctx.register_symbols,
+            regnum_symbols: ctx.regnum_symbols,
         })
     }
 
@@ -911,6 +934,7 @@ impl Expr {
             root,
             variable_symbols: ctx.variable_symbols,
             register_symbols: ctx.register_symbols,
+            regnum_symbols: ctx.regnum_symbols,
         })
     }
 
@@ -944,6 +968,7 @@ impl Expr {
                 root,
                 variable_symbols: ctx.variable_symbols,
                 register_symbols: ctx.register_symbols,
+                regnum_symbols: ctx.regnum_symbols,
             },
         ))
     }
@@ -971,6 +996,7 @@ impl Expr {
             root,
             variable_symbols: ctx.variable_symbols,
             register_symbols: ctx.register_symbols,
+            regnum_symbols: ctx.regnum_symbols,
         })
     }
 }
@@ -1291,6 +1317,21 @@ impl Call {
                 assert!(self.arguments.len() == 1, "log2Ceil requires 1 argument");
                 let input = self.arguments[0].lower_with_ctx(ctx);
                 ctx.add_node(tir::sem::SymKind::Log2Ceil, &[input])
+            }
+            BuiltinFunction::Regnum => {
+                // The argument names a register operand; the result is a symbol
+                // bound to that operand's encoding index, resolved per backend
+                // (the interpreter reads the decoded attribute, the SMT encoding
+                // uses the operand's index parameter).
+                let Some(Expr::Ident(id)) = self.arguments.first() else {
+                    ctx.had_error = true;
+                    return ctx.add_int_const(tir_adt::APInt::new(64, 0));
+                };
+                let sym = ctx.get_or_create_regnum_symbol(id.name.clone());
+                ctx.add_leaf(
+                    tir::sem::SymKind::Symbol,
+                    tir::sem::SymPayload::SymbolId(sym),
+                )
             }
             BuiltinFunction::SExt => {
                 assert!(self.arguments.len() == 2, "sext requires 2 arguments");

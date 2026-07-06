@@ -344,6 +344,15 @@ fn infer<'a>(
                 }
                 Type::Integer
             }
+            // `regnum(op)` -> bits<ENCODING_LEN>: the operand's encoding index.
+            // The width is the operand class's `ENCODING_LEN`, not tracked here;
+            // a fresh var lets the surrounding comparison fix it.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Regnum) => {
+                for arg in &call.arguments {
+                    infer(arg, env, tvg, subst, cache, diags, file_name);
+                }
+                Type::Var(tvg.fresh())
+            }
             ast::Expr::BuiltinFunction(ast::BuiltinFunction::SExt)
             | ast::Expr::BuiltinFunction(ast::BuiltinFunction::ZExt)
             | ast::Expr::BuiltinFunction(ast::BuiltinFunction::Load) => {

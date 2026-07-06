@@ -1,0 +1,80 @@
+// The `regnum(op)` builtin yields a register operand's encoding index. In the
+// simulator path it fills a symbol from the operand's decoded attribute (its
+// identity), distinct from the value read used elsewhere, so a guard like
+// `regnum(rs1) != 0` can suppress a write for x0 without suppressing the read.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa RegIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [RegIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [RegIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => { traits = [callee_saved] },
+    }
+}
+
+register_class CSR for [RegIsa] {
+    param ENCODING_LEN: Integer = 12;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        mscratch => { index = 0x340 },
+    }
+}
+
+instruction TCsrSet for [RegIsa] {
+    param MNEMONIC: String = "tcsrset";
+    param OPCODE: bits<7> = 0b1110011;
+
+    operands {
+        rd: GPR,
+        csr: CSR,
+        rs1: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => 0b010,
+        15..19 => rs1,
+        20..31 => csr,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {csr}, {rs1}"
+    }
+
+    behavior {
+        rd = csr;
+        if regnum(rs1) != zext(0b0, 5) {
+            csr = csr | rs1;
+        }
+    }
+}
+
+// The guard's condition is a Ne over the index symbol and the zero literal.
+// CHECK: SymKind::Ne
+
+// The index symbol binds to the operand's decoded attribute index, not its
+// register value (`let (_, index)`, unlike the `(class, index)` value read).
+// CHECK: let (_, index) = tir::backend::register_attr(
+// CHECK: "rs1",
+// CHECK: __syms[0] = Some(tir::sem::int_value(64, index as u64));
+
+// The CSR write is emitted under the guard.
+// CHECK: if value.to_u64() != 0 {

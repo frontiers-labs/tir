@@ -1,0 +1,74 @@
+// `regnum(op)` in the SMT encoding resolves to the operand's index parameter
+// directly (a register operand is already passed as its `ENCODING_LEN`-bit
+// index), so `regnum(rs1) != 0` becomes a `distinct` over that parameter and
+// the CSR write is guarded by an `ite` — a plain register write inside `if`,
+// no PC involved.
+
+// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=RegIsa --output=- %s | filecheck %s
+
+isa RegIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [RegIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [RegIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => { traits = [callee_saved] },
+    }
+}
+
+register_class CSR for [RegIsa] {
+    param ENCODING_LEN: Integer = 12;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        mscratch => { index = 0x340 },
+    }
+}
+
+instruction TCsrSet for [RegIsa] {
+    param MNEMONIC: String = "tcsrset";
+    param OPCODE: bits<7> = 0b1110011;
+
+    operands {
+        rd: GPR,
+        csr: CSR,
+        rs1: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => 0b010,
+        15..19 => rs1,
+        20..31 => csr,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {csr}, {rs1}"
+    }
+
+    behavior {
+        rd = csr;
+        if regnum(rs1) != zext(0b0, 5) {
+            csr = csr | rs1;
+        }
+    }
+}
+
+// The read into rd is unconditional; the CSR set is guarded on the index, which
+// lowers to the 5-bit operand parameter compared against zext(0b0, 5).
+// CHECK: (define-fun execute_tcsrset ((st TMDLState) (rd (_ BitVec 5)) (csr (_ BitVec 12)) (rs1 (_ BitVec 5))) TMDLState
+// CHECK-NEXT: (ite (distinct rs1 ((_ zero_extend 4) (_ bv0 1))) (write_csr (write_gpr st rd (read_csr st csr)) csr (bvor (read_csr st csr) (read_gpr st rs1))) (write_gpr st rd (read_csr st csr))))
