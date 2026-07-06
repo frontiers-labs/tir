@@ -6,9 +6,10 @@
 // ModR/M-escape variants. Declared before the generic memory forms so the
 // assembler tries the narrow-base `_sib`/`_rbp` candidates first (they parse a
 // base only in the rsp/r12 or rbp/r13 class and fall through otherwise).
-// Post-RA `canonicalize_encodings` selects them for codegen; behaviors match
-// the generic forms. `_sib` adds the escape SIB byte 0x24 (scale=00, index=none,
-// base=100); `_rbp` uses mod=01 with a zero disp8.
+// Post-RA `canonicalize_encodings` selects them for codegen; behavior-free
+// (canonicalize-only), so they root no isel rules. `_sib` adds the escape SIB
+// byte 0x24 (scale=00, index=none, base=100); `_rbp` uses mod=01 with a zero
+// disp8.
 
 template ExtendLoadSib for [X86_64] {
     param MNEMONIC: String;
@@ -67,9 +68,7 @@ instruction Movzx8LoadSib for [X86_64] : ExtendLoadSib {
         "{self.MNEMONIC} {dst}, byte ptr [{base}]"
     }
 
-    behavior {
-        dst = zext(load(base, 1, 0b0), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction Movzx8LoadRbp for [X86_64] : ExtendLoadRbp {
@@ -81,9 +80,7 @@ instruction Movzx8LoadRbp for [X86_64] : ExtendLoadRbp {
         "{self.MNEMONIC} {dst}, byte ptr [{base}]"
     }
 
-    behavior {
-        dst = zext(load(base, 1, 0b0), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction Movzx16LoadSib for [X86_64] : ExtendLoadSib {
@@ -95,9 +92,7 @@ instruction Movzx16LoadSib for [X86_64] : ExtendLoadSib {
         "{self.MNEMONIC} {dst}, word ptr [{base}]"
     }
 
-    behavior {
-        dst = zext(load(base, 2, 0b0), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction Movzx16LoadRbp for [X86_64] : ExtendLoadRbp {
@@ -109,9 +104,7 @@ instruction Movzx16LoadRbp for [X86_64] : ExtendLoadRbp {
         "{self.MNEMONIC} {dst}, word ptr [{base}]"
     }
 
-    behavior {
-        dst = zext(load(base, 2, 0b0), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction Movsx8LoadSib for [X86_64] : ExtendLoadSib {
@@ -123,9 +116,7 @@ instruction Movsx8LoadSib for [X86_64] : ExtendLoadSib {
         "{self.MNEMONIC} {dst}, byte ptr [{base}]"
     }
 
-    behavior {
-        dst = sext(load(base, 1, 0b1), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction Movsx8LoadRbp for [X86_64] : ExtendLoadRbp {
@@ -137,9 +128,7 @@ instruction Movsx8LoadRbp for [X86_64] : ExtendLoadRbp {
         "{self.MNEMONIC} {dst}, byte ptr [{base}]"
     }
 
-    behavior {
-        dst = sext(load(base, 1, 0b1), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction Movsx16LoadSib for [X86_64] : ExtendLoadSib {
@@ -151,9 +140,7 @@ instruction Movsx16LoadSib for [X86_64] : ExtendLoadSib {
         "{self.MNEMONIC} {dst}, word ptr [{base}]"
     }
 
-    behavior {
-        dst = sext(load(base, 2, 0b1), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction Movsx16LoadRbp for [X86_64] : ExtendLoadRbp {
@@ -165,9 +152,7 @@ instruction Movsx16LoadRbp for [X86_64] : ExtendLoadRbp {
         "{self.MNEMONIC} {dst}, word ptr [{base}]"
     }
 
-    behavior {
-        dst = sext(load(base, 2, 0b1), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction MovsxdLoadSib for [X86_64] {
@@ -192,9 +177,7 @@ instruction MovsxdLoadSib for [X86_64] {
         "{self.MNEMONIC} {dst}, dword ptr [{base}]"
     }
 
-    behavior {
-        dst = sext(load(base, 4, 0b1), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction MovsxdLoadRbp for [X86_64] {
@@ -219,9 +202,7 @@ instruction MovsxdLoadRbp for [X86_64] {
         "{self.MNEMONIC} {dst}, dword ptr [{base}]"
     }
 
-    behavior {
-        dst = sext(load(base, 4, 0b1), self.XLEN);
-    }
+    behavior { }
 }
 
 instruction Mov32LoadSib for [X86] {
@@ -246,9 +227,7 @@ instruction Mov32LoadSib for [X86] {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 
-    behavior {
-        dst = load(base, 4, 0b0);
-    }
+    behavior { }
 }
 
 instruction Mov32LoadRbp for [X86] {
@@ -273,9 +252,7 @@ instruction Mov32LoadRbp for [X86] {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 
-    behavior {
-        dst = load(base, 4, 0b0);
-    }
+    behavior { }
 }
 
 instruction Mov32StoreSib for [X86] {
@@ -300,9 +277,7 @@ instruction Mov32StoreSib for [X86] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior {
-        store(base, 4, src);
-    }
+    behavior { }
 }
 
 instruction Mov32StoreRbp for [X86] {
@@ -327,9 +302,7 @@ instruction Mov32StoreRbp for [X86] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior {
-        store(base, 4, src);
-    }
+    behavior { }
 }
 
 instruction Mov16StoreSib for [X86] {
@@ -359,9 +332,7 @@ instruction Mov16StoreSib for [X86] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior {
-        store(base, 2, src);
-    }
+    behavior { }
 }
 
 instruction Mov16StoreRbp for [X86] {
@@ -391,9 +362,7 @@ instruction Mov16StoreRbp for [X86] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior {
-        store(base, 2, src);
-    }
+    behavior { }
 }
 
 instruction Mov8StoreSib for [X86] {
@@ -418,9 +387,7 @@ instruction Mov8StoreSib for [X86] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior {
-        store(base, 1, src);
-    }
+    behavior { }
 }
 
 instruction Mov8StoreRbp for [X86] {
@@ -445,9 +412,7 @@ instruction Mov8StoreRbp for [X86] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior {
-        store(base, 1, src);
-    }
+    behavior { }
 }
 
 // disp32 (mod=10) needs a SIB only for rsp/r12; rbp/r13 are legal at mod=10.
@@ -475,9 +440,7 @@ instruction MovLoadDispSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base} + {imm}]"
     }
 
-    behavior {
-        dst = load(base + sext(imm, self.XLEN), 8, 0b0);
-    }
+    behavior { }
 }
 
 instruction MovStoreDispSib for [X86_64] {
@@ -504,9 +467,7 @@ instruction MovStoreDispSib for [X86_64] {
         "{self.MNEMONIC} [{base} + {imm}], {src}"
     }
 
-    behavior {
-        store(base + sext(imm, self.XLEN), 8, src);
-    }
+    behavior { }
 }
 
 // `movzx/movsx r64, size ptr [base]`: REX.W + 0x0F + opcode +

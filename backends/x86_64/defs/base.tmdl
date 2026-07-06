@@ -189,7 +189,7 @@ instruction Ret for [X86_64] {
 // forms so the assembler tries them first: a `_sib`/`_rbp` candidate parses its
 // base only in the narrow class (rsp/r12, rbp/r13), falling through to the
 // generic for every other base. Post-RA `canonicalize_encodings` selects them
-// for codegen. Behaviors match the generic forms.
+// for codegen. Behavior-free (canonicalize-only), so they root no isel rules.
 
 instruction MovLoadSib for [X86_64] {
     param OPNAME: String = "mov_load_sib";
@@ -213,9 +213,7 @@ instruction MovLoadSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 
-    behavior {
-        dst = load(base, 8, 0b0);
-    }
+    behavior { }
 }
 
 instruction MovLoadRbp for [X86_64] {
@@ -240,9 +238,7 @@ instruction MovLoadRbp for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 
-    behavior {
-        dst = load(base, 8, 0b0);
-    }
+    behavior { }
 }
 
 instruction MovStoreSib for [X86_64] {
@@ -267,9 +263,7 @@ instruction MovStoreSib for [X86_64] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior {
-        store(base, 8, src);
-    }
+    behavior { }
 }
 
 instruction MovStoreRbp for [X86_64] {
@@ -294,9 +288,7 @@ instruction MovStoreRbp for [X86_64] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior {
-        store(base, 8, src);
-    }
+    behavior { }
 }
 
 instruction MovLoad for [X86_64] {

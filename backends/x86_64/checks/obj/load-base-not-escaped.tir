@@ -1,0 +1,21 @@
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
+
+// Regression: the ModR/M-escape mov variants (`mov_load_*_sib`/`_rbp`) must not
+// participate in instruction selection. They carry empty behaviors, so no isel
+// rule derives from them; only `canonicalize_encodings` may pick them post-RA.
+// SysV lands the pointer arg in rdi, so the load must select the generic form
+// with rm=rdi (ModR/M 0x87) — never the SIB escape (0x84 + 0x24) that would
+// pin the base to rsp/r12 and load from the wrong address.
+
+module {
+  func @loadq(%0: !ptr.p<!i64>) -> !i64 {
+    %1 = ptr.load %0 : !i64
+    return %1
+  }
+  module_end
+}
+
+// CHECK: loadq:
+// mov rax, [rdi] (disp0, base=rdi): 48 8b 87 00000000
+// CHECK-NEXT: [0x48, 0x8B, 0x87, 0x00, 0x00, 0x00, 0x00]
+// CHECK-NEXT: [0xC3]
