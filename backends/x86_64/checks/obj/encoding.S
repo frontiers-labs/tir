@@ -38,7 +38,7 @@ enc:
 # mov rax, 1: opcode C7, ModR/M=11 000 000 = C0, imm32=1.
 # CHECK-NEXT: [0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]
 # add rcx, 42: opcode 81, ModR/M=11 000(/0) 001(rcx) = C1, imm32=42.
-# CHECK-NEXT: [0x48, 0x81, 0xC1, 0x2A, 0x00, 0x00, 0x00]
+# CHECK-NEXT: [0x48, 0x83, 0xC1, 0x2A]
 # shl rax, 3: opcode C1, ModR/M=11 100(/4) 000(rax) = E0, imm8=3.
 # CHECK-NEXT: [0x48, 0xC1, 0xE0, 0x03]
 # add r8, r9: REX.WRB=4D, opcode 01, ModR/M=11 reg(r9&7=1) rm(r8&7=0) = C8.
@@ -50,7 +50,7 @@ enc:
 # add r8, rax: REX.WB=49 (dst=r8 in rm), opcode 01, ModR/M=11 reg(0) rm(0) = C0.
 # CHECK-NEXT: [0x49, 0x01, 0xC0]
 # add r8, 42: REX.WB=49, opcode 81, ModR/M=11 000(/0) rm(r8&7=0) = C0, imm32=42.
-# CHECK-NEXT: [0x49, 0x81, 0xC0, 0x2A, 0x00, 0x00, 0x00]
+# CHECK-NEXT: [0x49, 0x83, 0xC0, 0x2A]
 # shl r9, 3: REX.WB=49, opcode C1, ModR/M=11 100(/4) rm(r9&7=1) = E1, imm8=3.
 # CHECK-NEXT: [0x49, 0xC1, 0xE1, 0x03]
 # imul rax, rbx: REX.W=48, 0F AF, ModR/M=11 reg(rax=0) rm(rbx=3) = C3 (dst in reg).

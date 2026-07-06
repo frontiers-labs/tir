@@ -406,6 +406,52 @@ instruction CallIndirect for [X86_64] {
     }
 }
 
+// No-REX indirect jmp/call (target in rax..rdi): 0xFF + ModR/M, no REX prefix.
+// Behavior-free (canonicalize-only), so they root no isel/terminator handling.
+instruction JmpIndirectNorex for [X86_64] {
+    param OPNAME: String = "jmp_indirect_norex";
+    param MNEMONIC: String = "jmp";
+
+    operands {
+        target: GPRlow,
+    }
+
+    encoding {
+        0..7 => 0xFF,
+        8..10 => target[0..2],
+        11..13 => 0b100,
+        14..15 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} *{target}"
+    }
+
+    behavior { }
+}
+
+instruction CallIndirectNorex for [X86_64] {
+    param OPNAME: String = "call_indirect_norex";
+    param MNEMONIC: String = "call";
+
+    operands {
+        target: GPRlow,
+    }
+
+    encoding {
+        0..7 => 0xFF,
+        8..10 => target[0..2],
+        11..13 => 0b010,
+        14..15 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} *{target}"
+    }
+
+    behavior { }
+}
+
 alu_rr!("32", "32", RegReg32,
     (Add, "add", 0x01, { dst = dst + src; }),
     (Sub, "sub", 0x29, { dst = dst - src; }),
@@ -488,6 +534,105 @@ alu_rr!("8H", "8h", RegReg8H,
     (Or,  "or",  0x08, { dst = dst | src; }),
     (Xor, "xor", 0x30, { dst = dst ^ src; }),
     (Mov, "mov", 0x88, { dst = src; })
+)
+
+// No-REX register/register forms (low subclasses); opcodes match the width above.
+alu_rr_norex!("32", RegReg32Norex,
+    (Add, "add", 0x01), (Sub, "sub", 0x29), (And, "and", 0x21),
+    (Or, "or", 0x09), (Xor, "xor", 0x31), (Mov, "mov", 0x89)
+)
+
+alu_rr_norex!("16", RegReg16Norex,
+    (Add, "add", 0x01), (Sub, "sub", 0x29), (And, "and", 0x21),
+    (Or, "or", 0x09), (Xor, "xor", 0x31), (Mov, "mov", 0x89)
+)
+
+alu_rr_norex!("8", RegReg8Norex,
+    (Add, "add", 0x00), (Sub, "sub", 0x28), (And, "and", 0x20),
+    (Or, "or", 0x08), (Xor, "xor", 0x30), (Mov, "mov", 0x88)
+)
+
+// No-REX register/immediate imm32 forms (low subclasses).
+alu_ri_norex!(RegImm32Norex,
+    (AddImm32Norex,  "add_imm32_norex",  "add",  0x81, 0b000),
+    (OrImm32Norex,   "or_imm32_norex",   "or",   0x81, 0b001),
+    (AndImm32Norex,  "and_imm32_norex",  "and",  0x81, 0b100),
+    (XorImm32Norex,  "xor_imm32_norex",  "xor",  0x81, 0b110),
+    (SubImm32Norex,  "sub_imm32_norex",  "sub",  0x81, 0b101),
+    (CmpImm32Norex,  "cmp_imm32_norex",  "cmp",  0x81, 0b111),
+    (TestImm32Norex, "test_imm32_norex", "test", 0xF7, 0b000),
+    (MovImm32Norex,  "mov_imm32_norex",  "mov",  0xC7, 0b000)
+)
+
+alu_ri_norex!(RegImm16Norex,
+    (AddImm16Norex, "add_imm16_norex", "add", 0x81, 0b000),
+    (OrImm16Norex,  "or_imm16_norex",  "or",  0x81, 0b001),
+    (AndImm16Norex, "and_imm16_norex", "and", 0x81, 0b100),
+    (XorImm16Norex, "xor_imm16_norex", "xor", 0x81, 0b110),
+    (MovImm16Norex, "mov_imm16_norex", "mov", 0xC7, 0b000)
+)
+
+alu_ri_norex!(RegImm8Norex,
+    (AddImm8Norex, "add_imm8_norex", "add", 0x80, 0b000),
+    (OrImm8Norex,  "or_imm8_norex",  "or",  0x80, 0b001),
+    (AndImm8Norex, "and_imm8_norex", "and", 0x80, 0b100),
+    (XorImm8Norex, "xor_imm8_norex", "xor", 0x80, 0b110),
+    (MovImm8Norex, "mov_imm8_norex", "mov", 0xC6, 0b000)
+)
+
+// Group-1 0x83 imm8 short forms. 64-bit REX.W and 32/16-bit REX + REX-free.
+alu_ri8!(RegImm8s, X86_64,
+    (AddImm8s, "add_imm8s", "add", 0b000),
+    (OrImm8s,  "or_imm8s",  "or",  0b001),
+    (AndImm8s, "and_imm8s", "and", 0b100),
+    (XorImm8s, "xor_imm8s", "xor", 0b110),
+    (SubImm8s, "sub_imm8s", "sub", 0b101),
+    (CmpImm8s, "cmp_imm8s", "cmp", 0b111)
+)
+
+alu_ri8!(RegImm8s32, X86,
+    (AddImm8s32, "add_imm8s32", "add", 0b000),
+    (OrImm8s32,  "or_imm8s32",  "or",  0b001),
+    (AndImm8s32, "and_imm8s32", "and", 0b100),
+    (XorImm8s32, "xor_imm8s32", "xor", 0b110),
+    (SubImm8s32, "sub_imm8s32", "sub", 0b101),
+    (CmpImm8s32, "cmp_imm8s32", "cmp", 0b111)
+)
+
+alu_ri8!(RegImm8s32Norex, X86,
+    (AddImm8s32Norex, "add_imm8s32_norex", "add", 0b000),
+    (OrImm8s32Norex,  "or_imm8s32_norex",  "or",  0b001),
+    (AndImm8s32Norex, "and_imm8s32_norex", "and", 0b100),
+    (XorImm8s32Norex, "xor_imm8s32_norex", "xor", 0b110),
+    (SubImm8s32Norex, "sub_imm8s32_norex", "sub", 0b101),
+    (CmpImm8s32Norex, "cmp_imm8s32_norex", "cmp", 0b111)
+)
+
+alu_ri8!(RegImm8s16, X86,
+    (AddImm8s16, "add_imm8s16", "add", 0b000),
+    (OrImm8s16,  "or_imm8s16",  "or",  0b001),
+    (AndImm8s16, "and_imm8s16", "and", 0b100),
+    (XorImm8s16, "xor_imm8s16", "xor", 0b110)
+)
+
+alu_ri8!(RegImm8s16Norex, X86,
+    (AddImm8s16Norex, "add_imm8s16_norex", "add", 0b000),
+    (OrImm8s16Norex,  "or_imm8s16_norex",  "or",  0b001),
+    (AndImm8s16Norex, "and_imm8s16_norex", "and", 0b100),
+    (XorImm8s16Norex, "xor_imm8s16_norex", "xor", 0b110)
+)
+
+// No-REX shift-by-immediate forms (low subclasses).
+shift_imm_norex!("32", RegShift32Norex,
+    (ShlImm, "shl", 0b100), (ShrImm, "shr", 0b101), (SarImm, "sar", 0b111)
+)
+
+shift_imm_norex!("16", RegShift16Norex,
+    (ShlImm, "shl", 0b100), (ShrImm, "shr", 0b101), (SarImm, "sar", 0b111)
+)
+
+shift_imm_norex!("8", RegShift8Norex,
+    (ShlImm, "shl", 0b100), (ShrImm, "shr", 0b101), (SarImm, "sar", 0b111)
 )
 
 alu_ri!("8H", "8h", RegImm8H,

@@ -182,6 +182,91 @@ mod isa {
                 ShrImm8Op,
                 SarImm8Op,
                 VirtualBranchOp,
+                Add32NorexOp,
+                Sub32NorexOp,
+                And32NorexOp,
+                Or32NorexOp,
+                Xor32NorexOp,
+                Mov32NorexOp,
+                Add16NorexOp,
+                Sub16NorexOp,
+                And16NorexOp,
+                Or16NorexOp,
+                Xor16NorexOp,
+                Mov16NorexOp,
+                Add8NorexOp,
+                Sub8NorexOp,
+                And8NorexOp,
+                Or8NorexOp,
+                Xor8NorexOp,
+                Mov8NorexOp,
+                AddImm32NorexOp,
+                OrImm32NorexOp,
+                AndImm32NorexOp,
+                XorImm32NorexOp,
+                SubImm32NorexOp,
+                CmpImm32NorexOp,
+                TestImm32NorexOp,
+                MovImm32NorexOp,
+                AddImm16NorexOp,
+                OrImm16NorexOp,
+                AndImm16NorexOp,
+                XorImm16NorexOp,
+                MovImm16NorexOp,
+                AddImm8NorexOp,
+                OrImm8NorexOp,
+                AndImm8NorexOp,
+                XorImm8NorexOp,
+                MovImm8NorexOp,
+                AddImm8sOp,
+                OrImm8sOp,
+                AndImm8sOp,
+                XorImm8sOp,
+                SubImm8sOp,
+                CmpImm8sOp,
+                AddImm8s32Op,
+                OrImm8s32Op,
+                AndImm8s32Op,
+                XorImm8s32Op,
+                SubImm8s32Op,
+                CmpImm8s32Op,
+                AddImm8s32NorexOp,
+                OrImm8s32NorexOp,
+                AndImm8s32NorexOp,
+                XorImm8s32NorexOp,
+                SubImm8s32NorexOp,
+                CmpImm8s32NorexOp,
+                AddImm8s16Op,
+                OrImm8s16Op,
+                AndImm8s16Op,
+                XorImm8s16Op,
+                AddImm8s16NorexOp,
+                OrImm8s16NorexOp,
+                AndImm8s16NorexOp,
+                XorImm8s16NorexOp,
+                ShlImm32NorexOp,
+                ShrImm32NorexOp,
+                SarImm32NorexOp,
+                ShlImm16NorexOp,
+                ShrImm16NorexOp,
+                SarImm16NorexOp,
+                ShlImm8NorexOp,
+                ShrImm8NorexOp,
+                SarImm8NorexOp,
+                SetEqNorexOp,
+                SetNotEqNorexOp,
+                SetLessNorexOp,
+                SetGreaterEqNorexOp,
+                SetLessEqNorexOp,
+                SetGreaterNorexOp,
+                SetBelowNorexOp,
+                SetAboveEqNorexOp,
+                SetBelowEqNorexOp,
+                SetAboveNorexOp,
+                PushNorexOp,
+                PopNorexOp,
+                JmpIndirectNorexOp,
+                CallIndirectNorexOp,
                 Add8HOp,
                 Sub8HOp,
                 And8HOp,
@@ -624,6 +709,27 @@ mod isa {
                 .map(|a| a.value.clone())
                 .expect("memory op operand attribute present")
         }
+        // The allocated index of a physical register operand, or None if the
+        // operand is still virtual (canonicalization runs post-RA, so a virtual
+        // operand simply means "not this op" and is left unchanged).
+        fn reg_index(op: &dyn Operation, name: &str) -> Option<u16> {
+            op.attributes().iter().find_map(|a| match &a.value {
+                AttributeValue::Register(RegisterAttr::Physical { index, .. })
+                    if a.name == name =>
+                {
+                    Some(*index)
+                }
+                _ => None,
+            })
+        }
+        // An immediate operand's integer value, or None for a symbol reference
+        // (a relocation that cannot fold to the sign-extended imm8 form).
+        fn imm_int(op: &dyn Operation, name: &str) -> Option<i64> {
+            op.attributes().iter().find_map(|a| match &a.value {
+                AttributeValue::Int(v) if a.name == name => Some(*v),
+                _ => None,
+            })
+        }
         let replace = |rewriter: &mut tir::Rewriter, new_op: Box<dyn Operation>| {
             rewriter.replace_op(op, new_op.as_ref()).map(|()| true)
         };
@@ -728,6 +834,237 @@ mod isa {
         escape!(sib MovLoadDispOp, MovLoadDispSibOpBuilder, ["dst", "base", "imm"]);
         escape!(sib MovStoreDispOp, MovStoreDispSibOpBuilder, ["base", "imm", "src"]);
 
+        // REX-free canonicalization: drop the REX byte GNU as omits when every
+        // register index is low (< 8, or < 4 for the 8-bit forms that must avoid
+        // the spl/bpl/sil/dil encodings), and fold group-1 immediates that fit a
+        // sign-extended i8 into the 0x83 short form. Each op maps to exactly one
+        // behavior-free variant, so selection is unaffected.
+        const LO: u16 = 8;
+        const B: u16 = 4;
+
+        // Register/register: `op → op_norex` when both operands are low.
+        macro_rules! rr_norex {
+            ($Op:ty, $Norex:ident, $t:expr) => {
+                if let Some(inner) = op.as_op::<$Op>() {
+                    return match (reg_index(&inner, "dst"), reg_index(&inner, "src")) {
+                        (Some(d), Some(s)) if d < $t && s < $t => replace(
+                            rewriter,
+                            Box::new(
+                                $Norex::new(context)
+                                    .attr("dst", attr(&inner, "dst"))
+                                    .attr("src", attr(&inner, "src"))
+                                    .build(),
+                            ),
+                        ),
+                        _ => Ok(false),
+                    };
+                }
+            };
+        }
+        // Single register + immediate: `op → op_norex` when the register is low.
+        macro_rules! ri_norex {
+            ($Op:ty, $Norex:ident, $t:expr) => {
+                if let Some(inner) = op.as_op::<$Op>() {
+                    return match reg_index(&inner, "dst") {
+                        Some(d) if d < $t => replace(
+                            rewriter,
+                            Box::new(
+                                $Norex::new(context)
+                                    .attr("dst", attr(&inner, "dst"))
+                                    .attr("imm", attr(&inner, "imm"))
+                                    .build(),
+                            ),
+                        ),
+                        _ => Ok(false),
+                    };
+                }
+            };
+        }
+        // Group-1 32/16-bit immediate: pick imm8/imm8-norex/imm32-norex.
+        macro_rules! g1_imm {
+            ($Op:ty, $Imm8:ident, $Imm8N:ident, $Imm32N:ident) => {
+                if let Some(inner) = op.as_op::<$Op>() {
+                    let low = matches!(reg_index(&inner, "dst"), Some(d) if d < LO);
+                    let small = matches!(imm_int(&inner, "imm"), Some(v) if (-128..=127).contains(&v));
+                    let d = attr(&inner, "dst");
+                    let i = attr(&inner, "imm");
+                    let new: Box<dyn Operation> = match (small, low) {
+                        (true, true) => {
+                            Box::new($Imm8N::new(context).attr("dst", d).attr("imm", i).build())
+                        }
+                        (true, false) => {
+                            Box::new($Imm8::new(context).attr("dst", d).attr("imm", i).build())
+                        }
+                        (false, true) => {
+                            Box::new($Imm32N::new(context).attr("dst", d).attr("imm", i).build())
+                        }
+                        (false, false) => return Ok(false),
+                    };
+                    return replace(rewriter, new);
+                }
+            };
+        }
+        // Group-1 64-bit immediate: only the 0x83 imm8 fold (REX.W stays).
+        macro_rules! g1_imm64 {
+            ($Op:ty, $Imm8:ident) => {
+                if let Some(inner) = op.as_op::<$Op>() {
+                    return match imm_int(&inner, "imm") {
+                        Some(v) if (-128..=127).contains(&v) => replace(
+                            rewriter,
+                            Box::new(
+                                $Imm8::new(context)
+                                    .attr("dst", attr(&inner, "dst"))
+                                    .attr("imm", attr(&inner, "imm"))
+                                    .build(),
+                            ),
+                        ),
+                        _ => Ok(false),
+                    };
+                }
+            };
+        }
+        // A single register operand named `$n` (setcc dst, push/pop reg, indirect
+        // jmp/call target): `op → op_norex` when that register is low.
+        macro_rules! reg1_norex {
+            ($Op:ty, $Norex:ident, $n:literal, $t:expr) => {
+                if let Some(inner) = op.as_op::<$Op>() {
+                    return match reg_index(&inner, $n) {
+                        Some(d) if d < $t => replace(
+                            rewriter,
+                            Box::new($Norex::new(context).attr($n, attr(&inner, $n)).build()),
+                        ),
+                        _ => Ok(false),
+                    };
+                }
+            };
+        }
+
+        rr_norex!(Add32Op, Add32NorexOpBuilder, LO);
+        rr_norex!(Sub32Op, Sub32NorexOpBuilder, LO);
+        rr_norex!(And32Op, And32NorexOpBuilder, LO);
+        rr_norex!(Or32Op, Or32NorexOpBuilder, LO);
+        rr_norex!(Xor32Op, Xor32NorexOpBuilder, LO);
+        rr_norex!(Mov32Op, Mov32NorexOpBuilder, LO);
+        rr_norex!(Add16Op, Add16NorexOpBuilder, LO);
+        rr_norex!(Sub16Op, Sub16NorexOpBuilder, LO);
+        rr_norex!(And16Op, And16NorexOpBuilder, LO);
+        rr_norex!(Or16Op, Or16NorexOpBuilder, LO);
+        rr_norex!(Xor16Op, Xor16NorexOpBuilder, LO);
+        rr_norex!(Mov16Op, Mov16NorexOpBuilder, LO);
+        rr_norex!(Add8Op, Add8NorexOpBuilder, B);
+        rr_norex!(Sub8Op, Sub8NorexOpBuilder, B);
+        rr_norex!(And8Op, And8NorexOpBuilder, B);
+        rr_norex!(Or8Op, Or8NorexOpBuilder, B);
+        rr_norex!(Xor8Op, Xor8NorexOpBuilder, B);
+        rr_norex!(Mov8Op, Mov8NorexOpBuilder, B);
+
+        g1_imm!(
+            AddImm32Op,
+            AddImm8s32OpBuilder,
+            AddImm8s32NorexOpBuilder,
+            AddImm32NorexOpBuilder
+        );
+        g1_imm!(
+            OrImm32Op,
+            OrImm8s32OpBuilder,
+            OrImm8s32NorexOpBuilder,
+            OrImm32NorexOpBuilder
+        );
+        g1_imm!(
+            AndImm32Op,
+            AndImm8s32OpBuilder,
+            AndImm8s32NorexOpBuilder,
+            AndImm32NorexOpBuilder
+        );
+        g1_imm!(
+            XorImm32Op,
+            XorImm8s32OpBuilder,
+            XorImm8s32NorexOpBuilder,
+            XorImm32NorexOpBuilder
+        );
+        g1_imm!(
+            SubImm32Op,
+            SubImm8s32OpBuilder,
+            SubImm8s32NorexOpBuilder,
+            SubImm32NorexOpBuilder
+        );
+        g1_imm!(
+            CmpImm32Op,
+            CmpImm8s32OpBuilder,
+            CmpImm8s32NorexOpBuilder,
+            CmpImm32NorexOpBuilder
+        );
+        g1_imm!(
+            AddImm16Op,
+            AddImm8s16OpBuilder,
+            AddImm8s16NorexOpBuilder,
+            AddImm16NorexOpBuilder
+        );
+        g1_imm!(
+            OrImm16Op,
+            OrImm8s16OpBuilder,
+            OrImm8s16NorexOpBuilder,
+            OrImm16NorexOpBuilder
+        );
+        g1_imm!(
+            AndImm16Op,
+            AndImm8s16OpBuilder,
+            AndImm8s16NorexOpBuilder,
+            AndImm16NorexOpBuilder
+        );
+        g1_imm!(
+            XorImm16Op,
+            XorImm8s16OpBuilder,
+            XorImm8s16NorexOpBuilder,
+            XorImm16NorexOpBuilder
+        );
+
+        g1_imm64!(AddImmOp, AddImm8sOpBuilder);
+        g1_imm64!(OrImmOp, OrImm8sOpBuilder);
+        g1_imm64!(AndImmOp, AndImm8sOpBuilder);
+        g1_imm64!(XorImmOp, XorImm8sOpBuilder);
+        g1_imm64!(SubImmOp, SubImm8sOpBuilder);
+        g1_imm64!(CmpImmOp, CmpImm8sOpBuilder);
+
+        // mov/test immediates: no 0x83 form, only the REX-free downgrade.
+        ri_norex!(MovImm32Op, MovImm32NorexOpBuilder, LO);
+        ri_norex!(TestImm32Op, TestImm32NorexOpBuilder, LO);
+        ri_norex!(MovImm16Op, MovImm16NorexOpBuilder, LO);
+        // 8-bit group-1 + mov immediates: REX-free when in al/cl/dl/bl.
+        ri_norex!(AddImm8Op, AddImm8NorexOpBuilder, B);
+        ri_norex!(OrImm8Op, OrImm8NorexOpBuilder, B);
+        ri_norex!(AndImm8Op, AndImm8NorexOpBuilder, B);
+        ri_norex!(XorImm8Op, XorImm8NorexOpBuilder, B);
+        ri_norex!(MovImm8Op, MovImm8NorexOpBuilder, B);
+
+        ri_norex!(ShlImm32Op, ShlImm32NorexOpBuilder, LO);
+        ri_norex!(ShrImm32Op, ShrImm32NorexOpBuilder, LO);
+        ri_norex!(SarImm32Op, SarImm32NorexOpBuilder, LO);
+        ri_norex!(ShlImm16Op, ShlImm16NorexOpBuilder, LO);
+        ri_norex!(ShrImm16Op, ShrImm16NorexOpBuilder, LO);
+        ri_norex!(SarImm16Op, SarImm16NorexOpBuilder, LO);
+        ri_norex!(ShlImm8Op, ShlImm8NorexOpBuilder, B);
+        ri_norex!(ShrImm8Op, ShrImm8NorexOpBuilder, B);
+        ri_norex!(SarImm8Op, SarImm8NorexOpBuilder, B);
+
+        reg1_norex!(SetEqOp, SetEqNorexOpBuilder, "dst", B);
+        reg1_norex!(SetNotEqOp, SetNotEqNorexOpBuilder, "dst", B);
+        reg1_norex!(SetLessOp, SetLessNorexOpBuilder, "dst", B);
+        reg1_norex!(SetGreaterEqOp, SetGreaterEqNorexOpBuilder, "dst", B);
+        reg1_norex!(SetLessEqOp, SetLessEqNorexOpBuilder, "dst", B);
+        reg1_norex!(SetGreaterOp, SetGreaterNorexOpBuilder, "dst", B);
+        reg1_norex!(SetBelowOp, SetBelowNorexOpBuilder, "dst", B);
+        reg1_norex!(SetAboveEqOp, SetAboveEqNorexOpBuilder, "dst", B);
+        reg1_norex!(SetBelowEqOp, SetBelowEqNorexOpBuilder, "dst", B);
+        reg1_norex!(SetAboveOp, SetAboveNorexOpBuilder, "dst", B);
+
+        reg1_norex!(PushOp, PushNorexOpBuilder, "reg", LO);
+        reg1_norex!(PopOp, PopNorexOpBuilder, "reg", LO);
+        // The indirect jmp/call forms are not produced before this pass: `jmp
+        // *reg` reaches its `_norex` form through the assembler, and the codegen
+        // indirect call is materialized REX-free directly in `finalize_virtual_ops`
+        // (it is created there, after this pass would have run).
+
         Ok(false)
     }
 
@@ -804,10 +1141,27 @@ mod isa {
                         "vcall_indirect is missing its 'callee_reg'".to_string(),
                     )
                 })?;
-            let real = CallIndirectOpBuilder::new(context)
-                .attr("target", target)
-                .build();
-            rewriter.replace_op(op, &real)?;
+            // `call *reg` needs no REX when the target is rax..rdi; emit the
+            // REX-free form directly (this op is created after
+            // `canonicalize_encodings` would run).
+            let low = matches!(
+                &target,
+                AttributeValue::Register(RegisterAttr::Physical { index, .. }) if *index < 8
+            );
+            let real: Box<dyn Operation> = if low {
+                Box::new(
+                    CallIndirectNorexOpBuilder::new(context)
+                        .attr("target", target)
+                        .build(),
+                )
+            } else {
+                Box::new(
+                    CallIndirectOpBuilder::new(context)
+                        .attr("target", target)
+                        .build(),
+                )
+            };
+            rewriter.replace_op(op, real.as_ref())?;
             return Ok(true);
         }
 
@@ -1210,6 +1564,105 @@ mod isa {
             assert!(ir.contains("mov_load"));
             assert!(!ir.contains("mov_load_sib"));
             assert!(!ir.contains("mov_load_rbp"));
+        }
+
+        /// Run `canonicalize_encodings` over a single op and return the printed IR.
+        macro_rules! canon {
+            ($build:expr) => {{
+                let context = tir::Context::with_default_dialects();
+                context.register_dialect::<X86_64Dialect>();
+                let module = ModuleOpBuilder::new(&context).build();
+                let mut b = IRBuilder::new(module.body());
+                b.insert($build(&context));
+                b.insert(ModuleEndOpBuilder::new(&context).build());
+                let mut pm = PassManager::new();
+                pm.add_pass(OpLoweringPass::new("c", vec![canonicalize_encodings]));
+                pm.run(&context, context.get_op(module.id()))
+                    .expect("pass runs");
+                let mut buf = String::new();
+                module
+                    .print(&mut IRFormatter::new(&mut buf))
+                    .expect("print module");
+                buf
+            }};
+        }
+
+        fn g32(index: u16) -> AttributeValue {
+            phys("GPR32", index)
+        }
+
+        #[test]
+        fn rr_low_becomes_norex_high_stays() {
+            let low = canon!(|c| Add32OpBuilder::new(c)
+                .attr("dst", g32(0))
+                .attr("src", g32(1))
+                .build());
+            assert!(low.contains("add32_norex"));
+            let high = canon!(|c| Add32OpBuilder::new(c)
+                .attr("dst", g32(8))
+                .attr("src", g32(1))
+                .build());
+            assert!(high.contains("x86_64.add32 "));
+            assert!(!high.contains("norex"));
+        }
+
+        #[test]
+        fn byte_forms_use_the_al_cl_dl_bl_threshold() {
+            let al = canon!(|c| Add8OpBuilder::new(c)
+                .attr("dst", phys("GPR8", 3))
+                .attr("src", phys("GPR8", 0))
+                .build());
+            assert!(al.contains("add8_norex"));
+            // spl (index 4) requires an empty REX, so it stays on the REX form.
+            let spl = canon!(|c| Add8OpBuilder::new(c)
+                .attr("dst", phys("GPR8", 4))
+                .attr("src", phys("GPR8", 0))
+                .build());
+            assert!(spl.contains("x86_64.add8 "));
+            assert!(!spl.contains("norex"));
+        }
+
+        #[test]
+        fn group1_imm_selects_imm8_norex_imm32_by_range_and_register() {
+            let mk = |imm: i64, reg: u16| {
+                canon!(|c: &tir::Context| AddImm32OpBuilder::new(c)
+                    .attr("dst", g32(reg))
+                    .attr("imm", AttributeValue::Int(imm))
+                    .build())
+            };
+            assert!(mk(42, 1).contains("add_imm8s32_norex"));
+            assert!(mk(42, 9).contains("add_imm8s32")); // high reg keeps REX
+            assert!(mk(300, 1).contains("add_imm32_norex")); // out of i8 range
+            assert!(mk(300, 9).contains("x86_64.add_imm32 ")); // neither applies
+        }
+
+        #[test]
+        fn group1_imm64_folds_only_the_imm8() {
+            let small = canon!(|c| AddImmOpBuilder::new(c)
+                .attr("dst", phys("GPR", 1))
+                .attr("imm", AttributeValue::Int(42))
+                .build());
+            assert!(small.contains("add_imm8s"));
+            let big = canon!(|c| AddImmOpBuilder::new(c)
+                .attr("dst", phys("GPR", 1))
+                .attr("imm", AttributeValue::Int(300))
+                .build());
+            assert!(big.contains("x86_64.add_imm "));
+        }
+
+        #[test]
+        fn singletons_drop_rex_when_low() {
+            let push = canon!(|c| PushOpBuilder::new(c).attr("reg", phys("GPR", 3)).build());
+            assert!(push.contains("push_norex"));
+            let push_hi = canon!(|c| PushOpBuilder::new(c).attr("reg", phys("GPR", 12)).build());
+            assert!(push_hi.contains("x86_64.push ") && !push_hi.contains("norex"));
+            let sete = canon!(|c| SetEqOpBuilder::new(c).attr("dst", phys("GPR8", 0)).build());
+            assert!(sete.contains("sete_norex"));
+            let shl = canon!(|c| ShlImm32OpBuilder::new(c)
+                .attr("dst", g32(0))
+                .attr("imm", AttributeValue::Int(3))
+                .build());
+            assert!(shl.contains("shl32_norex"));
         }
     }
 }

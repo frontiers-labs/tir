@@ -860,3 +860,39 @@ instruction Pop for [X86_64] : PushPop {
         GPR::rsp = GPR::rsp + zext(0b1000, self.XLEN);
     }
 }
+
+// No-REX push/pop (rax..rdi): the register number lives entirely in the opcode
+// byte. Behavior-free (canonicalize-only).
+template PushPopNorex for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<5>;
+
+    operands {
+        reg: GPRlow,
+    }
+
+    encoding {
+        0..2 => reg[0..2],
+        3..7 => OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {reg}"
+    }
+}
+
+instruction PushNorex for [X86_64] : PushPopNorex {
+    param OPNAME: String = "push_norex";
+    param MNEMONIC: String = "push";
+    param OPCODE: bits<5> = 0b01010;
+
+    behavior { }
+}
+
+instruction PopNorex for [X86_64] : PushPopNorex {
+    param OPNAME: String = "pop_norex";
+    param MNEMONIC: String = "pop";
+    param OPCODE: bits<5> = 0b01011;
+
+    behavior { }
+}

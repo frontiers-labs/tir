@@ -26,20 +26,20 @@ alu8:
 	shl bh, 2
 
 # CHECK:      asm.symbol {name = "alu8"}
-# CHECK-NEXT: x86_64.add8 {dst = al, src = bl}
-# CHECK-NEXT: x86_64.sub8 {dst = cl, src = dl}
+# CHECK-NEXT: x86_64.add8_norex {dst = al, src = bl}
+# CHECK-NEXT: x86_64.sub8_norex {dst = cl, src = dl}
 # CHECK-NEXT: x86_64.and8 {dst = sil, src = dil}
 # CHECK-NEXT: x86_64.or8 {dst = bpl, src = spl}
-# CHECK-NEXT: x86_64.xor8 {dst = al, src = al}
-# CHECK-NEXT: x86_64.mov8 {dst = bl, src = cl}
-# CHECK-NEXT: x86_64.add_imm8 {dst = al, imm = 42}
-# CHECK-NEXT: x86_64.and_imm8 {dst = cl, imm = 255}
-# CHECK-NEXT: x86_64.or_imm8 {dst = dl, imm = 1}
+# CHECK-NEXT: x86_64.xor8_norex {dst = al, src = al}
+# CHECK-NEXT: x86_64.mov8_norex {dst = bl, src = cl}
+# CHECK-NEXT: x86_64.add_imm8_norex {dst = al, imm = 42}
+# CHECK-NEXT: x86_64.and_imm8_norex {dst = cl, imm = 255}
+# CHECK-NEXT: x86_64.or_imm8_norex {dst = dl, imm = 1}
 # CHECK-NEXT: x86_64.xor_imm8 {dst = sil, imm = 7}
 # CHECK-NEXT: x86_64.mov_imm8 {dst = dil, imm = 100}
-# CHECK-NEXT: x86_64.shl8 {dst = al, imm = 3}
-# CHECK-NEXT: x86_64.shr8 {dst = bl, imm = 1}
-# CHECK-NEXT: x86_64.sar8 {dst = cl, imm = 7}
+# CHECK-NEXT: x86_64.shl8_norex {dst = al, imm = 3}
+# CHECK-NEXT: x86_64.shr8_norex {dst = bl, imm = 1}
+# CHECK-NEXT: x86_64.sar8_norex {dst = cl, imm = 7}
 # CHECK-NEXT: x86_64.add8 {dst = r8b, src = r9b}
 # CHECK-NEXT: x86_64.mov8 {dst = r15b, src = r10b}
 # CHECK-NEXT: x86_64.add_imm8 {dst = r12b, imm = 42}

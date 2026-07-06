@@ -29,6 +29,28 @@ template SetccReg for [X86] {
     }
 }
 
+// No-REX `setcc r/m8` (al/cl/dl/bl): 0x0F + 0x90|cc + ModR/M, no REX prefix.
+template SetccRegNorex for [X86] {
+    param MNEMONIC: String;
+    param CC: bits<8>;
+
+    operands {
+        dst: GPR8low,
+    }
+
+    encoding {
+        0..7 => 0x0F,
+        8..15 => CC,
+        16..18 => dst[0..2],
+        19..21 => 0b000,
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}"
+    }
+}
+
 // Remaining conditional jumps.
 
 jcc_ops!(
@@ -55,6 +77,19 @@ setcc_ops!(
     (SetAboveEq,   "setae", 0x93, { EFLAGS::cf == zext(0b0, 1) }),
     (SetBelowEq,   "setbe", 0x96, { (EFLAGS::cf | EFLAGS::zf) == zext(0b1, 1) }),
     (SetAbove,     "seta",  0x97, { (EFLAGS::cf | EFLAGS::zf) == zext(0b0, 1) })
+)
+
+setcc_norex!(
+    (SetEqNorex,        "sete_norex",  "sete",  0x94),
+    (SetNotEqNorex,     "setne_norex", "setne", 0x95),
+    (SetLessNorex,      "setl_norex",  "setl",  0x9C),
+    (SetGreaterEqNorex, "setge_norex", "setge", 0x9D),
+    (SetLessEqNorex,    "setle_norex", "setle", 0x9E),
+    (SetGreaterNorex,   "setg_norex",  "setg",  0x9F),
+    (SetBelowNorex,     "setb_norex",  "setb",  0x92),
+    (SetAboveEqNorex,   "setae_norex", "setae", 0x93),
+    (SetBelowEqNorex,   "setbe_norex", "setbe", 0x96),
+    (SetAboveNorex,     "seta_norex",  "seta",  0x97)
 )
 
 // cmovcc family: `cmovcc r64, r/m64` (0x0F 0x40|cc), the `RegRegExt` layout.

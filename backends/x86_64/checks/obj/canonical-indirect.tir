@@ -1,0 +1,28 @@
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
+
+// An indirect call whose target lands in a low register (rcx) is materialized
+// REX-free by `finalize_virtual_ops` (the call op is created after the
+// canonicalization pass, so the decision is made at creation). The surrounding
+// stack adjustment folds to the imm8 form and `mov eax, 0` drops its REX. Bytes
+// match GNU as: call rcx -> ff d1.
+
+module {
+  func @f(%fp: !i64) -> !i64 {
+    %r = indirect_call %fp() -> !i64
+    return %r
+  }
+  module_end
+}
+
+// CHECK: f:
+// mov rcx, rdi (detach callee): 48 89 f9
+// CHECK-NEXT: [0x48, 0x89, 0xF9]
+// add rsp, -8 (imm8): 48 83 c4 f8
+// CHECK-NEXT: [0x48, 0x83, 0xC4, 0xF8]
+// mov eax, 0 (norex): c7 c0 ...
+// CHECK-NEXT: [0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00]
+// call rcx (REX-free): ff d1
+// CHECK-NEXT: [0xFF, 0xD1]
+// CHECK-NEXT: [0x48, 0x83, 0xC4, 0x08]
+// CHECK-NEXT: [0x48, 0x89, 0xC0]
+// CHECK-NEXT: [0xC3]

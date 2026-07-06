@@ -30,7 +30,7 @@ mem_ext:
 # CHECK-NEXT: x86_64.mov_store8 {base = rbx, src = dl}
 # CHECK-NEXT: x86_64.mov_load_disp {dst = rax, base = rbx, imm = 8}
 # CHECK-NEXT: x86_64.mov_store_disp {base = rcx, imm = 16, src = rdx}
-# CHECK-NEXT: x86_64.push {reg = rbx}
+# CHECK-NEXT: x86_64.push_norex {reg = rbx}
 # CHECK-NEXT: x86_64.push {reg = r12}
-# CHECK-NEXT: x86_64.pop {reg = rbx}
+# CHECK-NEXT: x86_64.pop_norex {reg = rbx}
 # CHECK-NEXT: x86_64.pop {reg = r12}

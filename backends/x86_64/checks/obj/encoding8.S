@@ -22,16 +22,16 @@ enc8:
 
 # CHECK: enc8:
 # add al, bl: REX=40, opcode 00, ModR/M=11 reg(bl=3) rm(al=0) = D8.
-# CHECK-NEXT: [0x40, 0x00, 0xD8]
-# CHECK-NEXT: [0x40, 0x88, 0xD8]
+# CHECK-NEXT: [0x00, 0xD8]
+# CHECK-NEXT: [0x88, 0xD8]
 # sub sil, dil: REX=40 enables the new low bytes, opcode 28, ModR/M=11 reg(dil=7) rm(sil=6) = FE.
 # CHECK-NEXT: [0x40, 0x28, 0xFE]
 # mov al, 1: opcode C6, ModR/M=11 000 000 = C0, imm8=1.
-# CHECK-NEXT: [0x40, 0xC6, 0xC0, 0x01]
+# CHECK-NEXT: [0xC6, 0xC0, 0x01]
 # add cl, 42: opcode 80, ModR/M=11 000(/0) 001(cl) = C1, imm8=42.
-# CHECK-NEXT: [0x40, 0x80, 0xC1, 0x2A]
+# CHECK-NEXT: [0x80, 0xC1, 0x2A]
 # shl al, 3: opcode C0, ModR/M=11 100(/4) 000(al) = E0, imm8=3.
-# CHECK-NEXT: [0x40, 0xC0, 0xE0, 0x03]
+# CHECK-NEXT: [0xC0, 0xE0, 0x03]
 # add r8b, r9b: REX.RB=45, opcode 00, ModR/M=11 reg(r9b&7=1) rm(r8b&7=0) = C8.
 # CHECK-NEXT: [0x45, 0x00, 0xC8]
 # mov r10b, r11b: REX.RB=45, opcode 88, ModR/M=11 reg(r11b&7=3) rm(r10b&7=2) = DA.

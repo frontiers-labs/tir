@@ -24,8 +24,8 @@ arith_ext:
 # CHECK:      asm.symbol {name = "arith_ext"}
 # CHECK-NEXT: x86_64.neg {dst = rax}
 # CHECK-NEXT: x86_64.not {dst = rcx}
-# CHECK-NEXT: x86_64.sub_imm {dst = rax, imm = 42}
-# CHECK-NEXT: x86_64.cmp_imm {dst = rbx, imm = 7}
+# CHECK-NEXT: x86_64.sub_imm8s {dst = rax, imm = 42}
+# CHECK-NEXT: x86_64.cmp_imm8s {dst = rbx, imm = 7}
 # CHECK-NEXT: x86_64.test_imm {dst = rdx, imm = 5}
 # CHECK-NEXT: x86_64.imul_wide {dst = rbx}
 # CHECK-NEXT: x86_64.shl_cl {dst = rax}

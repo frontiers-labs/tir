@@ -14,5 +14,5 @@ mem:
 # CHECK-NEXT: x86_64.mov_store {base = rcx, src = rdx}
 # CHECK-NEXT: x86_64.mov_load {dst = r9, base = r10}
 # CHECK-NEXT: x86_64.mov_store {base = r11, src = r12}
-# CHECK-NEXT: x86_64.jmp_indirect {target = rsi}
+# CHECK-NEXT: x86_64.jmp_indirect_norex {target = rsi}
 # CHECK-NEXT: x86_64.call_indirect {target = r8}

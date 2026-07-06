@@ -40,14 +40,14 @@ conditional:
 # CHECK-NEXT: x86_64.jns {imm = 16}
 # CHECK-NEXT: x86_64.jo {imm = 16}
 # CHECK-NEXT: x86_64.jno {imm = 16}
-# CHECK-NEXT: x86_64.sete {dst = al}
-# CHECK-NEXT: x86_64.setne {dst = bl}
+# CHECK-NEXT: x86_64.sete_norex {dst = al}
+# CHECK-NEXT: x86_64.setne_norex {dst = bl}
 # CHECK-NEXT: x86_64.setl {dst = dil}
 # CHECK-NEXT: x86_64.setge {dst = spl}
 # CHECK-NEXT: x86_64.setle {dst = r9b}
 # CHECK-NEXT: x86_64.setg {dst = r10b}
-# CHECK-NEXT: x86_64.setb {dst = cl}
-# CHECK-NEXT: x86_64.setae {dst = dl}
+# CHECK-NEXT: x86_64.setb_norex {dst = cl}
+# CHECK-NEXT: x86_64.setae_norex {dst = dl}
 # CHECK-NEXT: x86_64.setbe {dst = sil}
 # CHECK-NEXT: x86_64.seta {dst = r15b}
 # CHECK-NEXT: x86_64.cmove {dst = rax, src = rbx}

@@ -1,0 +1,28 @@
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
+
+// The post-RA `canonicalize_encodings` pass rewrites to the REX-free and imm8
+// forms once registers are physical. SysV lands the two i32 args in edi/esi
+// (indices 7 and 6, both low), so isel's REX-carrying add32/mov32/add_imm32 are
+// downgraded: the register moves lose their 0x40 REX and `add eax, 42` folds to
+// the 0x83 imm8 short form. Bytes match GNU as.
+
+module {
+  func @lowregs(%0: !i32, %1: !i32) -> !i32 {
+    %2 = addi %0, %1 : !i32
+    %3 = constant {value = 42} : !i32
+    %4 = addi %2, %3 : !i32
+    return %4
+  }
+  module_end
+}
+
+// CHECK: lowregs:
+// mov eax, edi (norex): 89 f8
+// CHECK-NEXT: [0x89, 0xF8]
+// add eax, esi (norex): 01 f0
+// CHECK-NEXT: [0x01, 0xF0]
+// mov eax, eax (norex): 89 c0
+// CHECK-NEXT: [0x89, 0xC0]
+// add eax, 42 (imm8 norex): 83 c0 2a
+// CHECK-NEXT: [0x83, 0xC0, 0x2A]
+// CHECK-NEXT: [0xC3]
