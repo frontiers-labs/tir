@@ -1971,21 +1971,21 @@ mod tests {
             .into_iter()
             .map(|id| context.get_op(id).name)
             .collect();
-        // The lr save has no callee-saved register to live in (the modeled
-        // register file marks x0..x28 and x30 caller-saved), so it spills
-        // before the final ABI argument copy.
+        // The lr save lives in a callee-saved register (x19..x28 per AAPCS64),
+        // preserved by the prologue right after the frame is reserved and
+        // restored by the epilogue before the frame is released.
         assert_eq!(
             names,
             vec![
                 "sub_imm",
-                "orr",
-                "orr",
                 "store_doubleword",
                 "orr",
+                "orr",
+                "orr",
                 "bl",
+                "orr",
+                "orr",
                 "load_doubleword",
-                "orr",
-                "orr",
                 "add_imm",
                 "ret",
                 "symbol_end"

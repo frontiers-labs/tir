@@ -14,6 +14,10 @@ pub enum RegisterTrait {
     ProgramCounter,
     GlobalPointer,
     ThreadPointer,
+    /// Reserved by the platform ABI: never allocated (e.g. AArch64 x18, the
+    /// platform register). Like the pointer traits, it excludes the register from
+    /// the allocation order.
+    Reserved,
     /// Carries an incoming argument under the calling convention. Argument order
     /// follows the register index order within the class (a0 before a1, ...).
     Argument,
@@ -1582,6 +1586,7 @@ impl RegisterClass {
                         | RegisterTrait::ProgramCounter
                         | RegisterTrait::GlobalPointer
                         | RegisterTrait::ThreadPointer
+                        | RegisterTrait::Reserved
                 )
             })
         };

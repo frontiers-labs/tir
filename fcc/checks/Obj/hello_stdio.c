@@ -37,7 +37,7 @@
 // ARM: Symbol .L.str0: value=0x0 size=0xe bind=LOCAL type=OBJECT section=.rodata
 // ARM: Symbol main: value=0x0 size={{0x[0-9a-f]+}} bind=GLOBAL type=FUNC section=.text
 // ARM: Symbol printf: value=0x0 size=0x0 bind=GLOBAL type=NOTYPE section=UND
-// ARM: Reloc .text+0x4: R_AARCH64_ADR_PREL_LO21 .L.str0 + 0
+// ARM: Reloc .text+0x8: R_AARCH64_ADR_PREL_LO21 .L.str0 + 0
 // ARM: Reloc .text+{{0x[0-9a-f]+}}: R_AARCH64_CALL26 printf + 0
 
 // ARMASM: .global main

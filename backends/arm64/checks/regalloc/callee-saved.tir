@@ -1,0 +1,31 @@
+// RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
+
+// %a is computed, passed to an external call, then read again after it, so it is
+// live across the call and must occupy a callee-saved register (x19). The return
+// address saved across the call rides the same mechanism in a second callee-saved
+// register (x20). Per AAPCS64 both must be preserved for this function's caller:
+// the prologue saves them into the frame and the epilogue restores them before
+// the return. The call clobbers only the caller-saved registers x0..x17 (x18 is
+// reserved as the platform register and never appears).
+
+module {
+  declare @ext(!i64) -> !i64
+  func @f(%0: !i64) -> !i64 {
+    %a = addi %0, %0 : !i64
+    %1 = call @ext(%a : !i64) -> !i64
+    %2 = addi %a, %1 : !i64
+    return %2
+  }
+  module_end
+}
+
+// Prologue: reserve the frame, then save the two callee-saved registers used.
+// CHECK: arm64.sub_imm {rd = sp, rn = sp, imm = 16}
+// CHECK: arm64.store_doubleword {rt = x19, rn = sp, imm = 0}
+// CHECK: arm64.store_doubleword {rt = x20, rn = sp, imm = 8}
+// CHECK: arm64.vcall {callee = "ext", clobbers = [GPR[0], GPR[1], GPR[2], GPR[3], GPR[4], GPR[5], GPR[6], GPR[7], GPR[8], GPR[9], GPR[10], GPR[11], GPR[12], GPR[13], GPR[14], GPR[15], GPR[16], GPR[17]]}
+// Epilogue: restore both and release the frame before the return.
+// CHECK: arm64.load_doubleword {rt = x19, rn = sp, imm = 0}
+// CHECK: arm64.load_doubleword {rt = x20, rn = sp, imm = 8}
+// CHECK: arm64.add_imm {rd = sp, rn = sp, imm = 16}
+// CHECK: arm64.vret

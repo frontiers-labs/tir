@@ -19,8 +19,10 @@ register_class GPR for [ARMv8A64] {
     registers {
         x0 => { traits = [argument, return_value, caller_saved] },
         x1..x7 => { traits = [argument, caller_saved] },
-        x8..x28 => { traits = [caller_saved] },
-        x29("fp") => { traits = [stack_pointer, callee_saved] },
+        x8..x17 => { traits = [caller_saved] },
+        x18 => { traits = [reserved] },
+        x19..x28 => { traits = [callee_saved] },
+        x29("fp") => { traits = [callee_saved] },
         x30("lr") => { traits = [return_address, caller_saved] },
         x31("xzr") => { traits = [hardwired_zero] },
     }

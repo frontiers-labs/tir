@@ -1080,6 +1080,7 @@ where
                     "program_counter" => Some(RegisterTrait::ProgramCounter),
                     "global_pointer" => Some(RegisterTrait::GlobalPointer),
                     "thread_pointer" => Some(RegisterTrait::ThreadPointer),
+                    "reserved" => Some(RegisterTrait::Reserved),
                     "argument" => Some(RegisterTrait::Argument),
                     "return_value" => Some(RegisterTrait::ReturnValue),
                     "temporary" => Some(RegisterTrait::Temporary),
