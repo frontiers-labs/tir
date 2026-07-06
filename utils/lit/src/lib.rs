@@ -85,7 +85,12 @@ pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
         });
     }
     match std::fs::rename(&tmp, &dest) {
-        Ok(()) => dest,
+        Ok(()) => {
+            // POSIX defines rename between two hard links of the same inode
+            // as a no-op that succeeds and leaves `tmp` in place.
+            let _ = std::fs::remove_file(&tmp);
+            dest
+        }
         // Windows cannot replace an executable that is currently running; the
         // process-unique snapshot still works there.
         Err(_) => tmp,
