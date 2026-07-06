@@ -10,6 +10,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .add_input("./defs/multiplication.tmdl")
         .add_input("./defs/float.tmdl")
         .add_input("./defs/compressed.tmdl")
+        .add_input("./defs/atomics.tmdl")
+        .add_input("./defs/zifencei.tmdl")
         .add_input("./defs/zicsr.tmdl")
         .add_input("./defs/perf.tmdl")
         .add_input("./defs/vector.tmdl")

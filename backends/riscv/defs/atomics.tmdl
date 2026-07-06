@@ -1,0 +1,276 @@
+// RISC-V A standard extension: LR/SC and atomic memory operations.
+//
+// Every mnemonic has four static ordering variants (plain/.aq/.rl/.aqrl) that
+// map onto the target-neutral ordering vocabulary
+// (relaxed/acquire/release/acq_rel); the aq/rl encoding bits (26/25) select
+// the form so all four decode without conflict. See docs/tmdl/memory_model.md.
+
+isa A requires [RV32I | RV64I] {}
+// Internal conjunction, following the D64/C64 pattern: the rv64-only doubleword
+// atomics need XLEN = 64. The target enables A64 automatically from A on rv64.
+isa A64 requires [A, RV64I] {}
+
+// AMO R-type: rd = old memory, rs2 = operand, (rs1) = address.
+template AMOType for [A] {
+    param MNEMONIC: String;
+    param FUNCT5: bits<5>;
+    param FUNCT3: bits<3>;
+    param AQ: bits<1>;
+    param RL: bits<1>;
+    param OPCODE: bits<7> = 0b0101111;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => FUNCT3,
+        15..19 => rs1,
+        20..24 => rs2,
+        25 => RL,
+        26 => AQ,
+        27..31 => FUNCT5,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rs2}, ({rs1})"
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+// Load-reserved: no rs2, the rs2 encoding field is a fixed zero.
+template LRType for [A] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+    param AQ: bits<1>;
+    param RL: bits<1>;
+    param FUNCT5: bits<5> = 0b00010;
+    param OPCODE: bits<7> = 0b0101111;
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => FUNCT3,
+        15..19 => rs1,
+        20..24 => 0b00000,
+        25 => RL,
+        26 => AQ,
+        27..31 => FUNCT5,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, ({rs1})"
+    }
+
+    schedule { units = [WriteLoad]; }
+}
+
+// LR/SC ordering matrix: one flat row per (width, ordering). The instruction
+// name is spelled out per row (no ${concat}) so the plain relaxed form keeps
+// its unsuffixed name.
+macro lr {
+    ( $( ( $iname:ident, $mn:literal, $dia:ident, $fn3:literal, $bytes:literal, $aq:literal, $rl:literal, $ord:ident ) ),* ) => {
+        $( instruction $iname for [$dia] : LRType {
+               param MNEMONIC: String = $mn;
+               param FUNCT3: bits<3> = $fn3;
+               param AQ: bits<1> = $aq;
+               param RL: bits<1> = $rl;
+               behavior {
+                   try {
+                       rd = sext(load_reserved(rs1, $bytes, Ordering::$ord), self.XLEN);
+                   } except misaligned_load(addr) {
+                       trap(4, addr);
+                   }
+               }
+           } )*
+    };
+}
+
+macro sc {
+    ( $( ( $iname:ident, $mn:literal, $dia:ident, $fn3:literal, $bytes:literal, { $($val:tt)* }, $aq:literal, $rl:literal, $ord:ident ) ),* ) => {
+        $( instruction $iname for [$dia] : AMOType {
+               param MNEMONIC: String = $mn;
+               param FUNCT5: bits<5> = 0b00011;
+               param FUNCT3: bits<3> = $fn3;
+               param AQ: bits<1> = $aq;
+               param RL: bits<1> = $rl;
+               behavior {
+                   try {
+                       rd = if store_conditional(rs1, $bytes, $($val)*, Ordering::$ord) == zext(0b1, 1) {
+                           zext(0b0, self.XLEN)
+                       } else {
+                           zext(0b1, self.XLEN)
+                       };
+                   } except misaligned_store(addr) {
+                       trap(6, addr);
+                   }
+               }
+           } )*
+    };
+}
+
+lr!(
+    (LrW,     "lr.w",      A,   0b010, 4, 0b0, 0b0, relaxed),
+    (LrWAq,   "lr.w.aq",   A,   0b010, 4, 0b1, 0b0, acquire),
+    (LrWRl,   "lr.w.rl",   A,   0b010, 4, 0b0, 0b1, release),
+    (LrWAqrl, "lr.w.aqrl", A,   0b010, 4, 0b1, 0b1, acq_rel),
+    (LrD,     "lr.d",      A64, 0b011, 8, 0b0, 0b0, relaxed),
+    (LrDAq,   "lr.d.aq",   A64, 0b011, 8, 0b1, 0b0, acquire),
+    (LrDRl,   "lr.d.rl",   A64, 0b011, 8, 0b0, 0b1, release),
+    (LrDAqrl, "lr.d.aqrl", A64, 0b011, 8, 0b1, 0b1, acq_rel)
+)
+
+sc!(
+    (ScW,     "sc.w",      A,   0b010, 4, { extract(rs2, 31, 0) }, 0b0, 0b0, relaxed),
+    (ScWAq,   "sc.w.aq",   A,   0b010, 4, { extract(rs2, 31, 0) }, 0b1, 0b0, acquire),
+    (ScWRl,   "sc.w.rl",   A,   0b010, 4, { extract(rs2, 31, 0) }, 0b0, 0b1, release),
+    (ScWAqrl, "sc.w.aqrl", A,   0b010, 4, { extract(rs2, 31, 0) }, 0b1, 0b1, acq_rel),
+    (ScD,     "sc.d",      A64, 0b011, 8, { rs2 },                 0b0, 0b0, relaxed),
+    (ScDAq,   "sc.d.aq",   A64, 0b011, 8, { rs2 },                 0b1, 0b0, acquire),
+    (ScDRl,   "sc.d.rl",   A64, 0b011, 8, { rs2 },                 0b0, 0b1, release),
+    (ScDAqrl, "sc.d.aqrl", A64, 0b011, 8, { rs2 },                 0b1, 0b1, acq_rel)
+)
+
+// AMO family: one row per (Name, mnemonic-stem, FUNCT5, rmw-op) unrolls into
+// the eight (W for [A] / D for [A64]) × four-ordering instructions. The W form
+// operates on the low 32 bits (sign-extended into rd); the D form on all 64.
+macro amo {
+    ( $( ( $name:ident, $mn:literal, $f5:literal, $op:ident ) ),* ) => {
+        $(
+        instruction ${concat($name, W)} for [A] : AMOType {
+            param MNEMONIC: String = ${concat($mn, ".w")};
+            param FUNCT5: bits<5> = $f5;
+            param FUNCT3: bits<3> = 0b010;
+            param AQ: bits<1> = 0b0;
+            param RL: bits<1> = 0b0;
+            behavior {
+                try {
+                    rd = sext(atomic_rmw($op, rs1, 4, extract(rs2, 31, 0), Ordering::relaxed), self.XLEN);
+                } except misaligned_store(addr) {
+                    trap(6, addr);
+                }
+            }
+        }
+        instruction ${concat($name, W, Aq)} for [A] : AMOType {
+            param MNEMONIC: String = ${concat($mn, ".w.aq")};
+            param FUNCT5: bits<5> = $f5;
+            param FUNCT3: bits<3> = 0b010;
+            param AQ: bits<1> = 0b1;
+            param RL: bits<1> = 0b0;
+            behavior {
+                try {
+                    rd = sext(atomic_rmw($op, rs1, 4, extract(rs2, 31, 0), Ordering::acquire), self.XLEN);
+                } except misaligned_store(addr) {
+                    trap(6, addr);
+                }
+            }
+        }
+        instruction ${concat($name, W, Rl)} for [A] : AMOType {
+            param MNEMONIC: String = ${concat($mn, ".w.rl")};
+            param FUNCT5: bits<5> = $f5;
+            param FUNCT3: bits<3> = 0b010;
+            param AQ: bits<1> = 0b0;
+            param RL: bits<1> = 0b1;
+            behavior {
+                try {
+                    rd = sext(atomic_rmw($op, rs1, 4, extract(rs2, 31, 0), Ordering::release), self.XLEN);
+                } except misaligned_store(addr) {
+                    trap(6, addr);
+                }
+            }
+        }
+        instruction ${concat($name, W, Aqrl)} for [A] : AMOType {
+            param MNEMONIC: String = ${concat($mn, ".w.aqrl")};
+            param FUNCT5: bits<5> = $f5;
+            param FUNCT3: bits<3> = 0b010;
+            param AQ: bits<1> = 0b1;
+            param RL: bits<1> = 0b1;
+            behavior {
+                try {
+                    rd = sext(atomic_rmw($op, rs1, 4, extract(rs2, 31, 0), Ordering::acq_rel), self.XLEN);
+                } except misaligned_store(addr) {
+                    trap(6, addr);
+                }
+            }
+        }
+        instruction ${concat($name, D)} for [A64] : AMOType {
+            param MNEMONIC: String = ${concat($mn, ".d")};
+            param FUNCT5: bits<5> = $f5;
+            param FUNCT3: bits<3> = 0b011;
+            param AQ: bits<1> = 0b0;
+            param RL: bits<1> = 0b0;
+            behavior {
+                try {
+                    rd = sext(atomic_rmw($op, rs1, 8, rs2, Ordering::relaxed), self.XLEN);
+                } except misaligned_store(addr) {
+                    trap(6, addr);
+                }
+            }
+        }
+        instruction ${concat($name, D, Aq)} for [A64] : AMOType {
+            param MNEMONIC: String = ${concat($mn, ".d.aq")};
+            param FUNCT5: bits<5> = $f5;
+            param FUNCT3: bits<3> = 0b011;
+            param AQ: bits<1> = 0b1;
+            param RL: bits<1> = 0b0;
+            behavior {
+                try {
+                    rd = sext(atomic_rmw($op, rs1, 8, rs2, Ordering::acquire), self.XLEN);
+                } except misaligned_store(addr) {
+                    trap(6, addr);
+                }
+            }
+        }
+        instruction ${concat($name, D, Rl)} for [A64] : AMOType {
+            param MNEMONIC: String = ${concat($mn, ".d.rl")};
+            param FUNCT5: bits<5> = $f5;
+            param FUNCT3: bits<3> = 0b011;
+            param AQ: bits<1> = 0b0;
+            param RL: bits<1> = 0b1;
+            behavior {
+                try {
+                    rd = sext(atomic_rmw($op, rs1, 8, rs2, Ordering::release), self.XLEN);
+                } except misaligned_store(addr) {
+                    trap(6, addr);
+                }
+            }
+        }
+        instruction ${concat($name, D, Aqrl)} for [A64] : AMOType {
+            param MNEMONIC: String = ${concat($mn, ".d.aqrl")};
+            param FUNCT5: bits<5> = $f5;
+            param FUNCT3: bits<3> = 0b011;
+            param AQ: bits<1> = 0b1;
+            param RL: bits<1> = 0b1;
+            behavior {
+                try {
+                    rd = sext(atomic_rmw($op, rs1, 8, rs2, Ordering::acq_rel), self.XLEN);
+                } except misaligned_store(addr) {
+                    trap(6, addr);
+                }
+            }
+        }
+        )*
+    };
+}
+
+amo!(
+    (AmoAdd,  "amoadd",  0b00000, add),
+    (AmoSwap, "amoswap", 0b00001, swap),
+    (AmoXor,  "amoxor",  0b00100, xor),
+    (AmoAnd,  "amoand",  0b01100, and),
+    (AmoOr,   "amoor",   0b01000, or),
+    (AmoMin,  "amomin",  0b10000, min),
+    (AmoMax,  "amomax",  0b10100, max),
+    (AmoMinu, "amominu", 0b11000, minu),
+    (AmoMaxu, "amomaxu", 0b11100, maxu)
+)

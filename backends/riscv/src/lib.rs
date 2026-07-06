@@ -32,10 +32,12 @@ impl TargetConfig {
             config.features.push(Feature::D64);
         }
         // The M *W forms follow the same pattern: Zmmul64/RVM64 gate the
-        // rv64-only word multiply/divide instructions.
+        // rv64-only word multiply/divide instructions; A64 gates the rv64-only
+        // doubleword atomics.
         for (conj, base) in [
             (Feature::Zmmul64, Feature::Zmmul),
             (Feature::RVM64, Feature::RVM),
+            (Feature::A64, Feature::A),
         ] {
             if config.xlen == 64
                 && config.features.contains(&base)
@@ -117,7 +119,8 @@ impl TargetConfig {
                 | Feature::D64
                 | Feature::C64
                 | Feature::Zmmul64
-                | Feature::RVM64 => xlen == 64,
+                | Feature::RVM64
+                | Feature::A64 => xlen == 64,
                 _ => true,
             })
             .collect();
@@ -256,15 +259,16 @@ fn parse_riscv_isa_string(march: &str) -> Result<TargetConfig, String> {
             enable(base_feature);
             skip_extension_version(&mut chars);
         }
-        // G abbreviates IMAFD_Zicsr_Zifencei; the parts TMDL does not model
-        // yet contribute nothing.
+        // G abbreviates IMAFD_Zicsr_Zifencei.
         'g' => {
             enable(base_feature);
             enable(Feature::RVM);
             enable(Feature::Zmmul);
+            enable(Feature::A);
             enable(Feature::F);
             enable(Feature::D);
             enable(Feature::Zicsr);
+            enable(Feature::Zifencei);
             skip_extension_version(&mut chars);
         }
         'e' => return Err(format!("unsupported RISC-V base ISA 'e' in '{march}'")),
@@ -307,10 +311,14 @@ fn parse_riscv_isa_string(march: &str) -> Result<TargetConfig, String> {
                 enable(Feature::C);
                 skip_extension_version(&mut chars);
             }
+            'a' => {
+                enable(Feature::A);
+                skip_extension_version(&mut chars);
+            }
             // Standard single-letter extensions TMDL does not model yet are
             // accepted so common GNU march strings (e.g. rv64gc) keep working;
             // they contribute no instructions.
-            'a' | 'q' | 'l' | 'b' | 'j' | 't' | 'p' | 'h' => {
+            'q' | 'l' | 'b' | 'j' | 't' | 'p' | 'h' => {
                 skip_extension_version(&mut chars);
             }
             'z' | 's' | 'x' => {
@@ -576,6 +584,99 @@ dialect! {
             CSRReadWriteImmOp,
             CSRReadSetImmOp,
             CSRReadClearImmOp,
+            // A extension: load-reserved / store-conditional
+            LrWOp,
+            LrWAqOp,
+            LrWRlOp,
+            LrWAqrlOp,
+            LrDOp,
+            LrDAqOp,
+            LrDRlOp,
+            LrDAqrlOp,
+            ScWOp,
+            ScWAqOp,
+            ScWRlOp,
+            ScWAqrlOp,
+            ScDOp,
+            ScDAqOp,
+            ScDRlOp,
+            ScDAqrlOp,
+            // A extension: atomic memory operations
+            AmoAddWOp,
+            AmoAddWAqOp,
+            AmoAddWRlOp,
+            AmoAddWAqrlOp,
+            AmoAddDOp,
+            AmoAddDAqOp,
+            AmoAddDRlOp,
+            AmoAddDAqrlOp,
+            AmoSwapWOp,
+            AmoSwapWAqOp,
+            AmoSwapWRlOp,
+            AmoSwapWAqrlOp,
+            AmoSwapDOp,
+            AmoSwapDAqOp,
+            AmoSwapDRlOp,
+            AmoSwapDAqrlOp,
+            AmoXorWOp,
+            AmoXorWAqOp,
+            AmoXorWRlOp,
+            AmoXorWAqrlOp,
+            AmoXorDOp,
+            AmoXorDAqOp,
+            AmoXorDRlOp,
+            AmoXorDAqrlOp,
+            AmoAndWOp,
+            AmoAndWAqOp,
+            AmoAndWRlOp,
+            AmoAndWAqrlOp,
+            AmoAndDOp,
+            AmoAndDAqOp,
+            AmoAndDRlOp,
+            AmoAndDAqrlOp,
+            AmoOrWOp,
+            AmoOrWAqOp,
+            AmoOrWRlOp,
+            AmoOrWAqrlOp,
+            AmoOrDOp,
+            AmoOrDAqOp,
+            AmoOrDRlOp,
+            AmoOrDAqrlOp,
+            AmoMinWOp,
+            AmoMinWAqOp,
+            AmoMinWRlOp,
+            AmoMinWAqrlOp,
+            AmoMinDOp,
+            AmoMinDAqOp,
+            AmoMinDRlOp,
+            AmoMinDAqrlOp,
+            AmoMaxWOp,
+            AmoMaxWAqOp,
+            AmoMaxWRlOp,
+            AmoMaxWAqrlOp,
+            AmoMaxDOp,
+            AmoMaxDAqOp,
+            AmoMaxDRlOp,
+            AmoMaxDAqrlOp,
+            AmoMinuWOp,
+            AmoMinuWAqOp,
+            AmoMinuWRlOp,
+            AmoMinuWAqrlOp,
+            AmoMinuDOp,
+            AmoMinuDAqOp,
+            AmoMinuDRlOp,
+            AmoMinuDAqrlOp,
+            AmoMaxuWOp,
+            AmoMaxuWAqOp,
+            AmoMaxuWRlOp,
+            AmoMaxuWAqrlOp,
+            AmoMaxuDOp,
+            AmoMaxuDAqOp,
+            AmoMaxuDRlOp,
+            AmoMaxuDAqrlOp,
+            // Fences
+            FenceOp,
+            FenceIOp,
             // System
             EnvCallOp,
             EnvBreakOp,
@@ -2944,6 +3045,7 @@ mod target_parser_tests {
                 Feature::RV32I,
                 Feature::RVM,
                 Feature::Zmmul,
+                Feature::A,
                 Feature::C,
                 Feature::C32
             ]
@@ -2967,11 +3069,13 @@ mod target_parser_tests {
             features("rv32ifd", None),
             vec![Feature::RV32I, Feature::F, Feature::D]
         );
-        // G abbreviates IMAFD...; M, F and D are the modeled parts.
+        // G abbreviates IMAFD_Zicsr_Zifencei; M, A, F, D and Zifencei are modeled.
         let g = features("rv64gc_zba_zbb", None);
         assert!(g.contains(&Feature::RVM));
+        assert!(g.contains(&Feature::A));
         assert!(g.contains(&Feature::F));
         assert!(g.contains(&Feature::D));
+        assert!(g.contains(&Feature::Zifencei));
         // Bare architecture names select the generic, everything-on profile.
         assert_eq!(
             features("riscv64", None),
@@ -2987,6 +3091,9 @@ mod target_parser_tests {
                 Feature::C,
                 Feature::C64,
                 Feature::Zcd,
+                Feature::A,
+                Feature::A64,
+                Feature::Zifencei,
                 Feature::Zicsr,
                 Feature::RVV
             ]

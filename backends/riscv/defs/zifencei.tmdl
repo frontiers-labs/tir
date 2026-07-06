@@ -1,0 +1,24 @@
+// RISC-V Zifencei standard extension: instruction-stream fence.
+
+isa Zifencei requires [RV32I | RV64I] {}
+
+instruction FenceI for [Zifencei] {
+    param MNEMONIC: String = "fence.i";
+    param OPCODE: bits<7> = 0b0001111;
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => 0,
+        12..14 => 0b001,
+        15..19 => 0,
+        20..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC}"
+    }
+
+    behavior {
+        fence_i();
+    }
+}

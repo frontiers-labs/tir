@@ -583,6 +583,37 @@ template SystemNoOperand for [RV32I, RV64I] {
     }
 }
 
+// FENCE: order device-I/O and memory accesses. `pred`/`succ` are the 4-bit
+// `iorw` predecessor/successor sets, printed/parsed numerically (no keyword
+// form yet — see docs/tmdl/memory_model.md).
+instruction Fence for [RV32I, RV64I] {
+    param MNEMONIC: String = "fence";
+    param OPCODE: bits<7> = 0b0001111;
+
+    operands {
+        pred: bits<4>,
+        succ: bits<4>,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => 0,
+        12..14 => 0b000,
+        15..19 => 0,
+        20..23 => succ,
+        24..27 => pred,
+        28..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {pred}, {succ}"
+    }
+
+    behavior {
+        fence(pred, succ);
+    }
+}
+
 instruction EnvCall for [RV32I, RV64I] : SystemNoOperand {
     param MNEMONIC: String = "ecall";
     param IMM12: bits<12> = 0b000000000000;

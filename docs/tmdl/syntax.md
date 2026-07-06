@@ -192,6 +192,19 @@ instruction Add for [RV32I, RV64I] : RType {
   `extract`, `clamp`, `log2Ceil`, `load`/`store` (memory), and `trap(cause)` —
   raise a synchronous exception with a constant cause code (e.g. RISC-V
   `ecall`/`ebreak`); the simulator routes it to its exception callback.
+- Atomic memory and fence builtins (an optional trailing `Ordering::*` argument
+  selects acquire/release semantics; see
+  [Memory Model](memory_model.md) for the full reference):
+  - `load_reserved(addr, bytes, ordering)` — read memory and register a
+    reservation over the accessed range.
+  - `store_conditional(addr, bytes, value, ordering)` — write iff the
+    reservation still covers the exact range; evaluates to `bits<1>` (1 success,
+    0 failure) and consumes the reservation.
+  - `atomic_rmw(op, addr, bytes, value, ordering)` — one atomic
+    read-modify-write, evaluating to the old memory value; `op` is one of
+    `add, swap, xor, and, or, min, max, minu, maxu`.
+  - `fence(pred, succ)` — data-memory ordering fence; `fence_i()` —
+    instruction-stream fence. Both are statements, like `trap`.
 - Functional vector builtins operate on iterators (a value split into lanes):
   - `split(bits, n)` — cut a bit value into `n` equal-width lanes, lane 0 from
     the low bits.

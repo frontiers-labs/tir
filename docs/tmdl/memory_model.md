@@ -73,12 +73,16 @@ the Sail model is enabled for the A extension.
   behavior's job — RISC-V SC writes `rd = 0` on success:
 
   ```
-  rd = if store_conditional(rs1, 4, extract(rs2, 31, 0), Ordering::relaxed) == 0b1 {
+  rd = if store_conditional(rs1, 4, extract(rs2, 31, 0), Ordering::relaxed) == zext(0b1, 1) {
       zext(0b0, self.XLEN)
   } else {
       zext(0b1, self.XLEN)
   };
   ```
+
+  The `zext(0b1, 1)` — rather than a bare `0b1` — is required: an integer
+  literal has type `Integer` and does not unify with the `bits<1>` result of
+  `store_conditional`.
 
 - `atomic_rmw` performs one single-copy-atomic read-modify-write and evaluates
   to the **old** memory value. `op` is a bare identifier from the closed set
