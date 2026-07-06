@@ -851,6 +851,19 @@ mod isa {
                     addend: -4,
                     field_offset: 3,
                 }),
+                // `jmp rel32` (E9 + disp32): the disp32 follows the 1-byte opcode.
+                "jmp" => Some(RelocKind {
+                    r_type: R_X86_64_PC32,
+                    addend: -4,
+                    field_offset: 1,
+                }),
+                // `jcc rel32` (0F 8x + disp32): the disp32 follows the 2-byte opcode.
+                "je" | "jne" | "jl" | "jge" | "jb" | "jae" | "jle" | "jg" | "jbe" | "ja" | "js"
+                | "jns" | "jo" | "jno" => Some(RelocKind {
+                    r_type: R_X86_64_PC32,
+                    addend: -4,
+                    field_offset: 2,
+                }),
                 _ => None,
             },
             pc_rel_scale: |_| 0,

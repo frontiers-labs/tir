@@ -354,6 +354,7 @@ pub fn reloc_name(machine: u16, r_type: u32) -> Option<&'static str> {
         (EM_RISCV, 26) => Some("R_RISCV_HI20"),
         (EM_RISCV, 27) => Some("R_RISCV_LO12_I"),
         (EM_AARCH64, 274) => Some("R_AARCH64_ADR_PREL_LO21"),
+        (EM_AARCH64, 279) => Some("R_AARCH64_TSTBR14"),
         (EM_AARCH64, 280) => Some("R_AARCH64_CONDBR19"),
         (EM_AARCH64, 282) => Some("R_AARCH64_JUMP26"),
         (EM_AARCH64, 283) => Some("R_AARCH64_CALL26"),

@@ -13,6 +13,7 @@ use crate::{
 };
 
 const R_AARCH64_ADR_PREL_LO21: u32 = 274;
+const R_AARCH64_TSTBR14: u32 = 279;
 const R_AARCH64_CONDBR19: u32 = 280;
 const R_AARCH64_JUMP26: u32 = 282;
 const R_AARCH64_CALL26: u32 = 283;
@@ -38,8 +39,14 @@ pub(crate) fn object_format() -> ObjectFormatInfo {
                 addend: 0,
                 field_offset: 0,
             }),
-            "b.eq" | "b.ne" | "b.lt" | "b.ge" | "b.lo" | "b.hs" => Some(RelocKind {
+            "b.eq" | "b.ne" | "b.lt" | "b.ge" | "b.lo" | "b.hs" | "b.gt" | "b.le" | "b.hi"
+            | "b.ls" | "b.mi" | "b.pl" | "b.vs" | "b.vc" | "cbz" | "cbnz" => Some(RelocKind {
                 r_type: R_AARCH64_CONDBR19,
+                addend: 0,
+                field_offset: 0,
+            }),
+            "tbz" | "tbnz" => Some(RelocKind {
+                r_type: R_AARCH64_TSTBR14,
                 addend: 0,
                 field_offset: 0,
             }),
