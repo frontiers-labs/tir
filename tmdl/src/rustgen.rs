@@ -1559,9 +1559,9 @@ fn emit_instructions<'a>(
 
     // Most-specific-wins: try encodings that fix more opcode bits first, so a
     // more-general encoding declared earlier cannot shadow a specific one that
-    // should claim the word. `sort_by` is stable, preserving declaration order
-    // among equally-specific encodings.
-    instruction_decoder_dispatch.sort_by(|a, b| b.0.count_ones().cmp(&a.0.count_ones()));
+    // should claim the word. `sort_by_key` is stable, preserving declaration
+    // order among equally-specific encodings.
+    instruction_decoder_dispatch.sort_by_key(|d| std::cmp::Reverse(d.0.count_ones()));
     let instruction_decoder_dispatch: Vec<proc_macro2::TokenStream> = instruction_decoder_dispatch
         .into_iter()
         .map(|(_, ident)| {
