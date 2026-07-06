@@ -997,6 +997,28 @@ fn check_behavior(
     walk_paths(behavior, &mut paths);
 
     for path in paths {
+        // `Ordering::<member>` is a memory-ordering constant, not a register path.
+        if path.base == "Ordering" {
+            let member_ok =
+                path.remainder.len() == 1 && ast::ordering_code(&path.remainder[0]).is_some();
+            if !member_ok {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        path.span,
+                        format!(
+                            "unknown ordering '{}::{}' in instruction '{}'; valid orderings: {}",
+                            path.base,
+                            path.remainder.join("::"),
+                            owner,
+                            ast::ORDERING_NAMES.join(", ")
+                        ),
+                    ),
+                ));
+            }
+            continue;
+        }
+
         let reg_class = match item_cache.get(path.base.as_str()) {
             Some(ast::Item::RegisterClass(rc)) => rc,
             Some(_) | None => {
@@ -1047,7 +1069,194 @@ fn check_behavior(
         }
     }
 
+    check_atomic_structure(owner, behavior, file_name, &mut diags);
+
     diags
+}
+
+/// A `load_reserved`/`store_conditional`/`atomic_rmw` call.
+fn is_atomic_call(e: &ast::Expr) -> bool {
+    matches!(e, ast::Expr::Call(c) if matches!(
+        &*c.callee,
+        ast::Expr::BuiltinFunction(
+            ast::BuiltinFunction::LoadReserved
+                | ast::BuiltinFunction::StoreConditional
+                | ast::BuiltinFunction::AtomicRmw
+        )
+    ))
+}
+
+/// A bare `store_conditional` statement (discarded result) is legal.
+fn is_store_conditional_call(e: &ast::Expr) -> bool {
+    matches!(e, ast::Expr::Call(c) if matches!(
+        &*c.callee,
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::StoreConditional)
+    ))
+}
+
+/// A `fence`/`fence_i` call.
+fn is_fence_call(e: &ast::Expr) -> bool {
+    matches!(e, ast::Expr::Call(c) if matches!(
+        &*c.callee,
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Fence | ast::BuiltinFunction::FenceI)
+    ))
+}
+
+/// Visit `e` and every sub-expression.
+fn visit_exprs<'a>(e: &'a ast::Expr, f: &mut dyn FnMut(&'a ast::Expr)) {
+    f(e);
+    match e {
+        ast::Expr::Assign(a) => {
+            visit_exprs(&a.dest, f);
+            visit_exprs(&a.value, f);
+        }
+        ast::Expr::Binary(b) => {
+            visit_exprs(&b.lhs, f);
+            visit_exprs(&b.rhs, f);
+        }
+        ast::Expr::Unary(u) => visit_exprs(&u.x, f),
+        ast::Expr::Block(b) => b.stmts.iter().for_each(|s| visit_exprs(s, f)),
+        ast::Expr::Call(c) => {
+            visit_exprs(&c.callee, f);
+            c.arguments.iter().for_each(|a| visit_exprs(a, f));
+        }
+        ast::Expr::Field(fld) => visit_exprs(&fld.base, f),
+        ast::Expr::If(i) => {
+            visit_exprs(&i.cond, f);
+            visit_exprs(&i.then, f);
+            if let Some(e) = &i.else_ {
+                visit_exprs(e, f);
+            }
+        }
+        ast::Expr::IndexAccess(ix) => visit_exprs(&ix.base, f),
+        ast::Expr::Slice(s) => visit_exprs(&s.base, f),
+        ast::Expr::Try(t) => {
+            visit_exprs(&t.body, f);
+            t.handlers.iter().for_each(|h| visit_exprs(&h.body, f));
+        }
+        ast::Expr::Lambda(l) => visit_exprs(&l.body, f),
+        ast::Expr::Ident(_)
+        | ast::Expr::Lit(_)
+        | ast::Expr::Path(_)
+        | ast::Expr::BuiltinFunction(_)
+        | ast::Expr::Invalid => {}
+    }
+}
+
+fn count_matching(e: &ast::Expr, pred: fn(&ast::Expr) -> bool) -> usize {
+    let mut n = 0;
+    visit_exprs(e, &mut |x| {
+        if pred(x) {
+            n += 1;
+        }
+    });
+    n
+}
+
+/// Enforce the atomics/fence structural rules: at most one atomic per statement,
+/// atomics only within an assignment RHS (or a bare `store_conditional`), and
+/// `fence`/`fence_i` only in statement position.
+fn check_atomic_structure(
+    owner: &str,
+    stmt: &ast::Expr,
+    file_name: &str,
+    diags: &mut Vec<(String, Diag)>,
+) {
+    let mut err = |span: Span, msg: String| {
+        diags.push((file_name.to_string(), Rich::custom(span, msg)));
+    };
+    match stmt {
+        ast::Expr::Block(b) => {
+            for s in &b.stmts {
+                check_atomic_structure(owner, s, file_name, diags);
+            }
+        }
+        ast::Expr::Assign(a) => {
+            if count_matching(&a.dest, is_atomic_call) > 0 {
+                err(
+                    a.span,
+                    format!("atomic access is not allowed in an assignment target in '{owner}'"),
+                );
+            }
+            if count_matching(&a.value, is_atomic_call) > 1 {
+                err(
+                    a.span,
+                    format!("at most one atomic access is allowed per statement in '{owner}'"),
+                );
+            }
+            if count_matching(stmt, is_fence_call) > 0 {
+                err(
+                    a.span,
+                    format!("fence is only valid in statement position in '{owner}'"),
+                );
+            }
+        }
+        // A statement-level `if`/`try` guard: recurse into the bodies, but the
+        // condition/body must not hold an atomic or fence in a value position.
+        ast::Expr::If(i) => {
+            if count_matching(&i.cond, is_atomic_call) > 0
+                || count_matching(&i.cond, is_fence_call) > 0
+            {
+                err(
+                    i.span,
+                    format!("atomic or fence is not allowed in a condition in '{owner}'"),
+                );
+            }
+            check_atomic_structure(owner, &i.then, file_name, diags);
+            if let Some(e) = &i.else_ {
+                check_atomic_structure(owner, e, file_name, diags);
+            }
+        }
+        ast::Expr::Try(t) => {
+            check_atomic_structure(owner, &t.body, file_name, diags);
+            for h in &t.handlers {
+                check_atomic_structure(owner, &h.body, file_name, diags);
+            }
+        }
+        // A bare statement: only `store_conditional`/`fence`/`fence_i` calls may
+        // stand alone; any other atomic must be wrapped in an assignment RHS.
+        _ => {
+            if is_store_conditional_call(stmt) || is_fence_call(stmt) {
+                return;
+            }
+            if count_matching(stmt, is_atomic_call) > 0 {
+                err(
+                    expr_span(stmt),
+                    format!(
+                        "atomic access must appear within an assignment right-hand side in '{owner}'"
+                    ),
+                );
+            }
+            if count_matching(stmt, is_fence_call) > 0 {
+                err(
+                    expr_span(stmt),
+                    format!("fence is only valid in statement position in '{owner}'"),
+                );
+            }
+        }
+    }
+}
+
+/// Best-effort span of an arbitrary expression, for diagnostics.
+fn expr_span(e: &ast::Expr) -> Span {
+    match e {
+        ast::Expr::Assign(a) => a.span,
+        ast::Expr::Binary(b) => b.span,
+        ast::Expr::Unary(u) => u.span,
+        ast::Expr::Block(b) => b.span,
+        ast::Expr::Call(c) => c.span,
+        ast::Expr::Field(f) => f.span,
+        ast::Expr::If(i) => i.span,
+        ast::Expr::IndexAccess(ix) => ix.span,
+        ast::Expr::Slice(s) => s.span,
+        ast::Expr::Try(t) => t.span,
+        ast::Expr::Path(p) => p.span,
+        ast::Expr::Ident(id) => id.span,
+        ast::Expr::Lambda(l) => l.span,
+        ast::Expr::Lit(ast::Lit::Int(li)) => li.span,
+        ast::Expr::Lit(ast::Lit::Str(ls)) => ls.span,
+        ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => (0..0).into(),
+    }
 }
 
 fn check_encoding(

@@ -258,6 +258,11 @@ fn infer<'a>(
         }
 
         ast::Expr::Path(path) => {
+            // `Ordering::<member>` is a memory-ordering constant of type `bits<3>`,
+            // resolved before register-class lookup since `Ordering` is not a class.
+            if path.base == "Ordering" {
+                return Type::Bits(3);
+            }
             if path.remainder.len() != 1 {
                 diags.push((
                     file_name.to_string(),
@@ -355,11 +360,53 @@ fn infer<'a>(
             }
             ast::Expr::BuiltinFunction(ast::BuiltinFunction::SExt)
             | ast::Expr::BuiltinFunction(ast::BuiltinFunction::ZExt)
-            | ast::Expr::BuiltinFunction(ast::BuiltinFunction::Load) => {
+            | ast::Expr::BuiltinFunction(ast::BuiltinFunction::Load)
+            | ast::Expr::BuiltinFunction(ast::BuiltinFunction::LoadReserved) => {
                 for arg in &call.arguments {
                     infer(arg, env, tvg, subst, cache, diags, file_name);
                 }
                 Type::Var(tvg.fresh())
+            }
+            // `store_conditional(addr, bytes, value, ordering)` -> bits<1>: the
+            // success flag. Arguments carry the address/value/ordering.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::StoreConditional) => {
+                for arg in &call.arguments {
+                    infer(arg, env, tvg, subst, cache, diags, file_name);
+                }
+                Type::Bits(1)
+            }
+            // `atomic_rmw(op, addr, bytes, value, ordering)` -> bits<_>: the old
+            // memory word. `op` is a bare op-selector identifier, not a value, so
+            // it is validated but never run through inference.
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::AtomicRmw) => {
+                match call.arguments.first() {
+                    Some(ast::Expr::Ident(id)) if ast::atomic_rmw_op_code(&id.name).is_some() => {}
+                    _ => {
+                        diags.push((
+                            file_name.to_string(),
+                            Rich::custom(
+                                call.span,
+                                format!(
+                                    "atomic_rmw op must be one of: {}",
+                                    ast::ATOMIC_RMW_OPS.join(", ")
+                                ),
+                            ),
+                        ));
+                    }
+                }
+                for arg in call.arguments.iter().skip(1) {
+                    infer(arg, env, tvg, subst, cache, diags, file_name);
+                }
+                Type::Var(tvg.fresh())
+            }
+            // `fence(pred, succ)` / `fence_i()` are effect-only statements.
+            ast::Expr::BuiltinFunction(
+                ast::BuiltinFunction::Fence | ast::BuiltinFunction::FenceI,
+            ) => {
+                for arg in &call.arguments {
+                    infer(arg, env, tvg, subst, cache, diags, file_name);
+                }
+                Type::Integer
             }
             // Float arithmetic: both operands and the result share one type
             // (the register bits reinterpreted as the width's binary format).

@@ -398,6 +398,30 @@ pub struct Ident {
 /// ISAs that do not trap express themselves.
 pub const EXCEPTION_KINDS: &[&str] = &["misaligned_load", "misaligned_store"];
 
+/// The five `Ordering::<member>` names, in code order 0..4 (`bits<3>`).
+pub const ORDERING_NAMES: &[&str] = &["relaxed", "acquire", "release", "acq_rel", "seq_cst"];
+
+/// The `bits<3>` code of an `Ordering::<member>` constant, or `None` if unknown.
+pub fn ordering_code(member: &str) -> Option<u8> {
+    ORDERING_NAMES
+        .iter()
+        .position(|n| *n == member)
+        .map(|c| c as u8)
+}
+
+/// The closed set of `atomic_rmw` op selectors, in code order 0..8.
+pub const ATOMIC_RMW_OPS: &[&str] = &[
+    "add", "swap", "xor", "and", "or", "min", "max", "minu", "maxu",
+];
+
+/// The op code of an `atomic_rmw` selector identifier, or `None` if unknown.
+pub fn atomic_rmw_op_code(name: &str) -> Option<u8> {
+    ATOMIC_RMW_OPS
+        .iter()
+        .position(|n| *n == name)
+        .map(|c| c as u8)
+}
+
 /// One `except kind(binding) { ... }` clause. The binding receives the
 /// exception payload (the faulting address for misaligned accesses).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -497,6 +521,21 @@ pub enum BuiltinFunction {
     ZExt,
     Load,
     Store,
+    /// `load_reserved(addr, bytes, ordering)`: read memory and register a
+    /// reservation covering the access; value is the loaded word.
+    LoadReserved,
+    /// `store_conditional(addr, bytes, value, ordering)`: write iff a valid
+    /// reservation covers the access; value is `bits<1>`, 1 = success.
+    StoreConditional,
+    /// `atomic_rmw(op, addr, bytes, value, ordering)`: single read-modify-write;
+    /// `op` is a bare identifier from the closed set add/swap/xor/and/or/min/max/
+    /// minu/maxu. Value is the old memory word.
+    AtomicRmw,
+    /// `fence(pred, succ)`: data-memory ordering fence with target-defined bit
+    /// sets. An effect statement, like `trap`.
+    Fence,
+    /// `fence_i()`: instruction-stream fence. An effect statement.
+    FenceI,
     /// `trap(cause)`: raise a synchronous exception (e.g. ecall/ebreak). An
     /// effect-only builtin handled directly by codegen; it produces no value.
     Trap,
@@ -1085,6 +1124,16 @@ impl Path {
             return ctx.add_int_const(tir_adt::APInt::new(64, 0));
         }
 
+        // `Ordering::<member>` is a `bits<3>` memory-ordering constant, resolved
+        // before register-class handling since `Ordering` is not a class.
+        if self.base == "Ordering" {
+            let code = ordering_code(&self.remainder[0]).unwrap_or_else(|| {
+                ctx.had_error = true;
+                0
+            });
+            return ctx.add_int_const(tir_adt::APInt::new(3, code as u64));
+        }
+
         let reg_name = &self.remainder[0];
         // Resolve the register's encoding index: PC is special; otherwise prefer the
         // `(class, name)` table (which gives index-less registers like status flags a
@@ -1287,6 +1336,60 @@ impl IndexAccess {
     }
 }
 
+/// A constant `Ordering::<member>` or integer literal, or `None` for anything
+/// else (e.g. a decoded aq/rl operand feeding a future dynamic ordering).
+fn const_eval_u64(expr: &Expr) -> Option<u64> {
+    match expr {
+        Expr::Lit(Lit::Int(li)) => Some(li.parse_u64()),
+        Expr::Path(p) if p.base == "Ordering" && p.remainder.len() == 1 => {
+            ordering_code(&p.remainder[0]).map(u64::from)
+        }
+        _ => None,
+    }
+}
+
+/// Pack a `load`/`store` inert metadata operand: bit 0 keeps its old meaning
+/// (load signedness hint / store address space), bits 3:1 carry the ordering
+/// code. `base_meta` is the load's metadata arg (`None` for store, whose bit 0
+/// is always 0); `ordering` is the optional trailing ordering arg. A missing
+/// ordering reproduces the pre-atomics IR exactly (relaxed = 0).
+fn pack_ordering_meta<G>(
+    ctx: &mut SemaExprLoweringCtx<'_, G>,
+    base_meta: Option<&Expr>,
+    ordering: Option<&Expr>,
+) -> tir::graph::NodeId
+where
+    G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+{
+    let Some(ordering) = ordering else {
+        return match base_meta {
+            Some(m) => m.lower_with_ctx(ctx),
+            None => ctx.add_int_const(tir_adt::APInt::new(1, 0)),
+        };
+    };
+
+    let meta_bit0 = match base_meta {
+        Some(m) => const_eval_u64(m),
+        None => Some(0),
+    };
+    if let (Some(code), Some(bit0)) = (const_eval_u64(ordering), meta_bit0) {
+        let packed = (code << 1) | (bit0 & 1);
+        return ctx.add_int_const(tir_adt::APInt::new(4, packed));
+    }
+
+    // Dynamic ordering: concat(ordering[2:0], bit0) — ordering in the high bits.
+    let ord_node = ordering.lower_with_ctx(ctx);
+    let bit0_node = match base_meta {
+        Some(m) => {
+            let m = m.lower_with_ctx(ctx);
+            let zero = ctx.add_int_const(tir_adt::APInt::new(1, 0));
+            ctx.build_extract(m, zero, zero)
+        }
+        None => ctx.add_int_const(tir_adt::APInt::new(1, 0)),
+    };
+    ctx.add_node(tir::sem::SymKind::Concat, &[ord_node, bit0_node])
+}
+
 impl Call {
     fn as_sema_expr<
         G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
@@ -1346,22 +1449,89 @@ impl Call {
                 ctx.add_node(tir::sem::SymKind::ZExt, &[input, width])
             }
             BuiltinFunction::Load => {
-                assert!(self.arguments.len() == 3, "load requires 3 arguments");
+                assert!(
+                    matches!(self.arguments.len(), 3 | 4),
+                    "load requires 3 or 4 arguments"
+                );
                 let address = self.arguments[0].lower_with_ctx(ctx);
                 let bytes = self.arguments[1].lower_with_ctx(ctx);
-                let metadata = self.arguments[2].lower_with_ctx(ctx);
+                let metadata =
+                    pack_ordering_meta(ctx, Some(&self.arguments[2]), self.arguments.get(3));
                 ctx.add_node(tir::sem::SymKind::LoadMemory, &[address, bytes, metadata])
             }
             BuiltinFunction::Store => {
-                assert!(self.arguments.len() == 3, "store requires 3 arguments");
+                assert!(
+                    matches!(self.arguments.len(), 3 | 4),
+                    "store requires 3 or 4 arguments"
+                );
                 let address = self.arguments[0].lower_with_ctx(ctx);
                 let bytes = self.arguments[1].lower_with_ctx(ctx);
                 let value = self.arguments[2].lower_with_ctx(ctx);
-                let address_space = ctx.add_int_const(tir_adt::APInt::new(1, 0));
+                let address_space = pack_ordering_meta(ctx, None, self.arguments.get(3));
                 ctx.add_node(
                     tir::sem::SymKind::StoreMemory,
                     &[address, bytes, value, address_space],
                 )
+            }
+            BuiltinFunction::LoadReserved => {
+                assert!(
+                    self.arguments.len() == 3,
+                    "load_reserved requires 3 arguments"
+                );
+                let address = self.arguments[0].lower_with_ctx(ctx);
+                let bytes = self.arguments[1].lower_with_ctx(ctx);
+                let ordering = self.arguments[2].lower_with_ctx(ctx);
+                ctx.add_node(tir::sem::SymKind::LoadReserved, &[address, bytes, ordering])
+            }
+            BuiltinFunction::StoreConditional => {
+                assert!(
+                    self.arguments.len() == 4,
+                    "store_conditional requires 4 arguments"
+                );
+                let address = self.arguments[0].lower_with_ctx(ctx);
+                let bytes = self.arguments[1].lower_with_ctx(ctx);
+                let value = self.arguments[2].lower_with_ctx(ctx);
+                let ordering = self.arguments[3].lower_with_ctx(ctx);
+                ctx.add_node(
+                    tir::sem::SymKind::StoreConditional,
+                    &[address, bytes, value, ordering],
+                )
+            }
+            BuiltinFunction::AtomicRmw => {
+                assert!(self.arguments.len() == 5, "atomic_rmw requires 5 arguments");
+                // Arg 0 is the op selector, a bare identifier from the closed set;
+                // sema has already validated it, so an unknown name is a lowering
+                // failure rather than a panic.
+                let op_code = match &self.arguments[0] {
+                    Expr::Ident(id) => atomic_rmw_op_code(&id.name),
+                    _ => None,
+                };
+                let Some(op_code) = op_code else {
+                    ctx.had_error = true;
+                    return ctx.add_int_const(tir_adt::APInt::new(64, 0));
+                };
+                let op = ctx.add_int_const(tir_adt::APInt::new(4, op_code as u64));
+                let address = self.arguments[1].lower_with_ctx(ctx);
+                let bytes = self.arguments[2].lower_with_ctx(ctx);
+                let value = self.arguments[3].lower_with_ctx(ctx);
+                let ordering = self.arguments[4].lower_with_ctx(ctx);
+                ctx.add_node(
+                    tir::sem::SymKind::AtomicRmw,
+                    &[op, address, bytes, value, ordering],
+                )
+            }
+            BuiltinFunction::Fence => {
+                assert!(self.arguments.len() == 2, "fence requires 2 arguments");
+                let pred = self.arguments[0].lower_with_ctx(ctx);
+                let succ = self.arguments[1].lower_with_ctx(ctx);
+                let kind = ctx.add_int_const(tir_adt::APInt::new(1, 0));
+                ctx.add_node(tir::sem::SymKind::Fence, &[pred, succ, kind])
+            }
+            BuiltinFunction::FenceI => {
+                assert!(self.arguments.is_empty(), "fence_i requires 0 arguments");
+                let zero = ctx.add_int_const(tir_adt::APInt::new(1, 0));
+                let kind = ctx.add_int_const(tir_adt::APInt::new(1, 1));
+                ctx.add_node(tir::sem::SymKind::Fence, &[zero, zero, kind])
             }
             // trap has no semantic-expression form; codegen intercepts trap
             // calls before lowering, so reaching here means the behavior used

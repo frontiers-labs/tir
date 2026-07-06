@@ -1,0 +1,31 @@
+// The `atomic_rmw` op selector must be a bare identifier from the closed set;
+// an unknown name is a type-check error.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa AIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class GPR for [AIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => { traits = [callee_saved] },
+    }
+}
+
+instruction BadOp for [AIsa] {
+    param MNEMONIC: String = "badop";
+    param OPCODE: bits<7> = 0b0101111;
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior {
+        rd = atomic_rmw(bogus, rs1, 4, extract(rs2, 31, 0), Ordering::relaxed);
+    }
+}
+
+// CHECK: atomic_rmw op must be one of: add, swap, xor, and, or, min, max, minu, maxu

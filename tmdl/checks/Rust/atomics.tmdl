@@ -1,0 +1,36 @@
+// Atomics codegen: LR/SC/AMO/fence lower to the new `SymKind`s and the machine
+// memory adapter forwards to the `MachineContext` reservation methods, so the
+// executor reaches the hart's reservation logic. Atomic behaviors are excluded
+// from instruction selection and op-sem pattern generation; a plain ordered
+// load/store is still selection-eligible.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/atomics.tmdl | filecheck %s
+
+// The four atomic constructs each lower to their dedicated kind.
+// CHECK: SymKind::LoadReserved
+
+// The generated memory adapter forwards every atomic to the MachineContext, so
+// the executor's reservation state is consulted.
+// CHECK: self.0.load_reserved(address, size, ord)
+// CHECK: self.0.store_conditional(address, size, value, ord)
+// CHECK: self.0.atomic_rmw(op, address, size, value, ord)
+// CHECK: self.0.fence(pred, succ, kind)
+
+// CHECK: SymKind::StoreConditional
+// CHECK: SymKind::AtomicRmw
+// CHECK: SymKind::Fence
+
+// A plain store with an explicit ordering packs the ordering code into the
+// inert metadata operand (`seq_cst` = 4 -> bits 3:1 -> value 8, width 4) and
+// keeps its selection rule.
+// CHECK: int_payload(4, 8
+// CHECK: impl tir::sem::AsSemExpr for StRelOp
+
+// Atomic instructions get neither an op-sem pattern nor a selection rule.
+// CHECK-NOT: AsSemExpr for LrWOp
+// CHECK-NOT: AsSemExpr for ScWOp
+// CHECK-NOT: AsSemExpr for AmoAddWOp
+// CHECK-NOT: isel_pattern_lrw
+// CHECK-NOT: isel_pattern_scw
+// CHECK-NOT: isel_pattern_amoaddw
+// CHECK-NOT: isel_pattern_fenceinst

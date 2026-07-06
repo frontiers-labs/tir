@@ -407,6 +407,7 @@ fn emit_instructions<'a>(
         // match unrelated arithmetic.
         let semantics = if defined_register_operands.len() <= 1
             && !behavior_references_pc(&inst.behavior, &pc_classes)
+            && !behavior_has_atomic_ops(&inst.behavior)
         {
             analyze_instruction_semantics(
                 inst,
@@ -1065,6 +1066,7 @@ fn emit_instructions<'a>(
         let codegen_rhs: Option<&ast::Expr> = branch_value.as_ref().or(resolved_rhs);
 
         if let Some(rhs) = codegen_rhs
+            && !behavior_has_atomic_ops(&inst.behavior)
             && let Some(impl_ts) = emit_as_sem_expr_impl(rhs, &name_ident, &numeric_params)
         {
             as_sem_expr_impls.push(impl_ts);
@@ -4105,6 +4107,68 @@ fn is_trap_call(expr: &ast::Expr) -> bool {
     )
 }
 
+/// A `fence`/`fence_i` call: an effect statement, lowered like a store so the
+/// executor reaches `MachineContext::fence`.
+fn is_fence_call(expr: &ast::Expr) -> bool {
+    matches!(
+        expr,
+        ast::Expr::Call(ast::Call {
+            callee,
+            ..
+        }) if matches!(
+            callee.as_ref(),
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Fence | ast::BuiltinFunction::FenceI)
+        )
+    )
+}
+
+/// Whether the behavior contains any atomic/fence builtin. Such behaviors are
+/// excluded from instruction selection and op-sem pattern generation.
+fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
+    let is_atomic = |e: &ast::Expr| {
+        matches!(e, ast::Expr::Call(ast::Call { callee, .. }) if matches!(
+            callee.as_ref(),
+            ast::Expr::BuiltinFunction(
+                ast::BuiltinFunction::LoadReserved
+                    | ast::BuiltinFunction::StoreConditional
+                    | ast::BuiltinFunction::AtomicRmw
+                    | ast::BuiltinFunction::Fence
+                    | ast::BuiltinFunction::FenceI
+            )
+        ))
+    };
+    if is_atomic(expr) {
+        return true;
+    }
+    match expr {
+        ast::Expr::Assign(a) => {
+            behavior_has_atomic_ops(&a.dest) || behavior_has_atomic_ops(&a.value)
+        }
+        ast::Expr::Binary(b) => behavior_has_atomic_ops(&b.lhs) || behavior_has_atomic_ops(&b.rhs),
+        ast::Expr::Unary(u) => behavior_has_atomic_ops(&u.x),
+        ast::Expr::Block(b) => b.stmts.iter().any(behavior_has_atomic_ops),
+        ast::Expr::Call(c) => c.arguments.iter().any(behavior_has_atomic_ops),
+        ast::Expr::Field(f) => behavior_has_atomic_ops(&f.base),
+        ast::Expr::If(i) => {
+            behavior_has_atomic_ops(&i.cond)
+                || behavior_has_atomic_ops(&i.then)
+                || i.else_.as_ref().is_some_and(|e| behavior_has_atomic_ops(e))
+        }
+        ast::Expr::IndexAccess(i) => behavior_has_atomic_ops(&i.base),
+        ast::Expr::Slice(s) => behavior_has_atomic_ops(&s.base),
+        ast::Expr::Try(t) => {
+            behavior_has_atomic_ops(&t.body)
+                || t.handlers.iter().any(|h| behavior_has_atomic_ops(&h.body))
+        }
+        ast::Expr::Lambda(l) => behavior_has_atomic_ops(&l.body),
+        ast::Expr::Ident(_)
+        | ast::Expr::Lit(_)
+        | ast::Expr::Path(_)
+        | ast::Expr::BuiltinFunction(_)
+        | ast::Expr::Invalid => false,
+    }
+}
+
 /// The constant cause code of a `trap(cause, ...)` call. `None` when the
 /// first argument is not an integer literal. Further arguments (the trap
 /// value payload) only matter to the SMT model; the machine's exception
@@ -4139,7 +4203,7 @@ fn emit_behavior_exec(
             register_index_map,
             reg_kinds,
         ),
-        ast::Expr::Call(_) if is_store_call(expr) => emit_effect_exec(
+        ast::Expr::Call(_) if is_store_call(expr) || is_fence_call(expr) => emit_effect_exec(
             expr,
             ops,
             numeric_params,
@@ -4186,6 +4250,7 @@ fn emit_behavior_exec(
                         | ast::Expr::If(_)
                         | ast::Expr::Try(_)
                 ) || is_store_call(stmt)
+                    || is_fence_call(stmt)
                     || is_trap_call(stmt)
                 {
                     return None;
@@ -4349,6 +4414,40 @@ fn emit_value_eval(
                     value: u64,
                 ) -> Result<(), Self::Error> {
                     self.0.write_memory(address, size, value)
+                }
+
+                fn load_reserved(
+                    &mut self,
+                    address: u64,
+                    size: usize,
+                    ord: tir::sem::MemOrdering,
+                ) -> Result<u64, Self::Error> {
+                    self.0.load_reserved(address, size, ord)
+                }
+
+                fn store_conditional(
+                    &mut self,
+                    address: u64,
+                    size: usize,
+                    value: u64,
+                    ord: tir::sem::MemOrdering,
+                ) -> Result<bool, Self::Error> {
+                    self.0.store_conditional(address, size, value, ord)
+                }
+
+                fn atomic_rmw(
+                    &mut self,
+                    op: tir::sem::AtomicRmwOp,
+                    address: u64,
+                    size: usize,
+                    value: u64,
+                    ord: tir::sem::MemOrdering,
+                ) -> Result<u64, Self::Error> {
+                    self.0.atomic_rmw(op, address, size, value, ord)
+                }
+
+                fn fence(&mut self, pred: u32, succ: u32, kind: u32) -> Result<(), Self::Error> {
+                    self.0.fence(pred, succ, kind)
                 }
             }
             let mut __memory = __TmdlMachineMemory(machine);

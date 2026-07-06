@@ -1,0 +1,57 @@
+// Structural rules for atomics/fences rejected by semantic analysis: at most one
+// atomic per statement, a known `Ordering::*` member, and `fence` only in
+// statement position.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa AIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class GPR for [AIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => { traits = [callee_saved] },
+    }
+}
+
+instruction TwoAtomics for [AIsa] {
+    param MNEMONIC: String = "two";
+    param OPCODE: bits<7> = 0b0101111;
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior {
+        rd = atomic_rmw(add, rs1, 4, extract(rs2, 31, 0), Ordering::relaxed)
+            + atomic_rmw(add, rs1, 4, extract(rs2, 31, 0), Ordering::relaxed);
+    }
+}
+
+instruction BadOrdering for [AIsa] {
+    param MNEMONIC: String = "badord";
+    param OPCODE: bits<7> = 0b0101111;
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior {
+        rd = sext(load_reserved(rs1, 4, Ordering::bogus), self.XLEN);
+    }
+}
+
+instruction FenceInExpr for [AIsa] {
+    param MNEMONIC: String = "fexpr";
+    param OPCODE: bits<7> = 0b0001111;
+    operands { rd: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior {
+        rd = fence(0b0011, 0b0011);
+    }
+}
+
+// CHECK-DAG: at most one atomic access is allowed per statement
+// CHECK-DAG: unknown ordering 'Ordering::bogus'
+// CHECK-DAG: fence is only valid in statement position

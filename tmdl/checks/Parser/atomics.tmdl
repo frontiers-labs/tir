@@ -1,0 +1,17 @@
+// The parser accepts the five atomics builtins, the `Ordering::*` namespace, and
+// the optional trailing ordering argument on load/store (four-argument forms).
+
+// RUN: tmdlc --action=emit-ast --output=- %S/../Inputs/atomics.tmdl | filecheck %s
+
+// LR reads via `load_reserved` with an `Ordering::acquire` argument.
+// CHECK: LoadReserved,
+// CHECK: base: "Ordering",
+// CHECK: "acquire",
+
+// SC evaluates `store_conditional`; AMO uses `atomic_rmw` with a bare op ident.
+// CHECK: StoreConditional,
+// CHECK: AtomicRmw,
+
+// The two fence forms parse as distinct builtins.
+// CHECK: Fence,
+// CHECK: FenceI,

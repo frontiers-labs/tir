@@ -1,0 +1,129 @@
+// Positive coverage for the atomics vocabulary: all five new builtins, the
+// `Ordering::*` constants, and the optional trailing ordering on load/store.
+// Consumed by Parser/atomics.tmdl (emit-ast) and Rust/atomics.tmdl (emit-rust).
+
+isa AIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [AIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [AIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => { traits = [callee_saved] },
+    }
+}
+
+instruction LrW for [AIsa] {
+    param MNEMONIC: String = "lr.w";
+    param OPCODE: bits<7> = 0b0101111;
+
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}, ({rs1})" }
+
+    behavior {
+        try {
+            rd = sext(load_reserved(rs1, 4, Ordering::acquire), self.XLEN);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+}
+
+instruction ScW for [AIsa] {
+    param MNEMONIC: String = "sc.w";
+    param OPCODE: bits<7> = 0b0101111;
+
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
+
+    behavior {
+        rd = if store_conditional(rs1, 4, extract(rs2, 31, 0), Ordering::release) == zext(0b1, 1) {
+            zext(0b0, self.XLEN)
+        } else {
+            zext(0b1, self.XLEN)
+        };
+    }
+}
+
+instruction AmoAddW for [AIsa] {
+    param MNEMONIC: String = "amoadd.w";
+    param OPCODE: bits<7> = 0b0101111;
+
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
+
+    behavior {
+        rd = sext(atomic_rmw(add, rs1, 4, extract(rs2, 31, 0), Ordering::acq_rel), self.XLEN);
+    }
+}
+
+instruction FenceInst for [AIsa] {
+    param MNEMONIC: String = "fence";
+    param OPCODE: bits<7> = 0b0001111;
+
+    operands { }
+    encoding { 0..6 => OPCODE, }
+    asm { "{self.MNEMONIC}" }
+
+    behavior {
+        fence(0b0011, 0b0011);
+    }
+}
+
+instruction FenceIInst for [AIsa] {
+    param MNEMONIC: String = "fence.i";
+    param OPCODE: bits<7> = 0b0001111;
+
+    operands { }
+    encoding { 0..6 => OPCODE, }
+    asm { "{self.MNEMONIC}" }
+
+    behavior {
+        fence_i();
+    }
+}
+
+// A plain store with an explicit ordering: the ordering packs into the inert
+// metadata operand (`seq_cst` = 4 -> bits 3:1), and a plain store is still
+// selection-eligible, unlike the atomics above.
+instruction StRel for [AIsa] {
+    param MNEMONIC: String = "st.rel";
+    param OPCODE: bits<7> = 0b0100011;
+
+    operands { rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rs2}, ({rs1})" }
+
+    behavior {
+        store(rs1, 4, extract(rs2, 31, 0), Ordering::seq_cst);
+    }
+}
+
+// A plain load with an explicit ordering.
+instruction LdAcq for [AIsa] {
+    param MNEMONIC: String = "ld.acq";
+    param OPCODE: bits<7> = 0b0000011;
+
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}, ({rs1})" }
+
+    behavior {
+        rd = sext(load(rs1, 4, 0, Ordering::acquire), self.XLEN);
+    }
+}
