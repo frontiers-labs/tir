@@ -1,0 +1,63 @@
+// Same-mnemonic asm parser candidates are registered most-constrained-first,
+// independent of declaration order: the narrower immediate form is tried before
+// the wider one, so `op 300` (which the imm8 form's range guard rejects) falls
+// through to the imm32 form instead of the imm8 form winning and failing later.
+// OpWide (imm32) is declared first, yet OpNarrow (imm8) must register first.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa SortIsa {
+    param XLEN: Integer = 32;
+}
+
+register_class GPR for [SortIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0..x3 => { traits = [caller_saved] },
+    }
+}
+
+instruction OpWide for [SortIsa] {
+    param MNEMONIC: String = "op";
+    param OPNAME: String = "op_wide";
+
+    operands {
+        rd: GPR,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..6 => 0b0010011,
+        7..11 => rd,
+        12..43 => imm,
+    }
+
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+
+    behavior { rd = sext(imm, self.XLEN); }
+}
+
+instruction OpNarrow for [SortIsa] {
+    param MNEMONIC: String = "op";
+    param OPNAME: String = "op_narrow";
+
+    operands {
+        rd: GPR,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..6 => 0b0110011,
+        7..11 => rd,
+        12..19 => imm,
+    }
+
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+
+    behavior { rd = sext(imm, self.XLEN); }
+}
+
+// CHECK: parse_opnarrow_inst;
+// CHECK: parse_opwide_inst;

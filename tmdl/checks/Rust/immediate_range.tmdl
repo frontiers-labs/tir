@@ -1,0 +1,53 @@
+// A generated asm parser must reject an integer that does not fit its `bits<N>`
+// immediate, so per-mnemonic dispatch can backtrack to a wider form instead of
+// failing later in the encoder. The accepted set is the union of the signed and
+// unsigned N-bit ranges, mirroring the encoder: for `bits<8>` that is
+// [-128, 255], i.e. the half-open `-128i64..256i64`. So 255 and -128 parse, but
+// 256 and -129 make the candidate fail cleanly.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa ImmIsa {
+    param XLEN: Integer = 32;
+}
+
+register_class GPR for [ImmIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0..x3 => { traits = [caller_saved] },
+    }
+}
+
+instruction OpImm8 for [ImmIsa] {
+    param MNEMONIC: String = "opi";
+
+    operands {
+        rd: GPR,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0..6 => 0b0010011,
+        7..11 => rd,
+        12..19 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = sext(imm, self.XLEN);
+    }
+}
+
+// The immediate parse of both a decimal and a hexadecimal literal is range-guarded.
+// CHECK: fn parse_opimm8_inst
+// CHECK: tir::backend::Token::DecNumber
+// CHECK: if !(-128i64..256i64).contains(&value)
+// CHECK: return Err(());
+// CHECK: tir::backend::Token::HexNumber
+// CHECK: if !(-128i64..256i64).contains(&value)
+// CHECK: return Err(());

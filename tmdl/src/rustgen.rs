@@ -225,7 +225,16 @@ fn emit_instructions<'a>(
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let mut instruction_defs = vec![];
     let mut instruction_parsers_impls: Vec<proc_macro2::TokenStream> = vec![];
-    let mut instruction_parser_map_inits: Vec<proc_macro2::TokenStream> = vec![];
+    // Each entry carries its specificity key (operand count, total immediate
+    // bit-width, sum of register-class sizes) so same-mnemonic candidates can be
+    // ordered most-constrained-first, independent of declaration order.
+    let mut instruction_parser_candidates: Vec<(
+        String,
+        usize,
+        u32,
+        usize,
+        proc_macro2::TokenStream,
+    )> = vec![];
     let mut instruction_printers_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_printer_map_inits: Vec<proc_macro2::TokenStream> = vec![];
     let mut isel_rule_emitters: Vec<proc_macro2::TokenStream> = vec![];
@@ -251,6 +260,15 @@ fn emit_instructions<'a>(
                 .into_iter()
                 .map(move |(name, idx)| ((class.clone(), name), u32::from(idx)))
         })
+        .collect();
+
+    // Register count per class, used to sort same-mnemonic asm parser candidates
+    // by specificity: a form over a small class (e.g. 2-register `GPRsib`) is more
+    // constrained than one over a large class (16-register `GPR`) and is tried first.
+    let class_sizes: HashMap<String, usize> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .map(|rc| (rc.name.clone(), rc.resolve_registers().count()))
         .collect();
 
     // The inverse mapping, used to name a demand attribute after the register a
@@ -1192,13 +1210,32 @@ fn emit_instructions<'a>(
                                     });
                                 }
                                 Type::Integer | Type::Bits(_) => {
+                                    // Reject integers that do not fit the operand's
+                                    // `bits<N>` width so the per-mnemonic dispatch
+                                    // backtracks to a wider form instead of failing
+                                    // later in the encoder. Mirrors the encoder's
+                                    // union of the signed and unsigned N-bit ranges:
+                                    // [-(2^(N-1)), 2^N - 1].
+                                    let imm_guard = match ty {
+                                        Type::Bits(n) if *n < 64 => {
+                                            let min = proc_macro2::Literal::i64_suffixed(
+                                                -(1i64 << (n - 1)),
+                                            );
+                                            let max = proc_macro2::Literal::i64_suffixed(1i64 << n);
+                                            Some(
+                                                quote! { if !(#min..#max).contains(&value) { return Err(()); } },
+                                            )
+                                        }
+                                        _ => None,
+                                    };
                                     parse_steps.push(quote! {
                                         let val = if let Some(tok) = parser.peek() {
                                             match tok {
                                                 tir::backend::Token::DecNumber(n) => {
-                                                    let parsed = (*n).parse::<i64>().map_err(|_| ())?;
+                                                    let value = (*n).parse::<i64>().map_err(|_| ())?;
+                                                    #imm_guard
                                                     let _ = parser.bump();
-                                                    tir::attributes::AttributeValue::Int(parsed)
+                                                    tir::attributes::AttributeValue::Int(value)
                                                 }
                                                 tir::backend::Token::HexNumber(h) => {
                                                     let s = *h;
@@ -1207,9 +1244,10 @@ fn emit_instructions<'a>(
                                                     let s = if s.starts_with("0x") || s.starts_with("0X") { &s[2..] } else { s };
                                                     let v = i128::from_str_radix(s, 16).map_err(|_| ())?;
                                                     let v = if neg { -v } else { v };
-                                                    let v_i64: i64 = v.try_into().map_err(|_| ())?;
+                                                    let value: i64 = v.try_into().map_err(|_| ())?;
+                                                    #imm_guard
                                                     let _ = parser.bump();
-                                                    tir::attributes::AttributeValue::Int(v_i64)
+                                                    tir::attributes::AttributeValue::Int(value)
                                                 }
                                                 // A bare identifier in an immediate position is a
                                                 // symbol reference, resolved at object emission.
@@ -1436,14 +1474,39 @@ fn emit_instructions<'a>(
             if let Some(mn) = mnemonic.as_deref().or(Some(op_name)) {
                 let mn_lit = proc_macro2::Literal::string(mn);
                 let inst_features = feature_slice(&inst.for_isas);
-                instruction_parser_map_inits.push(quote! {
-                    if features_enabled(features, #inst_features) {
-                        let f: tir::backend::AsmInstructionParser = #parse_fn_ident;
-                        map.entry(#mn_lit.to_string()).or_default().push(f);
-                    } else {
-                        disabled.insert(#mn_lit.to_string());
+                let mut arity = 0usize;
+                let mut reg_specificity = 0usize;
+                let mut imm_bits = 0u32;
+                for ty in ops_map.values() {
+                    match ty {
+                        Type::Struct(class) => {
+                            arity += 1;
+                            reg_specificity = reg_specificity.saturating_add(
+                                class_sizes.get(class).copied().unwrap_or(usize::MAX),
+                            );
+                        }
+                        Type::Bits(n) => {
+                            arity += 1;
+                            imm_bits += u32::from(*n);
+                        }
+                        Type::Integer => arity += 1,
+                        _ => {}
                     }
-                });
+                }
+                instruction_parser_candidates.push((
+                    mn.to_string(),
+                    arity,
+                    imm_bits,
+                    reg_specificity,
+                    quote! {
+                        if features_enabled(features, #inst_features) {
+                            let f: tir::backend::AsmInstructionParser = #parse_fn_ident;
+                            map.entry(#mn_lit.to_string()).or_default().push(f);
+                        } else {
+                            disabled.insert(#mn_lit.to_string());
+                        }
+                    },
+                ));
             }
         }
 
@@ -1508,6 +1571,28 @@ fn emit_instructions<'a>(
                 }
             }
         })
+        .collect();
+
+    // Order same-mnemonic asm parser candidates most-constrained-first so the
+    // per-mnemonic dispatch tries a tighter form before a looser one, regardless
+    // of declaration order. Keys, in order:
+    //   1. total immediate bit-width, ascending — an immediate operand is the loosest
+    //      match (it accepts a bare register identifier or keyword as a symbol), so a
+    //      form without an immediate precedes one with, and among immediate forms imm8
+    //      precedes imm32. This keeps register/keyword forms ahead of the immediate
+    //      form that would swallow them (arm64 `add x,x,x`; x86 `shl dst, cl`);
+    //   2. operand count, descending — with equal immediate width, a longer form is
+    //      tried before a shorter one it shares a prefix with, so `imul rax, rbx` is
+    //      not stolen by the 1-operand `imul rax`;
+    //   3. register-class-size sum, ascending — a smaller class (2-register `GPRsib`)
+    //      precedes a larger one (16-register `GPR`).
+    // The stable sort keeps declaration order among equally specific candidates.
+    instruction_parser_candidates.sort_by(|a, b| {
+        (&a.0, a.2, std::cmp::Reverse(a.1), a.3).cmp(&(&b.0, b.2, std::cmp::Reverse(b.1), b.3))
+    });
+    let instruction_parser_map_inits: Vec<proc_macro2::TokenStream> = instruction_parser_candidates
+        .into_iter()
+        .map(|(.., tokens)| tokens)
         .collect();
 
     Ok(quote! {
