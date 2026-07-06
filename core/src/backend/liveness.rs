@@ -27,6 +27,10 @@ struct OpInfo {
     use_vregs: Vec<u32>,
     /// Physical registers written/clobbered by this op.
     clobbers: Vec<PhysReg>,
+    /// Physical registers read by this op (e.g. a fixed-register protocol like a
+    /// shift count in `cl`). Their live range keeps the allocator from parking an
+    /// unrelated vreg in the register between its def and this read.
+    phys_uses: Vec<PhysReg>,
 }
 
 struct BlockInfo {
@@ -110,6 +114,7 @@ pub fn analyze(
             let mut def_vregs = Vec::new();
             let mut use_vregs = Vec::new();
             let mut clobbers = Vec::new();
+            let mut phys_uses = Vec::new();
 
             for r in &regs.uses {
                 match r {
@@ -121,7 +126,9 @@ pub fn analyze(
                             exposed_uses.insert(*id);
                         }
                     }
-                    RegRef::Physical { .. } => {}
+                    RegRef::Physical { class, index } => {
+                        phys_uses.push((class.clone(), *index));
+                    }
                 }
             }
             for r in &regs.defs {
@@ -143,6 +150,7 @@ pub fn analyze(
                 def_vregs,
                 use_vregs,
                 clobbers,
+                phys_uses,
             });
         }
 
@@ -216,12 +224,29 @@ pub fn analyze(
         result.live_in.insert(info.block, live_in[i].clone());
 
         let mut live: HashSet<u32> = live_out[i].iter().copied().collect();
+        // Physical registers read later in the block and not yet re-defined, so
+        // still live across the current op. Seeded empty: fixed-register def/use
+        // pairs (e.g. a shift count moved into `cl` right before the shift) are
+        // emitted adjacent within one block by the lowerings, so no such range
+        // crosses a block boundary.
+        let mut live_phys: HashSet<PhysReg> = HashSet::new();
 
         for op in info.ops.iter().rev() {
             // A physical clobber conflicts with everything live across this op.
             for phys in &op.clobbers {
                 for &l in &live {
                     result.forbid(l, phys.clone());
+                }
+            }
+            // A physical register read later and still live across this op cannot
+            // hold any vreg live here, nor a vreg this op defines: overlap is
+            // resolved downstream by the same `phys_overlap` path as clobbers.
+            for phys in &live_phys {
+                for &l in &live {
+                    result.forbid(l, phys.clone());
+                }
+                for &d in &op.def_vregs {
+                    result.forbid(d, phys.clone());
                 }
             }
             // Each defined vreg interferes with all currently-live vregs and with
@@ -237,8 +262,16 @@ pub fn analyze(
             for &d in &op.def_vregs {
                 live.remove(&d);
             }
+            // A physical write ends the live range of that register (going backward).
+            for phys in &op.clobbers {
+                live_phys.remove(phys);
+            }
             for &u in &op.use_vregs {
                 live.insert(u);
+            }
+            // A physical read starts (going backward) a live range for that register.
+            for phys in &op.phys_uses {
+                live_phys.insert(phys.clone());
             }
         }
 
@@ -369,6 +402,60 @@ mod tests {
         assert!(
             liveness.interferes(v.number(), ra.number()),
             "live-through value must interfere with the right arm's def",
+        );
+    }
+
+    // Append an op that reads (`is_def == false`) or writes (`is_def == true`) the
+    // physical register `class[index]` via a role-tagged register attribute.
+    fn phys_op(context: &Context, block: &Arc<Block>, class: &str, index: u16, is_def: bool) {
+        use tir::OpInstance;
+        use tir::attributes::{AttributeRole, AttributeValue, NamedAttribute, RegisterAttr};
+
+        static DEF_ROLES: &[(&str, AttributeRole)] = &[("r", AttributeRole::Def)];
+        static USE_ROLES: &[(&str, AttributeRole)] = &[("r", AttributeRole::Use)];
+
+        let instance = OpInstance {
+            id: Default::default(),
+            name: "test.phys",
+            dialect: "test",
+            context: context.as_context_ref(),
+            operands: Vec::new(),
+            results: Vec::new(),
+            regions: Vec::new(),
+            attributes: vec![NamedAttribute::new(
+                "r",
+                AttributeValue::Register(RegisterAttr::Physical {
+                    class: class.to_string(),
+                    index,
+                }),
+            )],
+            attribute_roles: if is_def { DEF_ROLES } else { USE_ROLES },
+        };
+        let op = context.add_operation(instance);
+        block.insert(block.len(), op.id);
+    }
+
+    // A fixed-register read protocol: `def P; def v1; use P; use v1`. `v1` is live
+    // across the read of the physical register `P`, so it must not be colored `P` —
+    // otherwise the allocator could park it in `P` between `P`'s def and this read.
+    #[test]
+    fn physical_read_forbids_live_vreg() {
+        let context = Context::with_default_dialects();
+        let ty = IntegerType::new(&context, 64);
+        let a = context.create_value(ty, None);
+        let a_id = a.id();
+        let block = context.create_block(vec![a]);
+
+        phys_op(&context, &block, "R", 0, true); // def P
+        let v1 = addi(&context, &block, a_id, a_id, ty); // def v1 (live across the read)
+        phys_op(&context, &block, "R", 0, false); // use P
+        addi(&context, &block, v1, a_id, ty); // use v1
+
+        let liveness = analyze(&context, &[block.id()], |_| Vec::new());
+
+        assert!(
+            liveness.forbidden[&v1.number()].contains(&("R".to_string(), 0)),
+            "a vreg live across a physical-register read must be forbidden from it",
         );
     }
 
