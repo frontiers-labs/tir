@@ -92,6 +92,17 @@ pub fn infer_widths<V>(
                 .map(|bytes| (bytes as u32) * 8),
             SymKind::StoreMemory => None,
 
+            SymKind::LoadReserved => children
+                .get(1)
+                .and_then(|&c| const_u64(graph, c))
+                .map(|bytes| (bytes as u32) * 8),
+            SymKind::AtomicRmw => children
+                .get(2)
+                .and_then(|&c| const_u64(graph, c))
+                .map(|bytes| (bytes as u32) * 8),
+            SymKind::StoreConditional => Some(1),
+            SymKind::Fence => None,
+
             // No scalar width: element widths come from the runtime value, not structure.
             SymKind::Map
             | SymKind::Zip

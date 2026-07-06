@@ -261,10 +261,17 @@ pub(crate) fn template_node(
 /// instruction. Memory effects are excluded — two reads of the same address are
 /// not interchangeable across an intervening write.
 pub(crate) fn class_is_pure(egraph: &SemEGraph, class: Id) -> bool {
-    egraph
-        .nodes(class)
-        .iter()
-        .all(|n| !matches!(n.kind, SymKind::LoadMemory | SymKind::StoreMemory))
+    egraph.nodes(class).iter().all(|n| {
+        !matches!(
+            n.kind,
+            SymKind::LoadMemory
+                | SymKind::StoreMemory
+                | SymKind::LoadReserved
+                | SymKind::StoreConditional
+                | SymKind::AtomicRmw
+                | SymKind::Fence
+        )
+    })
 }
 
 /// The integer width of an e-class, taken from whichever member carries a known

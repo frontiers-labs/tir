@@ -10,9 +10,9 @@ use crate::graph::{MutDag, NodeId, NodeMeta, PostOrderDag};
 use crate::{Operation, ValueId};
 
 pub use tir_symbolic::lang::{
-    BuildError, Memory, SemBuilderHooks, SemExpr, SymKind, SymPayload, Value, build,
-    canonicalize_for_selection, execute, execute_with_memory, infer_widths, op_kind, op_name,
-    parse,
+    AtomicRmwOp, BuildError, MemOrdering, Memory, SemBuilderHooks, SemExpr, SymKind, SymPayload,
+    Value, build, canonicalize_for_selection, execute, execute_with_memory, infer_widths, op_kind,
+    op_name, parse,
 };
 
 mod discover;

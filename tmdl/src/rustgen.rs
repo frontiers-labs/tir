@@ -4667,6 +4667,10 @@ fn emit_expr_kind_ts(kind: &tir::sem::SymKind) -> proc_macro2::TokenStream {
         SymKind::Split => quote! { tir::sem::SymKind::Split },
         SymKind::Reduce => quote! { tir::sem::SymKind::Reduce },
         SymKind::Arg => quote! { tir::sem::SymKind::Arg },
+        SymKind::LoadReserved => quote! { tir::sem::SymKind::LoadReserved },
+        SymKind::StoreConditional => quote! { tir::sem::SymKind::StoreConditional },
+        SymKind::AtomicRmw => quote! { tir::sem::SymKind::AtomicRmw },
+        SymKind::Fence => quote! { tir::sem::SymKind::Fence },
     }
 }
 

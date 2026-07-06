@@ -1160,6 +1160,10 @@ fn emit_sem_expr(
         SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv => None,
         SymKind::Map | SymKind::Zip | SymKind::IterConcat => None,
         SymKind::Split | SymKind::Reduce | SymKind::Arg => None,
+        // Atomics have no bit-vector model here yet (SMT lowering is follow-up work).
+        SymKind::LoadReserved | SymKind::StoreConditional | SymKind::AtomicRmw | SymKind::Fence => {
+            None
+        }
         // The TMDL frontend never lowers to these (no remainder/negation/`Le`/bit
         // `Concat` operators), so they are unsupported by the bit-vector backend.
         SymKind::SRem | SymKind::URem | SymKind::Neg | SymKind::Le | SymKind::Concat => None,

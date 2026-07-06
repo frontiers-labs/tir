@@ -25,6 +25,7 @@ pub use lexer::lex;
 pub use parser::{AsmInstructionParser, AsmParser};
 pub use printer::{AsmInstructionPrinter, AsmPrintError, AsmPrinter};
 use tir::attributes::{AttributeValue, RegisterAttr};
+use tir::sem::{AtomicRmwOp, MemOrdering};
 use tir::utils::APInt;
 
 /// Decodes a 32-bit little-endian machine word into a freshly-built op in the
@@ -125,6 +126,48 @@ pub trait MachineContext {
     }
     fn read_memory(&self, address: u64, size: usize) -> Result<u64, SimTrap>;
     fn write_memory(&mut self, address: u64, size: usize, value: u64) -> Result<(), SimTrap>;
+    /// Read `size` bytes and register a reservation covering the access. The
+    /// default has no reservation concept and behaves like a plain read.
+    fn load_reserved(
+        &mut self,
+        address: u64,
+        size: usize,
+        _ord: MemOrdering,
+    ) -> Result<u64, SimTrap> {
+        self.read_memory(address, size)
+    }
+    /// Write `value` iff a valid reservation covers the access, returning success.
+    /// The default has no reservation concept, so the write always succeeds.
+    fn store_conditional(
+        &mut self,
+        address: u64,
+        size: usize,
+        value: u64,
+        _ord: MemOrdering,
+    ) -> Result<bool, SimTrap> {
+        self.write_memory(address, size, value)?;
+        Ok(true)
+    }
+    /// Single-copy-atomic read-modify-write; returns the old memory value. The
+    /// default reads, applies `op` at `size*8` bits, and writes back.
+    fn atomic_rmw(
+        &mut self,
+        op: AtomicRmwOp,
+        address: u64,
+        size: usize,
+        value: u64,
+        _ord: MemOrdering,
+    ) -> Result<u64, SimTrap> {
+        let old = self.read_memory(address, size)?;
+        let width = (size as u32) * 8;
+        let result = op.apply(APInt::new(width, old), APInt::new(width, value));
+        self.write_memory(address, size, result.to_u64())?;
+        Ok(old)
+    }
+    /// Memory/instruction fence. The default has no ordering state and is a no-op.
+    fn fence(&mut self, _pred: u32, _succ: u32, _kind: u32) -> Result<(), SimTrap> {
+        Ok(())
+    }
     fn read_pc(&self) -> u64;
     fn write_pc(&mut self, value: u64);
     /// The value of a TMDL ISA parameter (e.g. RISC-V `XLEN`) under the selected

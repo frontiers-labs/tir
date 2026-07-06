@@ -1,7 +1,7 @@
 use tir_adt::{APFloat, APInt, RawBits};
 use tir_graph::{Dag, NodeId};
 
-use crate::lang::{SymKind, SymPayload, Value};
+use crate::lang::{AtomicRmwOp, MemOrdering, SymKind, SymPayload, Value};
 
 /// Memory backend for `LoadMemory`/`StoreMemory` nodes.
 pub trait Memory {
@@ -45,6 +45,52 @@ pub trait Memory {
             self.write_memory(address + offset as u64, chunk, word)?;
             offset += chunk;
         }
+        Ok(())
+    }
+
+    /// Read `size` bytes and register a reservation covering the access. The
+    /// default has no reservation concept and behaves like a plain read.
+    fn load_reserved(
+        &mut self,
+        address: u64,
+        size: usize,
+        _ord: MemOrdering,
+    ) -> Result<u64, Self::Error> {
+        self.read_memory(address, size)
+    }
+
+    /// Write `value` iff a valid reservation covers the access, returning success.
+    /// The default has no reservation concept, so the write always succeeds.
+    fn store_conditional(
+        &mut self,
+        address: u64,
+        size: usize,
+        value: u64,
+        _ord: MemOrdering,
+    ) -> Result<bool, Self::Error> {
+        self.write_memory(address, size, value)?;
+        Ok(true)
+    }
+
+    /// Single-copy-atomic read-modify-write; returns the old memory value. The
+    /// default reads, applies `op` at `size*8` bits, and writes back.
+    fn atomic_rmw(
+        &mut self,
+        op: AtomicRmwOp,
+        address: u64,
+        size: usize,
+        value: u64,
+        _ord: MemOrdering,
+    ) -> Result<u64, Self::Error> {
+        let old = self.read_memory(address, size)?;
+        let width = (size as u32) * 8;
+        let result = op.apply(APInt::new(width, old), APInt::new(width, value));
+        self.write_memory(address, size, result.to_u64())?;
+        Ok(old)
+    }
+
+    /// Memory/instruction fence. The default has no ordering state and is a no-op.
+    fn fence(&mut self, _pred: u32, _succ: u32, _kind: u32) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -635,6 +681,52 @@ fn eval_node<V, M: Memory>(
             }
             Value::Int(APInt::new(1, 0))
         }
+
+        // ── Atomics ────────────────────────────────────────────────────────
+        SymKind::LoadReserved => {
+            let address = as_int!(c(0), "load_reserved").to_u64();
+            let size = as_int!(c(1), "load_reserved").to_u64() as usize;
+            assert!(
+                size <= 8,
+                "load_reserved does not support accesses wider than 8 bytes"
+            );
+            let ord = MemOrdering::from_code(as_int!(c(2), "load_reserved").to_u64());
+            let value = memory.load_reserved(address, size, ord)?;
+            Value::Int(APInt::new((size as u32) * 8, value))
+        }
+        SymKind::StoreConditional => {
+            let address = as_int!(c(0), "store_conditional").to_u64();
+            let size = as_int!(c(1), "store_conditional").to_u64() as usize;
+            assert!(
+                size <= 8,
+                "store_conditional does not support accesses wider than 8 bytes"
+            );
+            let value = as_int!(c(2), "store_conditional").to_u64();
+            let ord = MemOrdering::from_code(as_int!(c(3), "store_conditional").to_u64());
+            let ok = memory.store_conditional(address, size, value, ord)?;
+            Value::Int(APInt::new(1, ok as u64))
+        }
+        SymKind::AtomicRmw => {
+            let op = AtomicRmwOp::from_code(as_int!(c(0), "atomic_rmw").to_u64())
+                .expect("atomic_rmw op child must be a constant op code 0..8");
+            let address = as_int!(c(1), "atomic_rmw").to_u64();
+            let size = as_int!(c(2), "atomic_rmw").to_u64() as usize;
+            assert!(
+                size <= 8,
+                "atomic_rmw does not support accesses wider than 8 bytes"
+            );
+            let value = as_int!(c(3), "atomic_rmw").to_u64();
+            let ord = MemOrdering::from_code(as_int!(c(4), "atomic_rmw").to_u64());
+            let old = memory.atomic_rmw(op, address, size, value, ord)?;
+            Value::Int(APInt::new((size as u32) * 8, old))
+        }
+        SymKind::Fence => {
+            let pred = as_int!(c(0), "fence").to_u64() as u32;
+            let succ = as_int!(c(1), "fence").to_u64() as u32;
+            let kind = as_int!(c(2), "fence").to_u64() as u32;
+            memory.fence(pred, succ, kind)?;
+            Value::Int(APInt::new(1, 0))
+        }
     };
 
     cache[node.index()] = Some(result.clone());
@@ -1138,6 +1230,223 @@ mod tests {
 
         let out = execute(&g, &[rb(&[0x01, 0x02]), rb(&[0x03, 0x04])]);
         assert_eq!(raw_bytes(out), vec![0x04, 0x06]);
+    }
+
+    // ── Atomics ─────────────────────────────────────────────────────────────
+
+    /// Memory with single-hart reservation tracking, mirroring the executor's policy.
+    #[derive(Default)]
+    struct ResvMemory {
+        bytes: Vec<u8>,
+        reservation: Option<(u64, usize)>,
+        fences: usize,
+    }
+
+    impl Memory for ResvMemory {
+        type Error = ();
+
+        fn read_memory(&mut self, address: u64, size: usize) -> Result<u64, Self::Error> {
+            let start = address as usize;
+            let mut value = 0;
+            for (offset, byte) in self.bytes[start..start + size].iter().enumerate() {
+                value |= u64::from(*byte) << (offset * 8);
+            }
+            Ok(value)
+        }
+
+        fn write_memory(
+            &mut self,
+            address: u64,
+            size: usize,
+            value: u64,
+        ) -> Result<(), Self::Error> {
+            let start = address as usize;
+            for offset in 0..size {
+                self.bytes[start + offset] = ((value >> (offset * 8)) & 0xff) as u8;
+            }
+            Ok(())
+        }
+
+        fn load_reserved(
+            &mut self,
+            address: u64,
+            size: usize,
+            _ord: MemOrdering,
+        ) -> Result<u64, Self::Error> {
+            self.reservation = Some((address, size));
+            self.read_memory(address, size)
+        }
+
+        fn store_conditional(
+            &mut self,
+            address: u64,
+            size: usize,
+            value: u64,
+            _ord: MemOrdering,
+        ) -> Result<bool, Self::Error> {
+            let ok = self.reservation == Some((address, size));
+            self.reservation = None;
+            if ok {
+                self.write_memory(address, size, value)?;
+            }
+            Ok(ok)
+        }
+
+        fn fence(&mut self, _pred: u32, _succ: u32, _kind: u32) -> Result<(), Self::Error> {
+            self.fences += 1;
+            Ok(())
+        }
+    }
+
+    fn lr(g: &mut Graph, address: i64, bytes: i64) -> NodeId {
+        let a = int_con(g, address);
+        let b = int_con(g, bytes);
+        let ord = int_con(g, 0);
+        inner(g, SymKind::LoadReserved, &[a, b, ord])
+    }
+
+    fn sc(g: &mut Graph, address: i64, bytes: i64, value: i64) -> NodeId {
+        let a = int_con(g, address);
+        let b = int_con(g, bytes);
+        let v = int_con(g, value);
+        let ord = int_con(g, 0);
+        inner(g, SymKind::StoreConditional, &[a, b, v, ord])
+    }
+
+    #[test]
+    fn lr_then_sc_succeeds_and_writes() {
+        let mut mem = ResvMemory {
+            bytes: vec![0; 16],
+            ..Default::default()
+        };
+
+        let mut g = Graph::new();
+        lr(&mut g, 4, 4);
+        assert_eq!(as_u64(execute_with_memory(&g, &[], &mut mem).unwrap()), 0);
+
+        let mut g = Graph::new();
+        sc(&mut g, 4, 4, 0xdead_beef);
+        assert_eq!(as_u64(execute_with_memory(&g, &[], &mut mem).unwrap()), 1);
+        assert_eq!(&mem.bytes[4..8], &[0xef, 0xbe, 0xad, 0xde]);
+    }
+
+    #[test]
+    fn sc_without_lr_fails_and_leaves_memory() {
+        let mut mem = ResvMemory {
+            bytes: vec![0; 16],
+            ..Default::default()
+        };
+        let mut g = Graph::new();
+        sc(&mut g, 4, 4, 0x1234);
+        assert_eq!(as_u64(execute_with_memory(&g, &[], &mut mem).unwrap()), 0);
+        assert_eq!(&mem.bytes[4..8], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn sc_after_mismatched_lr_fails() {
+        let mut mem = ResvMemory {
+            bytes: vec![0; 16],
+            ..Default::default()
+        };
+        let mut g = Graph::new();
+        lr(&mut g, 4, 4);
+        execute_with_memory(&g, &[], &mut mem).unwrap();
+
+        // SC to a different address does not match the reservation.
+        let mut g = Graph::new();
+        sc(&mut g, 8, 4, 0x1234);
+        assert_eq!(as_u64(execute_with_memory(&g, &[], &mut mem).unwrap()), 0);
+    }
+
+    #[test]
+    fn default_store_conditional_always_succeeds() {
+        // TestMemory has no reservation concept, so the default SC unconditionally writes.
+        let mut mem = TestMemory { bytes: vec![0; 16] };
+        let mut g = Graph::new();
+        sc(&mut g, 4, 4, 0xabcd);
+        assert_eq!(as_u64(execute_with_memory(&g, &[], &mut mem).unwrap()), 1);
+        assert_eq!(&mem.bytes[4..8], &[0xcd, 0xab, 0, 0]);
+    }
+
+    #[test]
+    fn atomic_rmw_returns_old_and_applies_op() {
+        let mut mem = TestMemory { bytes: vec![0; 16] };
+        mem.bytes[4..8].copy_from_slice(&5i32.to_le_bytes());
+
+        let mut g = Graph::new();
+        let op = int_con(&mut g, AtomicRmwOp::Add as i64);
+        let a = int_con(&mut g, 4);
+        let b = int_con(&mut g, 4);
+        let v = int_con(&mut g, 7);
+        let ord = int_con(&mut g, 0);
+        inner(&mut g, SymKind::AtomicRmw, &[op, a, b, v, ord]);
+
+        // Old value is returned; memory holds old + val.
+        assert_eq!(as_u64(execute_with_memory(&g, &[], &mut mem).unwrap()), 5);
+        assert_eq!(i32::from_le_bytes(mem.bytes[4..8].try_into().unwrap()), 12);
+    }
+
+    #[test]
+    fn fence_is_a_noop_that_records() {
+        let mut mem = ResvMemory {
+            bytes: vec![0; 16],
+            ..Default::default()
+        };
+        let mut g = Graph::new();
+        let pred = int_con(&mut g, 3);
+        let succ = int_con(&mut g, 3);
+        let kind = int_con(&mut g, 0);
+        inner(&mut g, SymKind::Fence, &[pred, succ, kind]);
+        assert_eq!(as_u64(execute_with_memory(&g, &[], &mut mem).unwrap()), 0);
+        assert_eq!(mem.fences, 1);
+    }
+
+    #[test]
+    fn atomic_rmw_op_apply_edge_cases() {
+        let w = 32u32;
+        let neg = |v: i32| APInt::new(w, v as u32 as u64);
+        let pos = |v: u32| APInt::new(w, v as u64);
+
+        // Wrap-around add at 32-bit width.
+        assert_eq!(AtomicRmwOp::Add.apply(pos(0xffff_ffff), pos(1)).to_u64(), 0);
+
+        // Swap yields the new value; Xor/And/Or are bitwise.
+        assert_eq!(AtomicRmwOp::Swap.apply(pos(5), pos(9)).to_u64(), 9);
+        assert_eq!(
+            AtomicRmwOp::Xor.apply(pos(0b1100), pos(0b1010)).to_u64(),
+            0b0110
+        );
+        assert_eq!(
+            AtomicRmwOp::And.apply(pos(0b1100), pos(0b1010)).to_u64(),
+            0b1000
+        );
+        assert_eq!(
+            AtomicRmwOp::Or.apply(pos(0b1100), pos(0b1010)).to_u64(),
+            0b1110
+        );
+
+        // Signed min/max treat a high-bit-set operand as negative. `apply` keeps the
+        // chosen operand's bits verbatim, so read the result back as signed.
+        let signed = |v: APInt| v.with_signed(true).to_i64();
+        assert_eq!(signed(AtomicRmwOp::Min.apply(neg(-1), pos(1))), -1);
+        assert_eq!(signed(AtomicRmwOp::Max.apply(neg(-1), pos(1))), 1);
+        assert_eq!(signed(AtomicRmwOp::Min.apply(neg(-5), neg(-3))), -5);
+
+        // Unsigned min/max treat the same bits as a large positive number.
+        assert_eq!(AtomicRmwOp::MinU.apply(neg(-1), pos(1)).to_u64(), 1);
+        assert_eq!(
+            AtomicRmwOp::MaxU.apply(neg(-1), pos(1)).to_u64(),
+            0xffff_ffff
+        );
+    }
+
+    #[test]
+    fn atomic_rmw_op_from_code_roundtrips() {
+        for code in 0..=8u64 {
+            let op = AtomicRmwOp::from_code(code).unwrap();
+            assert_eq!(op as u64, code);
+        }
+        assert_eq!(AtomicRmwOp::from_code(9), None);
     }
 
     #[test]

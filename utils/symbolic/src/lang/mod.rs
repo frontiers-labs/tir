@@ -92,6 +92,23 @@ pub enum SymKind {
     Reduce,
     /// The k-th parameter of the innermost enclosing `Map`/`Reduce` lambda (`Int` payload).
     Arg,
+    /// Load-reserved: `[address, bytes, ordering]`. Reads memory and registers a
+    /// reservation; value is the loaded word at `bytes*8` width.
+    // #[arity = 3]
+    LoadReserved,
+    /// Store-conditional: `[address, bytes, value, ordering]`. Writes iff a valid
+    /// reservation covers the access; value is `bits<1>`, 1 = success.
+    // #[arity = 4]
+    StoreConditional,
+    /// Atomic read-modify-write: `[op, address, bytes, value, ordering]` where `op`
+    /// is a constant [`AtomicRmwOp`] code 0..8; value is the OLD memory value at
+    /// `bytes*8` width.
+    // #[arity = 5]
+    AtomicRmw,
+    /// Memory/instruction fence: `[pred, succ, kind]` where `kind` 0 = data fence,
+    /// 1 = instruction fence. `pred`/`succ` are target-defined ordering bit sets.
+    // #[arity = 3]
+    Fence,
 }
 
 impl SymKind {
@@ -122,8 +139,11 @@ impl SymKind {
             | SymKind::Clamp
             | SymKind::Extract
             | SymKind::LoadMemory
+            | SymKind::LoadReserved
+            | SymKind::Fence
             | SymKind::Fma => 3,
-            SymKind::StoreMemory => 4,
+            SymKind::StoreMemory | SymKind::StoreConditional => 4,
+            SymKind::AtomicRmw => 5,
             _ => 2,
         }
     }
@@ -135,6 +155,104 @@ impl SymKind {
         match self {
             SymKind::Split => n == 2 || n == 3,
             _ => n == self.arity(),
+        }
+    }
+}
+
+/// The closed set of [`SymKind::AtomicRmw`] operations, coded 0..8 in the op child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u64)]
+pub enum AtomicRmwOp {
+    Add = 0,
+    Swap = 1,
+    Xor = 2,
+    And = 3,
+    Or = 4,
+    Min = 5,
+    Max = 6,
+    MinU = 7,
+    MaxU = 8,
+}
+
+impl AtomicRmwOp {
+    /// The op for code 0..8, or `None` for any other value.
+    pub fn from_code(code: u64) -> Option<Self> {
+        Some(match code {
+            0 => AtomicRmwOp::Add,
+            1 => AtomicRmwOp::Swap,
+            2 => AtomicRmwOp::Xor,
+            3 => AtomicRmwOp::And,
+            4 => AtomicRmwOp::Or,
+            5 => AtomicRmwOp::Min,
+            6 => AtomicRmwOp::Max,
+            7 => AtomicRmwOp::MinU,
+            8 => AtomicRmwOp::MaxU,
+            _ => return None,
+        })
+    }
+
+    /// Apply the operation at the operands' width; `old`/`val` must share a width.
+    /// `Add` wraps; `Min`/`Max` compare signed, `MinU`/`MaxU` unsigned.
+    pub fn apply(&self, old: APInt, val: APInt) -> APInt {
+        match self {
+            AtomicRmwOp::Add => old.add(&val),
+            AtomicRmwOp::Swap => val,
+            AtomicRmwOp::Xor => old.xor(&val),
+            AtomicRmwOp::And => old.and(&val),
+            AtomicRmwOp::Or => old.or(&val),
+            AtomicRmwOp::Min => {
+                if old.with_signed(true).slt(&val.with_signed(true)) {
+                    old
+                } else {
+                    val
+                }
+            }
+            AtomicRmwOp::Max => {
+                if old.with_signed(true).sgt(&val.with_signed(true)) {
+                    old
+                } else {
+                    val
+                }
+            }
+            AtomicRmwOp::MinU => {
+                if old.with_signed(false).ult(&val.with_signed(false)) {
+                    old
+                } else {
+                    val
+                }
+            }
+            AtomicRmwOp::MaxU => {
+                if old.with_signed(false).ugt(&val.with_signed(false)) {
+                    old
+                } else {
+                    val
+                }
+            }
+        }
+    }
+}
+
+/// Memory-ordering annotation carried by the atomic kinds, coded 0..4. Semantically
+/// inert while there is one hart; recorded for a future interleaving model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u64)]
+pub enum MemOrdering {
+    Relaxed = 0,
+    Acquire = 1,
+    Release = 2,
+    AcqRel = 3,
+    SeqCst = 4,
+}
+
+impl MemOrdering {
+    /// The ordering for code 0..4; any out-of-range value maps to `Relaxed`.
+    pub fn from_code(code: u64) -> Self {
+        match code {
+            1 => MemOrdering::Acquire,
+            2 => MemOrdering::Release,
+            3 => MemOrdering::AcqRel,
+            4 => MemOrdering::SeqCst,
+            _ => MemOrdering::Relaxed,
         }
     }
 }
