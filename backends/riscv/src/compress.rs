@@ -106,7 +106,7 @@ fn compress(
     // expand it to the full `jalr x0, x1, 0`).
     if op.as_op::<VirtualReturnOp>().is_some() {
         let jr = CJumpRegOpBuilder::new(context)
-            .attr("rs1", phys(&("GPR".to_string(), 1)))
+            .attr("rs1", phys(&(crate::RegClass::GPR.id(), 1)))
             .build();
         return replace(rewriter, Box::new(jr));
     }

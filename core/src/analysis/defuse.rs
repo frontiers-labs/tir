@@ -13,16 +13,17 @@
 use std::collections::HashMap;
 
 use crate::attributes::{AttributeRole, AttributeValue, RegisterAttr};
+use crate::backend::regalloc::RegClassId;
 use crate::{
     Context, OpId, OpInstance,
     analysis::{Analysis, AnalysisManager},
 };
 
 /// A register operand resolved from an operation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegRef {
-    Virtual { id: u32, class: Option<String> },
-    Physical { class: String, index: u16 },
+    Virtual { id: u32, class: Option<RegClassId> },
+    Physical { class: RegClassId, index: u16 },
 }
 
 /// The register operands of a single operation, split by direction. A
@@ -89,15 +90,15 @@ pub fn op_regs(op: &OpInstance) -> OpRegs {
             let reg_ref = match reg {
                 RegisterAttr::Virtual { id, class } => RegRef::Virtual {
                     id: *id,
-                    class: class.clone(),
+                    class: *class,
                 },
                 RegisterAttr::Physical { class, index } => RegRef::Physical {
-                    class: class.clone(),
+                    class: *class,
                     index: *index,
                 },
             };
             if role_writes(role) {
-                regs.defs.push(reg_ref.clone());
+                regs.defs.push(reg_ref);
             }
             if role_reads(role) {
                 regs.uses.push(reg_ref);

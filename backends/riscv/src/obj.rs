@@ -118,7 +118,7 @@ fn lower_constant(
     let value = tir::backend::int_attr(constant.attributes(), "value").ok_or_else(|| {
         tir::PassError::InvalidRuleSet("constant op without an integer value".to_string())
     })?;
-    let dest = virt(constant.result().number(), "GPR");
+    let dest = virt(constant.result().number(), crate::RegClass::GPR.id());
 
     let last = materialize_int(context, op, rewriter, dest, value, xlen)?;
     rewriter.replace_op(op, last.as_ref())?;
@@ -139,7 +139,7 @@ fn materialize_int(
     if (-2048..2048).contains(&value) {
         let li = crate::AddImmOpBuilder::new(context)
             .attr("rd", dest)
-            .attr("rs1", phys(&("GPR".to_string(), 0)))
+            .attr("rs1", phys(&(crate::RegClass::GPR.id(), 0)))
             .attr("imm", AttributeValue::Int(value))
             .build();
         return Ok(Box::new(li));
@@ -193,7 +193,7 @@ pub(crate) fn lower_addr_of(
         return Ok(false);
     };
     let sym = addr_of.sym_name();
-    let dest = virt(addr_of.result().number(), "GPR");
+    let dest = virt(addr_of.result().number(), crate::RegClass::GPR.id());
 
     let lui = crate::LoadUpperImmOpBuilder::new(context)
         .attr("rd", dest.clone())
@@ -263,7 +263,7 @@ fn lower_constantf(
         .create_value(IntegerType::new(context, xlen), None)
         .id()
         .number();
-    let scratch_reg = virt(scratch, "GPR");
+    let scratch_reg = virt(scratch, crate::RegClass::GPR.id());
 
     let fmv: Box<dyn Operation> = match width {
         Some(32) => {
@@ -274,7 +274,7 @@ fn lower_constantf(
             rewriter.insert_op_before(op, li.as_ref())?;
             Box::new(
                 crate::FMvWXOpBuilder::new(context)
-                    .attr("fd", virt(result.number(), "FPR32"))
+                    .attr("fd", virt(result.number(), crate::RegClass::FPR32.id()))
                     .attr("rs1", scratch_reg)
                     .build(),
             )
@@ -290,7 +290,7 @@ fn lower_constantf(
             rewriter.insert_op_before(op, li.as_ref())?;
             Box::new(
                 crate::FMvDXOpBuilder::new(context)
-                    .attr("fd", virt(result.number(), "FPR64"))
+                    .attr("fd", virt(result.number(), crate::RegClass::FPR64.id()))
                     .attr("rs1", scratch_reg)
                     .build(),
             )
@@ -325,8 +325,8 @@ pub(crate) fn finalize_virtual_ops(
 ) -> Result<bool, tir::PassError> {
     if op.as_op::<VirtualReturnOp>().is_some() {
         let ret = JumpAndLinkRegOpBuilder::new(context)
-            .attr("rd", phys(&("GPR".to_string(), 0)))
-            .attr("rs1", phys(&("GPR".to_string(), 1)))
+            .attr("rd", phys(&(crate::RegClass::GPR.id(), 0)))
+            .attr("rs1", phys(&(crate::RegClass::GPR.id(), 1)))
             .attr("imm", AttributeValue::Int(0))
             .build();
         rewriter.replace_op(op, &ret)?;
@@ -341,7 +341,7 @@ pub(crate) fn finalize_virtual_ops(
         }
         let dest = block_attr(&br, "dest")?;
         let jump = JumpAndLinkOpBuilder::new(context)
-            .attr("rd", phys(&("GPR".to_string(), 0)))
+            .attr("rd", phys(&(crate::RegClass::GPR.id(), 0)))
             .attr("imm", AttributeValue::Block(dest))
             .build();
         rewriter.replace_op(op, &jump)?;
@@ -354,7 +354,7 @@ pub(crate) fn finalize_virtual_ops(
     if let Some(call) = op.as_op::<VirtualCallOp>() {
         let callee = string_attr(&call, "callee")?;
         let jal = JumpAndLinkOpBuilder::new(context)
-            .attr("rd", phys(&("GPR".to_string(), crate::RA)))
+            .attr("rd", phys(&(crate::RegClass::GPR.id(), crate::RA)))
             .attr("imm", AttributeValue::Str(callee))
             .build();
         rewriter.replace_op(op, &jal)?;
@@ -366,7 +366,7 @@ pub(crate) fn finalize_virtual_ops(
     if let Some(call) = op.as_op::<VirtualIndirectCallOp>() {
         let target = register_attr(&call, "callee_reg")?;
         let jalr = JumpAndLinkRegOpBuilder::new(context)
-            .attr("rd", phys(&("GPR".to_string(), crate::RA)))
+            .attr("rd", phys(&(crate::RegClass::GPR.id(), crate::RA)))
             .attr("rs1", target)
             .attr("imm", AttributeValue::Int(0))
             .build();

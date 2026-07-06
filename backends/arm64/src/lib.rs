@@ -384,7 +384,7 @@ fn lower_func_and_return_to_asm_symbol(
             .map(|arg| {
                 AttributeValue::Register(RegisterAttr::Virtual {
                     id: arg.id().number(),
-                    class: Some("GPR".to_string()),
+                    class: Some(RegClass::GPR.id()),
                 })
             })
             .collect::<Vec<_>>();
@@ -446,8 +446,8 @@ fn emit_branch_nonzero(
     vec![
         Box::new(
             CompareOpBuilder::new(context)
-                .attr("rn", virt(condition.number(), "GPR"))
-                .attr("rm", phys(&("GPR".to_string(), XZR)))
+                .attr("rn", virt(condition.number(), RegClass::GPR.id()))
+                .attr("rm", phys(&(RegClass::GPR.id(), XZR)))
                 .build(),
         ),
         Box::new(
@@ -471,7 +471,7 @@ fn mv(
     Box::new(
         OrOpBuilder::new(context)
             .attr("rd", rd)
-            .attr("rn", phys(&("GPR".to_string(), XZR)))
+            .attr("rn", phys(&(RegClass::GPR.id(), XZR)))
             .attr("rm", rm)
             .build(),
     )
@@ -517,7 +517,11 @@ fn lower_calls(
     let detach = |rewriter: &mut tir::Rewriter, value: tir::ValueId| {
         let ty = context.get_value(value).ty();
         let fresh = context.create_value(ty, None).id().number();
-        let copy = mv(context, virt(fresh, "GPR"), virt(value.number(), "GPR"));
+        let copy = mv(
+            context,
+            virt(fresh, RegClass::GPR.id()),
+            virt(value.number(), RegClass::GPR.id()),
+        );
         rewriter.insert_op_before(op, copy.as_ref()).map(|()| fresh)
     };
     let fresh_callee = callee_value
@@ -528,15 +532,23 @@ fn lower_calls(
         fresh_args.push(detach(rewriter, *arg)?);
     }
 
-    let lr = ("GPR".to_string(), LR);
+    let lr = (RegClass::GPR.id(), LR);
     let saved_lr = context
         .create_value(tir::builtin::IntegerType::new(context, 64), None)
         .id();
-    let save = mv(context, virt(saved_lr.number(), "GPR"), phys(&lr));
+    let save = mv(
+        context,
+        virt(saved_lr.number(), RegClass::GPR.id()),
+        phys(&lr),
+    );
     rewriter.insert_op_before(op, save.as_ref())?;
 
     for (&fresh, &reg) in fresh_args.iter().zip(class.arguments.iter()) {
-        let copy = mv(context, phys(&("GPR".to_string(), reg)), virt(fresh, "GPR"));
+        let copy = mv(
+            context,
+            phys(&(RegClass::GPR.id(), reg)),
+            virt(fresh, RegClass::GPR.id()),
+        );
         rewriter.insert_op_before(op, copy.as_ref())?;
     }
 
@@ -552,14 +564,18 @@ fn lower_calls(
         }
         Some(fresh) => Box::new(
             VirtualIndirectCallOpBuilder::new(context)
-                .attr("callee_reg", virt(fresh, "GPR"))
+                .attr("callee_reg", virt(fresh, RegClass::GPR.id()))
                 .attr("clobbers", caller_saved_clobbers())
                 .build(),
         ),
     };
 
     rewriter.insert_op_before(op, virtual_call.as_ref())?;
-    let restore = mv(context, phys(&lr), virt(saved_lr.number(), "GPR"));
+    let restore = mv(
+        context,
+        phys(&lr),
+        virt(saved_lr.number(), RegClass::GPR.id()),
+    );
 
     let ret_reg = class.return_values[0];
     if context.get_value(result).ty() == UnitType::new(context) {
@@ -568,8 +584,8 @@ fn lower_calls(
         rewriter.insert_op_before(op, restore.as_ref())?;
         let copy = mv(
             context,
-            virt(result.number(), "GPR"),
-            phys(&("GPR".to_string(), ret_reg)),
+            virt(result.number(), RegClass::GPR.id()),
+            phys(&(RegClass::GPR.id(), ret_reg)),
         );
         rewriter.replace_op(op, copy.as_ref())?;
     }
@@ -586,7 +602,7 @@ fn caller_saved_clobbers() -> tir::attributes::AttributeValue {
         class
             .caller_saved
             .iter()
-            .map(|&index| phys(&("GPR".to_string(), index)))
+            .map(|&index| phys(&(RegClass::GPR.id(), index)))
             .collect(),
     )
 }
@@ -611,19 +627,21 @@ fn create_isel_pass_for(
 
 /// The AArch64 stack pointer, reserved from allocation and used as the base for
 /// spill slots after the frame has been reserved.
-const SP: (&str, u16) = ("GPRsp", 31);
+fn sp() -> tir::backend::liveness::PhysReg {
+    (RegClass::GPRsp.id(), 31)
+}
 
-fn phys(reg: &(String, u16)) -> tir::attributes::AttributeValue {
+fn phys(reg: &tir::backend::liveness::PhysReg) -> tir::attributes::AttributeValue {
     tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Physical {
-        class: reg.0.clone(),
+        class: reg.0,
         index: reg.1,
     })
 }
 
-fn virt(value: u32, class: &str) -> tir::attributes::AttributeValue {
+fn virt(value: u32, class: tir::backend::regalloc::RegClassId) -> tir::attributes::AttributeValue {
     tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Virtual {
         id: value,
-        class: Some(class.to_string()),
+        class: Some(class),
     })
 }
 
@@ -640,16 +658,16 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
         16
     }
 
-    fn frame_register(&self) -> (String, u16) {
-        (SP.0.to_string(), SP.1)
+    fn frame_register(&self) -> tir::backend::liveness::PhysReg {
+        sp()
     }
 
     fn emit_spill_store(
         &self,
         context: &tir::Context,
         value: u32,
-        class: &str,
-        frame: &(String, u16),
+        class: tir::backend::regalloc::RegClassId,
+        frame: &tir::backend::liveness::PhysReg,
         offset: i64,
     ) -> Box<dyn Operation> {
         Box::new(
@@ -665,8 +683,8 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
         &self,
         context: &tir::Context,
         value: u32,
-        class: &str,
-        frame: &(String, u16),
+        class: tir::backend::regalloc::RegClassId,
+        frame: &tir::backend::liveness::PhysReg,
         offset: i64,
     ) -> Box<dyn Operation> {
         Box::new(
@@ -681,12 +699,16 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
     fn emit_copy(
         &self,
         context: &tir::Context,
-        class: &str,
+        class: tir::backend::regalloc::RegClassId,
         dst: u32,
         src: u32,
     ) -> Box<dyn Operation> {
-        match class {
-            "GPR" => mv(context, virt(dst, "GPR"), virt(src, "GPR")),
+        match class.name() {
+            "GPR" => mv(
+                context,
+                virt(dst, RegClass::GPR.id()),
+                virt(src, RegClass::GPR.id()),
+            ),
             other => unimplemented!(
                 "arm64 register copy for class {other} is not implemented (no float/vector move op)"
             ),
@@ -699,7 +721,7 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
         size: u32,
         saves: &[(tir::backend::liveness::PhysReg, i64)],
     ) -> Vec<Box<dyn Operation>> {
-        let sp = (SP.0.to_string(), SP.1);
+        let sp = sp();
         let mut ops: Vec<Box<dyn Operation>> = vec![Box::new(
             SubImmediateOpBuilder::new(context)
                 .attr("rd", phys(&sp))
@@ -725,7 +747,7 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
         size: u32,
         saves: &[(tir::backend::liveness::PhysReg, i64)],
     ) -> Vec<Box<dyn Operation>> {
-        let sp = (SP.0.to_string(), SP.1);
+        let sp = sp();
         let mut ops: Vec<Box<dyn Operation>> = Vec::new();
         for (reg, offset) in saves {
             ops.push(Box::new(
@@ -764,6 +786,7 @@ impl tir::backend::TargetMachine for Arm64Target {
     fn register_dialects(&self, context: &tir::Context) {
         context.register_dialect::<tir::backend::AsmDialect>();
         context.register_dialect::<Arm64Dialect>();
+        context.register_reg_classes(register_info().classes);
     }
 
     fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
@@ -868,7 +891,7 @@ mod tests {
         builtin::{FuncOp, IntegerType, UnitType, ops},
     };
 
-    use crate::{Arm64Dialect, create_isel_pass, create_regalloc_pass};
+    use crate::{Arm64Dialect, RegClass, create_isel_pass, create_regalloc_pass};
 
     #[test]
     #[ignore = "run with `cargo xtask axioms`"]
@@ -1005,14 +1028,17 @@ mod tests {
         assert_eq!(body, vec!["cmp", "b.lt", "vbr", "symbol_end"]);
     }
 
-    fn phys_of(op: &std::sync::Arc<tir::OpInstance>, name: &str) -> Option<(String, u16)> {
+    fn phys_of(
+        op: &std::sync::Arc<tir::OpInstance>,
+        name: &str,
+    ) -> Option<tir::backend::liveness::PhysReg> {
         use tir::attributes::{AttributeValue, RegisterAttr};
         op.attributes
             .iter()
             .find(|a| a.name == name)
             .and_then(|a| match &a.value {
                 AttributeValue::Register(RegisterAttr::Physical { class, index }) => {
-                    Some((class.clone(), *index))
+                    Some((*class, *index))
                 }
                 _ => None,
             })
@@ -1210,9 +1236,9 @@ mod tests {
             .find(|op| op.name == "add")
             .expect("the add must survive selection");
 
-        assert_eq!(phys_of(&add_op, "rn"), Some(("GPR".to_string(), 0)));
-        assert_eq!(phys_of(&add_op, "rm"), Some(("GPR".to_string(), 1)));
-        assert_eq!(phys_of(&add_op, "rd"), Some(("GPR".to_string(), 0)));
+        assert_eq!(phys_of(&add_op, "rn"), Some((RegClass::GPR.id(), 0)));
+        assert_eq!(phys_of(&add_op, "rm"), Some((RegClass::GPR.id(), 1)));
+        assert_eq!(phys_of(&add_op, "rd"), Some((RegClass::GPR.id(), 0)));
 
         body_blocks_have_no_virtual(&context, region.id());
     }
@@ -1238,15 +1264,15 @@ mod tests {
                 }],
             }
         }
-        fn frame_register(&self) -> (String, u16) {
+        fn frame_register(&self) -> tir::backend::liveness::PhysReg {
             self.0.frame_register()
         }
         fn emit_spill_store(
             &self,
             c: &tir::Context,
             v: u32,
-            class: &str,
-            f: &(String, u16),
+            class: tir::backend::regalloc::RegClassId,
+            f: &tir::backend::liveness::PhysReg,
             o: i64,
         ) -> Box<dyn Operation> {
             self.0.emit_spill_store(c, v, class, f, o)
@@ -1255,8 +1281,8 @@ mod tests {
             &self,
             c: &tir::Context,
             v: u32,
-            class: &str,
-            f: &(String, u16),
+            class: tir::backend::regalloc::RegClassId,
+            f: &tir::backend::liveness::PhysReg,
             o: i64,
         ) -> Box<dyn Operation> {
             self.0.emit_spill_reload(c, v, class, f, o)
@@ -1282,6 +1308,7 @@ mod tests {
     #[test]
     fn arm64_regalloc_spills_under_high_register_pressure() {
         use crate::{AddOpBuilder, VirtualReturnOpBuilder, virt};
+        use tir::backend::regalloc::TargetRegAlloc;
 
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
@@ -1299,15 +1326,23 @@ mod tests {
         let block = context.create_block(vec![a_val]);
         region.add_block(block.id());
 
+        // Tag every vreg with the tiny target's own `GPR` class, whose 5-register
+        // allocation order is what forces spilling. A `RegClassId` is an absolute
+        // handle into a specific register table, so this must be the same class the
+        // allocator reads from `TinyArm64::register_info`, not the full arm64 `GPR`.
+        let gpr = TinyArm64(crate::Arm64RegAlloc)
+            .register_info()
+            .class("GPR")
+            .unwrap();
         let mut bb = IRBuilder::new(context.get_block(block.id()));
         let mut producers = Vec::new();
         for _ in 0..8 {
             let v = context.create_value(i64, None).id().number();
             bb.insert(
                 AddOpBuilder::new(&context)
-                    .attr("rd", virt(v, "GPR"))
-                    .attr("rn", virt(a, "GPR"))
-                    .attr("rm", virt(a, "GPR"))
+                    .attr("rd", virt(v, gpr))
+                    .attr("rn", virt(a, gpr))
+                    .attr("rm", virt(a, gpr))
                     .build(),
             );
             producers.push(v);
@@ -1317,9 +1352,9 @@ mod tests {
             let s = context.create_value(i64, None).id().number();
             bb.insert(
                 AddOpBuilder::new(&context)
-                    .attr("rd", virt(s, "GPR"))
-                    .attr("rn", virt(acc, "GPR"))
-                    .attr("rm", virt(p, "GPR"))
+                    .attr("rd", virt(s, gpr))
+                    .attr("rn", virt(acc, gpr))
+                    .attr("rm", virt(p, gpr))
                     .build(),
             );
             acc = s;
@@ -1389,8 +1424,8 @@ mod tests {
         context.register_dialect::<Arm64Dialect>();
 
         let encoders = crate::get_instruction_encoders();
-        let gpr = |i: u16| phys(&("GPR".to_string(), i));
-        let gprsp = |i: u16| phys(&("GPRsp".to_string(), i));
+        let gpr = |i: u16| phys(&(RegClass::GPR.id(), i));
+        let gprsp = |i: u16| phys(&(RegClass::GPRsp.id(), i));
         let word = |id: tir::OpId| -> u32 {
             let inst = context.get_op(id);
             let enc = encoders[inst.name](&inst)
@@ -1549,8 +1584,8 @@ mod tests {
         context.register_dialect::<Arm64Dialect>();
 
         let encoders = crate::get_instruction_encoders();
-        let gpr = |i: u16| phys(&("GPR".to_string(), i));
-        let gprsp = |i: u16| phys(&("GPRsp".to_string(), i));
+        let gpr = |i: u16| phys(&(RegClass::GPR.id(), i));
+        let gprsp = |i: u16| phys(&(RegClass::GPRsp.id(), i));
         let word = |id: tir::OpId| -> u32 {
             let inst = context.get_op(id);
             let enc = encoders[inst.name](&inst)

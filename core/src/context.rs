@@ -117,6 +117,9 @@ struct ContextInstance {
     /// climb from an op to its enclosing ops.
     block_parent: Vec<Option<RegionId>>,
     dialects: HashMap<&'static str, Arc<dyn Dialect>>,
+    /// Register-class names of registered targets, for resolving parsed
+    /// `%virtN:CLASS` operands back to a [`RegClassId`].
+    reg_classes: HashMap<&'static str, crate::backend::regalloc::RegClassId>,
     op_interface_converters:
         HashMap<(&'static str, &'static str, std::any::TypeId), OpInterfaceConverter>,
     type_cache: Vec<Arc<dyn Type>>,
@@ -138,6 +141,7 @@ impl Context {
             op_parent: Vec::new(),
             block_parent: Vec::new(),
             dialects: HashMap::new(),
+            reg_classes: HashMap::new(),
             op_interface_converters: HashMap::new(),
             type_cache: vec![],
         })))
@@ -173,6 +177,24 @@ impl Context {
             .unwrap()
             .register_types(self);
         self.0.write().dialects.insert(D::name(), dialect);
+    }
+
+    /// Register a target's register classes so the generic op parser can resolve a
+    /// `%virtN:CLASS` operand's class name back to its [`RegClassId`]. Backends call
+    /// this from `register_dialects` with their generated `register_info().classes`.
+    pub fn register_reg_classes(&self, classes: &'static [crate::backend::regalloc::RegClassInfo]) {
+        let mut inner = self.0.write();
+        for class in classes {
+            inner
+                .reg_classes
+                .insert(class.name, crate::backend::regalloc::RegClassId::new(class));
+        }
+    }
+
+    /// Resolve a register-class name to its [`RegClassId`], if a target that defines
+    /// it has been registered (see [`Context::register_reg_classes`]).
+    pub fn resolve_reg_class(&self, name: &str) -> Option<crate::backend::regalloc::RegClassId> {
+        self.0.read().reg_classes.get(name).copied()
     }
 
     pub fn find_dialect<D: Dialect>(&self) -> Option<Arc<D>> {

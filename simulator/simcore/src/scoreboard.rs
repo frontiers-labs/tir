@@ -64,8 +64,8 @@ pub fn phys_regs(refs: &[RegRef], alias: Option<&Prf>) -> Vec<(String, u16)> {
         .filter_map(|r| match r {
             RegRef::Physical { class, index } => {
                 let class = match alias {
-                    Some(p) => p.file_of(class).to_string(),
-                    None => class.clone(),
+                    Some(p) => p.file_of(class.name()).to_string(),
+                    None => class.name().to_string(),
                 };
                 Some((class, *index))
             }

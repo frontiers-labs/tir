@@ -61,6 +61,93 @@ impl RegClassInfo {
     }
 }
 
+/// A handle to a register class: a pointer to its `'static` [`RegClassInfo`].
+///
+/// Register classes are per-dialect statics emitted by the TMDL backend — the
+/// generated `RegClass::X.id()` and `register_info().classes` point at the same
+/// table — so a class's identity is the identity of that pointer. Equality and
+/// hashing are by pointer; ordering is by name so codegen that sorts physical
+/// registers stays deterministic across builds. Derefs to [`RegClassInfo`], so a
+/// class's traits (`allocation_order`, `arguments`, `is_callee_saved`, …) read
+/// directly through the handle.
+#[derive(Clone, Copy)]
+pub struct RegClassId(&'static RegClassInfo);
+
+impl RegClassId {
+    pub const fn new(info: &'static RegClassInfo) -> Self {
+        RegClassId(info)
+    }
+
+    pub fn info(self) -> &'static RegClassInfo {
+        self.0
+    }
+
+    pub fn name(self) -> &'static str {
+        self.0.name
+    }
+
+    /// The physical register file this class draws from (see [`RegClassInfo::file`]).
+    pub fn file(self) -> &'static str {
+        self.0.file
+    }
+
+    /// The span of file indices a register of this class at `index` covers: its
+    /// file, start index, and group width (RVV LMUL>1 groups cover 2/4/8).
+    pub fn span(self, index: u16) -> (&'static str, u16, u16) {
+        (self.0.file, index, self.0.group_width.max(1))
+    }
+
+    /// Whether a register of this class at `index` overlaps `other` at
+    /// `other_index`: same file and intersecting index spans. For width-1 classes
+    /// this is file+index equality; a group register (RVV `VRM2` v8..v9) overlaps
+    /// every register it covers, and aliasing classes over one file (`GPR`/`GPRsp`
+    /// index 7) overlap at equal indices.
+    pub fn overlaps(self, index: u16, other: RegClassId, other_index: u16) -> bool {
+        let (fa, sa, wa) = self.span(index);
+        let (fb, sb, wb) = other.span(other_index);
+        fa == fb && sa < sb + wb && sb < sa + wa
+    }
+}
+
+impl std::ops::Deref for RegClassId {
+    type Target = RegClassInfo;
+    fn deref(&self) -> &RegClassInfo {
+        self.0
+    }
+}
+
+impl PartialEq for RegClassId {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+
+impl Eq for RegClassId {}
+
+impl std::hash::Hash for RegClassId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.0, state);
+    }
+}
+
+impl PartialOrd for RegClassId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RegClassId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.name.cmp(other.0.name)
+    }
+}
+
+impl std::fmt::Debug for RegClassId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RegClassId({})", self.0.name)
+    }
+}
+
 /// How a register class's architectural view maps onto its storage element.
 /// `bit_offset` is where the view starts within the element (x86 high-byte `ah`
 /// begins at bit 8); `merge` preserves the element's untouched bits on write
@@ -80,52 +167,30 @@ pub struct RegisterInfo {
 }
 
 impl RegisterInfo {
-    pub fn class(&self, name: &str) -> Option<&RegClassInfo> {
-        self.classes.iter().find(|c| c.name == name)
-    }
-
-    /// Build a lookup from class name to its info for repeated queries.
-    pub fn class_map(&self) -> HashMap<&'static str, &RegClassInfo> {
-        self.classes.iter().map(|c| (c.name, c)).collect()
-    }
-
-    /// The physical-register identity of `p` for aliasing purposes: its register
-    /// file (the root of the class's inheritance chain) plus index. Two
-    /// `(class, index)` pairs that resolve to the same `(file, index)` are the same
-    /// physical register even when reached through different classes — e.g.
-    /// `("GPR", 7)` and `("GPRsp", 7)` on AArch64. An unknown class is treated as
-    /// its own file.
-    pub fn phys_key<'a>(&'a self, p: &'a PhysReg) -> (&'a str, u16) {
-        let file = self.class(&p.0).map_or(p.0.as_str(), |c| c.file);
-        (file, p.1)
-    }
-
-    /// The span of file indices `p` covers: its file, start index, and its
-    /// class's group width.
-    pub fn phys_span<'a>(&'a self, p: &'a PhysReg) -> (&'a str, u16, u16) {
-        let (file, width) = self
-            .class(&p.0)
-            .map_or((p.0.as_str(), 1), |c| (c.file, c.group_width.max(1)));
-        (file, p.1, width)
+    pub fn class(&self, name: &str) -> Option<RegClassId> {
+        self.classes
+            .iter()
+            .find(|c| c.name == name)
+            .map(RegClassId::new)
     }
 
     /// Whether two physical registers overlap: same file and intersecting index
-    /// spans. For width-1 classes this is exactly `phys_key` equality; a group
-    /// register (RVV `VRM2` v8..v9) overlaps every register it covers.
+    /// spans. A group register (RVV `VRM2` v8..v9) overlaps every register it
+    /// covers; aliasing classes over one file (`GPR`/`GPRsp` index 7) overlap at
+    /// equal indices. Delegates to [`RegClassId::overlaps`].
     pub fn phys_overlap(&self, a: &PhysReg, b: &PhysReg) -> bool {
-        let (fa, sa, wa) = self.phys_span(a);
-        let (fb, sb, wb) = self.phys_span(b);
-        fa == fb && sa < sb + wb && sb < sa + wa
+        a.0.overlaps(a.1, b.0, b.1)
     }
 
     /// The class that owns the calling convention's argument registers — the
     /// natural default for integer virtual registers whose class is otherwise
     /// undetermined (e.g. function parameters with no register attribute yet).
-    pub fn default_integer_class(&self) -> Option<&RegClassInfo> {
+    pub fn default_integer_class(&self) -> Option<RegClassId> {
         self.classes
             .iter()
             .find(|c| !c.arguments.is_empty())
             .or_else(|| self.classes.iter().find(|c| !c.allocation_order.is_empty()))
+            .map(RegClassId::new)
     }
 }
 
@@ -142,8 +207,6 @@ pub enum RegAllocError {
     /// A virtual register could not be colored or spilled (e.g. an over-constrained
     /// pre-coloring). Carries the offending vreg id.
     Infeasible(u32),
-    /// A virtual register references a register class the target does not define.
-    UnknownClass { vreg: u32, class: String },
     /// The PBQP instance itself was malformed.
     Solver(String),
 }
@@ -195,13 +258,13 @@ pub fn allocate(config: &AllocConfig) -> Result<AllocResult, RegAllocError> {
 
     // Per-node alternative lists, resolved to concrete physical registers.
     let mut alternatives: Vec<Vec<Alternative>> = Vec::with_capacity(vregs.len());
-    let mut node_classes: Vec<&RegClassInfo> = Vec::with_capacity(vregs.len());
+    let mut node_classes: Vec<RegClassId> = Vec::with_capacity(vregs.len());
     for &vreg in &vregs {
-        let class = resolve_class(info, liveness, precolor, default_class, vreg)?;
+        let class = resolve_class(liveness, precolor, default_class, vreg)?;
         let mut alts: Vec<Alternative> = class
             .allocation_order
             .iter()
-            .map(|&idx| Alternative::Phys((class.name.to_string(), idx)))
+            .map(|&idx| Alternative::Phys((class, idx)))
             .collect();
         alts.push(Alternative::Spill);
         alternatives.push(alts);
@@ -247,7 +310,7 @@ pub fn allocate(config: &AllocConfig) -> Result<AllocResult, RegAllocError> {
     for (i, &vreg) in vregs.iter().enumerate() {
         match &alternatives[i][solution.choices[i]] {
             Alternative::Phys(p) => {
-                assignment.insert(vreg, p.clone());
+                assignment.insert(vreg, *p);
             }
             Alternative::Spill => spilled.push(vreg),
         }
@@ -263,25 +326,18 @@ pub fn allocate(config: &AllocConfig) -> Result<AllocResult, RegAllocError> {
 /// Determine the register class a virtual register must be allocated from: its
 /// pinned register's class, the class discovered from its operands, or the target's
 /// default integer class.
-fn resolve_class<'a>(
-    info: &'a RegisterInfo,
+fn resolve_class(
     liveness: &Liveness,
     precolor: &HashMap<u32, PhysReg>,
-    default_class: Option<&'a RegClassInfo>,
+    default_class: Option<RegClassId>,
     vreg: u32,
-) -> Result<&'a RegClassInfo, RegAllocError> {
-    let name = precolor
+) -> Result<RegClassId, RegAllocError> {
+    precolor
         .get(&vreg)
-        .map(|(c, _)| c.as_str())
-        .or_else(|| liveness.vreg_class.get(&vreg).map(String::as_str));
-
-    match name {
-        Some(name) => info.class(name).ok_or_else(|| RegAllocError::UnknownClass {
-            vreg,
-            class: name.to_string(),
-        }),
-        None => default_class.ok_or(RegAllocError::Infeasible(vreg)),
-    }
+        .map(|(c, _)| *c)
+        .or_else(|| liveness.vreg_class.get(&vreg).copied())
+        .or(default_class)
+        .ok_or(RegAllocError::Infeasible(vreg))
 }
 
 /// Build the cost vector for one node's alternatives, honoring pre-coloring,
@@ -289,7 +345,7 @@ fn resolve_class<'a>(
 fn node_costs(
     info: &RegisterInfo,
     alternatives: &[Alternative],
-    class: &RegClassInfo,
+    class: RegClassId,
     vreg: u32,
     liveness: &Liveness,
     precolor: &HashMap<u32, PhysReg>,
@@ -313,7 +369,7 @@ fn node_costs(
                     // clobbered value.
                     let conflict = forbidden
                         .is_some_and(|set| set.iter().any(|f| info.phys_overlap(f, target)));
-                    return if !conflict && info.phys_span(p) == info.phys_span(target) {
+                    return if !conflict && p.0.span(p.1) == target.0.span(target.1) {
                         0
                     } else {
                         INF_COST
@@ -399,7 +455,7 @@ pub trait TargetRegAlloc: Send + Sync {
         &self,
         context: &Context,
         value: u32,
-        class: &str,
+        class: RegClassId,
         frame: &PhysReg,
         offset: i64,
     ) -> Box<dyn Operation>;
@@ -409,7 +465,7 @@ pub trait TargetRegAlloc: Send + Sync {
         &self,
         context: &Context,
         value: u32,
-        class: &str,
+        class: RegClassId,
         frame: &PhysReg,
         offset: i64,
     ) -> Box<dyn Operation>;
@@ -417,7 +473,13 @@ pub trait TargetRegAlloc: Send + Sync {
     /// Build a register-to-register copy of virtual register `src` into virtual
     /// register `dst` (both of class `class`). Only reached on targets whose
     /// instructions have tied (two-address) operands, so the default panics.
-    fn emit_copy(&self, context: &Context, class: &str, dst: u32, src: u32) -> Box<dyn Operation> {
+    fn emit_copy(
+        &self,
+        context: &Context,
+        class: RegClassId,
+        dst: u32,
+        src: u32,
+    ) -> Box<dyn Operation> {
         let _ = (context, class, dst, src);
         unimplemented!("this target has tied operands but no copy emitter")
     }
@@ -553,8 +615,7 @@ impl Pass for RegisterAllocationPass {
         // Preserve the callee-saved registers the allocation used for this
         // function's caller. Frame-based targets reserve a slot per register;
         // push/pop targets handle framing themselves.
-        let saves =
-            callee_saved_slots(&info, &assignment, &mut frame, self.target.saves_on_frame());
+        let saves = callee_saved_slots(&assignment, &mut frame, self.target.saves_on_frame());
 
         let frame_size = frame.size(self.target.frame_align());
         if frame_size > 0 || !saves.is_empty() {
@@ -603,7 +664,7 @@ impl RegisterAllocationPass {
                     else {
                         continue;
                     };
-                    let class = class.clone().ok_or_else(|| {
+                    let class = class.ok_or_else(|| {
                         PassError::InvalidRuleSet(format!(
                             "tied operand {} has no register class",
                             attr.name
@@ -616,7 +677,7 @@ impl RegisterAllocationPass {
                 }
                 let op_ref = op_ref_in(context, block_id, op_id);
                 for (_, dst, src, class) in &ties {
-                    let copy = self.target.emit_copy(context, class, *dst, *src);
+                    let copy = self.target.emit_copy(context, *class, *dst, *src);
                     rewriter.insert_op_before(&op_ref, copy.as_ref())?;
                 }
                 let mut attrs = op.attributes.clone();
@@ -643,7 +704,7 @@ impl RegisterAllocationPass {
         blocks: &[BlockId],
     ) -> Result<(), PassError> {
         let info = self.target.register_info();
-        let default_class = info.default_integer_class().map(|c| c.name);
+        let default_class = info.default_integer_class();
         for &block_id in blocks {
             for op_id in context.get_block(block_id).op_ids() {
                 let op = context.get_op(op_id);
@@ -676,14 +737,14 @@ impl RegisterAllocationPass {
                 // Pair each parameter with its forwarded value and the register
                 // class to copy it in (from either endpoint's uses, else the
                 // default integer class).
-                let mut pairs: Vec<(u32, u32, String)> = Vec::new();
+                let mut pairs: Vec<(u32, u32, RegClassId)> = Vec::new();
                 for (&param, &arg) in params.iter().zip(args.iter()) {
                     if param == arg {
                         continue;
                     }
                     let class = vreg_class_in(context, blocks, arg)
                         .or_else(|| vreg_class_in(context, blocks, param))
-                        .or_else(|| default_class.map(str::to_string))
+                        .or(default_class)
                         .ok_or_else(|| {
                             PassError::InvalidRuleSet(format!(
                                 "block argument vreg {arg} has no register class"
@@ -694,7 +755,7 @@ impl RegisterAllocationPass {
 
                 let op_ref = op_ref_in(context, block_id, op_id);
                 for (dst, src, class) in sequence_parallel_copies(context, pairs) {
-                    let copy = self.target.emit_copy(context, &class, dst, src);
+                    let copy = self.target.emit_copy(context, class, dst, src);
                     rewriter.insert_op_before(&op_ref, copy.as_ref())?;
                 }
                 context.set_op_operands(op_id, Vec::new());
@@ -717,19 +778,18 @@ impl RegisterAllocationPass {
         frame: &mut FrameState,
     ) -> Result<(), PassError> {
         let info = self.target.register_info();
-        let default_class = info.default_integer_class().map(|c| c.name);
+        let default_class = info.default_integer_class();
         let frame_reg = self.target.frame_register();
 
         for &vreg in vregs {
             let class = liveness
                 .vreg_class
                 .get(&vreg)
-                .map(String::as_str)
+                .copied()
                 .or(default_class)
                 .ok_or_else(|| {
                     PassError::InvalidRuleSet(format!("spilled vreg {vreg} has no register class"))
-                })?
-                .to_string();
+                })?;
             let ty = context.get_value(ValueId::from_number(vreg)).ty();
             let offset = frame.alloc_slot();
 
@@ -754,21 +814,21 @@ impl RegisterAllocationPass {
                         frame.temps.insert(fresh);
                         let reload = self
                             .target
-                            .emit_spill_reload(context, fresh, &class, &frame_reg, offset);
+                            .emit_spill_reload(context, fresh, class, &frame_reg, offset);
                         let op_ref = op_ref_in(context, block_id, op_id);
                         rewriter.insert_op_before(&op_ref, reload.as_ref())?;
                         rename_attr(context, op_id, vreg, fresh, RoleClass::Read);
                         rename_attr(context, op_id, vreg, fresh, RoleClass::Write);
                         let store = self
                             .target
-                            .emit_spill_store(context, fresh, &class, &frame_reg, offset);
+                            .emit_spill_store(context, fresh, class, &frame_reg, offset);
                         insert_after(context, rewriter, block_id, op_id, store.as_ref())?;
                     } else if uses {
                         let fresh = context.create_value(ty, None).id().number();
                         frame.temps.insert(fresh);
                         let reload = self
                             .target
-                            .emit_spill_reload(context, fresh, &class, &frame_reg, offset);
+                            .emit_spill_reload(context, fresh, class, &frame_reg, offset);
                         let op_ref = op_ref_in(context, block_id, op_id);
                         rewriter.insert_op_before(&op_ref, reload.as_ref())?;
                         rename_attr(context, op_id, vreg, fresh, RoleClass::Read);
@@ -778,7 +838,7 @@ impl RegisterAllocationPass {
                         rename_attr(context, op_id, vreg, fresh, RoleClass::Write);
                         let store = self
                             .target
-                            .emit_spill_store(context, fresh, &class, &frame_reg, offset);
+                            .emit_spill_store(context, fresh, class, &frame_reg, offset);
                         insert_after(context, rewriter, block_id, op_id, store.as_ref())?;
                     }
                 }
@@ -939,15 +999,14 @@ fn insert_after(
 /// around the body. Deterministic order (by class then index) keeps codegen
 /// stable.
 fn callee_saved_slots(
-    info: &RegisterInfo,
     assignment: &HashMap<u32, PhysReg>,
     frame: &mut FrameState,
     on_frame: bool,
 ) -> Vec<(PhysReg, i64)> {
     let mut regs: Vec<PhysReg> = assignment
         .values()
-        .filter(|p| info.class(&p.0).is_some_and(|c| c.is_callee_saved(p.1)))
-        .cloned()
+        .filter(|p| p.0.is_callee_saved(p.1))
+        .copied()
         .collect();
     regs.sort();
     regs.dedup();
@@ -965,8 +1024,8 @@ fn callee_saved_slots(
 /// inherits the class and type of the value it saves.
 fn sequence_parallel_copies(
     context: &Context,
-    mut copies: Vec<(u32, u32, String)>,
-) -> Vec<(u32, u32, String)> {
+    mut copies: Vec<(u32, u32, RegClassId)>,
+) -> Vec<(u32, u32, RegClassId)> {
     let mut result = Vec::new();
     while !copies.is_empty() {
         if let Some(i) = copies
@@ -976,7 +1035,7 @@ fn sequence_parallel_copies(
             result.push(copies.remove(i));
         } else {
             // Only cycles remain: break one by saving its destination.
-            let (dst, _, class) = copies[0].clone();
+            let (dst, _, class) = copies[0];
             let ty = context.get_value(ValueId::from_number(dst)).ty();
             let temp = context.create_value(ty, None).id().number();
             result.push((temp, dst, class));
@@ -1029,17 +1088,13 @@ fn abi_precolor(
             let AttributeValue::Register(RegisterAttr::Virtual { id, class }) = attr else {
                 continue;
             };
-            let Some(rc) = class
-                .as_deref()
-                .and_then(|c| info.class(c))
-                .or_else(|| info.default_integer_class())
-            else {
+            let Some(rc) = class.or_else(|| info.default_integer_class()) else {
                 continue;
             };
             let slot = next_slot.entry(rc.file).or_insert(0);
             if let Some(&reg) = rc.arguments.get(*slot) {
-                let pin = (rc.name.to_string(), reg);
-                if let Some(prev) = precolor.insert(*id, pin.clone())
+                let pin = (rc, reg);
+                if let Some(prev) = precolor.insert(*id, pin)
                     && prev != pin
                 {
                     return Err(PassError::InvalidRuleSet(format!(
@@ -1064,17 +1119,13 @@ fn abi_precolor(
             };
             let vreg = value.number();
             let class = vreg_class_in(context, blocks, vreg);
-            let Some(rc) = class
-                .as_deref()
-                .and_then(|c| info.class(c))
-                .or_else(|| info.default_integer_class())
-            else {
+            let Some(rc) = class.or_else(|| info.default_integer_class()) else {
                 continue;
             };
             let Some(&ret_reg) = rc.return_values.first() else {
                 continue;
             };
-            let ret_pin = (rc.name.to_string(), ret_reg);
+            let ret_pin = (rc, ret_reg);
 
             match precolor.get(&vreg) {
                 // Already pinned to exactly the return register (or returned by
@@ -1086,7 +1137,7 @@ fn abi_precolor(
                 Some(_) => {
                     let ty = context.get_value(value).ty();
                     let fresh = context.create_value(ty, None).id().number();
-                    let copy = target.emit_copy(context, rc.name, fresh, vreg);
+                    let copy = target.emit_copy(context, rc, fresh, vreg);
                     let op_ref = op_ref_in(context, block_id, op_id);
                     rewriter.insert_op_before(&op_ref, copy.as_ref())?;
                     context.set_op_operand(op_id, 0, ValueId::from_number(fresh));
@@ -1104,10 +1155,10 @@ fn abi_precolor(
 
 /// The register class a virtual register is referenced with, from the first
 /// class-qualified register attribute naming it.
-fn vreg_class_in(context: &Context, blocks: &[BlockId], vreg: u32) -> Option<String> {
+fn vreg_class_in(context: &Context, blocks: &[BlockId], vreg: u32) -> Option<RegClassId> {
     let class_of = |value: &AttributeValue| match value {
         AttributeValue::Register(RegisterAttr::Virtual { id, class: Some(c) }) if *id == vreg => {
-            Some(c.clone())
+            Some(*c)
         }
         _ => None,
     };
@@ -1171,7 +1222,7 @@ fn rename_attr(context: &Context, op_id: OpId, from: u32, to: u32, role_class: R
         {
             attr.value = AttributeValue::Register(RegisterAttr::Virtual {
                 id: to,
-                class: class.clone(),
+                class: *class,
             });
             changed = true;
         }
@@ -1194,7 +1245,7 @@ fn rewrite_registers(context: &Context, blocks: &[BlockId], assignment: &HashMap
                     && let Some((class, index)) = assignment.get(id)
                 {
                     attr.value = AttributeValue::Register(RegisterAttr::Physical {
-                        class: class.clone(),
+                        class: *class,
                         index: *index,
                     });
                     changed = true;
@@ -1239,11 +1290,22 @@ mod tests {
         }
     }
 
+    /// The `RegClassId` for class `name` in `info`. Register-class tables are
+    /// promoted statics, so ids from repeated `three_reg_info()` calls (or any
+    /// `RegisterInfo` over the same literal) share one pointer identity.
+    fn id_of(info: &RegisterInfo, name: &str) -> RegClassId {
+        info.class(name).unwrap()
+    }
+
+    fn r_id() -> RegClassId {
+        id_of(&three_reg_info(), "R")
+    }
+
     fn liveness_with(vregs: &[u32], edges: &[(u32, u32)]) -> Liveness {
         let mut lv = Liveness::default();
         for &v in vregs {
             lv.vregs.insert(v);
-            lv.vreg_class.insert(v, "R".to_string());
+            lv.vreg_class.insert(v, r_id());
         }
         for &(a, b) in edges {
             lv.interference.insert((a.min(b), a.max(b)));
@@ -1322,10 +1384,7 @@ mod tests {
         let a = context.create_value(ty, None).id().number();
         let b = context.create_value(ty, None).id().number();
 
-        let seq = sequence_parallel_copies(
-            &context,
-            vec![(a, b, "R".to_string()), (b, a, "R".to_string())],
-        );
+        let seq = sequence_parallel_copies(&context, vec![(a, b, r_id()), (b, a, r_id())]);
         assert_eq!(seq.len(), 3, "a swap needs a saving temporary");
 
         // Simulate: each register starts holding its own original value; applying
@@ -1351,10 +1410,7 @@ mod tests {
         let b = context.create_value(ty, None).id().number();
         let c = context.create_value(ty, None).id().number();
 
-        let seq = sequence_parallel_copies(
-            &context,
-            vec![(a, b, "R".to_string()), (c, a, "R".to_string())],
-        );
+        let seq = sequence_parallel_copies(&context, vec![(a, b, r_id()), (c, a, r_id())]);
         assert_eq!(seq.len(), 2, "no cycle, no temporary");
         let mut regs: HashMap<u32, u32> = HashMap::new();
         regs.insert(a, a);
@@ -1438,7 +1494,7 @@ mod tests {
         let info = three_reg_info();
         let liveness = liveness_with(&[1, 2], &[(1, 2)]);
         let mut precolor = HashMap::new();
-        precolor.insert(1u32, ("R".to_string(), 0u16));
+        precolor.insert(1u32, (r_id(), 0u16));
         let result = allocate(&AllocConfig {
             info: &info,
             liveness: &liveness,
@@ -1448,7 +1504,7 @@ mod tests {
         .unwrap();
 
         let map = assigned(result);
-        assert_eq!(map[&1], ("R".to_string(), 0));
+        assert_eq!(map[&1], (r_id(), 0));
         assert_ne!(
             map[&2].1, 0,
             "an interfering vreg cannot reuse the pinned register"
@@ -1489,7 +1545,7 @@ mod tests {
             .forbidden
             .entry(1)
             .or_default()
-            .extend([("R".to_string(), 0u16), ("R".to_string(), 1u16)]);
+            .extend([(r_id(), 0u16), (r_id(), 1u16)]);
         let precolor = HashMap::new();
         let result = allocate(&AllocConfig {
             info: &info,
@@ -1502,7 +1558,7 @@ mod tests {
         let map = assigned(result);
         assert_eq!(
             map[&1],
-            ("R".to_string(), 2),
+            (r_id(), 2),
             "only the unforbidden register remains"
         );
     }
@@ -1534,12 +1590,12 @@ mod tests {
         },
     ];
 
-    fn two_class_liveness(class1: &str, class2: &str) -> Liveness {
+    fn two_class_liveness(class1: RegClassId, class2: RegClassId) -> Liveness {
         let mut lv = Liveness::default();
         lv.vregs.insert(1);
-        lv.vreg_class.insert(1, class1.to_string());
+        lv.vreg_class.insert(1, class1);
         lv.vregs.insert(2);
-        lv.vreg_class.insert(2, class2.to_string());
+        lv.vreg_class.insert(2, class2);
         lv.interference.insert((1, 2));
         lv
     }
@@ -1553,7 +1609,7 @@ mod tests {
         let info = RegisterInfo {
             classes: ALIASING_CLASSES,
         };
-        let liveness = two_class_liveness("GPR", "GPRsp");
+        let liveness = two_class_liveness(id_of(&info, "GPR"), id_of(&info, "GPRsp"));
         let precolor = HashMap::new();
         let result = allocate(&AllocConfig {
             info: &info,
@@ -1598,7 +1654,7 @@ mod tests {
             },
         ];
         let info = RegisterInfo { classes: CLASSES };
-        let liveness = two_class_liveness("A", "B");
+        let liveness = two_class_liveness(id_of(&info, "A"), id_of(&info, "B"));
         let precolor = HashMap::new();
         let result = allocate(&AllocConfig {
             info: &info,
@@ -1609,8 +1665,8 @@ mod tests {
         .unwrap();
 
         let map = assigned(result);
-        assert_eq!(map[&1], ("A".to_string(), 0));
-        assert_eq!(map[&2], ("B".to_string(), 0));
+        assert_eq!(map[&1], (id_of(&info, "A"), 0));
+        assert_eq!(map[&2], (id_of(&info, "B"), 0));
     }
 
     #[test]
@@ -1644,10 +1700,15 @@ mod tests {
             },
         ];
         let info = RegisterInfo { classes: CLASSES };
-        assert!(info.phys_overlap(&("VRM2".to_string(), 0), &("VR".to_string(), 1)));
-        assert!(!info.phys_overlap(&("VRM2".to_string(), 0), &("VR".to_string(), 2)));
+        let vrm2 = id_of(&info, "VRM2");
+        let vr = id_of(&info, "VR");
+        assert!(info.phys_overlap(&(vrm2, 0), &(vr, 1)));
+        assert!(!info.phys_overlap(&(vrm2, 0), &(vr, 2)));
+        // The overlap API is also exposed directly on the class handle.
+        assert!(vrm2.overlaps(0, vr, 1));
+        assert!(!vrm2.overlaps(0, vr, 2));
 
-        let liveness = two_class_liveness("VRM2", "VR");
+        let liveness = two_class_liveness(vrm2, vr);
         let precolor = HashMap::new();
         let result = allocate(&AllocConfig {
             info: &info,
@@ -1658,8 +1719,8 @@ mod tests {
         .unwrap();
 
         let map = assigned(result);
-        assert_eq!(map[&1], ("VRM2".to_string(), 0));
-        assert_eq!(map[&2], ("VR".to_string(), 2));
+        assert_eq!(map[&1], (vrm2, 0));
+        assert_eq!(map[&2], (vr, 2));
     }
 
     #[test]
@@ -1693,12 +1754,12 @@ mod tests {
         let info = RegisterInfo { classes: CLASSES };
         let mut liveness = Liveness::default();
         liveness.vregs.insert(1);
-        liveness.vreg_class.insert(1, "GPRsp".to_string());
+        liveness.vreg_class.insert(1, id_of(&info, "GPRsp"));
         liveness
             .forbidden
             .entry(1)
             .or_default()
-            .insert(("GPR".to_string(), 0u16));
+            .insert((id_of(&info, "GPR"), 0u16));
         let precolor = HashMap::new();
         let result = allocate(&AllocConfig {
             info: &info,
@@ -1711,7 +1772,7 @@ mod tests {
         let map = assigned(result);
         assert_eq!(
             map[&1],
-            ("GPRsp".to_string(), 1),
+            (id_of(&info, "GPRsp"), 1),
             "a forbidden index aliases across the shared file"
         );
     }

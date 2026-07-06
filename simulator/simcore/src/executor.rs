@@ -1013,7 +1013,7 @@ mod tests {
 
         fn gpr(index: u16) -> AttributeValue {
             AttributeValue::Register(RegisterAttr::Physical {
-                class: "GPR".to_string(),
+                class: tir_riscv::RegClass::GPR.id(),
                 index,
             })
         }
@@ -1381,7 +1381,7 @@ mod tests {
 
         fn gpr(index: u16) -> AttributeValue {
             AttributeValue::Register(RegisterAttr::Physical {
-                class: "GPR".to_string(),
+                class: tir_arm64::RegClass::GPR.id(),
                 index,
             })
         }

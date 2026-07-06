@@ -12,12 +12,13 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use tir::backend::regalloc::RegClassId;
 use tir::{BlockId, Context};
 
 pub use crate::analysis::defuse::{OpRegs, RegRef, op_regs};
 
-/// A physical register: its class name and encoding index.
-pub type PhysReg = (String, u16);
+/// A physical register: its class handle and encoding index.
+pub type PhysReg = (RegClassId, u16);
 
 /// Per-op register information cached for the backward scans.
 struct OpInfo {
@@ -52,7 +53,7 @@ pub struct Liveness {
     /// Physical registers each virtual register is live across and so must avoid.
     pub forbidden: HashMap<u32, HashSet<PhysReg>>,
     /// The register class discovered for each virtual register from its operands.
-    pub vreg_class: HashMap<u32, String>,
+    pub vreg_class: HashMap<u32, RegClassId>,
     /// Every virtual register referenced in the analyzed region.
     pub vregs: BTreeSet<u32>,
     /// Virtual registers live on entry to each block (keyed by block).
@@ -127,7 +128,7 @@ pub fn analyze(
                         }
                     }
                     RegRef::Physical { class, index } => {
-                        phys_uses.push((class.clone(), *index));
+                        phys_uses.push((*class, *index));
                     }
                 }
             }
@@ -141,7 +142,7 @@ pub fn analyze(
                         block_defs.insert(*id);
                     }
                     RegRef::Physical { class, index } => {
-                        clobbers.push((class.clone(), *index));
+                        clobbers.push((*class, *index));
                     }
                 }
             }
@@ -235,7 +236,7 @@ pub fn analyze(
             // A physical clobber conflicts with everything live across this op.
             for phys in &op.clobbers {
                 for &l in &live {
-                    result.forbid(l, phys.clone());
+                    result.forbid(l, *phys);
                 }
             }
             // A physical register read later and still live across this op cannot
@@ -243,10 +244,10 @@ pub fn analyze(
             // resolved downstream by the same `phys_overlap` path as clobbers.
             for phys in &live_phys {
                 for &l in &live {
-                    result.forbid(l, phys.clone());
+                    result.forbid(l, *phys);
                 }
                 for &d in &op.def_vregs {
-                    result.forbid(d, phys.clone());
+                    result.forbid(d, *phys);
                 }
             }
             // Each defined vreg interferes with all currently-live vregs and with
@@ -271,7 +272,7 @@ pub fn analyze(
             }
             // A physical read starts (going backward) a live range for that register.
             for phys in &op.phys_uses {
-                live_phys.insert(phys.clone());
+                live_phys.insert(*phys);
             }
         }
 
@@ -295,9 +296,9 @@ pub fn analyze(
     result
 }
 
-fn record_class(result: &mut Liveness, id: u32, class: &Option<String>) {
+fn record_class(result: &mut Liveness, id: u32, class: &Option<RegClassId>) {
     if let Some(class) = class {
-        result.vreg_class.entry(id).or_insert_with(|| class.clone());
+        result.vreg_class.entry(id).or_insert(*class);
     }
 }
 
@@ -305,8 +306,25 @@ fn record_class(result: &mut Liveness, id: u32, class: &Option<String>) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use tir::backend::regalloc::RegClassInfo;
     use tir::builtin::{IntegerType, ops};
     use tir::{Block, IRBuilder, TypeId, ValueId};
+
+    static R_CLASS: RegClassInfo = RegClassInfo {
+        name: "R",
+        file: "R",
+        allocation_order: &[0],
+        caller_saved: &[0],
+        callee_saved: &[],
+        arguments: &[],
+        return_values: &[],
+        reserved: &[],
+        group_width: 1,
+    };
+
+    fn r() -> RegClassId {
+        RegClassId::new(&R_CLASS)
+    }
 
     // `addi %a, %b` whose fresh result names a new virtual register (a def), with
     // its two operands read as uses — enough for liveness, which resolves builtin
@@ -407,7 +425,7 @@ mod tests {
 
     // Append an op that reads (`is_def == false`) or writes (`is_def == true`) the
     // physical register `class[index]` via a role-tagged register attribute.
-    fn phys_op(context: &Context, block: &Arc<Block>, class: &str, index: u16, is_def: bool) {
+    fn phys_op(context: &Context, block: &Arc<Block>, class: RegClassId, index: u16, is_def: bool) {
         use tir::OpInstance;
         use tir::attributes::{AttributeRole, AttributeValue, NamedAttribute, RegisterAttr};
 
@@ -424,10 +442,7 @@ mod tests {
             regions: Vec::new(),
             attributes: vec![NamedAttribute::new(
                 "r",
-                AttributeValue::Register(RegisterAttr::Physical {
-                    class: class.to_string(),
-                    index,
-                }),
+                AttributeValue::Register(RegisterAttr::Physical { class, index }),
             )],
             attribute_roles: if is_def { DEF_ROLES } else { USE_ROLES },
         };
@@ -446,15 +461,15 @@ mod tests {
         let a_id = a.id();
         let block = context.create_block(vec![a]);
 
-        phys_op(&context, &block, "R", 0, true); // def P
+        phys_op(&context, &block, r(), 0, true); // def P
         let v1 = addi(&context, &block, a_id, a_id, ty); // def v1 (live across the read)
-        phys_op(&context, &block, "R", 0, false); // use P
+        phys_op(&context, &block, r(), 0, false); // use P
         addi(&context, &block, v1, a_id, ty); // use v1
 
         let liveness = analyze(&context, &[block.id()], |_| Vec::new());
 
         assert!(
-            liveness.forbidden[&v1.number()].contains(&("R".to_string(), 0)),
+            liveness.forbidden[&v1.number()].contains(&(r(), 0)),
             "a vreg live across a physical-register read must be forbidden from it",
         );
     }

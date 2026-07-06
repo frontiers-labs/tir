@@ -459,7 +459,7 @@ mod isa {
                 .map(|arg| {
                     AttributeValue::Register(RegisterAttr::Virtual {
                         id: arg.id().number(),
-                        class: Some("GPR".to_string()),
+                        class: Some(RegClass::GPR.id()),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -492,10 +492,10 @@ mod isa {
         }
     }
 
-    fn virt(value: u32, class: &str) -> AttributeValue {
+    fn virt(value: u32, class: tir::backend::regalloc::RegClassId) -> AttributeValue {
         AttributeValue::Register(RegisterAttr::Virtual {
             id: value,
-            class: Some(class.to_string()),
+            class: Some(class),
         })
     }
 
@@ -524,8 +524,8 @@ mod isa {
         vec![
             Box::new(
                 TestOpBuilder::new(context)
-                    .attr("dst", virt(condition.number(), "GPR"))
-                    .attr("src", virt(condition.number(), "GPR"))
+                    .attr("dst", virt(condition.number(), RegClass::GPR.id()))
+                    .attr("src", virt(condition.number(), RegClass::GPR.id()))
                     .build(),
             ),
             Box::new(
@@ -551,7 +551,7 @@ mod isa {
         let value = tir::backend::int_attr(constant.attributes(), "value").ok_or_else(|| {
             tir::PassError::InvalidRuleSet("constant op without an integer value".to_string())
         })?;
-        let dst = virt(constant.result().number(), "GPR");
+        let dst = virt(constant.result().number(), RegClass::GPR.id());
         if i32::try_from(value).is_err() {
             let movabs = MovAbsOpBuilder::new(context)
                 .attr("dst", dst)
@@ -582,7 +582,7 @@ mod isa {
             return Ok(false);
         };
         let lea = LeaRipOpBuilder::new(context)
-            .attr("dst", virt(addr_of.result().number(), "GPR"))
+            .attr("dst", virt(addr_of.result().number(), RegClass::GPR.id()))
             .attr("imm", AttributeValue::Str(addr_of.sym_name()))
             .build();
         rewriter.replace_op(op, &lea)?;
@@ -607,7 +607,7 @@ mod isa {
             class
                 .caller_saved
                 .iter()
-                .map(|&index| phys("GPR", index))
+                .map(|&index| phys(RegClass::GPR.id(), index))
                 .collect(),
         )
     }
@@ -646,7 +646,11 @@ mod isa {
         let detach = |rewriter: &mut tir::Rewriter, value: tir::ValueId| {
             let ty = context.get_value(value).ty();
             let fresh = context.create_value(ty, None).id().number();
-            let copy = mv(context, virt(fresh, "GPR"), virt(value.number(), "GPR"));
+            let copy = mv(
+                context,
+                virt(fresh, RegClass::GPR.id()),
+                virt(value.number(), RegClass::GPR.id()),
+            );
             rewriter.insert_op_before(op, copy.as_ref()).map(|()| fresh)
         };
         let fresh_callee = callee_value
@@ -660,7 +664,7 @@ mod isa {
         // Reserve 8 bytes to realign the stack for the call.
         let realign = |rewriter: &mut tir::Rewriter, delta: i64| -> Result<(), tir::PassError> {
             let adj = AddImmOpBuilder::new(context)
-                .attr("dst", phys(SP.0, SP.1))
+                .attr("dst", phys(sp().0, sp().1))
                 .attr("imm", AttributeValue::Int(delta))
                 .build();
             rewriter.insert_op_before(op, &adj)
@@ -668,13 +672,17 @@ mod isa {
         realign(rewriter, -8)?;
 
         for (&fresh, &reg) in fresh_args.iter().zip(class.arguments.iter()) {
-            let copy = mv(context, phys("GPR", reg), virt(fresh, "GPR"));
+            let copy = mv(
+                context,
+                phys(RegClass::GPR.id(), reg),
+                virt(fresh, RegClass::GPR.id()),
+            );
             rewriter.insert_op_before(op, copy.as_ref())?;
         }
 
         // Variadic ABI: `al` counts vector registers used; zero it (no float args).
         let zero_eax = MovImm32OpBuilder::new(context)
-            .attr("dst", phys("GPR32", 0))
+            .attr("dst", phys(RegClass::GPR32.id(), 0))
             .attr("imm", AttributeValue::Int(0))
             .build();
         rewriter.insert_op_before(op, &zero_eax)?;
@@ -691,7 +699,7 @@ mod isa {
             }
             Some(fresh) => Box::new(
                 VirtualIndirectCallOpBuilder::new(context)
-                    .attr("callee_reg", virt(fresh, "GPR"))
+                    .attr("callee_reg", virt(fresh, RegClass::GPR.id()))
                     .attr("clobbers", caller_saved_clobbers())
                     .build(),
             ),
@@ -703,7 +711,11 @@ mod isa {
         if context.get_value(result).ty() == UnitType::new(context) {
             rewriter.erase_op(op)?;
         } else {
-            let copy = mv(context, virt(result.number(), "GPR"), phys("GPR", ret_reg));
+            let copy = mv(
+                context,
+                virt(result.number(), RegClass::GPR.id()),
+                phys(RegClass::GPR.id(), ret_reg),
+            );
             rewriter.replace_op(op, copy.as_ref())?;
         }
         Ok(true)
@@ -1217,13 +1229,12 @@ mod isa {
     }
 
     /// The x86-64 stack pointer (`rsp`, GPR index 4).
-    const SP: (&str, u16) = ("GPR", 4);
+    fn sp() -> tir::backend::liveness::PhysReg {
+        (RegClass::GPR.id(), 4)
+    }
 
-    fn phys(class: &str, index: u16) -> AttributeValue {
-        AttributeValue::Register(RegisterAttr::Physical {
-            class: class.to_string(),
-            index,
-        })
+    fn phys(class: tir::backend::regalloc::RegClassId, index: u16) -> AttributeValue {
+        AttributeValue::Register(RegisterAttr::Physical { class, index })
     }
 
     /// Register allocation target. Frame adjustment is `add rsp, ±size`; spill
@@ -1236,8 +1247,8 @@ mod isa {
             register_info()
         }
 
-        fn frame_register(&self) -> (String, u16) {
-            (SP.0.to_string(), SP.1)
+        fn frame_register(&self) -> tir::backend::liveness::PhysReg {
+            sp()
         }
 
         // Keep the frame a multiple of 16 so `rsp` stays ≡ 8 mod 16 at call sites
@@ -1250,8 +1261,8 @@ mod isa {
             &self,
             _context: &tir::Context,
             _value: u32,
-            _class: &str,
-            _frame: &(String, u16),
+            _class: tir::backend::regalloc::RegClassId,
+            _frame: &tir::backend::liveness::PhysReg,
             _offset: i64,
         ) -> Box<dyn Operation> {
             unimplemented!("x86-64 spilling needs memory operands, out of prototype scope")
@@ -1261,8 +1272,8 @@ mod isa {
             &self,
             _context: &tir::Context,
             _value: u32,
-            _class: &str,
-            _frame: &(String, u16),
+            _class: tir::backend::regalloc::RegClassId,
+            _frame: &tir::backend::liveness::PhysReg,
             _offset: i64,
         ) -> Box<dyn Operation> {
             unimplemented!("x86-64 spilling needs memory operands, out of prototype scope")
@@ -1271,17 +1282,17 @@ mod isa {
         fn emit_copy(
             &self,
             context: &tir::Context,
-            class: &str,
+            class: tir::backend::regalloc::RegClassId,
             dst: u32,
             src: u32,
         ) -> Box<dyn Operation> {
             let virt = |id: u32| {
                 AttributeValue::Register(RegisterAttr::Virtual {
                     id,
-                    class: Some(class.to_string()),
+                    class: Some(class),
                 })
             };
-            match class {
+            match class.name() {
                 "GPR" => Box::new(
                     MovOpBuilder::new(context)
                         .attr("dst", virt(dst))
@@ -1337,7 +1348,7 @@ mod isa {
             for ((class, index), _) in saves {
                 ops.push(Box::new(
                     PushOpBuilder::new(context)
-                        .attr("reg", phys(class, *index))
+                        .attr("reg", phys(*class, *index))
                         .build(),
                 ));
             }
@@ -1347,7 +1358,7 @@ mod isa {
             if total > 0 {
                 ops.push(Box::new(
                     AddImmOpBuilder::new(context)
-                        .attr("dst", phys(SP.0, SP.1))
+                        .attr("dst", phys(sp().0, sp().1))
                         .attr("imm", AttributeValue::Int(-total))
                         .build(),
                 ));
@@ -1366,7 +1377,7 @@ mod isa {
             if total > 0 {
                 ops.push(Box::new(
                     AddImmOpBuilder::new(context)
-                        .attr("dst", phys(SP.0, SP.1))
+                        .attr("dst", phys(sp().0, sp().1))
                         .attr("imm", AttributeValue::Int(total))
                         .build(),
                 ));
@@ -1374,7 +1385,7 @@ mod isa {
             for ((class, index), _) in saves.iter().rev() {
                 ops.push(Box::new(
                     PopOpBuilder::new(context)
-                        .attr("reg", phys(class, *index))
+                        .attr("reg", phys(*class, *index))
                         .build(),
                 ));
             }
@@ -1465,6 +1476,7 @@ mod isa {
         fn register_dialects(&self, context: &tir::Context) {
             context.register_dialect::<tir::backend::AsmDialect>();
             context.register_dialect::<X86_64Dialect>();
+            context.register_reg_classes(register_info().classes);
         }
 
         fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
@@ -1574,8 +1586,8 @@ mod isa {
             let mut b = IRBuilder::new(module.body());
             b.insert(
                 MovLoadOpBuilder::new(&context)
-                    .attr("dst", phys("GPR", 0))
-                    .attr("base", phys("GPR", base_index))
+                    .attr("dst", phys(RegClass::GPR.id(), 0))
+                    .attr("base", phys(RegClass::GPR.id(), base_index))
                     .build(),
             );
             b.insert(ModuleEndOpBuilder::new(&context).build());
@@ -1636,7 +1648,7 @@ mod isa {
         }
 
         fn g32(index: u16) -> AttributeValue {
-            phys("GPR32", index)
+            phys(RegClass::GPR32.id(), index)
         }
 
         #[test]
@@ -1657,14 +1669,14 @@ mod isa {
         #[test]
         fn byte_forms_use_the_al_cl_dl_bl_threshold() {
             let al = canon!(|c| Add8OpBuilder::new(c)
-                .attr("dst", phys("GPR8", 3))
-                .attr("src", phys("GPR8", 0))
+                .attr("dst", phys(RegClass::GPR8.id(), 3))
+                .attr("src", phys(RegClass::GPR8.id(), 0))
                 .build());
             assert!(al.contains("add8_norex"));
             // spl (index 4) requires an empty REX, so it stays on the REX form.
             let spl = canon!(|c| Add8OpBuilder::new(c)
-                .attr("dst", phys("GPR8", 4))
-                .attr("src", phys("GPR8", 0))
+                .attr("dst", phys(RegClass::GPR8.id(), 4))
+                .attr("src", phys(RegClass::GPR8.id(), 0))
                 .build());
             assert!(spl.contains("x86_64.add8 "));
             assert!(!spl.contains("norex"));
@@ -1687,12 +1699,12 @@ mod isa {
         #[test]
         fn group1_imm64_folds_only_the_imm8() {
             let small = canon!(|c| AddImmOpBuilder::new(c)
-                .attr("dst", phys("GPR", 1))
+                .attr("dst", phys(RegClass::GPR.id(), 1))
                 .attr("imm", AttributeValue::Int(42))
                 .build());
             assert!(small.contains("add_imm8s"));
             let big = canon!(|c| AddImmOpBuilder::new(c)
-                .attr("dst", phys("GPR", 1))
+                .attr("dst", phys(RegClass::GPR.id(), 1))
                 .attr("imm", AttributeValue::Int(300))
                 .build());
             assert!(big.contains("x86_64.add_imm "));
@@ -1700,11 +1712,17 @@ mod isa {
 
         #[test]
         fn singletons_drop_rex_when_low() {
-            let push = canon!(|c| PushOpBuilder::new(c).attr("reg", phys("GPR", 3)).build());
+            let push = canon!(|c| PushOpBuilder::new(c)
+                .attr("reg", phys(RegClass::GPR.id(), 3))
+                .build());
             assert!(push.contains("push_norex"));
-            let push_hi = canon!(|c| PushOpBuilder::new(c).attr("reg", phys("GPR", 12)).build());
+            let push_hi = canon!(|c| PushOpBuilder::new(c)
+                .attr("reg", phys(RegClass::GPR.id(), 12))
+                .build());
             assert!(push_hi.contains("x86_64.push ") && !push_hi.contains("norex"));
-            let sete = canon!(|c| SetEqOpBuilder::new(c).attr("dst", phys("GPR8", 0)).build());
+            let sete = canon!(|c| SetEqOpBuilder::new(c)
+                .attr("dst", phys(RegClass::GPR8.id(), 0))
+                .build());
             assert!(sete.contains("sete_norex"));
             let shl = canon!(|c| ShlImm32OpBuilder::new(c)
                 .attr("dst", g32(0))

@@ -191,14 +191,14 @@ pub trait MachineInstruction {
 pub fn register_attr(
     attrs: &[tir::attributes::NamedAttribute],
     name: &str,
-) -> Option<(String, u16)> {
+) -> Option<(tir::backend::regalloc::RegClassId, u16)> {
     attrs.iter().find_map(|attr| {
         if attr.name != name {
             return None;
         }
         match &attr.value {
             AttributeValue::Register(RegisterAttr::Physical { class, index }) => {
-                Some((class.clone(), *index))
+                Some((*class, *index))
             }
             _ => None,
         }

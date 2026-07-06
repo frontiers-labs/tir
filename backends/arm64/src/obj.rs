@@ -80,7 +80,10 @@ pub(crate) fn lower_constant(
     }
 
     let movz = MoveWideZeroOpBuilder::new(context)
-        .attr("rd", virt(constant.result().number(), "GPR"))
+        .attr(
+            "rd",
+            virt(constant.result().number(), crate::RegClass::GPR.id()),
+        )
         .attr("imm", AttributeValue::Int(value))
         .build();
     rewriter.replace_op(op, &movz)?;
@@ -100,7 +103,10 @@ pub(crate) fn lower_addr_of(
         return Ok(false);
     };
     let adr = AddressPCRelOpBuilder::new(context)
-        .attr("rd", virt(addr_of.result().number(), "GPR"))
+        .attr(
+            "rd",
+            virt(addr_of.result().number(), crate::RegClass::GPR.id()),
+        )
         .attr("imm", AttributeValue::Str(addr_of.sym_name()))
         .build();
     rewriter.replace_op(op, &adr)?;
@@ -127,7 +133,7 @@ pub(crate) fn finalize_virtual_ops(
 ) -> Result<bool, tir::PassError> {
     if op.as_op::<VirtualReturnOp>().is_some() {
         let ret = ReturnOpBuilder::new(context)
-            .attr("rn", phys(&("GPR".to_string(), 30)))
+            .attr("rn", phys(&(crate::RegClass::GPR.id(), 30)))
             .build();
         rewriter.replace_op(op, &ret)?;
         return Ok(true);

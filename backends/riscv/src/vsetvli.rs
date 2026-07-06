@@ -50,12 +50,14 @@ fn lmul_for(avl: &AttributeValue, sew: i64) -> Result<i64, PassError> {
 
 /// The register class holding one value of `total_bits` at the guaranteed
 /// minimum VLEN: `VR` for a single register, else the LMUL group class.
-pub(crate) fn vr_class_for_bits(total_bits: i64) -> Result<&'static str, PassError> {
+pub(crate) fn vr_class_for_bits(
+    total_bits: i64,
+) -> Result<tir::backend::regalloc::RegClassId, PassError> {
     match lmul_for(&AttributeValue::Int(1), total_bits)? {
-        1 => Ok("VR"),
-        2 => Ok("VRM2"),
-        4 => Ok("VRM4"),
-        _ => Ok("VRM8"),
+        1 => Ok(crate::RegClass::VR.id()),
+        2 => Ok(crate::RegClass::VRM2.id()),
+        4 => Ok(crate::RegClass::VRM4.id()),
+        _ => Ok(crate::RegClass::VRM8.id()),
     }
 }
 
@@ -133,7 +135,7 @@ impl InsertVsetvliPass {
         vtypei: i64,
     ) -> Result<(), PassError> {
         let x0 = AttributeValue::Register(RegisterAttr::Physical {
-            class: "GPR".to_string(),
+            class: crate::RegClass::GPR.id(),
             index: 0,
         });
         match avl {
@@ -153,7 +155,7 @@ impl InsertVsetvliPass {
                         "rd",
                         AttributeValue::Register(RegisterAttr::Virtual {
                             id: avl_reg,
-                            class: Some("GPR".to_string()),
+                            class: Some(crate::RegClass::GPR.id()),
                         }),
                     )
                     .attr("rs1", x0.clone())
@@ -166,7 +168,7 @@ impl InsertVsetvliPass {
                         "avl",
                         AttributeValue::Register(RegisterAttr::Virtual {
                             id: avl_reg,
-                            class: Some("GPR".to_string()),
+                            class: Some(crate::RegClass::GPR.id()),
                         }),
                     )
                     .attr("vtypei", AttributeValue::Int(vtypei))
@@ -180,7 +182,7 @@ impl InsertVsetvliPass {
                         "avl",
                         AttributeValue::Register(RegisterAttr::Virtual {
                             id: *id,
-                            class: Some("GPR".to_string()),
+                            class: Some(crate::RegClass::GPR.id()),
                         }),
                     )
                     .attr("vtypei", AttributeValue::Int(vtypei))
@@ -288,9 +290,9 @@ impl Pass for InsertVsetvliPass {
                 let lmul = lmul_for(&avl, sew)?;
                 if lmul > 1 {
                     let group = match lmul {
-                        2 => "VRM2",
-                        4 => "VRM4",
-                        _ => "VRM8",
+                        2 => crate::RegClass::VRM2.id(),
+                        4 => crate::RegClass::VRM4.id(),
+                        _ => crate::RegClass::VRM8.id(),
                     };
                     let mut attrs = body_op.attributes.clone();
                     let mut rewrote = false;
@@ -299,9 +301,9 @@ impl Pass for InsertVsetvliPass {
                             class: Some(c),
                             ..
                         }) = &mut a.value
-                            && c == "VR"
+                            && *c == crate::RegClass::VR.id()
                         {
-                            *c = group.to_string();
+                            *c = group;
                             rewrote = true;
                         }
                     }

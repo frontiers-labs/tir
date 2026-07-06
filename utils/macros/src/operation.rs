@@ -1658,7 +1658,7 @@ fn make_parser(
                                if let Some(id) = parser.parse_number() {
                                    let mut class = None;
                                    if parser.parse_token(":") {
-                                       if let Some(cls) = parser.parse_ident() { class = Some(cls.to_string()); } else { ok = false; }
+                                       if let Some(cls) = parser.parse_ident() { class = context.resolve_reg_class(cls); } else { ok = false; }
                                    }
                                    tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Virtual { id: id as u32, class: class })
                                } else { ok = false; break; }

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::backend::regalloc::RegClassId;
 use crate::{BlockId, Context, TypeId};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,8 +31,8 @@ pub enum AttributeRole {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RegisterAttr {
-    Physical { class: String, index: u16 },
-    Virtual { id: u32, class: Option<String> },
+    Physical { class: RegClassId, index: u16 },
+    Virtual { id: u32, class: Option<RegClassId> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,11 +93,11 @@ impl AttributeValue {
             }
             AttributeValue::Register(r) => match r {
                 RegisterAttr::Physical { class, index } => {
-                    fmt.write(format!("{}[{}]", class, index))
+                    fmt.write(format!("{}[{}]", class.name(), index))
                 }
                 RegisterAttr::Virtual { id, class } => {
                     if let Some(cls) = class {
-                        fmt.write(format!("%virt{}:{}", id, cls))
+                        fmt.write(format!("%virt{}:{}", id, cls.name()))
                     } else {
                         fmt.write(format!("%virt{}", id))
                     }
