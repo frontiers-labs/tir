@@ -28,7 +28,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
-use std::time::UNIX_EPOCH;
 
 use libtest_mimic::{Arguments, Failed, Trial};
 
@@ -41,11 +40,15 @@ struct TestCase {
     xfail: bool,
 }
 
-/// Build a workspace binary once and link it beside the current test executable.
+/// Build a workspace binary and snapshot it beside the current test executable
+/// under a stable name.
 ///
-/// Running `cargo run` from every parallel lit test can race with Cargo rewriting
-/// the target binary while another test tries to execute it. Tests should run
-/// this stable snapshot instead.
+/// Lit tests must not execute `target/<profile>/<bin>` directly: concurrent
+/// test processes (e.g. under `cargo nextest run`, which re-enters `main` for
+/// every test) may run `cargo build` while another process execs the binary,
+/// and Cargo rewrites it in place. The snapshot is repointed with an atomic
+/// rename instead, so an exec always sees a complete binary — old or new,
+/// never partially written — and stale copies do not accumulate.
 pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
     let test_exe = std::env::current_exe().expect("current test executable path");
     let deps_dir = test_exe.parent().expect("test executable directory");
@@ -66,51 +69,27 @@ pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
         "cargo build -p {package} failed: {status}"
     );
 
-    let source = profile_dir.join(bin.to_owned() + std::env::consts::EXE_SUFFIX);
-    let dest = linked_bin_path(&source, deps_dir, bin);
-    match std::fs::hard_link(&source, &dest) {
-        Ok(()) => return dest,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return dest,
-        Err(_) => {}
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let source = profile_dir.join(bin.to_owned() + suffix);
+    let dest = deps_dir.join(format!("{bin}-lit{suffix}"));
+    let tmp = deps_dir.join(format!("{bin}-lit-{}{suffix}", std::process::id()));
+
+    let _ = std::fs::remove_file(&tmp);
+    if std::fs::hard_link(&source, &tmp).is_err() {
+        std::fs::copy(&source, &tmp).unwrap_or_else(|e| {
+            panic!(
+                "copy built binary from '{}' to '{}': {e}",
+                source.display(),
+                tmp.display()
+            )
+        });
     }
-
-    let dest = copied_bin_path(deps_dir, bin);
-    std::fs::copy(&source, &dest).unwrap_or_else(|e| {
-        panic!(
-            "copy built binary from '{}' to '{}': {e}",
-            source.display(),
-            dest.display()
-        )
-    });
-    dest
-}
-
-fn linked_bin_path(source: &Path, deps_dir: &Path, bin: &str) -> PathBuf {
-    let metadata = std::fs::metadata(source)
-        .unwrap_or_else(|e| panic!("stat built binary '{}': {e}", source.display()));
-    let modified = metadata
-        .modified()
-        .unwrap_or_else(|e| panic!("stat built binary mtime '{}': {e}", source.display()))
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-
-    deps_dir.join(format!(
-        "{}-lit-{}-{}{}",
-        bin,
-        metadata.len(),
-        modified,
-        std::env::consts::EXE_SUFFIX
-    ))
-}
-
-fn copied_bin_path(deps_dir: &Path, bin: &str) -> PathBuf {
-    deps_dir.join(format!(
-        "{}-lit-copy-{}{}",
-        bin,
-        std::process::id(),
-        std::env::consts::EXE_SUFFIX
-    ))
+    match std::fs::rename(&tmp, &dest) {
+        Ok(()) => dest,
+        // Windows cannot replace an executable that is currently running; the
+        // process-unique snapshot still works there.
+        Err(_) => tmp,
+    }
 }
 
 #[derive(Clone)]
