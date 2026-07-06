@@ -1356,6 +1356,19 @@ fn emit_instructions<'a>(
                                             tir::attributes::AttributeValue::Str(symbol) => {
                                                 out.push_str(symbol);
                                             }
+                                            // A local branch target: print the block's label,
+                                            // falling back to `.L<n>` for unnamed blocks.
+                                            tir::attributes::AttributeValue::Block(block) => {
+                                                match _ctx.get_block(*block).attr("name") {
+                                                    Some(tir::attributes::AttributeValue::Str(label)) => {
+                                                        out.push_str(&label);
+                                                    }
+                                                    _ => {
+                                                        out.push_str(".L");
+                                                        out.push_str(&block.number().to_string());
+                                                    }
+                                                }
+                                            }
                                             _ => return None,
                                         }
                                     });
@@ -1386,7 +1399,7 @@ fn emit_instructions<'a>(
                 (quote! { _op }, quote! {})
             };
             instruction_printers_impls.push(quote! {
-                fn #print_fn_ident(#op_param: &tir::OpInstance) -> Option<String> {
+                fn #print_fn_ident(_ctx: &tir::Context, #op_param: &tir::OpInstance) -> Option<String> {
                     #attrs_binding
                     let mut out = String::new();
                     #(#print_steps)*

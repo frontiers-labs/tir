@@ -1,0 +1,28 @@
+// RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
+
+// A compiled conditional branch prints its block targets as labels: the entry
+// block is named by the symbol, and each successor block prints a `.L<n>` label
+// that the branch immediates reference.
+module {
+  func @select(%0: !i1) -> !i32 {
+    cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    %1 = constant {value = 1} : !i32
+    return %1
+  ^bb2:
+    %2 = constant {value = 0} : !i32
+    return %2
+  }
+  module_end
+}
+
+// CHECK:      .global select
+// CHECK-NEXT: select:
+// CHECK-NEXT: bne x10, x0, .L[[T:[0-9]+]]
+// CHECK-NEXT: jal x0, .L[[F:[0-9]+]]
+// CHECK-NEXT: .L[[T]]:
+// CHECK-NEXT: addi x10, x0, 1
+// CHECK-NEXT: jalr x0, 0(x1)
+// CHECK-NEXT: .L[[F]]:
+// CHECK-NEXT: addi x10, x0, 0
+// CHECK-NEXT: jalr x0, 0(x1)

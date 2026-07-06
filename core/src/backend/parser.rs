@@ -1,13 +1,16 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use tir::attributes::AttributeValue;
 use tir::{
-    IRBuilder,
+    Block, BlockId, IRBuilder, Operation, Region,
     builtin::{ModuleEndOpBuilder, ModuleOp, ModuleOpBuilder},
     parse::tokens::Parser,
 };
 
 use crate::backend::{
-    LiteralOpBuilder, SectionOpBuilder, SymbolEndOpBuilder, SymbolOpBuilder, lex, lexer::Token,
+    LiteralOpBuilder, MachineInstruction, SectionOpBuilder, SymbolEndOpBuilder, SymbolOpBuilder,
+    lex, lexer::Token,
 };
 
 pub type AsmInstructionParser =
@@ -54,6 +57,17 @@ impl AsmParser {
         let section_body = section_op.body();
         builder.set_insertion_point_to_start(section_body.clone());
 
+        // Local labels seen so far, mapped to the block they name. After parsing
+        // we rewrite branch immediates that reference one of these.
+        let mut labels: HashMap<String, BlockId> = HashMap::new();
+        let mut cur_region: Option<Arc<Region>> = None;
+        let mut cur_entry: Option<Arc<Block>> = None;
+        // Whether the insertion point is still the symbol's entry block, and
+        // whether that block already received content or an entry label.
+        let mut at_entry = false;
+        let mut block_has_content = false;
+        let mut entry_named = false;
+
         while let Some(token) = parser.peek() {
             match token {
                 Token::Global => {
@@ -73,13 +87,39 @@ impl AsmParser {
                             builder.set_insertion_point_to_start(global_op.body());
                             builder.insert(SymbolEndOpBuilder::new(context).build());
                             builder.set_insertion_point_to_start(global_op.body());
+
+                            cur_region = global_op.regions().next();
+                            cur_entry = Some(global_op.body());
+                            at_entry = true;
+                            block_has_content = false;
+                            entry_named = false;
                         }
                         _ => return Err(()),
                     }
                 }
-                Token::Label(_) => {
-                    // FIXME just skip for now, use actual block names in future.
+                Token::Label(name) => {
+                    let name = (*name).to_string();
                     let _ = parser.bump();
+                    if let (Some(region), Some(entry)) = (&cur_region, &cur_entry) {
+                        if at_entry && !block_has_content && !entry_named {
+                            // First label of a symbol with an empty entry block
+                            // (typical `func:` after `.global func`): map it to the
+                            // existing entry block rather than starting a new one.
+                            // The entry needs no `name` attribute: the symbol label
+                            // already prints it, and naming it would add a header to
+                            // the otherwise headerless single-block IR dump.
+                            labels.insert(name, entry.id());
+                            entry_named = true;
+                        } else {
+                            let block = context.create_block(vec![]);
+                            region.add_block(block.id());
+                            block.set_attr("name", AttributeValue::Str(name.clone()));
+                            labels.insert(name, block.id());
+                            builder.set_insertion_point_to_start(block.clone());
+                            at_entry = false;
+                            block_has_content = false;
+                        }
+                    }
                 }
                 Token::Text => {
                     // FIXME set insertion point to end of text section
@@ -105,6 +145,7 @@ impl AsmParser {
                                     .attr("value", tir::attributes::AttributeValue::Int(value))
                                     .build(),
                             );
+                            block_has_content = true;
                         }
                         "string" | "ascii" | "asciz" => {
                             let Some(Token::StringLit(value)) = parser.bump() else {
@@ -122,6 +163,7 @@ impl AsmParser {
                                     )
                                     .build(),
                             );
+                            block_has_content = true;
                         }
                         // Layout/section directives (`.rodata`, `.align`, ...)
                         // carry no data; skip them like unknown idents.
@@ -151,6 +193,7 @@ impl AsmParser {
                         if !parsed {
                             return Err(());
                         }
+                        block_has_content = true;
                     } else if self.disabled_mnemonics.contains(&key) {
                         // The instruction exists but the selected ISA/extension
                         // set does not include it.
@@ -166,7 +209,48 @@ impl AsmParser {
             }
         }
 
+        if !labels.is_empty() {
+            resolve_labels(context, &module.body(), &labels);
+        }
+
         Ok(module)
+    }
+}
+
+/// Rewrite branch immediates that name a local label into a block reference, so
+/// the encoder emits a pc-relative fixup instead of a symbol relocation.
+/// Unknown identifiers stay as `Str` and become external symbol references.
+fn resolve_labels(context: &tir::Context, block: &Arc<Block>, labels: &HashMap<String, BlockId>) {
+    for op_id in block.op_ids() {
+        let op = context.get_op(op_id);
+        if op
+            .clone()
+            .as_interface::<dyn MachineInstruction>()
+            .is_some()
+        {
+            let mut attrs = op.attributes.clone();
+            let mut changed = false;
+            for attr in &mut attrs {
+                if attr.name != "imm" {
+                    continue;
+                }
+                if let AttributeValue::Str(symbol) = &attr.value
+                    && let Some(target) = labels.get(symbol)
+                {
+                    attr.value = AttributeValue::Block(*target);
+                    changed = true;
+                }
+            }
+            if changed {
+                context.set_op_attributes(op_id, attrs);
+            }
+        }
+        for region_id in &op.regions {
+            let region = context.get_region(*region_id);
+            for child in region.iter(context.clone()) {
+                resolve_labels(context, &child, labels);
+            }
+        }
     }
 }
 

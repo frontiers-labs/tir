@@ -12,7 +12,7 @@ use crate::backend::{
     int_attr,
 };
 
-pub type AsmInstructionPrinter = fn(&OpInstance) -> Option<String>;
+pub type AsmInstructionPrinter = fn(&Context, &OpInstance) -> Option<String>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AsmPrintError {
@@ -52,11 +52,15 @@ impl AsmPrinter {
         }
     }
 
-    pub fn print_instruction(&self, op: &OpInstance) -> Result<Option<String>, AsmPrintError> {
+    pub fn print_instruction(
+        &self,
+        context: &Context,
+        op: &OpInstance,
+    ) -> Result<Option<String>, AsmPrintError> {
         let Some(printer) = self.instruction_printers.get(op.name()) else {
             return Ok(None);
         };
-        printer(op)
+        printer(context, op)
             .map(Some)
             .ok_or(AsmPrintError::InvalidInstruction { op: op.name() })
     }
@@ -103,7 +107,7 @@ impl AsmPrinter {
                 continue;
             }
 
-            if let Some(symbol) = op.clone().as_op::<SymbolOp>() {
+            if op.clone().as_op::<SymbolOp>().is_some() {
                 let name = string_attr(&op, "name").ok_or(AsmPrintError::MissingSymbolName)?;
                 if string_attr(&op, "binding") != Some("local") {
                     out.push_str(".global ");
@@ -112,7 +116,22 @@ impl AsmPrinter {
                 }
                 out.push_str(name);
                 out.push_str(":\n");
-                self.print_block(context, symbol.body(), out)?;
+                // The symbol label above names the entry block, so only non-entry
+                // blocks emit their own label (branch targets must be defined).
+                let region = context.get_region(op.regions[0]);
+                for (index, block) in region.iter(context.clone()).enumerate() {
+                    if index > 0 {
+                        match block.attr("name") {
+                            Some(AttributeValue::Str(label)) => out.push_str(&label),
+                            _ => {
+                                out.push_str(".L");
+                                out.push_str(&block.id().number().to_string());
+                            }
+                        }
+                        out.push_str(":\n");
+                    }
+                    self.print_block(context, block, out)?;
+                }
                 continue;
             }
 
@@ -146,7 +165,7 @@ impl AsmPrinter {
                 continue;
             }
 
-            if let Some(text) = self.print_instruction(&op)? {
+            if let Some(text) = self.print_instruction(context, &op)? {
                 out.push('\t');
                 out.push_str(&text);
                 out.push('\n');

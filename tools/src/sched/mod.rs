@@ -103,7 +103,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         let mnemonic = mi.mnemonic();
         let regs = op_regs(&op);
         let text = asm_printer
-            .print_instruction(&op)?
+            .print_instruction(&context, &op)?
             .ok_or_else(|| format!("no assembly printer registered for '{}'", op.name()))?;
         base.push(ScoreboardInstr {
             text,
