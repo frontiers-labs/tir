@@ -1047,6 +1047,10 @@ impl tir::backend::regalloc::TargetRegAlloc for RiscvRegAlloc {
         register_info()
     }
 
+    fn frame_align(&self) -> u32 {
+        16
+    }
+
     fn frame_register(&self) -> (String, u16) {
         (SP.0.to_string(), SP.1)
     }

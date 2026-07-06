@@ -1,0 +1,21 @@
+// RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
+
+// The call preserves the return address in a single callee-saved register (s0 =
+// x8), a lone 8-byte spill slot. The RISC-V psABI requires 16-byte stack
+// alignment, so the frame is rounded up from 8 to 16 bytes.
+
+module {
+  declare @ext(!i64) -> !i64
+  func @f(%0: !i64) -> !i64 {
+    %1 = call @ext(%0 : !i64) -> !i64
+    return %1
+  }
+  module_end
+}
+
+// CHECK: riscv.addi {rd = x2, rs1 = x2, imm = -16}
+// CHECK: riscv.sd {rs1 = x2, rs2 = x8, imm = 0}
+// CHECK: riscv.vcall {callee = "ext"
+// CHECK: riscv.ld {rd = x8, rs1 = x2, imm = 0}
+// CHECK: riscv.addi {rd = x2, rs1 = x2, imm = 16}
+// CHECK: riscv.vret

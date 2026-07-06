@@ -14,9 +14,11 @@ module {
 // return to c.jr; the call stays a 4-byte jal because its target is a
 // link-time fixup and compressed ranges cannot be relaxed. `caller` is non-leaf,
 // so the callee-saved register holding the return address across the call is
-// preserved by the prologue/epilogue (c.addi sp / c.sdsp / c.ldsp).
+// preserved by the prologue/epilogue. The frame is a single 8-byte slot rounded
+// up to the psABI's 16-byte alignment, so the sp adjustment compresses to
+// c.addi16sp (c.addi16sp / c.sdsp / c.ldsp).
 // CHECK: caller:
-// CHECK-NEXT: c.addi x2, -8
+// CHECK-NEXT: c.addi16sp sp, -16
 // CHECK-NEXT: c.sdsp x8, 0(sp)
 // CHECK-NEXT: c.mv x5, x10
 // CHECK-NEXT: c.mv x10, x5
@@ -25,10 +27,10 @@ module {
 // CHECK-NEXT: c.mv x1, x8
 // CHECK-NEXT: c.mv x10, x10
 // CHECK-NEXT: c.ldsp x8, 0(sp)
-// CHECK-NEXT: c.addi x2, 8
+// CHECK-NEXT: c.addi16sp sp, 16
 // CHECK-NEXT: c.jr x1
 
-// ENC: [0x61, 0x11]
+// ENC: [0x7D, 0x71]
 // ENC-NEXT: [0x22, 0xE0]
 // ENC-NEXT: [0xAA, 0x82]
 // ENC-NEXT: [0x16, 0x85]
@@ -37,12 +39,12 @@ module {
 // ENC-NEXT: [0xA2, 0x80]
 // ENC-NEXT: [0x2A, 0x85]
 // ENC-NEXT: [0x02, 0x64]
-// ENC-NEXT: [0x21, 0x01]
+// ENC-NEXT: [0x41, 0x61]
 // ENC-NEXT: [0x82, 0x80]
 
 // Without C the same program keeps the full-width forms.
 // NOC: caller:
-// NOC-NEXT: addi x2, x2, -8
+// NOC-NEXT: addi x2, x2, -16
 // NOC-NEXT: sd x8, 0(x2)
 // NOC-NEXT: addi x5, x10, 0
 // NOC: jal x1, callee
