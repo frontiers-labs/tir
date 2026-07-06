@@ -101,14 +101,13 @@ enc_ext:
 # CHECK-NEXT: [0x41, 0x54]
 # CHECK-NEXT: [0x5B]
 # CHECK-NEXT: [0x41, 0x5C]
-# 32-bit forms drop REX.W. Divergence: neg/not (F7), cmp/test reg-reg (39/85)
-# and the by-cl and rotate shifts (D3/C1) have no _norex canonicalization, so a
-# low-register operand keeps an empty 0x40 REX where GNU as omits it entirely
-# (f7 d8 / 39 cb / d3 e0 / c1 c0 03). Same accepted class as rol/ror; all valid.
-# The imm8 forms (sub eax,42 -> 83, test edx,5 -> f7) already match GNU as.
-# CHECK-NEXT: [0x40, 0xF7, 0xD8]
+# 32-bit forms drop REX.W, and neg/not (F7), cmp/test reg-reg (39/85) and the
+# by-cl and rotate shifts (D3/C1) now drop the empty REX entirely for a low
+# register via their _norex canonicalization, matching GNU as
+# (f7 d8 / 39 cb / d3 e0 / c1 c0 03).
+# CHECK-NEXT: [0xF7, 0xD8]
 # CHECK-NEXT: [0x83, 0xE8, 0x2A]
-# CHECK-NEXT: [0x40, 0x39, 0xCB]
+# CHECK-NEXT: [0x39, 0xCB]
 # CHECK-NEXT: [0xF7, 0xC2, 0x05, 0x00, 0x00, 0x00]
-# CHECK-NEXT: [0x40, 0xD3, 0xE0]
-# CHECK-NEXT: [0x40, 0xC1, 0xC0, 0x03]
+# CHECK-NEXT: [0xD3, 0xE0]
+# CHECK-NEXT: [0xC1, 0xC0, 0x03]

@@ -8,6 +8,11 @@
 #   add ecx,300  -> 81 c1 2c 01 00 00
 #   push rbx     -> 53             push r12    -> 41 54
 #   jmp rsi      -> ff e6          sete al     -> 0f 94 c0
+#   cmp ecx,edx  -> 39 d1          test al,bl  -> 84 d8
+#   neg ecx      -> f7 d9          not dl      -> f6 d2
+#   shl ecx,cl   -> d3 e1          rol ecx,3   -> c1 c1 03
+#   neg r9d      -> 41 f7 d9       cmp r9d,r10d-> 45 39 d1   (REX still engages)
+#   addsd xmm0,xmm1 -> f2 0f 58 c1 divsd xmm14,xmm15 -> f2 45 0f 5e f7
 
 	.global canon
 canon:
@@ -22,6 +27,18 @@ canon:
 	push r12
 	jmp *rsi
 	sete al
+	cmp ecx, edx
+	test al, bl
+	neg ecx
+	not dl
+	shl ecx, cl
+	rol ecx, 3
+	neg r9d
+	cmp r9d, r10d
+	shl r9d, cl
+	rol r9d, 3
+	addsd xmm0, xmm1
+	divsd xmm14, xmm15
 
 # CHECK: canon:
 # No REX for eax..edi; REX.R appears only once r8d sets its 4th bit.
@@ -39,3 +56,17 @@ canon:
 # CHECK-NEXT: [0x41, 0x54]
 # CHECK-NEXT: [0xFF, 0xE6]
 # CHECK-NEXT: [0x0F, 0x94, 0xC0]
+# cmp/test reg-reg, neg/not, by-cl and rotate shifts, and low-xmm SSE drop the
+# empty REX for a low register; a high register (r8+/xmm8+) keeps it.
+# CHECK-NEXT: [0x39, 0xD1]
+# CHECK-NEXT: [0x84, 0xD8]
+# CHECK-NEXT: [0xF7, 0xD9]
+# CHECK-NEXT: [0xF6, 0xD2]
+# CHECK-NEXT: [0xD3, 0xE1]
+# CHECK-NEXT: [0xC1, 0xC1, 0x03]
+# CHECK-NEXT: [0x41, 0xF7, 0xD9]
+# CHECK-NEXT: [0x45, 0x39, 0xD1]
+# CHECK-NEXT: [0x41, 0xD3, 0xE1]
+# CHECK-NEXT: [0x41, 0xC1, 0xC1, 0x03]
+# CHECK-NEXT: [0xF2, 0x0F, 0x58, 0xC1]
+# CHECK-NEXT: [0xF2, 0x45, 0x0F, 0x5E, 0xF7]

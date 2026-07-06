@@ -267,6 +267,29 @@ mod isa {
                 PopNorexOp,
                 JmpIndirectNorexOp,
                 CallIndirectNorexOp,
+                Cmp32NorexOp,
+                Test32NorexOp,
+                Cmp16NorexOp,
+                Test16NorexOp,
+                Cmp8NorexOp,
+                Test8NorexOp,
+                Neg32NorexOp,
+                Not32NorexOp,
+                Neg16NorexOp,
+                Not16NorexOp,
+                Neg8NorexOp,
+                Not8NorexOp,
+                ShlCl32NorexOp,
+                ShrCl32NorexOp,
+                SarCl32NorexOp,
+                ShlCl16NorexOp,
+                ShrCl16NorexOp,
+                SarCl16NorexOp,
+                ShlCl8NorexOp,
+                ShrCl8NorexOp,
+                SarCl8NorexOp,
+                RolImm32NorexOp,
+                RorImm32NorexOp,
                 Add8HOp,
                 Sub8HOp,
                 And8HOp,
@@ -386,6 +409,11 @@ mod isa {
                 MulsdOp,
                 DivsdOp,
                 MovsdOp,
+                AddsdNorexOp,
+                SubsdNorexOp,
+                MulsdNorexOp,
+                DivsdNorexOp,
+                MovsdNorexOp,
                 VirtualCallOp,
                 VirtualIndirectCallOp,
                 VirtualReturnOp
@@ -1064,6 +1092,26 @@ mod isa {
         // *reg` reaches its `_norex` form through the assembler, and the codegen
         // indirect call is materialized REX-free directly in `finalize_virtual_ops`
         // (it is created there, after this pass would have run).
+
+        // cmp/test reg-reg, neg/not, by-cl shifts and rotate immediates: the
+        // 32-bit width is the only one with a generic (so the only one reachable
+        // here); the 16/8-bit `_norex` forms exist for the assembler only.
+        rr_norex!(Cmp32Op, Cmp32NorexOpBuilder, LO);
+        rr_norex!(Test32Op, Test32NorexOpBuilder, LO);
+        reg1_norex!(Neg32Op, Neg32NorexOpBuilder, "dst", LO);
+        reg1_norex!(Not32Op, Not32NorexOpBuilder, "dst", LO);
+        reg1_norex!(ShlCl32Op, ShlCl32NorexOpBuilder, "dst", LO);
+        reg1_norex!(ShrCl32Op, ShrCl32NorexOpBuilder, "dst", LO);
+        reg1_norex!(SarCl32Op, SarCl32NorexOpBuilder, "dst", LO);
+        ri_norex!(RolImm32Op, RolImm32NorexOpBuilder, LO);
+        ri_norex!(RorImm32Op, RorImm32NorexOpBuilder, LO);
+
+        // Low-xmm SSE: drop the empty REX when both xmm operands are xmm0..xmm7.
+        rr_norex!(AddsdOp, AddsdNorexOpBuilder, LO);
+        rr_norex!(SubsdOp, SubsdNorexOpBuilder, LO);
+        rr_norex!(MulsdOp, MulsdNorexOpBuilder, LO);
+        rr_norex!(DivsdOp, DivsdNorexOpBuilder, LO);
+        rr_norex!(MovsdOp, MovsdNorexOpBuilder, LO);
 
         Ok(false)
     }

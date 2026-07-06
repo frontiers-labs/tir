@@ -14,6 +14,27 @@ register_class XMM for [X86_64] {
     }
 }
 
+// Low-XMM subclass (xmm0..xmm7) selected post-RA for the REX-free SSE encodings
+// GNU as emits when no register-number 4th bit is needed. Shares the XMM file,
+// carries no traits, and is never an allocation class (its ops are behavior-free
+// and root no isel rule).
+register_class XMMlow for [X86_64] {
+    file = XMM;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 64;
+
+    registers {
+        xmm0 => { index = 0 },
+        xmm1 => { index = 1 },
+        xmm2 => { index = 2 },
+        xmm3 => { index = 3 },
+        xmm4 => { index = 4 },
+        xmm5 => { index = 5 },
+        xmm6 => { index = 6 },
+        xmm7 => { index = 7 },
+    }
+}
+
 // `op xmm_dst, xmm_src`: the F2 mandatory prefix, REX (W=0; R/B carry the 4th
 // register-number bits), the 0x0F escape, the opcode, then ModR/M(mod=11,
 // reg=dst, rm=src). The op is two-address — dst is also the first source — so
@@ -45,6 +66,53 @@ template FpArith for [X86_64] {
         "{self.MNEMONIC} {dst}, {src}"
     }
 }
+
+// No-REX scalar-double form (xmm0..xmm7): F2 prefix, 0x0F escape, opcode, then
+// ModR/M(mod=11, reg=dst, rm=src). Dropping the REX byte shifts the tail up 8
+// bits, exactly as the 16-bit 0x66 forms do.
+template FpArithNorex for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: XMMlow,
+        src: XMMlow,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8..15 => 0x0F,
+        16..23 => OPCODE,
+        24..26 => src[0..2],
+        27..29 => dst[0..2],
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+// No-REX SSE forms. Behavior-free: canonicalize target for the low-xmm ALU and
+// movsd copies, and the assembler's preferred candidate for xmm0..xmm7.
+macro fp_norex {
+    ( $( ( $name:ident, $op:literal, $mn:literal, $opc:literal ) ),* ) => {
+        $( instruction $name for [X86_64] : FpArithNorex {
+               param OPNAME: String = $op;
+               param MNEMONIC: String = $mn;
+               param OPCODE: bits<8> = $opc;
+               behavior { }
+           } )*
+    };
+}
+
+fp_norex!(
+    (AddsdNorex, "addsd_norex", "addsd", 0x58),
+    (SubsdNorex, "subsd_norex", "subsd", 0x5C),
+    (MulsdNorex, "mulsd_norex", "mulsd", 0x59),
+    (DivsdNorex, "divsd_norex", "divsd", 0x5E),
+    (MovsdNorex, "movsd_norex", "movsd", 0x10)
+)
 
 instruction Addsd for [X86_64] : FpArith {
     param MNEMONIC: String = "addsd";

@@ -528,20 +528,25 @@ alu_rr!("8H", "8h", RegReg8H,
     (Mov, "mov", 0x88, { dst = src; })
 )
 
-// No-REX register/register forms (low subclasses); opcodes match the width above.
+// No-REX register/register forms (low subclasses); opcodes match the width
+// above. cmp (0x39/0x38) and test (0x85/0x84) join the ALU rows: the 32-bit
+// forms canonicalize Cmp32/Test32, the 16/8-bit forms are assembler-only.
 alu_rr_norex!("32", RegReg32Norex,
     (Add, "add", 0x01), (Sub, "sub", 0x29), (And, "and", 0x21),
-    (Or, "or", 0x09), (Xor, "xor", 0x31), (Mov, "mov", 0x89)
+    (Or, "or", 0x09), (Xor, "xor", 0x31), (Mov, "mov", 0x89),
+    (Cmp, "cmp", 0x39), (Test, "test", 0x85)
 )
 
 alu_rr_norex!("16", RegReg16Norex,
     (Add, "add", 0x01), (Sub, "sub", 0x29), (And, "and", 0x21),
-    (Or, "or", 0x09), (Xor, "xor", 0x31), (Mov, "mov", 0x89)
+    (Or, "or", 0x09), (Xor, "xor", 0x31), (Mov, "mov", 0x89),
+    (Cmp, "cmp", 0x39), (Test, "test", 0x85)
 )
 
 alu_rr_norex!("8", RegReg8Norex,
     (Add, "add", 0x00), (Sub, "sub", 0x28), (And, "and", 0x20),
-    (Or, "or", 0x08), (Xor, "xor", 0x30), (Mov, "mov", 0x88)
+    (Or, "or", 0x08), (Xor, "xor", 0x30), (Mov, "mov", 0x88),
+    (Cmp, "cmp", 0x38), (Test, "test", 0x84)
 )
 
 // No-REX register/immediate imm32 forms (low subclasses).
@@ -625,6 +630,26 @@ shift_imm_norex!("16", RegShift16Norex,
 
 shift_imm_norex!("8", RegShift8Norex,
     (ShlImm, "shl", 0b100), (ShrImm, "shr", 0b101), (SarImm, "sar", 0b111)
+)
+
+// No-REX by-cl shift forms (low subclasses). The 32-bit forms canonicalize
+// ShlCl32/ShrCl32/SarCl32; the 16/8-bit forms are assembler-only.
+reg_ext_norex!(RegShiftCl32Norex,
+    (ShlCl32Norex, "shl_cl32_norex", "shl", 0b100),
+    (ShrCl32Norex, "shr_cl32_norex", "shr", 0b101),
+    (SarCl32Norex, "sar_cl32_norex", "sar", 0b111)
+)
+
+reg_ext_norex!(RegShiftCl16Norex,
+    (ShlCl16Norex, "shl_cl16_norex", "shl", 0b100),
+    (ShrCl16Norex, "shr_cl16_norex", "shr", 0b101),
+    (SarCl16Norex, "sar_cl16_norex", "sar", 0b111)
+)
+
+reg_ext_norex!(RegShiftCl8Norex,
+    (ShlCl8Norex, "shl_cl8_norex", "shl", 0b100),
+    (ShrCl8Norex, "shr_cl8_norex", "shr", 0b101),
+    (SarCl8Norex, "sar_cl8_norex", "sar", 0b111)
 )
 
 alu_ri!("8H", "8h", RegImm8H,

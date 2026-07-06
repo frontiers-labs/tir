@@ -8,6 +8,15 @@ tmpl_runary!(RegUnary, X86_64, GPR, rexw = 0b1)
 
 tmpl_runary!(RegUnary32, X86, GPR32, rexw = 0b0)
 
+// No-REX group-3 unary templates over the low subclasses (0xF7 / 0x66+0xF7 /
+// 0xF6). Selected post-RA by `canonicalize_encodings` and by the assembler's
+// specificity sort where GNU as omits the empty REX.
+tmpl_runary!(RegUnary32Norex, GPR32low, norex)
+
+tmpl_runary!(RegUnary16Norex, GPR16low, prefix66norex)
+
+tmpl_runary!(RegUnary8Norex, GPR8low, bytenorex)
+
 // `movzx/movsx r64, r/m8`: REX.W + 0x0F + opcode, dst in ModR/M.reg, the
 // narrow source in rm (the `RegRegExt` field layout with a narrow source).
 tmpl_extend!(ExtendReg8, GPR8)
@@ -244,6 +253,24 @@ instruction Not32 for [X86] : RegUnary32 {
     }
 }
 
+// No-REX neg/not (0xF7 /3, /2; byte 0xF6) over the low subclasses. neg = /3,
+// not = /2. Behavior-free; the 32-bit forms are the canonicalize target for
+// Neg32/Not32, the 16/8-bit forms are assembler-only (no narrow generic).
+reg_ext_norex!(RegUnary32Norex,
+    (Neg32Norex, "neg32_norex", "neg", 0b011),
+    (Not32Norex, "not32_norex", "not", 0b010)
+)
+
+reg_ext_norex!(RegUnary16Norex,
+    (Neg16Norex, "neg16_norex", "neg", 0b011),
+    (Not16Norex, "not16_norex", "not", 0b010)
+)
+
+reg_ext_norex!(RegUnary8Norex,
+    (Neg8Norex, "neg8_norex", "neg", 0b011),
+    (Not8Norex, "not8_norex", "not", 0b010)
+)
+
 shift_imm!("32", "32", RegShift32,
     (RolImm, "rol", 0b000, {
         dst = (dst << extract(imm, 4, 0))
@@ -253,4 +280,10 @@ shift_imm!("32", "32", RegShift32,
         dst = (dst >> extract(imm, 4, 0))
             | (dst << ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
     })
+)
+
+// No-REX 32-bit rotate-by-immediate (0xC1 /0, /1). Behavior-free; the
+// canonicalize target for RolImm32/RorImm32 on a low register.
+shift_imm_norex!("32", RegShift32Norex,
+    (RolImm, "rol", 0b000), (RorImm, "ror", 0b001)
 )
