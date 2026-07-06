@@ -1,0 +1,173 @@
+// Hand-written checks for the SMT-LIB backend's atomics lowering: the
+// reservation state fields and constructors, load-reserved's `set_res`,
+// store-conditional's reservation guard, atomic RMW as a single read/write
+// transition, fence identity, and misaligned-atomic try/except. Do not
+// regenerate with update_checks.py.
+
+// RUN: tmdlc --action=emit-smtlib --dialect=atom --isa=AtomIsa --output=- %s | filecheck %s
+
+isa AtomIsa {
+    param XLEN: Integer = 64;
+
+    trap (cause, tval) {
+        CSR::mepc = PC::pc;
+        CSR::mcause = zext(cause, self.XLEN);
+        CSR::mtval = zext(tval, self.XLEN);
+        PC::pc = (CSR::mtvec >> 2) << 2;
+    }
+}
+
+register_class PC for [AtomIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+    registers { pc => { traits = [program_counter] }, }
+}
+
+register_class GPR for [AtomIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => { traits = [callee_saved] },
+    }
+}
+
+register_class CSR for [AtomIsa] {
+    param ENCODING_LEN: Integer = 12;
+    param WIDTH: Integer = self.XLEN;
+    registers {
+        mtvec => { index = 0x305 },
+        mepc => { index = 0x341 },
+        mcause => { index = 0x342 },
+        mtval => { index = 0x343 },
+    }
+}
+
+// The state datatype carries the reservation validity flag and address,
+// ordered after `mem` and before `pc`.
+// CHECK: (declare-datatypes () ((TMDLState (mk-TMDLState {{.*}}(mem (Array (_ BitVec 64) (_ BitVec 8))) (resv Bool) (resa (_ BitVec 64)) (pc (_ BitVec 64))))))
+
+// `set_res` records the reserved address and validates; `clear_res` only
+// invalidates, keeping the recorded address.
+// CHECK: (define-fun set_res ((st TMDLState) (a (_ BitVec 64))) TMDLState
+// CHECK-NEXT: (mk-TMDLState (csr st) (gpr st) (mem st) true a (pc st)))
+// CHECK: (define-fun clear_res ((st TMDLState)) TMDLState
+// CHECK-NEXT: (mk-TMDLState (csr st) (gpr st) (mem st) false (resa st) (pc st)))
+
+// Load-reserved: the register write of the loaded word, then `set_res` with
+// the access address, on the no-trap arm of the misaligned-load try/except.
+instruction LrW for [AtomIsa] {
+    param MNEMONIC: String = "lr.w";
+    param OPCODE: bits<7> = 0b0101111;
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}, ({rs1})" }
+    behavior {
+        try {
+            rd = sext(load_reserved(rs1, 4, Ordering::acquire), self.XLEN);
+        } except misaligned_load(addr) {
+            trap(4, addr);
+        }
+    }
+}
+// CHECK: ; INSTRUCTION: lrw writes-pc=false
+// CHECK: (define-fun execute_lrw
+// CHECK: (distinct (bvand exc_addr0 (_ bv3 64)) (_ bv0 64))
+// CHECK: (set_res (write_gpr st rd ((_ sign_extend 32) (read_mem_4 st (read_gpr st rs1)))) (read_gpr st rs1))
+
+// Store-conditional: the success predicate `(and (resv st) (= (resa st) addr))`
+// gates the memory write, the reservation is cleared on both paths, and the
+// same predicate materializes the `bits<1>` result the register write consumes.
+instruction ScW for [AtomIsa] {
+    param MNEMONIC: String = "sc.w";
+    param OPCODE: bits<7> = 0b0101111;
+    param FUNCT3: bits<3> = 0b010;
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 12..14 => FUNCT3, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
+    behavior {
+        rd = if store_conditional(rs1, 4, extract(rs2, 31, 0), Ordering::release) == zext(0b1, 1) {
+            zext(0b0, self.XLEN)
+        } else {
+            zext(0b1, self.XLEN)
+        };
+    }
+}
+// CHECK: ; INSTRUCTION: scw writes-pc=false
+// CHECK: (define-fun execute_scw
+// CHECK: (ite (and (resv st) (= (resa st) (read_gpr st rs1))) (write_mem_4 (clear_res
+// CHECK: (read_gpr st rs1) ((_ extract 31 0) (read_gpr st rs2)))
+// CHECK: (clear_res (write_gpr st rd
+
+// Bare-statement store-conditional: the effect applies against the entry
+// state, the success value is discarded.
+instruction ScBare for [AtomIsa] {
+    param MNEMONIC: String = "sc.bare";
+    param OPCODE: bits<7> = 0b0101111;
+    param FUNCT3: bits<3> = 0b011;
+    operands { rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 12..14 => FUNCT3, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rs2}, ({rs1})" }
+    behavior {
+        store_conditional(rs1, 4, extract(rs2, 31, 0), Ordering::relaxed);
+    }
+}
+// CHECK: ; INSTRUCTION: scbare writes-pc=false
+// CHECK: (define-fun execute_scbare
+// CHECK-NEXT: (ite (and (resv st) (= (resa st) (read_gpr st rs1))) (write_mem_4 (clear_res st) (read_gpr st rs1) ((_ extract 31 0) (read_gpr st rs2))) (clear_res st)))
+
+// Atomic add under a misaligned-store try/except: one transition writes the
+// old value to the register and the `bvadd` of old and operand to memory,
+// guarded by the store-misalignment ite.
+instruction AmoAddW for [AtomIsa] {
+    param MNEMONIC: String = "amoadd.w";
+    param OPCODE: bits<7> = 0b0101111;
+    param FUNCT3: bits<3> = 0b100;
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 12..14 => FUNCT3, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
+    behavior {
+        try {
+            rd = sext(atomic_rmw(add, rs1, 4, extract(rs2, 31, 0), Ordering::acq_rel), self.XLEN);
+        } except misaligned_store(addr) {
+            trap(6, addr);
+        }
+    }
+}
+// CHECK: ; INSTRUCTION: amoaddw writes-pc=false
+// CHECK: (define-fun execute_amoaddw
+// CHECK: (distinct (bvand exc_addr0 (_ bv3 64)) (_ bv0 64))
+// CHECK: (write_mem_4 (write_gpr st rd ((_ sign_extend 32) (read_mem_4 st (read_gpr st rs1)))) (read_gpr st rs1) (bvadd (read_mem_4 st (read_gpr st rs1)) ((_ extract 31 0) (read_gpr st rs2))))
+
+// Signed-minimum atomic: the combined value is `(ite (bvslt old val) old val)`.
+instruction AmoMinW for [AtomIsa] {
+    param MNEMONIC: String = "amomin.w";
+    param OPCODE: bits<7> = 0b0101111;
+    param FUNCT3: bits<3> = 0b101;
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 12..14 => FUNCT3, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
+    behavior {
+        rd = sext(atomic_rmw(min, rs1, 4, extract(rs2, 31, 0), Ordering::relaxed), self.XLEN);
+    }
+}
+// CHECK: ; INSTRUCTION: amominw writes-pc=false
+// CHECK: (define-fun execute_amominw
+// CHECK-NEXT: (write_mem_4 (write_gpr st rd ((_ sign_extend 32) (read_mem_4 st (read_gpr st rs1)))) (read_gpr st rs1) (ite (bvslt (read_mem_4 st (read_gpr st rs1)) ((_ extract 31 0) (read_gpr st rs2))) (read_mem_4 st (read_gpr st rs1)) ((_ extract 31 0) (read_gpr st rs2)))))
+
+// Fence is a single-transition identity: no reservation or memory effect, and
+// it is not marked unsupported.
+instruction FenceInst for [AtomIsa] {
+    param MNEMONIC: String = "fence";
+    param OPCODE: bits<7> = 0b0001111;
+    operands { }
+    encoding { 0..6 => OPCODE, }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        fence(0b0011, 0b0011);
+    }
+}
+// CHECK-NOT: UNSUPPORTED-BEHAVIOR
+// CHECK: ; INSTRUCTION: fenceinst writes-pc=false
+// CHECK: (define-fun execute_fenceinst ((st TMDLState)) TMDLState
+// CHECK-NEXT: st)

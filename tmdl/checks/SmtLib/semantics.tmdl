@@ -6,14 +6,14 @@
 // RUN: tmdlc --action=emit-smtlib --dialect=test --isa=TestIsa --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
 
 // State: register-file arrays, byte-addressable memory, the program counter.
-// CHECK: (declare-datatypes () ((TMDLState (mk-TMDLState (csr (Array (_ BitVec 12) (_ BitVec 64))) (gpr (Array (_ BitVec 5) (_ BitVec 64))) (mem (Array (_ BitVec 64) (_ BitVec 8))) (pc (_ BitVec 64))))))
+// CHECK: (declare-datatypes () ((TMDLState (mk-TMDLState (csr (Array (_ BitVec 12) (_ BitVec 64))) (gpr (Array (_ BitVec 5) (_ BitVec 64))) (mem (Array (_ BitVec 64) (_ BitVec 8))) (resv Bool) (resa (_ BitVec 64)) (pc (_ BitVec 64))))))
 
 // A merge sub-register view at bit offset 8: reads extract [15:8] of the file
 // element; writes splice `val` into that window, keeping bits 63:16 and 7:0.
 // CHECK: (define-fun read_gprh ((st TMDLState) (r (_ BitVec 5))) (_ BitVec 8)
 // CHECK-NEXT: ((_ extract 15 8) (select (gpr st) r)))
 // CHECK: (define-fun write_gprh ((st TMDLState) (r (_ BitVec 5)) (val (_ BitVec 8))) TMDLState
-// CHECK-NEXT: (mk-TMDLState (csr st) (store (gpr st) r (concat (concat ((_ extract 63 16) (select (gpr st) r)) val) ((_ extract 7 0) (select (gpr st) r)))) (mem st) (pc st)))
+// CHECK-NEXT: (mk-TMDLState (csr st) (store (gpr st) r (concat (concat ((_ extract 63 16) (select (gpr st) r)) val) ((_ extract 7 0) (select (gpr st) r)))) (mem st) (resv st) (resa st) (pc st)))
 
 // Little-endian memory accessors: byte at addr is the least significant.
 // CHECK: (define-fun read_mem_4 ((st TMDLState) (addr (_ BitVec 64))) (_ BitVec 32)

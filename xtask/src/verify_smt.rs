@@ -176,6 +176,19 @@ fn tmdl_writes_flags(smt: &str, instr: &Instruction, class: &str) -> bool {
     sexpr_at(&smt[start..]).contains(&format!("(write_{} ", class))
 }
 
+/// Whether the TMDL behavior of `instr` touches the reservation state (LR/SC/
+/// AMO), found by scanning its emitted `execute_*` body for the reservation
+/// accessors and constructors.
+fn instr_uses_reservation(smt: &str, instr: &Instruction) -> bool {
+    let Some(start) = smt.find(&format!("(define-fun execute_{} ", instr.name)) else {
+        return false;
+    };
+    let body = sexpr_at(&smt[start..]);
+    ["set_res", "clear_res", "(resv ", "(resa "]
+        .iter()
+        .any(|p| body.contains(p))
+}
+
 /// Plain read-write CSR storage (`mscratch`) plus the machine-mode trap setup
 /// state written by exception handlers in TMDL behaviors. The counter CSRs
 /// stay unmapped: they are read-only and their Sail accesses trap or go
@@ -415,6 +428,16 @@ pub fn verify_smt(sh: &Shell, isa: &str) -> anyhow::Result<()> {
         }
         if !instr.supported {
             report.unsupported.push(instr.name.clone());
+            continue;
+        }
+        // Atomics (A extension) reference the reservation state, whose mapping
+        // onto Sail's reservation register is follow-up work (see module docs);
+        // skip them until that is enabled.
+        if instr_uses_reservation(&smt, instr) {
+            report.unsupported.push(format!(
+                "{} (atomic; Sail reservation mapping is follow-up)",
+                instr.name
+            ));
             continue;
         }
         // Skip instructions with operands in register classes that have no
@@ -1525,6 +1548,8 @@ fn build_query(
     let xlen = spec.xlen;
     let mut q = String::from(smt);
     q.push_str("\n(declare-const st0 TMDLState)\n");
+    // No reservation is held on entry (a hart starts with no LR outstanding).
+    q.push_str("(assert (not (resv st0)))\n");
     let args = operand_smt_args(spec, instr, case);
     let call = if args.is_empty() {
         format!("(execute_{} st0)", instr.name)

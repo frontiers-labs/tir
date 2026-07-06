@@ -261,6 +261,23 @@ fn is_pc_class(rc: &ast::RegisterClass) -> bool {
         .any(|r| r.traits.contains(&ast::RegisterTrait::ProgramCounter))
 }
 
+/// Render a `(mk-TMDLState ...)` over `st`, defaulting each field to
+/// `(<field> st)` and replacing named fields from `overrides`. Field order
+/// matches the datatype: register arrays, mem, resv, resa, pc.
+fn mk_state(arrays: &[&String], overrides: &[(&str, &str)]) -> String {
+    let field = |name: &str| {
+        overrides
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map_or_else(|| format!("({} st)", name), |(_, e)| e.to_string())
+    };
+    let mut fields: Vec<String> = arrays.iter().map(|n| field(n.as_str())).collect();
+    for f in ["mem", "resv", "resa", "pc"] {
+        fields.push(field(f));
+    }
+    format!("(mk-TMDLState {})", fields.join(" "))
+}
+
 fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDLError> {
     // Derived classes alias their base's array, so only storage-owning
     // classes contribute a state field.
@@ -285,6 +302,8 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
         "(mem (Array (_ BitVec {}) (_ BitVec 8)))",
         ctx.xlen
     ));
+    fields.push("(resv Bool)".to_string());
+    fields.push(format!("(resa (_ BitVec {}))", ctx.xlen));
     fields.push(format!("(pc (_ BitVec {}))", ctx.xlen));
 
     writeln!(
@@ -345,17 +364,8 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
         } else {
             "val".to_string()
         };
-        let mut fields = Vec::new();
-        for n2 in &arrays {
-            if *n2 == storage {
-                fields.push(format!("(store ({} st) r {stored_val})", n2));
-            } else {
-                fields.push(format!("({} st)", n2));
-            }
-        }
-        fields.push("(mem st)".to_string());
-        fields.push("(pc st)".to_string());
-        let store = format!("(mk-TMDLState {})", fields.join(" "));
+        let stored = format!("(store ({storage} st) r {stored_val})");
+        let store = mk_state(&arrays, &[(storage.as_str(), stored.as_str())]);
         let write_body = match info.zero_index {
             Some(z) => format!("(ite (= r (_ bv{z} {idx_width}))\n    st\n    {store})"),
             None => store,
@@ -366,17 +376,11 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
         )?;
     }
 
-    let mut fields = arrays
-        .iter()
-        .map(|name| format!("({} st)", name))
-        .collect::<Vec<_>>();
-    fields.push("(mem st)".to_string());
-    fields.push("val".to_string());
     writeln!(
         output,
-        "\n(define-fun write_pc ((st TMDLState) (val (_ BitVec {val_width}))) TMDLState\n  (mk-TMDLState {fields}))",
+        "\n(define-fun write_pc ((st TMDLState) (val (_ BitVec {val_width}))) TMDLState\n  {body})",
         val_width = ctx.xlen,
-        fields = fields.join(" ")
+        body = mk_state(&arrays, &[("pc", "val")])
     )?;
 
     // Byte-addressable little-endian memory accessors, one pair per access
@@ -411,18 +415,25 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
             let byte = format!("((_ extract {} {}) val)", i * 8 + 7, i * 8);
             mem = format!("(store {} {} {})", mem, slot, byte);
         }
-        let mut fields = arrays
-            .iter()
-            .map(|name| format!("({} st)", name))
-            .collect::<Vec<_>>();
-        fields.push(mem);
-        fields.push("(pc st)".to_string());
         writeln!(
             output,
-            "\n(define-fun write_mem_{bytes} ((st TMDLState) (addr (_ BitVec {xlen})) (val (_ BitVec {val_width}))) TMDLState\n  (mk-TMDLState {}))",
-            fields.join(" ")
+            "\n(define-fun write_mem_{bytes} ((st TMDLState) (addr (_ BitVec {xlen})) (val (_ BitVec {val_width}))) TMDLState\n  {body})",
+            body = mk_state(&arrays, &[("mem", mem.as_str())])
         )?;
     }
+
+    // Reservation constructors: `set_res` records the reserved address and
+    // marks the reservation valid; `clear_res` invalidates it (LR/SC/AMO).
+    writeln!(
+        output,
+        "\n(define-fun set_res ((st TMDLState) (a (_ BitVec {xlen}))) TMDLState\n  {})",
+        mk_state(&arrays, &[("resv", "true"), ("resa", "a")])
+    )?;
+    writeln!(
+        output,
+        "\n(define-fun clear_res ((st TMDLState)) TMDLState\n  {})",
+        mk_state(&arrays, &[("resv", "false")])
+    )?;
 
     Ok(())
 }
@@ -957,6 +968,30 @@ fn eval_const_subtree(graph: &tir::sem::SemGraph, node: NodeId) -> Option<(u64, 
     }
 }
 
+/// Store-conditional success: a valid reservation covering exactly `addr`.
+/// Shared by the `bits<1>` value facet and the memory-write effect, so both
+/// gate on the identical predicate.
+fn sc_success(state: &str, addr: &str) -> String {
+    format!("(and (resv {state}) (= (resa {state}) {addr}))")
+}
+
+/// The AMO result word for op code 0..8 (per the design document) at the
+/// access width, over the old memory value and the operand.
+fn amo_combine(op: u8, old: &str, val: &str) -> Option<String> {
+    Some(match op {
+        0 => format!("(bvadd {old} {val})"),
+        1 => val.to_string(),
+        2 => format!("(bvxor {old} {val})"),
+        3 => format!("(bvand {old} {val})"),
+        4 => format!("(bvor {old} {val})"),
+        5 => format!("(ite (bvslt {old} {val}) {old} {val})"),
+        6 => format!("(ite (bvsgt {old} {val}) {old} {val})"),
+        7 => format!("(ite (bvult {old} {val}) {old} {val})"),
+        8 => format!("(ite (bvugt {old} {val}) {old} {val})"),
+        _ => return None,
+    })
+}
+
 fn emit_sem_expr(
     graph: &tir::sem::SemGraph,
     node: NodeId,
@@ -991,6 +1026,26 @@ fn emit_sem_expr(
             format!("({} {} {})", op, lhs, amt),
             wl,
             signed(sl),
+        ))
+    };
+    // `(read_mem_N st addr)` at the entry state, shared by plain loads,
+    // load-reserved, and the old-value facet of an atomic RMW.
+    let read_mem = |addr_idx: usize, bytes_idx: usize| -> Option<SmtVal> {
+        let (addr, w, s) = child(addr_idx)?.as_bv();
+        let bytes = const_child(bytes_idx)? as u16;
+        if !MEM_ACCESS_BYTES.contains(&bytes) {
+            return None;
+        }
+        let xlen = resolver.ctx.xlen as u32;
+        Some(SmtVal::bv(
+            format!(
+                "(read_mem_{} {} {})",
+                bytes,
+                resolver.state_name,
+                fit_smt(&addr, w, s, xlen)
+            ),
+            bytes as u32 * 8,
+            false,
         ))
     };
 
@@ -1136,34 +1191,25 @@ fn emit_sem_expr(
                 signed,
             ))
         }
-        SymKind::LoadMemory => {
-            let (addr, w, s) = child(0)?.as_bv();
-            let bytes = const_child(1)? as u16;
-            if !MEM_ACCESS_BYTES.contains(&bytes) {
-                return None;
-            }
-            let xlen = resolver.ctx.xlen as u32;
-            Some(SmtVal::bv(
-                format!(
-                    "(read_mem_{} {} {})",
-                    bytes,
-                    resolver.state_name,
-                    fit_smt(&addr, w, s, xlen)
-                ),
-                bytes as u32 * 8,
-                false,
-            ))
-        }
+        SymKind::LoadMemory => read_mem(0, 1),
         // Stores are effect statements, handled by `BehaviorEmitter::store`.
         SymKind::StoreMemory | SymKind::Sqrt | SymKind::Fma => None,
         // IEEE float arithmetic has no bit-vector model here.
         SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv => None,
         SymKind::Map | SymKind::Zip | SymKind::IterConcat => None,
         SymKind::Split | SymKind::Reduce | SymKind::Arg => None,
-        // Atomics have no bit-vector model here yet (SMT lowering is follow-up work).
-        SymKind::LoadReserved | SymKind::StoreConditional | SymKind::AtomicRmw | SymKind::Fence => {
-            None
+        // Load-reserved reads memory (the reservation is a state effect, set by
+        // `BehaviorEmitter`); the atomic RMW's value facet is the OLD word.
+        SymKind::LoadReserved => read_mem(0, 1),
+        SymKind::AtomicRmw => read_mem(1, 2),
+        // Store-conditional's `bits<1>` value is its success predicate.
+        SymKind::StoreConditional => {
+            let (addr, w, s) = child(0)?.as_bv();
+            let addr = fit_smt(&addr, w, s, resolver.ctx.xlen as u32);
+            Some(SmtVal::boolean(sc_success(resolver.state_name, &addr)))
         }
+        // Fence is a statement-only effect (identity), handled by the emitter.
+        SymKind::Fence => None,
         // The TMDL frontend never lowers to these (no remainder/negation/`Le`/bit
         // `Concat` operators), so they are unsupported by the bit-vector backend.
         SymKind::SRem | SymKind::URem | SymKind::Neg | SymKind::Le | SymKind::Concat => None,
@@ -1198,14 +1244,30 @@ fn collect_mem_ops<'a>(e: &'a ast::Expr, out: &mut Vec<MemOp<'a>>) -> Option<()>
             for arg in &c.arguments {
                 collect_mem_ops(arg, out)?;
             }
-            let kind = match &*c.callee {
-                ast::Expr::BuiltinFunction(ast::BuiltinFunction::Load) => Some(MemOpKind::Load),
-                ast::Expr::BuiltinFunction(ast::BuiltinFunction::Store) => Some(MemOpKind::Store),
+            // `(kind, address-arg index, bytes-arg index)`. Atomics classify
+            // like plain accesses for alignment (`atomic_rmw`'s first argument
+            // is its op selector, so its address and size sit one later).
+            let mem = match &*c.callee {
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::Load) => {
+                    Some((MemOpKind::Load, 0, 1))
+                }
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::LoadReserved) => {
+                    Some((MemOpKind::Load, 0, 1))
+                }
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::Store) => {
+                    Some((MemOpKind::Store, 0, 1))
+                }
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::StoreConditional) => {
+                    Some((MemOpKind::Store, 0, 1))
+                }
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::AtomicRmw) => {
+                    Some((MemOpKind::Store, 1, 2))
+                }
                 _ => None,
             };
-            if let Some(kind) = kind {
-                let addr = c.arguments.first()?;
-                let bytes = ast_int_lit(c.arguments.get(1)?)?;
+            if let Some((kind, addr_idx, bytes_idx)) = mem {
+                let addr = c.arguments.get(addr_idx)?;
+                let bytes = ast_int_lit(c.arguments.get(bytes_idx)?)?;
                 out.push(MemOp { kind, addr, bytes });
             }
         }
@@ -1239,6 +1301,81 @@ fn collect_mem_ops<'a>(e: &'a ast::Expr, out: &mut Vec<MemOp<'a>>) -> Option<()>
         | ast::Expr::Invalid => {}
     }
     Some(())
+}
+
+/// The single atomic call (LR/SC/AMO) inside a behavior expression. sema
+/// guarantees at most one per statement, so the first found is the only one.
+enum AtomicOp<'a> {
+    LoadReserved {
+        addr: &'a ast::Expr,
+    },
+    StoreConditional {
+        addr: &'a ast::Expr,
+        bytes: u64,
+        value: &'a ast::Expr,
+    },
+    AtomicRmw {
+        op: u8,
+        addr: &'a ast::Expr,
+        bytes: u64,
+        value: &'a ast::Expr,
+    },
+}
+
+/// Classify a call as an atomic, reading its arguments (see the builtin arity
+/// table in the design document).
+fn atomic_of_call(c: &ast::Call) -> Option<AtomicOp<'_>> {
+    match &*c.callee {
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::LoadReserved) => {
+            Some(AtomicOp::LoadReserved {
+                addr: c.arguments.first()?,
+            })
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::StoreConditional) => {
+            Some(AtomicOp::StoreConditional {
+                addr: c.arguments.first()?,
+                bytes: ast_int_lit(c.arguments.get(1)?)?,
+                value: c.arguments.get(2)?,
+            })
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::AtomicRmw) => {
+            let op = match c.arguments.first()? {
+                ast::Expr::Ident(id) => ast::atomic_rmw_op_code(&id.name)?,
+                _ => return None,
+            };
+            Some(AtomicOp::AtomicRmw {
+                op,
+                addr: c.arguments.get(1)?,
+                bytes: ast_int_lit(c.arguments.get(2)?)?,
+                value: c.arguments.get(3)?,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The atomic call within `e`, descending through pure wrappers
+/// (`sext`/`zext`/`extract`/`if`/...) as sema permits.
+fn find_atomic(e: &ast::Expr) -> Option<AtomicOp<'_>> {
+    if let ast::Expr::Call(c) = e
+        && let Some(op) = atomic_of_call(c)
+    {
+        return Some(op);
+    }
+    match e {
+        ast::Expr::Call(c) => c.arguments.iter().find_map(find_atomic),
+        ast::Expr::Assign(a) => find_atomic(&a.value),
+        ast::Expr::Binary(b) => find_atomic(&b.lhs).or_else(|| find_atomic(&b.rhs)),
+        ast::Expr::Unary(u) => find_atomic(&u.x),
+        ast::Expr::If(i) => find_atomic(&i.cond)
+            .or_else(|| find_atomic(&i.then))
+            .or_else(|| i.else_.as_deref().and_then(find_atomic)),
+        ast::Expr::Block(b) => b.stmts.iter().find_map(find_atomic),
+        ast::Expr::Field(f) => find_atomic(&f.base),
+        ast::Expr::Slice(s) => find_atomic(&s.base),
+        ast::Expr::IndexAccess(ix) => find_atomic(&ix.base),
+        _ => None,
+    }
 }
 
 /// Statement emitter folding a behavior into a TMDLState transition.
@@ -1302,6 +1439,54 @@ impl BehaviorEmitter<'_> {
             None
         })
     }
+
+    /// Wrap the register-write state `w` (or the bare entry state for a
+    /// discarded `store_conditional`) with an atomic's memory/reservation
+    /// effect. Reads observe the entry state `st` (parallel-assignment), so the
+    /// success predicate here matches the value facet emitted for the RHS.
+    fn atomic_effect(&self, op: &AtomicOp, w: &str) -> Option<String> {
+        let xlen = self.ctx.xlen as u32;
+        let addr = |a: &ast::Expr| -> Option<String> {
+            let (e, wa, sa) = self.emit_val(a)?.as_bv();
+            Some(fit_smt(&e, wa, sa, xlen))
+        };
+        match op {
+            AtomicOp::LoadReserved { addr: a } => Some(format!("(set_res {} {})", w, addr(a)?)),
+            AtomicOp::StoreConditional {
+                addr: a,
+                bytes,
+                value,
+            } => {
+                if !MEM_ACCESS_BYTES.contains(&(*bytes as u16)) {
+                    return None;
+                }
+                let addr = addr(a)?;
+                let (v, wv, sv) = self.emit_val(value)?.as_bv();
+                let val = fit_smt(&v, wv, sv, *bytes as u32 * 8);
+                Some(format!(
+                    "(ite {succ} (write_mem_{bytes} (clear_res {w}) {addr} {val}) (clear_res {w}))",
+                    succ = sc_success("st", &addr)
+                ))
+            }
+            AtomicOp::AtomicRmw {
+                op,
+                addr: a,
+                bytes,
+                value,
+            } => {
+                if !MEM_ACCESS_BYTES.contains(&(*bytes as u16)) {
+                    return None;
+                }
+                let width = *bytes as u32 * 8;
+                let addr = addr(a)?;
+                let old = format!("(read_mem_{} st {})", bytes, addr);
+                let (v, wv, sv) = self.emit_val(value)?.as_bv();
+                let val = fit_smt(&v, wv, sv, width);
+                let new = amo_combine(*op, &old, &val)?;
+                Some(format!("(write_mem_{} {} {} {})", bytes, w, addr, new))
+            }
+        }
+    }
 }
 
 impl sem_expr_state::StateEmitter for BehaviorEmitter<'_> {
@@ -1322,21 +1507,27 @@ impl sem_expr_state::StateEmitter for BehaviorEmitter<'_> {
             }
             format!("(write_pc {} {})", st_name, fit(ctx.xlen))
         };
+        // An atomic RHS threads its memory/reservation effect around the
+        // register write (`w`); a plain assignment is just `w`.
+        let wrap = |w: String| match find_atomic(&a.value) {
+            Some(op) => self.atomic_effect(&op, &w),
+            None => Some(w),
+        };
         let dest_name = match &*a.dest {
             ast::Expr::Ident(id) => Some(id.name.as_str()),
             ast::Expr::Path(p) if p.remainder.len() == 1 => Some(p.remainder[0].as_str()),
             _ => None,
         };
         if dest_name == Some("pc") {
-            return Some(write_pc());
+            return wrap(write_pc());
         }
         if let Some(name) = dest_name {
             match self.operands.get(name) {
                 Some(Type::Struct(rc)) if ctx.pc_classes.contains(&rc.to_lowercase()) => {
-                    return Some(write_pc());
+                    return wrap(write_pc());
                 }
                 Some(Type::Struct(rc)) => {
-                    return Some(format!(
+                    return wrap(format!(
                         "(write_{} {} {} {})",
                         rc.to_lowercase(),
                         st_name,
@@ -1356,7 +1547,7 @@ impl sem_expr_state::StateEmitter for BehaviorEmitter<'_> {
                 .get(&(p.base.clone(), p.remainder[0].clone()))
         {
             let class = p.base.to_lowercase();
-            return Some(format!(
+            return wrap(format!(
                 "(write_{} {} (_ bv{} {}) {})",
                 class,
                 st_name,
@@ -1383,6 +1574,16 @@ impl sem_expr_state::StateEmitter for BehaviorEmitter<'_> {
             fit_smt(&addr, wa, sa, xlen),
             fit_smt(&val, wv, sv, bytes as u32 * 8)
         ))
+    }
+
+    fn store_conditional(&self, c: &ast::Call, st_name: &str) -> Option<String> {
+        // A bare statement: the effect applies, the success value is discarded.
+        self.atomic_effect(&atomic_of_call(c)?, st_name)
+    }
+
+    fn fence(&self, _c: &ast::Call, st_name: &str) -> Option<String> {
+        // One instruction is one SMT transition, so a fence is the identity.
+        Some(st_name.to_string())
     }
 
     fn trap(
