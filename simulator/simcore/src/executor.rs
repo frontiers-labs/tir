@@ -1117,6 +1117,64 @@ mod tests {
     }
 
     #[test]
+    fn zicsr_set_and_clear_with_x0_do_not_write_the_csr() {
+        let context = Context::with_default_dialects();
+        context.register_dialect::<AsmDialect>();
+        context.register_dialect::<RiscvDialect>();
+
+        let dialect = context.find_dialect::<RiscvDialect>().unwrap();
+        let asm = "
+            .global last
+            last:
+              add x0, x0, x0
+            .global first
+            first:
+              csrrs x2, mscratch, x0
+              csrrsi x3, mscratch, 0
+              csrrs x5, mscratch, x4
+        ";
+        let module = dialect.get_asm_parser().parse_asm(&context, asm).unwrap();
+        let program =
+            ProgramImage::from_module(&context, module, 0x8000_0000, Some("first")).unwrap();
+
+        let mut executor = Executor::new(4096);
+        tir::backend::MachineContext::write_register(
+            &mut executor,
+            "CSR",
+            0x340,
+            APInt::new(64, 0b1010),
+        )
+        .unwrap();
+        tir::backend::MachineContext::write_register(
+            &mut executor,
+            "GPR",
+            4,
+            APInt::new(64, 0b0101),
+        )
+        .unwrap();
+        executor.load(program).unwrap();
+        executor.run(0x8000_000C, 10).unwrap();
+
+        let reg = |class, idx| {
+            tir::backend::MachineContext::read_register(&executor, class, idx)
+                .unwrap()
+                .to_u64()
+        };
+        // csrrs/csrrsi with a zero source read the CSR into rd but leave it
+        // untouched: neither instruction may write it.
+        assert_eq!(reg("GPR", 2), 0b1010, "csrrs x0 reads mscratch");
+        assert_eq!(
+            reg("GPR", 3),
+            0b1010,
+            "csrrsi 0 reads the unchanged mscratch"
+        );
+        // A non-x0 source still sets bits: the pre-write value goes to rd, the
+        // OR of the operands to the CSR.
+        assert_eq!(reg("GPR", 5), 0b1010, "csrrs reads before setting");
+        assert_eq!(reg("CSR", 0x340), 0b1111, "csrrs x4 set the masked bits");
+    }
+
+    #[test]
     fn counter_registers_track_retired_instructions_and_ignore_writes() {
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
