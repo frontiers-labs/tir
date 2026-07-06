@@ -28,6 +28,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
+use std::time::UNIX_EPOCH;
 
 use libtest_mimic::{Arguments, Failed, Trial};
 
@@ -40,11 +41,11 @@ struct TestCase {
     xfail: bool,
 }
 
-/// Build a workspace binary once and copy it beside the current test executable.
+/// Build a workspace binary once and link it beside the current test executable.
 ///
 /// Running `cargo run` from every parallel lit test can race with Cargo rewriting
 /// the target binary while another test tries to execute it. Tests should run
-/// this stable copy instead.
+/// this stable snapshot instead.
 pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
     let test_exe = std::env::current_exe().expect("current test executable path");
     let deps_dir = test_exe.parent().expect("test executable directory");
@@ -66,12 +67,14 @@ pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
     );
 
     let source = profile_dir.join(bin.to_owned() + std::env::consts::EXE_SUFFIX);
-    let dest = deps_dir.join(format!(
-        "{}-lit-{}{}",
-        bin,
-        std::process::id(),
-        std::env::consts::EXE_SUFFIX
-    ));
+    let dest = linked_bin_path(&source, deps_dir, bin);
+    match std::fs::hard_link(&source, &dest) {
+        Ok(()) => return dest,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return dest,
+        Err(_) => {}
+    }
+
+    let dest = copied_bin_path(deps_dir, bin);
     std::fs::copy(&source, &dest).unwrap_or_else(|e| {
         panic!(
             "copy built binary from '{}' to '{}': {e}",
@@ -80,6 +83,34 @@ pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
         )
     });
     dest
+}
+
+fn linked_bin_path(source: &Path, deps_dir: &Path, bin: &str) -> PathBuf {
+    let metadata = std::fs::metadata(source)
+        .unwrap_or_else(|e| panic!("stat built binary '{}': {e}", source.display()));
+    let modified = metadata
+        .modified()
+        .unwrap_or_else(|e| panic!("stat built binary mtime '{}': {e}", source.display()))
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    deps_dir.join(format!(
+        "{}-lit-{}-{}{}",
+        bin,
+        metadata.len(),
+        modified,
+        std::env::consts::EXE_SUFFIX
+    ))
+}
+
+fn copied_bin_path(deps_dir: &Path, bin: &str) -> PathBuf {
+    deps_dir.join(format!(
+        "{}-lit-copy-{}{}",
+        bin,
+        std::process::id(),
+        std::env::consts::EXE_SUFFIX
+    ))
 }
 
 #[derive(Clone)]
