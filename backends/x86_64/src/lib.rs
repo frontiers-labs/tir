@@ -413,14 +413,18 @@ mod isa {
         let value = tir::backend::int_attr(constant.attributes(), "value").ok_or_else(|| {
             tir::PassError::InvalidRuleSet("constant op without an integer value".to_string())
         })?;
+        let dst = virt(constant.result().number(), "GPR");
         if i32::try_from(value).is_err() {
-            return Err(tir::PassError::InvalidRuleSet(format!(
-                "constant {value} does not fit mov imm32; wide constant materialization is not implemented"
-            )));
+            let movabs = MovAbsOpBuilder::new(context)
+                .attr("dst", dst)
+                .attr("imm", AttributeValue::Int(value))
+                .build();
+            rewriter.replace_op(op, &movabs)?;
+            return Ok(true);
         }
 
         let mov = MovImmOpBuilder::new(context)
-            .attr("dst", virt(constant.result().number(), "GPR"))
+            .attr("dst", dst)
             .attr("imm", AttributeValue::Int(value))
             .build();
         rewriter.replace_op(op, &mov)?;

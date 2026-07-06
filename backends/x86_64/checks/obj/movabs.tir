@@ -1,0 +1,22 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s --check-prefix=ISEL
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
+
+// A constant that does not fit a 32-bit immediate materializes with `movabs
+// r64, imm64` (REX.W 0xB8+rd io) instead of the `mov r32, imm32` form.
+
+module {
+  func @wide() -> !i64 {
+    %0 = constant {value = 1234605616436508552} : !i64
+    return %0
+  }
+  module_end
+}
+
+// ISEL: x86_64.movabs {dst = rax, imm = 1234605616436508552}
+
+// movabs rax, 0x1122334455667788: REX.W=48, B8, then the 8 immediate bytes
+// little-endian.
+// CHECK: .section .text
+// CHECK-NEXT: wide:
+// CHECK-NEXT: [0x48, 0xB8, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]
+// CHECK-NEXT: [0xC3]
