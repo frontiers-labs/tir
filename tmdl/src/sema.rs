@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chumsky::error::Rich;
 
 use crate::utils::{
-    eval_bits_width, resolve_effective_asm_for_instruction,
+    eval_bits_width, isa_param_values, parse_literal_value, resolve_effective_asm_for_instruction,
     resolve_effective_encoding_for_instruction, resolve_isa_param_values,
     resolve_params_for_instruction, resolve_template_chain,
 };
@@ -21,6 +21,7 @@ pub fn analyze(files: &[ast::File]) -> Vec<(String, Diag)> {
     diags.extend(check_isas(files, &cache));
     diags.extend(check_templates(files, &cache));
     diags.extend(check_instructions(files, &cache));
+    diags.extend(check_register_classes(files, &cache));
     diags.extend(check_performance_model(files, &cache));
     for file in files {
         for item in &file.items {
@@ -37,6 +38,112 @@ pub fn analyze(files: &[ast::File]) -> Vec<(String, Diag)> {
         }
     }
 
+    diags
+}
+
+/// Validate sub-register-view params: `WRITE_POLICY` must be one of the two known
+/// policies, a nonzero `BIT_OFFSET` requires the merge policy, and the view
+/// (`BIT_OFFSET + WIDTH`) must fit within its storage class's `WIDTH`.
+fn check_register_classes(
+    files: &[ast::File],
+    item_cache: &HashMap<&str, &ast::Item>,
+) -> Vec<(String, Diag)> {
+    let mut diags: Vec<(String, Diag)> = Vec::new();
+    let classes: HashMap<String, &ast::RegisterClass> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .map(|rc| (rc.name.clone(), rc))
+        .collect();
+
+    let eval = |rc: &ast::RegisterClass,
+                name: &str,
+                params: &HashMap<String, i64>|
+     -> Option<i64> {
+        match rc.parameters.get(name)? {
+            (_, Some(ast::Expr::Lit(ast::Lit::Int(li)))) => Some(parse_literal_value(li) as i64),
+            (_, Some(ast::Expr::Field(f))) if matches!(&*f.base, ast::Expr::Ident(id) if id.name == "self") => {
+                params.get(f.member.as_str()).copied()
+            }
+            _ => None,
+        }
+    };
+
+    for file in files {
+        for rc in file.register_classes() {
+            let policy = rc.parameters.get("WRITE_POLICY");
+            let merge = match policy {
+                None => false,
+                Some((_, Some(ast::Expr::Lit(ast::Lit::Str(s))))) => match s.value() {
+                    "merge" => true,
+                    "zero_extend" => false,
+                    other => {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                rc.span,
+                                format!(
+                                    "register class '{}' has invalid WRITE_POLICY '{other}'; \
+                                     expected \"zero_extend\" or \"merge\"",
+                                    rc.name
+                                ),
+                            ),
+                        ));
+                        continue;
+                    }
+                },
+                Some(_) => {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(
+                            rc.span,
+                            format!(
+                                "register class '{}' WRITE_POLICY must be a string literal",
+                                rc.name
+                            ),
+                        ),
+                    ));
+                    continue;
+                }
+            };
+
+            if !rc.parameters.contains_key("BIT_OFFSET") && policy.is_none() {
+                continue;
+            }
+            let isa = rc.for_isas.first().map(String::as_str).unwrap_or("");
+            let params = isa_param_values(isa, item_cache);
+            let offset = eval(rc, "BIT_OFFSET", &params).unwrap_or(0);
+            if offset != 0 && !merge {
+                diags.push((
+                    file.file_name.clone(),
+                    Rich::custom(
+                        rc.span,
+                        format!(
+                            "register class '{}' has a nonzero BIT_OFFSET but WRITE_POLICY is \
+                             not \"merge\"",
+                            rc.name
+                        ),
+                    ),
+                ));
+            }
+            let storage = rc.register_file(&classes);
+            if let (Some(width), Some(sc)) = (eval(rc, "WIDTH", &params), classes.get(storage))
+                && let Some(storage_width) = eval(sc, "WIDTH", &params)
+                && offset + width > storage_width
+            {
+                diags.push((
+                    file.file_name.clone(),
+                    Rich::custom(
+                        rc.span,
+                        format!(
+                            "register class '{}' view (BIT_OFFSET {offset} + WIDTH {width}) \
+                             exceeds storage class '{storage}' WIDTH {storage_width}",
+                            rc.name
+                        ),
+                    ),
+                ));
+            }
+        }
+    }
     diags
 }
 

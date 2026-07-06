@@ -61,6 +61,17 @@ impl RegClassInfo {
     }
 }
 
+/// How a register class's architectural view maps onto its storage element.
+/// `bit_offset` is where the view starts within the element (x86 high-byte `ah`
+/// begins at bit 8); `merge` preserves the element's untouched bits on write
+/// (x86 8/16-bit writes) rather than zero-extending the value across the whole
+/// element (the default, matching x86 32-bit and AArch64 scalar-FP writes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RegisterView {
+    pub bit_offset: u32,
+    pub merge: bool,
+}
+
 /// The register file of a target: every allocatable (and reserved) register class,
 /// keyed by the class name used in [`RegisterAttr`] operands.
 #[derive(Debug, Clone, PartialEq, Eq)]

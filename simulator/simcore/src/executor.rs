@@ -68,6 +68,10 @@ pub struct Executor {
     /// it on read, so e.g. rv32 arithmetic wraps at 32 bits. Classes absent
     /// from the map keep whatever width the behavior produced.
     register_widths: HashMap<String, u32>,
+    /// Sub-register views departing from the default (bit offset 0, zero-extending
+    /// writes). Classes absent from the map use the default. Populated from
+    /// `TargetMachine::register_views`; drives narrow writes on x86.
+    register_views: HashMap<String, tir::backend::regalloc::RegisterView>,
     /// TMDL ISA parameter values (e.g. `XLEN`) under the selected target
     /// configuration, consulted by instruction behaviors via
     /// [`MachineContext::isa_param`].
@@ -214,6 +218,18 @@ impl Executor {
             .collect();
     }
 
+    /// Configure sub-register views per class (from
+    /// `TargetMachine::register_views`).
+    pub fn set_register_views(
+        &mut self,
+        views: impl IntoIterator<Item = (&'static str, tir::backend::regalloc::RegisterView)>,
+    ) {
+        self.register_views = views
+            .into_iter()
+            .map(|(class, view)| (class.to_string(), view))
+            .collect();
+    }
+
     /// Configure TMDL ISA parameter values (from `TargetMachine::isa_params`).
     pub fn set_isa_params(&mut self, params: impl IntoIterator<Item = (&'static str, i64)>) {
         self.isa_params = params
@@ -311,21 +327,59 @@ impl Executor {
                     .resized(byte_bits),
             );
         }
-        let key = (self.register_file(class).to_string(), index);
-        Ok(self
+        let file = self.register_file(class);
+        let file_byte_bits = self.class_byte_bits(file);
+        let key = (file.to_string(), index);
+        let slot = self
             .registers
             .get(&key)
             .cloned()
-            .unwrap_or_else(|| tir::utils::RawBits::new(byte_bits))
-            .resized(byte_bits))
+            .unwrap_or_else(|| tir::utils::RawBits::new(file_byte_bits))
+            .resized(file_byte_bits);
+        let off = self.register_views.get(class).map_or(0, |v| v.bit_offset);
+        if off == 0 {
+            Ok(slot.resized(byte_bits))
+        } else {
+            let shifted = slot.to_apint().lshr(off);
+            Ok(tir::utils::RawBits::from_apint(&shifted).resized(byte_bits))
+        }
     }
 
-    /// Store `bytes` into a register's file slot at the class byte width.
+    /// Store `bytes` into a register's file slot at the storage file's width. A
+    /// narrow class with a merge policy or nonzero bit offset splices its value
+    /// into the slot, preserving the untouched bits; otherwise the value is
+    /// zero-extended across the whole element.
     fn store_register_raw(&mut self, class: &str, index: u16, bytes: tir::utils::RawBits) {
-        let byte_bits = self.class_byte_bits(class);
         let file = self.register_file(class).to_string();
-        self.registers
-            .insert((file, index), bytes.resized(byte_bits));
+        let file_byte_bits = self.class_byte_bits(&file);
+        let key = (file.clone(), index);
+        let view = self.register_views.get(class).copied().unwrap_or_default();
+        let stored = if view.merge || view.bit_offset != 0 {
+            let w = self.class_bit_width(class);
+            let off = view.bit_offset;
+            let slot = self
+                .registers
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| tir::utils::RawBits::new(file_byte_bits))
+                .resized(file_byte_bits)
+                .to_apint();
+            let sw = slot.width();
+            let val = bytes.to_apint();
+            let val = match val.width() {
+                width if width > w => val.truncate(w),
+                width if width < w => val.zero_extend(w),
+                _ => val,
+            };
+            let val_shifted = val.zero_extend(sw).shl(off);
+            let mask = tir::utils::APInt::max_value(w, false)
+                .zero_extend(sw)
+                .shl(off);
+            tir::utils::RawBits::from_apint(&slot.and(&mask.not()).or(&val_shifted))
+        } else {
+            bytes.resized(file_byte_bits)
+        };
+        self.registers.insert(key, stored);
     }
 
     /// The recorded dynamic instruction stream as `(op, pc)` pairs, in execution
@@ -1423,5 +1477,106 @@ mod tests {
             0x2000 + (3 << 2),
             "pc takes the branch target"
         );
+    }
+
+    /// An executor configured with x86 register files, widths, and sub-register
+    /// views, so writes through the GPR8/GPR16/GPR8H classes exercise the
+    /// merge/offset policies.
+    fn x86_executor() -> Executor {
+        let mut ex = Executor::new(64);
+        let info = tir_x86_64::register_info();
+        let files: std::collections::HashMap<String, String> = info
+            .classes
+            .iter()
+            .map(|c| (c.name.to_string(), c.file.to_string()))
+            .collect();
+        ex.set_register_files(files);
+        ex.set_register_widths(tir_x86_64::register_widths(tir_x86_64::Feature::ALL));
+        ex.set_register_views(tir_x86_64::register_views(tir_x86_64::Feature::ALL));
+        ex
+    }
+
+    #[test]
+    fn x86_16bit_write_preserves_upper_bits() {
+        use tir::backend::MachineContext;
+        let mut ex = x86_executor();
+        // rax = all ones, then a 16-bit write to ax leaves bits 63:16 untouched.
+        MachineContext::write_register(&mut ex, "GPR", 0, APInt::new(64, u64::MAX)).unwrap();
+        MachineContext::write_register(&mut ex, "GPR16", 0, APInt::new(16, 0x1234)).unwrap();
+        assert_eq!(
+            MachineContext::read_register(&ex, "GPR", 0)
+                .unwrap()
+                .to_u64(),
+            0xFFFF_FFFF_FFFF_1234
+        );
+        assert_eq!(
+            MachineContext::read_register(&ex, "GPR16", 0)
+                .unwrap()
+                .to_u64(),
+            0x1234
+        );
+    }
+
+    #[test]
+    fn x86_high_byte_is_bits_15_8() {
+        use tir::backend::MachineContext;
+        let mut ex = x86_executor();
+        MachineContext::write_register(&mut ex, "GPR", 0, APInt::new(64, 0xAAAA_AAAA_AAAA_0000))
+            .unwrap();
+        // al is bits 7:0, ah is bits 15:8; each write leaves the other byte and
+        // the upper 48 bits alone.
+        MachineContext::write_register(&mut ex, "GPR8", 0, APInt::new(8, 0x11)).unwrap();
+        MachineContext::write_register(&mut ex, "GPR8H", 0, APInt::new(8, 0x22)).unwrap();
+        assert_eq!(
+            MachineContext::read_register(&ex, "GPR8", 0)
+                .unwrap()
+                .to_u64(),
+            0x11,
+            "al unchanged by the ah write"
+        );
+        assert_eq!(
+            MachineContext::read_register(&ex, "GPR8H", 0)
+                .unwrap()
+                .to_u64(),
+            0x22
+        );
+        assert_eq!(
+            MachineContext::read_register(&ex, "GPR16", 0)
+                .unwrap()
+                .to_u64(),
+            0x2211,
+            "ax == ah:al"
+        );
+        assert_eq!(
+            MachineContext::read_register(&ex, "GPR", 0)
+                .unwrap()
+                .to_u64(),
+            0xAAAA_AAAA_AAAA_2211,
+            "bits 63:16 preserved"
+        );
+    }
+
+    #[test]
+    fn x86_32bit_write_zero_extends() {
+        use tir::backend::MachineContext;
+        let mut ex = x86_executor();
+        MachineContext::write_register(&mut ex, "GPR", 0, APInt::new(64, u64::MAX)).unwrap();
+        MachineContext::write_register(&mut ex, "GPR32", 0, APInt::new(32, 0xDEAD_BEEF)).unwrap();
+        assert_eq!(
+            MachineContext::read_register(&ex, "GPR", 0)
+                .unwrap()
+                .to_u64(),
+            0x0000_0000_DEAD_BEEF,
+            "a 32-bit write zeroes bits 63:32"
+        );
+    }
+
+    #[test]
+    fn x86_write_al_then_read_rax() {
+        use tir::backend::MachineContext;
+        let mut ex = x86_executor();
+        MachineContext::write_register(&mut ex, "GPR8", 0, APInt::new(8, 0x7F)).unwrap();
+        let rax = MachineContext::read_register(&ex, "GPR", 0).unwrap();
+        assert_eq!((rax.to_u64(), rax.width()), (0x7F, 64));
     }
 }

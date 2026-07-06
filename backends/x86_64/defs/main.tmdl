@@ -85,6 +85,7 @@ register_class GPR32 for [X86] : GPR {
 
 register_class GPR16 for [X86] : GPR {
     param WIDTH: Integer = 16;
+    param WRITE_POLICY: String = "merge";
 
     registers {
         ax => { index = 0, traits = [return_value, caller_saved] },
@@ -110,6 +111,7 @@ register_class GPR16 for [X86] : GPR {
 // templates always emit.
 register_class GPR8 for [X86] : GPR {
     param WIDTH: Integer = 8;
+    param WRITE_POLICY: String = "merge";
 
     registers {
         al => { index = 0, traits = [return_value, caller_saved] },
@@ -138,6 +140,8 @@ register_class GPR8H for [X86] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 8;
+    param WRITE_POLICY: String = "merge";
+    param BIT_OFFSET: Integer = 8;
 
     registers {
         ah => { index = 0, traits = [caller_saved] },

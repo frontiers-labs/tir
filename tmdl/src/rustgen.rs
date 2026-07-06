@@ -1806,6 +1806,29 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
         width_entries.push(quote! { (#name_lit, #width_ts) });
     }
 
+    // Sub-register view of each class: bit offset into its storage element and
+    // whether narrow writes merge (preserve untouched bits) or zero-extend. Only
+    // classes departing from the default (offset 0, zero-extend) get an entry.
+    let mut view_entries = Vec::new();
+    for rc in files.iter().flat_map(|f| f.register_classes()) {
+        let bit_offset = match rc.parameters.get("BIT_OFFSET") {
+            Some((_ty, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => parse_literal_value(li) as u32,
+            _ => 0,
+        };
+        let merge = matches!(
+            rc.parameters.get("WRITE_POLICY"),
+            Some((_ty, Some(ast::Expr::Lit(ast::Lit::Str(s))))) if s.value() == "merge"
+        );
+        if bit_offset == 0 && !merge {
+            continue;
+        }
+        let name_lit = proc_macro2::Literal::string(&rc.name);
+        let off_lit = proc_macro2::Literal::u32_unsuffixed(bit_offset);
+        view_entries.push(quote! {
+            (#name_lit, tir::backend::regalloc::RegisterView { bit_offset: #off_lit, merge: #merge })
+        });
+    }
+
     Ok(quote! {
         pub fn register_info() -> tir::backend::regalloc::RegisterInfo {
             tir::backend::regalloc::RegisterInfo {
@@ -1818,6 +1841,13 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
             let params = isa_params(features);
             let _ = &params;
             vec![#(#width_entries),*]
+        }
+
+        /// Sub-register views (bit offset + write policy) of classes that depart
+        /// from the default of offset 0 and zero-extending writes.
+        pub fn register_views(features: &[Feature]) -> Vec<(&'static str, tir::backend::regalloc::RegisterView)> {
+            let _ = features;
+            vec![#(#view_entries),*]
         }
     })
 }

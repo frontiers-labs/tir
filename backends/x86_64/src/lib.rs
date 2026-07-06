@@ -1,7 +1,7 @@
 //! x86-64 backend prototype, generated from the TMDL descriptions in `defs/`.
 
 pub use isa::X86_64Dialect;
-pub use isa::{Feature, get_isel_rules};
+pub use isa::{Feature, get_isel_rules, register_info, register_views, register_widths};
 
 mod isa {
     // Generated code: not everything is used by this asm-focused prototype.
@@ -958,6 +958,10 @@ mod isa {
 
         fn register_widths(&self) -> Vec<(&'static str, u32)> {
             register_widths(Feature::ALL)
+        }
+
+        fn register_views(&self) -> Vec<(&'static str, tir::backend::regalloc::RegisterView)> {
+            register_views(Feature::ALL)
         }
 
         fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String> {

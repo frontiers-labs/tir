@@ -33,6 +33,20 @@ register_class CSR for [TestIsa] {
     }
 }
 
+// A merge sub-register view at bit offset 8 of the GPR file (a toy `ah`-style
+// class): reads extract [15:8], writes splice into it, keeping the rest.
+register_class GPRH for [TestIsa] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 8;
+    param WRITE_POLICY: String = "merge";
+    param BIT_OFFSET: Integer = 8;
+
+    registers {
+        h0 => { index = 0 },
+    }
+}
+
 template RType for [TestIsa] {
     param MNEMONIC: String;
     param OPCODE: bits<7>;

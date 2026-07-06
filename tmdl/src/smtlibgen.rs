@@ -29,6 +29,12 @@ struct ClassInfo {
     /// read and write one array; only its accessors differ (`GPRsp` has no
     /// hardwired zero at slot 31, `GPR` does).
     storage: String,
+    /// Bit within the storage element where this class's view begins (x86
+    /// high-byte `ah` -> 8). Reads/writes address `[bit_offset, bit_offset+width)`.
+    bit_offset: u16,
+    /// Preserve the storage element's untouched bits on write (x86 8/16-bit
+    /// writes) instead of zero-extending the value across it (the default).
+    merge: bool,
 }
 
 struct SmtCtx<'a> {
@@ -121,6 +127,15 @@ fn eval_class_param(
     }
 }
 
+/// Whether a class's `WRITE_POLICY` is `"merge"` (preserve untouched storage
+/// bits on write); absent or `"zero_extend"` is the default zero-extend.
+fn class_write_merge(rc: &ast::RegisterClass) -> bool {
+    matches!(
+        rc.parameters.get("WRITE_POLICY"),
+        Some((_, Some(ast::Expr::Lit(ast::Lit::Str(s))))) if s.value() == "merge"
+    )
+}
+
 pub fn generate_smtlib<'a>(
     dialect: &str,
     isa: &str,
@@ -208,6 +223,8 @@ pub fn generate_smtlib<'a>(
                 val_width: eval_class_param(rc, "WIDTH", &isa_params).unwrap_or(xlen as i64) as u16,
                 zero_index: rc.hardwired_zero_register_index(),
                 storage: storage_of(&name),
+                bit_offset: eval_class_param(rc, "BIT_OFFSET", &isa_params).unwrap_or(0) as u16,
+                merge: class_write_merge(rc),
             },
         );
     }
@@ -280,16 +297,18 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
         let idx_width = info.idx_width;
         let val_width = info.val_width;
         let storage = &info.storage;
+        let off = info.bit_offset;
         // A class narrower than its storage file is a sub-register view of it
-        // (x86 `eax`/`ax`/`al` in `rax`): reads truncate the file element and
-        // writes zero-extend into it — matching the interpreter, which stores at
-        // the class byte width and zero-pads on a wider read-back.
+        // (x86 `eax`/`ax`/`al` in `rax`): reads extract `[off, off+width)` of the
+        // file element. A zero-extend write clears the rest of the element (x86
+        // 32-bit, AArch64 scalar FP); a merge write preserves it (x86 8/16-bit).
         let storage_val_width = ctx.classes.get(storage).map_or(val_width, |c| c.val_width);
         let selected = format!("(select ({storage} st) r)");
-        let select = if val_width < storage_val_width {
-            format!("((_ extract {} 0) {selected})", val_width - 1)
+        let is_subview = val_width < storage_val_width || off > 0;
+        let select = if is_subview {
+            format!("((_ extract {} {off}) {selected})", off + val_width - 1)
         } else {
-            selected
+            selected.clone()
         };
         let read_body = match info.zero_index {
             Some(z) => {
@@ -302,7 +321,26 @@ fn build_state(ctx: &SmtCtx<'_>, output: &mut Box<dyn Write>) -> Result<(), TMDL
             "\n(define-fun read_{name} ((st TMDLState) (r (_ BitVec {idx_width}))) (_ BitVec {val_width})\n  {read_body})",
         )?;
 
-        let stored_val = if val_width < storage_val_width {
+        let stored_val = if info.merge || off > 0 {
+            // Splice `val` into `[off, off+width)`, keeping the element's other
+            // bits from the current slot: concat of high ++ val ++ low.
+            let mut parts = Vec::new();
+            if off + val_width < storage_val_width {
+                parts.push(format!(
+                    "((_ extract {} {}) {selected})",
+                    storage_val_width - 1,
+                    off + val_width
+                ));
+            }
+            parts.push("val".to_string());
+            if off > 0 {
+                parts.push(format!("((_ extract {} 0) {selected})", off - 1));
+            }
+            parts
+                .into_iter()
+                .reduce(|a, b| format!("(concat {a} {b})"))
+                .expect("at least the val segment")
+        } else if val_width < storage_val_width {
             format!("((_ zero_extend {}) val)", storage_val_width - val_width)
         } else {
             "val".to_string()

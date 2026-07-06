@@ -9,3 +9,4 @@ tir.workspace = true
 [dev-dependencies]
 tir-riscv.workspace = true
 tir-arm64.workspace = true
+tir-x86_64.workspace = true

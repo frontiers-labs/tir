@@ -75,6 +75,14 @@ pub trait TargetMachine {
     /// features (e.g. RISC-V `GPR` is 32 bits wide on rv32, 64 on rv64).
     fn register_widths(&self) -> Vec<(&'static str, u32)>;
 
+    /// Sub-register views departing from the default (bit offset 0, zero-extending
+    /// writes): x86 8/16-bit classes merge into their storage and the high-byte
+    /// classes sit at bit 8. Simulators install these so narrow writes preserve
+    /// the untouched bits of the enclosing register.
+    fn register_views(&self) -> Vec<(&'static str, crate::backend::regalloc::RegisterView)> {
+        vec![]
+    }
+
     /// The ISA (or ABI, when `prefer_abi`) name of a register given its class and
     /// encoding index — the inverse of the asm parser, for printing `x1`/`ra`
     /// instead of the raw `(class, index)`. `None` if the class/index is unknown.
