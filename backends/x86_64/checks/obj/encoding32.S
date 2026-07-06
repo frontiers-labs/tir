@@ -26,6 +26,8 @@ enc32:
 # sub esi, edi: opcode 29, ModR/M=11 reg(edi=7) rm(esi=6) = FE.
 # CHECK-NEXT: [0x29, 0xFE]
 # mov eax, 1: opcode C7, ModR/M=11 000 000 = C0, imm32=1.
+# Divergence: TIR uses the C7 /0 group form; GNU as picks the shorter B8+rd
+# immediate form (b8 01 00 00 00). Both valid; TIR's is one byte longer.
 # CHECK-NEXT: [0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]
 # add ecx, 42: opcode 81, ModR/M=11 000(/0) 001(ecx) = C1, imm32=42.
 # CHECK-NEXT: [0x83, 0xC1, 0x2A]

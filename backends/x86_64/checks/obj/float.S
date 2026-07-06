@@ -3,6 +3,9 @@
 # SSE2 scalar-double encodings: the F2 mandatory prefix, a REX byte (0x40 for
 # xmm0..xmm7; REX.R/REX.B add the 4th register-number bit for xmm8..xmm15), the
 # 0x0F escape, the opcode, then ModR/M(mod=11, reg=dst, rm=src).
+# Divergence: for xmm0..xmm7 TIR emits the empty 0x40 REX (no _norex form for
+# SSE) where GNU as omits it (f2 0f 58 c1). Valid; one byte longer. The r8+
+# forms that require REX.R/REX.B match GNU as exactly.
 
 	.global fp
 fp:

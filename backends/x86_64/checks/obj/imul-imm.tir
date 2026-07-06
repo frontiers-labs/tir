@@ -3,6 +3,10 @@
 // A `muli` against a constant folds into the three-operand immediate multiply
 // `imul dst, src, imm32` (REX.W 0x69 /r id): non-destructive, so the constant
 // never needs a separate materializing move. The i32 form drops REX.W.
+//
+// Divergence from GNU as: TIR always uses the 0x69 imm32 form; GNU as picks the
+// shorter 0x6B imm8 form for a small constant (48 6b c7 03 / 6b c7 05), and
+// omits the empty REX on the low-register i32 form. Both valid; TIR's is longer.
 
 module {
   func @scale64(%0: !i64) -> !i64 {

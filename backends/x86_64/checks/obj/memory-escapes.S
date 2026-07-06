@@ -54,7 +54,9 @@ esc:
 # CHECK-NEXT: [0x48, 0x89, 0x55, 0x00]
 # CHECK-NEXT: [0x49, 0x89, 0x14, 0x24]
 # CHECK-NEXT: [0x49, 0x89, 0x55, 0x00]
-# disp32 with rsp base keeps the SIB (mod=10 rm=100).
+# disp32 with rsp base keeps the SIB (mod=10 rm=100). Divergence: TIR always
+# uses disp32 for a non-zero displacement; GNU as would pick disp8 (48 8b 44 24
+# 08 / 48 89 54 24 08). Both valid; TIR's is 3 bytes longer.
 # CHECK-NEXT: [0x48, 0x8B, 0x84, 0x24, 0x08, 0x00, 0x00, 0x00]
 # CHECK-NEXT: [0x48, 0x89, 0x94, 0x24, 0x08, 0x00, 0x00, 0x00]
 # movzx/movsx byte/word.

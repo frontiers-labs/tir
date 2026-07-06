@@ -27,6 +27,8 @@ enc8:
 # sub sil, dil: REX=40 enables the new low bytes, opcode 28, ModR/M=11 reg(dil=7) rm(sil=6) = FE.
 # CHECK-NEXT: [0x40, 0x28, 0xFE]
 # mov al, 1: opcode C6, ModR/M=11 000 000 = C0, imm8=1.
+# Divergence: TIR uses the C6 /0 group form; GNU as picks the shorter B0+rb
+# immediate form (b0 01). Both valid; TIR's is one byte longer.
 # CHECK-NEXT: [0xC6, 0xC0, 0x01]
 # add cl, 42: opcode 80, ModR/M=11 000(/0) 001(cl) = C1, imm8=42.
 # CHECK-NEXT: [0x80, 0xC1, 0x2A]

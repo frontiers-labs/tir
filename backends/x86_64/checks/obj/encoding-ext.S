@@ -91,7 +91,9 @@ enc_ext:
 # CHECK-NEXT: [0x40, 0x89, 0x03]
 # CHECK-NEXT: [0x66, 0x40, 0x89, 0x0B]
 # CHECK-NEXT: [0x40, 0x88, 0x13]
-# disp32 forms: mod=10 + disp32.
+# disp32 forms: mod=10 + disp32. Divergence: TIR always uses disp32 for a
+# non-zero displacement; GNU as would pick the shorter disp8 (mod=01) form
+# (48 8b 43 08 / 48 89 51 10). Both valid; TIR's is 3 bytes longer.
 # CHECK-NEXT: [0x48, 0x8B, 0x83, 0x08, 0x00, 0x00, 0x00]
 # CHECK-NEXT: [0x48, 0x89, 0x91, 0x10, 0x00, 0x00, 0x00]
 # push/pop: 50+rd / 58+rd behind a plain REX.
@@ -99,7 +101,11 @@ enc_ext:
 # CHECK-NEXT: [0x41, 0x54]
 # CHECK-NEXT: [0x5B]
 # CHECK-NEXT: [0x41, 0x5C]
-# 32-bit forms drop REX.W.
+# 32-bit forms drop REX.W. Divergence: neg/not (F7), cmp/test reg-reg (39/85)
+# and the by-cl and rotate shifts (D3/C1) have no _norex canonicalization, so a
+# low-register operand keeps an empty 0x40 REX where GNU as omits it entirely
+# (f7 d8 / 39 cb / d3 e0 / c1 c0 03). Same accepted class as rol/ror; all valid.
+# The imm8 forms (sub eax,42 -> 83, test edx,5 -> f7) already match GNU as.
 # CHECK-NEXT: [0x40, 0xF7, 0xD8]
 # CHECK-NEXT: [0x83, 0xE8, 0x2A]
 # CHECK-NEXT: [0x40, 0x39, 0xCB]
