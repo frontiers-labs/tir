@@ -68,6 +68,17 @@ typed-arena = "2"
 debug = true
 lto = true
 
+# Full debug info makes a clean `cargo test --no-run` produce a ~22 GB target
+# dir (40+ statically linked binaries, ~97% DWARF). Line tables keep file:line
+# in backtraces, which is enough outside an interactive debugger session.
+[profile.dev]
+debug = "line-tables-only"
+
+# Backend build scripts link all of tmdl; without this each one is a ~220 MB
+# executable.
+[profile.dev.build-override]
+debug = false
+
 [profile.dev.package.filecheck]
 debug = false
 opt-level = 3
