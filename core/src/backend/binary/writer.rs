@@ -19,6 +19,7 @@ use super::{
 };
 use crate::backend::{
     BlockEndOp, LiteralOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp,
+    int_attr,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,20 +304,45 @@ impl BinaryWriter {
     }
 }
 
-/// Append a data directive's bytes to the current section. Only string
-/// directives are emitted so far; numeric ones still lack an encoding.
+/// Append a data directive's bytes to the current section. String directives
+/// emit their raw bytes; numeric directives emit little-endian values.
 fn emit_literal(op: &Arc<tir::OpInstance>, state: &mut WalkState) -> Result<(), BinaryEmitError> {
     let unsupported = || BinaryEmitError::UnsupportedOp {
         op: LiteralOp::name().to_string(),
     };
     let kind = string_attr(op, "kind").ok_or_else(unsupported)?;
-    let value = string_attr(op, "value").ok_or_else(unsupported)?;
-    let mut bytes = value.as_bytes().to_vec();
-    match kind {
-        "asciz" | "string" => bytes.push(0),
-        "ascii" => {}
+    let bytes = match kind {
+        "asciz" | "string" | "ascii" => {
+            let value = string_attr(op, "value").ok_or_else(unsupported)?;
+            let mut bytes = value.as_bytes().to_vec();
+            if kind != "ascii" {
+                bytes.push(0);
+            }
+            bytes
+        }
+        "byte" | "half" | "word" | "dword" | "space" => {
+            let value = int_attr(&op.attributes, "value").ok_or_else(unsupported)?;
+            match kind {
+                "space" => vec![0u8; usize::try_from(value).map_err(|_| unsupported())?],
+                "dword" => value.to_le_bytes().to_vec(),
+                _ => {
+                    let width = match kind {
+                        "byte" => 1,
+                        "half" => 2,
+                        _ => 4,
+                    };
+                    // Accept the full signed and unsigned range of the width.
+                    let min = -(1i64 << (width * 8 - 1));
+                    let max = (1i64 << (width * 8)) - 1;
+                    if value < min || value > max {
+                        return Err(unsupported());
+                    }
+                    value.to_le_bytes()[..width].to_vec()
+                }
+            }
+        }
         _ => return Err(unsupported()),
-    }
+    };
 
     let section = state
         .current_section

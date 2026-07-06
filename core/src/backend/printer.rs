@@ -9,6 +9,7 @@ use tir::{Context, OpInstance, Operation};
 
 use crate::backend::{
     BlockEndOp, LiteralOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp, SymbolOp,
+    int_attr,
 };
 
 pub type AsmInstructionPrinter = fn(&OpInstance) -> Option<String>;
@@ -119,14 +120,29 @@ impl AsmPrinter {
                 let kind = string_attr(&op, "kind").ok_or(AsmPrintError::UnsupportedOp {
                     op: LiteralOp::name(),
                 })?;
-                let value = string_attr(&op, "value").ok_or(AsmPrintError::UnsupportedOp {
-                    op: LiteralOp::name(),
-                })?;
                 out.push_str("\t.");
                 out.push_str(kind);
-                out.push_str(" \"");
-                out.push_str(&escape_asm_string(value));
-                out.push_str("\"\n");
+                match kind {
+                    "byte" | "half" | "word" | "dword" | "space" => {
+                        let value = int_attr(&op.attributes, "value").ok_or(
+                            AsmPrintError::UnsupportedOp {
+                                op: LiteralOp::name(),
+                            },
+                        )?;
+                        out.push(' ');
+                        out.push_str(&value.to_string());
+                        out.push('\n');
+                    }
+                    _ => {
+                        let value =
+                            string_attr(&op, "value").ok_or(AsmPrintError::UnsupportedOp {
+                                op: LiteralOp::name(),
+                            })?;
+                        out.push_str(" \"");
+                        out.push_str(&escape_asm_string(value));
+                        out.push_str("\"\n");
+                    }
+                }
                 continue;
             }
 

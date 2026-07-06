@@ -34,6 +34,16 @@ pub fn render_ascii(obj: &ObjectFile) -> String {
             let rendered: Vec<String> = bytes.iter().map(|b| format!("0x{b:02X}")).collect();
             let _ = writeln!(out, "  [{}]", rendered.join(", "));
         }
+
+        // Data sections (`.rodata`, `.bss`, ...) carry no instruction spans;
+        // dump their raw bytes so numeric literals stay observable.
+        if section.insn_spans.is_empty() && !section.data.is_empty() {
+            for symbol in next_symbol {
+                let _ = writeln!(out, "{}:", symbol.name);
+            }
+            let rendered: Vec<String> = section.data.iter().map(|b| format!("0x{b:02X}")).collect();
+            let _ = writeln!(out, "  [{}]", rendered.join(", "));
+        }
     }
     out
 }
