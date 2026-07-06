@@ -27,11 +27,31 @@ enum BlockExit {
 
 /// A single data-memory access performed by a retired instruction, captured
 /// into the trace so a timing model can drive a memory hierarchy.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct MemAccess {
     pub addr: u64,
     pub size: u8,
     pub is_write: bool,
+    pub kind: MemAccessKind,
+}
+
+/// The flavor of a recorded memory access. Timing models that only care about
+/// address/size/direction ignore this; it distinguishes the atomic constructs
+/// and fences for models that model reservation/ordering effects.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum MemAccessKind {
+    #[default]
+    Data,
+    LoadReserved,
+    StoreConditional {
+        success: bool,
+    },
+    AtomicRmw,
+    Fence {
+        pred: u8,
+        succ: u8,
+        ifence: bool,
+    },
 }
 
 /// What the simulation should do after an exception handler ran.
@@ -111,6 +131,11 @@ pub struct Executor {
     /// Checked on the *original* class before file aliasing, so `GPR[31]` (xzr)
     /// reads 0 even though it shares a storage slot with `GPRsp[31]` (sp).
     hardwired_zero: HashSet<(String, u16)>,
+    /// LR/SC reservation of the single implicit hart: exact (address, size) of
+    /// the last load_reserved. Multi-hart seam: this field moves into a per-hart
+    /// struct together with `registers`/`pc` when harts become explicit, and
+    /// remote-hart writes must then clear overlapping reservations.
+    reservation: Option<(u64, u8)>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -391,6 +416,53 @@ impl Executor {
     /// Data-memory accesses per retired instruction, parallel to [`Executor::trace`].
     pub fn mem_trace(&self) -> &[Vec<MemAccess>] {
         &self.mem_trace
+    }
+
+    /// Bounds-checked little-endian read of `size` bytes, without trace recording.
+    /// The recording wrapper lives in the [`MachineContext`] impl so the atomic
+    /// methods can reuse the raw read while tagging their own access kind.
+    fn read_memory_raw(&self, address: u64, size: usize) -> Result<u64, SimTrap> {
+        let offset = address
+            .checked_sub(self.memory_base)
+            .ok_or(SimTrap::BadAddress { address, size })?;
+        let start = usize::try_from(offset).map_err(|_| SimTrap::BadAddress { address, size })?;
+        let end = start
+            .checked_add(size)
+            .ok_or(SimTrap::BadAddress { address, size })?;
+        if end > self.memory.len() {
+            return Err(SimTrap::BadAddress { address, size });
+        }
+        let mut value = 0u64;
+        for (offset, byte) in self.memory[start..end].iter().enumerate() {
+            value |= u64::from(*byte) << (offset * 8);
+        }
+        Ok(value)
+    }
+
+    /// Bounds-checked little-endian write of `size` bytes, without trace recording.
+    fn write_memory_raw(&mut self, address: u64, size: usize, value: u64) -> Result<(), SimTrap> {
+        let offset = address
+            .checked_sub(self.memory_base)
+            .ok_or(SimTrap::BadAddress { address, size })?;
+        let start = usize::try_from(offset).map_err(|_| SimTrap::BadAddress { address, size })?;
+        let end = start
+            .checked_add(size)
+            .ok_or(SimTrap::BadAddress { address, size })?;
+        if end > self.memory.len() {
+            return Err(SimTrap::BadAddress { address, size });
+        }
+        for offset in 0..size {
+            self.memory[start + offset] = ((value >> (offset * 8)) & 0xFF) as u8;
+        }
+        Ok(())
+    }
+
+    /// Record a memory-trace access, gated exactly like the plain read/write paths
+    /// (only while capturing a machine instruction's execute with recording on).
+    fn record_mem_access(&self, access: MemAccess) {
+        if self.record_trace && self.capturing_mem {
+            self.mem_stage.borrow_mut().push(access);
+        }
     }
 
     /// Run `execute`, capturing its data-memory accesses, then drain them into
@@ -740,51 +812,102 @@ impl MachineContext for Executor {
     }
 
     fn read_memory(&self, address: u64, size: usize) -> Result<u64, SimTrap> {
-        let offset = address
-            .checked_sub(self.memory_base)
-            .ok_or(SimTrap::BadAddress { address, size })?;
-        let start = usize::try_from(offset).map_err(|_| SimTrap::BadAddress { address, size })?;
-        let end = start
-            .checked_add(size)
-            .ok_or(SimTrap::BadAddress { address, size })?;
-        if end > self.memory.len() {
-            return Err(SimTrap::BadAddress { address, size });
-        }
-        let mut value = 0u64;
-        for (offset, byte) in self.memory[start..end].iter().enumerate() {
-            value |= u64::from(*byte) << (offset * 8);
-        }
-        if self.record_trace && self.capturing_mem {
-            self.mem_stage.borrow_mut().push(MemAccess {
-                addr: address,
-                size: size as u8,
-                is_write: false,
-            });
-        }
+        let value = self.read_memory_raw(address, size)?;
+        self.record_mem_access(MemAccess {
+            addr: address,
+            size: size as u8,
+            is_write: false,
+            kind: MemAccessKind::Data,
+        });
         Ok(value)
     }
 
     fn write_memory(&mut self, address: u64, size: usize, value: u64) -> Result<(), SimTrap> {
-        let offset = address
-            .checked_sub(self.memory_base)
-            .ok_or(SimTrap::BadAddress { address, size })?;
-        let start = usize::try_from(offset).map_err(|_| SimTrap::BadAddress { address, size })?;
-        let end = start
-            .checked_add(size)
-            .ok_or(SimTrap::BadAddress { address, size })?;
-        if end > self.memory.len() {
-            return Err(SimTrap::BadAddress { address, size });
+        self.write_memory_raw(address, size, value)?;
+        self.record_mem_access(MemAccess {
+            addr: address,
+            size: size as u8,
+            is_write: true,
+            kind: MemAccessKind::Data,
+        });
+        Ok(())
+    }
+
+    fn load_reserved(
+        &mut self,
+        address: u64,
+        size: usize,
+        _ord: tir::sem::MemOrdering,
+    ) -> Result<u64, SimTrap> {
+        let value = self.read_memory_raw(address, size)?;
+        self.reservation = Some((address, size as u8));
+        self.record_mem_access(MemAccess {
+            addr: address,
+            size: size as u8,
+            is_write: false,
+            kind: MemAccessKind::LoadReserved,
+        });
+        Ok(value)
+    }
+
+    fn store_conditional(
+        &mut self,
+        address: u64,
+        size: usize,
+        value: u64,
+        _ord: tir::sem::MemOrdering,
+    ) -> Result<bool, SimTrap> {
+        // Success requires an exact (address, size) match; the reservation is
+        // consumed on both paths (matches Spike). Plain stores do not clear it.
+        let ok = self.reservation == Some((address, size as u8));
+        self.reservation = None;
+        if ok {
+            self.write_memory_raw(address, size, value)?;
         }
-        for offset in 0..size {
-            self.memory[start + offset] = ((value >> (offset * 8)) & 0xFF) as u8;
-        }
-        if self.record_trace && self.capturing_mem {
-            self.mem_stage.get_mut().push(MemAccess {
-                addr: address,
-                size: size as u8,
-                is_write: true,
-            });
-        }
+        self.record_mem_access(MemAccess {
+            addr: address,
+            size: size as u8,
+            is_write: ok,
+            kind: MemAccessKind::StoreConditional { success: ok },
+        });
+        Ok(ok)
+    }
+
+    fn atomic_rmw(
+        &mut self,
+        op: tir::sem::AtomicRmwOp,
+        address: u64,
+        size: usize,
+        value: u64,
+        _ord: tir::sem::MemOrdering,
+    ) -> Result<u64, SimTrap> {
+        let old = self.read_memory_raw(address, size)?;
+        let width = (size as u32) * 8;
+        let result = op.apply(
+            tir::utils::APInt::new(width, old),
+            tir::utils::APInt::new(width, value),
+        );
+        self.write_memory_raw(address, size, result.to_u64())?;
+        self.record_mem_access(MemAccess {
+            addr: address,
+            size: size as u8,
+            is_write: true,
+            kind: MemAccessKind::AtomicRmw,
+        });
+        Ok(old)
+    }
+
+    fn fence(&mut self, pred: u32, succ: u32, kind: u32) -> Result<(), SimTrap> {
+        self.record_mem_access(MemAccess {
+            addr: 0,
+            size: 0,
+            is_write: false,
+            kind: MemAccessKind::Fence {
+                pred: pred as u8,
+                succ: succ as u8,
+                ifence: kind == 1,
+            },
+        });
         Ok(())
     }
 
@@ -1102,6 +1225,7 @@ mod tests {
                 addr: data,
                 size: 4,
                 is_write: false,
+                ..Default::default()
             }]
         );
         assert_eq!(
@@ -1110,6 +1234,7 @@ mod tests {
                 addr: data + 4,
                 size: 4,
                 is_write: true,
+                ..Default::default()
             }]
         );
         assert!(executor.mem_trace()[2].is_empty(), "add touches no memory");
@@ -1578,5 +1703,221 @@ mod tests {
         MachineContext::write_register(&mut ex, "GPR8", 0, APInt::new(8, 0x7F)).unwrap();
         let rax = MachineContext::read_register(&ex, "GPR", 0).unwrap();
         assert_eq!((rax.to_u64(), rax.width()), (0x7F, 64));
+    }
+
+    const ATOMIC_BASE: u64 = 0x8000_0000;
+    const ATOMIC_ADDR: u64 = ATOMIC_BASE + 0x40;
+
+    #[test]
+    fn lr_then_sc_at_same_key_succeeds_and_writes() {
+        use tir::backend::MachineContext;
+        use tir::sem::MemOrdering;
+        let mut ex = Executor::new_at(4096, ATOMIC_BASE);
+        MachineContext::write_memory(&mut ex, ATOMIC_ADDR, 4, 0x1111_1111).unwrap();
+
+        let old = ex
+            .load_reserved(ATOMIC_ADDR, 4, MemOrdering::Relaxed)
+            .unwrap();
+        assert_eq!(old, 0x1111_1111);
+        let ok = ex
+            .store_conditional(ATOMIC_ADDR, 4, 0x2222_2222, MemOrdering::Relaxed)
+            .unwrap();
+        assert!(ok);
+        assert_eq!(
+            MachineContext::read_memory(&ex, ATOMIC_ADDR, 4).unwrap(),
+            0x2222_2222
+        );
+    }
+
+    #[test]
+    fn sc_without_reservation_fails_and_leaves_memory() {
+        use tir::backend::MachineContext;
+        use tir::sem::MemOrdering;
+        let mut ex = Executor::new_at(4096, ATOMIC_BASE);
+        MachineContext::write_memory(&mut ex, ATOMIC_ADDR, 4, 0x1111_1111).unwrap();
+
+        let ok = ex
+            .store_conditional(ATOMIC_ADDR, 4, 0x2222_2222, MemOrdering::Relaxed)
+            .unwrap();
+        assert!(!ok);
+        assert_eq!(
+            MachineContext::read_memory(&ex, ATOMIC_ADDR, 4).unwrap(),
+            0x1111_1111
+        );
+    }
+
+    #[test]
+    fn sc_with_mismatched_address_or_size_fails() {
+        use tir::backend::MachineContext;
+        use tir::sem::MemOrdering;
+        let mut ex = Executor::new_at(4096, ATOMIC_BASE);
+        MachineContext::write_memory(&mut ex, ATOMIC_ADDR, 4, 0x1111_1111).unwrap();
+
+        ex.load_reserved(ATOMIC_ADDR, 4, MemOrdering::Relaxed)
+            .unwrap();
+        let wrong_addr = ex
+            .store_conditional(ATOMIC_ADDR + 4, 4, 0x2222_2222, MemOrdering::Relaxed)
+            .unwrap();
+        assert!(
+            !wrong_addr,
+            "different address must not match the reservation"
+        );
+
+        ex.load_reserved(ATOMIC_ADDR, 4, MemOrdering::Relaxed)
+            .unwrap();
+        let wrong_size = ex
+            .store_conditional(ATOMIC_ADDR, 2, 0x2222, MemOrdering::Relaxed)
+            .unwrap();
+        assert!(!wrong_size, "different size must not match the reservation");
+    }
+
+    #[test]
+    fn second_sc_after_success_fails() {
+        use tir::backend::MachineContext;
+        use tir::sem::MemOrdering;
+        let mut ex = Executor::new_at(4096, ATOMIC_BASE);
+        ex.load_reserved(ATOMIC_ADDR, 4, MemOrdering::Relaxed)
+            .unwrap();
+        assert!(
+            ex.store_conditional(ATOMIC_ADDR, 4, 0x1, MemOrdering::Relaxed)
+                .unwrap()
+        );
+        assert!(
+            !ex.store_conditional(ATOMIC_ADDR, 4, 0x2, MemOrdering::Relaxed)
+                .unwrap(),
+            "the reservation is consumed by the first successful SC"
+        );
+    }
+
+    #[test]
+    fn plain_store_between_lr_and_sc_keeps_reservation() {
+        use tir::backend::MachineContext;
+        use tir::sem::MemOrdering;
+        let mut ex = Executor::new_at(4096, ATOMIC_BASE);
+        ex.load_reserved(ATOMIC_ADDR, 4, MemOrdering::Relaxed)
+            .unwrap();
+        // Documented policy: a plain store by the same hart does not clear the
+        // reservation, so the following SC still succeeds.
+        MachineContext::write_memory(&mut ex, ATOMIC_ADDR, 4, 0xDEAD_BEEF).unwrap();
+        assert!(
+            ex.store_conditional(ATOMIC_ADDR, 4, 0x2222_2222, MemOrdering::Relaxed)
+                .unwrap()
+        );
+        assert_eq!(
+            MachineContext::read_memory(&ex, ATOMIC_ADDR, 4).unwrap(),
+            0x2222_2222
+        );
+    }
+
+    #[test]
+    fn atomic_rmw_add_min_maxu() {
+        use tir::backend::MachineContext;
+        use tir::sem::{AtomicRmwOp, MemOrdering};
+        let mut ex = Executor::new_at(4096, ATOMIC_BASE);
+
+        MachineContext::write_memory(&mut ex, ATOMIC_ADDR, 4, 5).unwrap();
+        let old = ex
+            .atomic_rmw(AtomicRmwOp::Add, ATOMIC_ADDR, 4, 7, MemOrdering::Relaxed)
+            .unwrap();
+        assert_eq!(old, 5, "amo returns the old value");
+        assert_eq!(
+            MachineContext::read_memory(&ex, ATOMIC_ADDR, 4).unwrap(),
+            12
+        );
+
+        // Unsigned max at 32 bits: 0x8000_0000 (high bit set) beats 1.
+        MachineContext::write_memory(&mut ex, ATOMIC_ADDR, 4, 0x8000_0000).unwrap();
+        let old = ex
+            .atomic_rmw(AtomicRmwOp::MaxU, ATOMIC_ADDR, 4, 1, MemOrdering::Relaxed)
+            .unwrap();
+        assert_eq!(old, 0x8000_0000);
+        assert_eq!(
+            MachineContext::read_memory(&ex, ATOMIC_ADDR, 4).unwrap(),
+            0x8000_0000
+        );
+
+        // Signed min at 32 bits: 0xFFFF_FFFF (-1) beats 5.
+        MachineContext::write_memory(&mut ex, ATOMIC_ADDR, 4, 5).unwrap();
+        let old = ex
+            .atomic_rmw(
+                AtomicRmwOp::Min,
+                ATOMIC_ADDR,
+                4,
+                0xFFFF_FFFF,
+                MemOrdering::Relaxed,
+            )
+            .unwrap();
+        assert_eq!(old, 5);
+        assert_eq!(
+            MachineContext::read_memory(&ex, ATOMIC_ADDR, 4).unwrap(),
+            0xFFFF_FFFF
+        );
+    }
+
+    #[test]
+    fn fence_records_kind_and_changes_nothing() {
+        use tir::backend::MachineContext;
+        let mut ex = Executor::new_at(4096, ATOMIC_BASE);
+        MachineContext::write_register(&mut ex, "GPR", 1, APInt::new(64, 7)).unwrap();
+        ex.record_trace = true;
+        ex.capturing_mem = true;
+
+        ex.fence(0b0011, 0b0011, 0).unwrap();
+        {
+            let staged = ex.mem_stage.borrow();
+            assert_eq!(staged.len(), 1);
+            assert_eq!(
+                staged[0].kind,
+                crate::MemAccessKind::Fence {
+                    pred: 0b0011,
+                    succ: 0b0011,
+                    ifence: false,
+                }
+            );
+        }
+        ex.fence(0, 0, 1).unwrap();
+        assert_eq!(
+            ex.mem_stage.borrow()[1].kind,
+            crate::MemAccessKind::Fence {
+                pred: 0,
+                succ: 0,
+                ifence: true,
+            }
+        );
+        assert_eq!(
+            MachineContext::read_register(&ex, "GPR", 1)
+                .unwrap()
+                .to_u64(),
+            7,
+            "fence leaves architectural state untouched"
+        );
+    }
+
+    #[test]
+    fn mem_trace_records_atomic_kinds() {
+        use tir::backend::MachineContext;
+        use tir::sem::{AtomicRmwOp, MemOrdering};
+        let mut ex = Executor::new_at(4096, ATOMIC_BASE);
+        // Set up memory before enabling capture so these writes are not recorded.
+        MachineContext::write_memory(&mut ex, ATOMIC_ADDR, 4, 5).unwrap();
+        ex.record_trace = true;
+        ex.capturing_mem = true;
+
+        ex.load_reserved(ATOMIC_ADDR, 4, MemOrdering::Relaxed)
+            .unwrap();
+        ex.store_conditional(ATOMIC_ADDR, 4, 6, MemOrdering::Relaxed)
+            .unwrap();
+        ex.atomic_rmw(AtomicRmwOp::Add, ATOMIC_ADDR, 4, 1, MemOrdering::Relaxed)
+            .unwrap();
+
+        let kinds: Vec<_> = ex.mem_stage.borrow().iter().map(|a| a.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::MemAccessKind::LoadReserved,
+                crate::MemAccessKind::StoreConditional { success: true },
+                crate::MemAccessKind::AtomicRmw,
+            ]
+        );
     }
 }
