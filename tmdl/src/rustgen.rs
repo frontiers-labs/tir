@@ -2745,11 +2745,21 @@ fn analyze_flag_definer_semantics(
         flag_exprs.push((index, &assign.value));
     }
 
-    // Composition binds each operand to a pattern symbol the emitted pair
-    // reads back as a register; immediate-operand definers are not derived.
-    if operands
+    // Composition binds each register operand to a pattern symbol the emitted
+    // pair reads back as a register, and at most one immediate operand to a
+    // constant symbol feeding the composed comparison. Any other operand shape
+    // is not derived.
+    let immediate_operands = operands
         .iter()
-        .any(|(_, ty)| !matches!(ty, Type::Struct(_) | Type::String))
+        .filter(|(_, ty)| matches!(ty, Type::Bits(_) | Type::Integer))
+        .count();
+    if immediate_operands > 1
+        || operands.iter().any(|(_, ty)| {
+            !matches!(
+                ty,
+                Type::Struct(_) | Type::String | Type::Bits(_) | Type::Integer
+            )
+        })
     {
         return None;
     }
@@ -3258,6 +3268,52 @@ fn register_class_width_with_isa(
     }
 }
 
+/// The architectural bit-width of each of a definer's comparison-operand
+/// symbols. A register operand's width comes from its class; the immediate
+/// operand shares it — comparison operands are the same architectural width, so
+/// the composed condition proves against a canonical comparison over full-width
+/// symbols. `None` if a register width is unresolved or a symbol is untyped.
+fn definer_symbol_widths(
+    files: &[ast::File],
+    d: &FlagInst<'_>,
+    d_sem: &FlagDefinerSemantics,
+) -> Option<Vec<u32>> {
+    let mut widths = vec![0u32; d_sem.variable_symbols.len()];
+    let mut imm_symbol: Option<u32> = None;
+    let mut register_width: Option<u32> = None;
+    for (op_name, op_ty) in &d.ops {
+        let Some(&symbol) = d_sem.variable_symbols.get(op_name) else {
+            continue;
+        };
+        match op_ty {
+            Type::Struct(class_name) => {
+                let width = register_class_width_with_isa(files, class_name, &d.isa_param_values)?;
+                widths[symbol as usize] = width;
+                register_width = Some(width);
+            }
+            Type::Bits(_) | Type::Integer => imm_symbol = Some(symbol),
+            _ => {}
+        }
+    }
+    if let Some(symbol) = imm_symbol {
+        widths[symbol as usize] = register_width?;
+    }
+    if widths.contains(&0) {
+        return None;
+    }
+    Some(widths)
+}
+
+/// The pattern symbols bound to a definer's immediate operands (there is at most
+/// one), for canonicalization and immediate-range enforcement.
+fn definer_immediate_symbols(d: &FlagInst<'_>, d_sem: &FlagDefinerSemantics) -> HashSet<u32> {
+    d.ops
+        .iter()
+        .filter(|(_, ty)| matches!(ty, Type::Bits(_) | Type::Integer))
+        .filter_map(|(name, _)| d_sem.variable_symbols.get(name).copied())
+        .collect()
+}
+
 /// A flag-mediated instruction's resolved shape, shared by definer, branch and
 /// reader analysis.
 struct FlagInst<'a> {
@@ -3283,31 +3339,46 @@ fn emit_flag_definer_prelude(
     let mut operand_constraint_entries: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut prelude_attr_steps: Vec<proc_macro2::TokenStream> = Vec::new();
     for (op_name, op_ty) in &d.ops {
-        let Type::Struct(class_name) = op_ty else {
-            continue;
-        };
         let Some(&symbol) = d_sem.variable_symbols.get(op_name) else {
             continue;
         };
         let op_name_lit = proc_macro2::Literal::string(op_name);
-        let class_id = reg_class_id(class_name);
         let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
-        operand_constraint_entries
-            .push(quote! { (#symbol_lit, tir::graph::OperandConstraint::Register) });
-        prelude_attr_steps.push(quote! {
-            let src = m
-                .value_binding(#symbol_lit)
-                .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
-            builder = builder.attr(
-                #op_name_lit,
-                tir::attributes::AttributeValue::Register(
-                    tir::attributes::RegisterAttr::Virtual {
-                        id: src.number(),
-                        class: Some(#class_id),
-                    },
-                ),
-            );
-        });
+        match op_ty {
+            Type::Struct(class_name) => {
+                let class_id = reg_class_id(class_name);
+                operand_constraint_entries
+                    .push(quote! { (#symbol_lit, tir::graph::OperandConstraint::Register) });
+                prelude_attr_steps.push(quote! {
+                    let src = m
+                        .value_binding(#symbol_lit)
+                        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                    builder = builder.attr(
+                        #op_name_lit,
+                        tir::attributes::AttributeValue::Register(
+                            tir::attributes::RegisterAttr::Virtual {
+                                id: src.number(),
+                                class: Some(#class_id),
+                            },
+                        ),
+                    );
+                });
+            }
+            Type::Bits(_) | Type::Integer => {
+                operand_constraint_entries
+                    .push(quote! { (#symbol_lit, tir::graph::OperandConstraint::Immediate) });
+                prelude_attr_steps.push(quote! {
+                    let v = m
+                        .int_binding(#symbol_lit)
+                        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                    builder = builder.attr(
+                        #op_name_lit,
+                        tir::attributes::AttributeValue::Int(v),
+                    );
+                });
+            }
+            _ => continue,
+        }
     }
 
     if emitted_preludes.insert(d.inst.name.clone()) {
@@ -3472,22 +3543,9 @@ fn emit_flag_branch_rules(
             if d_sem.variable_symbols.len() != 2 {
                 continue;
             }
-            let mut symbol_widths = vec![0u32; d_sem.variable_symbols.len()];
-            let mut widths_ok = true;
-            for (op_name, op_ty) in &d.ops {
-                let (Type::Struct(class_name), Some(&symbol)) =
-                    (op_ty, d_sem.variable_symbols.get(op_name))
-                else {
-                    continue;
-                };
-                match register_class_width_with_isa(files, class_name, &d.isa_param_values) {
-                    Some(width) => symbol_widths[symbol as usize] = width,
-                    None => widths_ok = false,
-                }
-            }
-            if !widths_ok || symbol_widths.contains(&0) {
+            let Some(symbol_widths) = definer_symbol_widths(files, d, d_sem) else {
                 continue;
-            }
+            };
 
             let mut spliced = tir::sem::SemGraph::new();
             let substitute: HashMap<u32, tir::graph::NodeId> = b_sem
@@ -3512,9 +3570,12 @@ fn emit_flag_branch_rules(
                 continue;
             };
 
-            let no_immediates: HashSet<u32> = HashSet::new();
-            let (canon_pattern, canon_root, forced_widths) =
-                tir::sem::canonicalize_for_selection(&candidate, candidate_root, &no_immediates);
+            let immediate_symbols = definer_immediate_symbols(d, d_sem);
+            let (canon_pattern, canon_root, forced_widths) = tir::sem::canonicalize_for_selection(
+                &candidate,
+                candidate_root,
+                &immediate_symbols,
+            );
             let mut pattern_widths = tir::sem::infer_widths(&canon_pattern, |_| None);
             for (index, forced) in forced_widths.iter().enumerate() {
                 if forced.is_some() {
@@ -3528,6 +3589,11 @@ fn emit_flag_branch_rules(
                 &d_sem.variable_symbols,
                 &width_sensitive_symbols(&canon_pattern, &pattern_widths),
             );
+            let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
+                &d_sem.graph,
+                &d.ops,
+                &d_sem.variable_symbols,
+            ));
 
             let target_symbol = d_sem
                 .variable_symbols
@@ -3549,8 +3615,11 @@ fn emit_flag_branch_rules(
 
             let base_cost = {
                 use tir::graph::Dag;
-                // The condition pattern plus the definer instruction.
-                canon_pattern.len() as u32 + 1
+                // The condition pattern plus the two emitted instructions (the
+                // definer and the branch): a fused compare-and-branch is never
+                // cheaper than a single-instruction direct branch (e.g. arm64
+                // `cbz`) that covers the same guard.
+                canon_pattern.len() as u32 + 2
             };
             let base_cost_lit = proc_macro2::Literal::u32_unsuffixed(base_cost);
             let d_mnemonic_lit = proc_macro2::Literal::string(&d.mnemonic);
@@ -3601,7 +3670,8 @@ fn emit_flag_branch_rules(
                         })
                         .with_prelude_emitter(#prelude_fn_ident)
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
-                        #operand_width_call,
+                        #operand_width_call
+                        #operand_imm_range_call,
                     );
                 }
             });
@@ -3650,22 +3720,9 @@ fn emit_flag_reader_rules(
             if d_sem.variable_symbols.len() != 2 {
                 continue;
             }
-            let mut symbol_widths = vec![0u32; d_sem.variable_symbols.len()];
-            let mut widths_ok = true;
-            for (op_name, op_ty) in &d.ops {
-                let (Type::Struct(class_name), Some(&symbol)) =
-                    (op_ty, d_sem.variable_symbols.get(op_name))
-                else {
-                    continue;
-                };
-                match register_class_width_with_isa(files, class_name, &d.isa_param_values) {
-                    Some(width) => symbol_widths[symbol as usize] = width,
-                    None => widths_ok = false,
-                }
-            }
-            if !widths_ok || symbol_widths.contains(&0) {
+            let Some(symbol_widths) = definer_symbol_widths(files, d, d_sem) else {
                 continue;
-            }
+            };
 
             let mut spliced = tir::sem::SemGraph::new();
             let substitute: HashMap<u32, tir::graph::NodeId> = r_sem
@@ -3725,9 +3782,9 @@ fn emit_flag_reader_rules(
             pattern.add_edge(if_root, then_);
             pattern.add_edge(if_root, else_);
 
-            let no_immediates: HashSet<u32> = HashSet::new();
+            let immediate_symbols = definer_immediate_symbols(d, d_sem);
             let (canon_pattern, canon_root, forced_widths) =
-                tir::sem::canonicalize_for_selection(&pattern, if_root, &no_immediates);
+                tir::sem::canonicalize_for_selection(&pattern, if_root, &immediate_symbols);
             let mut pattern_widths = tir::sem::infer_widths(&canon_pattern, |_| None);
             for (index, forced) in forced_widths.iter().enumerate() {
                 if forced.is_some() {
@@ -3741,6 +3798,11 @@ fn emit_flag_reader_rules(
                 &d_sem.variable_symbols,
                 &width_sensitive_symbols(&canon_pattern, &pattern_widths),
             );
+            let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
+                &d_sem.graph,
+                &d.ops,
+                &d_sem.variable_symbols,
+            ));
 
             let Some((_, dest_class)) = r
                 .ops
@@ -3825,7 +3887,8 @@ fn emit_flag_reader_rules(
                         )
                         .with_prelude_emitter(#prelude_fn_ident)
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
-                        #operand_width_call,
+                        #operand_width_call
+                        #operand_imm_range_call,
                     );
                 }
             });

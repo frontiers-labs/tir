@@ -1,0 +1,87 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A comparison against a constant fuses into the `cmp r64, imm` + `jcc` pair
+// derived from the immediate flag definer (`cmp_imm`, 0x81 /7) composed with the
+// EFLAGS-guarded jumps. The constant binds the immediate operand directly rather
+// than materializing into a register.
+
+module {
+  func @slt_imm(%0: !i64) -> !i64 {
+    %c = constant {value = 5} : !i64
+    %1 = cmpi %0, %c {predicate = "slt"} : !i1
+    cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: asm.symbol {name = "slt_imm"
+  // CHECK: x86_64.cmp_imm {dst = %virt0:GPR, imm = 5}
+  // CHECK-NEXT: x86_64.jl {imm = ^bb1}
+  // CHECK-NEXT: x86_64.vbr ^bb2
+
+  func @eq_imm(%0: !i64) -> !i64 {
+    %c = constant {value = 5} : !i64
+    %1 = cmpi %0, %c {predicate = "eq"} : !i1
+    cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: asm.symbol {name = "eq_imm"
+  // CHECK: x86_64.cmp_imm {dst = %virt{{[0-9]+}}:GPR, imm = 5}
+  // CHECK-NEXT: x86_64.je {imm = ^bb1}
+
+  func @ne_imm(%0: !i64) -> !i64 {
+    %c = constant {value = 5} : !i64
+    %1 = cmpi %0, %c {predicate = "ne"} : !i1
+    cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: asm.symbol {name = "ne_imm"
+  // CHECK: x86_64.cmp_imm {dst = %virt{{[0-9]+}}:GPR, imm = 5}
+  // CHECK-NEXT: x86_64.jne {imm = ^bb1}
+
+  func @ult_imm(%0: !i64) -> !i64 {
+    %c = constant {value = 5} : !i64
+    %1 = cmpi %0, %c {predicate = "ult"} : !i1
+    cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: asm.symbol {name = "ult_imm"
+  // CHECK: x86_64.cmp_imm {dst = %virt{{[0-9]+}}:GPR, imm = 5}
+  // CHECK-NEXT: x86_64.jb {imm = ^bb1}
+
+  func @slt_zero(%0: !i64) -> !i64 {
+    %c = constant {value = 0} : !i64
+    %1 = cmpi %0, %c {predicate = "slt"} : !i1
+    cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // A zero constant fuses the same way (x86 has no compare-against-zero branch).
+  // CHECK: asm.symbol {name = "slt_zero"
+  // CHECK: x86_64.cmp_imm {dst = %virt{{[0-9]+}}:GPR, imm = 0}
+  // CHECK-NEXT: x86_64.jl {imm = ^bb1}
+
+  module_end
+}

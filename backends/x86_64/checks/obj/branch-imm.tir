@@ -1,0 +1,40 @@
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
+
+// The fused immediate compare selects the REX.W `cmp r64, imm32` (0x81 /7), then
+// `canonicalize_encodings` shrinks it to the `cmp r64, imm8` short form (0x83 /7)
+// when the constant fits a sign-extended byte: `5` encodes as imm8, `5000` stays
+// imm32.
+
+module {
+  func @small(%0: !i64) -> !i64 {
+    %c = constant {value = 5} : !i64
+    %1 = cmpi %0, %c {predicate = "slt"} : !i1
+    cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: small:
+  // CHECK-NEXT: [0x48, 0x83, 0xFF, 0x05]
+  // CHECK-NEXT: [0x0F, 0x8C, 0x05, 0x00, 0x00, 0x00]
+
+  func @big(%0: !i64) -> !i64 {
+    %c = constant {value = 5000} : !i64
+    %1 = cmpi %0, %c {predicate = "slt"} : !i1
+    cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: big:
+  // CHECK-NEXT: [0x48, 0x81, 0xFF, 0x88, 0x13, 0x00, 0x00]
+  // CHECK-NEXT: [0x0F, 0x8C, 0x05, 0x00, 0x00, 0x00]
+
+  module_end
+}
