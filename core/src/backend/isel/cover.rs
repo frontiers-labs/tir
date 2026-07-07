@@ -38,7 +38,7 @@ impl CaptureBindings {
     pub(crate) fn to_rule_match(
         &self,
         egraph: &SemEGraph,
-        class_value: &HashMap<Id, ValueId>,
+        class_values: &HashMap<Id, Vec<ValueId>>,
     ) -> RuleMatch {
         // A class can carry both a proven constant and a register value (an
         // assumption merges a condition with its truth value); record both so
@@ -49,7 +49,7 @@ impl CaptureBindings {
             if let Some(v) = class_int_binding(egraph, *class) {
                 int_bindings.push((*sym, v));
             }
-            if let Some(v) = class_value_binding(egraph, class_value, *class) {
+            if let Some(v) = class_value_binding(egraph, class_values, *class) {
                 value_bindings.push((*sym, v));
             }
         }
@@ -115,7 +115,7 @@ pub(crate) fn build_eclass_cover(
     egraph: &SemEGraph,
     op_roots: &HashSet<Id>,
     classes: &[Id],
-    must_materialize: &HashSet<Id>,
+    must_materialize: impl Fn(Id) -> bool,
     dead_allowed: &HashSet<Id>,
     matches: &[PbqpIselMatch],
 ) -> Option<ClassCover> {
@@ -140,7 +140,7 @@ pub(crate) fn build_eclass_cover(
         for binding in &m.bindings.pattern_nodes {
             if binding.is_boundary
                 || binding.pattern_node == m.pattern_root
-                || must_materialize.contains(&egraph.find(binding.class))
+                || must_materialize(egraph.find(binding.class))
             {
                 continue;
             }

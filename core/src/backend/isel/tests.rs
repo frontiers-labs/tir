@@ -2018,3 +2018,173 @@ fn refuses_cross_block_binding_to_non_escaping_value() {
         "the non-escaping dominator value is refused"
     );
 }
+
+/// A two-register `b == d` dominating fact merges the operand classes; the
+/// surviving class covers both a non-escaping dominator def (`d`, unbindable
+/// downstream) and an entry argument (`b`, always bindable). A dominated use of
+/// the merged class must bind through the bindable member — the survivor side
+/// must not hide it. (Operand order `b, d` makes `d` the union survivor.)
+#[test]
+fn eq_fact_binds_through_bindable_member() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let i64_ty = IntegerType::new(&context, 64);
+    let i1 = IntegerType::new(&context, 1);
+    let a = context.create_value(i64_ty, None);
+    let b = context.create_value(i64_ty, None);
+    let k = context.create_value(i64_ty, None);
+    let (a_id, b_id, k_id) = (a.id(), b.id(), k.id());
+    let region = context.create_region();
+    let entry = context.create_block(vec![a, b, k]);
+    let body = context.create_block(vec![]);
+    for block in [&entry, &body] {
+        region.add_block(block.id());
+    }
+    let other = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    // %d = a - k is used only by the guard compare, so it never escapes entry.
+    let mut eb = IRBuilder::new(entry.clone());
+    let d = ops::subi(&context, a_id, k_id, i64_ty).build();
+    let d_res = d.result();
+    eb.insert(d);
+    let cmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(b_id)
+        .rhs(d_res)
+        .predicate("eq")
+        .result_type(i1)
+        .build();
+    let cond = cmp.result();
+    eb.insert(cmp);
+    eb.insert(ops::cond_br(&context, cond, vec![], vec![], body.id(), other.id()).build());
+
+    // Dominated by `b == d`: their classes are one. The add reads `b`, which must
+    // bind though the survivor is `d` (the non-escaping dominator def).
+    let mut bb = IRBuilder::new(body.clone());
+    let r = ops::addi(&context, b_id, k_id, i64_ty).build();
+    let r_res = r.result();
+    bb.insert(r);
+    bb.insert(ops::r#return(&context, r_res).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        Rule::new("sub", atomic_pattern(SymKind::Sub), 1, emit_sub),
+        Rule::new("add", atomic_pattern(SymKind::Add), 1, emit_add),
+        Rule::new(
+            "beq",
+            atomic_pattern(SymKind::Eq),
+            1,
+            emit_fused_branch_marker,
+        )
+        .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
+    ];
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("selection should succeed via the bindable member");
+
+    let body_ops = block_op_list(&context, body.id());
+    let names: Vec<_> = body_ops.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["addi", "return"]);
+    let addi = &body_ops[0];
+    assert!(
+        addi.operands.contains(&b_id),
+        "the add binds the entry-argument member of the merged class"
+    );
+    assert!(
+        !addi.operands.contains(&d_res),
+        "the non-escaping survivor member is not bound"
+    );
+}
+
+/// A branch rule reading the register form of an operand whose class also carries
+/// a constant (merged by an `x == C` fact) must still receive the register value.
+/// The pre-fix guard resolver pushed the immediate exclusively, leaving the
+/// register emitter with no binding; both forms must be recorded.
+#[test]
+fn branch_reads_register_of_constant_merged_operand() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let i64_ty = IntegerType::new(&context, 64);
+    let i1 = IntegerType::new(&context, 1);
+    let x = context.create_value(i64_ty, None);
+    let y = context.create_value(i64_ty, None);
+    let (x_id, y_id) = (x.id(), y.id());
+    let region = context.create_region();
+    let entry = context.create_block(vec![x, y]);
+    let body = context.create_block(vec![]);
+    for block in [&entry, &body] {
+        region.add_block(block.id());
+    }
+    let other = context.create_block(vec![]);
+    let u = context.create_block(vec![]);
+    let v = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    let mut eb = IRBuilder::new(entry.clone());
+    let c = ops::constant(&context, 5, i64_ty).build();
+    let c_res = c.result();
+    eb.insert(c);
+    let ecmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(x_id)
+        .rhs(c_res)
+        .predicate("eq")
+        .result_type(i1)
+        .build();
+    let econd = ecmp.result();
+    eb.insert(ecmp);
+    eb.insert(ops::cond_br(&context, econd, vec![], vec![], body.id(), other.id()).build());
+
+    // Dominated by `x == 5`: x's class carries the constant AND the register x.
+    // The Lt branch rule reads the register form.
+    let mut bb = IRBuilder::new(body.clone());
+    let lt = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(x_id)
+        .rhs(y_id)
+        .predicate("slt")
+        .result_type(i1)
+        .build();
+    let ltc = lt.result();
+    bb.insert(lt);
+    bb.insert(ops::cond_br(&context, ltc, vec![], vec![], u.id(), v.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        branch_rule(),
+        Rule::new(
+            "beq",
+            atomic_pattern(SymKind::Eq),
+            1,
+            emit_fused_branch_marker,
+        )
+        .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
+    ];
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("selection should succeed with the register binding");
+
+    let body_ops = block_op_list(&context, body.id());
+    let names: Vec<_> = body_ops.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br", "br"], "slt fused into a branch");
+    let fused = body_ops[0]
+        .clone()
+        .as_op::<tir::builtin::BranchOp>()
+        .unwrap();
+    assert_eq!(fused.dest(), u.id());
+    assert_eq!(
+        fused.dest_args(),
+        vec![x_id, y_id],
+        "the branch reads register x, not the folded immediate"
+    );
+}

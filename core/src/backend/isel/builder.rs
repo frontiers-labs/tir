@@ -18,17 +18,14 @@ use super::node::{
 
 /// Builds a block's semantic expressions straight into the e-graph: every lowered
 /// node is hash-consed by [`SemEGraph::add`], so the e-graph *is* the interned DAG
-/// (no separate arena). Returns e-class [`Id`]s and records, in `class_value`, which
-/// class computes which op result so an intermediate can later be materialized as a
-/// register value.
+/// (no separate arena). Returns e-class [`Id`]s and records, in `value_to_class`,
+/// the class built for each IR value so operands share and cross-block uses expand.
 pub(crate) struct SemDagBuilder<'a> {
     context: &'a Context,
     value_to_def: &'a HashMap<ValueId, OpId>,
     egraph: &'a mut SemEGraph,
     /// The e-class built for each already-lowered IR value (operand sharing / CSE).
     pub(crate) value_to_class: HashMap<ValueId, Id>,
-    /// First class found to compute each op result (first writer wins, matching CSE).
-    pub(crate) class_value: HashMap<Id, ValueId>,
     /// Serial of the next opaque leaf; each un-lowerable node gets its own.
     opaque_serial: u32,
 }
@@ -44,7 +41,6 @@ impl<'a> SemDagBuilder<'a> {
             value_to_def,
             egraph,
             value_to_class: HashMap::new(),
-            class_value: HashMap::new(),
             opaque_serial: 0,
         }
     }
@@ -138,14 +134,6 @@ impl<'a> SemDagBuilder<'a> {
         self.add_op_node(kind, children, ty, payload)
     }
 
-    /// Record that `class` computes IR `value` (idempotent; first writer wins, which
-    /// is correct since identical computations are the same value under CSE).
-    fn set_value(&mut self, class: Id, value: ValueId) {
-        self.class_value
-            .entry(self.egraph.find(class))
-            .or_insert(value);
-    }
-
     pub(crate) fn build_for_op(&mut self, op: &std::sync::Arc<OpInstance>) -> Option<Id> {
         if let Some(class) = self.build_memory_effect(op) {
             return Some(class);
@@ -154,11 +142,7 @@ impl<'a> SemDagBuilder<'a> {
         let operands = self.build_operands(&op.operands);
         let mut graph = SemGraph::new();
         let root = op.clone().as_dyn_op().semantic_expr(&mut graph)?;
-        let class = self.lower_with_widths(&graph, root, &operands);
-        if let Some(result) = op.results.first() {
-            self.set_value(class, *result);
-        }
-        Some(class)
+        Some(self.lower_with_widths(&graph, root, &operands))
     }
 
     fn build_operands(&mut self, operands: &[ValueId]) -> Vec<Id> {
@@ -187,13 +171,11 @@ impl<'a> SemDagBuilder<'a> {
             let address = self.zero_offset_address(address);
             let bytes = self.add_u64_const(u64::from(bytes));
             let metadata = self.add_u64_const(0);
-            let class = self.add_op_unique(
+            return Some(self.add_op_unique(
                 SymKind::LoadMemory,
                 vec![address, bytes, metadata],
                 Some(result_ty),
-            );
-            self.set_value(class, result);
-            return Some(class);
+            ));
         }
 
         let write_parts = op
@@ -271,15 +253,12 @@ impl<'a> SemDagBuilder<'a> {
                 let mut graph = SemGraph::new();
                 if let Some(root) = def.clone().as_dyn_op().semantic_expr(&mut graph) {
                     let operands = self.build_operands(&def.operands);
-                    let class = self.lower_with_widths(&graph, root, &operands);
-                    self.set_value(class, value);
-                    class
+                    self.lower_with_widths(&graph, root, &operands)
                 } else {
                     self.add_input_value(value, value_ty)
                 }
             }
         } else {
-            // A block argument or entry input: no defining op, so a register leaf.
             self.add_input_value(value, value_ty)
         };
 

@@ -310,8 +310,6 @@ struct FunctionSelection {
     /// Every IR value a (canonical) class computes, so a boundary can resolve to a
     /// register value under the dominance rule at emit time.
     class_values: HashMap<Id, Vec<ValueId>>,
-    /// One representative value per class, for cost-model approximation only.
-    class_value: HashMap<Id, ValueId>,
     /// The position of each lowered op within its own block.
     op_position: HashMap<OpId, usize>,
     /// The op defining each IR value (function-wide).
@@ -340,7 +338,81 @@ struct FunctionSelection {
     prepared: HashMap<ValueId, ConditionExpr>,
 }
 
+/// A boundary class resolved to concrete operands for a consumer: the proven
+/// constant it folds to as an immediate, and/or the register value legal under
+/// the dominance rule. A class can carry both (an assumption merges a value with
+/// its truth constant); a valueless (pure or rewrite-introduced) class neither.
+struct Binding {
+    int: Option<APInt>,
+    value: Option<ValueId>,
+}
+
 impl FunctionSelection {
+    /// The base class ids a (scoped-canonical) class covers: the fact scope's
+    /// partition members, or the class itself when no scope is open. The side
+    /// tables are keyed by base reps, so every per-block query aggregates over
+    /// these — an assumption may merge a scoped class over several base keys, and
+    /// a query through the scoped rep must see all of them.
+    fn base_members(&self, class: Id) -> impl Iterator<Item = Id> + '_ {
+        let canon = self.egraph.find(class);
+        let members = self.egraph.scope_members(canon);
+        members
+            .is_empty()
+            .then_some(canon)
+            .into_iter()
+            .chain(members.iter().copied())
+    }
+
+    /// Whether any base member of `class` roots a lowered op (function-wide).
+    fn is_op_root(&self, class: Id) -> bool {
+        self.base_members(class)
+            .any(|m| self.ops_by_root.contains_key(&m))
+    }
+
+    /// Whether any base member of `class` is used as an operand by more than one
+    /// consumer (so a memory effect in it cannot be internalized).
+    fn is_shared(&self, class: Id) -> bool {
+        self.base_members(class)
+            .any(|m| self.shared_classes.contains(&m))
+    }
+
+    /// Whether `class` must keep a materializing alternative: a function-wide
+    /// requirement (any base member) or the block-local `overlay` (fused-branch
+    /// boundaries and materialized guard conditions, keyed by scoped rep).
+    fn requires_materialization(&self, class: Id, overlay: &HashSet<Id>) -> bool {
+        overlay.contains(&class)
+            || self
+                .base_members(class)
+                .any(|m| self.must_materialize.contains(&m))
+    }
+
+    /// Whether any base member of `class` computes an IR value (a candidate for a
+    /// register binding). A class with none is pure / rewrite-introduced.
+    fn has_values(&self, class: Id) -> bool {
+        self.base_members(class)
+            .any(|m| self.class_values.contains_key(&m))
+    }
+
+    /// Resolve `class` to operands for consumer op `consumer` in `block`: the
+    /// proven constant (folds to an immediate) and/or a register value legal under
+    /// the dominance rule. The single resolver behind boundary filtering, guard
+    /// selection, and emission, so collect-time acceptance implies emit-time
+    /// success. A valueless class yields neither — resolvable only as an
+    /// introduced dest the caller expects the cover to materialize.
+    fn resolve_binding(
+        &self,
+        dom: &DominatorTree,
+        context: &Context,
+        class: Id,
+        block: BlockId,
+        consumer: OpId,
+    ) -> Binding {
+        Binding {
+            int: class_int_binding(&self.egraph, class),
+            value: self.register_value(dom, context, class, block, consumer),
+        }
+    }
+
     /// The register value to bind `class` as an operand of consumer op `consumer`
     /// in `block`, under the dominance rule: a block argument / entry input; a
     /// same-block def preceding the consumer; or a value defined in a strict
@@ -357,42 +429,39 @@ impl FunctionSelection {
         block: BlockId,
         consumer: OpId,
     ) -> Option<ValueId> {
-        let class = self.egraph.find(class);
-        let candidates = self.class_values.get(&class)?;
         let mut best: Option<((u8, usize, u32), ValueId)> = None;
-        for &v in candidates {
-            let key = match self.value_block.get(&v).copied().flatten() {
-                None => (1u8, 0usize, v.number()),
-                Some(def_block) if def_block == block => {
-                    let def = self.value_to_def[&v];
-                    if !context.get_block(block).is_before(def, consumer) {
-                        continue;
-                    }
-                    (
-                        0,
-                        self.op_position.get(&def).copied().unwrap_or(0),
-                        v.number(),
-                    )
-                }
-                Some(def_block) => {
-                    if def_block == block
-                        || !dom.dominates(def_block, block)
-                        || !self.externally_bound.contains(&v)
-                    {
-                        continue;
-                    }
-                    (2, self.dom_distance(dom, block, def_block), v.number())
-                }
+        for member in self.base_members(class) {
+            let Some(candidates) = self.class_values.get(&member) else {
+                continue;
             };
-            if best.as_ref().is_none_or(|(best_key, _)| key < *best_key) {
-                best = Some((key, v));
+            for &v in candidates {
+                let key = match self.value_block.get(&v).copied().flatten() {
+                    None => (1u8, 0usize, v.number()),
+                    Some(def_block) if def_block == block => {
+                        let def = self.value_to_def[&v];
+                        if !context.get_block(block).is_before(def, consumer) {
+                            continue;
+                        }
+                        (0, self.op_position[&def], v.number())
+                    }
+                    Some(def_block) => {
+                        if !dom.dominates(def_block, block) || !self.externally_bound.contains(&v) {
+                            continue;
+                        }
+                        (2, self.dom_distance(dom, block, def_block), v.number())
+                    }
+                };
+                if best.as_ref().is_none_or(|(best_key, _)| key < *best_key) {
+                    best = Some((key, v));
+                }
             }
         }
         best.map(|(_, v)| v)
     }
 
     /// Steps up the dominator chain from `from` to `to` (closer dominators rank
-    /// first). `usize::MAX` when `to` is not on the chain.
+    /// first). `usize::MAX` when `to` is not on the chain. The tree exposes no
+    /// depth, so ranking dominators by closeness needs this walk.
     fn dom_distance(&self, dom: &DominatorTree, from: BlockId, to: BlockId) -> usize {
         let mut distance = 0;
         let mut current = Some(from);
@@ -407,10 +476,10 @@ impl FunctionSelection {
     }
 
     /// Whether `class` resolves to an operand for `consumer` in `block`: an
-    /// immediate constant; a class with no candidate register value (a pure or
-    /// rewrite-introduced intermediate the cover materializes); or a class with a
-    /// candidate value legal under the dominance rule. A class whose only register
-    /// candidates are cross-block non-escaping values is unresolvable.
+    /// immediate constant; a valueless class (a pure or rewrite-introduced
+    /// intermediate the cover materializes); or a class with a candidate value
+    /// legal under the dominance rule. A class whose only register candidates are
+    /// cross-block non-escaping values is unresolvable.
     fn boundary_resolvable(
         &self,
         dom: &DominatorTree,
@@ -419,16 +488,8 @@ impl FunctionSelection {
         block: BlockId,
         consumer: OpId,
     ) -> bool {
-        if class_int_binding(&self.egraph, class).is_some() {
-            return true;
-        }
-        match self.class_values.get(&self.egraph.find(class)) {
-            None => true,
-            Some(values) if values.is_empty() => true,
-            Some(_) => self
-                .register_value(dom, context, class, block, consumer)
-                .is_some(),
-        }
+        let binding = self.resolve_binding(dom, context, class, block, consumer);
+        binding.int.is_some() || binding.value.is_some() || !self.has_values(class)
     }
 }
 
@@ -571,17 +632,53 @@ impl InstructionSelectPass {
         let facts = analyses.get::<DominatingEdgeFacts>(context, root);
 
         let mut fs = self.build_function_selection(context, op, &facts);
+        // A fact-free block sees exactly the base graph, so every value pattern's
+        // e-match is block-independent: search once here and reuse for all such
+        // blocks (fact-bearing blocks re-search under their scope).
+        let base_matches = self.base_value_matches(&fs, context);
         for region_id in &op.op().regions {
             let region = context.get_region(*region_id);
             for block in region.iter(context.clone()) {
                 if block.is_empty() {
                     continue;
                 }
-                let plan =
-                    self.solve_block(context, &block, &mut fs, &dom, facts.facts(block.id()));
+                let plan = self.solve_block(
+                    context,
+                    &block,
+                    &mut fs,
+                    &dom,
+                    facts.facts(block.id()),
+                    &base_matches,
+                );
                 self.plans.insert(block.id(), plan);
             }
         }
+    }
+
+    /// Search every value pattern over the base graph once, honoring the same
+    /// legality a fact-free block's solve applies (boundary constraints, and
+    /// interior nodes restricted to pure or function-wide op-root classes). A
+    /// block narrows this superset to its own op-roots. Non-value patterns get an
+    /// empty slot so indices line up with `compiled_patterns`.
+    fn base_value_matches(
+        &self,
+        fs: &FunctionSelection,
+        context: &Context,
+    ) -> Vec<Vec<EMatch<u32>>> {
+        self.compiled_patterns
+            .iter()
+            .map(|compiled| {
+                if self.rules[compiled.rule_index].kind != RuleKind::Value {
+                    return Vec::new();
+                }
+                let pattern_root = compiled.pattern.root();
+                compiled
+                    .pattern
+                    .search_with_legality(&fs.egraph, &|node, class| {
+                        value_match_allowed(fs, context, compiled, pattern_root, node, class)
+                    })
+            })
+            .collect()
     }
 
     /// Lower every block of the function into one shared, base-saturated e-graph
@@ -707,7 +804,8 @@ impl InstructionSelectPass {
 
         rewrites::saturate(context, &mut egraph, &self.rewrites, Default::default());
 
-        // Canonicalize the side tables through `find`.
+        // Canonicalize the side tables through `find`: saturation may merge classes,
+        // so every id recorded against the pre-saturation graph is re-resolved here.
         let mut ops_by_root: HashMap<Id, Vec<OpId>> = HashMap::new();
         let mut op_root: HashMap<OpId, Id> = HashMap::new();
         for (&op, &root) in &roots_by_op {
@@ -736,10 +834,6 @@ impl InstructionSelectPass {
             values.sort_by_key(|v| v.number());
             values.dedup();
         }
-        let class_value: HashMap<Id, ValueId> = class_values
-            .iter()
-            .filter_map(|(&class, values)| values.first().map(|&v| (class, v)))
-            .collect();
 
         let mut value_block: HashMap<ValueId, Option<BlockId>> = HashMap::new();
         for values in class_values.values() {
@@ -794,12 +888,13 @@ impl InstructionSelectPass {
         let guard_ops: HashSet<OpId> = guards.values().flatten().map(|g| g.op).collect();
         let mut must_materialize = HashSet::new();
         for (&op, &root) in &roots_by_op {
-            let def_block = op_block[&op];
             let escapes = context.get_op(op).results.iter().any(|result| {
-                context.get_value(*result).uses().iter().any(|u| {
-                    op_block.get(&u.op()).copied() != Some(def_block)
-                        || (!roots_by_op.contains_key(&u.op()) && !guard_ops.contains(&u.op()))
-                })
+                // (a) a use in another block — captured exactly by `externally_bound`.
+                externally_bound.contains(result)
+                    // (b) a same-block use no match reaches and that is not a guard.
+                    || context.get_value(*result).uses().iter().any(|u| {
+                        !roots_by_op.contains_key(&u.op()) && !guard_ops.contains(&u.op())
+                    })
             });
             if escapes {
                 must_materialize.insert(egraph.find(root));
@@ -815,7 +910,6 @@ impl InstructionSelectPass {
             ops_by_root,
             op_root,
             class_values,
-            class_value,
             op_position,
             value_to_def,
             value_block,
@@ -838,6 +932,7 @@ impl InstructionSelectPass {
         fs: &mut FunctionSelection,
         dom: &DominatorTree,
         facts: &[EdgeFact],
+        base_matches: &[Vec<EMatch<u32>>],
     ) -> Result<BlockPlan, String> {
         let scoped = !facts.is_empty();
         if scoped {
@@ -852,7 +947,10 @@ impl InstructionSelectPass {
             egraph.rebuild();
             rewrites::saturate(context, egraph, &self.rewrites, Default::default());
         }
-        let plan = self.solve_block_inner(context, block, fs, dom);
+        // Under a scope the graph differs from the base, so re-search; a fact-free
+        // block reuses the cached base matches.
+        let cached = (!scoped).then_some(base_matches);
+        let plan = self.solve_block_inner(context, block, fs, dom, cached);
         if scoped {
             fs.egraph.pop_context();
         }
@@ -1000,6 +1098,7 @@ impl InstructionSelectPass {
         block: &Block,
         fs: &FunctionSelection,
         dom: &DominatorTree,
+        base_matches: Option<&[Vec<EMatch<u32>>]>,
     ) -> Result<BlockPlan, String> {
         let block_id = block.id();
         let op_ids = block.op_ids();
@@ -1013,20 +1112,15 @@ impl InstructionSelectPass {
         }
 
         // The earliest op of B rooting each class (for costing / the Emit anchor);
-        // its keys are B's op-root classes.
+        // its keys are B's op-root classes. Block order visits earliest first, so
+        // the first insertion per class already wins.
         let mut block_op_by_root: HashMap<Id, OpId> = HashMap::new();
         for &op_id in &op_ids {
             let Some(&root) = fs.op_root.get(&op_id) else {
                 continue;
             };
-            let root = fs.egraph.find(root);
             block_op_by_root
-                .entry(root)
-                .and_modify(|existing| {
-                    if fs.op_position[&op_id] < fs.op_position[existing] {
-                        *existing = op_id;
-                    }
-                })
+                .entry(fs.egraph.find(root))
                 .or_insert(op_id);
         }
         let block_roots: HashSet<Id> = block_op_by_root.keys().copied().collect();
@@ -1041,18 +1135,22 @@ impl InstructionSelectPass {
             dom,
             block_id,
             &op_refs,
-            &block_roots,
             &block_op_by_root,
             &guard_classes,
+            base_matches,
         );
+
+        // Search the branch rules once for the whole block, indexed by condition
+        // class, so each guard just looks up its hits.
+        let guard_branch_hits = self.guard_branch_hits(context, fs, guards);
 
         // Resolve each guarded terminator: fuse its condition into a branch-rule
         // instruction when one matches, else fall back to the target's
         // branch-if-nonzero (which needs the condition materialized). Fused
         // branches read their operands as registers, so those classes join the
-        // materialization set; a condition consumed only by its fused branch may
-        // instead go Dead (its defining op is erased).
-        let mut must_materialize = fs.must_materialize.clone();
+        // block's materialization overlay; a condition consumed only by its fused
+        // branch may instead go Dead (its defining op is erased).
+        let mut mm_overlay: HashSet<Id> = HashSet::new();
         let mut fused_conditions = HashSet::new();
         let mut terminators = Vec::new();
         for guard in guards {
@@ -1078,10 +1176,14 @@ impl InstructionSelectPass {
                 });
                 continue;
             }
-            match self.select_guard_branch(context, fs, dom, block_id, guard) {
+            let candidates = guard_branch_hits
+                .get(&class)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            match self.best_guard_branch(context, fs, dom, block_id, guard, candidates) {
                 Some((rule_index, m, boundary_classes)) => {
                     for boundary in boundary_classes {
-                        must_materialize.insert(fs.egraph.find(boundary));
+                        mm_overlay.insert(fs.egraph.find(boundary));
                     }
                     fused_conditions.insert(class);
                     terminators.push(TerminatorPlan::Guard {
@@ -1091,7 +1193,7 @@ impl InstructionSelectPass {
                     });
                 }
                 None => {
-                    must_materialize.insert(class);
+                    mm_overlay.insert(class);
                     terminators.push(TerminatorPlan::Guard {
                         op: guard.op,
                         branch: GuardBranch::Nonzero {
@@ -1114,7 +1216,7 @@ impl InstructionSelectPass {
         let dead_allowed: HashSet<Id> = fused_conditions
             .iter()
             .copied()
-            .filter(|class| !must_materialize.contains(class))
+            .filter(|class| !fs.requires_materialization(*class, &mm_overlay))
             .collect();
 
         if let Some(message) = completeness_error(&fs.egraph, &block_roots, &matches, &dead_allowed)
@@ -1132,7 +1234,7 @@ impl InstructionSelectPass {
                 let Some(class) = fs.op_root.get(&op_id).map(|c| fs.egraph.find(*c)) else {
                     continue;
                 };
-                if !must_materialize.contains(&class)
+                if !fs.requires_materialization(class, &mm_overlay)
                     && class_int_binding(&fs.egraph, class).is_some()
                 {
                     op_decisions.insert(op_id, BlockDecision::Consume);
@@ -1154,7 +1256,7 @@ impl InstructionSelectPass {
             &fs.egraph,
             &block_roots,
             &covered,
-            &must_materialize,
+            |class| fs.requires_materialization(class, &mm_overlay),
             &dead_allowed,
             &matches,
         ) else {
@@ -1211,7 +1313,7 @@ impl InstructionSelectPass {
                 );
             } else if internal_classes.contains(&class) {
                 op_decisions.insert(op_id, BlockDecision::Consume);
-            } else if !must_materialize.contains(&class)
+            } else if !fs.requires_materialization(class, &mm_overlay)
                 && class_int_binding(&fs.egraph, class).is_some()
             {
                 // The class is proven constant under the block's assumption:
@@ -1232,75 +1334,114 @@ impl InstructionSelectPass {
     /// class: the rule, the operand bindings (with the taken target bound as a
     /// block), and the boundary classes the branch reads as registers. `None`
     /// when no branch rule matches or an operand is unresolvable at `block`.
-    fn select_guard_branch(
+    /// Every conditional-branch rule match over the block's (scoped) graph,
+    /// indexed by condition class, so each guard resolves against its own hits
+    /// without re-searching per guard. Empty when the block has no guards.
+    fn guard_branch_hits(
+        &self,
+        context: &Context,
+        fs: &FunctionSelection,
+        guards: &[BlockGuard],
+    ) -> HashMap<Id, Vec<(usize, EMatch<u32>)>> {
+        let mut hits: HashMap<Id, Vec<(usize, EMatch<u32>)>> = HashMap::new();
+        if guards.is_empty() {
+            return hits;
+        }
+        for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
+            if !matches!(
+                self.rules[compiled.rule_index].kind,
+                RuleKind::CondBranch { .. }
+            ) {
+                continue;
+            }
+            for m in compiled.search(&fs.egraph, context) {
+                hits.entry(fs.egraph.find(m.root))
+                    .or_default()
+                    .push((pattern_index, m));
+            }
+        }
+        hits
+    }
+
+    /// The best conditional-branch rule among a guard's condition-class hits: the
+    /// rule, the operand bindings (taken target bound as a block), and the
+    /// boundary classes the branch reads as registers. `None` when none matches or
+    /// an operand is unresolvable at `block`.
+    fn best_guard_branch(
         &self,
         context: &Context,
         fs: &FunctionSelection,
         dom: &DominatorTree,
         block: BlockId,
         guard: &BlockGuard,
+        candidates: &[(usize, EMatch<u32>)],
     ) -> Option<(usize, RuleMatch, Vec<Id>)> {
-        let guard_class = fs.egraph.find(guard.class);
         let mut best: Option<(u64, usize, usize, RuleMatch, Vec<Id>)> = None;
-        for compiled in &self.compiled_patterns {
-            let rule = &self.rules[compiled.rule_index];
-            let RuleKind::CondBranch { target_symbol } = rule.kind else {
+        for (pattern_index, m) in candidates {
+            let compiled = &self.compiled_patterns[*pattern_index];
+            let RuleKind::CondBranch { target_symbol } = self.rules[compiled.rule_index].kind
+            else {
                 continue;
             };
-            for m in compiled.search(&fs.egraph, context) {
-                if fs.egraph.find(m.root) != guard_class {
-                    continue;
-                }
 
-                let mut captures = CaptureBindings::new();
-                for (var, class) in m.subst.entries() {
-                    let Var::Symbol(symbol) = var else { continue };
-                    captures.bind(*symbol, fs.egraph.find(class));
-                }
+            let mut captures = CaptureBindings::new();
+            for (var, class) in m.subst.entries() {
+                let Var::Symbol(symbol) = var else { continue };
+                captures.bind(*symbol, fs.egraph.find(class));
+            }
 
-                // Every operand must resolve at B: an immediate folds into the
-                // encoding; a register operand binds under the dominance rule and
-                // makes its class a materialization requirement. An unresolvable
-                // boundary disqualifies the match.
-                let mut boundary_classes = Vec::new();
-                let mut int_bindings = Vec::new();
-                let mut value_bindings = Vec::new();
-                let mut resolvable = true;
-                for (symbol, class) in &captures.entries {
-                    if let Some(v) = class_int_binding(&fs.egraph, *class) {
+            // Every operand must resolve at B. A class carrying an immediate folds
+            // it into the encoding (and still records its register form so a
+            // register-reading emitter finds it) without pinning materialization;
+            // a class with only a register value binds under the dominance rule and
+            // joins the materialization set. An unresolvable boundary disqualifies.
+            let mut boundary_classes = Vec::new();
+            let mut int_bindings = Vec::new();
+            let mut value_bindings = Vec::new();
+            let mut resolvable = true;
+            for (symbol, class) in &captures.entries {
+                let binding = fs.resolve_binding(dom, context, *class, block, guard.op);
+                match binding.int {
+                    Some(v) => {
                         int_bindings.push((*symbol, v));
-                    } else if let Some(v) = fs.register_value(dom, context, *class, block, guard.op)
-                    {
-                        value_bindings.push((*symbol, v));
-                        boundary_classes.push(*class);
-                    } else {
-                        resolvable = false;
-                        break;
+                        if let Some(reg) = binding.value {
+                            value_bindings.push((*symbol, reg));
+                        }
                     }
+                    None => match binding.value {
+                        Some(reg) => {
+                            value_bindings.push((*symbol, reg));
+                            boundary_classes.push(*class);
+                        }
+                        None => {
+                            resolvable = false;
+                            break;
+                        }
+                    },
                 }
-                if !resolvable {
-                    continue;
-                }
+            }
+            if !resolvable {
+                continue;
+            }
 
-                let cost = rule.base_cost as u64;
-                let specificity = compiled.specificity;
-                let better = match &best {
-                    None => true,
-                    Some((best_cost, best_specificity, ..)) => {
-                        cost < *best_cost || (cost == *best_cost && specificity > *best_specificity)
-                    }
-                };
-                if better {
-                    let rule_match = RuleMatch::new(int_bindings, value_bindings)
-                        .with_block_binding(target_symbol, guard.true_dest);
-                    best = Some((
-                        cost,
-                        specificity,
-                        compiled.rule_index,
-                        rule_match,
-                        boundary_classes,
-                    ));
+            let cost = self.rules[compiled.rule_index].base_cost as u64;
+            let specificity = compiled.specificity;
+            let better = match &best {
+                None => true,
+                Some((best_cost, best_specificity, ..)) => {
+                    cost < *best_cost || (cost == *best_cost && specificity > *best_specificity)
                 }
+            };
+            if better {
+                let rule_match = RuleMatch::new(int_bindings, value_bindings)
+                    .with_block_binding(target_symbol, guard.true_dest);
+                best = Some((
+                    cost,
+                    specificity,
+                    compiled.rule_index,
+                    rule_match,
+                    boundary_classes,
+                ));
             }
         }
         best.map(|(_, _, rule_index, m, boundaries)| (rule_index, m, boundaries))
@@ -1314,38 +1455,35 @@ impl InstructionSelectPass {
         dom: &DominatorTree,
         block: BlockId,
         op_refs: &HashMap<OpId, OperationRef>,
-        block_roots: &HashSet<Id>,
         block_op_by_root: &HashMap<Id, OpId>,
         guard_classes: &HashSet<Id>,
+        base_matches: Option<&[Vec<EMatch<u32>>]>,
     ) -> Vec<PbqpIselMatch> {
         let mut matches = Vec::new();
         for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
             let rule = &self.rules[compiled.rule_index];
-            // Branch rules select terminators, not values (see `select_guard_branch`).
+            // Branch rules select terminators, not values (see `best_guard_branch`).
             if rule.kind != RuleKind::Value {
                 continue;
             }
             let pattern_root = compiled.pattern.root();
 
-            // A pure class may sit interior to any number of matches: each fused
-            // instruction recomputes it. A memory-effect class is interior-legal
-            // only when its backing op is in B and it is not shared. Boundaries
-            // additionally honor the rule's register/immediate/width requirements.
-            let allowed = |pattern_node: Id, class: Id| {
-                if !compiled.boundary_ok(&fs.egraph, context, pattern_node, class) {
-                    return false;
-                }
-                if pattern_node == pattern_root
-                    || compiled.node_meta[pattern_node.index()].duplicable
-                {
-                    return true;
-                }
-                let class = fs.egraph.find(class);
-                node::class_is_pure(&fs.egraph, class)
-                    || (block_roots.contains(&class) && !fs.shared_classes.contains(&class))
+            // A fact-free block reuses the base search; a scoped one re-searches its
+            // own graph. Both apply the function-wide legality, then the per-block
+            // filter below narrows interior classes to B's own op-roots.
+            let fresh: Vec<EMatch<u32>>;
+            let raw: &[EMatch<u32>] = if let Some(cache) = base_matches {
+                &cache[pattern_index]
+            } else {
+                fresh = compiled
+                    .pattern
+                    .search_with_legality(&fs.egraph, &|node, class| {
+                        value_match_allowed(fs, context, compiled, pattern_root, node, class)
+                    });
+                &fresh
             };
 
-            for m in compiled.pattern.search_with_legality(&fs.egraph, &allowed) {
+            for m in raw {
                 let root = fs.egraph.find(m.root);
                 let block_op = block_op_by_root.get(&root).copied();
                 let is_guard_class = guard_classes.contains(&root);
@@ -1357,8 +1495,24 @@ impl InstructionSelectPass {
                     .nodes(root)
                     .iter()
                     .any(|n| !n.children().is_empty());
-                let introduced = is_computed && !fs.ops_by_root.contains_key(&root);
+                let introduced = is_computed && !fs.is_op_root(root);
                 if block_op.is_none() && !is_guard_class && !introduced {
+                    continue;
+                }
+
+                // Narrow the function-wide legality to B: a non-pure interior class
+                // is legal only when its backing op is in B and it is not shared
+                // (boundary constraints were already enforced during the search).
+                let interior_ok = (0..compiled.pattern.len()).all(|index| {
+                    let node = Id::from_raw(index as u32);
+                    if node == pattern_root || compiled.node_meta[node.index()].duplicable {
+                        return true;
+                    }
+                    let class = fs.egraph.find(m.binding(node));
+                    node::class_is_pure(&fs.egraph, class)
+                        || (block_op_by_root.contains_key(&class) && !fs.is_shared(class))
+                });
+                if !interior_ok {
                     continue;
                 }
 
@@ -1403,7 +1557,9 @@ impl InstructionSelectPass {
                 // Cost is op-relative when there is a backing op in B; a
                 // rewrite-introduced root has no op, so it takes the rule's
                 // target-independent base cost.
-                let rule_match = bindings.captures.to_rule_match(&fs.egraph, &fs.class_value);
+                let rule_match = bindings
+                    .captures
+                    .to_rule_match(&fs.egraph, &fs.class_values);
                 let cost = if let Some(op_ref) = block_op.and_then(|id| op_refs.get(&id)) {
                     self.cost_model
                         .node_cost(context, op_ref, rule, &rule_match)
@@ -1424,6 +1580,29 @@ impl InstructionSelectPass {
         prune_dominated_matches(&self.compiled_patterns, &mut matches);
         matches
     }
+}
+
+/// Whether `class` may bind under `pattern_node` in a value match, before the
+/// per-block narrowing: boundary constraints (register / immediate / width), and
+/// interior nodes restricted to pure or function-wide op-root, non-shared classes
+/// (a memory effect recomputed inside a fused instruction must have its backing
+/// op reachable). The root and duplicable nodes are always allowed.
+fn value_match_allowed(
+    fs: &FunctionSelection,
+    context: &Context,
+    compiled: &CompiledIselPattern,
+    pattern_root: Id,
+    pattern_node: Id,
+    class: Id,
+) -> bool {
+    if !compiled.boundary_ok(&fs.egraph, context, pattern_node, class) {
+        return false;
+    }
+    if pattern_node == pattern_root || compiled.node_meta[pattern_node.index()].duplicable {
+        return true;
+    }
+    let class = fs.egraph.find(class);
+    node::class_is_pure(&fs.egraph, class) || (fs.is_op_root(class) && !fs.is_shared(class))
 }
 
 /// Assert one dominating-edge fact in the current scope: the condition (and its

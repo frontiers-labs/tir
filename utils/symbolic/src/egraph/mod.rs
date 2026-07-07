@@ -214,6 +214,18 @@ impl<L: ENode> EGraph<L> {
         self.class(id).nodes()
     }
 
+    /// The base class ids the scope partition groups under the scoped-canonical
+    /// `id` (as [`Self::aggregate_scope`] builds it). Empty when no scope is open
+    /// or `id` is not a scoped representative — then `id` is itself the base rep.
+    /// Side tables built against the base graph are keyed by base reps, so a query
+    /// made under a scope aggregates over this slice.
+    pub fn scope_members(&self, id: Id) -> &[Id] {
+        self.scope_members
+            .get(&id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     /// Intern `node`, returning its e-class. A non-unique node equal to an existing
     /// one shares its class; otherwise (always for unique nodes) a fresh class.
     pub fn add(&mut self, mut node: L) -> Id {

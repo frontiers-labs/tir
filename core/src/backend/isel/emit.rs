@@ -9,7 +9,7 @@ use tir_symbolic::egraph::Id;
 use super::FunctionSelection;
 use super::RuleMatch;
 use super::cover::PbqpIselMatch;
-use super::node::{class_int_binding, class_width};
+use super::node::class_width;
 
 #[derive(Clone, Debug)]
 pub(crate) enum BlockDecision {
@@ -85,8 +85,10 @@ pub(crate) struct EmissionBuilder<'a> {
 
 impl EmissionBuilder<'_> {
     /// A Root-covered class with no original op is one the rewrites introduced.
+    /// The op-root test aggregates over the scoped class's base members, so a
+    /// fact-merged op class is not mistaken for an introduced one.
     fn is_introduced(&self, class: Id) -> bool {
-        self.root_match.contains_key(&class) && !self.fs.ops_by_root.contains_key(&class)
+        self.root_match.contains_key(&class) && !self.fs.is_op_root(class)
     }
 
     /// Build the operand bindings for a match, first materializing any introduced
@@ -153,27 +155,25 @@ impl EmissionBuilder<'_> {
     }
 
     /// Resolve each capture symbol to a concrete operand for consumer op
-    /// `consumer`: an introduced operand's fresh value, then a constant immediate,
-    /// then a register value chosen under the dominance rule.
+    /// `consumer`: an introduced operand's fresh value, then — through the one
+    /// shared resolver — a constant immediate and/or a register value under the
+    /// dominance rule (a class can carry both).
     fn build_rule_match(&self, match_id: usize, consumer: OpId) -> RuleMatch {
         let mut int_bindings = Vec::new();
         let mut value_bindings = Vec::new();
         for (sym, class) in &self.matches[match_id].bindings.captures.entries {
             let class = self.fs.egraph.find(*class);
-            // An introduced operand's fresh value takes priority; otherwise
-            // resolve the class to its constant and/or register operand (a class
-            // can carry both).
             if let Some(&dest) = self.introduced_dest.get(&class) {
                 value_bindings.push((*sym, dest));
                 continue;
             }
-            if let Some(v) = class_int_binding(&self.fs.egraph, class) {
+            let binding =
+                self.fs
+                    .resolve_binding(self.dom, self.context, class, self.block, consumer);
+            if let Some(v) = binding.int {
                 int_bindings.push((*sym, v));
             }
-            if let Some(v) =
-                self.fs
-                    .register_value(self.dom, self.context, class, self.block, consumer)
-            {
+            if let Some(v) = binding.value {
                 value_bindings.push((*sym, v));
             }
         }
