@@ -12,13 +12,14 @@ mod node;
 mod rules;
 mod seed;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tir_symbolic::egraph::{EGraph, Extraction, Id};
 
 use std::rc::Rc;
 
-use crate::analysis::{DominatorTree, GSA, GateNode};
+use crate::analysis::{DominatingEdgeFacts, DominatorTree, GSA, GateNode};
+use crate::graph::Dag;
 use crate::{
     AnalysisManager, BlockId, ConstantLike, Context, OpId, Operation, OperationRef, Pass,
     PassError, PassTarget, PreservedAnalyses, RegionGuard, RegionId, Rewriter, TypeId, ValueId,
@@ -70,6 +71,7 @@ impl Pass for InstCombinePass {
             value_class: seeded.value_class,
             arg_block: seeded.arg_block,
             dom: analyses.get::<DominatorTree>(context, root),
+            edge_facts: analyses.get::<DominatingEdgeFacts>(context, root),
             ruleset: builtin_ruleset(context),
         };
         let body = context.get_op(root).regions[0];
@@ -97,6 +99,7 @@ struct Driver<'a> {
     value_class: HashMap<ValueId, Id>,
     arg_block: HashMap<ValueId, BlockId>,
     dom: Rc<DominatorTree>,
+    edge_facts: Rc<DominatingEdgeFacts>,
     ruleset: Ruleset,
 }
 
@@ -110,16 +113,86 @@ impl Driver<'_> {
             .saturate(&self.ruleset.rewrites, ITER_LIMIT, NODE_LIMIT);
         let extraction = self.eg.extract_best(node::cost);
 
-        let op_ids: Vec<OpId> = self
+        let blocks: Vec<BlockId> = self
             .context
             .get_region(region)
             .iter(self.context.clone())
-            .flat_map(|block| self.context.get_block(block.id()).op_ids())
+            .map(|block| block.id())
             .collect();
-        for &op_id in &op_ids {
-            self.rewrite_op(op_id, &extraction, rewriter)?;
+        let region_blocks: HashSet<BlockId> = blocks.iter().copied().collect();
+
+        // Rewrite blocks in dominator-tree DFS order so each block's own guard
+        // fact, pushed as a scope, is inherited by the blocks it dominates. The
+        // region entry dominates the rest of the region, so it roots the DFS.
+        let mut visited = HashSet::new();
+        if let Some(&entry) = blocks.first() {
+            self.rewrite_block_tree(entry, &region_blocks, &extraction, rewriter, &mut visited)?;
         }
+        // Blocks unreachable in the dominator tree carry no inherited fact.
+        for &block in &blocks {
+            if visited.insert(block) {
+                for op_id in self.context.get_block(block).op_ids() {
+                    self.rewrite_op(op_id, &extraction, rewriter)?;
+                }
+            }
+        }
+
+        let op_ids: Vec<OpId> = blocks
+            .iter()
+            .flat_map(|&block| self.context.get_block(block).op_ids())
+            .collect();
         self.recurse(&op_ids, rewriter)
+    }
+
+    /// Rewrite `block` then its dominator subtree (restricted to this region).
+    /// A block's own guard fact holds throughout that subtree, so inject it once
+    /// under a fresh scope and let the nesting carry it down — no re-assertion.
+    fn rewrite_block_tree(
+        &mut self,
+        block: BlockId,
+        region_blocks: &HashSet<BlockId>,
+        parent_extraction: &Extraction<Node>,
+        rewriter: &mut Rewriter,
+        visited: &mut HashSet<BlockId>,
+    ) -> Result<(), PassError> {
+        if !visited.insert(block) {
+            return Ok(());
+        }
+        // A condition without a seeded class cannot be assumed; skip, don't panic.
+        let pushed = match self.edge_facts.own_fact(block) {
+            Some(fact) if self.value_class.contains_key(&fact.condition) => {
+                self.eg.push_context();
+                self.inject(fact.condition, fact.holds);
+                self.eg
+                    .saturate(&self.ruleset.rewrites, ITER_LIMIT, NODE_LIMIT);
+                true
+            }
+            _ => false,
+        };
+        // A pushed fact changes what extracts cheapest; reuse the parent's otherwise.
+        let local = pushed.then(|| self.eg.extract_best(node::cost));
+        let extraction = local.as_ref().unwrap_or(parent_extraction);
+
+        for op_id in self.context.get_block(block).op_ids() {
+            self.rewrite_op(op_id, extraction, rewriter)?;
+        }
+
+        if let Some(node) = self.dom.node_of(block) {
+            let children: Vec<BlockId> = self
+                .dom
+                .children(node)
+                .filter_map(|child| self.dom.block(child))
+                .filter(|child| region_blocks.contains(child))
+                .collect();
+            for child in children {
+                self.rewrite_block_tree(child, region_blocks, extraction, rewriter, visited)?;
+            }
+        }
+
+        if pushed {
+            self.eg.pop_context();
+        }
+        Ok(())
     }
 
     /// Replace `op_id`'s value with its cheapest equivalent form, if that improved.

@@ -1,0 +1,24 @@
+// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
+
+// The join ^bb3 has two predecessors, so no guarded edge dominates it and no
+// fact about %c reaches it. `muli(%c, %y)` must therefore stay — folding it to
+// %y would be unsound on the path where %c is false.
+
+module {
+  func @join(%c: !i1, %y: !i1) -> !i1 {
+    cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    br ^bb3
+  ^bb2:
+    br ^bb3
+  ^bb3:
+    %r = muli %c, %y : !i1
+    return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func @join
+// CHECK: ^bb3:
+// CHECK: muli
