@@ -42,7 +42,7 @@ use cover::{
     build_eclass_cover, completeness_error, prune_dominated_matches,
 };
 use emit::{BlockDecision, BlockPlan, EmissionBuilder, GuardBranch, TerminatorPlan};
-use node::{class_int_binding, template_node};
+use node::{class_int_binding, class_width, is_comparison, template_node};
 use pattern::{CompiledIselPattern, compile_isel_pattern};
 use rewrites::discover_rewrites;
 
@@ -804,6 +804,8 @@ impl InstructionSelectPass {
         };
 
         rewrites::saturate(context, &mut egraph, &self.rewrites, Default::default());
+
+        bridge_zero_branch_guards(context, &mut egraph, &guards);
 
         // Canonicalize the side tables through `find`: saturation may merge classes,
         // so every id recorded against the pre-saturation graph is re-resolved here.
@@ -1637,6 +1639,49 @@ fn assert_fact(context: &Context, egraph: &mut SemEGraph, expr: &ConditionExpr, 
             egraph.union(lhs, rhs);
         }
     }
+}
+
+/// Bridge each bare 1-bit guard condition `c` — one whose class holds no
+/// comparison to fuse — to `Ne(c, zext(0b0, 1))`, the shape the TMDL-derived
+/// zero-compare branch rules (arm64 `cbnz`) unify with; a bare leaf never
+/// matches their `Ne(x, ZExt(0, W))` root. The identity is trivially true for
+/// a 1-bit value. Injected after saturation and only into guard-condition
+/// classes so no unrelated width-1 class gains a comparison member (which
+/// could shift value selections or demand an `If` materializer); a target
+/// with no such rule leaves the extra member unmatched and falls back to
+/// branch-if-nonzero as before.
+fn bridge_zero_branch_guards(
+    context: &Context,
+    egraph: &mut SemEGraph,
+    guards: &HashMap<BlockId, Vec<BlockGuard>>,
+) {
+    let i1 = tir::builtin::IntegerType::new(context, 1);
+    for guard in guards.values().flatten() {
+        let class = egraph.find(guard.class);
+        if class_width(context, egraph, class) != Some(1)
+            || egraph.nodes(class).iter().any(|n| is_comparison(n.kind))
+        {
+            continue;
+        }
+        let zero = egraph.add(template_node(
+            SymKind::Constant,
+            Some(SymPayload::Int(APInt::new(1, 0))),
+            None,
+        ));
+        let one = egraph.add(template_node(
+            SymKind::Constant,
+            Some(SymPayload::Int(APInt::new(1, 1))),
+            None,
+        ));
+        let mut zext = template_node(SymKind::ZExt, None, None);
+        zext.children = vec![zero, one];
+        let zext = egraph.add(zext);
+        let mut ne = template_node(SymKind::Ne, None, Some(i1));
+        ne.children = vec![class, zext];
+        let ne = egraph.add(ne);
+        egraph.union(class, ne);
+    }
+    egraph.rebuild();
 }
 
 /// The closure of B's op-root and guard-condition classes under the bindings of

@@ -61,10 +61,22 @@ impl CompiledIselPattern {
         pattern_node: Id,
         class: Id,
     ) -> bool {
+        self.boundary_ok_impl(egraph, ctx, pattern_node, class, false)
+    }
+
+    fn boundary_ok_impl(
+        &self,
+        egraph: &SemEGraph,
+        ctx: &Context,
+        pattern_node: Id,
+        class: Id,
+        bool_binds_wide: bool,
+    ) -> bool {
         let meta = &self.node_meta[pattern_node.index()];
         if let Some(required) = meta.width
             && let Some(actual) = class_width(ctx, egraph, class)
             && actual != required
+            && !(bool_binds_wide && actual == 1)
         {
             return false;
         }
@@ -95,14 +107,17 @@ impl CompiledIselPattern {
 
     /// Matches across the whole e-graph, honoring only the boundary constraints
     /// (register/immediate/width) — the entry used where no block-level legality
-    /// applies (conditional-branch selection).
+    /// applies (conditional-branch selection). Here a width-1 class may bind a
+    /// register-width operand: a materialized i1 occupies its register as 0/1
+    /// (the hand-written branch-if-nonzero fallbacks already test the full
+    /// register), so a zero-compare branch reads the same bits either way.
     pub(crate) fn search(
         &self,
         egraph: &SemEGraph,
         ctx: &Context,
     ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
         self.pattern.search_with_legality(egraph, &|node, class| {
-            self.boundary_ok(egraph, ctx, node, class)
+            self.boundary_ok_impl(egraph, ctx, node, class, true)
         })
     }
 }

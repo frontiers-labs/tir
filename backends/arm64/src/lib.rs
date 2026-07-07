@@ -935,9 +935,9 @@ mod tests {
         let mut fb = IRBuilder::new(func.body());
         let add = ops::addi(&context, x_id, x_id, i64).build();
         fb.insert(add);
-        // A bare i1 condition (a block argument): no branch rule can fuse it, so
-        // selection falls back to `cmp cond, xzr` + `b.ne t` plus the deferred
-        // `vbr f`.
+        // A bare i1 condition (a block argument): the value-is-0/1 bridge lets
+        // the derived zero-compare branch fuse it into `cbnz cond, t` plus the
+        // deferred `vbr f`.
         fb.insert(ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build());
 
         let mut mb = IRBuilder::new(module.body());
@@ -958,7 +958,7 @@ mod tests {
             .into_iter()
             .map(|id| context.get_op(id).name)
             .collect();
-        assert_eq!(body, vec!["add", "cmp", "b.ne", "vbr", "symbol_end"]);
+        assert_eq!(body, vec!["add", "cbnz", "vbr", "symbol_end"]);
 
         let mut buf = String::new();
         let mut fmt = IRFormatter::new(&mut buf);

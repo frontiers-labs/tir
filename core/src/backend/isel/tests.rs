@@ -1368,6 +1368,65 @@ fn guard_without_matching_rule_uses_nonzero_fallback() {
     assert_eq!(nonzero.dest_args(), vec![b.args[0]]);
 }
 
+/// `Ne(x, zext(0, w))` — the pattern TMDL derives for zero-compare branches
+/// (arm64 `cbnz`).
+fn zero_branch_pattern() -> SemGraph {
+    let mut g = SemGraph::new();
+    let src = symbol(&mut g, 0);
+    let zero = g.add_node(SymKind::Constant);
+    g.set_leaf_data(zero, tir::sem::int_payload(1, 0, false));
+    let width = symbol(&mut g, 1);
+    let zext = binary(&mut g, SymKind::ZExt, zero, width);
+    binary(&mut g, SymKind::Ne, src, zext);
+    g
+}
+
+fn emit_zero_branch_marker(
+    context: &Context,
+    req: &EmitRequest,
+    m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let dest = m
+        .block_binding(2)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let src = m
+        .value_binding(0)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    // Forwards the condition twice so the fused form is distinguishable from
+    // the single-arg nonzero fallback marker.
+    Ok(Box::new(ops::br(context, vec![src, src], dest).build()))
+}
+
+/// A bare i1 condition bridges to `Ne(c, zext(0, w))`, so a derived
+/// zero-compare branch rule fuses it — its register-width operand binds the
+/// 1-bit condition — instead of the branch-if-nonzero fallback.
+#[test]
+fn bare_bool_guard_selects_zero_compare_branch() {
+    let rule = Rule::new(
+        "cbnz-marker",
+        zero_branch_pattern(),
+        1,
+        emit_zero_branch_marker,
+    )
+    .with_kind(RuleKind::CondBranch { target_symbol: 2 })
+    .with_operand_widths(vec![(0, 64)]);
+    let b = guarded_block_with_rules(&[1], vec![rule], |_, _, args| args[0]);
+
+    let body = block_ops(&b.context, b.region);
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br", "br"]);
+
+    let fused = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(fused.dest(), b.true_dest);
+    assert_eq!(
+        fused.dest_args(),
+        vec![b.args[0], b.args[0]],
+        "the zero-compare rule must fuse, not the nonzero fallback"
+    );
+    let fallthrough = body[1].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(fallthrough.dest(), b.false_dest);
+}
+
 /// A compared condition with another in-block consumer is both materialized
 /// (the boundary edge forbids Dead) and fused into the branch.
 #[test]

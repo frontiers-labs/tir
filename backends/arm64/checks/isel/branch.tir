@@ -73,11 +73,11 @@ module {
     %2 = constant {value = 0} : !i64
     return %2
   }
-  // A bare i1 condition has no comparison to fuse: the branch-if-nonzero
-  // fallback tests the register against the zero register (slot 31).
+  // A bare i1 condition has no comparison to fuse: the value-is-0/1 bridge
+  // lets the derived zero-compare branch select — one cbnz instead of the
+  // two-instruction branch-if-nonzero fallback.
   // CHECK: asm.symbol {name = "fallback"
-  // CHECK: arm64.cmp {rn = %virt{{[0-9]+}}:GPR, rm = x31}
-  // CHECK-NEXT: arm64.b.ne {imm = ^bb1}
+  // CHECK: arm64.cbnz {rt = %virt{{[0-9]+}}:GPR, imm = ^bb1}
   // CHECK-NEXT: arm64.vbr ^bb2
 
   module_end

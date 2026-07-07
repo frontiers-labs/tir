@@ -13,12 +13,11 @@ module {
   module_end
 }
 
-// cmp x0, xzr; b.ne +8 (CONDBR19 fixup patched); b +12 (imm26 fixup patched);
+// cbnz x0, +8 (CONDBR19 fixup patched); b +12 (imm26 fixup patched);
 // then each block: movz x0, #imm and ret.
 // CHECK: .section .text
 // CHECK-NEXT: select:
-// CHECK-NEXT: [0x1F, 0x00, 0x1F, 0xEB]
-// CHECK-NEXT: [0x41, 0x00, 0x00, 0x54]
+// CHECK-NEXT: [0x40, 0x00, 0x00, 0xB5]
 // CHECK-NEXT: [0x03, 0x00, 0x00, 0x14]
 // CHECK-NEXT: [0x20, 0x00, 0x80, 0xD2]
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
