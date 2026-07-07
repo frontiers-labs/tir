@@ -1063,6 +1063,13 @@ impl InstructionSelectPass {
                 BlockDecision::Emit { rule_index, m } => {
                     let rule = &self.rules[*rule_index];
                     let request = EmitRequest::for_op(&op_ref, context);
+                    // A materializer with a prelude (a flag-mediated `cset`/
+                    // `setcc`) emits its flag-setting definer immediately ahead
+                    // of the value instruction that reads the flags.
+                    if let Some(prelude) = rule.prelude_emit {
+                        let prelude_op = prelude(context, &request, m)?;
+                        rewriter.insert_op_before(&op_ref, prelude_op.as_ref())?;
+                    }
                     let new_op = (rule.emit_fn)(context, &request, m)?;
                     rewriter.replace_op(&op_ref, new_op.as_ref())?;
                 }

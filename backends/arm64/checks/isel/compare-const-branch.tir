@@ -1,0 +1,22 @@
+// RUN: not tir mc --march=arm64 --stage=isel %s
+
+// `cmpi %x, K` against a constant feeding a branch must never silently select a
+// flag-less `cset` (which drops its operands and runs the branch on stale
+// PSTATE). The composed cmp+cset materializer requires a register operand, so it
+// refuses the constant, and no immediate flag definer exists yet — selection
+// fails loudly instead of miscompiling. (Immediate definers are a later change.)
+
+module {
+  func @eq_zero_branch(%0: !i64) -> !i64 {
+    %1 = constant {value = 0} : !i64
+    %2 = cmpi %0, %1 {predicate = "eq"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  module_end
+}
