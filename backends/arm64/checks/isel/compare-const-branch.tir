@@ -1,10 +1,10 @@
-// RUN: not tir mc --march=arm64 --stage=isel %s
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
 
-// `cmpi %x, K` against a constant feeding a branch must never silently select a
-// flag-less `cset` (which drops its operands and runs the branch on stale
-// PSTATE). The composed cmp+cset materializer requires a register operand, so it
-// refuses the constant, and no immediate flag definer exists yet — selection
-// fails loudly instead of miscompiling. (Immediate definers are a later change.)
+// `cmpi %x, 0` feeding a branch selects `cbz`/`cbnz` directly: the bare-i1
+// bridge rewrites the guard's zero comparison to the `zext(0b0, W)` shape the
+// TMDL-derived `cbz`/`cbnz` rules match, so the branch reads the register
+// against the hardwired zero instead of routing through PSTATE. No flag-less
+// `cset` is selected (which would drop its operands and run on stale flags).
 
 module {
   func @eq_zero_branch(%0: !i64) -> !i64 {
@@ -18,5 +18,24 @@ module {
     %4 = constant {value = 0} : !i64
     return %4
   }
+  // CHECK: asm.symbol {name = "eq_zero_branch"
+  // CHECK-NOT: arm64.cset
+  // CHECK: arm64.cbz {rt = %virt0:GPR, imm = ^bb1}
+
+  func @ne_zero_branch(%0: !i64) -> !i64 {
+    %1 = constant {value = 0} : !i64
+    %2 = cmpi %0, %1 {predicate = "ne"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: asm.symbol {name = "ne_zero_branch"
+  // CHECK-NOT: arm64.cset
+  // CHECK: arm64.cbnz {rt = %virt5:GPR, imm = ^bb1}
+
   module_end
 }

@@ -85,10 +85,60 @@ module {
     %2 = constant {value = 0} : !i64
     return %2
   }
-  // A bare i1 condition has no comparison to fuse: branch-if-nonzero fallback.
+  // A bare i1 condition has no comparison to fuse: the bridge rewrites it to
+  // `%0 != 0`, which the derived `bne … x0` zero-form selects against the
+  // hardwired zero register.
   // CHECK: asm.symbol {name = "fallback"
   // CHECK: riscv.bne {rs1 = %virt23:GPR, rs2 = x0, imm = ^bb1}
   // CHECK-NEXT: riscv.vbr ^bb2
+
+  func @eq_zero(%0: !i64) -> !i64 {
+    %1 = constant {value = 0} : !i64
+    %2 = cmpi %0, %1 {predicate = "eq"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // `cmpi %x, 0 {eq}` fuses into `beq %x, x0`: the zero operand wires to the
+  // hardwired zero register instead of materializing the constant. No `li` of 0.
+  // CHECK: asm.symbol {name = "eq_zero"
+  // CHECK-NOT: riscv.slt
+  // CHECK: riscv.beq {rs1 = %virt26:GPR, rs2 = x0, imm = ^bb1}
+  // CHECK-NEXT: riscv.vbr ^bb2
+
+  func @ne_zero(%0: !i64) -> !i64 {
+    %1 = constant {value = 0} : !i64
+    %2 = cmpi %0, %1 {predicate = "ne"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // CHECK: asm.symbol {name = "ne_zero"
+  // CHECK: riscv.bne {rs1 = %virt31:GPR, rs2 = x0, imm = ^bb1}
+
+  func @sgt_zero(%0: !i64) -> !i64 {
+    %1 = constant {value = 0} : !i64
+    %2 = cmpi %0, %1 {predicate = "sgt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // `%x > 0` canonicalizes to `0 < %x`, selecting the other zero-form slot:
+  // `blt x0, %x` (zero wired into rs1).
+  // CHECK: asm.symbol {name = "sgt_zero"
+  // CHECK: riscv.blt {rs1 = x0, rs2 = %virt36:GPR, imm = ^bb1}
 
   module_end
 }
