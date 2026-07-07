@@ -83,5 +83,24 @@ module {
   // CHECK: x86_64.cmp_imm {dst = %virt{{[0-9]+}}:GPR, imm = 0}
   // CHECK-NEXT: x86_64.jl {imm = ^bb1}
 
+  func @eq_zero(%0: !i64) -> !i64 {
+    %c = constant {value = 0} : !i64
+    %1 = cmpi %0, %c {predicate = "eq"} : !i1
+    cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %3 = constant {value = 1} : !i64
+    return %3
+  ^bb2:
+    %4 = constant {value = 0} : !i64
+    return %4
+  }
+  // The derived `test c, c` zero-branch also proves `c == 0`, but its pattern is
+  // larger than the immediate compare's, so `cmp x, 0` wins on cost here (the
+  // `test` form is reserved for a bare i1 with no comparison to fuse).
+  // CHECK: asm.symbol {name = "eq_zero"
+  // CHECK-NOT: x86_64.test
+  // CHECK: x86_64.cmp_imm {dst = %virt{{[0-9]+}}:GPR, imm = 0}
+  // CHECK-NEXT: x86_64.je {imm = ^bb1}
+
   module_end
 }

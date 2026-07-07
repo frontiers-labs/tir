@@ -3501,6 +3501,13 @@ fn emit_flag_rules<'a>(
         isel_rule_emitters,
         isel_rule_inits,
     );
+    emit_aliased_zero_branch_rules(
+        files,
+        &definers,
+        &branches,
+        isel_rule_emitters,
+        isel_rule_inits,
+    );
     Ok(())
 }
 
@@ -3672,6 +3679,323 @@ fn emit_flag_branch_rules(
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
                         #operand_width_call
                         #operand_imm_range_call,
+                    );
+                }
+            });
+        }
+    }
+}
+
+/// Copy `node`'s subgraph into `dst`, rewriting every symbol id found in `map`
+/// to its mapped id. Unlike `copy_subgraph_remap_symbols` the mapping is fixed
+/// (not fresh-per-symbol), so two operand symbols can be aliased onto one.
+fn copy_subgraph_alias(
+    dst: &mut tir::sem::SemGraph,
+    src: &tir::sem::SemGraph,
+    node: tir::graph::NodeId,
+    map: &HashMap<u32, u32>,
+    memo: &mut HashMap<usize, tir::graph::NodeId>,
+) -> tir::graph::NodeId {
+    use tir::graph::{Dag, MutDag};
+    if let Some(&copied) = memo.get(&node.index()) {
+        return copied;
+    }
+    let children: Vec<tir::graph::NodeId> = src.children(node).collect();
+    let copied_children: Vec<tir::graph::NodeId> = children
+        .into_iter()
+        .map(|child| copy_subgraph_alias(dst, src, child, map, memo))
+        .collect();
+    let copied = dst.add_node(*src.get_node(node));
+    if let Some(data) = src.get_leaf_data(node) {
+        let data = match data {
+            tir::sem::SymPayload::SymbolId(id) if map.contains_key(id) => {
+                tir::sem::SymPayload::SymbolId(map[id])
+            }
+            other => other.clone(),
+        };
+        dst.set_leaf_data(copied, data);
+    }
+    for child in copied_children {
+        dst.add_edge(copied, child);
+    }
+    memo.insert(node.index(), copied);
+    copied
+}
+
+/// A single-symbol comparison against a literal zero (`Ne(s0, 0)`/`Eq(s0, 0)`),
+/// the SMT candidate an aliased flag definer's condition proves against.
+fn zero_vs_candidate(
+    kind: tir::sem::SymKind,
+    width: u32,
+) -> (tir::sem::SemGraph, tir::graph::NodeId) {
+    use tir::graph::MutDag;
+    let mut g = tir::sem::SemGraph::new();
+    let s = g.add_node(tir::sem::SymKind::Symbol);
+    g.set_leaf_data(s, tir::sem::SymPayload::SymbolId(0));
+    let z = g.add_node(tir::sem::SymKind::Constant);
+    g.set_leaf_data(z, tir::sem::int_payload(width, 0, false));
+    let root = g.add_node(kind);
+    g.add_edge(root, s);
+    g.add_edge(root, z);
+    (g, root)
+}
+
+/// The `Eq`/`Ne`-vs-zero comparison the composed aliased condition is provably
+/// equivalent to, proven at the operand's architectural width.
+fn zero_equivalent(
+    composed: &tir::sem::SemGraph,
+    symbol_widths: &[u32],
+) -> Option<tir::sem::SymKind> {
+    use tir::sem::{EquivalenceOracle, FuzzOracle, SmtOracle, SymKind};
+    let fuzz = FuzzOracle::default();
+    for kind in [SymKind::Ne, SymKind::Eq] {
+        let (candidate, _) = zero_vs_candidate(kind, symbol_widths[0]);
+        if fuzz.equivalent(composed, &candidate, symbol_widths)
+            && SmtOracle.equivalent(composed, &candidate, symbol_widths)
+        {
+            return Some(kind);
+        }
+    }
+    None
+}
+
+/// The emitted zero-branch pattern in the `zext(0b0, W)` shape the bare-i1
+/// bridge injects: `Ne(s0, zext(0, Wsym))` / `Eq(s0, zext(0, Wsym))`, so the
+/// derived `test c, c` + `jne`/`je` rule covers a bare boolean guard.
+fn zero_branch_pattern(
+    kind: tir::sem::SymKind,
+    width_symbol: u32,
+) -> (tir::sem::SemGraph, tir::graph::NodeId) {
+    use tir::graph::MutDag;
+    let mut g = tir::sem::SemGraph::new();
+    let s = g.add_node(tir::sem::SymKind::Symbol);
+    g.set_leaf_data(s, tir::sem::SymPayload::SymbolId(0));
+    let zero = g.add_node(tir::sem::SymKind::Constant);
+    g.set_leaf_data(zero, tir::sem::int_payload(1, 0, false));
+    let wsym = g.add_node(tir::sem::SymKind::Symbol);
+    g.set_leaf_data(wsym, tir::sem::SymPayload::SymbolId(width_symbol));
+    let zext = g.add_node(tir::sem::SymKind::ZExt);
+    g.add_edge(zext, zero);
+    g.add_edge(zext, wsym);
+    let root = g.add_node(kind);
+    g.add_edge(root, s);
+    g.add_edge(root, zext);
+    (g, root)
+}
+
+/// Compose each flag-guarded branch with a two-register flag definer whose
+/// operands are aliased to one symbol: `test c, c` sets the flags of `c & c`,
+/// so with `jne`/`je` the condition is provably `Ne(c, 0)`/`Eq(c, 0)`. Emitted
+/// in the bare-i1 bridge's `zext(0b0, W)` zero shape, the pair covers a bare
+/// boolean guard with a real derived rule — retiring the hand-written
+/// branch-if-nonzero fallback on targets (x86) with no direct zero-branch. The
+/// definer's two operand slots both bind from the single matched value.
+fn emit_aliased_zero_branch_rules(
+    files: &[ast::File],
+    definers: &[(FlagInst<'_>, FlagDefinerSemantics)],
+    branches: &[(FlagInst<'_>, FlagBranchSemantics)],
+    isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
+    isel_rule_inits: &mut Vec<proc_macro2::TokenStream>,
+) {
+    use tir::graph::Dag;
+    let mut emitted_preludes: HashSet<String> = HashSet::new();
+    for (b, b_sem) in branches {
+        for (d, d_sem) in definers {
+            if d_sem.class != b_sem.class {
+                continue;
+            }
+            let shared_isas: Vec<String> = b
+                .inst
+                .for_isas
+                .iter()
+                .filter(|isa| d.inst.for_isas.contains(isa))
+                .cloned()
+                .collect();
+            if shared_isas.is_empty() {
+                continue;
+            }
+            if !b_sem
+                .flag_symbols
+                .values()
+                .all(|index| d_sem.flag_roots.contains_key(index))
+            {
+                continue;
+            }
+            // Exactly two register operands of one class (no immediate): the
+            // aliased pair `test c, c`.
+            if d_sem.variable_symbols.len() != 2 {
+                continue;
+            }
+            let reg_ops: Vec<(&String, &String, u32)> = d
+                .ops
+                .iter()
+                .filter_map(|(name, ty)| {
+                    let Type::Struct(class) = ty else { return None };
+                    let &sym = d_sem.variable_symbols.get(name)?;
+                    Some((name, class, sym))
+                })
+                .collect();
+            if reg_ops.len() != 2 {
+                continue;
+            }
+            let (name_a, class_a, sym_a) = reg_ops[0];
+            let (name_b, class_b, sym_b) = reg_ops[1];
+            if class_a != class_b {
+                continue;
+            }
+            let Some(width) = register_class_width_with_isa(files, class_a, &d.isa_param_values)
+            else {
+                continue;
+            };
+
+            let map = HashMap::from([(sym_a, 0u32), (sym_b, 0u32)]);
+            let mut aliased_graph = tir::sem::SemGraph::new();
+            let mut alias_memo: HashMap<usize, tir::graph::NodeId> = HashMap::new();
+            let aliased_roots: HashMap<u32, tir::graph::NodeId> = d_sem
+                .flag_roots
+                .iter()
+                .map(|(&index, &root)| {
+                    (
+                        index,
+                        copy_subgraph_alias(
+                            &mut aliased_graph,
+                            &d_sem.graph,
+                            root,
+                            &map,
+                            &mut alias_memo,
+                        ),
+                    )
+                })
+                .collect();
+
+            let mut spliced = tir::sem::SemGraph::new();
+            let substitute: HashMap<u32, tir::graph::NodeId> = b_sem
+                .flag_symbols
+                .iter()
+                .map(|(symbol, index)| (*symbol, aliased_roots[index]))
+                .collect();
+            let spliced_root = compose_guard_with_definer(
+                &mut spliced,
+                &b_sem.graph,
+                b_sem.root,
+                &substitute,
+                &aliased_graph,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+            );
+            let (composed, _) = fold_constant_subtrees(&spliced, spliced_root);
+
+            let Some(kind) = zero_equivalent(&composed, &[width]) else {
+                continue;
+            };
+
+            let width_symbol = 1u32;
+            let (pattern, root) = zero_branch_pattern(kind, width_symbol);
+            let no_immediates: HashSet<u32> = HashSet::new();
+            let (canon_pattern, canon_root, forced_widths) =
+                tir::sem::canonicalize_for_selection(&pattern, root, &no_immediates);
+            let mut pattern_widths = tir::sem::infer_widths(&canon_pattern, |_| None);
+            for (index, forced) in forced_widths.iter().enumerate() {
+                if forced.is_some() {
+                    pattern_widths[index] = *forced;
+                }
+            }
+            let (pattern_stmts, _root_var) =
+                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths, &HashSet::new());
+
+            let prelude_fn_ident = format_ident!(
+                "emit_isel_flag_definer_{}_aliased",
+                d.inst.name.to_lowercase()
+            );
+            let d_builder_ident = format_ident!("{}OpBuilder", &d.inst.name);
+            let class_id = reg_class_id(class_a);
+            let name_a_lit = proc_macro2::Literal::string(name_a);
+            let name_b_lit = proc_macro2::Literal::string(name_b);
+            if emitted_preludes.insert(d.inst.name.clone()) {
+                isel_rule_emitters.push(quote! {
+                    fn #prelude_fn_ident(
+                        context: &tir::Context,
+                        req: &tir::backend::isel::EmitRequest,
+                        m: &tir::backend::isel::RuleMatch,
+                    ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+                        let src = m
+                            .value_binding(0)
+                            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                        let reg = tir::attributes::AttributeValue::Register(
+                            tir::attributes::RegisterAttr::Virtual {
+                                id: src.number(),
+                                class: Some(#class_id),
+                            },
+                        );
+                        let builder = #d_builder_ident::new(context)
+                            .attr(#name_a_lit, reg.clone())
+                            .attr(#name_b_lit, reg);
+                        Ok(Box::new(builder.build()))
+                    }
+                });
+            }
+
+            let target_symbol = 2u32;
+            let target_symbol_lit = proc_macro2::Literal::u32_unsuffixed(target_symbol);
+            let b_builder_ident = format_ident!("{}OpBuilder", &b.inst.name);
+            let target_name_lit = proc_macro2::Literal::string(&b_sem.target_operand);
+            let b_lower = b.inst.name.to_lowercase();
+            let d_lower = d.inst.name.to_lowercase();
+            let pattern_fn_ident =
+                format_ident!("isel_pattern_{}_via_{}_selfzero", b_lower, d_lower);
+            let emit_fn_ident = format_ident!("emit_isel_{}_via_{}_selfzero", b_lower, d_lower);
+            let rule_name_lit =
+                proc_macro2::Literal::string(&format!("{}+{}(self-zero)", d.mnemonic, b.mnemonic));
+            let base_cost = canon_pattern.len() as u32 + 2;
+            let base_cost_lit = proc_macro2::Literal::u32_unsuffixed(base_cost);
+            let d_mnemonic_lit = proc_macro2::Literal::string(&d.mnemonic);
+            let b_mnemonic_lit = proc_macro2::Literal::string(&b.mnemonic);
+            let pair_features = feature_slice(&shared_isas);
+
+            isel_rule_emitters.push(quote! {
+                fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
+                    use tir::graph::MutDag;
+                    let mut g = tir::sem::SemGraph::new();
+                    #(#pattern_stmts)*
+                    g
+                }
+
+                fn #emit_fn_ident(
+                    context: &tir::Context,
+                    req: &tir::backend::isel::EmitRequest,
+                    m: &tir::backend::isel::RuleMatch,
+                ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+                    let mut builder = #b_builder_ident::new(context);
+                    let dest = m
+                        .block_binding(#target_symbol_lit)
+                        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                    builder = builder.attr(
+                        #target_name_lit,
+                        tir::attributes::AttributeValue::Block(dest),
+                    );
+                    Ok(Box::new(builder.build()))
+                }
+            });
+
+            isel_rule_inits.push(quote! {
+                if features_enabled(features, #pair_features) {
+                    rules.push(
+                        tir::backend::isel::Rule::new(
+                            #rule_name_lit,
+                            #pattern_fn_ident(context),
+                            (#base_cost_lit).max(
+                                instruction_cost(#d_mnemonic_lit)
+                                    + instruction_cost(#b_mnemonic_lit),
+                            ),
+                            #emit_fn_ident,
+                        )
+                        .with_kind(tir::backend::isel::RuleKind::CondBranch {
+                            target_symbol: #target_symbol_lit,
+                        })
+                        .with_prelude_emitter(#prelude_fn_ident)
+                        .with_operand_constraints(vec![
+                            (0, tir::graph::OperandConstraint::Register)
+                        ]),
                     );
                 }
             });

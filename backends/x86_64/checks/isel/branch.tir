@@ -73,8 +73,9 @@ module {
     %2 = constant {value = 0} : !i64
     return %2
   }
-  // A bare i1 condition has no comparison to fuse: the branch-if-nonzero
-  // fallback tests the register against itself.
+  // A bare i1 condition has no comparison to fuse: the bridge rewrites the
+  // guard to `c != 0`, which the derived aliased-`test` zero-branch rule covers
+  // as `test c, c` (both operand slots bound from the one value) + `jne`.
   // CHECK: asm.symbol {name = "fallback"
   // CHECK: x86_64.test {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:GPR}
   // CHECK-NEXT: x86_64.jne {imm = ^bb1}
