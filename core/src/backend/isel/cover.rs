@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tir::{
-    OpId, ValueId,
+    ValueId,
     pbqp::{self, INF_COST, PbqpAlternative, PbqpMatrix, PbqpProblem},
     sem::SymKind,
 };
@@ -103,23 +103,25 @@ pub(crate) struct ClassCover {
     pub(crate) classes: Vec<Id>,
 }
 
-/// Build and solve the PBQP cover over the e-graph: one PBQP node per e-class,
+/// Build and solve the PBQP cover over the supplied `classes` (B's op-root and
+/// guard classes closed under the matches' bindings): one PBQP node per class,
 /// alternatives drawn from the instruction-pattern `matches`, and root -> bound
-/// class compatibility derived from each match's bindings. `must_materialize`
-/// lists classes whose value some consumer can never internalize (a use outside
-/// any match's reach), so they are never offered a consuming alternative.
-/// Returns `None` if the instance is infeasible (a class with no valid
-/// alternative).
+/// class compatibility derived from each match's bindings. `op_roots` are B's
+/// op-root classes (a class that is neither terminal nor a B op-root falls back
+/// to External). `must_materialize` lists classes whose value some consumer can
+/// never internalize, so they are never offered a consuming alternative. Returns
+/// `None` if the instance is infeasible (a class with no valid alternative).
 pub(crate) fn build_eclass_cover(
     egraph: &SemEGraph,
-    op_by_root: &HashMap<Id, OpId>,
+    op_roots: &HashSet<Id>,
+    classes: &[Id],
     must_materialize: &HashSet<Id>,
     dead_allowed: &HashSet<Id>,
     matches: &[PbqpIselMatch],
 ) -> Option<ClassCover> {
-    let classes: Vec<Id> = egraph.classes().map(|c| egraph.find(c.id())).collect();
+    let classes: Vec<Id> = classes.to_vec();
     let index: HashMap<Id, usize> = classes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
-    let class_index = |c: Id| index[&egraph.find(c)];
+    let class_index = |c: Id| index.get(&egraph.find(c)).copied();
 
     let is_terminal = |c: Id| egraph.nodes(c).iter().any(|n| n.children().is_empty());
 
@@ -131,7 +133,10 @@ pub(crate) fn build_eclass_cover(
     }
 
     for (match_id, m) in matches.iter().enumerate() {
-        alternatives_by_node[class_index(m.root)].push(PbqpIselAlternative::Root { match_id });
+        let Some(root_index) = class_index(m.root) else {
+            continue;
+        };
+        alternatives_by_node[root_index].push(PbqpIselAlternative::Root { match_id });
         for binding in &m.bindings.pattern_nodes {
             if binding.is_boundary
                 || binding.pattern_node == m.pattern_root
@@ -139,7 +144,10 @@ pub(crate) fn build_eclass_cover(
             {
                 continue;
             }
-            alternatives_by_node[class_index(binding.class)].push(PbqpIselAlternative::Internal {
+            let Some(child_index) = class_index(binding.class) else {
+                continue;
+            };
+            alternatives_by_node[child_index].push(PbqpIselAlternative::Internal {
                 match_id,
                 pattern_node: binding.pattern_node,
             });
@@ -147,11 +155,13 @@ pub(crate) fn build_eclass_cover(
     }
 
     for &c in dead_allowed {
-        alternatives_by_node[class_index(c)].push(PbqpIselAlternative::Dead);
+        if let Some(i) = class_index(c) {
+            alternatives_by_node[i].push(PbqpIselAlternative::Dead);
+        }
     }
 
     for (i, &c) in classes.iter().enumerate() {
-        if alternatives_by_node[i].is_empty() && (is_terminal(c) || !op_by_root.contains_key(&c)) {
+        if alternatives_by_node[i].is_empty() && (is_terminal(c) || !op_roots.contains(&c)) {
             alternatives_by_node[i].push(PbqpIselAlternative::External);
         }
     }
@@ -213,10 +223,13 @@ pub(crate) fn build_eclass_cover(
     // class pair gets one compatibility matrix.
     let mut edge_pairs: HashSet<(usize, usize)> = HashSet::new();
     for m in matches {
-        let ri = class_index(m.root);
+        let Some(ri) = class_index(m.root) else {
+            continue;
+        };
         for binding in &m.bindings.pattern_nodes {
-            let ci = class_index(binding.class);
-            if ri != ci {
+            if let Some(ci) = class_index(binding.class)
+                && ri != ci
+            {
                 edge_pairs.insert((ri, ci));
             }
         }
@@ -318,7 +331,7 @@ pub(crate) fn prune_dominated_matches(
 /// consumer needing the value) are skipped.
 pub(crate) fn completeness_error(
     egraph: &SemEGraph,
-    op_by_root: &HashMap<Id, OpId>,
+    op_roots: &HashSet<Id>,
     matches: &[PbqpIselMatch],
     exempt: &HashSet<Id>,
 ) -> Option<String> {
@@ -334,7 +347,7 @@ pub(crate) fn completeness_error(
     }
 
     let mut missing: Vec<SymKind> = Vec::new();
-    for &class in op_by_root.keys() {
+    for &class in op_roots {
         let class = egraph.find(class);
         if egraph.nodes(class).iter().any(|n| n.children().is_empty()) {
             continue;

@@ -3,12 +3,13 @@
 
 use std::collections::HashMap;
 
-use tir::{BlockId, Context, OpId, TypeId, ValueId, builtin::IntegerType};
+use tir::{BlockId, Context, OpId, TypeId, ValueId, analysis::DominatorTree, builtin::IntegerType};
 use tir_symbolic::egraph::Id;
 
+use super::FunctionSelection;
 use super::RuleMatch;
 use super::cover::PbqpIselMatch;
-use super::node::{SemEGraph, class_int_binding, class_value_binding, class_width};
+use super::node::{class_int_binding, class_width};
 
 #[derive(Clone, Debug)]
 pub(crate) enum BlockDecision {
@@ -70,9 +71,10 @@ pub(crate) struct IntroducedEmit {
 /// rewrite-introduced e-classes (those covered by a Root match but with no original
 /// IR op) as fresh-valued instructions threaded into their consumers' operands.
 pub(crate) struct EmissionBuilder<'a> {
-    pub(crate) egraph: &'a SemEGraph,
-    pub(crate) class_value: &'a HashMap<Id, ValueId>,
-    pub(crate) op_by_root: &'a HashMap<Id, OpId>,
+    pub(crate) fs: &'a FunctionSelection,
+    pub(crate) dom: &'a DominatorTree,
+    /// The block whose plan is being emitted (the consumer's block).
+    pub(crate) block: BlockId,
     pub(crate) matches: &'a [PbqpIselMatch],
     pub(crate) root_match: &'a HashMap<Id, usize>,
     pub(crate) context: &'a Context,
@@ -84,7 +86,7 @@ pub(crate) struct EmissionBuilder<'a> {
 impl EmissionBuilder<'_> {
     /// A Root-covered class with no original op is one the rewrites introduced.
     fn is_introduced(&self, class: Id) -> bool {
-        self.root_match.contains_key(&class) && !self.op_by_root.contains_key(&class)
+        self.root_match.contains_key(&class) && !self.fs.ops_by_root.contains_key(&class)
     }
 
     /// Build the operand bindings for a match, first materializing any introduced
@@ -100,14 +102,14 @@ impl EmissionBuilder<'_> {
             .captures
             .entries
             .iter()
-            .map(|(_, class)| self.egraph.find(*class))
+            .map(|(_, class)| self.fs.egraph.find(*class))
             .collect();
         for class in operand_classes {
             if self.is_introduced(class) {
                 self.emit_introduced(class, anchor, anchor_ty);
             }
         }
-        self.build_rule_match(match_id)
+        self.build_rule_match(match_id, anchor)
     }
 
     /// Ensure an introduced class is emitted (operands first), returning its fresh
@@ -122,7 +124,7 @@ impl EmissionBuilder<'_> {
             .captures
             .entries
             .iter()
-            .map(|(_, c)| self.egraph.find(*c))
+            .map(|(_, c)| self.fs.egraph.find(*c))
             .collect();
         for c in operand_classes {
             if self.is_introduced(c) {
@@ -132,14 +134,14 @@ impl EmissionBuilder<'_> {
 
         let dest_ty = anchor_ty
             .or_else(|| {
-                class_width(self.context, self.egraph, class)
+                class_width(self.context, &self.fs.egraph, class)
                     .map(|w| IntegerType::new(self.context, w))
             })
             .unwrap_or_else(|| IntegerType::new(self.context, 64));
         let dest = self.context.create_value(dest_ty, None).id();
         self.introduced_dest.insert(class, dest);
 
-        let m = self.build_rule_match(match_id);
+        let m = self.build_rule_match(match_id, anchor);
         self.introduced.push(IntroducedEmit {
             rule_index: self.matches[match_id].rule_index,
             m,
@@ -150,25 +152,28 @@ impl EmissionBuilder<'_> {
         dest
     }
 
-    /// Resolve each capture symbol to a concrete operand: an introduced operand's
-    /// fresh value, then a constant immediate, then an input value, then the value
-    /// an intermediate result produces.
-    fn build_rule_match(&self, match_id: usize) -> RuleMatch {
+    /// Resolve each capture symbol to a concrete operand for consumer op
+    /// `consumer`: an introduced operand's fresh value, then a constant immediate,
+    /// then a register value chosen under the dominance rule.
+    fn build_rule_match(&self, match_id: usize, consumer: OpId) -> RuleMatch {
         let mut int_bindings = Vec::new();
         let mut value_bindings = Vec::new();
         for (sym, class) in &self.matches[match_id].bindings.captures.entries {
-            let class = self.egraph.find(*class);
+            let class = self.fs.egraph.find(*class);
             // An introduced operand's fresh value takes priority; otherwise
             // resolve the class to its constant and/or register operand (a class
-            // can carry both — see `CaptureBindings::to_rule_match`).
+            // can carry both).
             if let Some(&dest) = self.introduced_dest.get(&class) {
                 value_bindings.push((*sym, dest));
                 continue;
             }
-            if let Some(v) = class_int_binding(self.egraph, class) {
+            if let Some(v) = class_int_binding(&self.fs.egraph, class) {
                 int_bindings.push((*sym, v));
             }
-            if let Some(v) = class_value_binding(self.egraph, self.class_value, class) {
+            if let Some(v) =
+                self.fs
+                    .register_value(self.dom, self.context, class, self.block, consumer)
+            {
                 value_bindings.push((*sym, v));
             }
         }

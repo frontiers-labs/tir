@@ -1736,3 +1736,285 @@ fn equal_cost_tie_breaks_to_more_specific_rule() {
         .collect();
     assert_eq!(body_ops, vec!["subi", "return"]);
 }
+
+fn slt(context: &Context, lhs: tir::ValueId, rhs: tir::ValueId) -> tir::builtin::CmpIOp {
+    tir::builtin::CmpIOpBuilder::new(context)
+        .lhs(lhs)
+        .rhs(rhs)
+        .predicate("slt")
+        .result_type(IntegerType::new(context, 1))
+        .build()
+}
+
+/// A fact inherited two dominator levels down folds a redundant compare in a
+/// grandchild block: the entry's true edge dominates ^mid, whose jump dominates
+/// ^gc, so the entry fact holds in ^gc and its identical compare folds to a jump.
+#[test]
+fn fact_inherited_two_levels_folds_grandchild_compare() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let i64_ty = IntegerType::new(&context, 64);
+    let a = context.create_value(i64_ty, None);
+    let b = context.create_value(i64_ty, None);
+    let (a_id, b_id) = (a.id(), b.id());
+    let region = context.create_region();
+    let entry = context.create_block(vec![a, b]);
+    let mid = context.create_block(vec![]);
+    let gc = context.create_block(vec![]);
+    for block in [&entry, &mid, &gc] {
+        region.add_block(block.id());
+    }
+    let (u, v, other) = (
+        context.create_block(vec![]),
+        context.create_block(vec![]),
+        context.create_block(vec![]),
+    );
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    let mut eb = IRBuilder::new(entry.clone());
+    let ecmp = slt(&context, a_id, b_id);
+    let econd = ecmp.result();
+    eb.insert(ecmp);
+    eb.insert(ops::cond_br(&context, econd, vec![], vec![], mid.id(), other.id()).build());
+
+    IRBuilder::new(mid.clone()).insert(ops::br(&context, vec![], gc.id()).build());
+
+    let mut gb = IRBuilder::new(gc.clone());
+    let gcmp = slt(&context, a_id, b_id);
+    let gcond = gcmp.result();
+    gb.insert(gcmp);
+    gb.insert(ops::cond_br(&context, gcond, vec![], vec![], u.id(), v.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name()).add_pass(
+        InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
+    );
+    pm.run(&context, context.get_op(module.id()))
+        .expect("nested dominated selection should succeed");
+
+    let body = block_op_list(&context, gc.id());
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    assert_eq!(names, vec!["br"], "grandchild compare folds to a jump");
+    let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(jump.dest(), u.id(), "the true successor is taken");
+}
+
+/// A join block reached from both diamond arms has two incoming edges, so it
+/// carries no fact: its identical compare does NOT fold and fuses into a real
+/// conditional branch.
+#[test]
+fn non_dominated_join_block_does_not_fold() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let i64_ty = IntegerType::new(&context, 64);
+    let a = context.create_value(i64_ty, None);
+    let b = context.create_value(i64_ty, None);
+    let (a_id, b_id) = (a.id(), b.id());
+    let region = context.create_region();
+    let entry = context.create_block(vec![a, b]);
+    let t = context.create_block(vec![]);
+    let f = context.create_block(vec![]);
+    let m = context.create_block(vec![]);
+    for block in [&entry, &t, &f, &m] {
+        region.add_block(block.id());
+    }
+    let (u, v) = (context.create_block(vec![]), context.create_block(vec![]));
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    let mut eb = IRBuilder::new(entry.clone());
+    let ecmp = slt(&context, a_id, b_id);
+    let econd = ecmp.result();
+    eb.insert(ecmp);
+    eb.insert(ops::cond_br(&context, econd, vec![], vec![], t.id(), f.id()).build());
+    IRBuilder::new(t.clone()).insert(ops::br(&context, vec![], m.id()).build());
+    IRBuilder::new(f.clone()).insert(ops::br(&context, vec![], m.id()).build());
+
+    let mut bb = IRBuilder::new(m.clone());
+    let mcmp = slt(&context, a_id, b_id);
+    let mcond = mcmp.result();
+    bb.insert(mcmp);
+    bb.insert(ops::cond_br(&context, mcond, vec![], vec![], u.id(), v.id()).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name()).add_pass(
+        InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
+    );
+    pm.run(&context, context.get_op(module.id()))
+        .expect("selection should succeed");
+
+    let body = block_op_list(&context, m.id());
+    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    // The compare fuses into the branch (marker `br`) plus the fallthrough — two
+    // ops, not the single jump a fold would produce.
+    assert_eq!(
+        names,
+        vec!["br", "br"],
+        "the join-block compare must not fold"
+    );
+    let fused = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
+    assert_eq!(fused.dest(), u.id());
+    assert_eq!(
+        fused.dest_args(),
+        vec![a_id, b_id],
+        "a real fused compare-branch"
+    );
+}
+
+/// Under an `a == k` guard, the dominated block proves `a` congruent to the
+/// constant, so a cross-block use of `a` folds to that immediate (the immediate
+/// rule fires instead of the register form).
+#[test]
+fn eq_guard_folds_value_to_immediate() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let i64_ty = IntegerType::new(&context, 64);
+    let i1 = IntegerType::new(&context, 1);
+    let a = context.create_value(i64_ty, None);
+    let p = context.create_value(i64_ty, None);
+    let (a_id, p_id) = (a.id(), p.id());
+    let region = context.create_region();
+    let entry = context.create_block(vec![a, p]);
+    let bb1 = context.create_block(vec![]);
+    for block in [&entry, &bb1] {
+        region.add_block(block.id());
+    }
+    let bb2 = context.create_block(vec![]);
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    let mut eb = IRBuilder::new(entry.clone());
+    let k = ops::constant(&context, 7, i64_ty).build();
+    let k_res = k.result();
+    eb.insert(k);
+    let ecmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(a_id)
+        .rhs(k_res)
+        .predicate("eq")
+        .result_type(i1)
+        .build();
+    let econd = ecmp.result();
+    eb.insert(ecmp);
+    eb.insert(ops::cond_br(&context, econd, vec![], vec![], bb1.id(), bb2.id()).build());
+
+    let mut bb = IRBuilder::new(bb1.clone());
+    let add = ops::addi(&context, p_id, a_id, i64_ty).build();
+    let add_res = add.result();
+    bb.insert(add);
+    bb.insert(ops::r#return(&context, add_res).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    // No branch rule for `eq`: the guard takes the nonzero fallback, which needs
+    // the compare materialized (eq-materializer). The immediate add rule folds the
+    // constant-proven `a`; the register add is the costlier fallback.
+    let rules = vec![
+        Rule::new("eq-mat", atomic_pattern(SymKind::Eq), 10, emit_sub),
+        Rule::new("addi", atomic_pattern(SymKind::Add), 1, emit_add_imm_marker)
+            .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+            .with_operand_imm_ranges(vec![(
+                1,
+                super::ImmRange {
+                    width: 12,
+                    signed: true,
+                },
+            )]),
+        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+    ];
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("selection should succeed");
+
+    let names: Vec<_> = block_op_list(&context, bb1.id())
+        .iter()
+        .map(|op| op.name)
+        .collect();
+    // The immediate rule fired (its `subi` marker), so `a` folded to the immediate
+    // under the eq guard rather than reading a register.
+    assert_eq!(names, vec!["subi", "return"]);
+}
+
+/// A value in a dominator block that never escapes it must not be read from a
+/// dominated block: the binding rule refuses it, so the dominated block's own
+/// recomputation of the same expression is selected standalone and bound instead.
+#[test]
+fn refuses_cross_block_binding_to_non_escaping_value() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let i64_ty = IntegerType::new(&context, 64);
+    let a = context.create_value(i64_ty, None);
+    let b = context.create_value(i64_ty, None);
+    let m = context.create_value(i64_ty, None);
+    let (a_id, b_id, m_id) = (a.id(), b.id(), m.id());
+    let region = context.create_region();
+    let entry = context.create_block(vec![a, b, m]);
+    let bb1 = context.create_block(vec![]);
+    for block in [&entry, &bb1] {
+        region.add_block(block.id());
+    }
+
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    // %d = a - b is used only within the entry block, so it never escapes.
+    let mut eb = IRBuilder::new(entry.clone());
+    let d = ops::subi(&context, a_id, b_id, i64_ty).build();
+    let d_res = d.result();
+    eb.insert(d);
+    let g = ops::subi(&context, d_res, m_id, i64_ty).build();
+    eb.insert(g);
+    eb.insert(ops::br(&context, vec![], bb1.id()).build());
+
+    // %e = a - b recomputes the same expression (CSE-merged with %d); the add
+    // consumes it, resolving its operand under the binding rule.
+    let mut bb = IRBuilder::new(bb1.clone());
+    let e = ops::subi(&context, a_id, b_id, i64_ty).build();
+    let e_res = e.result();
+    bb.insert(e);
+    let r = ops::addi(&context, e_res, m_id, i64_ty).build();
+    let r_res = r.result();
+    bb.insert(r);
+    bb.insert(ops::r#return(&context, r_res).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        Rule::new("sub", atomic_pattern(SymKind::Sub), 1, emit_sub),
+        Rule::new("add", atomic_pattern(SymKind::Add), 1, emit_add),
+    ];
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("selection should succeed");
+
+    let entry_sub = block_op_list(&context, entry.id())[0].results[0];
+    let bb1_ops = block_op_list(&context, bb1.id());
+    let names: Vec<_> = bb1_ops.iter().map(|op| op.name).collect();
+    // %e is selected standalone (its own subi) and the add reads it.
+    assert_eq!(names, vec!["subi", "addi", "return"]);
+    let bb1_sub = bb1_ops[0].results[0];
+    let addi = &bb1_ops[1];
+    assert!(
+        addi.operands.contains(&bb1_sub),
+        "the add binds the block-local recomputation"
+    );
+    assert!(
+        !addi.operands.contains(&entry_sub),
+        "the non-escaping dominator value is refused"
+    );
+}

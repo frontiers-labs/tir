@@ -26,7 +26,7 @@ pub(crate) struct SemDagBuilder<'a> {
     value_to_def: &'a HashMap<ValueId, OpId>,
     egraph: &'a mut SemEGraph,
     /// The e-class built for each already-lowered IR value (operand sharing / CSE).
-    value_to_class: HashMap<ValueId, Id>,
+    pub(crate) value_to_class: HashMap<ValueId, Id>,
     /// First class found to compute each op result (first writer wins, matching CSE).
     pub(crate) class_value: HashMap<Id, ValueId>,
     /// Serial of the next opaque leaf; each un-lowerable node gets its own.
@@ -278,18 +278,8 @@ impl<'a> SemDagBuilder<'a> {
                     self.add_input_value(value, value_ty)
                 }
             }
-        } else if let Some(def_op_id) = self.context.get_value(value).defining_op()
-            && self.context.get_op(def_op_id).name == "constant"
-        {
-            // A constant produced in another (dominating) block: rematerialize it as
-            // an immediate here so the consumer can fold it, rather than reading the
-            // producer block's register. The now-unused producer constant is dropped
-            // by the later dead-code-elimination pass. Non-constant cross-block
-            // producers stay register inputs (they are already selected when their
-            // block commits, so there is nothing to expand).
-            let def = self.context.get_op(def_op_id);
-            self.constant_class(&def, value, value_ty)
         } else {
+            // A block argument or entry input: no defining op, so a register leaf.
             self.add_input_value(value, value_ty)
         };
 

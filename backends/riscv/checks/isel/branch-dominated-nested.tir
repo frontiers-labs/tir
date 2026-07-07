@@ -1,0 +1,38 @@
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
+
+// A guard fact is inherited two dominator levels down: ^bb1 is dominated by the
+// entry's true edge, and ^bb3 is dominated by ^bb1's (unconditional) edge, so
+// the entry fact still holds throughout ^bb3. The identical compare re-computed
+// in ^bb3 is proven true there and its guard folds to an unconditional branch to
+// the taken successor; the compare op is erased.
+
+module {
+  func @nested(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %2, ^bb1, ^bb2
+  ^bb1:
+    br ^bb3
+  ^bb2:
+    %3 = constant {value = 0} : !i64
+    return %3
+  ^bb3:
+    %4 = cmpi %0, %1 {predicate = "slt"} : !i1
+    cond_br %4, ^bb4, ^bb5
+  ^bb4:
+    %5 = constant {value = 1} : !i64
+    return %5
+  ^bb5:
+    %6 = constant {value = 2} : !i64
+    return %6
+  }
+  module_end
+}
+
+// The entry fuses the compare-and-branch; ^bb1 is a plain jump; the grandchild
+// ^bb3 inherits the fact and reduces to a single jump to the known successor.
+// CHECK: riscv.blt {rs1 = %virt0:GPR, rs2 = %virt1:GPR, imm = ^bb1}
+// CHECK-NEXT: riscv.vbr ^bb2
+// CHECK: ^bb1:
+// CHECK-NEXT: riscv.vbr ^bb3
+// CHECK: ^bb3:
+// CHECK-NEXT: riscv.vbr ^bb4

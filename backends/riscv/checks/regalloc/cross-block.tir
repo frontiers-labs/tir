@@ -23,7 +23,8 @@ module {
 // CHECK: riscv.add {rd = [[V:x[0-9]+]], rs1 = x10, rs2 = x11}
 // CHECK: riscv.blt
 // The ^bb1 temporary must not reuse %v's register, and the cross-block add still
-// reads %v — proof it survived the branch.
+// reads %v — proof it survived the branch. (%v now expands to its defining
+// Add(a,b) in ^bb1, so it sorts to the commutative add's first operand.)
 // CHECK: riscv.add {rd = {{x[0-9]+}}, rs1 = x12, rs2 = x12}
-// CHECK: riscv.add {rd = x10, rs1 = {{x[0-9]+}}, rs2 = [[V]]}
+// CHECK: riscv.add {rd = x10, rs1 = [[V]], rs2 = {{x[0-9]+}}}
 // CHECK: riscv.vret
