@@ -58,6 +58,21 @@ pub struct EGraph<L: ENode> {
     scope_members: HashMap<Id, Vec<Id>>,
     scope_classes: HashMap<Id, EClass<L>>,
     scope_memo: Vec<HashMap<u64, Vec<(L, Id)>>>,
+    /// Undo log of base insertions per open context: `make_class` still writes the
+    /// new class into base `classes`/`classes_by_op`/children's `parents` while scoped
+    /// (so the overlay, which reads base, sees it), but `pop_context` reverts exactly
+    /// these so a popped scope leaves the base structurally identical. One frame per
+    /// context; nested pops revert only the innermost.
+    scope_created: Vec<Vec<ScopeCreated>>,
+}
+
+/// One base class minted by [`EGraph::make_class`] inside a scope, with what its
+/// insertion mutated so [`EGraph::pop_context`] can undo it.
+struct ScopeCreated {
+    id: Id,
+    op_key: u64,
+    /// Child classes that received a parent back-edge for this class.
+    parents_on: Vec<Id>,
 }
 
 impl<L: ENode> Default for EGraph<L> {
@@ -77,6 +92,7 @@ impl<L: ENode> EGraph<L> {
             scope_members: HashMap::new(),
             scope_classes: HashMap::new(),
             scope_memo: Vec::new(),
+            scope_created: Vec::new(),
         }
     }
 
@@ -111,18 +127,50 @@ impl<L: ENode> EGraph<L> {
     pub fn push_context(&mut self) {
         self.unionfind.push_context();
         self.scope_memo.push(HashMap::new());
+        self.scope_created.push(Vec::new());
         self.aggregate_scope();
     }
 
-    /// Leave the scope, discarding its unions and overlay; the enclosing scope (or
-    /// base) is restored without a rebuild.
+    /// Leave the scope, discarding its unions, overlay, and any classes added inside
+    /// it; the enclosing scope (or base) is restored without a rebuild.
     pub fn pop_context(&mut self) {
+        if let Some(created) = self.scope_created.pop() {
+            self.undo_created(created);
+        }
         self.unionfind.pop_context();
         self.scope_memo.pop();
         self.scope_members.clear();
         self.scope_classes.clear();
+        // Drop union work queued against classes that vanished with the scope; a
+        // survivor kept here would panic the next base `repair`.
+        self.pending = self
+            .pending
+            .iter()
+            .copied()
+            .filter(|&id| self.classes.contains_key(&self.find(id)))
+            .collect();
         if self.in_scope() {
             self.aggregate_scope();
+        }
+    }
+
+    /// Revert the base insertions logged for a just-popped scope: remove each class's
+    /// `classes_by_op` entry, the parent back-edges it pushed onto surviving children,
+    /// and the class itself.
+    fn undo_created(&mut self, created: Vec<ScopeCreated>) {
+        for c in created {
+            for child in c.parents_on {
+                if let Some(class) = self.classes.get_mut(&child) {
+                    class.parents.retain(|(_, pc)| *pc != c.id);
+                }
+            }
+            if let Some(bucket) = self.classes_by_op.get_mut(&c.op_key) {
+                bucket.retain(|&id| id != c.id);
+                if bucket.is_empty() {
+                    self.classes_by_op.remove(&c.op_key);
+                }
+            }
+            self.classes.remove(&c.id);
         }
     }
 
@@ -430,10 +478,8 @@ impl<L: ENode> EGraph<L> {
     /// distinct child class and (unless unique) memoize it.
     fn make_class(&mut self, node: L) -> Id {
         let id = Id::from_raw(self.unionfind.push());
-        self.classes_by_op
-            .entry(node.op_key())
-            .or_default()
-            .push(id);
+        let op_key = node.op_key();
+        self.classes_by_op.entry(op_key).or_default().push(id);
         let mut seen: Vec<Id> = Vec::new();
         for &child in node.children() {
             let child = self.find(child);
@@ -450,6 +496,14 @@ impl<L: ENode> EGraph<L> {
             self.memo_insert(node.clone(), id);
         }
         self.classes.insert(id, EClass::new(id, node));
+        // Inside a scope, log this base insertion so `pop_context` can revert it.
+        if let Some(frame) = self.scope_created.last_mut() {
+            frame.push(ScopeCreated {
+                id,
+                op_key,
+                parents_on: seen,
+            });
+        }
         id
     }
 
@@ -770,5 +824,120 @@ mod tests {
         assert!(g.connected(ab, ba));
         g.pop_context();
         assert!(!g.connected(ab, ba));
+    }
+
+    #[test]
+    fn scope_add_then_pop_restores_class_count() {
+        let mut g = EGraph::new();
+        let a = sym(&mut g, 0);
+        let b = sym(&mut g, 1);
+        g.rebuild();
+        let base = g.num_classes();
+
+        g.push_context();
+        neg(&mut g, a);
+        add(&mut g, a, b);
+        g.rebuild();
+        assert_eq!(g.num_classes(), base + 2);
+        g.pop_context();
+        assert_eq!(g.num_classes(), base);
+    }
+
+    #[test]
+    fn readd_after_pop_mints_one_class_no_accumulation() {
+        let mut g = EGraph::new();
+        let a = sym(&mut g, 0);
+        let b = sym(&mut g, 1);
+        g.rebuild();
+        let base = g.num_classes();
+
+        g.push_context();
+        add(&mut g, a, b);
+        g.pop_context();
+
+        // The scope's node is gone from the base memo, so re-adding mints exactly one
+        // fresh class; it is then interned, so a repeat shares it (no accumulation).
+        let e1 = add(&mut g, a, b);
+        assert_eq!(g.num_classes(), base + 1);
+        let e2 = add(&mut g, a, b);
+        assert_eq!(g.find(e1), g.find(e2));
+        assert_eq!(g.num_classes(), base + 1);
+    }
+
+    #[test]
+    fn scope_add_registers_then_reverts_child_parents() {
+        let mut g = EGraph::new();
+        let a = sym(&mut g, 0);
+        g.rebuild();
+        let before = g.classes[&a].parents.len();
+
+        g.push_context();
+        neg(&mut g, a);
+        assert_eq!(g.classes[&a].parents.len(), before + 1);
+        g.pop_context();
+        assert_eq!(g.classes[&a].parents.len(), before);
+    }
+
+    #[test]
+    fn nested_scope_pop_reverts_only_inner_adds() {
+        let mut g = EGraph::new();
+        let a = sym(&mut g, 0);
+        let b = sym(&mut g, 1);
+        g.rebuild();
+        let base = g.num_classes();
+
+        g.push_context();
+        neg(&mut g, a);
+        g.rebuild();
+        assert_eq!(g.num_classes(), base + 1);
+        g.push_context();
+        add(&mut g, a, b);
+        g.rebuild();
+        assert_eq!(g.num_classes(), base + 2);
+        g.pop_context();
+        assert_eq!(g.num_classes(), base + 1);
+        g.pop_context();
+        assert_eq!(g.num_classes(), base);
+    }
+
+    #[test]
+    fn scoped_saturate_leaves_base_identical() {
+        // Commutativity introduces add(b, a) as a new node inside the scope; after pop
+        // the base graph must be structurally identical.
+        let comm = comm_rule();
+        let mut g = EGraph::new();
+        let a = sym(&mut g, 0);
+        let b = sym(&mut g, 1);
+        add(&mut g, a, b);
+        g.rebuild();
+        let base_classes = g.num_classes();
+        let base_size = g.total_size();
+        let a_parents = g.classes[&a].parents.len();
+
+        g.push_context();
+        g.saturate([&comm], 10, 1000);
+        assert!(g.total_size() > base_size);
+        g.pop_context();
+
+        assert_eq!(g.num_classes(), base_classes);
+        assert_eq!(g.total_size(), base_size);
+        assert_eq!(g.classes[&a].parents.len(), a_parents);
+    }
+
+    #[test]
+    fn classes_by_op_does_not_accumulate_across_cycles() {
+        let mut g = EGraph::new();
+        let a = sym(&mut g, 0);
+        let b = sym(&mut g, 1);
+        g.rebuild();
+        let add_key = Math::Add([a, b]).op_key();
+        assert!(!g.classes_by_op.contains_key(&add_key));
+
+        for _ in 0..5 {
+            g.push_context();
+            add(&mut g, a, b);
+            g.pop_context();
+        }
+        assert!(!g.classes_by_op.contains_key(&add_key));
     }
 }
