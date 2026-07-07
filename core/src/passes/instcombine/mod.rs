@@ -2,8 +2,11 @@
 //! ([`crate::analysis::GSA`], which already encodes phis as γ/μ/Φ gates so the pass
 //! needs no CFG walk) into a [`tir_symbolic`] e-graph of real IR values, saturates,
 //! extracts the cheapest form per value by [`crate::OpCost`], and rewrites what
-//! improved. Flow-sensitive facts ride the e-graph's scoped assumptions: the region
-//! driver pushes a context, assumes a guard's condition, rewrites, and pops.
+//! improved. Flow-sensitive facts ride the e-graph's scoped assumptions: a
+//! structured region pushes its guard's condition around its body, and unstructured
+//! `cond_br` facts ([`crate::analysis::DominatingEdgeFacts`]) are asserted in
+//! dominator-tree DFS order — each block's own guard fact scoped once and inherited
+//! by the blocks it dominates — then popped on the way back up.
 //!
 //! The engine holds no op-specific knowledge — identity, cost, folding and
 //! constant-reading come from op interfaces; op construction is owned by the rewrites.
