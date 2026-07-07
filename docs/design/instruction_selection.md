@@ -58,7 +58,7 @@ guards against re-emitting), so building and solving each happen once.
 ## 1. Building the semantic e-graph
 
 `SemDagBuilder` lowers every op of the **whole function** into one shared
-`SemEGraph = EGraph<SemNode, ()>`. There is no separate DAG arena: the e-graph
+`SemEGraph = EGraph<SemNode>`. There is no separate DAG arena: the e-graph
 hash-conses, so it *is* the interned semantic DAG, and identical sub-expressions
 across ops — and across blocks — collapse to one e-class (CSE for free). A single
 builder instance lowers every block, so its per-value memoization
@@ -75,18 +75,20 @@ An e-node is a **label** plus its **operand e-classes**. The label is a
 `SemNode`:
 
 ```rust
-struct SemNode { kind: ExprKind, payload: Option<SemPayload>, ty: Option<TypeId> }
+struct SemNode { kind: SymKind, payload: Option<SemPayload>, ty: Option<TypeId>, children: Vec<Id> }
 
 enum SemPayload {
-    Expr(ExprPayload), // a semantic constant / symbol / value
-    Opaque(u32),       // a unique, never-merging marker (see below)
+    Expr(SymPayload<ValueId>), // a semantic constant / symbol / value
+    Opaque(u32),               // a unique, never-merging marker (see below)
 }
 ```
 
-Structure (the operands) lives in the e-node's child classes, never in the label.
-So two e-nodes are congruent iff they share a label *and* the same operand classes
-— exactly what `PartialEq`/`Hash` compare. `ty` is the verbatim IR type (no width
-normalization), so every target can constrain on the widths it distinguishes.
+The operands live inline in `children`, but the label — `(kind, payload, ty)` —
+ignores them: `PartialEq`/`Hash` compare only the label, so two e-nodes are
+congruent iff they share a label *and* the same canonical operand classes (the
+`ENode` contract, which pairs the label with the children). `ty` is the verbatim
+IR type (no width normalization), so every target can constrain on the widths it
+distinguishes.
 
 ```
    add : i32                       a SemNode label is just (kind, payload, ty);
@@ -96,7 +98,7 @@ normalization), so every target can constrain on the widths it distinguishes.
    └──────────┘   └──► class[y]    (symbol, ty=i32)
 ```
 
-`ExprKind` / `ExprPayload` come from each op's `semantic_expr` (the sem-DSL), so a
+`SymKind` / `SymPayload<ValueId>` come from each op's `semantic_expr` (the sem-DSL), so a
 multi-node expansion (e.g. a load becomes `LoadMemory(add(addr, 0), bytes,
 meta)`) lands as several e-nodes.
 
@@ -120,7 +122,9 @@ Ops implementing `MemoryRead` / `MemoryWrite` are lowered by
 `build_memory_effect` into `LoadMemory` / `StoreMemory` nodes whose address is
 wrapped as `addr + 0` so the targets' base+offset addressing patterns
 match a bare pointer. The interfaces are the only trigger; there is no op-name
-matching.
+matching. `class_is_pure` also treats the atomic and synchronization kinds
+(`LoadReserved`, `StoreConditional`, `AtomicRmw`, `Fence`) as impure, so like
+plain loads and stores their classes never merge or duplicate.
 
 ### Side tables produced by the build
 
@@ -256,6 +260,18 @@ compare fuses into `blt` on rv32 but is *refused* on rv64 (a 64-bit compare
 would read undefined upper bits) instead of miscompiling.
 Low-bits-preserving operators (add/and/shl/mul-low) stay width-agnostic.
 
+### Float operands
+
+A boundary may carry a **float requirement** (`Rule::with_operand_floats`,
+compiled to `Pattern::operand_floats`): the bound class must not hold a value
+whose IR type kind is the opposite — an integer operand refuses a float value
+and a float operand refuses an integer one, so a store never consumes a float
+and an `fadd` never consumes an integer. `class_is_float` reads the kind off
+whichever member carries a known integer or float type; a class of unknown type
+(a rewrite-introduced intermediate) matches either. Rewrite-introduced float
+nodes get their type from `type_for_kind_width`, which maps the arithmetic float
+kinds (`FAdd`/`FSub`/`FMul`/`FDiv`) at width 32/64 to `f32`/`f64`.
+
 ### Immediate ranges
 
 An immediate boundary additionally carries its **encoding range**
@@ -376,7 +392,7 @@ both records both.
 `completeness_error` runs **before** solving and checks only **B's** op-root
 classes: each non-terminal one must be a Root or interior of *some* match (or an
 exempt fused-branch condition), else selection fails naming the unsupported
-`ExprKind` ("missing atomic materializer rule for semantic kind …"). This is how an
+`SymKind` ("missing atomic materializer rule for semantic kind …"). This is how an
 incomplete rule set is rejected instead of silently dropping an op.
 
 ## 6. Committing
@@ -434,7 +450,7 @@ plus `uncond` to the false successor; a plain `br` lowers through `uncond`
 directly. `cmpi` participates via its predicate-dependent semantic expression
 (canonicalized so only `Eq/Ne/Lt/Ge/ULt/UGe` appear — `sgt`/`sle`/… swap
 operands), and a proved width-1 identity
-`c == If(c, zext(1,1), zext(0,1))` bridges a bare comparison class to the
+`c == If(c, 1, 0)` (any 1-bit `c`) bridges a bare comparison class to the
 `slt`-style `If`-patterns so a compare used as a *value* materializes with no
 hand-written rule.
 

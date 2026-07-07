@@ -1,11 +1,12 @@
 //! Instruction selection over semantic e-graphs.
 //!
-//! Each block's operations are lowered into an e-graph of semantic expressions
-//! ([`builder`]), saturated with proved algebraic rewrites ([`rewrites`]), and
-//! covered by the target's instruction patterns ([`pattern`]) — e-matched by
-//! the shared [`tir_symbolic::egraph`] engine — via a PBQP instance over
-//! e-classes ([`cover`]). The solved cover becomes an emission plan ([`emit`])
-//! the pass commits through the rewriter.
+//! The whole function's operations are lowered into one shared e-graph of
+//! semantic expressions ([`builder`]), saturated with proved algebraic rewrites
+//! ([`rewrites`]), and then covered *per block* — each inside its own
+//! dominating-edge assumption scope — by the target's instruction patterns
+//! ([`pattern`]), e-matched by the shared [`tir_symbolic::egraph`] engine, via a
+//! PBQP instance over e-classes ([`cover`]). The solved cover becomes an emission
+//! plan ([`emit`]) the pass commits through the rewriter.
 
 mod axioms;
 mod builder;

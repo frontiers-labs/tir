@@ -14,7 +14,9 @@ use tir_adt::APInt;
 use tir_symbolic::egraph::{EGraph, ENode, Id};
 
 /// The semantic e-graph instruction selection operates over: e-classes of
-/// equivalent semantic expressions for the values computed in a block.
+/// equivalent semantic expressions for the values computed across the whole
+/// function, shared by every block and covered per block inside per-block
+/// assumption scopes.
 pub type SemEGraph = EGraph<SemNode>;
 
 /// An e-graph node label: the operator identity (kind/payload) plus the IR type of
