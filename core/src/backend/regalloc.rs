@@ -651,8 +651,10 @@ impl Pass for RegisterAllocationPass {
             &blocks,
             &assignment,
             &abi.stack_args,
-            frame_size,
-            &saves,
+            FrameLayout {
+                size: frame_size,
+                saves: &saves,
+            },
         )?;
         if frame_size > 0 || !saves.is_empty() {
             self.insert_frame(context, rewriter, &blocks, frame_size, &saves)?;
@@ -924,8 +926,7 @@ impl RegisterAllocationPass {
         blocks: &[BlockId],
         assignment: &HashMap<u32, PhysReg>,
         args: &[IncomingStackArg],
-        frame_size: u32,
-        saves: &[(PhysReg, i64)],
+        layout: FrameLayout<'_>,
     ) -> Result<(), PassError> {
         if args.is_empty() {
             return Ok(());
@@ -951,9 +952,9 @@ impl RegisterAllocationPass {
                     arg.class.name()
                 )));
             }
-            let offset = self
-                .target
-                .incoming_stack_arg_offset(frame_size, saves, arg.stack_index);
+            let offset =
+                self.target
+                    .incoming_stack_arg_offset(layout.size, layout.saves, arg.stack_index);
             let load = self
                 .target
                 .emit_incoming_stack_arg_load(context, dst, &frame, offset)?;
@@ -961,6 +962,11 @@ impl RegisterAllocationPass {
         }
         Ok(())
     }
+}
+
+struct FrameLayout<'a> {
+    size: u32,
+    saves: &'a [(PhysReg, i64)],
 }
 
 /// Tracks spill stack-slot assignment across spill rounds.

@@ -186,7 +186,7 @@ operation! {
             result: "crate::builtin::IndexType",
         },
         attributes: A {
-            sew: Integer,
+            sew: "Int",
         },
     }
 }

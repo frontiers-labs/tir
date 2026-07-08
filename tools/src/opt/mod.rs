@@ -1,31 +1,9 @@
 use std::{error::Error, ffi::OsString};
 
 use clap::Args;
-use tir::{Context, IRFormatter, OpId, Operation, builtin::ModuleOp};
+use tir::{Context, IRFormatter, Operation, builtin::ModuleOp};
 
 use crate::common::{read_input, write_output};
-
-/// Verify `op` and every operation nested in its regions. The framework's
-/// `Operation::verify` only checks an op's own regions for terminators, so we
-/// walk the tree ourselves and run each op's full verifier.
-fn verify_recursive(context: &Context, op_id: OpId) -> Result<(), String> {
-    let instance = context.get_op(op_id);
-    instance
-        .clone()
-        .as_dyn_op()
-        .verify(context)
-        .map_err(|e| format!("verification failed: {e}"))?;
-
-    for region_id in instance.regions.clone() {
-        let region = context.get_region(region_id);
-        for block in region.iter(context.clone()) {
-            for child in block.op_ids() {
-                verify_recursive(context, child)?;
-            }
-        }
-    }
-    Ok(())
-}
 
 #[derive(Args)]
 pub struct ToolArgs {
@@ -66,7 +44,8 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     }
 
     if args.verify {
-        verify_recursive(&context, module.id())?;
+        tir::verify_op_tree(&context, module.id())
+            .map_err(|e| format!("verification failed: {e}"))?;
     }
 
     let mut rendered = String::new();

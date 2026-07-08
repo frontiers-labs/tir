@@ -142,6 +142,28 @@ pub trait Operation: 'static + Send + Sync + Any + Verifiable + OpDefVerifiable 
     }
 }
 
+pub fn verify_op_tree(context: &Context, op_id: OpId) -> Result<(), Error> {
+    if !context.has_operation(op_id) {
+        return Err(Error::VerificationError(format!(
+            "operation {op_id:?} does not exist"
+        )));
+    }
+
+    let instance = context.get_op(op_id);
+    instance.clone().as_dyn_op().verify(context)?;
+
+    for region_id in instance.regions.clone() {
+        let region = context.get_region(region_id);
+        for block in region.iter(context.clone()) {
+            for child in block.op_ids() {
+                verify_op_tree(context, child)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub trait Verifiable {
     fn verify_impl(&self, _context: &Context) -> Result<(), crate::Error> {
         Ok(())

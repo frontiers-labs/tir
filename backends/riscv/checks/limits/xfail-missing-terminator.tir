@@ -1,10 +1,6 @@
-// XFAIL: *
 // RUN: not tir mc --march=rv64i --stage=isel %s
 
-// VERIFIER GAP: a function whose only block has no terminator is accepted. The
-// dead body is swept and an empty `asm.symbol` is emitted with no `vret`, so
-// the function falls through into whatever follows. This malformed IR should be
-// rejected by the verifier; instead it compiles silently, so `not` fails today.
+// The mc pipeline verifies TIR before lowering and rejects missing terminators.
 
 module {
   func @a(%0: !i64) -> !i64 {

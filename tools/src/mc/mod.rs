@@ -70,6 +70,11 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         args.kind.unwrap_or_default(),
     )?;
 
+    if needs_lowering {
+        tir::verify_op_tree(&context, module.id())
+            .map_err(|e| format!("verification failed: {e}"))?;
+    }
+
     let stop_after = match (args.stage, args.filetype) {
         (Some(Stage::ISel), _) => StopAfter::ISel,
         (Some(Stage::RegAlloc), _) | (None, None) => StopAfter::RegAlloc,
