@@ -644,6 +644,28 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
                 .build(),
         ))
     }
+
+    fn emit_frame_address(
+        &self,
+        context: &tir::Context,
+        dst: &tir::backend::liveness::PhysReg,
+        frame: &tir::backend::liveness::PhysReg,
+        offset: i64,
+    ) -> Result<Vec<Box<dyn Operation>>, tir::PassError> {
+        if !matches!(dst.0.name(), "GPR" | "GPRsp") {
+            return Err(tir::PassError::InvalidRuleSet(format!(
+                "arm64 stack allocation addresses for register class {} are not supported",
+                dst.0.name()
+            )));
+        }
+        Ok(vec![Box::new(
+            AddImmediateOpBuilder::new(context)
+                .attr("rd", phys(dst))
+                .attr("rn", phys(frame))
+                .attr("imm", tir::attributes::AttributeValue::Int(offset))
+                .build(),
+        )])
+    }
 }
 
 pub fn create_regalloc_pass() -> tir::backend::regalloc::RegisterAllocationPass {

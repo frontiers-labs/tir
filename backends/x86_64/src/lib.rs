@@ -1107,6 +1107,31 @@ mod isa {
                     .build(),
             ))
         }
+
+        fn emit_frame_address(
+            &self,
+            context: &tir::Context,
+            dst: &tir::backend::liveness::PhysReg,
+            frame: &tir::backend::liveness::PhysReg,
+            offset: i64,
+        ) -> Result<Vec<Box<dyn Operation>>, tir::PassError> {
+            if dst.0.name() != "GPR" {
+                return Err(tir::PassError::InvalidRuleSet(format!(
+                    "x86-64 stack allocation addresses for register class {} are not supported",
+                    dst.0.name()
+                )));
+            }
+            let mut ops = vec![mv(context, phys(dst.0, dst.1), phys(frame.0, frame.1))];
+            if offset != 0 {
+                ops.push(Box::new(
+                    AddImmOpBuilder::new(context)
+                        .attr("dst", phys(dst.0, dst.1))
+                        .attr("imm", AttributeValue::Int(offset))
+                        .build(),
+                ));
+            }
+            Ok(ops)
+        }
     }
 
     /// Extra stack padding (0 or 8 bytes) so `push`ing `count` callee-saved

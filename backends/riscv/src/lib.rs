@@ -1080,6 +1080,28 @@ impl tir::backend::regalloc::TargetRegAlloc for RiscvRegAlloc {
                 .build(),
         ))
     }
+
+    fn emit_frame_address(
+        &self,
+        context: &tir::Context,
+        dst: &tir::backend::liveness::PhysReg,
+        frame: &tir::backend::liveness::PhysReg,
+        offset: i64,
+    ) -> Result<Vec<Box<dyn Operation>>, tir::PassError> {
+        if dst.0.name() != "GPR" {
+            return Err(tir::PassError::InvalidRuleSet(format!(
+                "riscv stack allocation addresses for register class {} are not supported",
+                dst.0.name()
+            )));
+        }
+        Ok(vec![Box::new(
+            AddImmOpBuilder::new(context)
+                .attr("rd", phys(dst))
+                .attr("rs1", phys(frame))
+                .attr("imm", tir::attributes::AttributeValue::Int(offset))
+                .build(),
+        )])
+    }
 }
 
 pub fn create_regalloc_pass() -> tir::backend::regalloc::RegisterAllocationPass {

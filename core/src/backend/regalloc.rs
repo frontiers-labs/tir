@@ -543,6 +543,20 @@ pub trait TargetRegAlloc: Send + Sync {
             dst.0.name()
         )))
     }
+
+    /// Build instruction(s) that materialize `[frame + offset]` into `dst`.
+    fn emit_frame_address(
+        &self,
+        _context: &Context,
+        dst: &PhysReg,
+        _frame: &PhysReg,
+        _offset: i64,
+    ) -> Result<Vec<Box<dyn Operation>>, PassError> {
+        Err(PassError::InvalidRuleSet(format!(
+            "stack allocation addresses are not supported for register class {}",
+            dst.0.name()
+        )))
+    }
 }
 
 /// A register allocation pass. Runs on each `asm.symbol` op produced by instruction
@@ -593,6 +607,7 @@ impl Pass for RegisterAllocationPass {
         let abi = abi_precolor(context, op, &info, self.target.as_ref(), rewriter, &blocks)?;
 
         let mut frame = FrameState::new(self.target.slot_size());
+        let stack_allocas = collect_stack_allocas(context, &blocks, &mut frame);
         let assignment = loop {
             // Recomputed each round: spills insert ops within blocks but never add
             // or remove edges, so the CFG is stable across rounds.
@@ -645,6 +660,14 @@ impl Pass for RegisterAllocationPass {
         let saves = callee_saved_slots(&assignment, &mut frame, self.target.saves_on_frame());
 
         let frame_size = frame.size(self.target.frame_align());
+        self.insert_stack_alloca_addresses(
+            context,
+            rewriter,
+            &blocks,
+            &assignment,
+            &stack_allocas,
+        )?;
+        erase_stack_allocas(context, rewriter, &stack_allocas)?;
         self.insert_incoming_stack_arg_loads(
             context,
             rewriter,
@@ -962,6 +985,40 @@ impl RegisterAllocationPass {
         }
         Ok(())
     }
+
+    fn insert_stack_alloca_addresses(
+        &self,
+        context: &Context,
+        rewriter: &mut Rewriter,
+        blocks: &[BlockId],
+        assignment: &HashMap<u32, PhysReg>,
+        allocas: &[StackAlloca],
+    ) -> Result<(), PassError> {
+        if allocas.is_empty() {
+            return Ok(());
+        }
+        let Some(&entry) = blocks.first() else {
+            return Ok(());
+        };
+        let op_ids = context.get_block(entry).op_ids();
+        let Some(&first) = op_ids.first() else {
+            return Ok(());
+        };
+        let target = op_ref_in(context, entry, first);
+        let frame = self.target.frame_register();
+        for alloca in allocas {
+            let Some(dst) = assignment.get(&alloca.vreg) else {
+                continue;
+            };
+            for op in self
+                .target
+                .emit_frame_address(context, dst, &frame, alloca.offset)?
+            {
+                rewriter.insert_op_before(&target, op.as_ref())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 struct FrameLayout<'a> {
@@ -1005,6 +1062,53 @@ impl FrameState {
         let align = align.max(1);
         size.div_ceil(align) * align
     }
+}
+
+struct StackAlloca {
+    op_id: OpId,
+    block: BlockId,
+    vreg: u32,
+    offset: i64,
+}
+
+fn collect_stack_allocas(
+    context: &Context,
+    blocks: &[BlockId],
+    frame: &mut FrameState,
+) -> Vec<StackAlloca> {
+    let mut allocas = Vec::new();
+    for &block in blocks {
+        for op_id in context.get_block(block).op_ids() {
+            let op = context.get_op(op_id);
+            if op.dialect != "ptr" || op.name != "alloca" {
+                continue;
+            }
+            let Some(result) = op.results.first() else {
+                continue;
+            };
+            allocas.push(StackAlloca {
+                op_id,
+                block,
+                vreg: result.number(),
+                offset: frame.alloc_slot(),
+            });
+        }
+    }
+    allocas
+}
+
+fn erase_stack_allocas(
+    context: &Context,
+    rewriter: &mut Rewriter,
+    allocas: &[StackAlloca],
+) -> Result<(), PassError> {
+    for alloca in allocas {
+        if context.has_operation(alloca.op_id) {
+            let op_ref = op_ref_in(context, alloca.block, alloca.op_id);
+            rewriter.erase_op(&op_ref)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

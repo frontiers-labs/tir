@@ -1,8 +1,7 @@
-// RUN: not tir mc --march=x86_64 --filetype=obj-ascii %s
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
 
-// FINDING G6 (isel-gap): ptr.alloca is not lowered by the backend. Object
-// emission fails: "cannot encode 'alloca'". Load/store through a pointer arg
-// work; the JIT path only survives because it runs Mem2Reg first.
+// ptr.alloca lowers to a frame slot address, so stack load/store code reaches
+// object emission.
 
 module {
   func @f(%0:!i32) -> !i32 {
@@ -13,3 +12,5 @@ module {
   }
   module_end
 }
+
+// CHECK: f:
