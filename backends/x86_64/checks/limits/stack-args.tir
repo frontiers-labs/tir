@@ -1,11 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
-// XFAIL: *
 
-// FINDING F3 (miscompile): the 7th/8th integer args must arrive on the stack
-// (SysV passes only 6 in registers). The backend instead maps them to arbitrary
-// GPRs (rax/r10) with no stack load, so a correct rbp/rsp-relative reload is
-// absent and this CHECK fails (XFAIL). tir-jit confirms f(1..6,70,800) returns
-// garbage instead of 870.
+// SysV passes integer args past the 6th on the stack. The callee reloads them
+// from the incoming stack area before use.
 
 module {
   func @f(%0:!i64,%1:!i64,%2:!i64,%3:!i64,%4:!i64,%5:!i64,%6:!i64,%7:!i64) -> !i64 {
@@ -15,4 +11,5 @@ module {
   module_end
 }
 
-// CHECK: rbp
+// CHECK: x86_64.mov_load_disp {dst = {{r[a-z0-9]+}}, base = rsp, imm = 8}
+// CHECK: x86_64.mov_load_disp {dst = {{r[a-z0-9]+}}, base = rsp, imm = 16}

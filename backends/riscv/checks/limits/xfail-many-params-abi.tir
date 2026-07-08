@@ -1,13 +1,7 @@
-// XFAIL: *
-// RUN: not tir mc --march=rv64i --filetype=asm %s
+// RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
 
-// MISCOMPILE: a function with more than eight integer parameters violates the
-// RISC-V ABI. Args nine and ten should arrive on the stack (loaded relative to
-// sp); instead codegen assigns them to caller-saved temporaries (t0/t1 = x5/x6)
-// and reads those uninitialized registers, e.g. `add x10, x6, x5`. No prologue
-// stack loads are emitted and no diagnostic is produced. Contrast the call-site
-// side, which rejects >8 args cleanly (stack-call-args-unsupported.tir). Since
-// this silently succeeds, `not` currently fails.
+// RISC-V passes integer args past a7 on the stack. The callee reloads them from
+// the incoming stack area before use.
 
 module {
   func @a(%0: !i64, %1: !i64, %2: !i64, %3: !i64, %4: !i64, %5: !i64, %6: !i64, %7: !i64, %8: !i64, %9: !i64) -> !i64 {
@@ -16,3 +10,6 @@ module {
   }
   module_end
 }
+
+// CHECK: riscv.ld {rd = x{{[0-9]+}}, rs1 = x2, imm = 0}
+// CHECK: riscv.ld {rd = x{{[0-9]+}}, rs1 = x2, imm = 8}

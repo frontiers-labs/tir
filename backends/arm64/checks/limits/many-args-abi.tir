@@ -1,14 +1,7 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
-// XFAIL: *
 
-// MISCOMPILE (AAPCS64): integer arguments past the 8th must be passed on the
-// stack, but the backend keeps assigning registers: this 10-arg function reads
-// its 9th and 10th args from x8/x9. With 20 args it wraps into the callee-saved
-// bank (x17, then x19), overrunning the argument registers entirely. Any call to
-// or from such a function violates the ABI.
-//
-// This asserts the 10th argument is reloaded from the stack (via sp), which the
-// backend does not do, so it XFAILs and documents the miscompile.
+// AAPCS64 passes integer args past the 8th on the stack. The callee reloads
+// them from the incoming stack area before use.
 
 module {
   func @f(%0: !i64, %1: !i64, %2: !i64, %3: !i64, %4: !i64, %5: !i64, %6: !i64, %7: !i64, %8: !i64, %9: !i64) -> !i64 {
@@ -18,5 +11,5 @@ module {
   module_end
 }
 
-// The 9th/10th args should come from the stack, not x8/x9.
-// CHECK: arm64.load_doubleword {rt = {{x[0-9]+}}, rn = sp
+// CHECK: arm64.load_doubleword {rt = {{x[0-9]+}}, rn = sp, imm = 0}
+// CHECK: arm64.load_doubleword {rt = {{x[0-9]+}}, rn = sp, imm = 8}

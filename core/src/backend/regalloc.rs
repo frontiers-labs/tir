@@ -516,6 +516,33 @@ pub trait TargetRegAlloc: Send + Sync {
     ) -> Vec<Box<dyn Operation>> {
         Vec::new()
     }
+
+    /// Stack offset, relative to the post-prologue frame register, where
+    /// incoming stack argument `stack_index` lives.
+    fn incoming_stack_arg_offset(
+        &self,
+        frame_size: u32,
+        _saves: &[(PhysReg, i64)],
+        stack_index: usize,
+    ) -> i64 {
+        frame_size as i64 + (stack_index as i64 * self.slot_size() as i64)
+    }
+
+    /// Build a load from an incoming stack argument into an already allocated
+    /// physical register. Only called for symbols whose argument list exceeds
+    /// the ABI register bank.
+    fn emit_incoming_stack_arg_load(
+        &self,
+        _context: &Context,
+        dst: &PhysReg,
+        _frame: &PhysReg,
+        _offset: i64,
+    ) -> Result<Box<dyn Operation>, PassError> {
+        Err(PassError::InvalidRuleSet(format!(
+            "stack-passed arguments are not supported for register class {}",
+            dst.0.name()
+        )))
+    }
 }
 
 /// A register allocation pass. Runs on each `asm.symbol` op produced by instruction
@@ -563,7 +590,7 @@ impl Pass for RegisterAllocationPass {
         self.lower_tied_operands(context, rewriter, &blocks)?;
         self.lower_block_args(context, rewriter, &blocks)?;
 
-        let precolor = abi_precolor(context, op, &info, self.target.as_ref(), rewriter, &blocks)?;
+        let abi = abi_precolor(context, op, &info, self.target.as_ref(), rewriter, &blocks)?;
 
         let mut frame = FrameState::new(self.target.slot_size());
         let assignment = loop {
@@ -591,7 +618,7 @@ impl Pass for RegisterAllocationPass {
             let result = allocate(&AllocConfig {
                 info: &info,
                 liveness: &liveness,
-                precolor: &precolor,
+                precolor: &abi.precolor,
                 spill_cost: &spill_cost,
             })
             .map_err(|e| PassError::InvalidRuleSet(format!("register allocation failed: {e:?}")))?;
@@ -618,6 +645,15 @@ impl Pass for RegisterAllocationPass {
         let saves = callee_saved_slots(&assignment, &mut frame, self.target.saves_on_frame());
 
         let frame_size = frame.size(self.target.frame_align());
+        self.insert_incoming_stack_arg_loads(
+            context,
+            rewriter,
+            &blocks,
+            &assignment,
+            &abi.stack_args,
+            frame_size,
+            &saves,
+        )?;
         if frame_size > 0 || !saves.is_empty() {
             self.insert_frame(context, rewriter, &blocks, frame_size, &saves)?;
         }
@@ -879,6 +915,52 @@ impl RegisterAllocationPass {
         }
         Ok(())
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_incoming_stack_arg_loads(
+        &self,
+        context: &Context,
+        rewriter: &mut Rewriter,
+        blocks: &[BlockId],
+        assignment: &HashMap<u32, PhysReg>,
+        args: &[IncomingStackArg],
+        frame_size: u32,
+        saves: &[(PhysReg, i64)],
+    ) -> Result<(), PassError> {
+        if args.is_empty() {
+            return Ok(());
+        }
+        let Some(&entry) = blocks.first() else {
+            return Ok(());
+        };
+        let op_ids = context.get_block(entry).op_ids();
+        let Some(&first) = op_ids.first() else {
+            return Ok(());
+        };
+        let target = op_ref_in(context, entry, first);
+        let frame = self.target.frame_register();
+        for arg in args {
+            let Some(dst) = assignment.get(&arg.vreg) else {
+                continue;
+            };
+            if dst.0 != arg.class {
+                return Err(PassError::InvalidRuleSet(format!(
+                    "stack argument vreg {} assigned to {:?}, expected class {}",
+                    arg.vreg,
+                    dst,
+                    arg.class.name()
+                )));
+            }
+            let offset = self
+                .target
+                .incoming_stack_arg_offset(frame_size, saves, arg.stack_index);
+            let load = self
+                .target
+                .emit_incoming_stack_arg_load(context, dst, &frame, offset)?;
+            rewriter.insert_op_before(&target, load.as_ref())?;
+        }
+        Ok(())
+    }
 }
 
 /// Tracks spill stack-slot assignment across spill rounds.
@@ -1060,6 +1142,17 @@ fn sequence_parallel_copies(
 /// miscompile. Such a return is broken with a copy (`fresh <- vreg`) inserted
 /// before the `vret`, so the argument keeps its entry pin while `fresh` takes the
 /// return pin. This mutates the IR, so it runs once, outside the spill loop.
+struct AbiPrecolor {
+    precolor: HashMap<u32, PhysReg>,
+    stack_args: Vec<IncomingStackArg>,
+}
+
+struct IncomingStackArg {
+    vreg: u32,
+    class: RegClassId,
+    stack_index: usize,
+}
+
 fn abi_precolor(
     context: &Context,
     op: &OperationRef,
@@ -1067,8 +1160,9 @@ fn abi_precolor(
     target: &dyn TargetRegAlloc,
     rewriter: &mut Rewriter,
     blocks: &[BlockId],
-) -> Result<HashMap<u32, PhysReg>, PassError> {
+) -> Result<AbiPrecolor, PassError> {
     let mut precolor: HashMap<u32, PhysReg> = HashMap::new();
+    let mut stack_args = Vec::new();
 
     // Argument vregs: the symbol's `arg_regs` attribute carries each argument's
     // register class (assigned by the target's function lowering, e.g. vectors
@@ -1101,8 +1195,14 @@ fn abi_precolor(
                         "argument vreg {id} pinned to conflicting registers {prev:?} and {pin:?}"
                     )));
                 }
-                *slot += 1;
+            } else {
+                stack_args.push(IncomingStackArg {
+                    vreg: *id,
+                    class: rc,
+                    stack_index: *slot - rc.arguments.len(),
+                });
             }
+            *slot += 1;
         }
     }
 
@@ -1150,7 +1250,10 @@ fn abi_precolor(
         }
     }
 
-    Ok(precolor)
+    Ok(AbiPrecolor {
+        precolor,
+        stack_args,
+    })
 }
 
 /// The register class a virtual register is referenced with, from the first

@@ -1074,6 +1074,39 @@ mod isa {
             }
             ops
         }
+
+        fn incoming_stack_arg_offset(
+            &self,
+            frame_size: u32,
+            saves: &[(tir::backend::liveness::PhysReg, i64)],
+            stack_index: usize,
+        ) -> i64 {
+            let saved = saves.len() as i64 * 8;
+            let locals = frame_size as i64 + saved_frame_pad(saves.len());
+            saved + locals + 8 + stack_index as i64 * 8
+        }
+
+        fn emit_incoming_stack_arg_load(
+            &self,
+            context: &tir::Context,
+            dst: &tir::backend::liveness::PhysReg,
+            frame: &tir::backend::liveness::PhysReg,
+            offset: i64,
+        ) -> Result<Box<dyn Operation>, tir::PassError> {
+            if dst.0.name() != "GPR" {
+                return Err(tir::PassError::InvalidRuleSet(format!(
+                    "x86-64 stack arguments for register class {} are not supported",
+                    dst.0.name()
+                )));
+            }
+            Ok(Box::new(
+                MovLoadDispOpBuilder::new(context)
+                    .attr("dst", phys(dst.0, dst.1))
+                    .attr("base", phys(frame.0, frame.1))
+                    .attr("imm", AttributeValue::Int(offset))
+                    .build(),
+            ))
+        }
     }
 
     /// Extra stack padding (0 or 8 bytes) so `push`ing `count` callee-saved

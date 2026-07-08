@@ -622,6 +622,28 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
         ));
         ops
     }
+
+    fn emit_incoming_stack_arg_load(
+        &self,
+        context: &tir::Context,
+        dst: &tir::backend::liveness::PhysReg,
+        frame: &tir::backend::liveness::PhysReg,
+        offset: i64,
+    ) -> Result<Box<dyn Operation>, tir::PassError> {
+        if dst.0.name() != "GPR" {
+            return Err(tir::PassError::InvalidRuleSet(format!(
+                "arm64 stack arguments for register class {} are not supported",
+                dst.0.name()
+            )));
+        }
+        Ok(Box::new(
+            LoadDoublewordOpBuilder::new(context)
+                .attr("rt", phys(dst))
+                .attr("rn", phys(frame))
+                .attr("imm", tir::attributes::AttributeValue::Int(offset))
+                .build(),
+        ))
+    }
 }
 
 pub fn create_regalloc_pass() -> tir::backend::regalloc::RegisterAllocationPass {
