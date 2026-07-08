@@ -135,17 +135,29 @@ mod isa {
                 })
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let arg_regs = func
-                .body()
-                .arguments()
-                .iter()
-                .map(|arg| {
-                    AttributeValue::Register(RegisterAttr::Virtual {
-                        id: arg.id().number(),
-                        class: Some(RegClass::GPR.id()),
-                    })
-                })
-                .collect::<Vec<_>>();
+            let mut arg_regs = Vec::new();
+            for arg in func.body().arguments().iter() {
+                let ty = context.get_type_data(arg.ty());
+                let ty_any = ty.as_ref() as &dyn std::any::Any;
+                let class = if let Some(float_ty) = ty_any.downcast_ref::<tir::builtin::FloatType>()
+                {
+                    match float_ty.bit_width() {
+                        32 => RegClass::XMM32.id(),
+                        64 => RegClass::XMM.id(),
+                        other => {
+                            return Err(tir::PassError::InvalidRuleSet(format!(
+                                "{other}-bit float arguments are not supported (only f32/f64)"
+                            )));
+                        }
+                    }
+                } else {
+                    RegClass::GPR.id()
+                };
+                arg_regs.push(AttributeValue::Register(RegisterAttr::Virtual {
+                    id: arg.id().number(),
+                    class: Some(class),
+                }));
+            }
 
             let lowered = tir::backend::SymbolOpBuilder::new(context)
                 .body(op.op().regions[0])
@@ -167,6 +179,67 @@ mod isa {
         }
 
         Ok(false)
+    }
+
+    fn int_width(context: &tir::Context, value: tir::ValueId) -> Option<u32> {
+        let data = context.get_type_data(context.get_value(value).ty());
+        (data.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<tir::builtin::IntegerType>()
+            .map(tir::builtin::IntegerType::width)
+    }
+
+    fn lower_trunci(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        use tir::Operation;
+        use tir::builtin::TruncIOp;
+
+        let Some(trunc) = op.as_op::<TruncIOp>() else {
+            return Ok(false);
+        };
+        let Some(&input) = trunc.operands().first() else {
+            return Err(tir::PassError::RewriteFailed(op.op().id));
+        };
+        let result = trunc.result();
+        let Some(input_width) = int_width(context, input) else {
+            return Err(tir::PassError::RewriteFailed(op.op().id));
+        };
+        let Some(result_width) = int_width(context, result) else {
+            return Err(tir::PassError::RewriteFailed(op.op().id));
+        };
+        if input_width <= result_width {
+            return Ok(false);
+        }
+
+        let new_op: Box<dyn Operation> = match result_width {
+            32 => Box::new(
+                Mov32OpBuilder::new(context)
+                    .attr("dst", virt(result.number(), RegClass::GPR32.id()))
+                    .attr("src", virt(input.number(), RegClass::GPR32.id()))
+                    .build(),
+            ),
+            16 => Box::new(
+                Mov16OpBuilder::new(context)
+                    .attr("dst", virt(result.number(), RegClass::GPR16.id()))
+                    .attr("src", virt(input.number(), RegClass::GPR16.id()))
+                    .build(),
+            ),
+            8 => Box::new(
+                Mov8OpBuilder::new(context)
+                    .attr("dst", virt(result.number(), RegClass::GPR8.id()))
+                    .attr("src", virt(input.number(), RegClass::GPR8.id()))
+                    .build(),
+            ),
+            _ => {
+                return Err(tir::PassError::InvalidRuleSet(format!(
+                    "x86_64 trunci to i{result_width} is not supported"
+                )));
+            }
+        };
+        rewriter.replace_op(op, new_op.as_ref())?;
+        Ok(true)
     }
 
     impl X86_64Dialect {
@@ -249,6 +322,81 @@ mod isa {
             .attr("imm", AttributeValue::Int(value))
             .build();
         rewriter.replace_op(op, &mov)?;
+        Ok(true)
+    }
+
+    fn lower_constantf(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        use tir::builtin::{ConstantFOp, FloatType, IntegerType};
+
+        let Some(constant) = op.as_op::<ConstantFOp>() else {
+            return Ok(false);
+        };
+        let value = constant
+            .attributes()
+            .iter()
+            .find_map(|attr| match (&attr.value, attr.name == "value") {
+                (AttributeValue::F64(v), true) => Some(*v),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                tir::PassError::InvalidRuleSet("constantf op without a float value".to_string())
+            })?;
+        let result = constant.result();
+        let width = {
+            let ty = context.get_type_data(context.get_value(result).ty());
+            (ty.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<FloatType>()
+                .map(FloatType::bit_width)
+        };
+
+        let lowered: Box<dyn Operation> = match width {
+            Some(32) => {
+                let scratch = context
+                    .create_value(IntegerType::new(context, 32), None)
+                    .id()
+                    .number();
+                let bits = (value as f32).to_bits() as i32 as i64;
+                let mov = MovImm32OpBuilder::new(context)
+                    .attr("dst", virt(scratch, RegClass::GPR32.id()))
+                    .attr("imm", AttributeValue::Int(bits))
+                    .build();
+                rewriter.insert_op_before(op, &mov)?;
+                Box::new(
+                    MovdToXmmOpBuilder::new(context)
+                        .attr("dst", virt(result.number(), RegClass::XMM32.id()))
+                        .attr("src", virt(scratch, RegClass::GPR32.id()))
+                        .build(),
+                )
+            }
+            Some(64) => {
+                let scratch = context
+                    .create_value(IntegerType::new(context, 64), None)
+                    .id()
+                    .number();
+                let bits = value.to_bits() as i64;
+                let mov = MovAbsOpBuilder::new(context)
+                    .attr("dst", virt(scratch, RegClass::GPR.id()))
+                    .attr("imm", AttributeValue::Int(bits))
+                    .build();
+                rewriter.insert_op_before(op, &mov)?;
+                Box::new(
+                    MovqToXmmOpBuilder::new(context)
+                        .attr("dst", virt(result.number(), RegClass::XMM.id()))
+                        .attr("src", virt(scratch, RegClass::GPR.id()))
+                        .build(),
+                )
+            }
+            _ => {
+                return Err(tir::PassError::InvalidRuleSet(
+                    "only f32/f64 constants are supported".to_string(),
+                ));
+            }
+        };
+        rewriter.replace_op(op, lowered.as_ref())?;
         Ok(true)
     }
 
@@ -1012,6 +1160,12 @@ mod isa {
                         .attr("src", virt(src))
                         .build(),
                 ),
+                "XMM32" => Box::new(
+                    MovssOpBuilder::new(context)
+                        .attr("dst", virt(dst))
+                        .attr("src", virt(src))
+                        .build(),
+                ),
                 other => unreachable!("unknown x86-64 register class {other}"),
             }
         }
@@ -1203,6 +1357,7 @@ mod isa {
                     cond_nonzero: emit_branch_nonzero,
                 })
                 .with_op_lowering(lower_func_and_return_to_asm_symbol)
+                .with_op_lowering(lower_trunci)
                 .with_op_lowering(lower_calls)
         }
 
@@ -1211,7 +1366,7 @@ mod isa {
         }
 
         fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![lower_constant, lower_addr_of]
+            vec![lower_constant, lower_constantf, lower_addr_of]
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {

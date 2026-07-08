@@ -1,8 +1,6 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
 
-// Coverage: f64 arithmetic selects the scalar FP ops and float arguments land in
-// the FP registers (regalloc assigns d0/d1). This PASSES today and pins the
-// working float path against regressions.
+// f64 arithmetic selects scalar FP ops and float arguments use FP registers.
 
 module {
   func @f(%0: !f64, %1: !f64) -> !f64 {
@@ -15,7 +13,7 @@ module {
   module_end
 }
 
-// CHECK: asm.symbol {name = "f"
+// CHECK: asm.symbol {name = "f", arg_regs = [%virt0:FPR64, %virt1:FPR64]}
 // CHECK: arm64.fadd {fd = %virt2:FPR64, fa = %virt0:FPR64, fb = %virt1:FPR64}
 // CHECK-NEXT: arm64.fsub
 // CHECK-NEXT: arm64.fmul

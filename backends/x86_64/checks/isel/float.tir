@@ -16,6 +16,7 @@ module {
   module_end
 }
 
+// CHECK:      asm.symbol {name = "arith", arg_regs = [%virt0:XMM, %virt1:XMM]}
 // CHECK:      x86_64.addsd {dst = %virt2:XMM, dst_tied = %virt0:XMM, src = %virt1:XMM}
 // CHECK-NEXT: x86_64.mulsd {dst = %virt3:XMM, dst_tied = %virt1:XMM, src = %virt2:XMM}
 // CHECK-NEXT: x86_64.subsd {dst = %virt4:XMM, dst_tied = %virt3:XMM, src = %virt0:XMM}

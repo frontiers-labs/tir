@@ -1,8 +1,6 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
-// XFAIL: *
 
-// ISEL GAP: `trunci` has no materializer. isel aborts with
-//   "invalid rule set: missing atomic materializer rule for semantic kind Extract".
+// i64 -> i32 truncation selects UBFM extracting bits [31:0].
 
 module {
   func @f(%0: !i64) -> !i32 {
@@ -12,4 +10,6 @@ module {
   module_end
 }
 
-// CHECK: arm64
+// CHECK: arm64.ubfm
+// CHECK-SAME: immr = 0
+// CHECK-SAME: imms = 31

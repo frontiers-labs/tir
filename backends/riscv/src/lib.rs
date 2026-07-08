@@ -571,6 +571,80 @@ fn lower_func_and_return_to_asm_symbol(
     Ok(false)
 }
 
+fn int_width(context: &tir::Context, value: tir::ValueId) -> Option<u32> {
+    let data = context.get_type_data(context.get_value(value).ty());
+    (data.as_ref() as &dyn std::any::Any)
+        .downcast_ref::<tir::builtin::IntegerType>()
+        .map(tir::builtin::IntegerType::width)
+}
+
+fn lower_trunci_rv32(
+    context: &tir::Context,
+    op: &tir::OperationRef,
+    rewriter: &mut tir::Rewriter,
+) -> Result<bool, tir::PassError> {
+    lower_trunci(context, op, rewriter, 32)
+}
+
+fn lower_trunci_rv64(
+    context: &tir::Context,
+    op: &tir::OperationRef,
+    rewriter: &mut tir::Rewriter,
+) -> Result<bool, tir::PassError> {
+    lower_trunci(context, op, rewriter, 64)
+}
+
+fn lower_trunci(
+    context: &tir::Context,
+    op: &tir::OperationRef,
+    rewriter: &mut tir::Rewriter,
+    xlen: u32,
+) -> Result<bool, tir::PassError> {
+    use tir::builtin::TruncIOp;
+
+    let Some(trunc) = op.as_op::<TruncIOp>() else {
+        return Ok(false);
+    };
+    let Some(&input) = trunc.operands().first() else {
+        return Err(tir::PassError::RewriteFailed(op.op().id));
+    };
+    let result = trunc.result();
+    let Some(input_width) = int_width(context, input) else {
+        return Err(tir::PassError::RewriteFailed(op.op().id));
+    };
+    let Some(result_width) = int_width(context, result) else {
+        return Err(tir::PassError::RewriteFailed(op.op().id));
+    };
+    if input_width <= result_width {
+        return Ok(false);
+    }
+    if result_width != 32 {
+        return Err(tir::PassError::InvalidRuleSet(format!(
+            "riscv trunci to i{result_width} is not supported"
+        )));
+    }
+
+    let lowered: Box<dyn Operation> = if xlen == 64 {
+        Box::new(
+            AddImmWordOpBuilder::new(context)
+                .attr("rd", virt(result.number(), RegClass::GPR.id()))
+                .attr("rs1", virt(input.number(), RegClass::GPR.id()))
+                .attr("imm", tir::attributes::AttributeValue::Int(0))
+                .build(),
+        )
+    } else {
+        Box::new(
+            AddImmOpBuilder::new(context)
+                .attr("rd", virt(result.number(), RegClass::GPR.id()))
+                .attr("rs1", virt(input.number(), RegClass::GPR.id()))
+                .attr("imm", tir::attributes::AttributeValue::Int(0))
+                .build(),
+        )
+    };
+    rewriter.replace_op(op, lowered.as_ref())?;
+    Ok(true)
+}
+
 /// Lower `vector.vector_len` to `vsetvli rd, avl`: the one instruction that both
 /// produces a value (the granted element count) and configures the vector unit.
 /// The vsetvli-insertion pass recognizes it as establishing the configuration,
@@ -822,6 +896,11 @@ fn create_isel_pass_for(
             cond_nonzero: emit_branch_nonzero,
         })
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
+        .with_op_lowering(if features.contains(&Feature::RV64I) {
+            lower_trunci_rv64
+        } else {
+            lower_trunci_rv32
+        })
         .with_op_lowering(lower_calls)
         .with_op_lowering(lower_vector_len)
 }

@@ -2,10 +2,10 @@
 //! covering, plus the small saturation driver over the [`tir_symbolic`] e-graph.
 
 use tir::{Context, sem::SymKind};
-use tir_symbolic::egraph::{EMatch, Pattern, PatternNode};
+use tir_symbolic::egraph::{EMatch, Pattern, PatternNode, Var};
 
 use super::axioms::bool_materialize_axioms;
-use super::node::{SemEGraph, SemNode};
+use super::node::{SemEGraph, SemNode, class_int_binding, class_width, template_node};
 use super::pattern::CompiledIselPattern;
 
 /// The right-hand side of an [`IselRewrite`]: given the e-graph and a match, assert
@@ -78,6 +78,7 @@ pub fn saturate(
 /// through [`super::InstructionSelectPass::with_axioms`]. Every axiom still
 /// proves each width instantiation before it unions (see [`super::axioms`]).
 pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRewrite> {
+    let mut rewrites = vec![low_bits_extract_rewrite()];
     let has_if_materializer = patterns.iter().any(|compiled| {
         matches!(
             compiled.pattern.node(compiled.pattern.root()),
@@ -85,11 +86,43 @@ pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRew
         )
     });
     if has_if_materializer {
-        bool_materialize_axioms()
-            .into_iter()
-            .map(|a| a.compile())
-            .collect()
-    } else {
-        Vec::new()
+        rewrites.extend(bool_materialize_axioms().into_iter().map(|a| a.compile()));
+    }
+    rewrites
+}
+
+fn low_bits_extract_rewrite() -> IselRewrite {
+    let mut searcher = Pattern::<SemNode, u32>::new();
+    let x = searcher.var(Var::Symbol(0));
+    let hi = searcher.var(Var::Symbol(1));
+    let lo = searcher.var(Var::Symbol(2));
+    let mut root = template_node(SymKind::Extract, None, None);
+    root.children = vec![x, hi, lo];
+    searcher.add(root);
+
+    IselRewrite {
+        name: "trunc-low-bits".to_string(),
+        searcher,
+        apply: Box::new(move |ctx, eg, m| {
+            let x_class = eg.find(m.binding(x));
+            let Some(result_width) = class_width(ctx, eg, m.root) else {
+                return;
+            };
+            let Some(input_width) = class_width(ctx, eg, x_class) else {
+                return;
+            };
+            if input_width <= result_width || result_width == 0 {
+                return;
+            }
+            let Some(hi_value) = class_int_binding(eg, m.binding(hi)) else {
+                return;
+            };
+            let Some(lo_value) = class_int_binding(eg, m.binding(lo)) else {
+                return;
+            };
+            if hi_value.to_u64() == u64::from(result_width - 1) && lo_value.to_u64() == 0 {
+                eg.union(m.root, x_class);
+            }
+        }),
     }
 }

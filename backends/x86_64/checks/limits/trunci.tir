@@ -1,8 +1,6 @@
-// RUN: not tir mc --march=x86_64 --stage=isel %s
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// FINDING G2 (isel-gap): trunci has no materializer: "missing atomic
-// materializer rule for semantic kind Extract". (extsi/extui do lower, but
-// miscompile - see sign-zero-extend.tir.)
+// i64 -> i32 truncation selects a 32-bit move, preserving the low bits.
 
 module {
   func @tr(%0: !i64) -> !i32 {
@@ -11,3 +9,5 @@ module {
   }
   module_end
 }
+
+// CHECK: x86_64.mov32

@@ -10,7 +10,23 @@ register_class XMM for [X86_64] {
     param WIDTH: Integer = 64;
 
     registers {
-        xmm0..xmm15 => { traits = [float, caller_saved] },
+        xmm0 => { index = 0, traits = [float, argument, return_value, caller_saved] },
+        xmm1 => { index = 1, traits = [float, argument, return_value, caller_saved] },
+        xmm2..xmm7 => { traits = [float, argument, caller_saved] },
+        xmm8..xmm15 => { traits = [float, caller_saved] },
+    }
+}
+
+register_class XMM32 for [X86_64] {
+    file = XMM;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 32;
+
+    registers {
+        xmm0 => { index = 0, traits = [float, argument, return_value, caller_saved] },
+        xmm1 => { index = 1, traits = [float, argument, return_value, caller_saved] },
+        xmm2..xmm7 => { traits = [float, argument, caller_saved] },
+        xmm8..xmm15 => { traits = [float, caller_saved] },
     }
 }
 
@@ -50,6 +66,34 @@ template FpArith for [X86_64] {
 
     encoding {
         0..7 => 0xF2,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => OPCODE,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+template FpArith32 for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: XMM32,
+        src: XMM32,
+    }
+
+    encoding {
+        0..7 => 0xF3,
         8 => src[3],
         9 => 0b0,
         10 => dst[3],
@@ -150,6 +194,42 @@ instruction Divsd for [X86_64] : FpArith {
     }
 }
 
+instruction Addss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "addss";
+    param OPCODE: bits<8> = 0x58;
+
+    behavior {
+        dst = fadd(dst, src);
+    }
+}
+
+instruction Subss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "subss";
+    param OPCODE: bits<8> = 0x5C;
+
+    behavior {
+        dst = fsub(dst, src);
+    }
+}
+
+instruction Mulss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "mulss";
+    param OPCODE: bits<8> = 0x59;
+
+    behavior {
+        dst = fmul(dst, src);
+    }
+}
+
+instruction Divss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "divss";
+    param OPCODE: bits<8> = 0x5E;
+
+    behavior {
+        dst = fdiv(dst, src);
+    }
+}
+
 // `movsd xmm_dst, xmm_src` (F2 0F 10 /r): register-to-register scalar-double
 // move. Emitted by register allocation to copy a value before a two-address FP
 // op overwrites it; the reg/rm layout matches `FpArith`.
@@ -170,6 +250,79 @@ instruction Movsd for [X86_64] {
         12..15 => 0b0100,
         16..23 => 0x0F,
         24..31 => 0x10,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = src;
+    }
+}
+
+instruction Movss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "movss";
+    param OPCODE: bits<8> = 0x10;
+
+    behavior {
+        dst = src;
+    }
+}
+
+instruction MovdToXmm for [X86_64] {
+    param MNEMONIC: String = "movd";
+    param OPNAME: String = "movd_xmm";
+
+    operands {
+        dst: XMM32,
+        src: GPR32,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x6E,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = src;
+    }
+}
+
+instruction MovqToXmm for [X86_64] {
+    param MNEMONIC: String = "movq";
+    param OPNAME: String = "movq_xmm";
+
+    operands {
+        dst: XMM,
+        src: GPR,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b1,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x6E,
         32..34 => src[0..2],
         35..37 => dst[0..2],
         38..39 => 0b11,
