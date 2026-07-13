@@ -340,6 +340,12 @@ fn emit_instructions<'a>(
         .filter(|rc| rc.has_float_registers())
         .map(|rc| rc.name.clone())
         .collect();
+    let polymorphic_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .filter(|rc| rc.has_polymorphic_registers())
+        .map(|rc| rc.name.clone())
+        .collect();
 
     // Register classes with a hardwired-zero register (RISC-V `x0`, AArch64
     // `xzr`), mapping the class name to that register's index. A two-register
@@ -884,18 +890,18 @@ fn emit_instructions<'a>(
             }
             let (pattern_stmts, _root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths, &float_nodes);
-            let operand_width_call = emit_operand_width_call(
+            let operand_register_call = emit_operand_register_call(
                 &ops,
                 &semantics.variable_symbols,
                 &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+                &float_classes,
+                &polymorphic_classes,
             );
             let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
                 &semantics.pattern,
                 &ops,
                 &semantics.variable_symbols,
             ));
-            let operand_float_call =
-                emit_operand_float_call(&ops, &semantics.variable_symbols, &float_classes);
             // Cost reflects the canonical pattern's size (one machine instruction).
             let base_cost = {
                 use tir::graph::Dag;
@@ -965,9 +971,9 @@ fn emit_instructions<'a>(
                             #emit_fn_ident,
                         )
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
-                        #operand_width_call
+                        #operand_register_call
                         #operand_imm_range_call
-                        #operand_float_call,
+                        ,
                     );
                 }
             });
@@ -1003,6 +1009,7 @@ fn emit_instructions<'a>(
                 branch.target_symbol,
                 &no_zero_slots,
                 &float_classes,
+                &polymorphic_classes,
             );
             isel_rule_emitters.push(emitter);
             isel_rule_inits.push(init);
@@ -1092,6 +1099,7 @@ fn emit_instructions<'a>(
                         branch.target_symbol,
                         &zero_slots,
                         &float_classes,
+                        &polymorphic_classes,
                     );
                     isel_rule_emitters.push(emitter);
                     isel_rule_inits.push(init);
@@ -3644,6 +3652,18 @@ fn emit_flag_branch_rules(
     isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
     isel_rule_inits: &mut Vec<proc_macro2::TokenStream>,
 ) {
+    let float_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|file| file.register_classes())
+        .filter(|class| class.has_float_registers())
+        .map(|class| class.name.clone())
+        .collect();
+    let polymorphic_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|file| file.register_classes())
+        .filter(|class| class.has_polymorphic_registers())
+        .map(|class| class.name.clone())
+        .collect();
     for (b, b_sem) in branches {
         for (d, d_sem) in definers {
             if d_sem.class != b_sem.class {
@@ -3711,10 +3731,12 @@ fn emit_flag_branch_rules(
             }
             let (pattern_stmts, _root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths, &HashSet::new());
-            let operand_width_call = emit_operand_width_call(
+            let operand_register_call = emit_operand_register_call(
                 &d.ops,
                 &d_sem.variable_symbols,
                 &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+                &float_classes,
+                &polymorphic_classes,
             );
             let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
                 &d_sem.graph,
@@ -3797,7 +3819,7 @@ fn emit_flag_branch_rules(
                         })
                         .with_prelude_emitter(#prelude_fn_ident)
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
-                        #operand_width_call
+                        #operand_register_call
                         #operand_imm_range_call,
                     );
                 }
@@ -4199,6 +4221,18 @@ fn emit_flag_reader_rules(
     isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
     isel_rule_inits: &mut Vec<proc_macro2::TokenStream>,
 ) {
+    let float_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|file| file.register_classes())
+        .filter(|class| class.has_float_registers())
+        .map(|class| class.name.clone())
+        .collect();
+    let polymorphic_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|file| file.register_classes())
+        .filter(|class| class.has_polymorphic_registers())
+        .map(|class| class.name.clone())
+        .collect();
     use tir::graph::{Dag, MutDag};
     let isa_closure = isa_requires_closure(files);
     for (r, r_sem) in readers {
@@ -4292,10 +4326,12 @@ fn emit_flag_reader_rules(
             }
             let (pattern_stmts, _root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths, &HashSet::new());
-            let operand_width_call = emit_operand_width_call(
+            let operand_register_call = emit_operand_register_call(
                 &d.ops,
                 &d_sem.variable_symbols,
                 &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+                &float_classes,
+                &polymorphic_classes,
             );
             let operand_imm_range_call = emit_operand_imm_range_call(&immediate_operand_ranges(
                 &d_sem.graph,
@@ -4386,7 +4422,7 @@ fn emit_flag_reader_rules(
                         )
                         .with_prelude_emitter(#prelude_fn_ident)
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
-                        #operand_width_call
+                        #operand_register_call
                         #operand_imm_range_call,
                     );
                 }
@@ -4568,44 +4604,54 @@ fn width_sensitive_symbols(
     out
 }
 
-/// Emit the `.with_operand_widths` builder call constraining each sensitive
-/// register operand to its register class's architectural width (resolved at
-/// runtime from the enabled features via `__register_widths`).
-fn emit_operand_width_call(
+/// Emit each register operand's storage domain and whether its instruction
+/// consumes the full architectural width.
+fn emit_operand_register_call(
     ops: &[(String, Type)],
     variable_symbols: &HashMap<String, u32>,
     sensitive_symbols: &HashSet<u32>,
+    float_classes: &HashSet<String>,
+    polymorphic_classes: &HashSet<String>,
 ) -> proc_macro2::TokenStream {
-    let width_steps: Vec<proc_macro2::TokenStream> = ops
+    let register_steps: Vec<proc_macro2::TokenStream> = ops
         .iter()
         .filter_map(|(op_name, op_ty)| {
             let Type::Struct(class_name) = op_ty else {
                 return None;
             };
             let &symbol = variable_symbols.get(op_name)?;
-            if !sensitive_symbols.contains(&symbol) {
-                return None;
-            }
             let class_lit = proc_macro2::Literal::string(class_name);
             let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
+            let capability = if polymorphic_classes.contains(class_name) {
+                quote! { tir::backend::isel::RegisterCapability::any(*width) }
+            } else if float_classes.contains(class_name) {
+                quote! { tir::backend::isel::RegisterCapability::float(*width) }
+            } else {
+                quote! { tir::backend::isel::RegisterCapability::integer(*width) }
+            };
+            let requirement = if sensitive_symbols.contains(&symbol) {
+                quote! { tir::backend::isel::RegisterRequirement::whole(#capability) }
+            } else {
+                quote! { tir::backend::isel::RegisterRequirement::low_bits(#capability) }
+            };
             Some(quote! {
                 if let Some((_, width)) =
                     __register_widths.iter().find(|(class, _)| *class == #class_lit)
                 {
-                    __operand_widths.push((#symbol_lit, *width));
+                    __operand_registers.push((#symbol_lit, #requirement));
                 }
             })
         })
         .collect();
 
-    if width_steps.is_empty() {
+    if register_steps.is_empty() {
         return quote! {};
     }
     quote! {
-        .with_operand_widths({
-            let mut __operand_widths: Vec<(u32, u32)> = Vec::new();
-            #(#width_steps)*
-            __operand_widths
+        .with_operand_registers({
+            let mut __operand_registers = Vec::new();
+            #(#register_steps)*
+            __operand_registers
         })
     }
 }
@@ -4667,32 +4713,6 @@ fn immediate_operand_ranges(
         out.push((symbol, width, signed));
     }
     out
-}
-
-/// Emit the `.with_operand_floats` builder call marking each register operand
-/// symbol as float (its class holds `float`-trait registers) or integer, so a
-/// float value never binds an integer operand and vice versa.
-fn emit_operand_float_call(
-    ops: &[(String, Type)],
-    variable_symbols: &HashMap<String, u32>,
-    float_classes: &HashSet<String>,
-) -> proc_macro2::TokenStream {
-    let entries: Vec<proc_macro2::TokenStream> = ops
-        .iter()
-        .filter_map(|(op_name, op_ty)| {
-            let Type::Struct(class_name) = op_ty else {
-                return None;
-            };
-            let &symbol = variable_symbols.get(op_name)?;
-            let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
-            let is_float = float_classes.contains(class_name);
-            Some(quote! { (#symbol_lit, #is_float) })
-        })
-        .collect();
-    if entries.is_empty() {
-        return quote! {};
-    }
-    quote! { .with_operand_floats(vec![#(#entries),*]) }
 }
 
 /// Emit the `.with_operand_imm_ranges` builder call for the immediate operands'
@@ -5761,6 +5781,7 @@ fn emit_cond_branch_rule(
     target_symbol: u32,
     zero_slots: &HashMap<String, (String, u16)>,
     float_classes: &HashSet<String>,
+    polymorphic_classes: &HashSet<String>,
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let emit_fn_ident = format_ident!("emit_isel_{}", rule_name);
     let pattern_fn_ident = format_ident!("isel_pattern_{}", rule_name);
@@ -5855,14 +5876,15 @@ fn emit_cond_branch_rule(
     }
     let (pattern_stmts, _root_var) =
         emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths, &HashSet::new());
-    let operand_width_call = emit_operand_width_call(
+    let operand_register_call = emit_operand_register_call(
         ops,
         variable_symbols,
         &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+        float_classes,
+        polymorphic_classes,
     );
     let operand_imm_range_call =
         emit_operand_imm_range_call(&immediate_operand_ranges(pattern, ops, variable_symbols));
-    let operand_float_call = emit_operand_float_call(ops, variable_symbols, float_classes);
     let base_cost = {
         use tir::graph::Dag;
         (canon_pattern.len() as u32).max(1)
@@ -5903,9 +5925,9 @@ fn emit_cond_branch_rule(
                     target_symbol: #target_symbol_lit,
                 })
                 .with_operand_constraints(vec![#(#operand_constraint_entries),*])
-                #operand_width_call
+                #operand_register_call
                 #operand_imm_range_call
-                #operand_float_call,
+                ,
             );
         }
     };

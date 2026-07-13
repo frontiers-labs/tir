@@ -168,6 +168,47 @@ pub struct RegisterCapability {
     float: bool,
 }
 
+/// A register operand's storage capability and whether its instruction reads
+/// the value's full architectural width rather than only its defined low bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegisterRequirement {
+    capability: RegisterCapability,
+    whole: bool,
+}
+
+impl RegisterRequirement {
+    pub fn low_bits(capability: RegisterCapability) -> Self {
+        Self {
+            capability,
+            whole: false,
+        }
+    }
+
+    pub fn whole(capability: RegisterCapability) -> Self {
+        Self {
+            capability,
+            whole: true,
+        }
+    }
+
+    pub fn accepts(&self, ty: &tir::sem::SemType) -> bool {
+        use tir::sem::{SemType, Width};
+        if !self.capability.accepts(ty) {
+            return false;
+        }
+        !self.whole
+            || !matches!(
+                ty,
+                SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width))
+                    if *width != self.capability.width
+            )
+    }
+
+    fn accepts_low_bits(&self, ty: &tir::sem::SemType) -> bool {
+        self.capability.accepts(ty)
+    }
+}
+
 impl RegisterCapability {
     pub fn integer(width: u32) -> Self {
         Self {
@@ -197,7 +238,7 @@ impl RegisterCapability {
         use tir::sem::{SemType, Width};
         match ty {
             SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width)) => {
-                self.integer && *width == self.width
+                self.integer && *width <= self.width
             }
             SemType::Float(format) => {
                 let (Width::Const(exponent), Width::Const(mantissa)) =
@@ -263,21 +304,12 @@ pub struct Rule {
     /// are unconstrained, so hand-written and synthesized rules keep matching any
     /// value.
     pub operand_constraints: Vec<(u32, OperandConstraint)>,
-    /// Per-operand-symbol required value width, for operands the instruction is
-    /// width-sensitive in (comparisons, right shifts, division): the operand's
-    /// upper bits reach the result, so a narrower value must not bind. Symbols
-    /// absent here match any width.
-    pub operand_widths: Vec<(u32, u32)>,
+    /// Per-register-operand storage and bit-demand requirements.
+    pub operand_registers: Vec<(u32, RegisterRequirement)>,
     /// Per-operand-symbol immediate encoding range. A constant outside the field's
     /// representable range must not bind (its encoding would truncate). Symbols
     /// absent here accept any constant.
     pub operand_imm_ranges: Vec<(u32, ImmRange)>,
-    /// Per-operand-symbol float requirement: `true` for operands living in a
-    /// float register class, `false` for integer ones. A value whose IR type is
-    /// known to be of the other kind must not bind — an integer store must not
-    /// consume a float value and vice versa. Symbols absent here (and values of
-    /// unknown type) match either.
-    pub operand_floats: Vec<(u32, bool)>,
     pub emit_fn: RuleEmitFn,
 }
 
@@ -290,9 +322,8 @@ impl Rule {
             kind: RuleKind::Value,
             prelude_emit: None,
             operand_constraints: Vec::new(),
-            operand_widths: Vec::new(),
+            operand_registers: Vec::new(),
             operand_imm_ranges: Vec::new(),
-            operand_floats: Vec::new(),
             emit_fn,
         }
     }
@@ -304,11 +335,10 @@ impl Rule {
         self
     }
 
-    /// Require operand symbols to bind values of exactly the given width (see
-    /// [`Rule::operand_widths`]). Values of unknown width — rewrite-introduced
-    /// intermediates carrying no IR type — still match.
-    pub fn with_operand_widths(mut self, widths: Vec<(u32, u32)>) -> Self {
-        self.operand_widths = widths;
+    /// Describe which semantic values each physical register operand can store
+    /// and whether the instruction consumes all of their architectural bits.
+    pub fn with_operand_registers(mut self, registers: Vec<(u32, RegisterRequirement)>) -> Self {
+        self.operand_registers = registers;
         self
     }
 
@@ -316,13 +346,6 @@ impl Rule {
     /// represent (see [`Rule::operand_imm_ranges`]).
     pub fn with_operand_imm_ranges(mut self, ranges: Vec<(u32, ImmRange)>) -> Self {
         self.operand_imm_ranges = ranges;
-        self
-    }
-
-    /// Require operand symbols to bind float (or non-float) values (see
-    /// [`Rule::operand_floats`]).
-    pub fn with_operand_floats(mut self, floats: Vec<(u32, bool)>) -> Self {
-        self.operand_floats = floats;
         self
     }
 
@@ -622,9 +645,8 @@ impl InstructionSelectPass {
                     rule_index,
                     &rule.pattern,
                     &rule.operand_constraints,
-                    &rule.operand_widths,
+                    &rule.operand_registers,
                     &rule.operand_imm_ranges,
-                    &rule.operand_floats,
                 )
             })
             .collect();

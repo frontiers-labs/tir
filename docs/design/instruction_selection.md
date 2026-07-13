@@ -245,32 +245,26 @@ graph: its patterns are searched once for the whole function
 (`base_value_matches`) and each such block reuses that superset, narrowing it to
 its own op-roots. A **fact-bearing** block re-searches under its scope.
 
-### Width-sensitive operands
+### Semantic types and register storage
 
-A boundary may carry a **width requirement** (`Rule::with_operand_widths`,
-compiled to `Pattern::operand_width`): the bound class must hold a value of
-exactly that width, or one of *unknown* width (a rewrite-introduced
-intermediate, produced at register width by whatever materializes it). TMDL
-derives these for operands whose upper register bits reach the result —
-comparison operands always; right-shift values and division/remainder operands
-under an *untyped* node (a typed word form like `sraw` already pins its
-operands through width inference) — resolving the width from the operand's
-register class per enabled features (XLEN: 64 on rv64, 32 on rv32). So an i32
-compare fuses into `blt` on rv32 but is *refused* on rv64 (a 64-bit compare
-would read undefined upper bits) instead of miscompiling.
-Low-bits-preserving operators (add/and/shl/mul-low) stay width-agnostic.
+Every semantic pattern is assigned a type by unifying operator signatures.
+Integer operators are polymorphic over a bit width; floating operators preserve
+an exact exponent/mantissa format. Matching unifies those inferred types with
+the ground types carried by e-classes, so integer and floating expressions do
+not cross-match.
 
-### Float operands
+This value type is separate from a physical register operand's
+`RegisterCapability`. Integer-only and float-only banks admit their respective
+semantic domains; a TMDL `polymorphic` register class admits both, covering
+overlapping Arm SIMD/FP banks and RISC-V integer-register floating-point
+extensions. The register still has one storage width: narrower integer values
+fit in its low bits, while a floating format must occupy the bank exactly.
 
-A boundary may carry a **float requirement** (`Rule::with_operand_floats`,
-compiled to `Pattern::operand_floats`): the bound class must not hold a value
-whose IR type kind is the opposite — an integer operand refuses a float value
-and a float operand refuses an integer one, so a store never consumes a float
-and an `fadd` never consumes an integer. `class_is_float` reads the kind off
-whichever member carries a known integer or float type; a class of unknown type
-(a rewrite-introduced intermediate) matches either. Rewrite-introduced float
-nodes get their type from `type_for_kind_width`, which maps the arithmetic float
-kinds (`FAdd`/`FSub`/`FMul`/`FDiv`) at width 32/64 to `f32`/`f64`.
+A `RegisterRequirement` additionally records whether an instruction reads only
+those defined low bits or consumes the whole architectural register. TMDL marks
+comparison, untyped right-shift, division, and remainder operands as whole-width
+consumers. Thus an i32 compare is refused by a 64-bit compare instruction, while
+an i32 add may still use a 64-bit register bank.
 
 ### Immediate ranges
 

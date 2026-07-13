@@ -9,10 +9,8 @@ use tir::{
 };
 use tir_symbolic::egraph::{Id, Pattern, PatternNode, Var};
 
-use super::ImmRange;
-use super::node::{
-    SemEGraph, SemNode, class_int_binding, class_is_float, class_semantic_type, class_width,
-};
+use super::node::{SemEGraph, SemNode, class_int_binding, class_semantic_type};
+use super::{ImmRange, RegisterRequirement};
 
 /// A rule's pattern compiled for e-matching: the [`Pattern`] itself plus the
 /// per-pattern-node metadata the matcher and the PBQP cover consult.
@@ -40,13 +38,10 @@ pub(crate) struct PatternNodeMeta {
     /// constants).
     pub(crate) duplicable: bool,
     pub(crate) constraint: Option<OperandConstraint>,
-    /// Required value width of the bound class (see `Rule::operand_widths`).
-    pub(crate) width: Option<u32>,
+    /// Storage capability and bit demand of a physical register operand.
+    pub(crate) register: Option<RegisterRequirement>,
     /// Encoding range of an immediate operand (see `Rule::operand_imm_ranges`).
     pub(crate) imm_range: Option<ImmRange>,
-    /// Whether the bound value must (`true`) or must not (`false`) be a float
-    /// (see `Rule::operand_floats`).
-    pub(crate) float: Option<bool>,
     /// The symbolic value type inferred from the semantic operator signatures.
     pub(crate) semantic_type: Option<SemType>,
 }
@@ -94,22 +89,18 @@ impl CompiledIselPattern {
         bool_binds_wide: bool,
     ) -> bool {
         let meta = &self.node_meta[pattern_node.index()];
-        if let Some(required) = meta.width
-            && let Some(actual) = class_width(ctx, egraph, class)
-            && actual != required
-            && !(bool_binds_wide && actual == 1)
+        if let Some(required) = meta.register
+            && let Some(actual) = class_semantic_type(ctx, egraph, class)
+            && !required.accepts(&actual)
+            && !(bool_binds_wide
+                && matches!(actual, SemType::Bits(tir::sem::Width::Const(1)))
+                && required.accepts_low_bits(&actual))
         {
             return false;
         }
         if let Some(range) = meta.imm_range
             && let Some(value) = class_int_binding(egraph, class)
             && !range.contains(&value)
-        {
-            return false;
-        }
-        if let Some(required) = meta.float
-            && let Some(actual) = class_is_float(ctx, egraph, class)
-            && actual != required
         {
             return false;
         }
@@ -160,9 +151,8 @@ pub(crate) fn compile_isel_pattern(
     rule_index: usize,
     expr: &SemGraph,
     operand_constraints: &[(u32, OperandConstraint)],
-    operand_widths: &[(u32, u32)],
+    operand_registers: &[(u32, RegisterRequirement)],
     operand_imm_ranges: &[(u32, ImmRange)],
-    operand_floats: &[(u32, bool)],
 ) -> Option<CompiledIselPattern> {
     let root = expr.root()?;
     let inferred_types = infer_types(expr, |_| None).ok()?;
@@ -177,9 +167,8 @@ pub(crate) fn compile_isel_pattern(
         &mut memo,
         &inferred_types,
         operand_constraints,
-        operand_widths,
+        operand_registers,
         operand_imm_ranges,
-        operand_floats,
     )?;
     pattern.set_root(pattern_root);
 
@@ -212,9 +201,8 @@ fn compile_isel_pattern_node(
     memo: &mut HashMap<NodeId, Id>,
     inferred_types: &[SemType],
     operand_constraints: &[(u32, OperandConstraint)],
-    operand_widths: &[(u32, u32)],
+    operand_registers: &[(u32, RegisterRequirement)],
     operand_imm_ranges: &[(u32, ImmRange)],
-    operand_floats: &[(u32, bool)],
 ) -> Option<Id> {
     if let Some(compiled) = memo.get(&node).copied() {
         return Some(compiled);
@@ -233,18 +221,14 @@ fn compile_isel_pattern_node(
                     .iter()
                     .find(|(s, _)| s == symbol)
                     .map(|(_, c)| *c),
-                width: operand_widths
+                register: operand_registers
                     .iter()
                     .find(|(s, _)| s == symbol)
-                    .map(|(_, w)| *w),
+                    .map(|(_, requirement)| *requirement),
                 imm_range: operand_imm_ranges
                     .iter()
                     .find(|(s, _)| s == symbol)
                     .map(|(_, r)| *r),
-                float: operand_floats
-                    .iter()
-                    .find(|(s, _)| s == symbol)
-                    .map(|(_, f)| *f),
                 semantic_type: Some(inferred_types[node.index()].clone()),
                 ..Default::default()
             });
@@ -284,9 +268,8 @@ fn compile_isel_pattern_node(
                         memo,
                         inferred_types,
                         operand_constraints,
-                        operand_widths,
+                        operand_registers,
                         operand_imm_ranges,
-                        operand_floats,
                     )
                 })
                 .collect::<Option<Vec<Id>>>()?;

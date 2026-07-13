@@ -306,23 +306,6 @@ pub(crate) fn class_width(ctx: &Context, egraph: &SemEGraph, class: Id) -> Optio
         .find_map(|n| n.ty.and_then(|ty| type_width(ctx, ty)))
 }
 
-/// Whether an e-class holds a float (`Some(true)`) or integer (`Some(false)`)
-/// value, from whichever member carries one of those types. `None` when no
-/// member's type says either (rewrite-introduced intermediates, pointers).
-pub(crate) fn class_is_float(ctx: &Context, egraph: &SemEGraph, class: Id) -> Option<bool> {
-    egraph.nodes(class).iter().find_map(|n| {
-        let data = ctx.get_type_data(n.ty?);
-        let any = data.as_ref() as &dyn std::any::Any;
-        if any.downcast_ref::<tir::builtin::FloatType>().is_some() {
-            Some(true)
-        } else if any.downcast_ref::<IntegerType>().is_some() {
-            Some(false)
-        } else {
-            None
-        }
-    })
-}
-
 /// A ground semantic type carried by any typed member of an e-class.
 pub(crate) fn class_semantic_type(ctx: &Context, egraph: &SemEGraph, class: Id) -> Option<SemType> {
     egraph

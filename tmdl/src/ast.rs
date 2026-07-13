@@ -33,6 +33,9 @@ pub enum RegisterTrait {
     /// selection types its patterns with float types and keeps float and
     /// integer operands from binding across register files.
     Float,
+    /// Stores either integer or floating-point values, as in Arm SIMD/FP banks
+    /// and RISC-V's integer-register floating-point extensions.
+    Polymorphic,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1745,6 +1748,11 @@ impl RegisterClass {
     pub fn has_float_registers(&self) -> bool {
         self.resolve_registers()
             .any(|reg| reg.traits.contains(&RegisterTrait::Float))
+    }
+
+    pub fn has_polymorphic_registers(&self) -> bool {
+        self.resolve_registers()
+            .any(|reg| reg.traits.contains(&RegisterTrait::Polymorphic))
     }
 
     pub fn hardwired_zero_register_index(&self) -> Option<u16> {

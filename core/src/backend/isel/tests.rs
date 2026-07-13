@@ -6,16 +6,25 @@ use tir::{
 };
 
 use super::{
-    BranchEmitters, EmitRequest, InstructionSelectPass, IselCostModel, RegisterCapability, Rule,
-    RuleKind, RuleMatch, SemEGraph, SemNode, template_node,
+    BranchEmitters, EmitRequest, InstructionSelectPass, IselCostModel, RegisterCapability,
+    RegisterRequirement, Rule, RuleKind, RuleMatch, SemEGraph, SemNode, template_node,
 };
 
 #[test]
 fn overlapping_register_capability_accepts_integer_and_float_values() {
     let capability = RegisterCapability::any(64);
 
+    assert!(capability.accepts(&SemType::bits(32)));
     assert!(capability.accepts(&SemType::bits(64)));
     assert!(capability.accepts(&SemType::Float(FloatFormat::new(11, 52))));
+}
+
+#[test]
+fn whole_register_requirement_rejects_narrow_integer_values() {
+    let requirement = RegisterRequirement::whole(RegisterCapability::integer(64));
+
+    assert!(!requirement.accepts(&SemType::bits(32)));
+    assert!(requirement.accepts(&SemType::bits(64)));
 }
 
 fn symbol(g: &mut SemGraph, id: u32) -> tir::graph::NodeId {
@@ -761,8 +770,10 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
         0,
         &shift_imm_pattern(SymKind::ShiftRightArithmetic),
         &[(1, OperandConstraint::Immediate)],
-        &[(0, 64)],
-        &[],
+        &[(
+            0,
+            RegisterRequirement::whole(RegisterCapability::integer(64)),
+        )],
         &[],
     )
     .expect("srai pattern should compile");
@@ -1417,7 +1428,10 @@ fn bare_bool_guard_selects_zero_compare_branch() {
         emit_zero_branch_marker,
     )
     .with_kind(RuleKind::CondBranch { target_symbol: 2 })
-    .with_operand_widths(vec![(0, 64)]);
+    .with_operand_registers(vec![(
+        0,
+        RegisterRequirement::whole(RegisterCapability::integer(64)),
+    )]);
     let b = guarded_block_with_rules(&[1], vec![rule], |_, _, args| args[0]);
 
     let body = block_ops(&b.context, b.region);
@@ -1537,7 +1551,9 @@ fn width_constraint_gates_comparison_fusion() {
         mb.insert(func);
         mb.insert(ops::module_end(&context).build());
 
-        let rules = vec![branch_rule().with_operand_widths(vec![(0, rule_width), (1, rule_width)])];
+        let requirement = RegisterRequirement::whole(RegisterCapability::integer(rule_width));
+        let rules =
+            vec![branch_rule().with_operand_registers(vec![(0, requirement), (1, requirement)])];
         let mut pm = PassManager::new();
         pm.nest(FuncOp::name())
             .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));

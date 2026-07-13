@@ -1087,6 +1087,7 @@ where
                     "saved" => Some(RegisterTrait::Saved),
                     "status_flag" => Some(RegisterTrait::StatusFlag),
                     "float" => Some(RegisterTrait::Float),
+                    "polymorphic" => Some(RegisterTrait::Polymorphic),
                     _ => {
                         emitter.emit(Rich::custom(
                             e.span(),
@@ -1555,6 +1556,33 @@ mod tests {
     };
 
     use super::{inline_expr, instruction_def, isa_def, machine_def, register_class_def, unit_def};
+
+    #[test]
+    fn register_class_parses_polymorphic_storage() {
+        let src =
+            "register_class GPR for [Isa] { registers { x0 => { traits = [polymorphic] }, } }";
+        let (tokens, _e) = lexer().parse(src).into_output_errors();
+        let tokens = tokens.unwrap();
+        let rc = register_class_def()
+            .then(end())
+            .parse(
+                tokens
+                    .as_slice()
+                    .map((src.len()..src.len()).into(), |(t, s)| (t, s)),
+            )
+            .output()
+            .unwrap()
+            .0
+            .clone();
+
+        assert!(
+            rc.resolve_registers()
+                .next()
+                .unwrap()
+                .traits
+                .contains(&crate::ast::RegisterTrait::Polymorphic)
+        );
+    }
 
     #[test]
     fn register_class_parses_inheritance() {
