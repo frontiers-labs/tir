@@ -176,6 +176,101 @@ the `tir axioms` developer utility runs after a backend instruction change. It
 enumerates terms over the target's atomic instruction kinds, prunes by
 behavioral fingerprint, and accepts the smallest candidate the `SmtOracle`
 proves at every declared sample.
+
+### `isel.sexp` syntax
+
+The file contains one `theory` form with one `search` section and any
+number of built-in axiom families:
+
+```scheme
+(theory
+  (search
+    (max-ops 3)
+    (candidates-per-class 4)
+    (operators add sub and shl lshr ashr)
+    (goal sext extension
+      (leaves zero one n w w-minus-n ones-n)
+      (widths (8 32) (16 32) (8 64) (16 64)))
+    (goal neg unary
+      (leaves zero one w ones-w)
+      (widths (8 8) (32 32) (64 64))))
+
+  (family sub-immediate
+    (requires add)
+    (axiom sub-via-add-neg
+      (vars (a w)) (consts (c w)) (root w)
+      (lhs (sub a c))
+      (rhs (add a (neg c))))))
+```
+
+Full-line comments begin with `;`. Unknown sections, operators, goal shapes,
+or leaf names reject the theory when it is loaded.
+
+The `search` fields are:
+
+- `max-ops`: maximum operator-node count in an enumerated candidate. Leaves do
+  not count.
+- `candidates-per-class`: representatives retained for one observational
+  fingerprint, providing fallbacks when an SMT proof rejects the first term.
+- `operators`: semantic operators the enumerator may use. A target contributes
+  an operator only when its rule set has an atomic materializer for it.
+- `goal`: a semantic operator to bridge, followed by `extension` or `unary`.
+  An extension goal treats each width sample as `(source-width result-width)`;
+  a unary goal uses equal widths.
+- `widths`: concrete `(n w)` pairs used for fingerprints and proof checks.
+  These samples filter candidates; every rewrite application is still proved
+  again at its actual widths.
+
+Candidate leaf names expand as follows:
+
+| leaf | value for sample `(n w)` |
+|------|--------------------------|
+| `zero` | `0` |
+| `one` | `1` |
+| `n` | source width |
+| `w` | result/register width |
+| `w-minus-n` | `w - n` |
+| `ones-n` | `2^n - 1` |
+| `ones-w` | `2^w - 1` |
+
+A `family` is installed only when every kind in `(requires ...)` is rooted by
+the target's instruction rules. Its remaining children are ordinary `axiom`
+forms:
+
+```scheme
+(axiom name
+  (vars (value width) ...)
+  (consts (value width) ...)
+  (root width-or-literal)
+  (where (< width-expr width-expr) (= width-expr width-expr) ...)
+  (lhs pattern)
+  (rhs template))
+```
+
+- `vars` is optional; it declares captured values and binds their e-class
+  widths. Reusing a width name requires equal widths.
+- `consts` is optional and works like `vars`, but the matched e-class must
+  contain a constant.
+- `root` binds or checks the matched root width.
+- `where` is optional and accepts `<` and `=` guards over width expressions.
+- `lhs` is the e-matched semantic pattern. Declared variables are captures;
+  undeclared atoms are anonymous wildcards. Integer and width-expression
+  operands match constants of that value.
+- `rhs` may reference declared variables, `root`, semantic operator forms,
+  bare width-expression constants, or `(const value-expr width)` for a
+  specifically sized constant.
+
+Width expressions are integer literals, bound width names, `(- a b)`, and
+`(ones e)`. Semantic operator names use the same fixed-arity vocabulary as the
+op semantic-expression DSL.
+
+After changing the theory or target instructions, regenerate and validate the
+committed artifacts with:
+
+```sh
+cargo run -p tir-tools --bin tir -- axioms --report --write
+```
+
 The result is committed as `backends/<t>/src/isel.axioms`, installed by the
 backend through `with_axioms`, and guarded by a per-backend freshness test
 that re-runs discovery and diffs the file. `with_axioms` drops any axiom whose
