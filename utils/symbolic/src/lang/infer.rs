@@ -3,7 +3,162 @@ use std::collections::{HashMap, HashSet};
 use tir_adt::APInt;
 use tir_graph::{Dag, GenericDag, MutDag, NodeId};
 
-use crate::lang::{SymKind, SymPayload, WidthRule, scalar_op};
+use crate::lang::types::TypeInference;
+use crate::lang::{SemType, SymKind, SymPayload, TypeError, Width, WidthRule, scalar_op};
+
+/// Infer semantic value types by instantiating each operator's polymorphic
+/// signature and unifying it with the types of its operands. `seed` supplies
+/// externally known types, normally the IR types of symbol leaves and roots.
+pub fn infer_types<V>(
+    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+    seed: impl Fn(NodeId) -> Option<SemType>,
+) -> Result<Vec<SemType>, TypeError> {
+    let mut inference = TypeInference::default();
+    let mut types: Vec<SemType> = Vec::with_capacity(graph.len());
+
+    for index in 0..graph.len() {
+        let node = NodeId::from_index(index);
+        let children: Vec<NodeId> = graph.children(node).collect();
+        let child = |slot: usize| types[children[slot].index()].clone();
+        let kind = *graph.get_kind(node);
+        let inferred = match kind {
+            SymKind::Symbol | SymKind::Arg => inference.fresh_type(),
+            SymKind::Constant => inference.fresh_bits(),
+            SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv => {
+                let ty = inference.fresh_float();
+                inference.unify(&child(0), &ty)?;
+                inference.unify(&child(1), &ty)?;
+                ty
+            }
+            SymKind::Eq
+            | SymKind::Ne
+            | SymKind::Lt
+            | SymKind::Le
+            | SymKind::Gt
+            | SymKind::Ge
+            | SymKind::ULt
+            | SymKind::ULe
+            | SymKind::UGt
+            | SymKind::UGe => {
+                let operand = inference.fresh_bits();
+                inference.unify(&child(0), &operand)?;
+                inference.unify(&child(1), &operand)?;
+                SemType::bits(1)
+            }
+            SymKind::Add
+            | SymKind::Sub
+            | SymKind::Mul
+            | SymKind::Div
+            | SymKind::UDiv
+            | SymKind::SRem
+            | SymKind::URem
+            | SymKind::Or
+            | SymKind::And
+            | SymKind::Xor
+            | SymKind::Xnor => {
+                let operand = inference.fresh_bits();
+                inference.unify(&child(0), &operand)?;
+                inference.unify(&child(1), &operand)?;
+                operand
+            }
+            SymKind::Neg | SymKind::Not => {
+                let operand = inference.fresh_bits();
+                inference.unify(&child(0), &operand)?;
+                operand
+            }
+            SymKind::ShiftLeft | SymKind::ShiftRightArithmetic | SymKind::ShiftRightLogic => {
+                let value = inference.fresh_bits();
+                let amount = inference.fresh_bits();
+                inference.unify(&child(0), &value)?;
+                inference.unify(&child(1), &amount)?;
+                value
+            }
+            SymKind::Concat => {
+                let lhs = inference.fresh_width();
+                let rhs = inference.fresh_width();
+                inference.unify(&child(0), &SemType::Bits(lhs.clone()))?;
+                inference.unify(&child(1), &SemType::Bits(rhs.clone()))?;
+                SemType::Bits(Width::Add(Box::new(lhs), Box::new(rhs)))
+            }
+            SymKind::If => {
+                inference.unify(&child(0), &SemType::bits(1))?;
+                let result = inference.fresh_type();
+                inference.unify(&child(1), &result)?;
+                inference.unify(&child(2), &result)?;
+                result
+            }
+            SymKind::SExt | SymKind::ZExt => {
+                let value = inference.fresh_bits();
+                let width = inference.fresh_bits();
+                inference.unify(&child(0), &value)?;
+                inference.unify(&child(1), &width)?;
+                const_u64(graph, children[1])
+                    .map(|width| SemType::bits(width as u32))
+                    .unwrap_or_else(|| inference.fresh_bits())
+            }
+            SymKind::Extract => {
+                let value = inference.fresh_bits();
+                inference.unify(&child(0), &value)?;
+                for slot in 1..3 {
+                    let bound = inference.fresh_bits();
+                    inference.unify(&child(slot), &bound)?;
+                }
+                match (const_u64(graph, children[1]), const_u64(graph, children[2])) {
+                    (Some(high), Some(low)) if high >= low => {
+                        SemType::bits((high - low + 1) as u32)
+                    }
+                    _ => inference.fresh_bits(),
+                }
+            }
+            SymKind::Clamp | SymKind::Log2Ceil | SymKind::Sqrt => child(0),
+            SymKind::Fma => {
+                let ty = inference.fresh_float();
+                for slot in 0..3 {
+                    inference.unify(&child(slot), &ty)?;
+                }
+                ty
+            }
+            SymKind::LoadMemory | SymKind::LoadReserved => const_u64(graph, children[1])
+                .map(|bytes| SemType::bits(bytes as u32 * 8))
+                .unwrap_or_else(|| inference.fresh_bits()),
+            SymKind::StoreConditional => SemType::bits(1),
+            SymKind::AtomicRmw => const_u64(graph, children[2])
+                .map(|bytes| SemType::bits(bytes as u32 * 8))
+                .unwrap_or_else(|| inference.fresh_bits()),
+            SymKind::StoreMemory | SymKind::Fence => SemType::Unit,
+            SymKind::Split => SemType::Iterator(Box::new(inference.fresh_type())),
+            SymKind::Zip => {
+                let lhs = inference.fresh_type();
+                let rhs = inference.fresh_type();
+                inference.unify(&child(0), &SemType::Iterator(Box::new(lhs.clone())))?;
+                inference.unify(&child(1), &SemType::Iterator(Box::new(rhs.clone())))?;
+                SemType::Iterator(Box::new(SemType::Pair(Box::new(lhs), Box::new(rhs))))
+            }
+            SymKind::Map => {
+                let element = inference.fresh_type();
+                inference.unify(&child(0), &SemType::Iterator(Box::new(element)))?;
+                SemType::Iterator(Box::new(child(1)))
+            }
+            SymKind::IterConcat => inference.fresh_bits(),
+            SymKind::Reduce => child(1),
+            SymKind::StateAssign
+            | SymKind::StateStore
+            | SymKind::StateStoreConditional
+            | SymKind::StateFence
+            | SymKind::StateTrap
+            | SymKind::StateBlock
+            | SymKind::StateIf
+            | SymKind::StateTry
+            | SymKind::StateHandler => SemType::State,
+        };
+        if let Some(expected) = seed(node) {
+            inference.unify(&inferred, &expected)?;
+        }
+        types.push(inferred);
+    }
+
+    Ok(types.iter().map(|ty| inference.resolve(ty)).collect())
+}
 
 /// Infer each node's integer bit-width bottom-up; `leaf_width` supplies `Symbol`
 /// widths, `None` means unknown and propagates. Relies on children having lower
@@ -376,4 +531,66 @@ fn canon_rebuild<V: Clone>(
     };
     memo.insert(node.index(), new_node);
     new_node
+}
+
+#[cfg(test)]
+mod type_tests {
+    use tir_graph::{GenericDag, MutDag};
+
+    use super::*;
+    use crate::lang::{FloatFormat, SemType, infer_types};
+
+    type Graph = GenericDag<SymKind, SymPayload<()>>;
+
+    fn binary(kind: SymKind) -> (Graph, NodeId, NodeId, NodeId) {
+        let mut graph = Graph::new();
+        let lhs = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(lhs, SymPayload::SymbolId(0));
+        let rhs = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(rhs, SymPayload::SymbolId(1));
+        let root = graph.add_node(kind);
+        graph.add_edge(root, lhs);
+        graph.add_edge(root, rhs);
+        (graph, lhs, rhs, root)
+    }
+
+    #[test]
+    fn integer_binary_operation_is_width_polymorphic() {
+        let (graph, lhs, rhs, root) = binary(SymKind::Add);
+        let types = infer_types(&graph, |node| {
+            (node == lhs || node == rhs).then(|| SemType::bits(32))
+        })
+        .unwrap();
+
+        assert_eq!(types[root.index()], SemType::bits(32));
+    }
+
+    #[test]
+    fn integer_binary_operation_rejects_mixed_widths() {
+        let (graph, lhs, rhs, _) = binary(SymKind::Add);
+        let error = infer_types(&graph, |node| {
+            if node == lhs {
+                Some(SemType::bits(32))
+            } else if node == rhs {
+                Some(SemType::bits(64))
+            } else {
+                None
+            }
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("width mismatch"));
+    }
+
+    #[test]
+    fn float_operation_preserves_the_operand_format() {
+        let (graph, lhs, rhs, root) = binary(SymKind::FAdd);
+        let f32 = SemType::Float(FloatFormat::new(8, 23));
+        let types = infer_types(&graph, |node| {
+            (node == lhs || node == rhs).then(|| f32.clone())
+        })
+        .unwrap();
+
+        assert_eq!(types[root.index()], f32);
+    }
 }

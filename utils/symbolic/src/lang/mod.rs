@@ -5,11 +5,13 @@ mod exec;
 mod infer;
 mod ops;
 mod sexpr;
+mod types;
 
 pub use exec::{Memory, execute, execute_with_memory};
-pub use infer::{canonicalize_for_selection, infer_widths};
+pub use infer::{canonicalize_for_selection, infer_types, infer_widths};
 pub use ops::{SCALAR_OPS, ScalarOp, SmtTemplate, WidthRule, scalar_op, scalar_op_named};
 pub use sexpr::{BuildError, SemBuilderHooks, SemExpr, build, op_kind, op_name, parse};
+pub use types::{FloatFormat, SemType, TypeError, TypeVar, Width, WidthVar};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
