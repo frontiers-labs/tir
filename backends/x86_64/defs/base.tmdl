@@ -159,11 +159,8 @@ instruction Call for [X86_64] {
     }
 
     behavior {
-        // Push the return address to the new top of stack. Behaviors are
-        // parallel-assignment, so the store must name `rsp - 8` explicitly
-        // rather than read `rsp` after its own decrement.
-        store(GPR::rsp - zext(0b1000, self.XLEN), 8, PC::pc + zext(0b101, self.XLEN));
         GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
+        store(GPR::rsp, 8, PC::pc + zext(0b101, self.XLEN));
         PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
     }
 }
@@ -578,22 +575,22 @@ alu_ri_norex!(RegImm8Norex,
 )
 
 // Group-1 0x83 imm8 short forms. 64-bit REX.W and 32/16-bit REX + REX-free.
-alu_ri8!(RegImm8s, X86_64,
-    (AddImm8s, "add_imm8s", "add", 0b000),
-    (OrImm8s,  "or_imm8s",  "or",  0b001),
-    (AndImm8s, "and_imm8s", "and", 0b100),
-    (XorImm8s, "xor_imm8s", "xor", 0b110),
-    (SubImm8s, "sub_imm8s", "sub", 0b101),
-    (CmpImm8s, "cmp_imm8s", "cmp", 0b111)
+alu_ri8_sem!(RegImm8s, X86_64,
+    (AddImm8s, "add_imm8s", "add", 0b000, { dst = dst + sext(imm, self.XLEN); }),
+    (OrImm8s,  "or_imm8s",  "or",  0b001, { dst = dst | sext(imm, self.XLEN); }),
+    (AndImm8s, "and_imm8s", "and", 0b100, { dst = dst & sext(imm, self.XLEN); }),
+    (XorImm8s, "xor_imm8s", "xor", 0b110, { dst = dst ^ sext(imm, self.XLEN); }),
+    (SubImm8s, "sub_imm8s", "sub", 0b101, { dst = dst - sext(imm, self.XLEN); }),
+    (CmpImm8s, "cmp_imm8s", "cmp", 0b111, { })
 )
 
-alu_ri8!(RegImm8s32, X86,
-    (AddImm8s32, "add_imm8s32", "add", 0b000),
-    (OrImm8s32,  "or_imm8s32",  "or",  0b001),
-    (AndImm8s32, "and_imm8s32", "and", 0b100),
-    (XorImm8s32, "xor_imm8s32", "xor", 0b110),
-    (SubImm8s32, "sub_imm8s32", "sub", 0b101),
-    (CmpImm8s32, "cmp_imm8s32", "cmp", 0b111)
+alu_ri8_sem!(RegImm8s32, X86,
+    (AddImm8s32, "add_imm8s32", "add", 0b000, { dst = dst + sext(imm, 32); }),
+    (OrImm8s32,  "or_imm8s32",  "or",  0b001, { dst = dst | sext(imm, 32); }),
+    (AndImm8s32, "and_imm8s32", "and", 0b100, { dst = dst & sext(imm, 32); }),
+    (XorImm8s32, "xor_imm8s32", "xor", 0b110, { dst = dst ^ sext(imm, 32); }),
+    (SubImm8s32, "sub_imm8s32", "sub", 0b101, { dst = dst - sext(imm, 32); }),
+    (CmpImm8s32, "cmp_imm8s32", "cmp", 0b111, { })
 )
 
 alu_ri8!(RegImm8s32Norex, X86,
@@ -605,11 +602,11 @@ alu_ri8!(RegImm8s32Norex, X86,
     (CmpImm8s32Norex, "cmp_imm8s32_norex", "cmp", 0b111)
 )
 
-alu_ri8!(RegImm8s16, X86,
-    (AddImm8s16, "add_imm8s16", "add", 0b000),
-    (OrImm8s16,  "or_imm8s16",  "or",  0b001),
-    (AndImm8s16, "and_imm8s16", "and", 0b100),
-    (XorImm8s16, "xor_imm8s16", "xor", 0b110)
+alu_ri8_sem!(RegImm8s16, X86,
+    (AddImm8s16, "add_imm8s16", "add", 0b000, { dst = dst + sext(imm, 16); }),
+    (OrImm8s16,  "or_imm8s16",  "or",  0b001, { dst = dst | sext(imm, 16); }),
+    (AndImm8s16, "and_imm8s16", "and", 0b100, { dst = dst & sext(imm, 16); }),
+    (XorImm8s16, "xor_imm8s16", "xor", 0b110, { dst = dst ^ sext(imm, 16); })
 )
 
 alu_ri8!(RegImm8s16Norex, X86,

@@ -148,6 +148,17 @@ instruction TStore for [TestIsa] : RType {
     }
 }
 
+instruction TStoreWriteback for [TestIsa] : RType {
+    param MNEMONIC: String = "tstorewb";
+    param OPCODE: bits<7> = 0b0001001;
+
+    behavior {
+        rs1 = rs1 - zext(0b10000, self.XLEN);
+        store(rs1, 8, rs2);
+        store(rs1 + zext(0b1000, self.XLEN), 8, rd);
+    }
+}
+
 instruction TAlign for [TestIsa] : RType {
     param MNEMONIC: String = "talign";
     param OPCODE: bits<7> = 0b0000110;

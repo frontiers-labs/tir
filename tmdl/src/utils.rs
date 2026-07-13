@@ -278,27 +278,40 @@ pub fn item_supports_isa<'a>(
     target: &str,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
 ) -> bool {
-    let mut pending: Vec<&str> = for_isas.iter().map(String::as_str).collect();
-    let mut visited: HashSet<&str> = HashSet::new();
-    while let Some(isa_name) = pending.pop() {
+    fn supports<'a>(
+        isa_name: &str,
+        target: &str,
+        item_cache: &HashMap<&'a str, &'a ast::Item>,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
         if isa_name == target {
             return true;
         }
-        if !visited.insert(isa_name) {
-            continue;
+        if !visiting.insert(isa_name.to_string()) {
+            return false;
         }
-        let Some(ast::Item::Isa(isa)) = item_cache.get(isa_name) else {
-            continue;
+        let result = match item_cache.get(isa_name) {
+            Some(ast::Item::Isa(isa)) => match &isa.requires {
+                None => false,
+                Some(ast::IsaRequirement::Single(parent)) => {
+                    supports(parent, target, item_cache, visiting)
+                }
+                Some(ast::IsaRequirement::Any(parents)) => parents
+                    .iter()
+                    .any(|parent| supports(parent, target, item_cache, visiting)),
+                Some(ast::IsaRequirement::All(parents)) => parents
+                    .iter()
+                    .all(|parent| supports(parent, target, item_cache, visiting)),
+            },
+            _ => false,
         };
-        match &isa.requires {
-            None => {}
-            Some(ast::IsaRequirement::Single(parent)) => pending.push(parent),
-            Some(ast::IsaRequirement::Any(parents)) | Some(ast::IsaRequirement::All(parents)) => {
-                pending.extend(parents.iter().map(String::as_str));
-            }
-        }
+        visiting.remove(isa_name);
+        result
     }
-    false
+
+    for_isas
+        .iter()
+        .any(|isa| supports(isa, target, item_cache, &mut HashSet::new()))
 }
 
 /// Parameter values visible from `target`: its own parameters and those
@@ -343,5 +356,49 @@ pub fn parse_literal_value(lit: &ast::LitInt) -> u64 {
         u64::from_str_radix(stripped, 16).unwrap_or(0)
     } else {
         v.parse::<u64>().unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Span;
+    use chumsky::span::Span as _;
+
+    fn isa(name: &str, requires: Option<ast::IsaRequirement>) -> ast::Item {
+        ast::Item::Isa(ast::Isa {
+            name: name.to_string(),
+            requires,
+            parameters: Default::default(),
+            trap_handler: None,
+            span: Span::new((), 0..0),
+        })
+    }
+
+    #[test]
+    fn all_isa_requirements_must_all_support_the_target() {
+        let items = [
+            isa("RV32", None),
+            isa("RV64", None),
+            isa(
+                "C",
+                Some(ast::IsaRequirement::Any(vec![
+                    "RV32".to_string(),
+                    "RV64".to_string(),
+                ])),
+            ),
+            isa(
+                "C64",
+                Some(ast::IsaRequirement::All(vec![
+                    "C".to_string(),
+                    "RV64".to_string(),
+                ])),
+            ),
+        ];
+        let cache = items.iter().map(|item| (item.name(), item)).collect();
+
+        assert!(!item_supports_isa(&["C64".to_string()], "RV32", &cache));
+        assert!(item_supports_isa(&["C64".to_string()], "RV64", &cache));
+        assert!(item_supports_isa(&["C".to_string()], "RV32", &cache));
     }
 }

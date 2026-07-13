@@ -41,6 +41,11 @@
 // CHECK: (define-fun execute_tstore
 // CHECK-NEXT: (write_mem_8 st (read_gpr st rs1) (read_gpr st rs2)))
 
+// A writeback updates the named operand for later statements. Other operands
+// remain entry snapshots even when they alias the same physical register.
+// CHECK: (define-fun execute_tstorewriteback
+// CHECK-NEXT: (write_mem_8 (write_mem_8 (write_gpr st rs1 (bvsub (read_gpr st rs1) ((_ zero_extend 59) (_ bv16 5)))) (bvsub (read_gpr st rs1) ((_ zero_extend 59) (_ bv16 5))) (read_gpr st rs2)) (bvadd (bvsub (read_gpr st rs1) ((_ zero_extend 59) (_ bv16 5))) ((_ zero_extend 60) (_ bv8 4))) (read_gpr st rd)))
+
 // `~register` is a width-preserving bvnot; `~literal` folds to a signed
 // constant (~1 = -2 = (_ bv6 3)) that sign-extends to all-ones-but-low-bit.
 // CHECK: (define-fun execute_talign

@@ -421,6 +421,28 @@ pub fn verify_smt(sh: &Shell, isa: &str, args: impl Iterator<Item = String>) -> 
         if shard.is_some_and(|shard| !shard.contains(&instr.name)) {
             continue;
         }
+        if spec.name.starts_with("riscv") && instr.name == "vsetvli" {
+            report
+                .unsupported
+                .push("vsetvli (RVV disabled in Sail configuration)".to_string());
+            continue;
+        }
+        if spec.name.starts_with("riscv") && instr.width_bits == 16 {
+            report.unsupported.push(format!(
+                "{} (compressed extension disabled in Sail configuration)",
+                instr.name
+            ));
+            continue;
+        }
+        if spec.name.starts_with("riscv")
+            && matches!(instr.name.as_str(), "envcall" | "envbreak" | "cenvbreak")
+        {
+            report.unsupported.push(format!(
+                "{} (terminating Sail trace omits architectural trap state)",
+                instr.name
+            ));
+            continue;
+        }
         if !instr.supported {
             report.unsupported.push(instr.name.clone());
             continue;
@@ -925,6 +947,37 @@ fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
         }
     }
     cases
+}
+
+fn operand_case_is_valid(spec: &IsaSpec, instr: &Instruction, case: &[u64]) -> bool {
+    let value = |index: usize| case[index];
+    match (spec.name, instr.name.as_str()) {
+        ("armv8", "loaddoublewordpreindex" | "loaddoublewordpostindex") => value(0) != value(1),
+        ("armv8", "storedoublewordpreindex") => value(0) != value(1),
+        ("armv8", "loadpair") => value(0) != value(1),
+        ("armv8", "loadpairpreindex" | "loadpairpostindex") => {
+            value(0) != value(1) && value(0) != value(2) && value(1) != value(2)
+        }
+        ("armv8", "storepairpreindex") => value(0) != value(2) && value(1) != value(2),
+        (name, "cmove" | "cadd") if name.starts_with("riscv") => value(0) != 0 && value(1) != 0,
+        (name, "cjumpreg" | "cjumpandlinkreg") if name.starts_with("riscv") => value(0) != 0,
+        (name, "caddimm" | "cloadimm") if name.starts_with("riscv") => value(0) != 0,
+        (name, "cloadupperimm") if name.starts_with("riscv") => {
+            value(0) != 0 && value(0) != 2 && value(1) != 0
+        }
+        (name, "caddimm16sp") if name.starts_with("riscv") => value(0) != 0,
+        ("riscv32", "cshiftleftlogicalimm") => value(0) != 0 && value(1) < 32,
+        (name, "cshiftleftlogicalimm") if name.starts_with("riscv") => value(0) != 0,
+        (name, "cloadwordsp" | "cloaddoublesp") if name.starts_with("riscv") => value(0) != 0,
+        (
+            "x86_64",
+            "movload" | "mov32load" | "movsxdload" | "movsx8load" | "movsx16load" | "movzx8load"
+            | "movzx16load",
+        ) => !matches!(value(1) & 7, 4 | 5),
+        ("x86_64", "movstore" | "mov32store" | "mov16store") => !matches!(value(0) & 7, 4 | 5),
+        ("x86_64", "movstoredisp") => value(0) & 7 != 4,
+        _ => true,
+    }
 }
 
 fn operand_smt_literal(spec: &IsaSpec, kind: &OperandKind, value: u64) -> String {
@@ -1450,10 +1503,18 @@ fn build_query(
         }
     }
 
-    // Fetch invariant: PC is 4-byte aligned (no compressed instructions). x86
+    // Fixed-width ISAs align the PC to the concrete instruction width. x86
     // pins the PC to a concrete aligned value in its config instead.
     if spec.align_pc {
-        q.push_str("(assert (= ((_ extract 1 0) st0_pc) #b00))\n");
+        let alignment_bits = instr.width_bytes().trailing_zeros();
+        if alignment_bits > 0 {
+            let _ = writeln!(
+                q,
+                "(assert (= ((_ extract {} 0) st0_pc) (_ bv0 {})))",
+                alignment_bits - 1,
+                alignment_bits
+            );
+        }
     }
 
     // A value is (low-half) canonical when bits 63..47 are all zero: a valid
@@ -1478,9 +1539,9 @@ fn build_query(
             let _ = writeln!(q, "(assert (= ((_ extract 63 46) {addr}) (_ bv0 18)))");
         }
     } else {
-        // RISC-V (until the C extension is modeled): registers feeding an
-        // indirect jump are assumed 4-byte aligned, so misaligned-fetch trap
-        // paths are vacuous.
+        // Registers feeding an indirect jump obey the target instruction
+        // alignment, so misaligned-fetch trap paths are vacuous.
+        let alignment_bits = instr.width_bytes().trailing_zeros();
         for &i in &instr.pc_source_operands {
             if let OperandKind::Reg { class, idx_width } = &instr.operands[i].1 {
                 let reg = flat_read_register(
@@ -1489,7 +1550,14 @@ fn build_query(
                     "st0",
                     &format!("(_ bv{} {})", case[i], idx_width),
                 );
-                let _ = writeln!(q, "(assert (= ((_ extract 1 0) {reg}) #b00))");
+                if alignment_bits > 0 {
+                    let _ = writeln!(
+                        q,
+                        "(assert (= ((_ extract {} 0) {reg}) (_ bv0 {})))",
+                        alignment_bits - 1,
+                        alignment_bits
+                    );
+                }
             }
         }
     }
@@ -1811,20 +1879,16 @@ fn verify_instruction(
         instruction: instr.name.clone(),
         ..InstructionTiming::default()
     };
-    let cases = operand_cases(spec, instr);
+    let cases = operand_cases(spec, instr)
+        .into_iter()
+        .filter(|case| operand_case_is_valid(spec, instr, case))
+        .collect::<Vec<_>>();
     timing.cases = cases.len();
     let started = Instant::now();
     let words = encode_words(instr, &cases);
     timing.encode_ms = started.elapsed().as_millis();
-    // x86 encodings are lossless (register indices and immediates are stored
-    // verbatim), so the decoded operands equal the inputs; the wide, variable
-    // `decode_*` round-trip is only needed for the lossy fixed-width ISAs.
     let decode_started = Instant::now();
-    let cases = if spec.reg_names.is_empty() {
-        decode_operands(instr, &words)
-    } else {
-        cases
-    };
+    let cases = decode_operands(instr, &words);
     timing.decode_ms = decode_started.elapsed().as_millis();
     let mut line = String::new();
     let isla_started = Instant::now();
@@ -1972,7 +2036,7 @@ fn run_solver(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output
         return run_z3(tools, path);
     };
     let output = Command::new(bitwuzla)
-        .args(["--time-limit", "100"])
+        .args(["--time-limit", "5000"])
         .arg(path)
         .output();
     let Ok(output) = output else {

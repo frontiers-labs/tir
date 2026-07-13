@@ -120,16 +120,13 @@ Structural rules enforced by sema:
 
 A region form (`atomic { t = load(...); store(...); }`) was rejected:
 
-1. The generated Rust executor runs behavior statements sequentially against
-   live register state. A two-statement AMO writes `rd` before the store
-   statement reads `rs2`/`rs1`, so `amoadd.w a0, a0, (a1)`-style register
-   aliasing would compute the wrong value.
-2. The SMT backend permits at most one faulting memory access per `try`
+1. The SMT backend permits at most one faulting memory access per `try`
    block; a load+store region has two, making `except misaligned_store`
    untranslatable.
-3. Sail models AMOs the same way: one read-modify-write access, not a region.
+2. Sail models AMOs as one read-modify-write access, not two independently
+   observable memory effects.
 
-A single-expression `atomic_rmw` avoids all three problems and keeps the
+A single-expression `atomic_rmw` avoids both problems and keeps the
 value/effect split (old value in a register write, memory update as the
 effect) explicit for both backends.
 

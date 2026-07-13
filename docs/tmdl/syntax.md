@@ -187,7 +187,7 @@ instruction Add for [RV32I, RV64I] : RType {
 ```
 
 - Same structure as `template` with optional inheritance and `for [...]`.
-- `behavior` — required; describes semantics using the expression language. Basic assignments and arithmetic/bitwise ops are supported.
+- `behavior` — required; describes semantics using the expression language. Statements execute in order. Operand and fixed-register reads start as instruction-entry snapshots; assigning a name updates that name for later statements without changing a different operand that aliases the same physical register. Basic assignments and arithmetic/bitwise ops are supported.
 - Builtin functions usable in behaviors: `sext`/`zext` (width extension),
   `extract`, `clamp`, `log2Ceil`, `load`/`store` (memory), and `trap(cause)` —
   raise a synchronous exception with a constant cause code (e.g. RISC-V

@@ -1,0 +1,12 @@
+// Behavior operands are captured once. Later statements reuse those entry
+// symbols after a destination write, while shared lowering substitutes the
+// updated named binding into their semantic expressions.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
+
+// CHECK-LABEL: impl tir::backend::MachineInstruction for TStoreWritebackOp
+// CHECK: let __tmdl_entry_syms
+// CHECK: machine.read_register
+// CHECK: let __syms = __tmdl_entry_syms.clone()
+// CHECK: machine.write_register_value
+// CHECK: let __syms = __tmdl_entry_syms.clone()

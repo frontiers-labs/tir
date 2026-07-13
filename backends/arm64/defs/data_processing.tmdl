@@ -273,7 +273,7 @@ instruction CompareNegImmediate for [ARMv8A64] : CmpImmTemplate {
 // AND the NZCV flags of `rn - imm` (the same flag logic as `cmp`, but with a
 // real destination). Declared after CompareImmediate so `cmp` (rd = xzr) is
 // preferred when decoding a word whose rd field is 31.
-instruction SubsImmediate for [ARMv8A64] : AddSubImm {
+instruction SubsImmediate for [ARMv8A64] : AddSubImmFlags {
     param MNEMONIC: String = "subs";
     param OPNAME: String = "subs_imm";
     param OP: bits<1> = 0b1;
@@ -302,7 +302,7 @@ instruction SubsImmediate for [ARMv8A64] : AddSubImm {
 // flags of `rn + imm` (the same flag logic as `cmn`, but with a real
 // destination). Declared after CompareNegImmediate so `cmn` (rd = xzr) is
 // preferred when decoding a word whose rd field is 31.
-instruction AddsImmediate for [ARMv8A64] : AddSubImm {
+instruction AddsImmediate for [ARMv8A64] : AddSubImmFlags {
     param MNEMONIC: String = "adds";
     param OPNAME: String = "adds_imm";
     param OP: bits<1> = 0b0;
@@ -662,7 +662,7 @@ instruction AndImmediate for [ARMv8A64] {
     schedule { units = [WriteIALU]; }
 
     operands {
-        rd: GPR,
+        rd: GPRsp,
         rn: GPR,
         immr: bits<6>,
         imms: bits<6>,
@@ -703,7 +703,7 @@ instruction AndImmediate32 for [ARMv8A64] {
     schedule { units = [WriteIALU]; }
 
     operands {
-        rd: GPR,
+        rd: GPRsp,
         rn: GPR,
         immr: bits<6>,
         imms: bits<6>,
@@ -725,13 +725,13 @@ instruction AndImmediate32 for [ARMv8A64] {
     }
 
     behavior {
-        rd = zext(extract(rn, 31, 0), self.XLEN) & extract(
+        rd = zext(extract(rn, 31, 0) & extract(
             (((zext(0b1, self.XLEN) << (zext(imms, self.XLEN) + zext(0b1, self.XLEN)))
                 - zext(0b1, self.XLEN)) >> zext(immr, self.XLEN))
             | (((zext(0b1, self.XLEN) << (zext(imms, self.XLEN) + zext(0b1, self.XLEN)))
                 - zext(0b1, self.XLEN))
                 << ((zext(0b100000, self.XLEN) - zext(immr, self.XLEN)) & zext(0b11111, self.XLEN))),
-            31, 0);
+            31, 0), self.XLEN);
     }
 }
 

@@ -467,6 +467,17 @@ macro alu_ri8 {
     };
 }
 
+macro alu_ri8_sem {
+    ( $tmpl:ident, $dia:ident, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
+        $( instruction $name for [$dia] : $tmpl {
+               param OPNAME: String = $op;
+               param MNEMONIC: String = $mn;
+               param EXT: bits<3> = $ext;
+               behavior { $($b)* }
+           } )*
+    };
+}
+
 macro shift_cl {
     ( $nsuf:literal, $osuf:literal, $tmpl:ident, $( ( $name:ident, $ostem:literal, $mn:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction ${concat($name, $nsuf)} for [X86] : $tmpl {

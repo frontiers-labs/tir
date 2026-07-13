@@ -61,6 +61,201 @@ pub struct BehaviorGraph {
     pub regnum_symbols: HashMap<String, u32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Binding {
+    Ident(String),
+    Path(String, Vec<String>),
+}
+
+impl Binding {
+    fn from_destination(expr: &ast::Expr) -> Option<Self> {
+        match expr {
+            ast::Expr::Ident(ident) => Some(Self::Ident(ident.name.clone())),
+            ast::Expr::Path(path) => Some(Self::Path(path.base.clone(), path.remainder.clone())),
+            _ => None,
+        }
+    }
+
+    fn expression(&self, span: crate::Span) -> ast::Expr {
+        match self {
+            Self::Ident(name) => ast::Expr::Ident(ast::Ident {
+                name: name.clone(),
+                span,
+            }),
+            Self::Path(base, remainder) => ast::Expr::Path(ast::Path {
+                base: base.clone(),
+                remainder: remainder.clone(),
+                span,
+            }),
+        }
+    }
+}
+
+type Bindings = HashMap<Binding, ast::Expr>;
+
+/// Rewrite a behavior block into SSA-like expressions. Operand names and fixed
+/// register paths are entry snapshots; an assignment updates only its named
+/// binding, so later statements see that value without corrupting a different
+/// operand that aliases the same physical register.
+fn sequence_behavior(expr: &ast::Expr, bindings: &mut Bindings) -> ast::Expr {
+    match expr {
+        ast::Expr::Ident(ident) => bindings
+            .get(&Binding::Ident(ident.name.clone()))
+            .cloned()
+            .unwrap_or_else(|| expr.clone()),
+        ast::Expr::Path(path) => bindings
+            .get(&Binding::Path(path.base.clone(), path.remainder.clone()))
+            .cloned()
+            .unwrap_or_else(|| expr.clone()),
+        ast::Expr::Assign(assign) => {
+            let value = sequence_behavior(&assign.value, bindings);
+            if let Some(binding) = Binding::from_destination(&assign.dest) {
+                bindings.insert(binding, value.clone());
+            }
+            ast::Expr::Assign(ast::Assign {
+                dest: assign.dest.clone(),
+                value: Box::new(value),
+                span: assign.span,
+            })
+        }
+        ast::Expr::Binary(binary) => ast::Expr::Binary(ast::Binary {
+            lhs: Box::new(sequence_behavior(&binary.lhs, bindings)),
+            rhs: Box::new(sequence_behavior(&binary.rhs, bindings)),
+            op: binary.op.clone(),
+            span: binary.span,
+        }),
+        ast::Expr::Unary(unary) => ast::Expr::Unary(ast::Unary {
+            x: Box::new(sequence_behavior(&unary.x, bindings)),
+            op: unary.op.clone(),
+            span: unary.span,
+        }),
+        ast::Expr::Block(block) => ast::Expr::Block(ast::Block {
+            stmts: block
+                .stmts
+                .iter()
+                .map(|statement| sequence_behavior(statement, bindings))
+                .collect(),
+            last_expr_return: block.last_expr_return,
+            span: block.span,
+        }),
+        ast::Expr::Call(call) => ast::Expr::Call(ast::Call {
+            callee: call.callee.clone(),
+            arguments: call
+                .arguments
+                .iter()
+                .map(|argument| sequence_behavior(argument, bindings))
+                .collect(),
+            span: call.span,
+        }),
+        ast::Expr::Field(field) => ast::Expr::Field(ast::Field {
+            base: Box::new(sequence_behavior(&field.base, bindings)),
+            member: field.member.clone(),
+            span: field.span,
+        }),
+        ast::Expr::If(if_expr) => {
+            let condition = sequence_behavior(&if_expr.cond, bindings);
+            let entry = bindings.clone();
+            let mut then_bindings = entry.clone();
+            let then = sequence_behavior(&if_expr.then, &mut then_bindings);
+            let mut else_bindings = entry.clone();
+            let else_ = if_expr
+                .else_
+                .as_ref()
+                .map(|else_expr| sequence_behavior(else_expr, &mut else_bindings));
+
+            let mut keys = then_bindings.keys().cloned().collect::<Vec<_>>();
+            keys.extend(else_bindings.keys().cloned());
+            keys.sort_by_key(|key| format!("{key:?}"));
+            keys.dedup();
+            for key in keys {
+                let entry_value = entry
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| key.expression(if_expr.span));
+                let then_value = then_bindings
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| entry_value.clone());
+                let else_value = else_bindings
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| entry_value.clone());
+                let value = if then_value == else_value {
+                    then_value
+                } else {
+                    ast::Expr::If(ast::If {
+                        cond: Box::new(condition.clone()),
+                        then: Box::new(then_value),
+                        else_: Some(Box::new(else_value)),
+                        span: if_expr.span,
+                    })
+                };
+                bindings.insert(key, value);
+            }
+
+            ast::Expr::If(ast::If {
+                cond: Box::new(condition),
+                then: Box::new(then),
+                else_: else_.map(Box::new),
+                span: if_expr.span,
+            })
+        }
+        ast::Expr::IndexAccess(index) => ast::Expr::IndexAccess(ast::IndexAccess {
+            base: Box::new(sequence_behavior(&index.base, bindings)),
+            index: index.index,
+            span: index.span,
+        }),
+        ast::Expr::Slice(slice) => ast::Expr::Slice(ast::Slice {
+            base: Box::new(sequence_behavior(&slice.base, bindings)),
+            start: slice.start,
+            end: slice.end,
+            span: slice.span,
+        }),
+        ast::Expr::Try(try_expr) => {
+            let entry = bindings.clone();
+            let mut body_bindings = entry.clone();
+            let body = sequence_behavior(&try_expr.body, &mut body_bindings);
+            let handlers = try_expr
+                .handlers
+                .iter()
+                .map(|handler| {
+                    let mut handler_bindings = entry.clone();
+                    if let Some(binding) = &handler.binding {
+                        handler_bindings.remove(&Binding::Ident(binding.clone()));
+                    }
+                    ast::ExceptClause {
+                        kind: handler.kind.clone(),
+                        binding: handler.binding.clone(),
+                        body: sequence_behavior(&handler.body, &mut handler_bindings),
+                        span: handler.span,
+                    }
+                })
+                .collect();
+            // A caught exception rolls the body back, so no single expression
+            // describes post-try bindings. Existing ISA behaviors end the block
+            // at the try; retain entry bindings for any following statement.
+            *bindings = entry;
+            ast::Expr::Try(ast::TryExcept {
+                body: Box::new(body),
+                handlers,
+                span: try_expr.span,
+            })
+        }
+        ast::Expr::Lambda(lambda) => {
+            let mut lambda_bindings = bindings.clone();
+            for parameter in &lambda.params {
+                lambda_bindings.remove(&Binding::Ident(parameter.clone()));
+            }
+            ast::Expr::Lambda(ast::Lambda {
+                params: lambda.params.clone(),
+                body: Box::new(sequence_behavior(&lambda.body, &mut lambda_bindings)),
+                span: lambda.span,
+            })
+        }
+        ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => expr.clone(),
+    }
+}
+
 impl BehaviorGraph {
     pub fn effect_nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.graph.preorder(self.root)
@@ -466,8 +661,13 @@ pub fn lower_behavior<'a>(
     isa_consts: &HashMap<String, i64>,
     register_indices: &HashMap<(String, String), u32>,
 ) -> Option<BehaviorGraph> {
+    let expr = sequence_behavior(expr, &mut HashMap::new());
+    let trap_handler = trap_handler.cloned().map(|mut handler| {
+        handler.body = sequence_behavior(&handler.body, &mut HashMap::new());
+        handler
+    });
     let mut exprs = Vec::new();
-    collect_values(expr, trap_handler, &mut exprs)?;
+    collect_values(&expr, trap_handler.as_ref(), &mut exprs)?;
     let mut values = ValueGraph::new();
     let (value_roots, variable_symbols, register_symbols, regnum_symbols) = if exprs.is_empty() {
         (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new())
@@ -512,10 +712,10 @@ pub fn lower_behavior<'a>(
         graph,
         roots,
         _exprs: exprs,
-        trap_handler,
+        trap_handler: trap_handler.as_ref(),
         register_indices: register_indices.clone(),
     };
-    let root = lowerer.lower(expr)?;
+    let root = lowerer.lower(&expr)?;
     Some(BehaviorGraph {
         graph: lowerer.graph,
         root,
@@ -536,6 +736,48 @@ mod tests {
             name: name.to_string(),
             span: Span::new((), 0..0),
         })
+    }
+
+    fn int(value: &str) -> ast::Expr {
+        ast::Expr::Lit(ast::Lit::Int(ast::LitInt::new(
+            value.to_string(),
+            Span::new((), 0..0),
+        )))
+    }
+
+    #[test]
+    fn later_reads_use_named_writeback_without_changing_other_operands() {
+        let updated = ast::Expr::Binary(ast::Binary {
+            lhs: Box::new(ident("rn")),
+            rhs: Box::new(int("1")),
+            op: ast::BinOp::Add,
+            span: Span::new((), 0..0),
+        });
+        let behavior = ast::Expr::Block(ast::Block {
+            stmts: vec![
+                ast::Expr::Assign(ast::Assign {
+                    dest: Box::new(ident("rn")),
+                    value: Box::new(updated.clone()),
+                    span: Span::new((), 0..0),
+                }),
+                ast::Expr::Call(ast::Call {
+                    callee: Box::new(ast::Expr::BuiltinFunction(ast::BuiltinFunction::Store)),
+                    arguments: vec![ident("rn"), int("8"), ident("rt")],
+                    span: Span::new((), 0..0),
+                }),
+            ],
+            last_expr_return: false,
+            span: Span::new((), 0..0),
+        });
+
+        let ast::Expr::Block(sequenced) = sequence_behavior(&behavior, &mut HashMap::new()) else {
+            panic!("block expected")
+        };
+        let ast::Expr::Call(store) = &sequenced.stmts[1] else {
+            panic!("store expected")
+        };
+        assert_eq!(store.arguments[0], updated);
+        assert_eq!(store.arguments[2], ident("rt"));
     }
 
     #[test]

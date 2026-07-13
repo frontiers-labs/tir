@@ -272,6 +272,38 @@ template AddSubImm for [ARMv8A64] {
     }
 }
 
+// Flag-setting add/sub immediate keeps SP as a valid source, but encoding 31
+// in the destination names XZR rather than SP.
+template AddSubImmFlags for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
+    param MNEMONIC: String;
+    param SF: bits<1> = 0b1;
+    param OP: bits<1>;
+    param SETFLAGS: bits<1> = 0b1;
+    param SH: bits<1> = 0b0;
+
+    operands {
+        rd: GPR,
+        rn: GPRsp,
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => rn,
+        10..21 => imm,
+        22 => SH,
+        23..28 => 0b100010,
+        29 => SETFLAGS,
+        30 => OP,
+        31 => SF,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {imm}"
+    }
+}
+
 // Data Processing -- Register (logical shifted register). N inverts the
 // shifted operand (`bic`/`orn`/`eon`).
 template LogicalReg for [ARMv8A64] {

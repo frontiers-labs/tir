@@ -1764,11 +1764,9 @@ impl BehaviorEmitter<'_> {
             symbols,
             operands: self.operands,
             locals: &locals,
-            // TMDL behaviors use parallel-assignment semantics: every read
-            // observes the instruction's entry state, not prior statements'
-            // writes (so RISC-V `jalr` with `rd == rs1` targets the original
-            // `rs1`). Reads therefore always come from the entry state `st`,
-            // even though writes thread through `st_name`.
+            // Shared behavior lowering substitutes prior named assignments
+            // into later expressions. Remaining symbols are entry snapshots,
+            // preserving distinct operands that alias one physical register.
             state,
             ctx: self.ctx,
         };
@@ -1781,8 +1779,8 @@ impl BehaviorEmitter<'_> {
 
     /// Wrap the register-write state `w` (or the bare entry state for a
     /// discarded `store_conditional`) with an atomic's memory/reservation
-    /// effect. Reads observe the entry state `st` (parallel-assignment), so the
-    /// success predicate here matches the value facet emitted for the RHS.
+    /// effect. Symbol reads use the sequenced expression graph over entry
+    /// snapshots, so the success predicate matches the value facet of the RHS.
     fn atomic_effect(&self, op: &AtomicOp, w: &str) -> Option<String> {
         let xlen = self.ctx.xlen as u32;
         let addr = |a: NodeId| -> Option<String> {
@@ -1917,9 +1915,9 @@ impl sem_expr_state::BehaviorEmitter for BehaviorEmitter<'_> {
             let (values, root) = self.behavior.value_graph(value)?;
             return self.atomic_effect(&atomic_of_node(&values, root)?, st_name);
         }
-        let (values, root) = self.behavior.value_graph(value)?;
-        let children = values.children(root).collect::<Vec<_>>();
-        let bytes = eval_const_subtree(&values, *children.get(1)?)?.0 as u16;
+        let children = self.behavior.graph.children(value).collect::<Vec<_>>();
+        let (byte_values, byte_root) = self.behavior.value_graph(*children.get(1)?)?;
+        let bytes = eval_const_subtree(&byte_values, byte_root)?.0 as u16;
         if !MEM_ACCESS_BYTES.contains(&bytes) {
             return None;
         }
@@ -2144,9 +2142,14 @@ impl sem_expr_state::BehaviorEmitter for FlatBehaviorEmitter<'_> {
         if kind == tir::sem::SymKind::StateStoreConditional {
             return None;
         }
-        let (values, root) = self.values.behavior.value_graph(value)?;
-        let children = values.children(root).collect::<Vec<_>>();
-        let bytes = eval_const_subtree(&values, *children.get(1)?)?.0 as u16;
+        let children = self
+            .values
+            .behavior
+            .graph
+            .children(value)
+            .collect::<Vec<_>>();
+        let (byte_values, byte_root) = self.values.behavior.value_graph(*children.get(1)?)?;
+        let bytes = eval_const_subtree(&byte_values, byte_root)?.0 as u16;
         if !MEM_ACCESS_BYTES.contains(&bytes) {
             return None;
         }

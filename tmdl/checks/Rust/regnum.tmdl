@@ -67,14 +67,15 @@ instruction TCsrSet for [RegIsa] {
     }
 }
 
-// The guard's condition is a Ne over the index symbol and the zero literal.
-// CHECK: SymKind::Ne
-
 // The index symbol binds to the operand's decoded attribute index, not its
-// register value (`let (_, index)`, unlike the `(class, index)` value read).
+// register value (`let (_, index)`, unlike the `(class, index)` value read),
+// and is captured before any behavior statement executes.
 // CHECK: let (_, index) = tir::backend::register_attr(
 // CHECK: "rs1",
 // CHECK: __syms[{{[0-9]+}}] = Some(tir::sem::int_value(64, index as u64));
+
+// The guard's condition is a Ne over the captured index symbol and zero.
+// CHECK: SymKind::Ne
 
 // The CSR write is emitted under the guard.
 // CHECK: if value.to_u64() != 0 {

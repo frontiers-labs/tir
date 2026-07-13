@@ -44,8 +44,7 @@ stride = "0x10"
 
 [registers.defaults]
 satp = "0x0000000000000000"
-# RV64 (MXL=2) with I and M enabled; C stays off so the 4-byte PC alignment
-# assumption in xtask verify-smt holds.
+# RV64 (MXL=2) with I and M enabled; C is disabled in this Sail snapshot.
 misa = "{ bits = 0x8000000000001100 }"
 mstatus = "{ bits = 0x0000000000000000 }"
 # Direct mode, base 0: trap paths must reach the architectural state writes

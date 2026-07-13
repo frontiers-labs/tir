@@ -5371,7 +5371,29 @@ fn emit_behavior_exec(
         ctx.isa_param_values,
         register_index_map,
     )?;
-    emit_behavior_effect(&behavior, behavior.root, ctx)
+    let (max_sym_id, sym_inits) = emit_sym_inits(
+        &behavior.variable_symbols,
+        &behavior.register_symbols,
+        &behavior.regnum_symbols,
+        ctx.ops,
+        ctx.isa_param_values,
+        ctx.mnemonic,
+        ctx.reg_kinds,
+    );
+    let sym_count_lit = proc_macro2::Literal::usize_unsuffixed(max_sym_id + 1);
+    let body = emit_behavior_effect(&behavior, behavior.root, ctx)?;
+    Some(quote! {
+        {
+            let __tmdl_entry_syms: Vec<tir::sem::Value> = {
+                let mut __syms: Vec<Option<tir::sem::Value>> = vec![None; #sym_count_lit];
+                #(#sym_inits)*
+                __syms.into_iter()
+                    .map(|value| value.unwrap_or_else(|| tir::sem::int_value(64, 0)))
+                    .collect()
+            };
+            #body
+        }
+    })
 }
 
 struct RustBehaviorCtx<'a> {
@@ -5396,28 +5418,14 @@ fn emit_behavior_effect(
             else {
                 return None;
             };
-            let eval = emit_behavior_value_eval(
-                behavior,
-                *children.first()?,
-                ctx.ops,
-                ctx.isa_param_values,
-                ctx.mnemonic,
-                ctx.reg_kinds,
-            )?;
+            let eval = emit_behavior_value_eval(behavior, *children.first()?, ctx.mnemonic)?;
             let write = emit_graph_destination_write(destination, ctx.ops, ctx.mnemonic)?;
             Some(quote! {{ #eval #write }})
         }
         tir::sem::SymKind::StateStore
         | tir::sem::SymKind::StateStoreConditional
         | tir::sem::SymKind::StateFence => {
-            let eval = emit_behavior_value_eval(
-                behavior,
-                *children.first()?,
-                ctx.ops,
-                ctx.isa_param_values,
-                ctx.mnemonic,
-                ctx.reg_kinds,
-            )?;
+            let eval = emit_behavior_value_eval(behavior, *children.first()?, ctx.mnemonic)?;
             Some(quote! {{ #eval let _ = value; }})
         }
         tir::sem::SymKind::StateTrap => {
@@ -5427,14 +5435,7 @@ fn emit_behavior_effect(
                 return None;
             };
             let cause = *children.get((0..*argument_count).next()?)?;
-            let eval = emit_behavior_value_eval(
-                behavior,
-                cause,
-                ctx.ops,
-                ctx.isa_param_values,
-                ctx.mnemonic,
-                ctx.reg_kinds,
-            )?;
+            let eval = emit_behavior_value_eval(behavior, cause, ctx.mnemonic)?;
             Some(quote! { #eval machine.raise_exception(value.to_u64())?; })
         }
         // The simulator executes the no-trap path. Handler state is modeled by
@@ -5448,14 +5449,7 @@ fn emit_behavior_effect(
             Some(quote! { #(#steps)* })
         }
         tir::sem::SymKind::StateIf => {
-            let cond_eval = emit_behavior_value_eval(
-                behavior,
-                *children.first()?,
-                ctx.ops,
-                ctx.isa_param_values,
-                ctx.mnemonic,
-                ctx.reg_kinds,
-            )?;
+            let cond_eval = emit_behavior_value_eval(behavior, *children.first()?, ctx.mnemonic)?;
             let then_body = emit_behavior_effect(behavior, *children.get(1)?, ctx)?;
             // Omit the `else` arm for a guard with no else clause (e.g. a
             // guarded CSR write), so codegen emits no empty `else {}`.
@@ -5483,49 +5477,19 @@ fn emit_behavior_effect(
 fn emit_behavior_value_eval(
     behavior: &sem_expr_state::BehaviorGraph,
     root: tir::graph::NodeId,
-    ops: &[(String, Type)],
-    isa_param_values: &HashMap<String, i64>,
     mnemonic_lit: &proc_macro2::Literal,
-    reg_kinds: &HashMap<String, (bool, u32)>,
 ) -> Option<proc_macro2::TokenStream> {
     let (values, root) = behavior.value_graph(root)?;
-    emit_lowered_value_eval(
-        &values,
-        root,
-        &behavior.variable_symbols,
-        &behavior.register_symbols,
-        &behavior.regnum_symbols,
-        ops,
-        isa_param_values,
-        mnemonic_lit,
-        reg_kinds,
-    )
+    emit_lowered_value_eval(&values, root, mnemonic_lit)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_lowered_value_eval(
     dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
     root: tir::graph::NodeId,
-    variable_symbols: &HashMap<String, u32>,
-    register_symbols: &HashMap<(String, u32), u32>,
-    regnum_symbols: &HashMap<String, u32>,
-    ops: &[(String, Type)],
-    isa_param_values: &HashMap<String, i64>,
     mnemonic_lit: &proc_macro2::Literal,
-    reg_kinds: &HashMap<String, (bool, u32)>,
 ) -> Option<proc_macro2::TokenStream> {
     // Build the semantic graph inline (no type annotations, so no `_context`).
     let (dag_stmts, _root) = emit_dag_as_code(dag, root, &[], &HashSet::new());
-    let (max_sym_id, sym_inits) = emit_sym_inits(
-        variable_symbols,
-        register_symbols,
-        regnum_symbols,
-        ops,
-        isa_param_values,
-        mnemonic_lit,
-        reg_kinds,
-    );
-    let sym_count_lit = proc_macro2::Literal::usize_unsuffixed(max_sym_id + 1);
 
     Some(quote! {
         let value = {
@@ -5535,11 +5499,7 @@ fn emit_lowered_value_eval(
                 let g = &mut __g;
                 #(#dag_stmts)*
             }
-            let mut __syms: Vec<Option<tir::sem::Value>> = vec![None; #sym_count_lit];
-            #(#sym_inits)*
-            let __syms: Vec<tir::sem::Value> = __syms.into_iter()
-                .map(|v| v.unwrap_or_else(|| tir::sem::int_value(64, 0)))
-                .collect();
+            let __syms = __tmdl_entry_syms.clone();
             struct __TmdlMachineMemory<'a>(&'a mut dyn tir::backend::MachineContext);
             impl tir::sem::Memory for __TmdlMachineMemory<'_> {
                 type Error = tir::backend::SimTrap;
