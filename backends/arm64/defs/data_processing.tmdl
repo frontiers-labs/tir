@@ -735,49 +735,9 @@ instruction AndImmediate32 for [ARMv8A64] {
     }
 }
 
-// Scalar floating point. The semantic engine interprets a float-typed register's
-// bits as an APFloat (exp/mant from the class width), so `fadd`/`fmul` on FPR32
-// and FPR64 operands compute real binary32/binary64 results.
-
-instruction FAddSingle for [ARMv8A64] : FPArith32 {
-    param MNEMONIC: String = "fadd";
-    param OPNAME: String = "fadd_s";
-    param OPCODE: bits<4> = 0b0010;
-
-    behavior {
-        fd = fadd(fa, fb);
-    }
-}
-
-instruction FSubSingle for [ARMv8A64] : FPArith32 {
-    param MNEMONIC: String = "fsub";
-    param OPNAME: String = "fsub_s";
-    param OPCODE: bits<4> = 0b0011;
-
-    behavior {
-        fd = fsub(fa, fb);
-    }
-}
-
-instruction FMulSingle for [ARMv8A64] : FPArith32 {
-    param MNEMONIC: String = "fmul";
-    param OPNAME: String = "fmul_s";
-    param OPCODE: bits<4> = 0b0000;
-
-    behavior {
-        fd = fmul(fa, fb);
-    }
-}
-
-instruction FDivSingle for [ARMv8A64] : FPArith32 {
-    param MNEMONIC: String = "fdiv";
-    param OPNAME: String = "fdiv_s";
-    param OPCODE: bits<4> = 0b0001;
-
-    behavior {
-        fd = fdiv(fa, fb);
-    }
-}
+// Scalar double-precision floating point. The semantic engine interprets a
+// float-typed register's bits as an APFloat (exp/mant from the class width), so
+// `fadd`/`fmul` on FPR64 operands compute real binary64 results.
 
 instruction FAddDouble for [ARMv8A64] : FPArith64 {
     param MNEMONIC: String = "fadd";
@@ -851,44 +811,6 @@ instruction FMovImmediateDouble for [ARMv8A64] {
             | (((zext(0b0, self.XLEN) - zext(extract(imm, 6, 6), self.XLEN)) & zext(0b11111111, self.XLEN)) << 54)
             | (zext(extract(imm, 5, 4), self.XLEN) << 52)
             | (zext(extract(imm, 3, 0), self.XLEN) << 48);
-    }
-}
-
-// FMOV (scalar, immediate), single. Same VFPExpandImm immediate family as the
-// double form, producing a binary32 bit pattern.
-instruction FMovImmediateSingle for [ARMv8A64] {
-    param MNEMONIC: String = "fmov";
-    param OPNAME: String = "fmov_s_imm";
-    schedule { units = [WriteIALU]; }
-
-    operands {
-        fd: FPR32,
-        imm: bits<8>,
-    }
-
-    encoding {
-        0..4 => fd,
-        5..9 => 0b00000,
-        10..12 => 0b100,
-        13..20 => imm,
-        21 => 0b1,
-        22..23 => 0b00,
-        24..28 => 0b11110,
-        29 => 0b0,
-        30 => 0b0,
-        31 => 0b0,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {imm}"
-    }
-
-    behavior {
-        fd = (zext(extract(imm, 7, 7), 32) << 31)
-            | ((zext(0b1, 32) - zext(extract(imm, 6, 6), 32)) << 30)
-            | (((zext(0b0, 32) - zext(extract(imm, 6, 6), 32)) & zext(0b11111, 32)) << 25)
-            | (zext(extract(imm, 5, 4), 32) << 23)
-            | (zext(extract(imm, 3, 0), 32) << 19);
     }
 }
 

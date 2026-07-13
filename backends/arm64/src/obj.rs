@@ -8,9 +8,8 @@ use tir::backend::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
 
 use crate::{
     AddressPCRelOpBuilder, BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder,
-    FMovImmediateDoubleOpBuilder, FMovImmediateSingleOpBuilder, MoveWideZeroOpBuilder,
-    ReturnOpBuilder, VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp, phys,
-    virt,
+    MoveWideZeroOpBuilder, ReturnOpBuilder, VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp,
+    VirtualReturnOp, phys, virt,
 };
 
 const R_AARCH64_ADR_PREL_LO21: u32 = 274;
@@ -89,102 +88,6 @@ pub(crate) fn lower_constant(
         .build();
     rewriter.replace_op(op, &movz)?;
     Ok(true)
-}
-
-pub(crate) fn lower_constantf(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-) -> Result<bool, tir::PassError> {
-    use tir::builtin::{ConstantFOp, FloatType};
-
-    let Some(constant) = op.as_op::<ConstantFOp>() else {
-        return Ok(false);
-    };
-    let value = constant
-        .attributes()
-        .iter()
-        .find_map(|attr| match (&attr.value, attr.name == "value") {
-            (AttributeValue::F64(v), true) => Some(*v),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            tir::PassError::InvalidRuleSet("constantf op without a float value".to_string())
-        })?;
-    let result = constant.result();
-    let width = {
-        let ty = context.get_type_data(context.get_value(result).ty());
-        (ty.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<FloatType>()
-            .map(FloatType::bit_width)
-    };
-
-    match width {
-        Some(32) => {
-            let bits = (value as f32).to_bits();
-            let imm = find_vfp_imm32(bits).ok_or_else(|| {
-                tir::PassError::InvalidRuleSet(format!(
-                    "f32 constant {value} is not encodable as an arm64 fmov immediate"
-                ))
-            })?;
-            let fmov = FMovImmediateSingleOpBuilder::new(context)
-                .attr("fd", virt(result.number(), crate::RegClass::FPR32.id()))
-                .attr("imm", AttributeValue::Int(i64::from(imm)))
-                .build();
-            rewriter.replace_op(op, &fmov)?;
-        }
-        Some(64) => {
-            let bits = value.to_bits();
-            let imm = find_vfp_imm64(bits).ok_or_else(|| {
-                tir::PassError::InvalidRuleSet(format!(
-                    "f64 constant {value} is not encodable as an arm64 fmov immediate"
-                ))
-            })?;
-            let fmov = FMovImmediateDoubleOpBuilder::new(context)
-                .attr("fd", virt(result.number(), crate::RegClass::FPR64.id()))
-                .attr("imm", AttributeValue::Int(i64::from(imm)))
-                .build();
-            rewriter.replace_op(op, &fmov)?;
-        }
-        _ => {
-            return Err(tir::PassError::InvalidRuleSet(
-                "only f32/f64 constants are supported".to_string(),
-            ));
-        }
-    }
-    Ok(true)
-}
-
-fn find_vfp_imm32(bits: u32) -> Option<u8> {
-    (0..=u8::MAX).find(|&imm| vfp_expand_imm32(imm) == bits)
-}
-
-fn find_vfp_imm64(bits: u64) -> Option<u8> {
-    (0..=u8::MAX).find(|&imm| vfp_expand_imm64(imm) == bits)
-}
-
-fn vfp_expand_imm32(imm: u8) -> u32 {
-    let sign = ((imm >> 7) & 1) as u32;
-    let bit6 = ((imm >> 6) & 1) as u32;
-    let imm54 = ((imm >> 4) & 0x3) as u32;
-    let frac = (imm & 0xf) as u32;
-    (sign << 31)
-        | ((1 - bit6) << 30)
-        | (((0u32.wrapping_sub(bit6)) & 0x1f) << 25)
-        | (imm54 << 23)
-        | (frac << 19)
-}
-
-fn vfp_expand_imm64(imm: u8) -> u64 {
-    let sign = ((imm >> 7) & 1) as u64;
-    let bit6 = ((imm >> 6) & 1) as u64;
-    let imm54 = ((imm >> 4) & 0x3) as u64;
-    let frac = (imm & 0xf) as u64;
-    (sign << 63)
-        | ((1 - bit6) << 62)
-        | (((0u64.wrapping_sub(bit6)) & 0xff) << 54)
-        | (imm54 << 52)
-        | (frac << 48)
 }
 
 /// Pre-RA: materialize an `addr_of` symbol address as `adr rd, sym`. The

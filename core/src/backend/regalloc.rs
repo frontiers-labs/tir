@@ -1350,11 +1350,11 @@ fn rewrite_registers(context: &Context, blocks: &[BlockId], assignment: &HashMap
             let mut attrs = op.attributes.clone();
             let mut changed = false;
             for attr in &mut attrs {
-                if let AttributeValue::Register(RegisterAttr::Virtual { id, class }) = &attr.value
-                    && let Some((assigned_class, index)) = assignment.get(id)
+                if let AttributeValue::Register(RegisterAttr::Virtual { id, .. }) = &attr.value
+                    && let Some((class, index)) = assignment.get(id)
                 {
                     attr.value = AttributeValue::Register(RegisterAttr::Physical {
-                        class: class.unwrap_or(*assigned_class),
+                        class: *class,
                         index: *index,
                     });
                     changed = true;

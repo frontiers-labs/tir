@@ -232,28 +232,17 @@ fn lower_func_and_return_to_asm_symbol(
             })
             .unwrap_or_else(|| "unknown".to_string());
 
-        let mut arg_regs = Vec::new();
-        for arg in func.body().arguments().iter() {
-            let ty = context.get_type_data(arg.ty());
-            let ty_any = ty.as_ref() as &dyn std::any::Any;
-            let class = if let Some(float_ty) = ty_any.downcast_ref::<tir::builtin::FloatType>() {
-                match float_ty.bit_width() {
-                    32 => RegClass::FPR32.id(),
-                    64 => RegClass::FPR64.id(),
-                    other => {
-                        return Err(tir::PassError::InvalidRuleSet(format!(
-                            "{other}-bit float arguments are not supported (only f32/f64)"
-                        )));
-                    }
-                }
-            } else {
-                RegClass::GPR.id()
-            };
-            arg_regs.push(AttributeValue::Register(RegisterAttr::Virtual {
-                id: arg.id().number(),
-                class: Some(class),
-            }));
-        }
+        let arg_regs = func
+            .body()
+            .arguments()
+            .iter()
+            .map(|arg| {
+                AttributeValue::Register(RegisterAttr::Virtual {
+                    id: arg.id().number(),
+                    class: Some(RegClass::GPR.id()),
+                })
+            })
+            .collect::<Vec<_>>();
 
         let lowered = tir::backend::SymbolOpBuilder::new(context)
             .body(op.op().regions[0])
@@ -275,55 +264,6 @@ fn lower_func_and_return_to_asm_symbol(
     }
 
     Ok(false)
-}
-
-fn int_width(context: &tir::Context, value: tir::ValueId) -> Option<u32> {
-    let data = context.get_type_data(context.get_value(value).ty());
-    (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<tir::builtin::IntegerType>()
-        .map(tir::builtin::IntegerType::width)
-}
-
-fn lower_trunci(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-) -> Result<bool, tir::PassError> {
-    use tir::builtin::TruncIOp;
-
-    let Some(trunc) = op.as_op::<TruncIOp>() else {
-        return Ok(false);
-    };
-    let Some(&input) = trunc.operands().first() else {
-        return Err(tir::PassError::RewriteFailed(op.op().id));
-    };
-    let result = trunc.result();
-    let Some(input_width) = int_width(context, input) else {
-        return Err(tir::PassError::RewriteFailed(op.op().id));
-    };
-    let Some(result_width) = int_width(context, result) else {
-        return Err(tir::PassError::RewriteFailed(op.op().id));
-    };
-    if input_width <= result_width {
-        return Ok(false);
-    }
-    if !(1..=64).contains(&result_width) {
-        return Err(tir::PassError::InvalidRuleSet(format!(
-            "arm64 trunci to i{result_width} is not supported"
-        )));
-    }
-
-    let ubfm = UnsignedBitfieldMoveOpBuilder::new(context)
-        .attr("rd", virt(result.number(), RegClass::GPR.id()))
-        .attr("rn", virt(input.number(), RegClass::GPR.id()))
-        .attr("immr", tir::attributes::AttributeValue::Int(0))
-        .attr(
-            "imms",
-            tir::attributes::AttributeValue::Int(i64::from(result_width - 1)),
-        )
-        .build();
-    rewriter.replace_op(op, &ubfm)?;
-    Ok(true)
 }
 
 impl Arm64Dialect {
@@ -537,7 +477,6 @@ fn create_isel_pass_for(
             cond_nonzero: emit_branch_nonzero,
         })
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
-        .with_op_lowering(lower_trunci)
         .with_op_lowering(lower_calls)
 }
 
@@ -777,11 +716,7 @@ impl tir::backend::TargetMachine for Arm64Target {
     }
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        vec![
-            obj::lower_constant,
-            obj::lower_constantf,
-            obj::lower_addr_of,
-        ]
+        vec![obj::lower_constant, obj::lower_addr_of]
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {

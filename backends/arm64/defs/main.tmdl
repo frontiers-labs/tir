@@ -70,11 +70,7 @@ register_class FPR64 for [ARMv8A64] {
     param WIDTH: Integer = 64;
 
     registers {
-        d0 => { index = 0, traits = [float, argument, return_value, caller_saved] },
-        d1 => { index = 1, traits = [float, argument, return_value, caller_saved] },
-        d2..d7 => { traits = [float, argument, caller_saved] },
-        d8..d15 => { traits = [float, callee_saved] },
-        d16..d31 => { traits = [float, caller_saved] },
+        d0..d31 => { traits = [float, caller_saved] },
     }
 }
 
@@ -84,43 +80,7 @@ register_class FPR32 for [ARMv8A64] {
     param WIDTH: Integer = 32;
 
     registers {
-        s0 => { index = 0, traits = [float, argument, return_value, caller_saved] },
-        s1 => { index = 1, traits = [float, argument, return_value, caller_saved] },
-        s2..s7 => { traits = [float, argument, caller_saved] },
-        s8..s15 => { traits = [float, callee_saved] },
-        s16..s31 => { traits = [float, caller_saved] },
-    }
-}
-
-// FP data-processing (2 source), single precision. OPCODE selects the operation
-// (fmul 0000, fadd 0010, fsub 0011, fdiv 0001); ptype = 00 (binary32).
-template FPArith32 for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param OPCODE: bits<4>;
-
-    operands {
-        fd: FPR32,
-        fa: FPR32,
-        fb: FPR32,
-    }
-
-    encoding {
-        0..4 => fd,
-        5..9 => fa,
-        10..11 => 0b10,
-        12..15 => OPCODE,
-        16..20 => fb,
-        21 => 0b1,
-        22..23 => 0b00,
-        24..28 => 0b11110,
-        29 => 0b0,
-        30 => 0b0,
-        31 => 0b0,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {fa}, {fb}"
+        s0..s31 => { traits = [float, caller_saved] },
     }
 }
 

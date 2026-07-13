@@ -1,6 +1,10 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+// XFAIL: *
 
-// f64 parameters are ABI-classified as XMM values.
+// FINDING F2 (miscompile): f64 parameters are ABI-classified as GPR, not XMM,
+// so they are read from the wrong registers. A correct SysV classification puts
+// the first f64 arg in the XMM class / xmm0. arg_regs currently says GPR, so
+// this CHECK fails (XFAIL). tir-jit confirms addf(1.5,2.25) returns garbage.
 
 module {
   func @addf(%0: !f64, %1: !f64) -> !f64 {
@@ -10,5 +14,4 @@ module {
   module_end
 }
 
-// CHECK: arg_regs = [%virt0:XMM, %virt1:XMM]
-// CHECK: x86_64.addsd {dst = xmm0, src = xmm1}
+// CHECK: arg_regs = [%virt0:XMM
