@@ -83,14 +83,14 @@ impl fmt::Display for TypeError {
 impl std::error::Error for TypeError {}
 
 #[derive(Default)]
-pub(crate) struct TypeInference {
+pub struct TypeUnifier {
     next_type: u32,
     next_width: u32,
     types: HashMap<TypeVar, SemType>,
     widths: HashMap<WidthVar, Width>,
 }
 
-impl TypeInference {
+impl TypeUnifier {
     pub(crate) fn fresh_type(&mut self) -> SemType {
         let var = TypeVar(self.next_type);
         self.next_type += 1;
@@ -114,7 +114,7 @@ impl TypeInference {
         })
     }
 
-    pub(crate) fn unify(&mut self, lhs: &SemType, rhs: &SemType) -> Result<(), TypeError> {
+    pub fn unify(&mut self, lhs: &SemType, rhs: &SemType) -> Result<(), TypeError> {
         let lhs = self.resolve(lhs);
         let rhs = self.resolve(rhs);
         match (&lhs, &rhs) {
@@ -166,7 +166,7 @@ impl TypeInference {
         }
     }
 
-    pub(crate) fn resolve(&self, ty: &SemType) -> SemType {
+    pub fn resolve(&self, ty: &SemType) -> SemType {
         match ty {
             SemType::Var(var) => self
                 .types

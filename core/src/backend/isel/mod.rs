@@ -740,11 +740,9 @@ impl InstructionSelectPass {
                     return Vec::new();
                 }
                 let pattern_root = compiled.pattern.root();
-                compiled
-                    .pattern
-                    .search_with_legality(&fs.egraph, &|node, class| {
-                        value_match_allowed(fs, context, compiled, pattern_root, node, class)
-                    })
+                compiled.search_with_legality(&fs.egraph, context, &|node, class| {
+                    value_match_allowed(fs, context, compiled, pattern_root, node, class)
+                })
             })
             .collect()
     }
@@ -1575,11 +1573,9 @@ impl InstructionSelectPass {
             let raw: &[EMatch<u32>] = if let Some(cache) = base_matches {
                 &cache[pattern_index]
             } else {
-                fresh = compiled
-                    .pattern
-                    .search_with_legality(&fs.egraph, &|node, class| {
-                        value_match_allowed(fs, context, compiled, pattern_root, node, class)
-                    });
+                fresh = compiled.search_with_legality(&fs.egraph, context, &|node, class| {
+                    value_match_allowed(fs, context, compiled, pattern_root, node, class)
+                });
                 &fresh
             };
 

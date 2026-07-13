@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use tir_adt::APInt;
 use tir_graph::{Dag, GenericDag, MutDag, NodeId};
 
-use crate::lang::types::TypeInference;
+use crate::lang::types::TypeUnifier;
 use crate::lang::{SemType, SymKind, SymPayload, TypeError, Width, WidthRule, scalar_op};
 
 /// Infer semantic value types by instantiating each operator's polymorphic
@@ -13,7 +13,7 @@ pub fn infer_types<V>(
     graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
     seed: impl Fn(NodeId) -> Option<SemType>,
 ) -> Result<Vec<SemType>, TypeError> {
-    let mut inference = TypeInference::default();
+    let mut inference = TypeUnifier::default();
     let mut types: Vec<SemType> = Vec::with_capacity(graph.len());
 
     for index in 0..graph.len() {

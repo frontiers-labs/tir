@@ -7,8 +7,8 @@ use std::hash::{Hash, Hasher};
 
 use tir::{
     Context, TypeId, ValueId,
-    builtin::IntegerType,
-    sem::{SymKind, SymPayload},
+    builtin::{FloatType, IntegerType},
+    sem::{FloatFormat, SemType, SymKind, SymPayload},
 };
 use tir_adt::APInt;
 use tir_symbolic::egraph::{EGraph, ENode, Id};
@@ -229,6 +229,19 @@ pub(crate) fn type_width(context: &Context, ty: TypeId) -> Option<u32> {
         })
 }
 
+/// The context-independent semantic type represented by an IR type. Register
+/// classes are intentionally absent: this describes the value, not its storage.
+pub(crate) fn semantic_type(context: &Context, ty: TypeId) -> Option<SemType> {
+    let data = context.get_type_data(ty);
+    let any = data.as_ref() as &dyn std::any::Any;
+    any.downcast_ref::<IntegerType>()
+        .map(|ty| SemType::bits(ty.width()))
+        .or_else(|| {
+            any.downcast_ref::<FloatType>()
+                .map(|ty| SemType::Float(FloatFormat::new(ty.exp_width(), ty.mant_width())))
+        })
+}
+
 /// The IR type of a `width`-bit value computed by a `kind` node: the IEEE
 /// binary format for the float kinds, an integer type otherwise.
 pub(crate) fn type_for_kind_width(context: &Context, kind: SymKind, width: u32) -> Option<TypeId> {
@@ -308,4 +321,12 @@ pub(crate) fn class_is_float(ctx: &Context, egraph: &SemEGraph, class: Id) -> Op
             None
         }
     })
+}
+
+/// A ground semantic type carried by any typed member of an e-class.
+pub(crate) fn class_semantic_type(ctx: &Context, egraph: &SemEGraph, class: Id) -> Option<SemType> {
+    egraph
+        .nodes(class)
+        .iter()
+        .find_map(|node| node.ty.and_then(|ty| semantic_type(ctx, ty)))
 }

@@ -5,12 +5,14 @@ use std::collections::{HashMap, HashSet};
 use tir::{
     Context,
     graph::{Dag, Matchable, MetaDag, NodeId, OperandConstraint},
-    sem::{SemGraph, SymKind, SymPayload},
+    sem::{SemGraph, SemType, SymKind, SymPayload, TypeUnifier, infer_types},
 };
 use tir_symbolic::egraph::{Id, Pattern, PatternNode, Var};
 
 use super::ImmRange;
-use super::node::{SemEGraph, SemNode, class_int_binding, class_is_float, class_width};
+use super::node::{
+    SemEGraph, SemNode, class_int_binding, class_is_float, class_semantic_type, class_width,
+};
 
 /// A rule's pattern compiled for e-matching: the [`Pattern`] itself plus the
 /// per-pattern-node metadata the matcher and the PBQP cover consult.
@@ -27,7 +29,7 @@ pub(crate) struct CompiledIselPattern {
 }
 
 /// Per-pattern-node matching metadata.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct PatternNodeMeta {
     /// An operand capture point (a `Var::Symbol` leaf).
     pub(crate) is_boundary: bool,
@@ -45,9 +47,28 @@ pub(crate) struct PatternNodeMeta {
     /// Whether the bound value must (`true`) or must not (`false`) be a float
     /// (see `Rule::operand_floats`).
     pub(crate) float: Option<bool>,
+    /// The symbolic value type inferred from the semantic operator signatures.
+    pub(crate) semantic_type: Option<SemType>,
 }
 
 impl CompiledIselPattern {
+    fn match_types(
+        &self,
+        egraph: &SemEGraph,
+        ctx: &Context,
+        matched: &tir_symbolic::egraph::EMatch<u32>,
+    ) -> bool {
+        let mut unifier = TypeUnifier::default();
+        self.node_meta.iter().enumerate().all(|(index, meta)| {
+            let Some(expected) = &meta.semantic_type else {
+                return true;
+            };
+            let class = matched.binding(Id::from_raw(index as u32));
+            class_semantic_type(ctx, egraph, class)
+                .is_none_or(|actual| unifier.unify(expected, &actual).is_ok())
+        })
+    }
+
     /// Whether `class` may bind under `pattern_node`: a width requirement rejects
     /// a value *known* to be of a different width than the instruction operates
     /// at (a rewrite-introduced class of unknown width is produced at register
@@ -116,9 +137,22 @@ impl CompiledIselPattern {
         egraph: &SemEGraph,
         ctx: &Context,
     ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
-        self.pattern.search_with_legality(egraph, &|node, class| {
+        self.search_with_legality(egraph, ctx, &|node, class| {
             self.boundary_ok_impl(egraph, ctx, node, class, true)
         })
+    }
+
+    pub(crate) fn search_with_legality(
+        &self,
+        egraph: &SemEGraph,
+        ctx: &Context,
+        allowed: &dyn Fn(Id, Id) -> bool,
+    ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
+        self.pattern
+            .search_with_legality(egraph, allowed)
+            .into_iter()
+            .filter(|matched| self.match_types(egraph, ctx, matched))
+            .collect()
     }
 }
 
@@ -131,6 +165,7 @@ pub(crate) fn compile_isel_pattern(
     operand_floats: &[(u32, bool)],
 ) -> Option<CompiledIselPattern> {
     let root = expr.root()?;
+    let inferred_types = infer_types(expr, |_| None).ok()?;
     let mut pattern = Pattern::new();
     let mut node_meta = Vec::new();
     let mut memo = HashMap::new();
@@ -140,6 +175,7 @@ pub(crate) fn compile_isel_pattern(
         &mut pattern,
         &mut node_meta,
         &mut memo,
+        &inferred_types,
         operand_constraints,
         operand_widths,
         operand_imm_ranges,
@@ -174,6 +210,7 @@ fn compile_isel_pattern_node(
     pattern: &mut Pattern<SemNode, u32>,
     node_meta: &mut Vec<PatternNodeMeta>,
     memo: &mut HashMap<NodeId, Id>,
+    inferred_types: &[SemType],
     operand_constraints: &[(u32, OperandConstraint)],
     operand_widths: &[(u32, u32)],
     operand_imm_ranges: &[(u32, ImmRange)],
@@ -208,6 +245,7 @@ fn compile_isel_pattern_node(
                     .iter()
                     .find(|(s, _)| s == symbol)
                     .map(|(_, f)| *f),
+                semantic_type: Some(inferred_types[node.index()].clone()),
                 ..Default::default()
             });
             compiled
@@ -225,6 +263,7 @@ fn compile_isel_pattern_node(
                 node_meta.push(PatternNodeMeta {
                     is_constant: true,
                     duplicable: true,
+                    semantic_type: Some(inferred_types[node.index()].clone()),
                     ..Default::default()
                 });
                 compiled
@@ -243,6 +282,7 @@ fn compile_isel_pattern_node(
                         pattern,
                         node_meta,
                         memo,
+                        inferred_types,
                         operand_constraints,
                         operand_widths,
                         operand_imm_ranges,
@@ -256,7 +296,10 @@ fn compile_isel_pattern_node(
                 ty: expr.get_actual_type(node),
                 children,
             });
-            node_meta.push(PatternNodeMeta::default());
+            node_meta.push(PatternNodeMeta {
+                semantic_type: Some(inferred_types[node.index()].clone()),
+                ..Default::default()
+            });
             compiled
         }
     };
