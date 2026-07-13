@@ -306,6 +306,8 @@ pub struct Rule {
     pub operand_constraints: Vec<(u32, OperandConstraint)>,
     /// Per-register-operand storage and bit-demand requirements.
     pub operand_registers: Vec<(u32, RegisterRequirement)>,
+    /// Storage capability of the register receiving this rule's result.
+    pub result_register: Option<RegisterRequirement>,
     /// Per-operand-symbol immediate encoding range. A constant outside the field's
     /// representable range must not bind (its encoding would truncate). Symbols
     /// absent here accept any constant.
@@ -323,6 +325,7 @@ impl Rule {
             prelude_emit: None,
             operand_constraints: Vec::new(),
             operand_registers: Vec::new(),
+            result_register: None,
             operand_imm_ranges: Vec::new(),
             emit_fn,
         }
@@ -339,6 +342,16 @@ impl Rule {
     /// and whether the instruction consumes all of their architectural bits.
     pub fn with_operand_registers(mut self, registers: Vec<(u32, RegisterRequirement)>) -> Self {
         self.operand_registers = registers;
+        self
+    }
+
+    pub fn with_result_register(mut self, register: RegisterRequirement) -> Self {
+        self.result_register = Some(register);
+        self
+    }
+
+    pub fn with_optional_result_register(mut self, register: Option<RegisterRequirement>) -> Self {
+        self.result_register = register;
         self
     }
 
@@ -647,6 +660,7 @@ impl InstructionSelectPass {
                     &rule.operand_constraints,
                     &rule.operand_registers,
                     &rule.operand_imm_ranges,
+                    rule.result_register,
                 )
             })
             .collect();

@@ -6,13 +6,13 @@ use tir::{
     Context, MemoryRead, MemoryWrite, OpId, OpInstance, TypeId, ValueId,
     attributes::AttributeValue,
     graph::{Dag, NodeId},
-    sem::{SemGraph, SymKind, SymPayload, infer_widths},
+    sem::{SemGraph, SemType, SymKind, SymPayload, infer_types},
 };
 use tir_adt::APInt;
 use tir_symbolic::egraph::Id;
 
 use super::node::{
-    SemEGraph, SemNode, SemPayload, minimal_unsigned_apint, template_node, type_for_kind_width,
+    SemEGraph, SemNode, SemPayload, ir_type, minimal_unsigned_apint, semantic_type, template_node,
     type_width,
 };
 
@@ -142,7 +142,7 @@ impl<'a> SemDagBuilder<'a> {
         let operands = self.build_operands(&op.operands);
         let mut graph = SemGraph::new();
         let root = op.clone().as_dyn_op().semantic_expr(&mut graph)?;
-        Some(self.lower_with_widths(&graph, root, &operands))
+        Some(self.lower_typed(&graph, root, &operands))
     }
 
     fn build_operands(&mut self, operands: &[ValueId]) -> Vec<Id> {
@@ -152,10 +152,9 @@ impl<'a> SemDagBuilder<'a> {
             .collect()
     }
 
-    /// Infer node widths from `operands` and lower `graph` rooted at `root`.
-    fn lower_with_widths(&mut self, graph: &SemGraph, root: NodeId, operands: &[Id]) -> Id {
-        let widths = self.infer_local_widths(graph, operands);
-        self.lower_graph_node(graph, root, operands, &widths)
+    fn lower_typed(&mut self, graph: &SemGraph, root: NodeId, operands: &[Id]) -> Id {
+        let types = self.infer_local_types(graph, operands);
+        self.lower_graph_node(graph, root, operands, types.as_deref())
     }
 
     fn build_memory_effect(&mut self, op: &std::sync::Arc<OpInstance>) -> Option<Id> {
@@ -224,7 +223,7 @@ impl<'a> SemDagBuilder<'a> {
         let mut graph = SemGraph::new();
         let root = def.clone().as_dyn_op().semantic_expr(&mut graph)?;
         let operands = self.build_operands(&def.operands);
-        let class = self.lower_with_widths(&graph, root, &operands);
+        let class = self.lower_typed(&graph, root, &operands);
         let comparison = self
             .egraph
             .nodes(class)
@@ -253,7 +252,7 @@ impl<'a> SemDagBuilder<'a> {
                 let mut graph = SemGraph::new();
                 if let Some(root) = def.clone().as_dyn_op().semantic_expr(&mut graph) {
                     let operands = self.build_operands(&def.operands);
-                    self.lower_with_widths(&graph, root, &operands)
+                    self.lower_typed(&graph, root, &operands)
                 } else {
                     self.add_input_value(value, value_ty)
                 }
@@ -283,18 +282,15 @@ impl<'a> SemDagBuilder<'a> {
         }
     }
 
-    /// Infer the width of every node of `graph` from the IR types of the operands
-    /// it references, then resolve those widths against the live context. This is
-    /// the same width rule TMDL uses for patterns, so the program graph and the
-    /// rule patterns end up typed consistently.
-    fn infer_local_widths(&self, graph: &SemGraph, operands: &[Id]) -> Vec<Option<u32>> {
-        infer_widths(graph, |node| match graph.get_leaf_data(node) {
+    fn infer_local_types(&self, graph: &SemGraph, operands: &[Id]) -> Option<Vec<SemType>> {
+        infer_types(graph, |node| match graph.get_leaf_data(node) {
             Some(SymPayload::SymbolId(id)) => operands
                 .get(*id as usize)
                 .and_then(|&class| self.class_ty(class))
-                .and_then(|ty| type_width(self.context, ty)),
+                .and_then(|ty| semantic_type(self.context, ty)),
             _ => None,
         })
+        .ok()
     }
 
     /// The IR type recorded on an operand class (taken from any member carrying one).
@@ -302,20 +298,14 @@ impl<'a> SemDagBuilder<'a> {
         self.egraph.nodes(class).iter().find_map(|n| n.ty)
     }
 
-    /// Lower one node of a semantic-expression graph, typing each node from its
-    /// inferred width. Operand leaves keep the IR type they were built with;
-    /// internal nodes (and the root) take their inferred width resolved to a
-    /// type — a float type for the float kinds, so float-typed rule patterns
-    /// match them exactly.
     fn lower_graph_node(
         &mut self,
         graph: &SemGraph,
         node: NodeId,
         operands: &[Id],
-        widths: &[Option<u32>],
+        types: Option<&[SemType]>,
     ) -> Id {
-        let node_ty = widths[node.index()]
-            .and_then(|width| type_for_kind_width(self.context, *graph.get_node(node), width));
+        let node_ty = types.and_then(|types| ir_type(self.context, &types[node.index()]));
         match graph.get_node(node) {
             SymKind::Symbol => match graph.get_leaf_data(node) {
                 Some(SymPayload::SymbolId(id)) => operands
@@ -331,7 +321,7 @@ impl<'a> SemDagBuilder<'a> {
             kind => {
                 let children: Vec<Id> = graph
                     .children(node)
-                    .map(|child| self.lower_graph_node(graph, child, operands, widths))
+                    .map(|child| self.lower_graph_node(graph, child, operands, types))
                     .collect();
                 if kind.accepts_arity(children.len()) {
                     self.add_op(*kind, children, node_ty)

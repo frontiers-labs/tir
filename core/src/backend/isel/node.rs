@@ -242,17 +242,19 @@ pub(crate) fn semantic_type(context: &Context, ty: TypeId) -> Option<SemType> {
         })
 }
 
-/// The IR type of a `width`-bit value computed by a `kind` node: the IEEE
-/// binary format for the float kinds, an integer type otherwise.
-pub(crate) fn type_for_kind_width(context: &Context, kind: SymKind, width: u32) -> Option<TypeId> {
-    use tir::builtin::FloatType;
-    match kind {
-        SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv => match width {
-            32 => Some(FloatType::f32(context)),
-            64 => Some(FloatType::f64(context)),
+pub(crate) fn ir_type(context: &Context, ty: &SemType) -> Option<TypeId> {
+    use tir::sem::Width;
+    match ty {
+        SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width)) => {
+            Some(IntegerType::new(context, *width))
+        }
+        SemType::Float(format) => match (&format.exponent, &format.mantissa) {
+            (Width::Const(exponent), Width::Const(mantissa)) => {
+                Some(FloatType::new(context, *exponent, *mantissa))
+            }
             _ => None,
         },
-        _ => Some(IntegerType::new(context, width)),
+        _ => None,
     }
 }
 

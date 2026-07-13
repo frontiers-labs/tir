@@ -775,6 +775,7 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
             RegisterRequirement::whole(RegisterCapability::integer(64)),
         )],
         &[],
+        None,
     )
     .expect("srai pattern should compile");
 

@@ -153,6 +153,7 @@ fn root_kinds(rules: &[Rule]) -> (BTreeMap<SymKind, BTreeSet<&'static str>>, BTr
             &rule.operand_constraints,
             &rule.operand_registers,
             &rule.operand_imm_ranges,
+            rule.result_register,
         ) else {
             continue;
         };

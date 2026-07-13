@@ -123,6 +123,19 @@ impl TypeUnifier {
             (SemType::Bits(a), SemType::Bits(b)) | (SemType::RawBits(a), SemType::RawBits(b)) => {
                 self.unify_width(a, b)
             }
+            (SemType::RawBits(raw), SemType::Bits(bits))
+            | (SemType::Bits(bits), SemType::RawBits(raw)) => self.unify_width(raw, bits),
+            (SemType::RawBits(raw), SemType::Float(format))
+            | (SemType::Float(format), SemType::RawBits(raw)) => self.unify_width(
+                raw,
+                &Width::Add(
+                    Box::new(Width::Const(1)),
+                    Box::new(Width::Add(
+                        Box::new(format.exponent.clone()),
+                        Box::new(format.mantissa.clone()),
+                    )),
+                ),
+            ),
             (SemType::Float(a), SemType::Float(b)) => {
                 self.unify_width(&a.exponent, &b.exponent)?;
                 self.unify_width(&a.mantissa, &b.mantissa)

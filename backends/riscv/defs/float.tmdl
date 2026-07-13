@@ -231,9 +231,9 @@ instruction FMvDX for [D64] {
     }
 }
 
-// FP loads/stores. Besides load/store selection (the float destination class
-// types `flw`'s pattern as f32, so it never overlaps `lw`), these are the
-// spill/reload instructions register allocation emits for FPR values.
+// FP loads/stores. Besides load/store selection (the float destination
+// capability keeps `flw` from overlapping `lw`), these are the spill/reload
+// instructions register allocation emits for FPR values.
 
 instruction FLoadWord for [F] {
     param MNEMONIC: String = "flw";

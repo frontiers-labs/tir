@@ -24,6 +24,7 @@ pub(crate) struct CompiledIselPattern {
     /// `addw` (one typed node) beats the untyped `add` for an i32 value, while the
     /// untyped `add`/`and` still match every other width.
     pub(crate) specificity: usize,
+    result_register: Option<RegisterRequirement>,
 }
 
 /// Per-pattern-node matching metadata.
@@ -54,14 +55,22 @@ impl CompiledIselPattern {
         matched: &tir_symbolic::egraph::EMatch<u32>,
     ) -> bool {
         let mut unifier = TypeUnifier::default();
-        self.node_meta.iter().enumerate().all(|(index, meta)| {
+        let nodes_match = self.node_meta.iter().enumerate().all(|(index, meta)| {
+            if meta.is_boundary {
+                return true;
+            }
             let Some(expected) = &meta.semantic_type else {
                 return true;
             };
             let class = matched.binding(Id::from_raw(index as u32));
             class_semantic_type(ctx, egraph, class)
                 .is_none_or(|actual| unifier.unify(expected, &actual).is_ok())
-        })
+        });
+        nodes_match
+            && self.result_register.is_none_or(|register| {
+                class_semantic_type(ctx, egraph, matched.root)
+                    .is_none_or(|actual| register.accepts(&actual))
+            })
     }
 
     /// Whether `class` may bind under `pattern_node`: a width requirement rejects
@@ -153,6 +162,7 @@ pub(crate) fn compile_isel_pattern(
     operand_constraints: &[(u32, OperandConstraint)],
     operand_registers: &[(u32, RegisterRequirement)],
     operand_imm_ranges: &[(u32, ImmRange)],
+    result_register: Option<RegisterRequirement>,
 ) -> Option<CompiledIselPattern> {
     let root = expr.root()?;
     let inferred_types = infer_types(expr, |_| None).ok()?;
@@ -189,6 +199,7 @@ pub(crate) fn compile_isel_pattern(
         pattern,
         node_meta,
         specificity,
+        result_register,
     })
 }
 

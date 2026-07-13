@@ -119,8 +119,8 @@ pub fn infer_types<V>(
                 ty
             }
             SymKind::LoadMemory | SymKind::LoadReserved => const_u64(graph, children[1])
-                .map(|bytes| SemType::bits(bytes as u32 * 8))
-                .unwrap_or_else(|| inference.fresh_bits()),
+                .map(|bytes| SemType::RawBits(Width::Const(bytes as u32 * 8)))
+                .unwrap_or_else(|| SemType::RawBits(inference.fresh_width())),
             SymKind::StoreConditional => SemType::bits(1),
             SymKind::AtomicRmw => const_u64(graph, children[2])
                 .map(|bytes| SemType::bits(bytes as u32 * 8))
@@ -592,5 +592,31 @@ mod type_tests {
         .unwrap();
 
         assert_eq!(types[root.index()], f32);
+    }
+
+    #[test]
+    fn raw_memory_bits_admit_a_float_interpretation() {
+        let mut graph = Graph::new();
+        let address = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(address, SymPayload::SymbolId(0));
+        let bytes = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(bytes, SymPayload::Int(APInt::new(8, 4)));
+        let metadata = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(metadata, SymPayload::Int(APInt::new(1, 0)));
+        let load = graph.add_node(SymKind::LoadMemory);
+        graph.add_edge(load, address);
+        graph.add_edge(load, bytes);
+        graph.add_edge(load, metadata);
+
+        let types = infer_types(&graph, |_| None).unwrap();
+        assert_eq!(types[load.index()], SemType::RawBits(Width::Const(32)));
+
+        let mut unifier = TypeUnifier::default();
+        unifier
+            .unify(
+                &types[load.index()],
+                &SemType::Float(FloatFormat::new(8, 23)),
+            )
+            .unwrap();
     }
 }
