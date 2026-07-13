@@ -3,8 +3,8 @@
 ; view = zero-cost register re-view; UNCOVERED = documented gap.
 
 kind                  status     via
-Add                   rooted     x86_64.add, x86_64.add16, x86_64.add32, x86_64.add8, x86_64.add8h, x86_64.addimm, x86_64.addimm16, x86_64.addimm32, x86_64.addimm8, x86_64.addimm8h
-Sub                   rooted     x86_64.sub, x86_64.sub16, x86_64.sub32, x86_64.sub8, x86_64.sub8h, x86_64.subimm, x86_64.subimm32
+Add                   rooted     x86_64.add, x86_64.add16, x86_64.add32, x86_64.add8, x86_64.add8h, x86_64.addimm, x86_64.addimm16, x86_64.addimm32, x86_64.addimm8, x86_64.addimm8h, x86_64.addimm8s, x86_64.addimm8s16, x86_64.addimm8s32
+Sub                   rooted     x86_64.sub, x86_64.sub16, x86_64.sub32, x86_64.sub8, x86_64.sub8h, x86_64.subimm, x86_64.subimm32, x86_64.subimm8s, x86_64.subimm8s32
 Mul                   rooted     x86_64.imul, x86_64.imul32, x86_64.imulimm, x86_64.imulimm32
 Eq                    bridged    eq-via-cmp, eq-via-if
 Ne                    bridged    ne-via-cmp, ne-via-if
@@ -15,9 +15,9 @@ UGe                   bridged    uge-via-cmp, uge-via-if
 ShiftLeft             rooted     x86_64.shlcl, x86_64.shlcl32, x86_64.shlimm, x86_64.shlimm16, x86_64.shlimm32, x86_64.shlimm8, x86_64.shlimm8h
 ShiftRightArithmetic  rooted     x86_64.sarcl, x86_64.sarcl32, x86_64.sarimm, x86_64.sarimm16, x86_64.sarimm32, x86_64.sarimm8, x86_64.sarimm8h
 ShiftRightLogic       rooted     x86_64.shrcl, x86_64.shrcl32, x86_64.shrimm, x86_64.shrimm16, x86_64.shrimm32, x86_64.shrimm8, x86_64.shrimm8h
-Or                    rooted     x86_64.or, x86_64.or16, x86_64.or32, x86_64.or8, x86_64.or8h, x86_64.orimm, x86_64.orimm16, x86_64.orimm32, x86_64.orimm8, x86_64.orimm8h
-And                   rooted     x86_64.and, x86_64.and16, x86_64.and32, x86_64.and8, x86_64.and8h, x86_64.andimm, x86_64.andimm16, x86_64.andimm32, x86_64.andimm8, x86_64.andimm8h
-Xor                   rooted     x86_64.xor, x86_64.xor16, x86_64.xor32, x86_64.xor8, x86_64.xor8h, x86_64.xorimm, x86_64.xorimm16, x86_64.xorimm32, x86_64.xorimm8, x86_64.xorimm8h
+Or                    rooted     x86_64.or, x86_64.or16, x86_64.or32, x86_64.or8, x86_64.or8h, x86_64.orimm, x86_64.orimm16, x86_64.orimm32, x86_64.orimm8, x86_64.orimm8h, x86_64.orimm8s, x86_64.orimm8s16, x86_64.orimm8s32
+And                   rooted     x86_64.and, x86_64.and16, x86_64.and32, x86_64.and8, x86_64.and8h, x86_64.andimm, x86_64.andimm16, x86_64.andimm32, x86_64.andimm8, x86_64.andimm8h, x86_64.andimm8s, x86_64.andimm8s16, x86_64.andimm8s32
+Xor                   rooted     x86_64.xor, x86_64.xor16, x86_64.xor32, x86_64.xor8, x86_64.xor8h, x86_64.xorimm, x86_64.xorimm16, x86_64.xorimm32, x86_64.xorimm8, x86_64.xorimm8h, x86_64.xorimm8s, x86_64.xorimm8s16, x86_64.xorimm8s32
 ZExt                  rooted     x86_64.movzx16, x86_64.movzx8
 SExt                  rooted     x86_64.movsx16, x86_64.movsx8, x86_64.movsxd
 Extract               view       register re-view (low-slice)

@@ -21,8 +21,9 @@ does the rest.
 | `isel/builder.rs` | `SemDagBuilder`: the function's IR ops → one shared semantic e-graph, including memory effects |
 | `isel/pattern.rs` | `compile_isel_pattern`: rule semantics → `tir_symbolic::egraph::Pattern`s + per-node metadata |
 | `isel/axioms.rs` | s-expression axioms and their compilation into proved rewrites |
-| `isel/synthesis.rs` | offline discovery of bridge axioms by enumeration (`discover_axioms`) |
-| `isel/rewrites.rs` | the built-in boolean bridges (`discover_rewrites`), saturation driver |
+| `defs/isel.sexp` | checked discovery search space, goals, samples, and built-in axiom families |
+| `isel/synthesis.rs` | generic offline enumeration engine (`discover_axioms`) |
+| `isel/rewrites.rs` | theory-family selection and saturation driver |
 | `isel/cover.rs` | PBQP construction, match dominance pruning, completeness check |
 | `isel/emit.rs` | `BlockPlan` and `EmissionBuilder`: cover → per-op decisions |
 
@@ -168,13 +169,13 @@ as s-expression axioms (`isel/axioms.rs`):
   (rhs (ashr (shl x (- w n)) (- w n))))
 ```
 
-Nobody writes these by hand either: the `tir axioms` developer utility
-*discovers* them (`isel/synthesis.rs`) whenever a backend's instruction set
-changes. Discovery enumerates candidate terms over the target's atomic
-instruction kinds, directly in the axiom language (constant leaves are width
-expressions, so candidates are width-parameterized by construction), prunes by
-behavioral fingerprint over sampled inputs at several `(n, w)` pairs, and
-accepts the smallest candidate the `SmtOracle` proves at every sampled pair.
+The checked `core/defs/isel.sexp` theory declares the candidate operators,
+search bounds, goals, leaves, width samples, and capability-gated built-in
+families. The generic `isel/synthesis.rs` engine interprets that data whenever
+the `tir axioms` developer utility runs after a backend instruction change. It
+enumerates terms over the target's atomic instruction kinds, prunes by
+behavioral fingerprint, and accepts the smallest candidate the `SmtOracle`
+proves at every declared sample.
 The result is committed as `backends/<t>/src/isel.axioms`, installed by the
 backend through `with_axioms`, and guarded by a per-backend freshness test
 that re-runs discovery and diffs the file. `with_axioms` drops any axiom whose

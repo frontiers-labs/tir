@@ -19,6 +19,7 @@ mod rewrites;
 mod synthesis;
 #[cfg(test)]
 mod tests;
+mod theory;
 
 use std::collections::{HashMap, HashSet};
 

@@ -18,10 +18,10 @@ pub use tir_symbolic::lang::{
 };
 
 mod discover;
-pub(crate) use discover::{EXT_WIDTH_SAMPLES, con, op, sample_values, sym};
 pub use discover::{
     EquivalenceOracle, FuzzOracle, SmtOracle, confirm_bool_via_if, confirm_extension_via_shifts,
 };
+pub(crate) use discover::{con, op, sample_values, sym};
 
 /// The post-order graph core builds semantic expressions into: [`SymKind`] nodes
 /// over `SymPayload<ValueId>` leaves, annotated with [`NodeMeta`] so a node can

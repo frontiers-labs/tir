@@ -21,10 +21,9 @@ use tir::graph::{Dag, NodeId};
 use tir::sem::{SemGraph, SymKind};
 use tir::{Context, OpInstance, Operation, builtin::ops};
 
-use super::axioms::{
-    bool_materialize_axioms, comparison_materialize_axioms, parse_axiom, sub_via_add_neg_axiom,
-};
+use super::axioms::parse_axiom;
 use super::pattern::compile_isel_pattern;
+use super::theory::enabled_axioms;
 use super::{Rule, RuleKind};
 use tir_symbolic::egraph::{PatternNode, Var};
 
@@ -198,17 +197,7 @@ fn bridged_kinds(
         }
     }
 
-    let mut families = Vec::new();
-    if roots(SymKind::If) {
-        families.extend(bool_materialize_axioms());
-        if roots(SymKind::Xor) {
-            families.extend(comparison_materialize_axioms());
-        }
-    }
-    if roots(SymKind::Add) {
-        families.push(sub_via_add_neg_axiom());
-    }
-    for axiom in families {
+    for axiom in enabled_axioms(roots) {
         if let Some(kind) = axiom.lhs_kind() {
             record(kind, axiom.name().to_string());
         }

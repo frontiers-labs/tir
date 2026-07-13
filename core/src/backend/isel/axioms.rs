@@ -841,21 +841,9 @@ fn compile_lhs(
 
 /// The boolean materializer bridges: any width-1 comparison equals the
 /// `If(c, 1, 0)` shape TMDL derives for `slt`-style instructions.
+#[cfg(test)]
 pub(crate) fn bool_materialize_axioms() -> Vec<Axiom> {
-    [
-        "eq", "ne", "lt", "le", "gt", "ge", "ult", "ule", "ugt", "uge",
-    ]
-    .iter()
-    .map(|kind| {
-        parse_axiom(&format!(
-            "(axiom {kind}-via-if (root 1)
-               (lhs ({kind} a b))
-               (rhs (if root (zext (const 1 1) (const 1 1))
-                             (zext (const 0 1) (const 1 1)))))"
-        ))
-        .expect("builtin axiom must parse")
-    })
-    .collect()
+    super::theory::enabled_axioms(|kind| kind == SymKind::If)
 }
 
 /// Bridge the six comparison values a `slt`/`sltu`-class target cannot root
@@ -867,35 +855,23 @@ pub(crate) fn bool_materialize_axioms() -> Vec<Axiom> {
 /// the boolean `via-if` bridges. `ne` is `not(eq)` — a constant in the `ult`
 /// low operand would match neither `sltu` (register) nor `sltiu` (imm is high).
 /// Emitted only when the target roots `xor`.
+#[cfg(test)]
 pub(crate) fn comparison_materialize_axioms() -> Vec<Axiom> {
-    [
-        ("eq", "(ult (xor a b) 1)"),
-        ("ne", "(xor (ult (xor a b) 1) (const 1 1))"),
-        ("ge", "(xor (lt a b) (const 1 1))"),
-        ("le", "(xor (lt b a) (const 1 1))"),
-        ("uge", "(xor (ult a b) (const 1 1))"),
-        ("ule", "(xor (ult b a) (const 1 1))"),
-    ]
-    .iter()
-    .map(|(kind, rhs)| {
-        parse_axiom(&format!(
-            "(axiom {kind}-via-cmp (vars (a w) (b w)) (root 1)
-               (lhs ({kind} a b)) (rhs {rhs}))"
-        ))
-        .expect("builtin axiom must parse")
-    })
-    .collect()
+    super::theory::enabled_axioms(|kind| matches!(kind, SymKind::If | SymKind::Xor))
+        .into_iter()
+        .filter(|axiom| axiom.name.ends_with("-via-cmp"))
+        .collect()
 }
 
 /// `x - c == x + (-c)` for a constant `c`: a target without a subtract-immediate
 /// covers `sub` with an immediate operand through `add`, since `neg(const)` folds
 /// to the negated immediate. The `consts` operand keeps it off register `sub`.
+#[cfg(test)]
 pub(crate) fn sub_via_add_neg_axiom() -> Axiom {
-    parse_axiom(
-        "(axiom sub-via-add-neg (vars (a w)) (consts (c w)) (root w)
-           (lhs (sub a c)) (rhs (add a (neg c))))",
-    )
-    .expect("builtin axiom must parse")
+    super::theory::enabled_axioms(|kind| kind == SymKind::Add)
+        .into_iter()
+        .find(|axiom| axiom.name == "sub-via-add-neg")
+        .expect("sub-immediate family is declared")
 }
 
 #[cfg(test)]

@@ -4,11 +4,9 @@
 use tir::{Context, sem::SymKind};
 use tir_symbolic::egraph::{EMatch, Pattern, PatternNode};
 
-use super::axioms::{
-    bool_materialize_axioms, comparison_materialize_axioms, sub_via_add_neg_axiom,
-};
 use super::node::{SemEGraph, SemNode};
 use super::pattern::CompiledIselPattern;
+use super::theory::enabled_axioms;
 
 /// The right-hand side of an [`IselRewrite`]: given the e-graph and a match, assert
 /// the proven equivalence (typically by building nodes and unioning the result with
@@ -88,17 +86,8 @@ pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRew
             )
         })
     };
-    let mut axioms = Vec::new();
-    if roots(SymKind::If) {
-        axioms.extend(bool_materialize_axioms());
-        if roots(SymKind::Xor) {
-            axioms.extend(comparison_materialize_axioms());
-        }
-    }
-    // `x - c == x + (-c)`: covers an immediate `sub` operand through `add` where
-    // the target roots `add` (the `neg(const)` folds to the negated immediate).
-    if roots(SymKind::Add) {
-        axioms.push(sub_via_add_neg_axiom());
-    }
-    axioms.into_iter().map(|a| a.compile()).collect()
+    enabled_axioms(roots)
+        .into_iter()
+        .map(|axiom| axiom.compile())
+        .collect()
 }

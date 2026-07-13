@@ -42,48 +42,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tir::sem::{EXT_WIDTH_SAMPLES, SymKind, op_name, sample_values};
+use tir::sem::{SymKind, op_name, sample_values};
 
 use super::Rule;
 use super::axioms::parse_axiom;
 use super::pattern::{atomic_kinds, compile_isel_pattern};
-
-/// Kinds candidates may use: cheap fixed-arity bit-vector ops. Division and
-/// remainder are excluded — no target bridges through them and their proofs
-/// dominate solver time.
-const SUPPORTED_KINDS: &[SymKind] = &[
-    SymKind::Add,
-    SymKind::Sub,
-    SymKind::Mul,
-    SymKind::And,
-    SymKind::Or,
-    SymKind::Xor,
-    SymKind::ShiftLeft,
-    SymKind::ShiftRightLogic,
-    SymKind::ShiftRightArithmetic,
-];
-
-/// Largest candidate, in operator count. The classic bridges need two; three
-/// leaves headroom for targets with unusual kind sets.
-const MAX_OPS: usize = 3;
-
-/// Fingerprint collisions kept per behavior class as proof fallbacks.
-const CANDIDATES_PER_CLASS: usize = 4;
+use super::theory::{GoalShape, Leaf as WLeaf, theory};
 
 /// A constant leaf: a width expression evaluated per `(n, w)` instantiation.
-#[derive(Clone, Copy, PartialEq)]
-enum WLeaf {
-    Zero,
-    One,
-    N,
-    W,
-    WMinusN,
-    /// `2^n - 1`, the mask of the extended value's bits.
-    OnesN,
-    /// `2^w - 1`, the all-ones register (`-1` as an immediate).
-    OnesW,
-}
-
 impl WLeaf {
     fn eval(self, n: u32, w: u32) -> u64 {
         match self {
@@ -110,49 +76,7 @@ impl WLeaf {
     }
 }
 
-/// The shape of a bridge goal: a two-operand extension (`(sext x w)`, value of
-/// width `n < w`) or a same-width unary (`(neg x)`).
-#[derive(Clone, Copy, PartialEq)]
-enum GoalShape {
-    Extension,
-    Unary,
-}
-
-/// The kinds discovery bridges, with their shapes.
-const GOALS: &[(SymKind, GoalShape)] = &[
-    (SymKind::SExt, GoalShape::Extension),
-    (SymKind::ZExt, GoalShape::Extension),
-    (SymKind::Neg, GoalShape::Unary),
-    (SymKind::Not, GoalShape::Unary),
-];
-
 impl GoalShape {
-    /// Constant leaves candidates may use. Extension goals include the
-    /// `(ones n)` mask; immediate-range legality rejects the resulting
-    /// masked-`and` matches where the mask does not encode (see the module doc).
-    fn leaves(self) -> &'static [WLeaf] {
-        match self {
-            GoalShape::Extension => &[
-                WLeaf::Zero,
-                WLeaf::One,
-                WLeaf::N,
-                WLeaf::W,
-                WLeaf::WMinusN,
-                WLeaf::OnesN,
-            ],
-            GoalShape::Unary => &[WLeaf::Zero, WLeaf::One, WLeaf::W, WLeaf::OnesW],
-        }
-    }
-
-    /// The `(n, w)` pairs fingerprints and proofs sample; a unary goal
-    /// operates at the register width, so `n == w`.
-    fn width_pairs(self) -> Vec<(u32, u32)> {
-        match self {
-            GoalShape::Extension => EXT_WIDTH_SAMPLES.to_vec(),
-            GoalShape::Unary => [8, 32, 64].into_iter().map(|w| (w, w)).collect(),
-        }
-    }
-
     /// The `prove` argument for one pair, in width-name declaration order.
     fn prove_widths(self, n: u32, w: u32) -> Vec<u64> {
         match self {
@@ -262,10 +186,10 @@ impl Term {
 /// Per width pair: `(n, w, register-wide input samples)`. The samples carry
 /// junk above bit `n`, so a candidate must tolerate undefined upper bits to
 /// match the goal.
-fn build_samples(shape: GoalShape) -> Vec<(u32, u32, Vec<u64>)> {
-    shape
-        .width_pairs()
-        .into_iter()
+fn build_samples(width_pairs: &[(u32, u32)]) -> Vec<(u32, u32, Vec<u64>)> {
+    width_pairs
+        .iter()
+        .copied()
         .map(|(n, w)| {
             let xs = sample_values(w, 2)
                 .iter()
@@ -310,7 +234,8 @@ fn enumerate(
     samples: &[(u32, u32, Vec<u64>)],
 ) -> HashMap<Vec<u64>, Vec<Term>> {
     let mut classes: HashMap<Vec<u64>, Vec<Term>> = HashMap::new();
-    let mut by_size: Vec<Vec<Term>> = Vec::with_capacity(MAX_OPS + 1);
+    let config = theory();
+    let mut by_size: Vec<Vec<Term>> = Vec::with_capacity(config.max_ops + 1);
 
     let leaves: Vec<Term> = std::iter::once(Term::X)
         .chain(leaves.iter().copied().map(Term::Const))
@@ -323,7 +248,7 @@ fn enumerate(
     }
     by_size.push(leaves);
 
-    for size in 1..=MAX_OPS {
+    for size in 1..=config.max_ops {
         let mut level = Vec::new();
         for &kind in kinds {
             for left_size in 0..size {
@@ -346,7 +271,7 @@ fn enumerate(
                         if class.is_empty() {
                             level.push(term.clone());
                         }
-                        if class.len() < CANDIDATES_PER_CLASS {
+                        if class.len() < config.candidates_per_class {
                             class.push(term);
                         }
                     }
@@ -390,15 +315,20 @@ fn discover_bridge_texts(goal: SymKind, shape: GoalShape, kinds: &[SymKind]) -> 
     if kinds.is_empty() {
         return Vec::new();
     }
-    let mut terms = proved_bridge_terms(goal, shape, kinds, shape.leaves());
+    let config = theory()
+        .goals
+        .iter()
+        .find(|config| config.kind == goal && config.shape == shape)
+        .expect("requested bridge goal is declared in the theory");
+    let mut terms = proved_bridge_terms(goal, shape, kinds, &config.leaves, &config.widths);
     if !terms.is_empty() && terms.iter().all(Term::contains_ones_mask) {
-        let mask_free: Vec<WLeaf> = shape
-            .leaves()
+        let mask_free: Vec<WLeaf> = config
+            .leaves
             .iter()
             .copied()
             .filter(|leaf| !matches!(leaf, WLeaf::OnesN | WLeaf::OnesW))
             .collect();
-        for term in proved_bridge_terms(goal, shape, kinds, &mask_free) {
+        for term in proved_bridge_terms(goal, shape, kinds, &mask_free, &config.widths) {
             if !terms.iter().any(|t| t.render() == term.render()) {
                 terms.push(term);
             }
@@ -422,8 +352,9 @@ fn proved_bridge_terms(
     shape: GoalShape,
     kinds: &[SymKind],
     leaves: &[WLeaf],
+    width_pairs: &[(u32, u32)],
 ) -> Vec<Term> {
-    let samples = build_samples(shape);
+    let samples = build_samples(width_pairs);
     let classes = enumerate(kinds, leaves, &samples);
     let goal_fp: Vec<u64> = samples
         .iter()
@@ -444,8 +375,7 @@ fn proved_bridge_terms(
         }
         let text = render_axiom(goal, shape, candidate, 0);
         let axiom = parse_axiom(&text).expect("rendered axiom must parse");
-        if shape
-            .width_pairs()
+        if width_pairs
             .iter()
             .all(|&(n, w)| axiom.prove(&shape.prove_widths(n, w)))
         {
@@ -459,16 +389,17 @@ fn proved_bridge_terms(
 /// The proved bridge axiom texts realizing `goal` over the target's atomic
 /// kinds; empty if discovery finds none. Deterministic.
 pub(crate) fn synthesize_bridge_texts(goal: SymKind, atomics: &HashSet<SymKind>) -> Vec<String> {
-    let Some((_, shape)) = GOALS.iter().find(|(kind, _)| *kind == goal) else {
+    let Some(config) = theory().goals.iter().find(|config| config.kind == goal) else {
         return Vec::new();
     };
-    let mut kinds: Vec<SymKind> = SUPPORTED_KINDS
+    let mut kinds: Vec<SymKind> = theory()
+        .operators
         .iter()
         .copied()
         .filter(|k| atomics.contains(k))
         .collect();
     kinds.sort();
-    discover_bridge_texts(goal, *shape, &kinds)
+    discover_bridge_texts(goal, config.shape, &kinds)
 }
 
 /// Discover every bridge axiom the rule set supports: the `tir axioms`
@@ -490,9 +421,10 @@ pub fn discover_axioms(rules: &[Rule]) -> Vec<String> {
         })
         .collect();
     let atomics = atomic_kinds(&compiled);
-    GOALS
+    theory()
+        .goals
         .iter()
-        .flat_map(|&(goal, _)| synthesize_bridge_texts(goal, &atomics))
+        .flat_map(|goal| synthesize_bridge_texts(goal.kind, &atomics))
         .collect()
 }
 
