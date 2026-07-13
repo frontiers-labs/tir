@@ -158,6 +158,62 @@ pub struct ImmRange {
     pub signed: bool,
 }
 
+/// The semantic value representations a physical register class can store.
+/// This is deliberately separate from the value's type: overlapping banks may
+/// accept both integer and floating-point interpretations of the same bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegisterCapability {
+    width: u32,
+    integer: bool,
+    float: bool,
+}
+
+impl RegisterCapability {
+    pub fn integer(width: u32) -> Self {
+        Self {
+            width,
+            integer: true,
+            float: false,
+        }
+    }
+
+    pub fn float(width: u32) -> Self {
+        Self {
+            width,
+            integer: false,
+            float: true,
+        }
+    }
+
+    pub fn any(width: u32) -> Self {
+        Self {
+            width,
+            integer: true,
+            float: true,
+        }
+    }
+
+    pub fn accepts(&self, ty: &tir::sem::SemType) -> bool {
+        use tir::sem::{SemType, Width};
+        match ty {
+            SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width)) => {
+                self.integer && *width == self.width
+            }
+            SemType::Float(format) => {
+                let (Width::Const(exponent), Width::Const(mantissa)) =
+                    (&format.exponent, &format.mantissa)
+                else {
+                    return self.float;
+                };
+                self.float && 1 + exponent + mantissa == self.width
+            }
+            SemType::Var(_) => true,
+            SemType::Iterator(_) | SemType::Pair(_, _) | SemType::State | SemType::Unit => false,
+            SemType::Bits(_) | SemType::RawBits(_) => self.integer,
+        }
+    }
+}
+
 impl ImmRange {
     /// Whether `value` is representable in the field: its 64-bit register
     /// pattern must survive the encode/decode roundtrip (truncate to the

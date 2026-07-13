@@ -2,13 +2,21 @@ use tir::{
     Context, IRBuilder, IRFormatter, Operation, PassManager, TypeId,
     builtin::{FuncOp, IntegerType, ops},
     graph::{MetaMutDag, MutDag, OperandConstraint},
-    sem::{SemGraph, SymKind, SymPayload},
+    sem::{FloatFormat, SemGraph, SemType, SymKind, SymPayload},
 };
 
 use super::{
-    BranchEmitters, EmitRequest, InstructionSelectPass, IselCostModel, Rule, RuleKind, RuleMatch,
-    SemEGraph, SemNode, template_node,
+    BranchEmitters, EmitRequest, InstructionSelectPass, IselCostModel, RegisterCapability, Rule,
+    RuleKind, RuleMatch, SemEGraph, SemNode, template_node,
 };
+
+#[test]
+fn overlapping_register_capability_accepts_integer_and_float_values() {
+    let capability = RegisterCapability::any(64);
+
+    assert!(capability.accepts(&SemType::bits(64)));
+    assert!(capability.accepts(&SemType::Float(FloatFormat::new(11, 52))));
+}
 
 fn symbol(g: &mut SemGraph, id: u32) -> tir::graph::NodeId {
     let node = g.add_node(SymKind::Symbol);
