@@ -494,19 +494,6 @@ fn holes_of(node: &AxNode, out: &mut Vec<(String, Option<usize>)>) {
 }
 
 impl Axiom {
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The semantic kind the LHS matches at its root — the kind this axiom
-    /// bridges (covers).
-    pub(crate) fn lhs_kind(&self) -> Option<SymKind> {
-        match &self.lhs {
-            AxNode::Node(kind, _) => Some(*kind),
-            _ => None,
-        }
-    }
-
     /// Every node kind the RHS introduces, for target-capability gating.
     pub(crate) fn rhs_kinds(&self) -> HashSet<SymKind> {
         fn walk(node: &AxNode, out: &mut HashSet<SymKind>) {
@@ -1002,7 +989,7 @@ mod tests {
 
         let axiom = bool_materialize_axioms()
             .into_iter()
-            .find(|a| a.name() == "lt-via-if")
+            .find(|a| a.name == "lt-via-if")
             .unwrap();
         apply_all(&ctx, &mut eg, &axiom.compile());
         assert!(class_kinds(&eg, root).contains(&SymKind::If));
@@ -1109,7 +1096,7 @@ mod tests {
 
         let axiom = comparison_materialize_axioms()
             .into_iter()
-            .find(|a| a.name() == "eq-via-cmp")
+            .find(|a| a.name == "eq-via-cmp")
             .unwrap();
         apply_all(&ctx, &mut eg, &axiom.compile());
         let ult = eg

@@ -11,7 +11,6 @@
 mod axioms;
 mod builder;
 mod cover;
-mod coverage;
 mod emit;
 mod node;
 mod pattern;
@@ -33,7 +32,6 @@ use tir::{
 use tir_adt::APInt;
 use tir_symbolic::egraph::{ENode, Id, Var};
 
-pub use coverage::{CoverageRow, CoverageStatus, discover_coverage, render_coverage_file};
 pub use node::{SemEGraph, SemNode, SemPayload};
 pub use rewrites::{IselRewrite, SaturationLimits};
 pub use synthesis::{discover_axioms, render_axioms_file};

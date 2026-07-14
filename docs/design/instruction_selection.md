@@ -268,7 +268,7 @@ After changing the theory or target instructions, regenerate and validate the
 committed artifacts with:
 
 ```sh
-cargo run -p tir-tools --bin tir -- axioms --report --write
+cargo run -p tir-tools --bin tir -- axioms --write
 ```
 
 The result is committed as `backends/<t>/src/isel.axioms`, installed by the

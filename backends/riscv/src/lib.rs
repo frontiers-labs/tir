@@ -1528,16 +1528,6 @@ mod tests {
             tir::backend::isel::render_axioms_file(&discovered),
             "isel.axioms is stale; run `cargo run -p tir-tools --bin tir -- axioms --write`"
         );
-        assert_eq!(
-            include_str!("isel.coverage"),
-            tir::backend::isel::render_coverage_file(&tir::backend::isel::discover_coverage(
-                "riscv",
-                &rules,
-                &discovered,
-            )),
-            "isel.coverage is stale; run \
-             `cargo run -p tir-tools --bin tir -- axioms --report --write`"
-        );
     }
 
     #[test]
