@@ -572,9 +572,11 @@ fn emit_instructions<'a>(
         let op_display_name = format!("{}.{}", dialect, op_name);
         let op_display_name_lit = proc_macro2::Literal::string(&op_display_name);
         let mut register_attr_print_arms = Vec::new();
+        let mut text_only_register_attrs = Vec::new();
         for (op_name, op_ty) in &ops {
             if let Type::Struct(class_name) = op_ty {
                 let attr_name_lit = proc_macro2::Literal::string(op_name);
+                text_only_register_attrs.push(attr_name_lit.clone());
                 let print_fn_ident = format_ident!("print_{}", class_name.to_lowercase());
                 // Text-only targets use one nominal operand class and derive the real
                 // class per register (PTX banks), so print through the attribute's
@@ -617,6 +619,7 @@ fn emit_instructions<'a>(
         // class-dispatching `register_name`.
         for (name, _) in &implicit_reads {
             let attr_name_lit = proc_macro2::Literal::string(name);
+            text_only_register_attrs.push(attr_name_lit.clone());
             register_attr_print_arms.push(quote! {
                 #attr_name_lit => {
                     if let tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Physical { class, index }) = &attr.value {
@@ -643,8 +646,29 @@ fn emit_instructions<'a>(
                 }
             }
         };
-        instruction_custom_format_impls.push(quote! {
-            impl #name_ident {
+        let custom_format_impl = if text_only {
+            quote! {
+                fn custom_print<'a, 'b: 'a>(
+                    &'a self,
+                    fmt: &'a mut tir::IRFormatter<'b>,
+                ) -> Result<(), std::fmt::Error> {
+                    custom_print_text_operation(
+                        &self.0,
+                        #op_display_name_lit,
+                        &[#(#text_only_register_attrs),*],
+                        fmt,
+                    )
+                }
+
+                fn custom_parse<'src>(
+                    parser: &mut tir::parse::text::Parser<'src>,
+                    _context: &tir::Context,
+                ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
+                    custom_parse_text_operation(parser)
+                }
+            }
+        } else {
+            quote! {
                 fn custom_print<'a, 'b: 'a>(
                     &'a self,
                     fmt: &'a mut tir::IRFormatter<'b>,
@@ -678,6 +702,11 @@ fn emit_instructions<'a>(
                 ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
                     Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
                 }
+            }
+        };
+        instruction_custom_format_impls.push(quote! {
+            impl #name_ident {
+                #custom_format_impl
             }
         });
 
@@ -1737,6 +1766,60 @@ fn emit_instructions<'a>(
         quote! {}
     };
 
+    let text_only_format_helpers = if text_only {
+        quote! {
+            fn custom_print_text_operation(
+                op: &tir::OpInstance,
+                op_name: &str,
+                register_attributes: &[&str],
+                fmt: &mut tir::IRFormatter<'_>,
+            ) -> Result<(), std::fmt::Error> {
+                fmt.write(op_name)?;
+                if !op.attributes.is_empty() {
+                    fmt.write(" ")?;
+                    fmt.write("{")?;
+                    let mut first = true;
+                    let context = op.context.upgrade();
+                    for attr in &op.attributes {
+                        if !first {
+                            fmt.write(", ")?;
+                        }
+                        first = false;
+                        fmt.write(&attr.name)?;
+                        fmt.write(" = ")?;
+                        if register_attributes.contains(&attr.name.as_str()) {
+                            if let tir::attributes::AttributeValue::Register(
+                                tir::attributes::RegisterAttr::Physical { class, index },
+                            ) = &attr.value
+                            {
+                                if let Some(name) = register_name(class.name(), *index, false) {
+                                    fmt.write(name)?;
+                                } else {
+                                    attr.value.print(fmt, &context)?;
+                                }
+                            } else {
+                                attr.value.print(fmt, &context)?;
+                            }
+                        } else {
+                            attr.value.print(fmt, &context)?;
+                        }
+                    }
+                    fmt.write("}")?;
+                }
+                fmt.write("\n")?;
+                Ok(())
+            }
+
+            fn custom_parse_text_operation<'src>(
+                parser: &mut tir::parse::text::Parser<'src>,
+            ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
+                Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     // The object-file emission interface (per-instruction encoders/patchers and
     // their lookup maps) is emitted only for targets with a binary encoding.
     let encoder_section = if text_only {
@@ -1764,6 +1847,7 @@ fn emit_instructions<'a>(
 
     Ok(quote! {
         #(#instruction_defs)*
+        #text_only_format_helpers
         #(#instruction_custom_format_impls)*
         #(#machine_instruction_impls)*
         #(#as_sem_expr_impls)*

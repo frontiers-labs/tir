@@ -1,0 +1,46 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+isa TextIsa {
+    param XLEN: Integer = 32;
+}
+
+register_class GPR for [TextIsa] {
+    param ENCODING_LEN: Integer = 2;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        r0..r3 => { traits = [caller_saved] },
+    }
+}
+
+template Binary for [TextIsa] {
+    param OPNAME: String;
+    param MNEMONIC: String;
+
+    operands {
+        d: GPR,
+        a: GPR,
+    }
+
+    asm { "{self.MNEMONIC} {d}, {a}" }
+}
+
+instruction Add for [TextIsa] : Binary {
+    param OPNAME: String = "add";
+    param MNEMONIC: String = "add";
+    behavior { todo(); }
+}
+
+instruction Sub for [TextIsa] : Binary {
+    param OPNAME: String = "sub";
+    param MNEMONIC: String = "sub";
+    behavior { todo(); }
+}
+
+// Text-only operations share the attribute formatter instead of expanding the
+// same register-dispatch loop into every generated operation.
+// CHECK-COUNT-1: fn custom_print_text_operation
+// CHECK: impl AddOp
+// CHECK: custom_print_text_operation(&self.0, "test.add", &["d", "a"], fmt)
+// CHECK: impl SubOp
+// CHECK: custom_print_text_operation(&self.0, "test.sub", &["d", "a"], fmt)
