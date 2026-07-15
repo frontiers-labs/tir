@@ -34,9 +34,9 @@ abi SysV("sysv") for [X86_64] {
     classifier = sysv;
 }
 
-// CHECK: "Abi": {
-// CHECK: "name": "SysV",
-// CHECK: "alias": "sysv",
-// CHECK: "save_style": "PushPop"
-// CHECK: "overflow": "Stack"
-// CHECK: "classifier": "sysv"
+// CHECK:              "kind": "abi",
+// CHECK-NEXT:         "name": "SysV",
+// CHECK-NEXT:         "alias": "sysv",
+// CHECK:                "save_style": "push_pop"
+// CHECK:                  "overflow": "stack"
+// CHECK:              "classifier": "sysv"

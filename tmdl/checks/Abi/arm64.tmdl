@@ -27,9 +27,10 @@ abi AAPCS64("aapcs64") for [ARMv8A64] {
     classifier = aapcs64;
 }
 
-// CHECK: "Abi": {
-// CHECK: "name": "AAPCS64",
-// CHECK: "alias": "aapcs64",
-// CHECK: "class": "GPRsp",
-// CHECK-NEXT: "name": "sp"
-// CHECK: "classifier": "aapcs64"
+// CHECK:              "kind": "abi",
+// CHECK-NEXT:         "name": "AAPCS64",
+// CHECK-NEXT:         "alias": "aapcs64",
+// CHECK:                  "name": "sp",
+// CHECK:                    "class": "GPRsp",
+// CHECK-NEXT:               "name": "sp"
+// CHECK:              "classifier": "aapcs64"

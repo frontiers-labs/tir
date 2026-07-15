@@ -26,6 +26,136 @@
     "files"
   ],
   "$defs": {
+    "AbiOverflow": {
+      "description": "Destination used after a pass sequence exhausts its registers.",
+      "type": "string",
+      "enum": [
+        "int",
+        "float",
+        "vector",
+        "stack"
+      ]
+    },
+    "AbiPassSequence": {
+      "description": "Ordered registers used to pass one kind of ABI value.",
+      "type": "object",
+      "properties": {
+        "overflow": {
+          "$ref": "#/$defs/AbiOverflow"
+        },
+        "registers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AbiRegisterSequence"
+          }
+        },
+        "value_kind": {
+          "$ref": "#/$defs/AbiValueKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value_kind",
+        "registers"
+      ]
+    },
+    "AbiRegister": {
+      "description": "Register identified by register class and architectural name.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "name"
+      ]
+    },
+    "AbiRegisterSequence": {
+      "description": "A single ABI register or an inclusive register range.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/AbiRegister"
+        },
+        "start": {
+          "$ref": "#/$defs/AbiRegister"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start"
+      ]
+    },
+    "AbiRole": {
+      "description": "Named ABI role such as the stack pointer or return address.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "register": {
+          "$ref": "#/$defs/AbiRegister"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "register"
+      ]
+    },
+    "AbiSaveStyle": {
+      "description": "Mechanism used to save callee-saved registers.",
+      "type": "string",
+      "enum": [
+        "frame_slots",
+        "push_pop"
+      ]
+    },
+    "AbiStack": {
+      "description": "ABI stack layout and save convention.",
+      "type": "object",
+      "properties": {
+        "align": {
+          "$ref": "#/$defs/Expr"
+        },
+        "growth": {
+          "$ref": "#/$defs/AbiStackGrowth"
+        },
+        "red_zone": {
+          "$ref": "#/$defs/Expr"
+        },
+        "save_style": {
+          "$ref": "#/$defs/AbiSaveStyle"
+        },
+        "slot_size": {
+          "$ref": "#/$defs/Expr"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AbiStackGrowth": {
+      "description": "Direction in which the ABI stack grows.",
+      "type": "string",
+      "enum": [
+        "down",
+        "up"
+      ]
+    },
+    "AbiValueKind": {
+      "description": "ABI value category used for argument and result classification.",
+      "type": "string",
+      "enum": [
+        "int",
+        "float",
+        "vector"
+      ]
+    },
     "BinOp": {
       "type": "string",
       "enum": [
@@ -654,6 +784,78 @@
           ]
         },
         {
+          "description": "An ABI after ABI inheritance is resolved.",
+          "type": "object",
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "arguments": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AbiPassSequence"
+              }
+            },
+            "base": {
+              "type": "string"
+            },
+            "callee_saved": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AbiRegisterSequence"
+              }
+            },
+            "classifier": {
+              "type": "string"
+            },
+            "isas": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "abi"
+            },
+            "name": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Parameter"
+              }
+            },
+            "reserved": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AbiRegisterSequence"
+              }
+            },
+            "returns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AbiPassSequence"
+              }
+            },
+            "roles": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AbiRole"
+              }
+            },
+            "stack": {
+              "$ref": "#/$defs/AbiStack"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
           "description": "A register class after register-class inheritance is resolved.",
           "type": "object",
           "properties": {
@@ -1047,12 +1249,6 @@
         "alias": {
           "type": "string"
         },
-        "argument_order": {
-          "type": "integer",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0
-        },
         "index": {
           "type": "integer",
           "format": "uint16",
@@ -1088,12 +1284,6 @@
           "properties": {
             "alias": {
               "type": "string"
-            },
-            "argument_order": {
-              "type": "integer",
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0
             },
             "index": {
               "type": "integer",
@@ -1164,18 +1354,7 @@
       "type": "string",
       "enum": [
         "hardwired_zero",
-        "return_address",
-        "caller_saved",
-        "callee_saved",
-        "stack_pointer",
         "program_counter",
-        "global_pointer",
-        "thread_pointer",
-        "reserved",
-        "argument",
-        "return_value",
-        "temporary",
-        "saved",
         "status_flag",
         "float",
         "polymorphic"

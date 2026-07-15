@@ -85,82 +85,76 @@ pub struct RegisterNameTables {
     pub abi_names: Vec<(u16, String)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AbiValueKind {
     Int,
     Float,
     Vector,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AbiStackGrowth {
     Down,
     Up,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AbiSaveStyle {
     FrameSlots,
     PushPop,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbiRegister {
     pub class: String,
     pub name: String,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbiRegisterSequence {
     pub start: AbiRegister,
     pub end: Option<AbiRegister>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbiRole {
     pub name: String,
     pub register: AbiRegister,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AbiOverflow {
     Kind(AbiValueKind),
     Stack,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbiPassSequence {
     pub kind: AbiValueKind,
     pub registers: Vec<AbiRegisterSequence>,
     pub overflow: Option<AbiOverflow>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AbiStack {
     pub align: Option<Expr>,
     pub grows: Option<AbiStackGrowth>,
     pub red_zone: Option<Expr>,
     pub slot_size: Option<Expr>,
     pub save_style: Option<AbiSaveStyle>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Abi {
     pub name: String,
     pub alias: Option<String>,
     pub for_isas: Vec<String>,
     pub base: Option<String>,
-    #[serde(serialize_with = "serialize_params")]
     pub parameters: StableHashMap<String, (Type, Option<Expr>)>,
     pub stack: Option<AbiStack>,
     pub roles: Vec<AbiRole>,
@@ -169,7 +163,6 @@ pub struct Abi {
     pub callee_saved: Option<Vec<AbiRegisterSequence>>,
     pub reserved: Option<Vec<AbiRegisterSequence>>,
     pub classifier: Option<String>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 

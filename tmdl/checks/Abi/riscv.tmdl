@@ -37,13 +37,29 @@ abi LP64D("lp64d") for [RV64ID] : LP64 {
                     FPR64::f8..FPR64::f9, FPR64::f18..FPR64::f27];
 }
 
-// CHECK: "Abi": {
-// CHECK: "name": "LP64",
-// CHECK: "alias": "lp64",
-// CHECK: "classifier": "riscv"
-// CHECK: "Abi": {
-// CHECK: "name": "LP64D",
-// CHECK: "alias": "lp64d",
-// CHECK: "kind": "Int"
-// CHECK: "kind": "Float"
-// CHECK: "classifier": "riscv"
+// CHECK:              "kind": "abi",
+// CHECK-NEXT:         "name": "LP64",
+// CHECK-NEXT:         "alias": "lp64",
+// CHECK:              "stack": {
+// CHECK:                "growth": "down",
+// CHECK:              "roles": [
+// CHECK:                  "name": "sp",
+// CHECK:                  "register": {
+// CHECK-NEXT:               "class": "GPR",
+// CHECK-NEXT:               "name": "x2"
+// CHECK:              "arguments": [
+// CHECK:                  "value_kind": "int",
+// CHECK:                  "registers": [
+// CHECK:                      "start": {
+// CHECK-NEXT:                   "class": "GPR",
+// CHECK-NEXT:                   "name": "x10"
+// CHECK:                      "end": {
+// CHECK-NEXT:                   "class": "GPR",
+// CHECK-NEXT:                   "name": "x17"
+// CHECK:                  "overflow": "stack"
+// CHECK:              "classifier": "riscv"
+// CHECK:              "kind": "abi",
+// CHECK-NEXT:         "name": "LP64D",
+// CHECK-NEXT:         "alias": "lp64d",
+// CHECK:                  "value_kind": "float",
+// CHECK:                  "overflow": "int"

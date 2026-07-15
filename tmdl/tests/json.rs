@@ -17,6 +17,11 @@ fn scheduling_models_validate_against_the_committed_schema() {
     validate_output("scheduling", "checks/Json/scheduling.tmdl", true);
 }
 
+#[test]
+fn abi_declarations_validate_against_the_committed_schema() {
+    validate_output("abi", "checks/Abi/riscv.tmdl", false);
+}
+
 fn validate_output(name: &str, input: &str, text_only: bool) {
     let output = std::env::temp_dir().join(format!("tmdl-json-{}-{name}.json", std::process::id()));
     let input = format!("{}/{input}", env!("CARGO_MANIFEST_DIR"));

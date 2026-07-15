@@ -5,8 +5,10 @@ use serde::Serialize;
 
 use crate::{Type as AstType, ast};
 
+mod abi;
 mod expr;
 
+use abi::{AbiPassSequence, AbiRegisterSequence, AbiRole, AbiStack};
 use expr::Expr;
 
 const VERSION: u8 = 1;
@@ -74,6 +76,36 @@ enum Item {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[schemars(with = "TrapHandler")]
         trap_handler: Option<TrapHandler>,
+    },
+    /// An ABI after ABI inheritance is resolved.
+    Abi {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        alias: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        isas: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        base: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        parameters: Vec<Parameter>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "AbiStack")]
+        stack: Option<AbiStack>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        roles: Vec<AbiRole>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        arguments: Vec<AbiPassSequence>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        returns: Vec<AbiPassSequence>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        callee_saved: Vec<AbiRegisterSequence>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        reserved: Vec<AbiRegisterSequence>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        classifier: Option<String>,
     },
     /// A register class after register-class inheritance is resolved.
     RegisterClass {
@@ -179,6 +211,32 @@ impl From<&ast::Item> for Item {
                 requires: isa.requires.as_ref().map(IsaRequirement::from),
                 parameters: parameters(&isa.parameters),
                 trap_handler: isa.trap_handler.as_ref().map(TrapHandler::from),
+            },
+            ast::Item::Abi(abi) => Self::Abi {
+                name: abi.name.clone(),
+                alias: abi.alias.clone(),
+                isas: abi.for_isas.clone(),
+                base: abi.base.clone(),
+                parameters: parameters(&abi.parameters),
+                stack: abi.stack.as_ref().map(AbiStack::from),
+                roles: abi.roles.iter().map(AbiRole::from).collect(),
+                arguments: abi.args.iter().map(AbiPassSequence::from).collect(),
+                returns: abi.rets.iter().map(AbiPassSequence::from).collect(),
+                callee_saved: abi
+                    .callee_saved
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(AbiRegisterSequence::from)
+                    .collect(),
+                reserved: abi
+                    .reserved
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(AbiRegisterSequence::from)
+                    .collect(),
+                classifier: abi.classifier.clone(),
             },
             ast::Item::RegisterClass(class) => Self::RegisterClass {
                 name: class.name.clone(),
@@ -337,9 +395,6 @@ enum RegisterDef {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[schemars(with = "u16")]
         index: Option<u16>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        #[schemars(with = "u16")]
-        argument_order: Option<u16>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         traits: Vec<RegisterTrait>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -363,7 +418,6 @@ impl From<&ast::RegisterDef> for RegisterDef {
                 name: register.name.clone(),
                 alias: register.alias.clone(),
                 index: register.index,
-                argument_order: register.arg_order,
                 traits: register.traits.iter().map(RegisterTrait::from).collect(),
                 subregisters: register.subregisters.iter().map(Register::from).collect(),
             },
@@ -388,9 +442,6 @@ struct Register {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "u16")]
     index: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "u16")]
-    argument_order: Option<u16>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     traits: Vec<RegisterTrait>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -403,7 +454,6 @@ impl From<&ast::Register> for Register {
             name: register.name.clone(),
             alias: register.alias.clone(),
             index: register.index,
-            argument_order: register.arg_order,
             traits: register.traits.iter().map(RegisterTrait::from).collect(),
             subregisters: register.subregisters.iter().map(Register::from).collect(),
         }
@@ -416,18 +466,7 @@ impl From<&ast::Register> for Register {
 /// Semantic and ABI traits attached to a register.
 enum RegisterTrait {
     HardwiredZero,
-    ReturnAddress,
-    CallerSaved,
-    CalleeSaved,
-    StackPointer,
     ProgramCounter,
-    GlobalPointer,
-    ThreadPointer,
-    Reserved,
-    Argument,
-    ReturnValue,
-    Temporary,
-    Saved,
     StatusFlag,
     Float,
     Polymorphic,
@@ -437,18 +476,7 @@ impl From<&ast::RegisterTrait> for RegisterTrait {
     fn from(trait_: &ast::RegisterTrait) -> Self {
         match trait_ {
             ast::RegisterTrait::HardwiredZero => Self::HardwiredZero,
-            ast::RegisterTrait::ReturnAddress => Self::ReturnAddress,
-            ast::RegisterTrait::CallerSaved => Self::CallerSaved,
-            ast::RegisterTrait::CalleeSaved => Self::CalleeSaved,
-            ast::RegisterTrait::StackPointer => Self::StackPointer,
             ast::RegisterTrait::ProgramCounter => Self::ProgramCounter,
-            ast::RegisterTrait::GlobalPointer => Self::GlobalPointer,
-            ast::RegisterTrait::ThreadPointer => Self::ThreadPointer,
-            ast::RegisterTrait::Reserved => Self::Reserved,
-            ast::RegisterTrait::Argument => Self::Argument,
-            ast::RegisterTrait::ReturnValue => Self::ReturnValue,
-            ast::RegisterTrait::Temporary => Self::Temporary,
-            ast::RegisterTrait::Saved => Self::Saved,
             ast::RegisterTrait::StatusFlag => Self::StatusFlag,
             ast::RegisterTrait::Float => Self::Float,
             ast::RegisterTrait::Polymorphic => Self::Polymorphic,
