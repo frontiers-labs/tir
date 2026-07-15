@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "./defs/ptx/tensor.tmdl",
         "./defs/ptx/texture.tmdl",
     ];
+    let split_inputs = &inputs[2..];
     let compile = |action, output| {
         let mut builder = Compiler::builder()
             .output(OutputKind::File(format!("{out_dir}/{output}")))
@@ -28,9 +29,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             .action(action)
             // PTX is a text pseudo-ISA: its instructions have assembly syntax but no
             // binary encoding.
-            .text_only(true);
+            .text_only(true)
+            .custom_assembly(true);
         for input in inputs {
             builder = builder.add_input(input);
+        }
+        if matches!(action, Action::EmitRust) {
+            for input in split_inputs {
+                builder = builder.split_input(input);
+            }
         }
         builder.build().compile()
     };

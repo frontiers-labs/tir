@@ -12,7 +12,7 @@ use crate::error::TMDLError;
 use crate::expander::{Diag, MacroTable, StringArena, collect_macros, expand};
 use crate::lexer::{Token, lex};
 use crate::parser::parse;
-use crate::rustgen::{generate_operation_list, generate_rust};
+use crate::rustgen::{generate_operation_list, generate_rust, generate_rust_modules};
 use crate::sema_analyze;
 use crate::smtlibgen::generate_smtlib;
 use crate::{Span, Spanned};
@@ -24,6 +24,8 @@ pub struct Compiler {
     dialect: Option<String>,
     isa: Option<String>,
     text_only: bool,
+    split_inputs: Vec<String>,
+    custom_assembly: bool,
 }
 
 pub struct CompilerBuilder {
@@ -33,6 +35,8 @@ pub struct CompilerBuilder {
     dialect: Option<String>,
     isa: Option<String>,
     text_only: bool,
+    split_inputs: Vec<String>,
+    custom_assembly: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +74,12 @@ pub struct Cli {
     /// representation.
     #[arg(long)]
     pub text_only: bool,
+    /// Emit instruction code from this input into a sibling Rust module.
+    #[arg(long)]
+    pub split_input: Vec<String>,
+    /// The target supplies its own assembly parser and printer.
+    #[arg(long, requires = "text_only")]
+    pub custom_assembly: bool,
 }
 
 impl Compiler {
@@ -81,10 +91,27 @@ impl Compiler {
             dialect: None,
             isa: None,
             text_only: false,
+            split_inputs: vec![],
+            custom_assembly: false,
         }
     }
 
     pub fn compile(&self) -> Result<(), TMDLError> {
+        if !self.split_inputs.is_empty() && !matches!(self.action, Action::EmitRust) {
+            return Err(TMDLError::Codegen(
+                "split inputs are only supported by emit-rust".to_string(),
+            ));
+        }
+        if !self.split_inputs.is_empty() && matches!(self.output, OutputKind::Stdout) {
+            return Err(TMDLError::Codegen(
+                "split Rust output cannot be written to stdout".to_string(),
+            ));
+        }
+        if self.custom_assembly && !self.text_only {
+            return Err(TMDLError::Codegen(
+                "custom assembly requires text-only Rust generation".to_string(),
+            ));
+        }
         match self.action {
             Action::EmitRust | Action::EmitOperationList | Action::EmitSmtlib => {
                 self.compile_whole_program()
@@ -263,14 +290,46 @@ impl Compiler {
 
         match &self.action {
             Action::EmitRust => {
-                let output: Box<dyn Write> = self.create_output_writer()?;
-                generate_rust(
-                    self.dialect.as_ref().unwrap(),
-                    &parsed_files,
-                    &item_cache,
-                    self.text_only,
-                    output,
-                )?
+                if self.split_inputs.is_empty() {
+                    let output: Box<dyn Write> = self.create_output_writer()?;
+                    generate_rust(
+                        self.dialect.as_ref().unwrap(),
+                        &parsed_files,
+                        &item_cache,
+                        self.text_only,
+                        self.custom_assembly,
+                        output,
+                    )?;
+                } else {
+                    let generated = generate_rust_modules(
+                        self.dialect.as_ref().unwrap(),
+                        &parsed_files,
+                        &item_cache,
+                        self.text_only,
+                        self.custom_assembly,
+                        &self.split_inputs,
+                    )?;
+                    let mut output = self.create_output_writer()?;
+                    output.write_all(generated.root.as_bytes())?;
+                    output.flush()?;
+                    let output_dir = match &self.output {
+                        OutputKind::File(path) => PathBuf::from(path)
+                            .parent()
+                            .filter(|parent| !parent.as_os_str().is_empty())
+                            .unwrap_or_else(|| std::path::Path::new("."))
+                            .to_path_buf(),
+                        OutputKind::Batch(path) => PathBuf::from(path),
+                        OutputKind::Stdout => {
+                            return Err(TMDLError::Codegen(
+                                "split Rust output cannot be written to stdout".to_string(),
+                            ));
+                        }
+                    };
+                    fs::create_dir_all(&output_dir)?;
+                    for (file_name, contents) in generated.modules {
+                        fs::write(output_dir.join(file_name), contents)?;
+                    }
+                }
             }
             Action::EmitOperationList => {
                 let output: Box<dyn Write> = self.create_output_writer()?;
@@ -366,6 +425,22 @@ impl CompilerBuilder {
         Self { text_only, ..self }
     }
 
+    pub fn split_input(self, path: &str) -> Self {
+        let mut split_inputs = self.split_inputs;
+        split_inputs.push(path.to_string());
+        Self {
+            split_inputs,
+            ..self
+        }
+    }
+
+    pub fn custom_assembly(self, custom_assembly: bool) -> Self {
+        Self {
+            custom_assembly,
+            ..self
+        }
+    }
+
     pub fn build(self) -> Compiler {
         Compiler {
             action: self.action.unwrap(),
@@ -374,6 +449,8 @@ impl CompilerBuilder {
             dialect: self.dialect,
             isa: self.isa,
             text_only: self.text_only,
+            split_inputs: self.split_inputs,
+            custom_assembly: self.custom_assembly,
         }
     }
 }
@@ -393,10 +470,14 @@ pub fn compiler_main(args: Option<&ArgMatches>) -> Result<(), Box<dyn std::error
         .dialect(args.dialect.clone())
         .isa(args.isa.clone())
         .text_only(args.text_only)
+        .custom_assembly(args.custom_assembly)
         .output(output);
 
     for input in &args.inputs {
         compiler_builder = compiler_builder.add_input(input);
+    }
+    for input in &args.split_input {
+        compiler_builder = compiler_builder.split_input(input);
     }
 
     let compiler = compiler_builder.build();
