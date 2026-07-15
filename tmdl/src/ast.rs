@@ -1,10 +1,8 @@
 use crate::utils::StableHashMap;
 use crate::{Span, Type};
-use serde::Serialize;
-use serde::ser::{SerializeStruct, Serializer};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RegisterTrait {
     HardwiredZero,
     ProgramCounter,
@@ -21,7 +19,7 @@ pub enum RegisterTrait {
     Polymorphic,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Register {
     pub name: String,
     pub alias: Option<String>,
@@ -30,7 +28,6 @@ pub struct Register {
     pub index: Option<u16>,
     pub traits: Vec<RegisterTrait>,
     pub subregisters: Vec<Register>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
@@ -42,23 +39,22 @@ impl Register {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RegisterRange {
     pub start: String,
     pub end: String,
     pub alias_pattern: Option<String>,
     pub traits: Vec<RegisterTrait>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RegisterDef {
     Single(Register),
     Range(RegisterRange),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RegisterClass {
     pub name: String,
     pub for_isas: Vec<String>,
@@ -77,10 +73,8 @@ pub struct RegisterClass {
     /// (file `GPR`, indices 0..3) but their own encoding differs, so inheriting
     /// `GPR`'s full register list would be wrong.
     pub file: Option<String>,
-    #[serde(serialize_with = "serialize_params")]
     pub parameters: StableHashMap<String, (Type, Option<Expr>)>,
     pub registers: Vec<RegisterDef>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
@@ -179,7 +173,7 @@ pub struct Abi {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IsaRequirement {
     Single(String),
     Any(Vec<String>),
@@ -190,31 +184,27 @@ pub enum IsaRequirement {
 /// exception updates state. A `trap(args...)` call in a behavior inlines it in
 /// the SMT model with `params` bound to the call arguments (missing trailing
 /// arguments read as zero); the simulator routes `trap` to the machine.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TrapHandler {
     pub params: Vec<String>,
     pub body: Expr,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Isa {
     pub name: String,
     pub requires: Option<IsaRequirement>,
-    #[serde(serialize_with = "serialize_params")]
     pub parameters: StableHashMap<String, (Type, Option<Expr>)>,
     pub trap_handler: Option<TrapHandler>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Template {
     pub name: String,
     pub for_isas: Vec<String>,
     pub parent_template: Option<String>,
-    #[serde(serialize_with = "serialize_params")]
     pub params: StableHashMap<String, (Type, Option<Expr>)>,
     pub operands: Vec<(String, Type)>,
     pub encoding: Vec<EncodingArm>,
@@ -223,16 +213,14 @@ pub struct Template {
     /// `schedule` of their own (resolved by
     /// [`crate::utils::resolve_effective_schedule_for_instruction`]).
     pub schedule: Option<Schedule>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Instruction {
     pub name: String,
     pub for_isas: Vec<String>,
     pub parent_template: Option<String>,
-    #[serde(serialize_with = "serialize_params")]
     pub params: StableHashMap<String, (Type, Option<Expr>)>,
     pub operands: Vec<(String, Type)>,
     pub encoding: Vec<EncodingArm>,
@@ -242,17 +230,15 @@ pub struct Instruction {
     /// instruction belongs to. `None` when the instruction carries no `schedule`
     /// block; consumers fall back to a default scheduling class.
     pub schedule: Option<Schedule>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
 /// The `schedule { ... }` block of an instruction. Declares only *membership* in
 /// machine-independent scheduling classes ([`SchedClassDecl`]); the concrete cost
 /// (latency, resources) is supplied per-machine by [`UnitBind`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schedule {
     pub classes: Vec<String>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
@@ -260,28 +246,26 @@ pub struct Schedule {
 /// identity that instructions reference and machines bind to concrete cost. The
 /// optional defaults are resource-agnostic and feed the compiler cost model when
 /// no specific machine is selected.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedClassDecl {
     pub name: String,
     pub default_latency: Option<i64>,
     pub default_throughput: Option<i64>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
 /// One functional unit / issue resource declared by a [`Machine`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineUnit {
     pub name: String,
     /// Number of parallel units of this resource.
     pub units: i64,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
 /// How a pipeline stage handles data hazards. Mirrors
 /// [`tir::backend::sched::Protection`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protection {
     Protected,
     Unprotected,
@@ -290,11 +274,10 @@ pub enum Protection {
 
 /// One named stage of a [`Machine`]'s pipeline. Its position in the pipeline list
 /// is its cycle offset from issue.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipelinePhase {
     pub name: String,
     pub protection: Protection,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
@@ -304,7 +287,7 @@ pub struct PipelinePhase {
 /// pipeline phases); the latter desugars to `latency = cycle(writes) -
 /// cycle(reads)` with a non-zero read cycle. Scalar `latency = N` is equivalent
 /// to reading at cycle 0 and writing at cycle N.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitBind {
     pub unit: String,
     pub latency: Option<i64>,
@@ -315,14 +298,13 @@ pub struct UnitBind {
     pub writes: Option<String>,
     /// Resources (by [`MachineUnit`] name) this unit occupies.
     pub uses: Vec<String>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
 /// A machine's per-instruction cost override (the LLVM `InstRW` analogue): it
 /// supersedes the `sched_class`-based resolution for one specific instruction on this
 /// machine. Carries the same timing fields as a [`UnitBind`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineOverride {
     /// The overridden instruction, by its TMDL `instruction` name.
     pub instruction: String,
@@ -331,25 +313,23 @@ pub struct MachineOverride {
     pub reads: Option<String>,
     pub writes: Option<String>,
     pub uses: Vec<String>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
 /// A forwarding/bypass path between two of a machine's resources, with the
 /// producer→consumer latency it grants. Mirrors [`tir::backend::sched::Forward`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Forward {
     pub from: String,
     pub to: String,
     pub latency: i64,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
 /// A `machine` block: one device implementation. Holds the resource menu, buffer
 /// sizes (defaults; the Rust simulator may override), and per-unit cost
 /// bindings for a set of ISAs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Machine {
     pub name: String,
     /// Optional friendly name used to select this machine (e.g. `in-order`),
@@ -373,20 +353,18 @@ pub struct Machine {
     pub overrides: Vec<MachineOverride>,
     /// Forwarding/bypass paths between resources.
     pub forwards: Vec<Forward>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EncodingArm {
     pub start: u16,
     pub end: Option<u16>,
     pub value: Expr,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Isa(Isa),
     Abi(Abi),
@@ -397,55 +375,49 @@ pub enum Item {
     Machine(Machine),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Lit {
     Str(LitStr),
     Int(LitInt),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LitStr {
     value: String,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LitInt {
     value: String,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Field {
     pub base: Box<Expr>,
     pub member: String,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct If {
     pub cond: Box<Expr>,
     pub then: Box<Expr>,
     pub else_: Option<Box<Expr>>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Block {
     pub stmts: Vec<Expr>,
     pub last_expr_return: bool,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Ident {
     pub name: String,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
@@ -481,43 +453,39 @@ pub fn atomic_rmw_op_code(name: &str) -> Option<u8> {
 
 /// One `except kind(binding) { ... }` clause. The binding receives the
 /// exception payload (the faulting address for misaligned accesses).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExceptClause {
     pub kind: String,
     pub binding: Option<String>,
     pub body: Expr,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
 /// `try { ... } except ...`: precise-trap semantics. If an operation in the
 /// body raises a caught exception, none of the body's effects commit and the
 /// matching clause executes against the state at try entry.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TryExcept {
     pub body: Box<Expr>,
     pub handlers: Vec<ExceptClause>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Assign {
     pub dest: Box<Expr>,
     pub value: Box<Expr>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Path {
     pub base: String,
     pub remainder: Vec<String>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BinOp {
     Add,
     Sub,
@@ -542,29 +510,27 @@ pub enum BinOp {
     ShiftRightArithmetic,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Binary {
     pub lhs: Box<Expr>,
     pub rhs: Box<Expr>,
     pub op: BinOp,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UnOp {
     BitwiseNot,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Unary {
     pub x: Box<Expr>,
     pub op: UnOp,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BuiltinFunction {
     Clamp,
     Extract,
@@ -623,43 +589,39 @@ pub enum BuiltinFunction {
     Todo,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Call {
     pub callee: Box<Expr>,
     pub arguments: Vec<Expr>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
 /// A Rust-style anonymous function `|params| body`. Only valid as an argument to
 /// the `map`/`reduce` builtins; the lowering inlines its body, binding each
 /// parameter to the corresponding lambda argument.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Lambda {
     pub params: Vec<String>,
     pub body: Box<Expr>,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Slice {
     pub base: Box<Expr>,
     pub start: u16,
     pub end: u16,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IndexAccess {
     pub base: Box<Expr>,
     pub index: u16,
-    #[serde(skip_serializing)]
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     Assign(Assign),
     Binary(Binary),
@@ -852,7 +814,7 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPay
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct File {
     pub items: Vec<Item>,
     pub file_name: String,
@@ -1710,37 +1672,6 @@ impl Item {
     }
 }
 
-impl Serialize for Type {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut state = serializer.serialize_struct("Type", 2)?;
-        match self {
-            Type::String => {
-                state.serialize_field("name", "String")?;
-            }
-            Type::Integer => {
-                state.serialize_field("name", "Integer")?;
-            }
-            Type::Bits(width) => {
-                state.serialize_field("name", "Bits")?;
-                state.serialize_field("width", width)?;
-            }
-            Type::BitsExpr(expr) => {
-                state.serialize_field("name", "BitsExpr")?;
-                state.serialize_field("width", expr)?;
-            }
-            Type::Struct(name) => {
-                state.serialize_field("name", "Struct")?;
-                state.serialize_field("struct", name)?;
-            }
-            _ => unreachable!("Other types should not be part of AST"),
-        }
-        state.end()
-    }
-}
-
 impl RegisterClass {
     pub fn register_name_tables(&self) -> RegisterNameTables {
         let mut entries = self
@@ -2146,33 +2077,4 @@ impl File {
             _ => None,
         })
     }
-}
-
-#[derive(Serialize)]
-struct ParamRef<'a> {
-    name: &'a str,
-    #[serde(rename = "type")]
-    ty: &'a Type,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<&'a Expr>,
-}
-
-fn serialize_params<S>(
-    params: &HashMap<String, (Type, Option<Expr>)>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut mapped: Vec<ParamRef<'_>> = params
-        .iter()
-        .map(|(name, (ty, val))| ParamRef {
-            name,
-            ty,
-            value: val.as_ref(),
-        })
-        .collect();
-    mapped.sort_by_key(|x| x.name);
-
-    mapped.serialize(serializer)
 }

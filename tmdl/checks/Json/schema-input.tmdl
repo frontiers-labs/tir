@@ -1,0 +1,1 @@
+// RUN: not tmdlc --action=emit-ast-json-schema --output=- %s

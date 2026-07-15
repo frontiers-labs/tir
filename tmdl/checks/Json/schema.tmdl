@@ -1,0 +1,12 @@
+// RUN: tmdlc --action=emit-ast-json-schema --output=- | filecheck %s
+// RUN: tmdlc --action=emit-ast-json-schema --output=- | diff - %S/../../../docs/tmdl/ast-v1.schema.json
+
+// CHECK: "$schema": "https://json-schema.org/draft/2020-12/schema",
+// CHECK: "title": "TMDL checked AST",
+// CHECK: "description": "Versioned, checked TMDL abstract syntax tree.",
+// CHECK: "files": {
+// CHECK: "version": {
+// CHECK: "const": 1,
+// CHECK: "$defs": {
+// CHECK: "Expr": {
+// CHECK: "Item": {

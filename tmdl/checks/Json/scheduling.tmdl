@@ -1,0 +1,52 @@
+// RUN: tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s
+
+// CHECK:              "kind": "sched_class",
+// CHECK-NEXT:         "name": "WriteALU",
+// CHECK-NEXT:         "default_latency": 1,
+// CHECK-NEXT:         "default_throughput": 2
+// CHECK:              "kind": "instruction",
+// CHECK:              "schedule": [
+// CHECK-NEXT:           "WriteALU"
+// CHECK:              "kind": "machine",
+// CHECK-NEXT:         "name": "TestCore",
+// CHECK-NEXT:         "alias": "test-core",
+// CHECK:              "buffers": [
+// CHECK-NEXT:           {
+// CHECK-NEXT:             "name": "rob",
+// CHECK-NEXT:             "count": 8
+// CHECK:              "pipeline": [
+// CHECK:                  "protection": "protected"
+// CHECK:              "resources": [
+// CHECK:                  "name": "ALU",
+// CHECK-NEXT:             "units": 2
+// CHECK:              "bindings": [
+// CHECK:                  "unit": "WriteALU",
+// CHECK:                  "uses": [
+// CHECK-NEXT:               "ALU"
+// CHECK:              "overrides": [
+// CHECK:                  "instruction": "Nop",
+// CHECK:              "forwards": [
+// CHECK:                  "from": "ALU",
+// CHECK-NEXT:             "to": "ALU",
+// CHECK-NEXT:             "latency": 0
+
+isa TestIsa {}
+
+sched_class WriteALU { latency = 1; throughput = 2; }
+
+instruction Nop for [TestIsa] {
+    param MNEMONIC: String = "nop";
+    asm { "nop" }
+    behavior { todo(); }
+    schedule { units = [WriteALU]; }
+}
+
+machine TestCore ("test-core") for [TestIsa] {
+    issue_width = 2;
+    buffers { rob = 8; }
+    pipeline { IF; EX: protected; }
+    unit ALU { count = 2; }
+    bind WriteALU { reads = IF; writes = EX; uses = [ALU]; }
+    override Nop { latency = 2; uses = [ALU]; }
+    forward ALU => ALU { latency = 0; }
+}

@@ -1,0 +1,24 @@
+// RUN: tmdlc --action=emit-ast-json --output=- %S/../Inputs/atomics.tmdl | filecheck %s
+
+// CHECK:              "name": "LrW",
+// CHECK:              "behavior": {
+// CHECK-NEXT:           "kind": "block",
+// CHECK:                  "kind": "try",
+// CHECK:                      "kind": "builtin",
+// CHECK-NEXT:                 "name": "sext"
+// CHECK:                          "kind": "builtin",
+// CHECK-NEXT:                     "name": "load_reserved"
+// CHECK:                          "kind": "path",
+// CHECK-NEXT:                     "segments": [
+// CHECK-NEXT:                       "Ordering",
+// CHECK-NEXT:                       "acquire"
+// CHECK:                    "handlers": [
+// CHECK:                        "kind": "misaligned_load",
+// CHECK-NEXT:                   "binding": "addr",
+// CHECK:                          "kind": "builtin",
+// CHECK-NEXT:                     "name": "trap"
+// CHECK:              "name": "ScW",
+// CHECK:                  "kind": "if",
+// CHECK:                  "condition": {
+// CHECK:                  "then": {
+// CHECK:                  "else": {

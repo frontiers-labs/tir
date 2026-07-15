@@ -10,6 +10,7 @@
   - [RISC-V Compressed Instructions](./design/riscv_compression.md)
 - [TIR Machine Description Language](./tmdl/index.md)
   - [TMDL Syntax Guide](./tmdl/syntax.md)
+  - [Checked AST JSON](./tmdl/json.md)
   - [Declarative Macros](./tmdl/macros.md)
   - [Memory Model](./tmdl/memory_model.md)
   - [SMT Equivalence Checking](./tmdl/smt_verification.md)

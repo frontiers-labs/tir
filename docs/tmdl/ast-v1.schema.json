@@ -1,0 +1,1333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TMDL checked AST",
+  "description": "Versioned, checked TMDL abstract syntax tree.",
+  "type": "object",
+  "properties": {
+    "files": {
+      "description": "Checked input files in command-line order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/File"
+      }
+    },
+    "version": {
+      "description": "JSON contract revision. Its schema is fixed to `1`.",
+      "type": "integer",
+      "format": "uint8",
+      "const": 1,
+      "maximum": 255,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "files"
+  ],
+  "$defs": {
+    "BinOp": {
+      "type": "string",
+      "enum": [
+        "add",
+        "subtract",
+        "multiply",
+        "divide",
+        "unsigned_divide",
+        "equal",
+        "not_equal",
+        "less_than",
+        "greater_than",
+        "less_than_equal",
+        "greater_than_equal",
+        "unsigned_less_than",
+        "unsigned_greater_than",
+        "unsigned_less_than_equal",
+        "unsigned_greater_than_equal",
+        "bitwise_and",
+        "bitwise_or",
+        "bitwise_xor",
+        "shift_left_logical",
+        "shift_right_logical",
+        "shift_right_arithmetic"
+      ]
+    },
+    "BuiltinFunction": {
+      "type": "string",
+      "enum": [
+        "clamp",
+        "extract",
+        "log2_ceil",
+        "regnum",
+        "sext",
+        "zext",
+        "load",
+        "store",
+        "load_reserved",
+        "store_conditional",
+        "atomic_rmw",
+        "fence",
+        "fence_i",
+        "trap",
+        "split",
+        "concat",
+        "map",
+        "reduce",
+        "zip",
+        "fadd",
+        "fsub",
+        "fmul",
+        "fdiv",
+        "todo"
+      ]
+    },
+    "EncodingArm": {
+      "description": "One inclusive bit range in an instruction encoding.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "description": "Highest encoded bit; omitted for a single-bit arm.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "start": {
+          "description": "Lowest encoded bit.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "value": {
+          "$ref": "#/$defs/Expr"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "value"
+      ]
+    },
+    "ExceptClause": {
+      "description": "One exception handler in a `try` expression.",
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "body": {
+          "$ref": "#/$defs/Expr"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "body"
+      ]
+    },
+    "Expr": {
+      "description": "A checked TMDL expression. Numeric literal values retain their source spelling.",
+      "oneOf": [
+        {
+          "description": "Assignment to an lvalue expression.",
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/Expr"
+            },
+            "kind": {
+              "type": "string",
+              "const": "assign"
+            },
+            "value": {
+              "$ref": "#/$defs/Expr"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "destination",
+            "value"
+          ]
+        },
+        {
+          "description": "Binary operator application.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "binary"
+            },
+            "lhs": {
+              "$ref": "#/$defs/Expr"
+            },
+            "op": {
+              "$ref": "#/$defs/BinOp"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Expr"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "op",
+            "lhs",
+            "rhs"
+          ]
+        },
+        {
+          "description": "Unary operator application.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unary"
+            },
+            "op": {
+              "$ref": "#/$defs/UnOp"
+            },
+            "value": {
+              "$ref": "#/$defs/Expr"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "op",
+            "value"
+          ]
+        },
+        {
+          "description": "Ordered expression block.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "block"
+            },
+            "returns_last": {
+              "description": "Whether the final statement supplies the block value; omitted when false.",
+              "type": "boolean"
+            },
+            "statements": {
+              "description": "Statements in source order; omitted when empty.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Function or builtin call.",
+          "type": "object",
+          "properties": {
+            "arguments": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              }
+            },
+            "callee": {
+              "$ref": "#/$defs/Expr"
+            },
+            "kind": {
+              "type": "string",
+              "const": "call"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "callee"
+          ]
+        },
+        {
+          "description": "Named member access.",
+          "type": "object",
+          "properties": {
+            "base": {
+              "$ref": "#/$defs/Expr"
+            },
+            "kind": {
+              "type": "string",
+              "const": "field"
+            },
+            "member": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "base",
+            "member"
+          ]
+        },
+        {
+          "description": "Local or declaration identifier.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "identifier"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "Conditional expression.",
+          "type": "object",
+          "properties": {
+            "condition": {
+              "$ref": "#/$defs/Expr"
+            },
+            "else": {
+              "$ref": "#/$defs/Expr"
+            },
+            "kind": {
+              "type": "string",
+              "const": "if"
+            },
+            "then": {
+              "$ref": "#/$defs/Expr"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "condition",
+            "then"
+          ]
+        },
+        {
+          "description": "Constant index access.",
+          "type": "object",
+          "properties": {
+            "base": {
+              "$ref": "#/$defs/Expr"
+            },
+            "index": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "index"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "base",
+            "index"
+          ]
+        },
+        {
+          "description": "Qualified name split into source-order segments.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "path"
+            },
+            "segments": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "segments"
+          ]
+        },
+        {
+          "description": "String literal without its source quotes.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "description": "Integer or bit literal retaining radix and source digits.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "integer"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "description": "Inclusive bit slice.",
+          "type": "object",
+          "properties": {
+            "base": {
+              "$ref": "#/$defs/Expr"
+            },
+            "end": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "slice"
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "base",
+            "start",
+            "end"
+          ]
+        },
+        {
+          "description": "Precise-trap body and its ordered exception handlers.",
+          "type": "object",
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/Expr"
+            },
+            "handlers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ExceptClause"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "try"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "body",
+            "handlers"
+          ]
+        },
+        {
+          "description": "Builtin function used as a call target.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "builtin"
+            },
+            "name": {
+              "$ref": "#/$defs/BuiltinFunction"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "Anonymous function used by iterator builtins.",
+          "type": "object",
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/Expr"
+            },
+            "kind": {
+              "type": "string",
+              "const": "lambda"
+            },
+            "parameters": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "parameters",
+            "body"
+          ]
+        },
+        {
+          "description": "Parser recovery node; checked successful inputs do not normally contain it.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "invalid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "File": {
+      "description": "One checked input file.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "Top-level declarations in source order after macro expansion.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Item"
+          }
+        },
+        "path": {
+          "description": "Input path exactly as passed to `tmdlc`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "items"
+      ]
+    },
+    "Forward": {
+      "description": "A resource forwarding path and its latency.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "latency": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "latency"
+      ]
+    },
+    "IsaRequirement": {
+      "description": "Boolean composition of ISA requirements.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "isa": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "single"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "isa"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "isas": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "any"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "isas"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "isas": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "all"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "isas"
+          ]
+        }
+      ]
+    },
+    "Item": {
+      "description": "A checked top-level TMDL declaration.",
+      "oneOf": [
+        {
+          "description": "An instruction-set architecture and its parameters.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "isa"
+            },
+            "name": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Parameter"
+              }
+            },
+            "requires": {
+              "$ref": "#/$defs/IsaRequirement"
+            },
+            "trap_handler": {
+              "$ref": "#/$defs/TrapHandler"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "A register class after register-class inheritance is resolved.",
+          "type": "object",
+          "properties": {
+            "base": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "isas": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "register_class"
+            },
+            "name": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Parameter"
+              }
+            },
+            "registers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RegisterDef"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "A reusable instruction template. Template inheritance remains declarative.",
+          "type": "object",
+          "properties": {
+            "assembly": {
+              "$ref": "#/$defs/Expr"
+            },
+            "encoding": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EncodingArm"
+              }
+            },
+            "isas": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "template"
+            },
+            "name": {
+              "type": "string"
+            },
+            "operands": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Operand"
+              }
+            },
+            "parameters": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Parameter"
+              }
+            },
+            "schedule": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "template": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "An instruction declaration. Inherited template fields are not duplicated.",
+          "type": "object",
+          "properties": {
+            "assembly": {
+              "$ref": "#/$defs/Expr"
+            },
+            "behavior": {
+              "$ref": "#/$defs/Expr"
+            },
+            "encoding": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EncodingArm"
+              }
+            },
+            "isas": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "instruction"
+            },
+            "name": {
+              "type": "string"
+            },
+            "operands": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Operand"
+              }
+            },
+            "parameters": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Parameter"
+              }
+            },
+            "schedule": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "template": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name",
+            "behavior"
+          ]
+        },
+        {
+          "description": "A machine-independent scheduling class.",
+          "type": "object",
+          "properties": {
+            "default_latency": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "default_throughput": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "const": "sched_class"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "A concrete machine performance model.",
+          "type": "object",
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "bindings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UnitBind"
+              }
+            },
+            "buffers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NamedCount"
+              }
+            },
+            "forwards": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Forward"
+              }
+            },
+            "isas": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "issue_width": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "const": "machine"
+            },
+            "name": {
+              "type": "string"
+            },
+            "overrides": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MachineOverride"
+              }
+            },
+            "pipeline": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PipelinePhase"
+              }
+            },
+            "register_files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NamedCount"
+              }
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MachineUnit"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        }
+      ]
+    },
+    "MachineOverride": {
+      "description": "Machine-specific timing override for one instruction.",
+      "type": "object",
+      "properties": {
+        "instruction": {
+          "type": "string"
+        },
+        "latency": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "reads": {
+          "type": "string"
+        },
+        "throughput": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "uses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "writes": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "instruction"
+      ]
+    },
+    "MachineUnit": {
+      "description": "A functional resource and its parallel unit count.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "units": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "units"
+      ]
+    },
+    "NamedCount": {
+      "description": "A named buffer or physical-register-file size.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "count"
+      ]
+    },
+    "Operand": {
+      "description": "Named instruction operand.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/Type"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "Parameter": {
+      "description": "Named declaration parameter with an optional value.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/Type"
+        },
+        "value": {
+          "$ref": "#/$defs/Expr"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "PipelinePhase": {
+      "description": "One ordered phase in a machine pipeline.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "protection": {
+          "$ref": "#/$defs/Protection"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "protection"
+      ]
+    },
+    "Protection": {
+      "description": "Hardware hazard protection for a pipeline phase.",
+      "type": "string",
+      "enum": [
+        "protected",
+        "unprotected",
+        "hard"
+      ]
+    },
+    "Register": {
+      "description": "A nested subregister declaration.",
+      "type": "object",
+      "properties": {
+        "alias": {
+          "type": "string"
+        },
+        "argument_order": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "index": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "subregisters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Register"
+          }
+        },
+        "traits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RegisterTrait"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "RegisterDef": {
+      "description": "A single register or an inclusive register-name range.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "argument_order": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "index": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "single"
+            },
+            "name": {
+              "type": "string"
+            },
+            "subregisters": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Register"
+              }
+            },
+            "traits": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RegisterTrait"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "alias_pattern": {
+              "type": "string"
+            },
+            "end": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "range"
+            },
+            "start": {
+              "type": "string"
+            },
+            "traits": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RegisterTrait"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "start",
+            "end"
+          ]
+        }
+      ]
+    },
+    "RegisterTrait": {
+      "description": "Semantic and ABI traits attached to a register.",
+      "type": "string",
+      "enum": [
+        "hardwired_zero",
+        "return_address",
+        "caller_saved",
+        "callee_saved",
+        "stack_pointer",
+        "program_counter",
+        "global_pointer",
+        "thread_pointer",
+        "reserved",
+        "argument",
+        "return_value",
+        "temporary",
+        "saved",
+        "status_flag",
+        "float",
+        "polymorphic"
+      ]
+    },
+    "TrapHandler": {
+      "description": "Architectural synchronous trap handler.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/Expr"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "body"
+      ]
+    },
+    "Type": {
+      "description": "A type allowed in a checked TMDL declaration.",
+      "oneOf": [
+        {
+          "description": "TMDL `String`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "TMDL `Integer`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "integer"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A fixed-width bit vector.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bits"
+            },
+            "width": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "width"
+          ]
+        },
+        {
+          "description": "A bit vector whose width is an ISA-parameter expression.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bits_expr"
+            },
+            "width": {
+              "$ref": "#/$defs/Expr"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "width"
+          ]
+        },
+        {
+          "description": "A named register class or other structural type.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "named"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        }
+      ]
+    },
+    "UnOp": {
+      "type": "string",
+      "enum": [
+        "bitwise_not"
+      ]
+    },
+    "UnitBind": {
+      "description": "Machine-specific timing and resource use for a scheduling class.",
+      "type": "object",
+      "properties": {
+        "latency": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "reads": {
+          "type": "string"
+        },
+        "throughput": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "uses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "writes": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "unit"
+      ]
+    }
+  }
+}

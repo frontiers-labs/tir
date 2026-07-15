@@ -1,0 +1,41 @@
+// RUN: tmdlc --action=emit-ast-json --output=- %S/../Inputs/simple.tmdl | filecheck %s
+
+// CHECK: {
+// CHECK-NEXT:   "version": 1,
+// CHECK-NEXT:   "files": [
+// CHECK:          "path": "{{.*}}/Inputs/simple.tmdl",
+// CHECK:              "kind": "isa",
+// CHECK:              "name": "TestIsa32",
+// CHECK:              "parameters": [
+// CHECK:                  "name": "PARAM1",
+// CHECK:                  "type": {
+// CHECK-NEXT:               "kind": "integer"
+// CHECK:                    "kind": "integer",
+// CHECK-NEXT:               "value": "100"
+// CHECK:              "kind": "register_class",
+// CHECK:                  "kind": "single",
+// CHECK:                  "traits": [
+// CHECK-NEXT:               "hardwired_zero"
+// CHECK:              "kind": "template",
+// CHECK:              "isas": [
+// CHECK:              "parameters": [
+// CHECK:                  "kind": "bits",
+// CHECK-NEXT:             "width": 7
+// CHECK:              "operands": [
+// CHECK:                  "name": "rs1",
+// CHECK:                  "type": {
+// CHECK-NEXT:               "kind": "named",
+// CHECK-NEXT:               "name": "GPR"
+// CHECK:              "kind": "instruction",
+// CHECK:              "template": "ParentInst",
+// CHECK:              "behavior": {
+// CHECK-NEXT:           "kind": "block",
+// CHECK:                    "kind": "assign",
+// CHECK:                    "value": {
+// CHECK-NEXT:                 "kind": "binary",
+// CHECK-NEXT:                 "op": "add",
+// CHECK-NOT: "null"
+// CHECK-NOT: "for_isas"
+// CHECK-NOT: "parent_template"
+// CHECK-NOT: "Lit"
+// CHECK-NOT: "Ident"

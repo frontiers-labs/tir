@@ -52,6 +52,7 @@ pub enum Action {
     EmitExpandedTokens,
     EmitAst,
     EmitAstJson,
+    EmitAstJsonSchema,
     EmitRust,
     EmitOperationList,
     EmitSmtlib,
@@ -97,6 +98,17 @@ impl Compiler {
     }
 
     pub fn compile(&self) -> Result<(), TMDLError> {
+        if matches!(self.action, Action::EmitAstJsonSchema) {
+            if !self.inputs.is_empty() || !self.split_inputs.is_empty() {
+                return Err(TMDLError::Codegen(
+                    "emit-ast-json-schema does not accept inputs".to_string(),
+                ));
+            }
+            let mut output = self.create_output_writer()?;
+            serde_json::to_writer_pretty(&mut output, &crate::json::schema())?;
+            writeln!(output)?;
+            return Ok(());
+        }
         if !self.split_inputs.is_empty() && !matches!(self.action, Action::EmitRust) {
             return Err(TMDLError::Codegen(
                 "split inputs are only supported by emit-rust".to_string(),
@@ -240,7 +252,8 @@ impl Compiler {
                     }
                 }
                 Action::EmitAstJson => {
-                    serde_json::to_writer_pretty(&mut output, &parsed_files)?;
+                    let document = crate::json::Document::from_ast(&parsed_files);
+                    serde_json::to_writer_pretty(&mut output, &document)?;
                     writeln!(output)?;
                 }
                 _ => unreachable!(),

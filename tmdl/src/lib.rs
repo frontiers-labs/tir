@@ -2,6 +2,7 @@ mod ast;
 mod compiler;
 mod error;
 mod expander;
+mod json;
 mod lexer;
 mod parser;
 mod rustgen;

@@ -12,6 +12,7 @@ prettyplease.workspace = true
 proc-macro2.workspace = true
 syn = { workspace = true, features = ["parsing"] }
 chumsky.workspace = true
+schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tir.workspace = true
@@ -24,6 +25,7 @@ path = "bin.rs"
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
+jsonschema.workspace = true
 tir-lit.workspace = true
 
 [[bench]]
