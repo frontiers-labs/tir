@@ -628,7 +628,6 @@ dependencies = [
  "tempfile",
  "tir",
  "tir-arm64",
- "tir-jit",
  "tir-lit",
  "tir-riscv",
  "tir-x86_64",

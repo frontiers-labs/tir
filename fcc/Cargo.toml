@@ -16,7 +16,6 @@ tempfile = "3.27.0"
 
 [dev-dependencies]
 tir-lit = { path = "../utils/lit" }
-tir-jit.workspace = true
 criterion = { workspace = true }
 
 [[bin]]
