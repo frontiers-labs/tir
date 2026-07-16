@@ -149,9 +149,18 @@ mod isa {
                 .arguments()
                 .iter()
                 .map(|arg| {
+                    let ty = context.get_type_data(arg.ty());
+                    let class = if (ty.as_ref() as &dyn std::any::Any)
+                        .downcast_ref::<tir::builtin::FloatType>()
+                        .is_some()
+                    {
+                        RegClass::XMM.id()
+                    } else {
+                        RegClass::GPR.id()
+                    };
                     AttributeValue::Register(RegisterAttr::Virtual {
                         id: arg.id().number(),
-                        class: Some(RegClass::GPR.id()),
+                        class: Some(class),
                     })
                 })
                 .collect::<Vec<_>>();
