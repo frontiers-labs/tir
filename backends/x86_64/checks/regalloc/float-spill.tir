@@ -1,0 +1,21 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s --check-prefix=COPY
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s --check-prefix=ENC
+
+// SysV has no callee-saved XMM registers, so the computed value that remains
+// live across the call must be stored and reloaded through the stack frame.
+
+module {
+  declare @external() -> !i64
+  func @pressure(%0: !f64) -> !f64 {
+    %1 = addf %0, %0 : !f64
+    %2 = call @external() -> !i64
+    %3 = addf %1, %1 : !f64
+    return %3
+  }
+  module_end
+}
+
+// COPY: x86_64.movsd_store_disp
+// COPY: x86_64.movsd_load_disp
+// ENC: [0xF2, 0x40, 0x0F, 0x11, 0x8C, 0x24
+// ENC: [0xF2, 0x40, 0x0F, 0x10, 0x8C, 0x24

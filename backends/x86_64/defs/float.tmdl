@@ -185,3 +185,137 @@ instruction Movsd for [X86_64] {
         dst = src;
     }
 }
+
+instruction MovsdLoadDisp for [X86_64] {
+    param OPNAME: String = "movsd_load_disp";
+    param MNEMONIC: String = "movsd";
+
+    operands {
+        dst: XMM,
+        base: GPR,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => base[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x10,
+        32..34 => base[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b10,
+        40..71 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior {
+        dst = load(base + sext(imm, self.XLEN), 8, 0b0);
+    }
+}
+
+instruction MovsdStoreDisp for [X86_64] {
+    param OPNAME: String = "movsd_store_disp";
+    param MNEMONIC: String = "movsd";
+
+    operands {
+        base: GPR,
+        imm: bits<32>,
+        src: XMM,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => base[3],
+        9 => 0b0,
+        10 => src[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x11,
+        32..34 => base[0..2],
+        35..37 => src[0..2],
+        38..39 => 0b10,
+        40..71 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior {
+        store(base + sext(imm, self.XLEN), 8, src);
+    }
+}
+
+instruction MovsdLoadDispSib for [X86_64] {
+    param OPNAME: String = "movsd_load_disp_sib";
+    param MNEMONIC: String = "movsd";
+
+    operands {
+        dst: XMM,
+        base: GPRsib,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => base[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x10,
+        32..34 => 0b100,
+        35..37 => dst[0..2],
+        38..39 => 0b10,
+        40..47 => 0x24,
+        48..79 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior { }
+}
+
+instruction MovsdStoreDispSib for [X86_64] {
+    param OPNAME: String = "movsd_store_disp_sib";
+    param MNEMONIC: String = "movsd";
+
+    operands {
+        base: GPRsib,
+        imm: bits<32>,
+        src: XMM,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => base[3],
+        9 => 0b0,
+        10 => src[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x11,
+        32..34 => 0b100,
+        35..37 => src[0..2],
+        38..39 => 0b10,
+        40..47 => 0x24,
+        48..79 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior { }
+}

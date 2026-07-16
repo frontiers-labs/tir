@@ -547,6 +547,8 @@ mod isa {
         );
         escape!(sib MovLoadDispOp, MovLoadDispSibOpBuilder, ["dst", "base", "imm"]);
         escape!(sib MovStoreDispOp, MovStoreDispSibOpBuilder, ["base", "imm", "src"]);
+        escape!(sib MovsdLoadDispOp, MovsdLoadDispSibOpBuilder, ["dst", "base", "imm"]);
+        escape!(sib MovsdStoreDispOp, MovsdStoreDispSibOpBuilder, ["base", "imm", "src"]);
 
         // REX-free canonicalization: drop the REX byte GNU as omits when every
         // register index is low (< 8, or < 4 for the 8-bit forms that must avoid
@@ -932,6 +934,13 @@ mod isa {
                         .attr("src", virt(value, class))
                         .build(),
                 ),
+                "XMM" => Box::new(
+                    MovsdStoreDispOpBuilder::new(context)
+                        .attr("base", phys(frame.0, frame.1))
+                        .attr("imm", AttributeValue::Int(offset))
+                        .attr("src", virt(value, class))
+                        .build(),
+                ),
                 other => unimplemented!("x86-64 spilling for {other} is not implemented"),
             }
         }
@@ -947,6 +956,13 @@ mod isa {
             match class.name() {
                 "GPR" => Box::new(
                     MovLoadDispOpBuilder::new(context)
+                        .attr("dst", virt(value, class))
+                        .attr("base", phys(frame.0, frame.1))
+                        .attr("imm", AttributeValue::Int(offset))
+                        .build(),
+                ),
+                "XMM" => Box::new(
+                    MovsdLoadDispOpBuilder::new(context)
                         .attr("dst", virt(value, class))
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
