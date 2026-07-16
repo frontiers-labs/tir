@@ -1,9 +1,8 @@
-// RUN: not tir mc --march=x86_64 --filetype=obj-ascii %s
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
-// FINDING G8 (isel-gap): calls with more than 6 register arguments are
-// unsupported: "stack-passed call arguments are not supported by codegen yet".
-// 6-arg calls work. (Graceful error, unlike the callee-side stack-arg
-// miscompile in stack-args.tir.)
+// SysV passes the seventh integer argument at rsp before the call. The 8-byte
+// argument slot is padded to 16 bytes, and the existing 8-byte call-alignment
+// adjustment makes the total reservation 24 bytes.
 
 module {
   declare @g(!i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
@@ -13,3 +12,8 @@ module {
   }
   module_end
 }
+
+// CHECK: x86_64.add_imm {dst = rsp, imm = -24}
+// CHECK: x86_64.mov_store_disp {base = rsp, imm = 0, src = {{.*}}}
+// CHECK: x86_64.vcall {callee = "g"
+// CHECK: x86_64.add_imm {dst = rsp, imm = 24}

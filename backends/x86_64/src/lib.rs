@@ -331,17 +331,34 @@ mod isa {
             )
         }
 
+        fn stack_arg_store(
+            &self,
+            context: &tir::Context,
+            abi: &tir::backend::abi::AbiInfo,
+            value: AttributeValue,
+            offset: i64,
+        ) -> Result<Box<dyn Operation>, tir::PassError> {
+            Ok(Box::new(
+                MovStoreDispOpBuilder::new(context)
+                    .attr("base", phys(abi.sp.0, abi.sp.1))
+                    .attr("imm", AttributeValue::Int(offset))
+                    .attr("src", value)
+                    .build(),
+            ))
+        }
+
         fn call_prefix(
             &self,
             context: &tir::Context,
             abi: &tir::backend::abi::AbiInfo,
-            _outgoing_size: u32,
+            outgoing_size: u32,
         ) -> Vec<Box<dyn Operation>> {
+            let reserved = i64::from(outgoing_size) + 8;
             vec![
                 Box::new(
                     AddImmOpBuilder::new(context)
                         .attr("dst", phys(abi.sp.0, abi.sp.1))
-                        .attr("imm", AttributeValue::Int(-8))
+                        .attr("imm", AttributeValue::Int(-reserved))
                         .build(),
                 ),
                 Box::new(
@@ -357,12 +374,13 @@ mod isa {
             &self,
             context: &tir::Context,
             abi: &tir::backend::abi::AbiInfo,
-            _outgoing_size: u32,
+            outgoing_size: u32,
         ) -> Vec<Box<dyn Operation>> {
+            let reserved = i64::from(outgoing_size) + 8;
             vec![Box::new(
                 AddImmOpBuilder::new(context)
                     .attr("dst", phys(abi.sp.0, abi.sp.1))
-                    .attr("imm", AttributeValue::Int(8))
+                    .attr("imm", AttributeValue::Int(reserved))
                     .build(),
             )]
         }
