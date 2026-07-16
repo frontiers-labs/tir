@@ -988,9 +988,19 @@ impl tir::backend::regalloc::TargetRegAlloc for RiscvRegAlloc {
                 virt(dst, RegClass::GPR.id()),
                 virt(src, RegClass::GPR.id()),
             ),
-            other => unimplemented!(
-                "riscv register copy for class {other} is not implemented (no float/vector move op)"
+            "FPR32" => Box::new(
+                FMoveSOpBuilder::new(context)
+                    .attr("fd", virt(dst, RegClass::FPR32.id()))
+                    .attr("fs", virt(src, RegClass::FPR32.id()))
+                    .build(),
             ),
+            "FPR64" => Box::new(
+                FMoveDOpBuilder::new(context)
+                    .attr("fd", virt(dst, RegClass::FPR64.id()))
+                    .attr("fs", virt(src, RegClass::FPR64.id()))
+                    .build(),
+            ),
+            other => unimplemented!("riscv register copy for class {other} is not implemented"),
         }
     }
 

@@ -1,0 +1,16 @@
+// RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s --check-prefix=COPY
+// RUN: tir mc --march=arm64 --filetype=obj-ascii %s | filecheck %s --check-prefix=ENC
+
+module {
+  func @forward(%0: !f64) -> !f64 {
+    br ^bb1(%0 : !f64)
+    ^bb1(%1: !f64):
+    %2 = addf %1, %1 : !f64
+    return %2
+  }
+  module_end
+}
+
+// COPY: arm64.fmov_reg64
+// ENC: forward:
+// ENC-NEXT: [0x00, 0x40, 0x60, 0x1E]

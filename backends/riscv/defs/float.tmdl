@@ -196,6 +196,59 @@ instruction FDivD for [D] : FPArith64 {
     }
 }
 
+// Register copies use FSGNJ with both sources equal, preserving every bit.
+instruction FMoveS for [F] {
+    param MNEMONIC: String = "fsgnj.s";
+
+    operands {
+        fd: FPR32,
+        fs: FPR32,
+    }
+
+    encoding {
+        0..6 => 0b1010011,
+        7..11 => fd,
+        12..14 => 0b000,
+        15..19 => fs,
+        20..24 => fs,
+        25..31 => 0b0010000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {fs}, {fs}"
+    }
+
+    behavior {
+        fd = fs;
+    }
+}
+
+instruction FMoveD for [D] {
+    param MNEMONIC: String = "fsgnj.d";
+
+    operands {
+        fd: FPR64,
+        fs: FPR64,
+    }
+
+    encoding {
+        0..6 => 0b1010011,
+        7..11 => fd,
+        12..14 => 0b000,
+        15..19 => fs,
+        20..24 => fs,
+        25..31 => 0b0010001,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {fs}, {fs}"
+    }
+
+    behavior {
+        fd = fs;
+    }
+}
+
 // Bit-pattern moves from the integer file, used to materialize float
 // constants (an integer `li` sequence followed by the move). `fmv.d.x` needs
 // the whole binary64 pattern in one integer register, so it is rv64-only.

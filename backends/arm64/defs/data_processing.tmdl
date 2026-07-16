@@ -777,6 +777,36 @@ instruction FDivDouble for [ARMv8A64] : FPArith64 {
     }
 }
 
+instruction FMoveRegisterDouble for [ARMv8A64] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_reg64";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        fd: FPR64,
+        fa: FPR64,
+    }
+
+    encoding {
+        0..4 => fd,
+        5..9 => fa,
+        10..14 => 0b10000,
+        15..20 => 0b000000,
+        21 => 0b1,
+        22..23 => 0b01,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {fa}"
+    }
+
+    behavior {
+        fd = fa;
+    }
+}
+
 // FMOV (scalar, immediate), double. The 8-bit imm expands to a binary64 value
 // (VFPExpandImm): sign=imm<7>, exp = NOT(imm<6>):Replicate(imm<6>,8):imm<5:4>,
 // frac = imm<3:0>:Zeros(48). We build that 64-bit pattern and move it into the

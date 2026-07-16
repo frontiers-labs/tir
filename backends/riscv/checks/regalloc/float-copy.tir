@@ -1,0 +1,16 @@
+// RUN: tir mc --march=rv64id --stage=regalloc %s | filecheck %s --check-prefix=COPY
+// RUN: tir mc --march=rv64id --filetype=obj-ascii %s | filecheck %s --check-prefix=ENC
+
+module {
+  func @forward(%0: !f64) -> !f64 {
+    br ^bb1(%0 : !f64)
+    ^bb1(%1: !f64):
+    %2 = addf %1, %1 : !f64
+    return %2
+  }
+  module_end
+}
+
+// COPY: riscv.fsgnj.d
+// ENC: forward:
+// ENC-NEXT: [0x53, 0x00, 0xA5, 0x22]

@@ -533,9 +533,13 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
                 virt(dst, RegClass::GPR.id()),
                 virt(src, RegClass::GPR.id()),
             ),
-            other => unimplemented!(
-                "arm64 register copy for class {other} is not implemented (no float/vector move op)"
+            "FPR64" => Box::new(
+                FMoveRegisterDoubleOpBuilder::new(context)
+                    .attr("fd", virt(dst, RegClass::FPR64.id()))
+                    .attr("fa", virt(src, RegClass::FPR64.id()))
+                    .build(),
             ),
+            other => unimplemented!("arm64 register copy for class {other} is not implemented"),
         }
     }
 
