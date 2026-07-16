@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -145,8 +145,11 @@ enum PreprocToken {
 
 /// Evaluate a C preprocessor constant expression; returns the integer value.
 /// Undefined identifiers and non-integer macros evaluate to 0.
-fn eval_if_expr(expr: &str, defines: &HashMap<String, Token>) -> i64 {
-    let toks: Vec<PreprocToken> = PreprocToken::lexer(expr).filter_map(|r| r.ok()).collect();
+fn eval_if_expr(expr: &str, defines: &HashMap<String, MacroDefinition>, span: Span) -> i64 {
+    let expanded = expand_if_expr(expr, defines, span);
+    let toks: Vec<PreprocToken> = PreprocToken::lexer(&expanded)
+        .filter_map(Result::ok)
+        .collect();
     IfExpr {
         toks: &toks,
         pos: 0,
@@ -158,7 +161,7 @@ fn eval_if_expr(expr: &str, defines: &HashMap<String, Token>) -> i64 {
 struct IfExpr<'a> {
     toks: &'a [PreprocToken],
     pos: usize,
-    defines: &'a HashMap<String, Token>,
+    defines: &'a HashMap<String, MacroDefinition>,
 }
 
 impl<'a> IfExpr<'a> {
@@ -397,7 +400,14 @@ impl<'a> IfExpr<'a> {
             Some(PreprocToken::Identifier(_)) => {
                 if let Some(PreprocToken::Identifier(name)) = self.bump() {
                     match self.defines.get(name.as_str()) {
-                        Some(Token::IntegerLiteral(n)) => n.value.to_i64(),
+                        Some(MacroDefinition::Object(body))
+                            if matches!(body.as_slice(), [Token::IntegerLiteral(_)]) =>
+                        {
+                            let Token::IntegerLiteral(n) = &body[0] else {
+                                unreachable!()
+                            };
+                            n.value.to_i64()
+                        }
                         _ => 0, // undefined or non-integer macro
                     }
                 } else {
@@ -467,15 +477,27 @@ struct Frame {
     path: PathBuf,
 }
 
+#[derive(Clone)]
+enum MacroDefinition {
+    Object(Vec<Token>),
+    Function {
+        parameters: Vec<String>,
+        replacement: Vec<Token>,
+    },
+}
+
+#[derive(Clone)]
+struct ExpansionToken {
+    token: Token,
+    span: Span,
+    hideset: HashSet<String>,
+}
+
 pub struct TokenStream {
     /// Stack of source frames.  Top = active frame.
     frames: Vec<Frame>,
-    /// Maps macro names to their single-token replacement value.
-    ///
-    /// `Token::Hash` is used as a sentinel meaning "defined but no replacement
-    /// text" (e.g. `#define FLAG`).  Such macros participate in `#ifdef` /
-    /// `#ifndef` but expand to nothing in code.
-    defines: HashMap<String, Token>,
+    defines: HashMap<String, MacroDefinition>,
+    pending: VecDeque<ExpansionToken>,
     include_paths: IncludePaths,
     cond_stack: Vec<CondState>,
     diagnostics: Vec<Diagnostic>,
@@ -554,18 +576,29 @@ impl TokenStream {
                     }
                 };
                 let remainder = pp.remainder();
-                if remainder.starts_with('(') {
-                    self.skip_line(source.len(), remainder);
-                    return;
-                }
-                let body_end = remainder.find('\n').unwrap_or(remainder.len());
-                // Lex the replacement body to get its token value.
-                // Token::Hash is the sentinel for "no replacement text".
-                let token = Token::lexer(remainder[..body_end].trim())
-                    .next()
-                    .and_then(|r| r.ok())
-                    .unwrap_or(Token::Hash);
-                self.defines.insert(name, token);
+                let definition_text = logical_line(remainder);
+                let definition = if definition_text.starts_with('(') {
+                    let Some(parameters_end) = definition_text.find(')') else {
+                        self.skip_line(source.len(), remainder);
+                        return;
+                    };
+                    let parameters = &definition_text[1..parameters_end];
+                    let parameters = if parameters.trim().is_empty() {
+                        Vec::new()
+                    } else {
+                        parameters
+                            .split(',')
+                            .map(|parameter| parameter.trim().to_string())
+                            .collect()
+                    };
+                    MacroDefinition::Function {
+                        parameters,
+                        replacement: lex_replacement(&definition_text[parameters_end + 1..]),
+                    }
+                } else {
+                    MacroDefinition::Object(lex_replacement(&definition_text))
+                };
+                self.defines.insert(name, definition);
                 self.skip_line(source.len(), remainder);
             }
 
@@ -639,7 +672,12 @@ impl TokenStream {
             Some(Ok(PreprocToken::If)) => {
                 let remainder = pp.remainder();
                 let line_end = remainder.find('\n').unwrap_or(remainder.len());
-                let result = !skipping && eval_if_expr(&remainder[..line_end], &self.defines) != 0;
+                let result = !skipping
+                    && eval_if_expr(
+                        &remainder[..line_end],
+                        &self.defines,
+                        Span::new(self.current_file(), directive_start),
+                    ) != 0;
                 let state = if skipping {
                     CondState::OuterSkip
                 } else if result {
@@ -655,10 +693,11 @@ impl TokenStream {
                 let remainder = pp.remainder();
                 let line_end = remainder.find('\n').unwrap_or(remainder.len());
                 let expr_str = &remainder[..line_end];
+                let span = Span::new(self.current_file(), directive_start);
                 if let Some(top) = self.cond_stack.last_mut() {
                     *top = match *top {
                         CondState::Inactive => {
-                            if eval_if_expr(expr_str, &self.defines) != 0 {
+                            if eval_if_expr(expr_str, &self.defines, span) != 0 {
                                 CondState::Active
                             } else {
                                 CondState::Inactive
@@ -746,82 +785,354 @@ impl TokenStream {
             _ => self.skip_line(source.len(), pp.remainder()),
         }
     }
+
+    fn next_unexpanded(&mut self) -> Option<ExpansionToken> {
+        loop {
+            while self
+                .frames
+                .last()
+                .is_some_and(|frame| frame.offset >= frame.source.len())
+            {
+                self.frames.pop();
+            }
+
+            let (source, offset, file) = {
+                let frame = self.frames.last()?;
+                (Arc::clone(&frame.source), frame.offset, frame.file)
+            };
+            let span = Span::new(file, offset);
+            let mut lexer = Token::lexer(&source[offset..]);
+
+            match lexer.next() {
+                None => {
+                    self.frames.pop();
+                }
+                Some(Err(_)) => {
+                    self.frames.last_mut().unwrap().offset = source.len() - lexer.remainder().len();
+                }
+                Some(Ok(Token::Hash)) => {
+                    let pp = lexer.morph::<PreprocToken>();
+                    self.process_directive(&source, offset, pp);
+                }
+                Some(Ok(token)) => {
+                    self.frames.last_mut().unwrap().offset = source.len() - lexer.remainder().len();
+                    if !is_skipping(&self.cond_stack) {
+                        return Some(ExpansionToken {
+                            token,
+                            span,
+                            hideset: HashSet::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn take_input(&mut self) -> Option<ExpansionToken> {
+        self.pending.pop_front().or_else(|| self.next_unexpanded())
+    }
+
+    fn prepend(&mut self, tokens: impl IntoIterator<Item = ExpansionToken>) {
+        let tokens = tokens.into_iter().collect::<Vec<_>>();
+        for token in tokens.into_iter().rev() {
+            self.pending.push_front(token);
+        }
+    }
 }
 
 impl Iterator for TokenStream {
     type Item = (Token, Span);
 
     fn next(&mut self) -> Option<(Token, Span)> {
-        loop {
-            // Drop exhausted frames.
-            while self
-                .frames
-                .last()
-                .is_some_and(|f| f.offset >= f.source.len())
-            {
-                self.frames.pop();
-            }
+        let token = next_expanded(self)?;
+        Some((token.token, token.span))
+    }
+}
 
-            // Clone Arc (cheap) + copy offset/file so we release the shared
-            // borrow on frames before taking &mut self below.
-            let (source_rc, offset, file) = {
-                let top = self.frames.last()?;
-                (Arc::clone(&top.source), top.offset, top.file)
-            };
+trait ExpansionSource {
+    fn take(&mut self) -> Option<ExpansionToken>;
+    fn prepend(&mut self, tokens: Vec<ExpansionToken>);
+    fn defines(&self) -> &HashMap<String, MacroDefinition>;
+}
 
-            // Every emitted token is spanned at its start position in its file.
-            let span = Span::new(file, offset);
+impl ExpansionSource for TokenStream {
+    fn take(&mut self) -> Option<ExpansionToken> {
+        self.take_input()
+    }
 
-            let mut lexer = Token::lexer(&source_rc[offset..]);
-            let tok = lexer.next();
+    fn prepend(&mut self, tokens: Vec<ExpansionToken>) {
+        TokenStream::prepend(self, tokens);
+    }
 
-            match tok {
-                None => {
-                    self.frames.pop();
-                }
-
-                Some(Err(_)) => {
-                    // Unrecognised character — skip it.
-                    let new = source_rc.len() - lexer.remainder().len();
-                    self.frames.last_mut().unwrap().offset = new;
-                }
-
-                Some(Ok(Token::Hash)) => {
-                    // morph hands the same source position to the directive lexer.
-                    let pp = lexer.morph::<PreprocToken>();
-                    self.process_directive(&source_rc, offset, pp);
-                    // process_directive always calls skip_line, which sets the offset.
-                }
-
-                Some(Ok(Token::Identifier(name))) => {
-                    let new = source_rc.len() - lexer.remainder().len();
-                    self.frames.last_mut().unwrap().offset = new;
-                    if !is_skipping(&self.cond_stack) {
-                        match self.defines.get(&name).cloned() {
-                            Some(Token::Hash) => {
-                                // Empty define — expands to nothing; continue.
-                            }
-                            Some(tok) => return Some((tok, span)),
-                            None => return Some((Token::Identifier(name), span)),
-                        }
-                    }
-                }
-
-                Some(Ok(c_tok)) => {
-                    let new = source_rc.len() - lexer.remainder().len();
-                    self.frames.last_mut().unwrap().offset = new;
-                    if !is_skipping(&self.cond_stack) {
-                        return Some((c_tok, span));
-                    }
-                }
-            }
-        }
+    fn defines(&self) -> &HashMap<String, MacroDefinition> {
+        &self.defines
     }
 }
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+fn expand_if_expr(source: &str, defines: &HashMap<String, MacroDefinition>, span: Span) -> String {
+    let mut tokens = Token::lexer(source)
+        .filter_map(Result::ok)
+        .map(|token| ExpansionToken {
+            token,
+            span,
+            hideset: HashSet::new(),
+        })
+        .collect::<Vec<_>>();
+    for defined_index in 0..tokens.len() {
+        if !matches!(&tokens[defined_index].token, Token::Identifier(name) if name == "defined") {
+            continue;
+        }
+        tokens[defined_index].hideset.insert("defined".to_string());
+        let mut operand_index = defined_index + 1;
+        while tokens
+            .get(operand_index)
+            .is_some_and(|token| is_whitespace(&token.token))
+        {
+            operand_index += 1;
+        }
+        if tokens
+            .get(operand_index)
+            .is_some_and(|token| matches!(token.token, Token::LParen))
+        {
+            operand_index += 1;
+            while tokens
+                .get(operand_index)
+                .is_some_and(|token| is_whitespace(&token.token))
+            {
+                operand_index += 1;
+            }
+        }
+        let operand = tokens
+            .get(operand_index)
+            .and_then(|token| match &token.token {
+                Token::Identifier(name) => Some(name.clone()),
+                _ => None,
+            });
+        if let Some(operand) = operand {
+            tokens[operand_index].hideset.insert(operand);
+        }
+    }
+    expand_tokens(tokens, defines)
+        .into_iter()
+        .map(|token| token.token.to_string())
+        .collect()
+}
+
+fn lex_replacement(source: &str) -> Vec<Token> {
+    Token::lexer(source.trim()).filter_map(Result::ok).collect()
+}
+
+fn logical_line(source: &str) -> String {
+    let mut line = String::new();
+    let mut remainder = source;
+    loop {
+        let Some(line_end) = remainder.find('\n') else {
+            line.push_str(remainder);
+            break;
+        };
+        let segment = &remainder[..line_end];
+        if let Some(continued) = segment.strip_suffix('\\') {
+            line.push_str(continued);
+            remainder = &remainder[line_end + 1..];
+        } else {
+            line.push_str(segment);
+            break;
+        }
+    }
+    line
+}
+
+fn is_whitespace(token: &Token) -> bool {
+    matches!(token, Token::Whitespace(_) | Token::Comment(_))
+}
+
+fn trim_argument(argument: &[ExpansionToken]) -> Vec<ExpansionToken> {
+    let start = argument
+        .iter()
+        .position(|token| !is_whitespace(&token.token))
+        .unwrap_or(argument.len());
+    let end = argument
+        .iter()
+        .rposition(|token| !is_whitespace(&token.token))
+        .map_or(start, |index| index + 1);
+    argument[start..end].to_vec()
+}
+
+fn substitute_arguments(
+    replacement: Vec<Token>,
+    parameters: &[String],
+    arguments: Vec<Vec<ExpansionToken>>,
+    defines: &HashMap<String, MacroDefinition>,
+    span: Span,
+) -> Vec<ExpansionToken> {
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| expand_tokens(trim_argument(&argument), defines))
+        .collect::<Vec<_>>();
+    let mut substituted = Vec::new();
+    for token in replacement {
+        let parameter = match &token {
+            Token::Identifier(name) => parameters.iter().position(|parameter| parameter == name),
+            _ => None,
+        };
+        if let Some(index) = parameter {
+            substituted.extend(arguments[index].clone());
+        } else {
+            substituted.push(ExpansionToken {
+                token,
+                span,
+                hideset: HashSet::new(),
+            });
+        }
+    }
+    substituted
+}
+
+fn expand_tokens(
+    tokens: Vec<ExpansionToken>,
+    defines: &HashMap<String, MacroDefinition>,
+) -> Vec<ExpansionToken> {
+    let mut source = QueuedExpansion {
+        input: VecDeque::from(tokens),
+        defines,
+    };
+    let mut output = Vec::new();
+    while let Some(token) = next_expanded(&mut source) {
+        output.push(token);
+    }
+    output
+}
+
+fn next_expanded(source: &mut impl ExpansionSource) -> Option<ExpansionToken> {
+    loop {
+        let token = source.take()?;
+        let Token::Identifier(name) = &token.token else {
+            return Some(token);
+        };
+        let Some(definition) = source.defines().get(name).cloned() else {
+            return Some(token);
+        };
+        if token.hideset.contains(name) {
+            return Some(token);
+        }
+
+        let replacement = match definition {
+            MacroDefinition::Object(replacement) => replacement
+                .into_iter()
+                .map(|replacement| ExpansionToken {
+                    token: replacement,
+                    span: token.span,
+                    hideset: token.hideset.clone(),
+                })
+                .collect::<Vec<_>>(),
+            MacroDefinition::Function {
+                parameters,
+                replacement,
+            } => {
+                let Some(arguments) = take_invocation(source, &parameters) else {
+                    return Some(token);
+                };
+                substitute_arguments(
+                    replacement,
+                    &parameters,
+                    arguments,
+                    source.defines(),
+                    token.span,
+                )
+            }
+        };
+        let mut hideset = token.hideset;
+        hideset.insert(name.clone());
+        source.prepend(
+            replacement
+                .into_iter()
+                .map(|mut replacement| {
+                    replacement.hideset.extend(hideset.iter().cloned());
+                    replacement
+                })
+                .collect(),
+        );
+    }
+}
+
+fn take_invocation(
+    source: &mut impl ExpansionSource,
+    parameters: &[String],
+) -> Option<Vec<Vec<ExpansionToken>>> {
+    let mut consumed = Vec::new();
+    let opening = loop {
+        let Some(token) = source.take() else {
+            source.prepend(consumed);
+            return None;
+        };
+        if is_whitespace(&token.token) {
+            consumed.push(token);
+        } else {
+            break token;
+        }
+    };
+    consumed.push(opening);
+    if !matches!(consumed.last().unwrap().token, Token::LParen) {
+        source.prepend(consumed);
+        return None;
+    }
+
+    let mut arguments = vec![Vec::new()];
+    let mut depth = 0;
+    loop {
+        let Some(token) = source.take() else {
+            source.prepend(consumed);
+            return None;
+        };
+        consumed.push(token.clone());
+        match token.token {
+            Token::LParen => {
+                depth += 1;
+                arguments.last_mut().unwrap().push(token);
+            }
+            Token::RParen if depth == 0 => break,
+            Token::RParen => {
+                depth -= 1;
+                arguments.last_mut().unwrap().push(token);
+            }
+            Token::Comma if depth == 0 => arguments.push(Vec::new()),
+            _ => arguments.last_mut().unwrap().push(token),
+        }
+    }
+    if parameters.is_empty() && arguments.len() == 1 && trim_argument(&arguments[0]).is_empty() {
+        arguments.clear();
+    }
+    if arguments.len() != parameters.len() {
+        source.prepend(consumed);
+        return None;
+    }
+    Some(arguments)
+}
+
+struct QueuedExpansion<'a> {
+    input: VecDeque<ExpansionToken>,
+    defines: &'a HashMap<String, MacroDefinition>,
+}
+
+impl ExpansionSource for QueuedExpansion<'_> {
+    fn take(&mut self) -> Option<ExpansionToken> {
+        self.input.pop_front()
+    }
+
+    fn prepend(&mut self, tokens: Vec<ExpansionToken>) {
+        for token in tokens.into_iter().rev() {
+            self.input.push_front(token);
+        }
+    }
+
+    fn defines(&self) -> &HashMap<String, MacroDefinition> {
+        self.defines
+    }
+}
 
 impl TokenStream {
     /// Drain the stream into the full token list. Diagnostics raised during
@@ -854,6 +1165,17 @@ pub fn preprocessed(
     include_paths: &IncludePaths,
 ) -> TokenStream {
     let file = intern_file(name, source);
+    let defines = defines
+        .into_iter()
+        .map(|(name, token)| {
+            let replacement = if token == Token::Hash {
+                Vec::new()
+            } else {
+                vec![token]
+            };
+            (name, MacroDefinition::Object(replacement))
+        })
+        .collect();
     TokenStream {
         frames: vec![Frame {
             source: file_source(file),
@@ -862,6 +1184,7 @@ pub fn preprocessed(
             path: PathBuf::from(name),
         }],
         defines,
+        pending: VecDeque::new(),
         include_paths: include_paths.clone(),
         cond_stack: Vec::new(),
         diagnostics: Vec::new(),
