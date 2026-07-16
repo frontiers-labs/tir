@@ -974,7 +974,9 @@ fn operand_case_is_valid(spec: &IsaSpec, instr: &Instruction, case: &[u64]) -> b
             "movload" | "mov32load" | "movsxdload" | "movsx8load" | "movsx16load" | "movzx8load"
             | "movzx16load",
         ) => !matches!(value(1) & 7, 4 | 5),
-        ("x86_64", "movstore" | "mov32store" | "mov16store") => !matches!(value(0) & 7, 4 | 5),
+        ("x86_64", "movstore" | "mov32store" | "mov16store" | "mov8store") => {
+            !matches!(value(0) & 7, 4 | 5)
+        }
         ("x86_64", "movstoredisp") => value(0) & 7 != 4,
         _ => true,
     }

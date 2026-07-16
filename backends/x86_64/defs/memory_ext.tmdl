@@ -207,7 +207,7 @@ instruction MovsxdLoadRbp for [X86_64] {
     behavior { }
 }
 
-instruction Mov32LoadSib for [X86] {
+instruction Mov32LoadSib for [X86_64] {
     param OPNAME: String = "mov_load32_sib";
     param MNEMONIC: String = "mov";
 
@@ -232,7 +232,7 @@ instruction Mov32LoadSib for [X86] {
     behavior { }
 }
 
-instruction Mov32LoadRbp for [X86] {
+instruction Mov32LoadRbp for [X86_64] {
     param OPNAME: String = "mov_load32_rbp";
     param MNEMONIC: String = "mov";
 
@@ -257,7 +257,7 @@ instruction Mov32LoadRbp for [X86] {
     behavior { }
 }
 
-instruction Mov32StoreSib for [X86] {
+instruction Mov32StoreSib for [X86_64] {
     param OPNAME: String = "mov_store32_sib";
     param MNEMONIC: String = "mov";
 
@@ -282,7 +282,7 @@ instruction Mov32StoreSib for [X86] {
     behavior { }
 }
 
-instruction Mov32StoreRbp for [X86] {
+instruction Mov32StoreRbp for [X86_64] {
     param OPNAME: String = "mov_store32_rbp";
     param MNEMONIC: String = "mov";
 
@@ -307,7 +307,7 @@ instruction Mov32StoreRbp for [X86] {
     behavior { }
 }
 
-instruction Mov16StoreSib for [X86] {
+instruction Mov16StoreSib for [X86_64] {
     param OPNAME: String = "mov_store16_sib";
     param MNEMONIC: String = "mov";
 
@@ -337,7 +337,7 @@ instruction Mov16StoreSib for [X86] {
     behavior { }
 }
 
-instruction Mov16StoreRbp for [X86] {
+instruction Mov16StoreRbp for [X86_64] {
     param OPNAME: String = "mov_store16_rbp";
     param MNEMONIC: String = "mov";
 
@@ -367,7 +367,7 @@ instruction Mov16StoreRbp for [X86] {
     behavior { }
 }
 
-instruction Mov8StoreSib for [X86] {
+instruction Mov8StoreSib for [X86_64] {
     param OPNAME: String = "mov_store8_sib";
     param MNEMONIC: String = "mov";
 
@@ -392,7 +392,7 @@ instruction Mov8StoreSib for [X86] {
     behavior { }
 }
 
-instruction Mov8StoreRbp for [X86] {
+instruction Mov8StoreRbp for [X86_64] {
     param OPNAME: String = "mov_store8_rbp";
     param MNEMONIC: String = "mov";
 
@@ -585,7 +585,7 @@ instruction MovsxdLoad for [X86_64] {
 // its destination is the GPR32 view; byte/word stores take the narrow source
 // register directly.
 
-instruction Mov32Load for [X86] {
+instruction Mov32Load for [X86_64] {
     param OPNAME: String = "mov_load32";
     param MNEMONIC: String = "mov";
 
@@ -611,7 +611,7 @@ instruction Mov32Load for [X86] {
     }
 }
 
-instruction Mov32Store for [X86] {
+instruction Mov32Store for [X86_64] {
     param OPNAME: String = "mov_store32";
     param MNEMONIC: String = "mov";
 
@@ -637,7 +637,7 @@ instruction Mov32Store for [X86] {
     }
 }
 
-instruction Mov16Store for [X86] {
+instruction Mov16Store for [X86_64] {
     param OPNAME: String = "mov_store16";
     param MNEMONIC: String = "mov";
 
@@ -668,7 +668,7 @@ instruction Mov16Store for [X86] {
     }
 }
 
-instruction Mov8Store for [X86] {
+instruction Mov8Store for [X86_64] {
     param OPNAME: String = "mov_store8";
     param MNEMONIC: String = "mov";
 

@@ -48,7 +48,7 @@ instruction Imul for [X86_64] : RegRegExt {
     }
 }
 
-instruction Imul32 for [X86] : RegRegExt32 {
+instruction Imul32 for [X86_64] : RegRegExt32 {
     param OPNAME: String = "imul32";
     param MNEMONIC: String = "imul";
     param OPCODE: bits<8> = 0xAF;
@@ -71,7 +71,7 @@ instruction ImulImm for [X86_64] : RegRegImm {
     }
 }
 
-instruction ImulImm32 for [X86] : RegRegImm32 {
+instruction ImulImm32 for [X86_64] : RegRegImm32 {
     param OPNAME: String = "imul_imm32";
     param MNEMONIC: String = "imul";
     param OPCODE: bits<8> = 0x69;
@@ -586,7 +586,7 @@ alu_ri8_sem!(RegImm8s, X86_64,
     (CmpImm8s, "cmp_imm8s", "cmp", 0b111, { })
 )
 
-alu_ri8_sem!(RegImm8s32, X86,
+alu_ri8_sem!(RegImm8s32, X86_64,
     (AddImm8s32, "add_imm8s32", "add", 0b000, { dst = dst + sext(imm, 32); }),
     (OrImm8s32,  "or_imm8s32",  "or",  0b001, { dst = dst | sext(imm, 32); }),
     (AndImm8s32, "and_imm8s32", "and", 0b100, { dst = dst & sext(imm, 32); }),
@@ -595,7 +595,7 @@ alu_ri8_sem!(RegImm8s32, X86,
     (CmpImm8s32, "cmp_imm8s32", "cmp", 0b111, { })
 )
 
-alu_ri8!(RegImm8s32Norex, X86,
+alu_ri8!(RegImm8s32Norex, X86_64,
     (AddImm8s32Norex, "add_imm8s32_norex", "add", 0b000),
     (OrImm8s32Norex,  "or_imm8s32_norex",  "or",  0b001),
     (AndImm8s32Norex, "and_imm8s32_norex", "and", 0b100),
@@ -604,14 +604,14 @@ alu_ri8!(RegImm8s32Norex, X86,
     (CmpImm8s32Norex, "cmp_imm8s32_norex", "cmp", 0b111)
 )
 
-alu_ri8_sem!(RegImm8s16, X86,
+alu_ri8_sem!(RegImm8s16, X86_64,
     (AddImm8s16, "add_imm8s16", "add", 0b000, { dst = dst + sext(imm, 16); }),
     (OrImm8s16,  "or_imm8s16",  "or",  0b001, { dst = dst | sext(imm, 16); }),
     (AndImm8s16, "and_imm8s16", "and", 0b100, { dst = dst & sext(imm, 16); }),
     (XorImm8s16, "xor_imm8s16", "xor", 0b110, { dst = dst ^ sext(imm, 16); })
 )
 
-alu_ri8!(RegImm8s16Norex, X86,
+alu_ri8!(RegImm8s16Norex, X86_64,
     (AddImm8s16Norex, "add_imm8s16_norex", "add", 0b000),
     (OrImm8s16Norex,  "or_imm8s16_norex",  "or",  0b001),
     (AndImm8s16Norex, "and_imm8s16_norex", "and", 0b100),

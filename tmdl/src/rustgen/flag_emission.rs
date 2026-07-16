@@ -623,9 +623,8 @@ fn emit_aliased_zero_branch_rules(
 /// whose emitter is the reader (`cset`/`setcc`), materializing the comparison in
 /// a destination register — the value analog of the flag-branch rules.
 /// Each ISA's transitive `requires` set. An instruction tagged with ISA `a`
-/// where `requires[a]` contains `b` is available wherever `b` is (e.g. `X86`
-/// requires `X86_64`), so two such instructions can co-occur even without a
-/// shared tag — needed to pair an `[X86]` `setcc` with an `[X86_64]` `cmp`.
+/// where `requires[a]` contains `b` can co-occur with an instruction tagged
+/// `b`, even when the two instructions have no shared tag.
 fn isa_requires_closure(files: &[ast::File]) -> HashMap<String, HashSet<String>> {
     let mut closure: HashMap<String, HashSet<String>> = HashMap::new();
     for isa in files.iter().flat_map(|f| f.isas()) {
@@ -633,7 +632,7 @@ fn isa_requires_closure(files: &[ast::File]) -> HashMap<String, HashSet<String>>
             Some(ast::IsaRequirement::Single(s)) => vec![s.clone()],
             // `All` is a conjunction: every listed ISA is guaranteed present.
             Some(ast::IsaRequirement::All(v)) => v.clone(),
-            // A single-element `Any` (`requires [X86_64]`) is an exact
+            // A single-element `Any` (`requires [X86]`) is an exact
             // requirement. A multi-element `Any` is a disjunction (`[RV32I |
             // RV64I]`): no single ISA is guaranteed, so it can imply nothing
             // for the closure — assuming all would falsely pair instructions
@@ -901,5 +900,3 @@ fn emit_flag_reader_rules(
         }
     }
 }
-
-

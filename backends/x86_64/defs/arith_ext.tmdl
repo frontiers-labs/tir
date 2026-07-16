@@ -8,7 +8,7 @@
 // Group-3 unary `op r/m64`: REX.W + 0xF7 + ModR/M(mod=11, reg=EXT, rm=dst).
 tmpl_runary!(RegUnary, X86_64, GPR, rexw = 0b1)
 
-tmpl_runary!(RegUnary32, X86, GPR32, rexw = 0b0)
+tmpl_runary!(RegUnary32, X86_64, GPR32, rexw = 0b0)
 
 // No-REX group-3 unary templates over the low subclasses (0xF7 / 0x66+0xF7 /
 // 0xF6). Selected post-RA by `canonicalize_encodings` and by the assembler's
@@ -120,7 +120,7 @@ extend_ops!(
 )
 
 // `movsxd r64, r/m32` (0x63): no 0x0F escape.
-instruction Movsxd for [X86] {
+instruction Movsxd for [X86_64] {
     param MNEMONIC: String = "movsxd";
 
     operands {
@@ -182,7 +182,7 @@ instruction MovAbs for [X86_64] {
 
 // 32-bit forms.
 
-instruction Cmp32 for [X86] : RegReg32 {
+instruction Cmp32 for [X86_64] : RegReg32 {
     param OPNAME: String = "cmp32";
     param MNEMONIC: String = "cmp";
     param OPCODE: bits<8> = 0x39;
@@ -192,7 +192,7 @@ instruction Cmp32 for [X86] : RegReg32 {
     }
 }
 
-instruction Test32 for [X86] : RegReg32 {
+instruction Test32 for [X86_64] : RegReg32 {
     param OPNAME: String = "test32";
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0x85;
@@ -202,7 +202,7 @@ instruction Test32 for [X86] : RegReg32 {
     }
 }
 
-instruction CmpImm32 for [X86] : RegImm32 {
+instruction CmpImm32 for [X86_64] : RegImm32 {
     param OPNAME: String = "cmp_imm32";
     param MNEMONIC: String = "cmp";
     param OPCODE: bits<8> = 0x81;
@@ -213,7 +213,7 @@ instruction CmpImm32 for [X86] : RegImm32 {
     }
 }
 
-instruction TestImm32 for [X86] : RegImm32 {
+instruction TestImm32 for [X86_64] : RegImm32 {
     param OPNAME: String = "test_imm32";
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0xF7;
@@ -224,7 +224,7 @@ instruction TestImm32 for [X86] : RegImm32 {
     }
 }
 
-instruction SubImm32 for [X86] : RegImm32 {
+instruction SubImm32 for [X86_64] : RegImm32 {
     param OPNAME: String = "sub_imm32";
     param MNEMONIC: String = "sub";
     param OPCODE: bits<8> = 0x81;
@@ -235,7 +235,7 @@ instruction SubImm32 for [X86] : RegImm32 {
     }
 }
 
-instruction Neg32 for [X86] : RegUnary32 {
+instruction Neg32 for [X86_64] : RegUnary32 {
     param OPNAME: String = "neg32";
     param MNEMONIC: String = "neg";
     param EXT: bits<3> = 0b011;
@@ -245,7 +245,7 @@ instruction Neg32 for [X86] : RegUnary32 {
     }
 }
 
-instruction Not32 for [X86] : RegUnary32 {
+instruction Not32 for [X86_64] : RegUnary32 {
     param OPNAME: String = "not32";
     param MNEMONIC: String = "not";
     param EXT: bits<3> = 0b010;

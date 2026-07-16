@@ -1,7 +1,7 @@
 //! x86-64 backend prototype, generated from the TMDL descriptions in `defs/`.
 
-pub use isa::X86_64Dialect;
 pub use isa::{Feature, get_isel_rules, register_info, register_views, register_widths};
+pub use isa::{TargetConfig, X86_64Dialect};
 
 mod isa {
     // Generated code: not everything is used by this asm-focused prototype.
@@ -1146,7 +1146,36 @@ mod isa {
         }
     }
 
+    /// Parsed x86-64 target selection.
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct TargetConfig {
+        features: Vec<Feature>,
+    }
+
+    impl TargetConfig {
+        /// Parse an x86-64 architecture name.
+        pub fn parse(
+            march: &str,
+            _mcpu: Option<&str>,
+            _mattr: Option<&str>,
+        ) -> Result<Self, String> {
+            match march.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+                "x86_64" | "amd64" | "x64" => {}
+                other => return Err(format!("unknown x86-64 architecture '{other}'")),
+            }
+            let features = vec![Feature::X86, Feature::X86_64];
+            validate_features(&features)?;
+            Ok(Self { features })
+        }
+
+        /// The enabled ISA set.
+        pub fn features(&self) -> &[Feature] {
+            &self.features
+        }
+    }
+
     struct X86Target {
+        config: TargetConfig,
         selected_abi: &'static tir::backend::abi::AbiInfo,
     }
 
@@ -1162,14 +1191,17 @@ mod isa {
         }
 
         fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
-            tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, Feature::ALL))
-                .with_axioms(include_str!("isel.axioms"))
-                .with_branch_emitters(tir::backend::isel::BranchEmitters {
-                    uncond: emit_uncond_branch,
-                    cond_nonzero: emit_branch_nonzero,
-                })
-                .with_op_lowering(lower_func_and_return_to_asm_symbol)
-                .with_call_lowering(self.abi(), Box::new(X86CallEmitter))
+            tir::backend::isel::InstructionSelectPass::new(get_isel_rules(
+                context,
+                self.config.features(),
+            ))
+            .with_axioms(include_str!("isel.axioms"))
+            .with_branch_emitters(tir::backend::isel::BranchEmitters {
+                uncond: emit_uncond_branch,
+                cond_nonzero: emit_branch_nonzero,
+            })
+            .with_op_lowering(lower_func_and_return_to_asm_symbol)
+            .with_call_lowering(self.abi(), Box::new(X86CallEmitter))
         }
 
         fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
@@ -1200,7 +1232,7 @@ mod isa {
         }
 
         fn asm_parser(&self, _context: &tir::Context) -> tir::backend::AsmParser {
-            let (parsers, disabled) = get_instruction_parsers(Feature::ALL);
+            let (parsers, disabled) = get_instruction_parsers(self.config.features());
             tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
         }
 
@@ -1212,23 +1244,23 @@ mod isa {
         }
 
         fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {
-            machine_model(name, Feature::ALL)
+            machine_model(name, self.config.features())
         }
 
         fn machines(&self) -> Vec<&'static str> {
-            machines(Feature::ALL)
+            machines(self.config.features())
         }
 
         fn isa_params(&self) -> Vec<(&'static str, i64)> {
-            isa_params(Feature::ALL)
+            isa_params(self.config.features())
         }
 
         fn register_widths(&self) -> Vec<(&'static str, u32)> {
-            register_widths(Feature::ALL)
+            register_widths(self.config.features())
         }
 
         fn register_views(&self) -> Vec<(&'static str, tir::backend::regalloc::RegisterView)> {
-            register_views(Feature::ALL)
+            register_views(self.config.features())
         }
 
         fn register_name(&self, class: &str, index: u16, prefer_abi: bool) -> Option<String> {
@@ -1252,12 +1284,13 @@ mod isa {
 
     fn select_x86_64(
         march: &str,
-        _mcpu: Option<&str>,
-        _mattr: Option<&str>,
+        mcpu: Option<&str>,
+        mattr: Option<&str>,
         mabi: Option<&str>,
     ) -> Result<Option<Box<dyn tir::backend::TargetMachine>>, String> {
         match march.trim().to_ascii_lowercase().replace('-', "_").as_str() {
             "x86_64" | "amd64" | "x64" => {
+                let config = TargetConfig::parse(march, mcpu, mattr)?;
                 let selected_abi = match mabi {
                     Some(name) => abi_by_name(name).ok_or_else(|| {
                         format!(
@@ -1271,7 +1304,10 @@ mod isa {
                     })?,
                     None => default_abi(),
                 };
-                Ok(Some(Box::new(X86Target { selected_abi })))
+                Ok(Some(Box::new(X86Target {
+                    config,
+                    selected_abi,
+                })))
             }
             _ => Ok(None),
         }
@@ -1444,6 +1480,16 @@ mod isa {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn x86_64_target_enables_its_x86_prerequisite() {
+        let config = crate::TargetConfig::parse("x86_64", None, None).unwrap();
+        assert_eq!(
+            config.features(),
+            &[crate::Feature::X86, crate::Feature::X86_64]
+        );
+        assert!(crate::TargetConfig::parse("x86", None, None).is_err());
+    }
+
     #[test]
     fn generated_abi_matches_sysv_register_convention() {
         let abi = crate::isa::default_abi();

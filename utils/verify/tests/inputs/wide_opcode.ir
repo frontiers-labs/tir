@@ -1,0 +1,16 @@
+enum zread_kind {
+  zRead_ifetch
+}
+
+enum zwrite_kind {
+  zWrite_plain
+}
+
+register zpc : %bv64
+
+val zfootprint : (%bv) -> %bool
+
+fn zfootprint(zopcode) {
+  return = true;
+  end;
+}

@@ -148,7 +148,20 @@ impl Verifier {
         let task_state = TaskState::new();
         let stop_conditions = StopConditions::default();
         for (&word, &width) in words.iter().zip(widths) {
-            let opcode = Val::Bits(B129::new(u64::try_from(word)?, width));
+            anyhow::ensure!(
+                (1..=128).contains(&width),
+                "instruction width must be between 1 and 128 bits"
+            );
+            anyhow::ensure!(
+                width == 128 || word < (1_u128 << width),
+                "instruction word does not fit its declared width"
+            );
+            let low_width = width.min(64);
+            let mut opcode = B129::zeros(width).set_slice(0, B129::new(word as u64, low_width));
+            if width > 64 {
+                opcode = opcode.set_slice(64, B129::new((word >> 64) as u64, width - 64));
+            }
+            let opcode = Val::Bits(opcode);
             let checkpoint = initial_checkpoint(&self.architecture);
             let task_id = TaskId::fresh();
             task_words.insert(task_id, word);

@@ -5,7 +5,7 @@
 // jcc family in base.tmdl; only cf/zf/sf/of are modeled.
 
 // `setcc r/m8`: REX + 0x0F + 0x90|cc + ModR/M(mod=11, reg=0, rm=dst).
-template SetccReg for [X86] {
+template SetccReg for [X86_64] {
     param MNEMONIC: String;
     param CC: bits<8>;
 
@@ -32,7 +32,7 @@ template SetccReg for [X86] {
 }
 
 // No-REX `setcc r/m8` (al/cl/dl/bl): 0x0F + 0x90|cc + ModR/M, no REX prefix.
-template SetccRegNorex for [X86] {
+template SetccRegNorex for [X86_64] {
     param MNEMONIC: String;
     param CC: bits<8>;
 

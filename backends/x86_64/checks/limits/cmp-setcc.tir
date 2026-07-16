@@ -3,7 +3,7 @@
 // A cmpi materialized as a value (not fused into a branch) lowers to `cmp` +
 // `setcc`: the flag-definer (`cmp`) is composed with the flag-reading value
 // materializer (`setl`) into an `slt`-style value rule. Works for i32 and i64
-// (the `[X86]` setcc pairs with the `[X86_64]` cmp — X86 requires X86_64), and
+// (the setcc and cmp are both available in X86_64), and
 // the boolean is matched regardless of setcc's 8-bit destination width.
 
 module {

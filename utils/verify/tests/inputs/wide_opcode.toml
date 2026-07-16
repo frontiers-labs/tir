@@ -1,0 +1,34 @@
+pc = "pc"
+ifetch = "Read_ifetch"
+read_exclusives = []
+write_exclusives = []
+
+[[toolchain]]
+name = "default"
+assembler = "true"
+objdump = "true"
+nm = "true"
+linker = "true"
+
+[mmu]
+page_table_base = "0x300000"
+page_size = "4096"
+s2_page_table_base = "0x300000"
+s2_page_size = "4096"
+
+[threads]
+base = "0x1000"
+top = "0x2000"
+stride = "0x1000"
+
+[symbolic_addrs]
+base = "0x2000"
+top = "0x2000"
+stride = "0x10"
+
+[registers]
+ignore = []
+
+[registers.defaults]
+
+[registers.renames]
