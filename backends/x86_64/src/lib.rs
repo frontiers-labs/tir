@@ -880,9 +880,8 @@ mod isa {
         AttributeValue::Register(RegisterAttr::Physical { class, index })
     }
 
-    /// Register allocation target. Frame adjustment is `add rsp, ±size`; spill
-    /// slots would need memory operands, which this prototype's ISA does not
-    /// model, so spilling is left unimplemented (no test reaches it).
+    /// Register allocation target. Frame adjustment is `add rsp, ±size`; GPR
+    /// spills use the displacement-based `mov` memory forms.
     struct X86RegAlloc;
 
     impl tir::backend::regalloc::TargetRegAlloc for X86RegAlloc {
@@ -892,24 +891,42 @@ mod isa {
 
         fn emit_spill_store(
             &self,
-            _context: &tir::Context,
-            _value: u32,
-            _class: tir::backend::regalloc::RegClassId,
-            _frame: &tir::backend::liveness::PhysReg,
-            _offset: i64,
+            context: &tir::Context,
+            value: u32,
+            class: tir::backend::regalloc::RegClassId,
+            frame: &tir::backend::liveness::PhysReg,
+            offset: i64,
         ) -> Box<dyn Operation> {
-            unimplemented!("x86-64 spilling needs memory operands, out of prototype scope")
+            match class.name() {
+                "GPR" => Box::new(
+                    MovStoreDispOpBuilder::new(context)
+                        .attr("base", phys(frame.0, frame.1))
+                        .attr("imm", AttributeValue::Int(offset))
+                        .attr("src", virt(value, class))
+                        .build(),
+                ),
+                other => unimplemented!("x86-64 spilling for {other} is not implemented"),
+            }
         }
 
         fn emit_spill_reload(
             &self,
-            _context: &tir::Context,
-            _value: u32,
-            _class: tir::backend::regalloc::RegClassId,
-            _frame: &tir::backend::liveness::PhysReg,
-            _offset: i64,
+            context: &tir::Context,
+            value: u32,
+            class: tir::backend::regalloc::RegClassId,
+            frame: &tir::backend::liveness::PhysReg,
+            offset: i64,
         ) -> Box<dyn Operation> {
-            unimplemented!("x86-64 spilling needs memory operands, out of prototype scope")
+            match class.name() {
+                "GPR" => Box::new(
+                    MovLoadDispOpBuilder::new(context)
+                        .attr("dst", virt(value, class))
+                        .attr("base", phys(frame.0, frame.1))
+                        .attr("imm", AttributeValue::Int(offset))
+                        .build(),
+                ),
+                other => unimplemented!("x86-64 spilling for {other} is not implemented"),
+            }
         }
 
         fn emit_copy(

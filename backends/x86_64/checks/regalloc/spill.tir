@@ -1,0 +1,30 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+// Seven computed values remain live across the call, exceeding the six SysV
+// callee-saved GPRs and forcing one value through the stack frame.
+
+module {
+  declare @external() -> !i64
+  func @pressure(%0: !i64) -> !i64 {
+    %1 = addi %0, %0 : !i64
+    %2 = subi %1, %0 : !i64
+    %3 = addi %2, %0 : !i64
+    %4 = subi %3, %0 : !i64
+    %5 = addi %4, %0 : !i64
+    %6 = subi %5, %0 : !i64
+    %7 = addi %6, %0 : !i64
+    %8 = call @external() -> !i64
+    %9 = addi %1, %2 : !i64
+    %10 = addi %3, %4 : !i64
+    %11 = addi %5, %6 : !i64
+    %12 = addi %9, %10 : !i64
+    %13 = addi %11, %7 : !i64
+    %14 = addi %12, %13 : !i64
+    %15 = addi %14, %8 : !i64
+    return %15
+  }
+  module_end
+}
+
+// CHECK: x86_64.mov_store_disp
+// CHECK: x86_64.mov_load_disp
