@@ -23,6 +23,10 @@
 // CHECK: (define-fun execute_tadd ((st TMDLState) (rd (_ BitVec 5)) (rs1 (_ BitVec 5)) (rs2 (_ BitVec 5))) TMDLState
 // CHECK-NEXT: (write_gpr st rd (bvadd (read_gpr st rs1) (read_gpr st rs2))))
 
+// A bitcast preserves the operand bits without emitting an SMT operation.
+// CHECK: (define-fun execute_tbitcast
+// CHECK-NEXT: (write_gpr st rd (read_gpr st rs1)))
+
 // The shift amount is the low log2(XLEN) bits of rs2, widened back to 64.
 // CHECK: (define-fun execute_tshift
 // CHECK-NEXT: (write_gpr st rd (bvshl (read_gpr st rs1) ((_ zero_extend 58) ((_ extract 5 0) (read_gpr st rs2)))))

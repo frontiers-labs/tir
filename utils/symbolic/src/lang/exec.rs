@@ -570,6 +570,7 @@ fn eval_node<V, M: Memory>(
             };
             Value::Int(APInt::new(a.width(), result))
         }
+        SymKind::Bitcast => Value::RawBits(as_raw_bits(c(0))),
 
         SymKind::Extract => {
             let value = as_int!(c(0), "extract");

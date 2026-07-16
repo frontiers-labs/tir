@@ -106,6 +106,15 @@ instruction TAdd for [TestIsa] : RType {
     }
 }
 
+instruction TBitcast for [TestIsa] : RType {
+    param MNEMONIC: String = "tbitcast";
+    param OPCODE: bits<7> = 0b0001010;
+
+    behavior {
+        rd = bitcast(rs1);
+    }
+}
+
 instruction TShift for [TestIsa] : RType {
     param MNEMONIC: String = "tshift";
     param OPCODE: bits<7> = 0b0000010;

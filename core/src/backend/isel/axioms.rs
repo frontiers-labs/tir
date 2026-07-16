@@ -126,6 +126,30 @@ impl Guard {
     }
 }
 
+/// A predicate over a matched constant's *value* (not its width): whether the
+/// bound constant `var` fits a signed `bits`-bit immediate. A `materialize`
+/// decomposition axiom guards on the negation so it fires only on constants too
+/// wide for the target's immediate, bounding the saturation descent.
+struct ValueGuard {
+    var: usize,
+    bits: u32,
+    negated: bool,
+}
+
+/// `v`'s low `width` bits read as a two's-complement signed value.
+fn sign_extend(v: u64, width: u32) -> i64 {
+    let shift = 64 - width.min(64);
+    ((v << shift) as i64) >> shift
+}
+
+/// Whether `v`, read as two's-complement at its own width, is within the signed
+/// `bits`-bit range `[-2^(bits-1), 2^(bits-1))`.
+fn fits_signed(v: &APInt, bits: u32) -> bool {
+    let signed = sign_extend(v.to_u64(), v.width());
+    let bound = 1i128 << (bits - 1);
+    (-bound..bound).contains(&i128::from(signed))
+}
+
 /// The width a template constant materializes at.
 #[derive(Clone, Copy)]
 enum ConstWidth {
@@ -151,6 +175,10 @@ enum AxNode {
     /// to the expression, evaluated after widths resolve.
     ConstMatch(WidthExpr),
     Node(SymKind, Vec<AxNode>),
+    /// A materialize-axiom RHS node kept structural (an emitted instruction),
+    /// wrapping a [`AxNode::Node`]; unmarked RHS nodes fold to constants. Purely
+    /// an instantiation directive — semantically transparent to the proof.
+    Keep(Box<AxNode>),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -173,10 +201,17 @@ pub(crate) struct Axiom {
     const_vars: Vec<usize>,
     root_width: WidthBinding,
     guards: Vec<Guard>,
+    /// Value predicates gating on a matched constant's magnitude (see
+    /// [`ValueGuard`]); only meaningful for `materialize` axioms.
+    value_guards: Vec<ValueGuard>,
     lhs: AxNode,
     rhs: AxNode,
     /// The RHS references the matched root itself (excludes var references).
     uses_root: bool,
+    /// A materialize axiom: its LHS root is a bare `consts` var, so it matches
+    /// every constant class, and its RHS structure is unioned *with* the folded
+    /// constant instead of collapsing to it (keeps the shift/add tiling live).
+    materialize: bool,
 }
 
 fn atom(e: &SemExpr) -> Option<&str> {
@@ -245,6 +280,7 @@ pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
     let mut const_vars: Vec<usize> = Vec::new();
     let mut root_width = None;
     let mut guards = Vec::new();
+    let mut value_guards = Vec::new();
     let mut lhs_expr = None;
     let mut rhs_expr = None;
 
@@ -280,18 +316,37 @@ pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
             "where" => {
                 for g in rest {
                     let SemExpr::List(parts) = g else {
-                        return Err("guards must be (< <a> <b>)".into());
+                        return Err("guards must be (< <a> <b>) or (fits <var> <bits>)".into());
                     };
-                    let [SemExpr::Atom(cmp), a, b] = parts.as_slice() else {
-                        return Err("guards must be (< <a> <b>)".into());
+                    // `(not ...)` unwraps to its inner guard; only `fits` may be
+                    // negated, which the match below enforces.
+                    let (parts, negated) = match parts.as_slice() {
+                        [SemExpr::Atom(kw), SemExpr::List(inner)] if kw == "not" => {
+                            (inner.as_slice(), true)
+                        }
+                        parts => (parts, false),
                     };
-                    let a = parse_width_expr(a, &width_names)?;
-                    let b = parse_width_expr(b, &width_names)?;
-                    guards.push(match cmp.as_str() {
-                        "<" => Guard::Lt(a, b),
-                        "=" => Guard::Eq(a, b),
-                        other => return Err(format!("unknown guard `{other}`")),
-                    });
+                    match parts {
+                        [SemExpr::Atom(kw), SemExpr::Atom(var), SemExpr::Atom(bits)]
+                            if kw == "fits" =>
+                        {
+                            value_guards.push(parse_value_guard(var, bits, negated, &vars)?);
+                        }
+                        [SemExpr::Atom(cmp), a, b] if !negated => {
+                            let a = parse_width_expr(a, &width_names)?;
+                            let b = parse_width_expr(b, &width_names)?;
+                            guards.push(match cmp.as_str() {
+                                "<" => Guard::Lt(a, b),
+                                "=" => Guard::Eq(a, b),
+                                other => return Err(format!("unknown guard `{other}`")),
+                            });
+                        }
+                        _ => {
+                            return Err("guards must be (< <a> <b>), (fits <var> <bits>), \
+                                 or (not (fits <var> <bits>))"
+                                .into());
+                        }
+                    }
                 }
             }
             "lhs" => {
@@ -316,7 +371,10 @@ pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
         &vars,
         &width_names,
     )?;
-    if !matches!(lhs, AxNode::Node(..)) {
+    // A bare `consts` var as the LHS root marks a materialize axiom: it matches
+    // every constant class so a wide constant can be decomposed in place.
+    let materialize = matches!(&lhs, AxNode::Hole(_, Some(i)) if const_vars.contains(i));
+    if !materialize && !matches!(lhs, AxNode::Node(..)) {
         return Err("lhs must be a pattern node, not a bare atom".into());
     }
     let root_width = root_width.ok_or("missing root section")?;
@@ -356,10 +414,31 @@ pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
         const_vars,
         root_width,
         guards,
+        value_guards,
         lhs,
         rhs,
         uses_root,
+        materialize,
     })
+}
+
+fn parse_value_guard(
+    var: &str,
+    bits: &str,
+    negated: bool,
+    vars: &[(String, WidthBinding)],
+) -> Result<ValueGuard, String> {
+    let var = vars
+        .iter()
+        .position(|(v, _)| v == var)
+        .ok_or_else(|| format!("fits var `{var}` is not declared"))?;
+    let bits = bits
+        .parse::<u32>()
+        .map_err(|_| "fits bit count must be an integer".to_string())?;
+    if !(1..=64).contains(&bits) {
+        return Err("fits bit count must be in 1..=64".to_string());
+    }
+    Ok(ValueGuard { var, bits, negated })
 }
 
 fn intern(names: &mut Vec<String>, name: &str) -> usize {
@@ -437,6 +516,16 @@ fn parse_node(
                     parse_width_expr(e, width_names)?,
                     ConstWidth::Register,
                 )),
+                "keep" if side == Side::Rhs => {
+                    let [inner] = rest else {
+                        return Err("keep form is (keep <node>)".into());
+                    };
+                    let inner = parse_node(inner, side, vars, width_names)?;
+                    if !matches!(inner, AxNode::Node(..)) {
+                        return Err("keep wraps a node, not a bare atom".into());
+                    }
+                    Ok(AxNode::Keep(Box::new(inner)))
+                }
                 "const" if side == Side::Rhs => {
                     let [value, SemExpr::Atom(width)] = rest else {
                         return Err("const form is (const <expr> <width>)".into());
@@ -478,6 +567,7 @@ fn references(node: &AxNode, uses_root: &mut bool, vars: &mut HashSet<usize>) {
                 references(c, uses_root, vars);
             }
         }
+        AxNode::Keep(inner) => references(inner, uses_root, vars),
     }
 }
 
@@ -489,6 +579,7 @@ fn holes_of(node: &AxNode, out: &mut Vec<(String, Option<usize>)>) {
                 holes_of(c, out);
             }
         }
+        AxNode::Keep(inner) => holes_of(inner, out),
         AxNode::Root | AxNode::Const(..) | AxNode::ConstMatch(..) => {}
     }
 }
@@ -497,11 +588,15 @@ impl Axiom {
     /// Every node kind the RHS introduces, for target-capability gating.
     pub(crate) fn rhs_kinds(&self) -> HashSet<SymKind> {
         fn walk(node: &AxNode, out: &mut HashSet<SymKind>) {
-            if let AxNode::Node(kind, children) = node {
-                out.insert(*kind);
-                for c in children {
-                    walk(c, out);
+            match node {
+                AxNode::Node(kind, children) => {
+                    out.insert(*kind);
+                    for c in children {
+                        walk(c, out);
+                    }
                 }
+                AxNode::Keep(inner) => walk(inner, out),
+                _ => {}
             }
         }
         let mut kinds = HashSet::new();
@@ -549,6 +644,12 @@ impl Axiom {
                     .any(|&id| class_int_binding(eg, m.binding(id)).is_none())
                 {
                     return;
+                }
+                for vg in &self.value_guards {
+                    match class_int_binding(eg, m.binding(holes[&self.vars[vg.var].0])) {
+                        Some(v) if fits_signed(&v, vg.bits) == !vg.negated => {}
+                        _ => return,
+                    }
                 }
                 for (id, expr) in &const_matches {
                     let Some(expected) = expr.eval(&widths) else {
@@ -699,6 +800,7 @@ impl Axiom {
                     .collect::<Option<Vec<_>>>()?;
                 Some(op(g, *kind, &children))
             }
+            AxNode::Keep(inner) => self.realize(inner, g, widths, register_width, side, root_sym),
         }
     }
 
@@ -727,7 +829,42 @@ impl Axiom {
                     None,
                 ))
             }
+            // A kept materialize node stays structural (an emitted instruction),
+            // typed at the root width so its shift/add tiles the class.
+            AxNode::Keep(inner) => {
+                let AxNode::Node(kind, node_children) = &**inner else {
+                    unreachable!("keep wraps a node");
+                };
+                let children = node_children
+                    .iter()
+                    .map(|c| self.instantiate(ctx, c, eg, m, holes, widths))
+                    .collect::<Option<Vec<_>>>()?;
+                let width = self.root_width.value(widths) as u32;
+                let ty = tir::builtin::IntegerType::new(ctx, width);
+                let mut n = template_node(*kind, None, Some(ty));
+                n.children = children;
+                eg.add(n)
+            }
             AxNode::Node(kind, children) => {
+                // An unmarked subtree of a materialize axiom is evaluated purely
+                // numerically at the *root width* — the width the identity was
+                // proved at — and becomes one *typed* constant class: a clean
+                // recursion target the axiom can decompose again, with no
+                // back-reference to the wide root (which would make the cover's
+                // class graph cyclic) and no junk classes for the deconstruction
+                // intermediates. The value is stored sign-extended the same way
+                // program constants are interned. Only the kept reconstruction
+                // nodes survive as instructions.
+                if self.materialize {
+                    let width = self.root_width.value(widths) as u32;
+                    let ty = tir::builtin::IntegerType::new(ctx, width);
+                    let value = self.eval_at(node, eg, m, holes, widths, width)?;
+                    return Some(eg.add(template_node(
+                        SymKind::Constant,
+                        Some(SymPayload::Int(APInt::new_signed(64, value))),
+                        Some(ty),
+                    )));
+                }
                 let children = children
                     .iter()
                     .map(|c| self.instantiate(ctx, c, eg, m, holes, widths))
@@ -744,6 +881,60 @@ impl Axiom {
             }
         })
     }
+
+    /// Numerically evaluate an unmarked materialize-RHS subtree at `width` (see
+    /// [`fold_values_at`]); `None` if a leaf is not a bound constant.
+    fn eval_at(
+        &self,
+        node: &AxNode,
+        eg: &SemEGraph,
+        m: &EMatch<u32>,
+        holes: &HashMap<String, Id>,
+        widths: &[u64],
+        width: u32,
+    ) -> Option<i64> {
+        match node {
+            AxNode::Hole(name, _) => {
+                class_int_binding(eg, m.binding(holes[name])).map(|v| v.to_i64())
+            }
+            AxNode::Const(e, _) | AxNode::ConstMatch(e) => e.eval(widths).map(|v| v as i64),
+            AxNode::Node(kind, children) => {
+                let values = children
+                    .iter()
+                    .map(|c| self.eval_at(c, eg, m, holes, widths, width))
+                    .collect::<Option<Vec<_>>>()?;
+                fold_values_at(*kind, &values, width)
+            }
+            AxNode::Root | AxNode::Keep(..) => None,
+        }
+    }
+}
+
+/// Execute a pure op over `(value, width)` constant operands via a throwaway
+/// [`SemGraph`]; `None` when the result is not an integer.
+fn execute_fold(kind: SymKind, operands: &[(u64, u32)]) -> Option<APInt> {
+    let mut g = SemGraph::new();
+    let ids: Vec<NodeId> = operands.iter().map(|&(v, w)| con(&mut g, v, w)).collect();
+    op(&mut g, kind, &ids);
+    match execute(&g, &[]) {
+        Value::Int(result) => Some(result),
+        _ => None,
+    }
+}
+
+/// Evaluate a pure op over integer operands at bit-width `width`: operands are
+/// truncated to `width`, the op executed there, and the result returned
+/// sign-extended to i64 — the convention program constants are interned with,
+/// so a recursion constant compares and binds like an original one.
+fn fold_values_at(kind: SymKind, values: &[i64], width: u32) -> Option<i64> {
+    let mask = if width >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    };
+    let operands: Vec<(u64, u32)> = values.iter().map(|&v| ((v as u64) & mask, width)).collect();
+    let result = execute_fold(kind, &operands)?;
+    Some(sign_extend(result.to_u64(), width))
 }
 
 /// Fold a pure op whose operands are all constants into a single constant, so an
@@ -767,19 +958,11 @@ fn fold_constant_op(kind: SymKind, children: &[Id], eg: &mut SemEGraph) -> Optio
     ) {
         return None;
     }
-    let consts: Vec<APInt> = children
+    let operands: Vec<(u64, u32)> = children
         .iter()
-        .map(|&c| class_int_binding(eg, c))
+        .map(|&c| class_int_binding(eg, c).map(|v| (v.to_u64(), v.width())))
         .collect::<Option<Vec<_>>>()?;
-    let mut g = SemGraph::new();
-    let operands: Vec<NodeId> = consts
-        .iter()
-        .map(|v| con(&mut g, v.to_u64(), v.width()))
-        .collect();
-    op(&mut g, kind, &operands);
-    let Value::Int(result) = execute(&g, &[]) else {
-        return None;
-    };
+    let result = execute_fold(kind, &operands)?;
     Some(eg.add(template_node(
         SymKind::Constant,
         Some(SymPayload::Int(result)),
@@ -822,7 +1005,9 @@ fn compile_lhs(
             n.children = children;
             searcher.add(n)
         }
-        AxNode::Root | AxNode::Const(..) => unreachable!("rejected when parsing the lhs"),
+        AxNode::Root | AxNode::Const(..) | AxNode::Keep(..) => {
+            unreachable!("rejected when parsing the lhs")
+        }
     }
 }
 
@@ -1186,6 +1371,107 @@ mod tests {
             1,
             "a slice must not match the low-extract axiom"
         );
+    }
+
+    /// The universal low-12-bit split identity, guarded to fire only on
+    /// constants too wide for a 12-bit signed immediate.
+    fn wide_const_axiom() -> Axiom {
+        parse_axiom(
+            "(axiom wide-const
+               (consts (v w)) (root w) (where (not (fits v 12)))
+               (lhs v)
+               (rhs (keep (add
+                    (keep (shl (ashr (sub v (ashr (shl v (- w 12)) (- w 12))) 12) 12))
+                    (ashr (shl v (- w 12)) (- w 12))))))",
+        )
+        .unwrap()
+    }
+
+    fn constant_egraph_at(ctx: &Context, value: u64, width: u32) -> (SemEGraph, Id) {
+        let ty = IntegerType::new(ctx, width);
+        let mut eg = SemEGraph::new();
+        let root = eg.add(template_node(
+            SymKind::Constant,
+            Some(SymPayload::Int(APInt::new(width, value))),
+            Some(ty),
+        ));
+        (eg, root)
+    }
+
+    fn constant_egraph(ctx: &Context, value: u64) -> (SemEGraph, Id) {
+        constant_egraph_at(ctx, value, 64)
+    }
+
+    /// The `shl` operand class of the decomposition's root `add`, when present.
+    fn shl_operand(eg: &SemEGraph, root: Id) -> Option<Id> {
+        eg.nodes(root)
+            .iter()
+            .find(|n| n.kind == SymKind::Add)
+            .and_then(|add| {
+                add.children.iter().copied().find(|&c| {
+                    eg.nodes(eg.find(c))
+                        .iter()
+                        .any(|n| n.kind == SymKind::ShiftLeft)
+                })
+            })
+    }
+
+    #[test]
+    fn materialize_axiom_decomposes_a_narrow_typed_constant() {
+        let ctx = Context::with_default_dialects();
+        let (mut eg, root) = constant_egraph_at(&ctx, 74565, 32);
+        apply_all(&ctx, &mut eg, &wide_const_axiom().compile());
+        assert!(
+            class_kinds(&eg, root).contains(&SymKind::Add) && shl_operand(&eg, root).is_some(),
+            "an i32 constant must decompose at its own width, got {:?}",
+            class_kinds(&eg, root)
+        );
+    }
+
+    #[test]
+    fn materialize_axiom_decomposes_a_wide_constant() {
+        let ctx = Context::with_default_dialects();
+        let (mut eg, root) = constant_egraph(&ctx, 0x8000_0000);
+        apply_all(&ctx, &mut eg, &wide_const_axiom().compile());
+        assert!(
+            class_kinds(&eg, root).contains(&SymKind::Add) && shl_operand(&eg, root).is_some(),
+            "the shift/add tiling must be unioned into the constant class, got {:?}",
+            class_kinds(&eg, root)
+        );
+        assert_eq!(
+            class_int_binding(&eg, root).map(|v| v.to_u64()),
+            Some(0x8000_0000),
+            "union-with-fold must keep the constant value in the class"
+        );
+    }
+
+    #[test]
+    fn materialize_axiom_skips_a_fitting_constant() {
+        let ctx = Context::with_default_dialects();
+        let (mut eg, root) = constant_egraph(&ctx, 5);
+        apply_all(&ctx, &mut eg, &wide_const_axiom().compile());
+        assert_eq!(
+            class_kinds(&eg, root),
+            HashSet::from([SymKind::Constant]),
+            "a constant fitting the 12-bit immediate must not be decomposed"
+        );
+    }
+
+    #[test]
+    fn fits_guard_rejects_invalid_bit_counts_and_supports_64_bits() {
+        let axiom = |bits| {
+            parse_axiom(&format!(
+                "(axiom fits-{bits}
+                   (consts (v w)) (root w) (where (fits v {bits}))
+                   (lhs v) (rhs v))"
+            ))
+        };
+
+        assert!(axiom(0).is_err());
+        assert!(axiom(65).is_err());
+        assert!(axiom(64).is_ok());
+        assert!(fits_signed(&APInt::new_signed(64, i64::MIN), 64));
+        assert!(fits_signed(&APInt::new_signed(64, i64::MAX), 64));
     }
 
     #[test]

@@ -80,6 +80,11 @@ pub fn infer_types<V>(
                 inference.unify(&child(1), &SemType::Bits(rhs.clone()))?;
                 SemType::Bits(Width::Add(Box::new(lhs), Box::new(rhs)))
             }
+            SymKind::Bitcast => {
+                let width = inference.fresh_width();
+                inference.unify(&child(0), &SemType::RawBits(width.clone()))?;
+                SemType::RawBits(width)
+            }
             SymKind::If => {
                 inference.unify(&child(0), &SemType::bits(1))?;
                 let result = inference.fresh_type();
@@ -194,6 +199,7 @@ pub fn infer_widths<V>(
                 },
 
                 SymKind::Clamp
+                | SymKind::Bitcast
                 | SymKind::Log2Ceil
                 | SymKind::Sqrt
                 | SymKind::Fma
@@ -592,6 +598,22 @@ mod type_tests {
         .unwrap();
 
         assert_eq!(types[root.index()], f32);
+    }
+
+    #[test]
+    fn bitcast_accepts_a_float_and_preserves_its_bit_width() {
+        let mut graph = Graph::new();
+        let input = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(input, SymPayload::SymbolId(0));
+        let root = graph.add_node(SymKind::Bitcast);
+        graph.add_edge(root, input);
+
+        let types = infer_types(&graph, |node| {
+            (node == input).then(|| SemType::Float(FloatFormat::new(8, 23)))
+        })
+        .unwrap();
+
+        assert_eq!(types[root.index()], SemType::raw_bits(32));
     }
 
     #[test]

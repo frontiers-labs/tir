@@ -534,6 +534,7 @@ pub struct Unary {
 pub enum BuiltinFunction {
     Clamp,
     Extract,
+    Bitcast,
     Log2Ceil,
     /// `regnum(op)`: the encoding index (architectural register number) of a
     /// register operand, as `bits<ENCODING_LEN>` of the operand's class. Reads
@@ -1466,6 +1467,11 @@ impl Call {
                 let high = self.arguments[1].lower_with_ctx(ctx);
                 let low = self.arguments[2].lower_with_ctx(ctx);
                 ctx.build_extract(input, high, low)
+            }
+            BuiltinFunction::Bitcast => {
+                assert!(self.arguments.len() == 1, "bitcast requires 1 argument");
+                let input = self.arguments[0].lower_with_ctx(ctx);
+                ctx.add_node(tir::sem::SymKind::Bitcast, &[input])
             }
             BuiltinFunction::Log2Ceil => {
                 assert!(self.arguments.len() == 1, "log2Ceil requires 1 argument");

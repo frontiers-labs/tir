@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use tir::{
     Context, MemoryRead, MemoryWrite, OpId, OpInstance, TypeId, ValueId,
     attributes::AttributeValue,
+    builtin::{FloatType, IntegerType},
     graph::{Dag, NodeId},
     sem::{SemGraph, SemType, SymKind, SymPayload, infer_types},
 };
@@ -135,6 +136,9 @@ impl<'a> SemDagBuilder<'a> {
     }
 
     pub(crate) fn build_for_op(&mut self, op: &std::sync::Arc<OpInstance>) -> Option<Id> {
+        if op.name == "constantf" {
+            return self.float_constant_class(op);
+        }
         if let Some(class) = self.build_memory_effect(op) {
             return Some(class);
         }
@@ -248,6 +252,9 @@ impl<'a> SemDagBuilder<'a> {
             let def = self.context.get_op(def_op_id);
             if def.name == "constant" {
                 self.constant_class(&def, value, value_ty)
+            } else if def.name == "constantf" {
+                self.float_constant_class(&def)
+                    .unwrap_or_else(|| self.add_input_value(value, value_ty))
             } else {
                 let mut graph = SemGraph::new();
                 if let Some(root) = def.clone().as_dyn_op().semantic_expr(&mut graph) {
@@ -280,6 +287,29 @@ impl<'a> SemDagBuilder<'a> {
             },
             None => self.add_input_value(value, value_ty),
         }
+    }
+
+    fn float_constant_class(&mut self, def: &std::sync::Arc<OpInstance>) -> Option<Id> {
+        let &result = def.results.first()?;
+        let result_ty = self.context.get_value(result).ty();
+        let width = {
+            let data = self.context.get_type_data(result_ty);
+            (data.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<FloatType>()?
+                .bit_width()
+        };
+        let value = def.attributes.iter().find_map(|attr| match &attr.value {
+            AttributeValue::F64(value) if attr.name == "value" => Some(*value),
+            _ => None,
+        })?;
+        let bits = match width {
+            32 => (value as f32).to_bits() as i32 as i64,
+            64 => value.to_bits() as i64,
+            _ => return None,
+        };
+        let int_ty = IntegerType::new(self.context, width);
+        let bits = self.add_int(APInt::new_signed(64, bits), Some(int_ty));
+        Some(self.add_op(SymKind::Bitcast, vec![bits], Some(result_ty)))
     }
 
     fn infer_local_types(&self, graph: &SemGraph, operands: &[Id]) -> Option<Vec<SemType>> {

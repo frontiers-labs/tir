@@ -187,6 +187,7 @@
       "enum": [
         "clamp",
         "extract",
+        "bitcast",
         "log2_ceil",
         "regnum",
         "sext",

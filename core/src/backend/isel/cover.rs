@@ -64,6 +64,20 @@ pub(crate) struct PatternNodeBinding {
     pub(crate) pattern_node: Id,
     pub(crate) class: Id,
     pub(crate) is_boundary: bool,
+    pub(crate) demand: BoundaryDemand,
+}
+
+/// What a boundary binding requires of its class. A register operand needs the
+/// value materialized in a register; an immediate (or constant template) is
+/// encoded inline, so any constant class satisfies it; a structural boundary (a
+/// width variable) demands nothing — the emitter reads it from the match.
+/// Ordered by how demanding the requirement is: a structural boundary needs
+/// nothing, an immediate needs a constant, a register needs materialization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum BoundaryDemand {
+    Structural,
+    Immediate,
+    Register,
 }
 
 #[derive(Clone, Debug)]
@@ -113,11 +127,23 @@ pub(crate) struct ClassCover {
 /// to External). `must_materialize` lists classes whose value some consumer can
 /// never internalize, so they are never offered a consuming alternative. Returns
 /// `None` if the instance is infeasible (a class with no valid alternative).
+/// Per-class predicates the cover consults (all derived from the function-wide
+/// side tables): `must_materialize` bars consuming alternatives,
+/// `force_materialize` drops the free External alternative when a materializer
+/// match roots the class, and `externally_bindable` says whether External
+/// satisfies a boundary's register requirement (the class carries an IR value
+/// or folds to an immediate).
+pub(crate) struct ClassPolicies<'a> {
+    pub(crate) must_materialize: &'a dyn Fn(Id) -> bool,
+    pub(crate) force_materialize: &'a dyn Fn(Id) -> bool,
+    pub(crate) externally_bindable: &'a dyn Fn(Id) -> bool,
+}
+
 pub(crate) fn build_eclass_cover(
     egraph: &SemEGraph,
     op_roots: &HashSet<Id>,
     classes: &[Id],
-    must_materialize: impl Fn(Id) -> bool,
+    policies: &ClassPolicies,
     dead_allowed: &HashSet<Id>,
     matches: &[PbqpIselMatch],
 ) -> Option<ClassCover> {
@@ -127,9 +153,16 @@ pub(crate) fn build_eclass_cover(
 
     let is_terminal = |c: Id| egraph.nodes(c).iter().any(|n| n.children().is_empty());
 
+    // A forced class (a constant that must reach an unselected consumer in a
+    // register) with a materializer match rooted on it loses the zero-cost
+    // External alternative, so the cover emits the materializer instead of
+    // leaving the constant to a later target hook. Without a rooted match,
+    // External stays so that hook can diagnose or lower the unsupported case.
+    let rooted: HashSet<Id> = matches.iter().map(|m| egraph.find(m.root)).collect();
+
     let mut alternatives_by_node = vec![Vec::<PbqpIselAlternative>::new(); classes.len()];
     for (i, &c) in classes.iter().enumerate() {
-        if is_terminal(c) {
+        if is_terminal(c) && !((policies.force_materialize)(c) && rooted.contains(&c)) {
             alternatives_by_node[i].push(PbqpIselAlternative::External);
         }
     }
@@ -142,7 +175,7 @@ pub(crate) fn build_eclass_cover(
         for binding in &m.bindings.pattern_nodes {
             if binding.is_boundary
                 || binding.pattern_node == m.pattern_root
-                || must_materialize(egraph.find(binding.class))
+                || (policies.must_materialize)(egraph.find(binding.class))
             {
                 continue;
             }
@@ -247,12 +280,18 @@ pub(crate) fn build_eclass_cover(
 
         for (parent_alt_idx, parent_alt) in parent_alts.iter().enumerate() {
             for (child_alt_idx, child_alt) in child_alts.iter().enumerate() {
-                if !alternatives_compatible(egraph, child_class, parent_alt, child_alt, matches) {
+                if !alternatives_compatible(
+                    egraph,
+                    child_class,
+                    parent_alt,
+                    child_alt,
+                    matches,
+                    policies.externally_bindable,
+                ) {
                     matrix.set(parent_alt_idx, child_alt_idx, INF_COST);
                 }
             }
         }
-
         problem.add_edge(
             pbqp::PbqpNodeId::from_index(pi),
             pbqp::PbqpNodeId::from_index(ci),
@@ -272,11 +311,14 @@ pub(crate) fn build_eclass_cover(
 }
 
 /// Drop matches dominated by an interchangeable alternative: same root class,
-/// same internal-class coverage, same boundary operands, but no cheaper and no
-/// more specific. Specificity (the number of type-constrained pattern nodes)
-/// thus breaks ties between otherwise identical matches without ever touching
-/// the PBQP objective — an i32 `addw` beats the untyped `add` at equal cost,
-/// while a genuinely cheaper instruction still wins on cost alone.
+/// same internal-class coverage, same boundary operands, but no cheaper, no
+/// more specific, and no less demanding of its boundaries. Specificity (the
+/// number of type-constrained pattern nodes) breaks ties between otherwise
+/// identical matches without ever touching the PBQP objective — an i32 `addw`
+/// beats the untyped `add` at equal cost — and at equal cost/specificity a
+/// match folding a class as an immediate beats one demanding it in a register
+/// (which may force a whole materializer chain), while a genuinely cheaper
+/// instruction still wins on cost alone.
 pub(crate) fn prune_dominated_matches(
     patterns: &[CompiledIselPattern],
     matches: &mut Vec<PbqpIselMatch>,
@@ -286,19 +328,27 @@ pub(crate) fn prune_dominated_matches(
         let mut internals = Vec::new();
         for binding in &m.bindings.pattern_nodes {
             if binding.is_boundary {
-                boundaries.push(binding.class);
+                boundaries.push((binding.class, binding.demand));
             } else if binding.pattern_node != m.pattern_root {
                 internals.push(binding.class);
             }
         }
+        // Sorting by (class, demand) puts equal class multisets in the same
+        // class order, so within a group demands compare positionally over
+        // aligned classes.
         boundaries.sort();
         internals.sort();
-        (m.root, boundaries, internals)
+        let (classes, demands): (Vec<Id>, Vec<BoundaryDemand>) = boundaries.into_iter().unzip();
+        (m.root, classes, demands, internals)
     };
+    let footprints: Vec<_> = matches.iter().map(footprint).collect();
 
     let mut groups: HashMap<_, Vec<usize>> = HashMap::new();
-    for (index, m) in matches.iter().enumerate() {
-        groups.entry(footprint(m)).or_default().push(index);
+    for (index, (root, classes, _, internals)) in footprints.iter().enumerate() {
+        groups
+            .entry((*root, classes, internals))
+            .or_default()
+            .push(index);
     }
 
     let mut keep = vec![true; matches.len()];
@@ -316,7 +366,13 @@ pub(crate) fn prune_dominated_matches(
                     matches[b].cost,
                     patterns[matches[b].pattern_index].specificity,
                 );
-                if cost_a <= cost_b && spec_a >= spec_b && (cost_a < cost_b || spec_a > spec_b) {
+                let (demands_a, demands_b) = (&footprints[a].2, &footprints[b].2);
+                let demands_le = demands_a.iter().zip(demands_b).all(|(da, db)| da <= db);
+                if cost_a <= cost_b
+                    && spec_a >= spec_b
+                    && demands_le
+                    && (cost_a < cost_b || spec_a > spec_b || demands_a != demands_b)
+                {
                     keep[b] = false;
                 }
             }
@@ -396,12 +452,25 @@ pub(crate) fn alternatives_compatible(
     parent_alt: &PbqpIselAlternative,
     child_alt: &PbqpIselAlternative,
     matches: &[PbqpIselMatch],
+    externally_bindable: &dyn Fn(Id) -> bool,
 ) -> bool {
     match child_requirement(egraph, child, parent_alt, matches) {
-        Some(ChildRequirement::Materialized) => matches!(
-            child_alt,
-            PbqpIselAlternative::Root { .. } | PbqpIselAlternative::External
-        ),
+        // A boundary requirement is satisfied by the class rooting its own
+        // instruction, or by External when the class reaches the operand
+        // externally: for a register, it carries an IR value or folds to an
+        // immediate — a valueless synthetic class (the injected `zext(0b0, W)`
+        // zero shape) can only satisfy it by rooting a match; for an immediate,
+        // any constant class (the value is folded into the encoding).
+        Some(req @ (ChildRequirement::Materialized | ChildRequirement::Immediate)) => {
+            match child_alt {
+                PbqpIselAlternative::Root { .. } => true,
+                PbqpIselAlternative::External => match req {
+                    ChildRequirement::Materialized => externally_bindable(child),
+                    _ => class_int_binding(egraph, child).is_some(),
+                },
+                PbqpIselAlternative::Internal { .. } | PbqpIselAlternative::Dead => false,
+            }
+        }
         Some(ChildRequirement::SameMatch {
             match_id,
             pattern_node,
@@ -437,20 +506,28 @@ pub(crate) fn child_requirement(
 
     let m = &matches[match_id];
     let mut internal_node = None;
-    let mut boundary = false;
+    let mut register_boundary = false;
+    let mut immediate_boundary = false;
     for binding in &m.bindings.pattern_nodes {
         if binding.class != child || binding.pattern_node == m.pattern_root {
             continue;
         }
         if binding.is_boundary {
-            boundary = true;
+            match binding.demand {
+                BoundaryDemand::Register => register_boundary = true,
+                BoundaryDemand::Immediate => immediate_boundary = true,
+                BoundaryDemand::Structural => {}
+            }
         } else if internal_node.is_none() {
             internal_node = Some(binding.pattern_node);
         }
     }
 
-    if boundary {
+    if register_boundary {
         return Some(ChildRequirement::Materialized);
+    }
+    if immediate_boundary {
+        return Some(ChildRequirement::Immediate);
     }
     match internal_node {
         Some(_) if class_is_pure(egraph, child) => None,
@@ -464,5 +541,6 @@ pub(crate) fn child_requirement(
 
 pub(crate) enum ChildRequirement {
     Materialized,
+    Immediate,
     SameMatch { match_id: usize, pattern_node: Id },
 }

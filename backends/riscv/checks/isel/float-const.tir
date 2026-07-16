@@ -1,0 +1,23 @@
+// RUN: tir mc --march=rv64if --stage=isel %s | filecheck %s --check-prefix=RV64
+// RUN: tir mc --march=rv32if --stage=isel %s | filecheck %s --check-prefix=RV32
+
+module {
+  func @scale(%0: !f32) -> !f32 {
+    %1 = constantf {value = 2.5} : !f32
+    %2 = mulf %0, %1 : !f32
+    return %2
+  }
+  module_end
+}
+
+// RV64: riscv.addi {rd = %virt{{[0-9]+}}:GPR, rs1 = x0, imm = 64}
+// RV64: riscv.slliw
+// RV64: riscv.fmv.w.x {fd = %virt{{[0-9]+}}:FPR32, rs1 = %virt{{[0-9]+}}:GPR}
+// RV64: riscv.fmul.s
+// RV64-NOT: constantf
+
+// RV32: riscv.addi {rd = %virt{{[0-9]+}}:GPR, rs1 = x0, imm = 64}
+// RV32: riscv.slli
+// RV32: riscv.fmv.w.x {fd = %virt{{[0-9]+}}:FPR32, rs1 = %virt{{[0-9]+}}:GPR}
+// RV32: riscv.fmul.s
+// RV32-NOT: constantf

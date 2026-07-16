@@ -266,6 +266,7 @@ fn emit(graph: &ExprPostGraph, node: NodeId, r: &Resolver<'_>, b: &mut Btor2) ->
         ExprKind::ShiftLeft => shift!("sll", |s| s),
         ExprKind::ShiftRightLogic => shift!("srl", |_| false),
         ExprKind::ShiftRightArithmetic => shift!("sra", |_| true),
+        ExprKind::Bitcast => Some(ch!(0)),
         ExprKind::Not => {
             let x = ch!(0);
             Some(b.not(x))

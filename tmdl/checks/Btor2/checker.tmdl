@@ -10,6 +10,7 @@
 // CHECK: {{[0-9]+}} input {{[0-9]+}} dst_val
 // CHECK: {{[0-9]+}} input {{[0-9]+}} next_pc
 // CHECK: {{[0-9]+}} input {{[0-9]+}} valid
+// CHECK: ; modeled TBitcast
 // CHECK: {{[0-9]+}} bad {{[0-9]+}} dst_we_mismatch
 // CHECK: {{[0-9]+}} bad {{[0-9]+}} dst_val_mismatch
 // CHECK: {{[0-9]+}} bad {{[0-9]+}} dst_addr_mismatch

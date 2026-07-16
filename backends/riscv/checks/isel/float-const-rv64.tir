@@ -1,0 +1,17 @@
+// RUN: tir mc --march=rv64ifd --stage=isel %s | filecheck %s
+// RUN: not tir mc --march=rv32ifd --stage=isel %s
+
+module {
+  func @scale(%0: !f64) -> !f64 {
+    %1 = constantf {value = 2.5} : !f64
+    %2 = mulf %0, %1 : !f64
+    return %2
+  }
+  module_end
+}
+
+// CHECK: riscv.addi {rd = %virt{{[0-9]+}}:GPR, rs1 = x0,
+// CHECK: riscv.slli
+// CHECK: riscv.fmv.d.x {fd = %virt{{[0-9]+}}:FPR64, rs1 = %virt{{[0-9]+}}:GPR}
+// CHECK: riscv.fmul.d
+// CHECK-NOT: constantf

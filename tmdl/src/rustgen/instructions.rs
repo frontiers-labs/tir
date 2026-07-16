@@ -701,7 +701,7 @@ fn emit_instructions<'a>(
             // Cost reflects the canonical pattern's size (one machine instruction).
             let base_cost = {
                 use tir::graph::Dag;
-                (canon_pattern.len() as u32).max(1)
+                (canon_pattern.len() as u32 + implicit_reads.len() as u32).max(1)
             };
             let base_cost_lit = proc_macro2::Literal::u32_unsuffixed(base_cost);
             let mnemonic_cost_lit = proc_macro2::Literal::string(mnemonic_name);
@@ -774,6 +774,170 @@ fn emit_instructions<'a>(
                     );
                 }
             });
+
+            // Zero-form constant materializer: when the canonical pattern is
+            // `reg + imm` and the source register's class has a hardwired-zero
+            // register (RISC-V `addi rs1:GPR`), derive a rule matching
+            // `zext(0b0, W) + imm` — the shape the constant-materializer bridge
+            // injects into fitting program-constant classes — with the register
+            // slot wired to the zero register, so a bare constant selects as
+            // the canonical `li` (`addi rd, x0, imm`). arm64's add-immediate
+            // reads `GPRsp`, whose encoding 31 is `sp`, not a hardwired zero,
+            // so no zero-form is derived there.
+            let zero_form = match defined_register_operands.as_slice() {
+                [rd_name] if !read_register_operands.contains(rd_name)
+                    && implicit_reads.is_empty() =>
+                {
+                    value_zero_form_operands(
+                        &canon_pattern,
+                        canon_root,
+                        &ops,
+                        &semantics.variable_symbols,
+                        rd_name,
+                        |class: &str| {
+                            hardwired_zero_index.contains_key(class)
+                                && !float_classes.contains(class)
+                                && !polymorphic_classes.contains(class)
+                        },
+                    )
+                }
+                _ => None,
+            };
+            if let Some((zero_reg_name, zero_reg_class, imm_sym)) = zero_form {
+                let zero_pattern_fn_ident =
+                    format_ident!("isel_pattern_{}_zero", inst.name.to_lowercase());
+                let zero_emit_fn_ident =
+                    format_ident!("emit_isel_{}_zero", inst.name.to_lowercase());
+                let zero_rule_name_lit =
+                    proc_macro2::Literal::string(&format!("{}_zero", inst.name.to_lowercase()));
+                let width_sym = semantics
+                    .variable_symbols
+                    .values()
+                    .chain(semantics.register_symbols.values())
+                    .copied()
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let width_sym_lit = proc_macro2::Literal::u32_unsuffixed(width_sym);
+                let imm_sym_lit = proc_macro2::Literal::u32_unsuffixed(imm_sym);
+                let (zero_meta_use, root_ty_stmt) = pattern_widths[canon_root.index()]
+                    .map(|width| {
+                        let width_lit = proc_macro2::Literal::u32_unsuffixed(width);
+                        (
+                            quote! { use tir::graph::MetaMutDag as _; },
+                            quote! {
+                                g.set_actual_type(
+                                    __root,
+                                    tir::builtin::IntegerType::new(_context, #width_lit),
+                                );
+                            },
+                        )
+                    })
+                    .unwrap_or_default();
+
+                let rd_name = defined_register_operands
+                    .first()
+                    .expect("zero-form requires a defined register operand");
+                let rd_name_lit = proc_macro2::Literal::string(rd_name);
+                let rd_class_id = reg_class_id(dst_class.expect("defined operand has a class"));
+                let zero_reg_name_lit = proc_macro2::Literal::string(&zero_reg_name);
+                let zero_class_id = reg_class_id(&zero_reg_class);
+                let zero_index_lit =
+                    proc_macro2::Literal::u16_unsuffixed(hardwired_zero_index[&zero_reg_class]);
+                let imm_name = ops
+                    .iter()
+                    .find(|(name, _)| semantics.variable_symbols.get(name) == Some(&imm_sym))
+                    .map(|(name, _)| name.clone())
+                    .expect("immediate operand has a name");
+                let imm_name_lit = proc_macro2::Literal::string(&imm_name);
+                let zero_imm_range_call = emit_operand_imm_range_call(
+                    &immediate_operand_ranges(&semantics.pattern, &ops, &semantics.variable_symbols)
+                        .into_iter()
+                        .filter(|(symbol, _, _)| *symbol == imm_sym)
+                        .collect::<Vec<_>>(),
+                );
+
+                isel_rule_emitters.push(quote! {
+                    fn #zero_pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
+                        #zero_meta_use
+                        use tir::graph::MutDag;
+                        let mut g = tir::sem::SemGraph::new();
+                        let __zero = g.add_node(tir::sem::SymKind::Constant);
+                        g.set_leaf_data(__zero, tir::sem::int_payload(1, 0, false));
+                        let __width = g.add_node(tir::sem::SymKind::Symbol);
+                        g.set_leaf_data(__width, tir::sem::SymPayload::SymbolId(#width_sym_lit));
+                        let __zext = g.add_node(tir::sem::SymKind::ZExt);
+                        g.add_edge(__zext, __zero);
+                        g.add_edge(__zext, __width);
+                        let __imm = g.add_node(tir::sem::SymKind::Symbol);
+                        g.set_leaf_data(__imm, tir::sem::SymPayload::SymbolId(#imm_sym_lit));
+                        let __root = g.add_node(tir::sem::SymKind::Add);
+                        g.add_edge(__root, __zext);
+                        g.add_edge(__root, __imm);
+                        #root_ty_stmt
+                        g
+                    }
+
+                    fn #zero_emit_fn_ident(
+                        context: &tir::Context,
+                        req: &tir::backend::isel::EmitRequest,
+                        m: &tir::backend::isel::RuleMatch,
+                    ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
+                        let mut builder = #builder_ident::new(context);
+                        let dst = req
+                            .results
+                            .first()
+                            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?
+                            .number();
+                        builder = builder.attr(
+                            #rd_name_lit,
+                            tir::attributes::AttributeValue::Register(
+                                tir::attributes::RegisterAttr::Virtual {
+                                    id: dst,
+                                    class: Some(#rd_class_id),
+                                },
+                            ),
+                        );
+                        builder = builder.attr(
+                            #zero_reg_name_lit,
+                            tir::attributes::AttributeValue::Register(
+                                tir::attributes::RegisterAttr::Physical {
+                                    class: #zero_class_id,
+                                    index: #zero_index_lit,
+                                },
+                            ),
+                        );
+                        let v = m
+                            .int_binding(#imm_sym_lit)
+                            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+                        builder = builder.attr(
+                            #imm_name_lit,
+                            tir::attributes::AttributeValue::Int(v),
+                        );
+                        Ok(Box::new(builder.build()))
+                    }
+                });
+
+                isel_rule_inits.push(quote! {
+                    if features_enabled(features, #inst_features) {
+                        rules.push(
+                            tir::backend::isel::Rule::new(
+                                #zero_rule_name_lit,
+                                #zero_pattern_fn_ident(context),
+                                (5).max(instruction_cost(#mnemonic_cost_lit)),
+                                #zero_emit_fn_ident,
+                            )
+                            .with_operand_constraints(vec![(
+                                #imm_sym_lit,
+                                tir::graph::OperandConstraint::Immediate,
+                            )])
+                            #result_register_call
+                            #zero_imm_range_call
+                            ,
+                        );
+                    }
+                });
+            }
         }
 
         // A guarded PC write (`if cond { PC::pc = PC::pc + imm }`) becomes a

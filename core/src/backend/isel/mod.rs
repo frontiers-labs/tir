@@ -30,7 +30,7 @@ use tir::{
     sem::{SemGraph, SymKind, SymPayload},
 };
 use tir_adt::APInt;
-use tir_symbolic::egraph::{ENode, Id, Var};
+use tir_symbolic::egraph::{ENode, Id, PatternNode, Var};
 
 pub use node::{SemEGraph, SemNode, SemPayload};
 pub use rewrites::{IselRewrite, SaturationLimits};
@@ -424,6 +424,10 @@ struct FunctionSelection {
     /// an op no match reaches, or by an op in a different block — so the defining op
     /// must never be consumed.
     must_materialize: HashSet<Id>,
+    /// Constant values consumed by an op that selection cannot rewrite (a return,
+    /// a call): the defining block's cover must root a materializer match for them
+    /// instead of leaving the constant to the pre-RA hook.
+    force_constant_values: HashSet<ValueId>,
     /// The guarded terminators of each block, each with its condition's e-class.
     guards: HashMap<BlockId, Vec<BlockGuard>>,
     /// Plain unconditional branch terminators per block.
@@ -488,6 +492,75 @@ impl FunctionSelection {
     fn has_values(&self, class: Id) -> bool {
         self.base_members(class)
             .any(|m| self.class_values.contains_key(&m))
+    }
+
+    /// Whether any IR value carried by a base member of `class` satisfies `pred`.
+    fn any_class_value(&self, class: Id, pred: impl Fn(&ValueId) -> bool) -> bool {
+        self.base_members(class).any(|m| {
+            self.class_values
+                .get(&m)
+                .is_some_and(|values| values.iter().any(&pred))
+        })
+    }
+
+    /// Whether the class carries an IR value that still exists after selection:
+    /// a block input, or the result of any op but a bare `constant` (which is
+    /// erased once selection or the dead-constant sweep is done with it). Only
+    /// such a value satisfies a register operand externally.
+    fn has_surviving_value(&self, context: &Context, class: Id) -> bool {
+        self.any_class_value(class, |v| {
+            self.value_to_def
+                .get(v)
+                .is_none_or(|op| context.get_op(*op).name != "constant")
+        })
+    }
+
+    /// Whether the cover must root a materializer match for `class` (see
+    /// [`FunctionSelection::force_constant_values`]).
+    fn forces_constant_materialization(&self, class: Id, block: BlockId) -> bool {
+        self.any_class_value(class, |value| {
+            self.force_constant_values.contains(value)
+                && self.value_block.get(value) == Some(&Some(block))
+        })
+    }
+
+    fn has_materialized_constant_value(
+        &self,
+        dom: &DominatorTree,
+        class: Id,
+        block: BlockId,
+    ) -> bool {
+        self.any_class_value(class, |value| {
+            if !self.force_constant_values.contains(value) {
+                return false;
+            }
+            match self.value_block.get(value).copied().flatten() {
+                Some(def_block) if def_block == block => true,
+                Some(def_block) => {
+                    dom.dominates(def_block, block) && self.externally_bound.contains(value)
+                }
+                None => false,
+            }
+        })
+    }
+
+    /// Whether External satisfies a boundary's register requirement for `class`:
+    /// a value that outlives selection backs the class. Without materializer
+    /// rules (`no_materializer_rules`), a bare constant also qualifies: the
+    /// target's pre-RA hook still lowers surviving constants. With them, every
+    /// constant needing a register must root a materializer match.
+    fn externally_bindable(
+        &self,
+        context: &Context,
+        dom: &DominatorTree,
+        class: Id,
+        block: BlockId,
+        no_materializer_rules: bool,
+    ) -> bool {
+        self.has_surviving_value(context, class)
+            || self.has_materialized_constant_value(dom, class, block)
+            || (no_materializer_rules
+                && (self.has_values(class) || class_int_binding(&self.egraph, class).is_some()))
     }
 
     /// Resolve `class` to operands for consumer op `consumer` in `block`: the
@@ -628,6 +701,10 @@ pub type OpLowering = fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool,
 pub struct InstructionSelectPass {
     rules: Vec<Rule>,
     compiled_patterns: Vec<CompiledIselPattern>,
+    /// Immediate ranges of the rule set's zero-form constant materializers
+    /// (see [`pattern::constant_materializer_ranges`]). Empty means bare
+    /// constants stay with the target's pre-RA materialization hook.
+    constant_materializer_ranges: Vec<ImmRange>,
     /// Target-independent algebraic identities the program e-graph is saturated
     /// with before covering (e.g. discovered `sext`/shift bridges). Populated by
     /// rewrite discovery; empty means selection is purely syntactic tiling.
@@ -666,10 +743,13 @@ impl InstructionSelectPass {
             .collect();
 
         let rewrites = discover_rewrites(&compiled_patterns);
+        let constant_materializer_ranges =
+            pattern::constant_materializer_ranges(&compiled_patterns);
 
         Self {
             rules,
             compiled_patterns,
+            constant_materializer_ranges,
             rewrites,
             branch_emitters: None,
             cost_model: Box::new(DefaultIselCostModel),
@@ -832,6 +912,7 @@ impl InstructionSelectPass {
         let mut guards: HashMap<BlockId, Vec<BlockGuard>> = HashMap::new();
         let mut jumps: HashMap<BlockId, Vec<BlockJump>> = HashMap::new();
         let mut prepared: HashMap<ValueId, ConditionExpr> = HashMap::new();
+        let mut constant_candidates: Vec<(OpId, Id)> = Vec::new();
         let value_to_class = {
             let mut builder = SemDagBuilder::new(context, &value_to_def, &mut egraph);
             for &block_id in &block_ids {
@@ -839,6 +920,11 @@ impl InstructionSelectPass {
                     let op = context.get_op(op_id);
                     if let Some(root) = builder.build_for_op(&op) {
                         roots_by_op.insert(op_id, root);
+                    } else if !self.constant_materializer_ranges.is_empty()
+                        && op.name == "constant"
+                        && let Some(&result) = op.results.first()
+                    {
+                        constant_candidates.push((op_id, builder.build_from_value(result)));
                     }
                 }
             }
@@ -916,9 +1002,20 @@ impl InstructionSelectPass {
             builder.value_to_class
         };
 
+        // A `constant` op has no semantic expression, so it never roots the
+        // e-graph on its own. With zero-form materializer rules in the rule set,
+        // each integer constant's class becomes the op's root, so the cover can
+        // select a real materializing instruction for it.
+        constant_candidates.retain(|(_, class)| class_int_binding(&egraph, *class).is_some());
+        for &(op_id, class) in &constant_candidates {
+            roots_by_op.entry(op_id).or_insert(class);
+        }
+
         rewrites::saturate(context, &mut egraph, &self.rewrites, Default::default());
 
         bridge_zero_branch_guards(context, &mut egraph, &guards);
+
+        bridge_constant_materializers(&mut egraph, &self.constant_materializer_ranges);
 
         // Canonicalize the side tables through `find`: saturation may merge classes,
         // so every id recorded against the pre-saturation graph is re-resolved here.
@@ -1002,6 +1099,11 @@ impl InstructionSelectPass {
         // a guarded terminator is exempt (branch selection recomputes the condition
         // inside the branch, or re-adds the materialization requirement itself).
         let guard_ops: HashSet<OpId> = guards.values().flatten().map(|g| g.op).collect();
+        let guard_condition_ops: HashSet<OpId> = guards
+            .values()
+            .flatten()
+            .filter_map(|guard| value_to_def.get(&guard.condition).copied())
+            .collect();
         let mut must_materialize = HashSet::new();
         for (&op, &root) in &roots_by_op {
             let escapes = context.get_op(op).results.iter().any(|result| {
@@ -1017,6 +1119,32 @@ impl InstructionSelectPass {
             }
         }
 
+        // A constant consumed by an op that selection cannot rewrite (a return, a
+        // call) must reach that consumer in a register. Forcing the cover to
+        // root a materializer match there moves the `li` into selection; a
+        // wide cross-block constant is forced at its dominating definition;
+        // constants whose consumers all fold them as immediates keep their
+        // zero-cost External alternative.
+        let mut force_constant_values: HashSet<ValueId> = HashSet::new();
+        for &(op_id, class) in &constant_candidates {
+            for &result in &context.get_op(op_id).results {
+                let unselected_use = context.get_value(result).uses().iter().any(|u| {
+                    !roots_by_op.contains_key(&u.op())
+                        && !guard_ops.contains(&u.op())
+                        && !guard_condition_ops.contains(&u.op())
+                });
+                let wide_cross_block = externally_bound.contains(&result)
+                    && class_int_binding(&egraph, class).is_some_and(|value| {
+                        !self
+                            .constant_materializer_ranges
+                            .iter()
+                            .any(|range| range.contains(&value))
+                    });
+                if unselected_use || wide_cross_block {
+                    force_constant_values.insert(result);
+                }
+            }
+        }
         for guard in guards.values_mut().flatten() {
             guard.class = egraph.find(guard.class);
         }
@@ -1032,6 +1160,7 @@ impl InstructionSelectPass {
             externally_bound,
             shared_classes,
             must_materialize,
+            force_constant_values,
             guards,
             jumps,
             prepared,
@@ -1396,7 +1525,19 @@ impl InstructionSelectPass {
             &fs.egraph,
             &block_roots,
             &covered,
-            |class| fs.requires_materialization(class, &mm_overlay),
+            &cover::ClassPolicies {
+                must_materialize: &|class| fs.requires_materialization(class, &mm_overlay),
+                force_materialize: &|class| fs.forces_constant_materialization(class, block_id),
+                externally_bindable: &|class| {
+                    fs.externally_bindable(
+                        context,
+                        dom,
+                        class,
+                        block_id,
+                        self.constant_materializer_ranges.is_empty(),
+                    )
+                },
+            },
             &dead_allowed,
             &matches,
         ) else {
@@ -1453,6 +1594,10 @@ impl InstructionSelectPass {
                 );
             } else if internal_classes.contains(&class) {
                 op_decisions.insert(op_id, BlockDecision::Consume);
+            } else if context.get_op(op_id).name == "constant" {
+                // No decision: an uncovered constant survives for a target hook
+                // to diagnose or lower, while the dead-constant sweep reaps it
+                // once every consumer folded the immediate.
             } else if !fs.requires_materialization(class, &mm_overlay)
                 && class_int_binding(&fs.egraph, class).is_some()
             {
@@ -1523,12 +1668,17 @@ impl InstructionSelectPass {
         candidates: &[(usize, EMatch<u32>)],
     ) -> Option<(usize, RuleMatch, Vec<Id>)> {
         let mut best: Option<(u64, usize, usize, RuleMatch, Vec<Id>)> = None;
+        let mut register_symbols_by_pattern: HashMap<usize, HashSet<u32>> = HashMap::new();
         for (pattern_index, m) in candidates {
             let compiled = &self.compiled_patterns[*pattern_index];
             let RuleKind::CondBranch { target_symbol } = self.rules[compiled.rule_index].kind
             else {
                 continue;
             };
+
+            let register_symbols = register_symbols_by_pattern
+                .entry(*pattern_index)
+                .or_insert_with(|| compiled.register_symbols());
 
             let mut captures = CaptureBindings::new();
             for (var, class) in m.subst.entries() {
@@ -1545,10 +1695,21 @@ impl InstructionSelectPass {
             let mut int_bindings = Vec::new();
             let mut value_bindings = Vec::new();
             let mut resolvable = true;
+            // A register operand may read a bare constant only when another use
+            // already forces that constant to be materialized.
             for (symbol, class) in &captures.entries {
                 let binding = fs.resolve_binding(dom, context, *class, block, guard.op);
                 match binding.int {
                     Some(v) => {
+                        if register_symbols.contains(symbol)
+                            && !fs.has_surviving_value(context, *class)
+                            && !binding
+                                .value
+                                .is_some_and(|value| fs.force_constant_values.contains(&value))
+                        {
+                            resolvable = false;
+                            break;
+                        }
                         int_bindings.push((*symbol, v));
                         if let Some(reg) = binding.value {
                             value_bindings.push((*symbol, reg));
@@ -1575,7 +1736,8 @@ impl InstructionSelectPass {
             let better = match &best {
                 None => true,
                 Some((best_cost, best_specificity, ..)) => {
-                    cost < *best_cost || (cost == *best_cost && specificity > *best_specificity)
+                    (cost, std::cmp::Reverse(specificity))
+                        < (*best_cost, std::cmp::Reverse(*best_specificity))
                 }
             };
             if better {
@@ -1677,7 +1839,26 @@ impl InstructionSelectPass {
                     continue;
                 }
 
-                let pattern_nodes = (0..compiled.pattern.len())
+                let mut structural_boundaries = HashSet::new();
+                let mut value_boundaries = HashSet::new();
+                for index in 0..compiled.pattern.len() {
+                    let PatternNode::Node(node) = compiled.pattern.node(Id::from_raw(index as u32))
+                    else {
+                        continue;
+                    };
+                    for (operand, &child) in node.children.iter().enumerate() {
+                        if !compiled.node_meta[child.index()].is_boundary {
+                            continue;
+                        }
+                        if matches!(node.kind, SymKind::SExt | SymKind::ZExt) && operand == 1 {
+                            structural_boundaries.insert(child);
+                        } else {
+                            value_boundaries.insert(child);
+                        }
+                    }
+                }
+                structural_boundaries.retain(|node| !value_boundaries.contains(node));
+                let pattern_nodes: Vec<PatternNodeBinding> = (0..compiled.pattern.len())
                     .map(|index| Id::from_raw(index as u32))
                     .map(|pattern_node| {
                         let meta = &compiled.node_meta[pattern_node.index()];
@@ -1690,9 +1871,35 @@ impl InstructionSelectPass {
                             // match and under a boundary of another without making
                             // the cover infeasible.
                             is_boundary: meta.is_boundary || meta.is_constant,
+                            demand: if meta.demands_register()
+                                || (meta.is_boundary
+                                    && meta.constraint.is_none()
+                                    && meta.register.is_none()
+                                    && !structural_boundaries.contains(&pattern_node))
+                            {
+                                cover::BoundaryDemand::Register
+                            } else if meta.constraint
+                                == Some(tir::graph::OperandConstraint::Immediate)
+                                || meta.is_constant
+                            {
+                                cover::BoundaryDemand::Immediate
+                            } else {
+                                cover::BoundaryDemand::Structural
+                            },
                         }
                     })
                     .collect();
+                // A match register-reading its own root class would compute the
+                // value from itself (matching the injected li form's `Add(zext 0,
+                // C)` member of `C` with a register-operand rule); only an
+                // immediate self-binding (the li rules) is coherent.
+                if pattern_nodes.iter().any(|binding| {
+                    binding.is_boundary
+                        && binding.demand == cover::BoundaryDemand::Register
+                        && binding.class == root
+                }) {
+                    continue;
+                }
                 let bindings = FullMatchBindings {
                     captures,
                     pattern_nodes,
@@ -1710,7 +1917,6 @@ impl InstructionSelectPass {
                 } else {
                     rule.base_cost as u64
                 };
-
                 matches.push(PbqpIselMatch {
                     pattern_index,
                     rule_index: compiled.rule_index,
@@ -1865,6 +2071,61 @@ fn bridge_zero_branch_guards(
                 egraph.union(class, replaced);
             }
         }
+    }
+    egraph.rebuild();
+}
+
+/// Bridge each constant class that fits a zero-form materializer's immediate to
+/// the `Add(zext(0b0, W), C)` shape those rules match — the TMDL-derived
+/// `addi rd, x0, imm` li form — so a bare constant can be covered by a real
+/// instruction rooted on its own class, with the zero operand wired to the
+/// hardwired-zero register by the rule's emitter:
+///
+/// * the injected `add` is a true value equivalence (`0 + C == C` at any
+///   width), and the `zext(0b0, W)` zero is the same shape the branch
+///   zero-guard bridge and the derived zero-form rules already share;
+/// * only classes whose constant lands in a materializer's `ImmRange` gain the
+///   member, so a wide constant keeps its bare class and selects through the
+///   materialize decomposition axioms into a shift/add chain instead.
+///
+/// Runs over every constant class, not just program-`constant` roots: the
+/// materialize axioms decompose a wide constant into narrower ones, and each
+/// narrowed constant that finally fits the immediate must gain the li form to
+/// be covered. Structural, not an axiom (same standard as
+/// [`bridge_zero_branch_guards`]): the equivalence is universally true, but the
+/// trigger is target immediate-range membership, decided from the rule set — a
+/// saturation axiom would need the range as a value guard yet compute nothing
+/// new. It belongs here as a targeted post-saturation injection.
+fn bridge_constant_materializers(egraph: &mut SemEGraph, ranges: &[ImmRange]) {
+    if ranges.is_empty() {
+        return;
+    }
+    let zero = egraph.add(template_node(
+        SymKind::Constant,
+        Some(SymPayload::Int(APInt::new(1, 0))),
+        None,
+    ));
+    let width = egraph.add(template_node(
+        SymKind::Constant,
+        Some(SymPayload::Int(APInt::new(1, 1))),
+        None,
+    ));
+    let mut zext = template_node(SymKind::ZExt, None, None);
+    zext.children = vec![zero, width];
+    let zext = egraph.add(zext);
+    let classes: Vec<Id> = egraph.classes().map(|c| c.id()).collect();
+    for class in classes {
+        let class = egraph.find(class);
+        let Some(value) = class_int_binding(egraph, class) else {
+            continue;
+        };
+        if !ranges.iter().any(|range| range.contains(&value)) {
+            continue;
+        }
+        let mut add = template_node(SymKind::Add, None, None);
+        add.children = vec![egraph.find(zext), class];
+        let add = egraph.add(add);
+        egraph.union(class, add);
     }
     egraph.rebuild();
 }

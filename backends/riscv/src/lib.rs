@@ -706,6 +706,7 @@ fn create_isel_pass_for(
         .collect();
     tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, &features))
         .with_axioms(include_str!("isel.axioms"))
+        .with_axioms(include_str!("isel-materialize.axioms"))
         .with_branch_emitters(tir::backend::isel::BranchEmitters {
             uncond: emit_uncond_branch,
             cond_nonzero: emit_branch_nonzero,
@@ -1211,17 +1212,9 @@ impl tir::backend::TargetMachine for RiscvTarget {
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         if self.config.xlen == 64 {
-            vec![
-                obj::lower_constant_rv64,
-                obj::lower_constantf_rv64,
-                obj::lower_addr_of,
-            ]
+            vec![obj::lower_constant_rv64, obj::lower_addr_of]
         } else {
-            vec![
-                obj::lower_constant_rv32,
-                obj::lower_constantf_rv32,
-                obj::lower_addr_of,
-            ]
+            vec![obj::lower_constant_rv32, obj::lower_addr_of]
         }
     }
 
@@ -1683,10 +1676,17 @@ mod tests {
         let rv32if = rule_names(&[crate::Feature::RV32I, crate::Feature::F]);
         assert!(rv32if.contains(&"fadds"));
         assert!(rv32if.contains(&"floadword"));
+        assert!(rv32if.contains(&"fmvwx"));
         assert!(!rv32if.contains(&"faddd"));
-        let rv64ifd = rule_names(&[crate::Feature::RV64I, crate::Feature::F, crate::Feature::D]);
+        let rv64ifd = rule_names(&[
+            crate::Feature::RV64I,
+            crate::Feature::F,
+            crate::Feature::D,
+            crate::Feature::D64,
+        ]);
         assert!(rv64ifd.contains(&"fadds"));
         assert!(rv64ifd.contains(&"faddd"));
+        assert!(rv64ifd.contains(&"fmvdx"));
         assert!(rv64ifd.contains(&"fstoredouble"));
     }
 
@@ -1905,9 +1905,11 @@ mod tests {
     }
 
     #[test]
-    fn live_constant_is_not_erased() {
+    fn live_constant_materializes_li() {
         // A constant with a genuine remaining use (returned directly, so no
-        // instruction folds it as an immediate) must survive dead-constant cleanup.
+        // instruction folds it as an immediate) is selected as the canonical
+        // `li` (`addi rd, x0, imm`) rather than surviving to the pre-RA hook
+        // — and is never silently erased.
         let context = Context::with_default_dialects();
         context.register_dialect::<AsmDialect>();
         context.register_dialect::<RiscvDialect>();
@@ -1945,8 +1947,8 @@ mod tests {
             .map(|id| context.get_op(id).name)
             .collect();
         assert!(
-            body.contains(&"constant"),
-            "a constant feeding the return must be kept, got {body:?}"
+            body.contains(&"addi") && !body.contains(&"constant"),
+            "a constant feeding the return must select as li, got {body:?}"
         );
     }
 

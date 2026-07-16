@@ -1,0 +1,31 @@
+// RUN: tir mc --march=rv32i --filetype=asm %s | filecheck %s
+
+// The same arithmetic decomposition runs at the constant's i32 width on RV32,
+// including both signed boundaries.
+
+module {
+  func @min() -> !i32 {
+    %0 = constant {value = -2147483648} : !i32
+    return %0
+  }
+  // CHECK-LABEL: min:
+  // CHECK-NEXT: addi x5, x0, -128
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x10, x5, 0
+  // CHECK-NEXT: jalr x0, 0(x1)
+
+  func @max() -> !i32 {
+    %0 = constant {value = 2147483647} : !i32
+    return %0
+  }
+  // CHECK-LABEL: max:
+  // CHECK-NEXT: addi x5, x0, -128
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x10, x5, -1
+  // CHECK-NEXT: jalr x0, 0(x1)
+  module_end
+}

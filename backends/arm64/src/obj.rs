@@ -8,8 +8,8 @@ use tir::backend::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
 
 use crate::{
     AddressPCRelOpBuilder, BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder,
-    MoveWideZeroOpBuilder, ReturnOpBuilder, VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp,
-    VirtualReturnOp, phys, virt,
+    MoveWideKeepShiftedOpBuilder, MoveWideZeroOpBuilder, ReturnOpBuilder, VirtualBranchOp,
+    VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
 };
 
 const R_AARCH64_ADR_PREL_LO21: u32 = 274;
@@ -58,8 +58,8 @@ pub(crate) fn object_format() -> ObjectFormatInfo {
     }
 }
 
-/// Pre-RA: materialize a `constant` that survived instruction selection into
-/// `movz rd, #imm` (only the unshifted 16-bit form exists so far).
+/// Pre-RA: materialize a `constant` that survived instruction selection with
+/// `movz` followed by one `movk` for each non-zero upper halfword.
 pub(crate) fn lower_constant(
     context: &tir::Context,
     op: &tir::OperationRef,
@@ -73,20 +73,29 @@ pub(crate) fn lower_constant(
     let value = tir::backend::int_attr(constant.attributes(), "value").ok_or_else(|| {
         tir::PassError::InvalidRuleSet("constant op without an integer value".to_string())
     })?;
-    if !(0..=0xFFFF).contains(&value) {
-        return Err(tir::PassError::InvalidRuleSet(format!(
-            "constant {value} does not fit movz #imm16; wide constant materialization is not implemented"
-        )));
+    let bits = value as u64;
+    let dest = virt(constant.result().number(), crate::RegClass::GPR.id());
+    let mut last: Box<dyn Operation> = Box::new(
+        MoveWideZeroOpBuilder::new(context)
+            .attr("rd", dest.clone())
+            .attr("imm", AttributeValue::Int((bits & 0xffff) as i64))
+            .build(),
+    );
+    for halfword in 1..4 {
+        let part = ((bits >> (halfword * 16)) & 0xffff) as i64;
+        if part == 0 {
+            continue;
+        }
+        rewriter.insert_op_before(op, last.as_ref())?;
+        last = Box::new(
+            MoveWideKeepShiftedOpBuilder::new(context)
+                .attr("rd", dest.clone())
+                .attr("imm", AttributeValue::Int(part))
+                .attr("hw", AttributeValue::Int(halfword))
+                .build(),
+        );
     }
-
-    let movz = MoveWideZeroOpBuilder::new(context)
-        .attr(
-            "rd",
-            virt(constant.result().number(), crate::RegClass::GPR.id()),
-        )
-        .attr("imm", AttributeValue::Int(value))
-        .build();
-    rewriter.replace_op(op, &movz)?;
+    rewriter.replace_op(op, last.as_ref())?;
     Ok(true)
 }
 

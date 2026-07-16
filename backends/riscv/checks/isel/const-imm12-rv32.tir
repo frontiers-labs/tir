@@ -1,0 +1,22 @@
+// RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s
+
+// rv32 selects fitting constants the same way: `addi rd, x0, imm`.
+
+module {
+  func @five() -> !i32 {
+    %0 = constant {value = 5} : !i32
+    return %0
+  }
+  // CHECK: asm.symbol {name = "five"
+  // CHECK-NOT: constant
+  // CHECK: riscv.addi {rd = %virt0:GPR, rs1 = x0, imm = 5}
+
+  func @imm_min() -> !i32 {
+    %0 = constant {value = -2048} : !i32
+    return %0
+  }
+  // CHECK: asm.symbol {name = "imm_min"
+  // CHECK-NOT: constant
+  // CHECK: riscv.addi {rd = %virt1:GPR, rs1 = x0, imm = -2048}
+  module_end
+}

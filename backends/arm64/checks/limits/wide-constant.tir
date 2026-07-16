@@ -1,12 +1,7 @@
-// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
-// XFAIL: *
+// RUN: tir mc --march=arm64 --filetype=asm %s | filecheck %s
 
-// UNSUPPORTED: constant materialization only emits a single MOVZ, so any value
-// that does not fit imm16 fails. isel aborts with
-//   "constant 65536 does not fit movz #imm16; wide constant materialization is
-//    not implemented".
-// The multi-instruction MOVZ/MOVK (and MOVN for negatives) sequence is missing,
-// so even `constant -1` cannot be produced.
+// Values wider than 16 bits start from MOVZ and fill the remaining halfwords
+// with MOVK.
 
 module {
   func @f() -> !i64 {
@@ -16,4 +11,5 @@ module {
   module_end
 }
 
-// CHECK: arm64.movk
+// CHECK: movz {{.*}}, 0
+// CHECK: movk {{.*}}, 1, 1

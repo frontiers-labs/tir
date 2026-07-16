@@ -1441,6 +1441,7 @@ where
             match name {
                 "clamp" => Some(BuiltinFunction::Clamp),
                 "extract" => Some(BuiltinFunction::Extract),
+                "bitcast" => Some(BuiltinFunction::Bitcast),
                 "log2Ceil" => Some(BuiltinFunction::Log2Ceil),
                 "regnum" => Some(BuiltinFunction::Regnum),
                 "sext" => Some(BuiltinFunction::SExt),

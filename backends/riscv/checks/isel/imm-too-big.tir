@@ -1,9 +1,9 @@
-// RUN: not tir mc --march=rv64i --stage=isel %s
+// RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
 
 // 2048 does not fit `addi`'s signed 12-bit immediate field: the encoding
-// would truncate to -2048. The immediate rule must refuse the constant, and
-// with no wide-constant materializer in the rule set selection fails instead
-// of miscompiling.
+// would truncate to -2048. The immediate rule refuses the constant, and the
+// materialize decomposition builds it instead — (1 << 12) - 2048 == 2048 —
+// so the consuming add reads it from a register. Never a truncated encoding.
 
 module {
   func @big(%0: !i64) -> !i64 {
@@ -13,3 +13,8 @@ module {
   }
   module_end
 }
+
+// CHECK: addi x5, x0, 1
+// CHECK-NEXT: slli x5, x5, 12
+// CHECK-NEXT: addi x5, x5, -2048
+// CHECK-NEXT: add x10, x5, x10

@@ -48,6 +48,8 @@ pub enum SymKind {
     Not,
     /// Bit concatenation; first operand occupies the high bits, width is the sum.
     Concat,
+    /// Reinterpret a scalar value's unchanged bit pattern in another scalar domain.
+    Bitcast,
     /// Arguments are condition, then branch, else branch
     // #[arity = 3]
     If,
@@ -155,6 +157,7 @@ impl SymKind {
             SymKind::Symbol | SymKind::Constant | SymKind::Arg => 0,
             SymKind::Not
             | SymKind::Neg
+            | SymKind::Bitcast
             | SymKind::Log2Ceil
             | SymKind::Sqrt
             | SymKind::IterConcat => 1,

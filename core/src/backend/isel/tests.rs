@@ -1,13 +1,14 @@
 use tir::{
     Context, IRBuilder, IRFormatter, Operation, PassManager, TypeId,
-    builtin::{FuncOp, IntegerType, ops},
+    builtin::{FloatType, FuncOp, IntegerType, ops},
     graph::{MetaMutDag, MutDag, OperandConstraint},
     sem::{FloatFormat, SemGraph, SemType, SymKind, SymPayload},
 };
 
 use super::{
-    BranchEmitters, EmitRequest, InstructionSelectPass, IselCostModel, RegisterCapability,
-    RegisterRequirement, Rule, RuleKind, RuleMatch, SemEGraph, SemNode, template_node,
+    BranchEmitters, EmitRequest, ImmRange, InstructionSelectPass, IselCostModel,
+    RegisterCapability, RegisterRequirement, Rule, RuleEmitFn, RuleKind, RuleMatch, SemEGraph,
+    SemNode, template_node,
 };
 
 #[test]
@@ -618,6 +619,172 @@ fn emit_add_imm_marker(
     Ok(Box::new(ops::subi(context, lhs, lhs, result_ty).build()))
 }
 
+fn zero_materializer_pattern() -> SemGraph {
+    let mut g = SemGraph::new();
+    let zero = g.add_node(SymKind::Constant);
+    g.set_leaf_data(zero, tir::sem::int_payload(1, 0, false));
+    let width = symbol(&mut g, 2);
+    let zext = binary(&mut g, SymKind::ZExt, zero, width);
+    let immediate = symbol(&mut g, 1);
+    binary(&mut g, SymKind::Add, zext, immediate);
+    g
+}
+
+fn emit_materializer_marker(
+    context: &Context,
+    req: &EmitRequest,
+    _m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let result = *req
+        .results
+        .first()
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let result_ty = req.result_ty.expect("typed result");
+    Ok(Box::new(
+        ops::muli(context, result, result, result_ty).build(),
+    ))
+}
+
+fn materializer_rule(emit: RuleEmitFn) -> Rule {
+    Rule::new("li", zero_materializer_pattern(), 5, emit)
+        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+        .with_operand_imm_ranges(vec![(
+            1,
+            ImmRange {
+                width: 12,
+                signed: true,
+            },
+        )])
+}
+
+fn emit_integer_materializer_marker(
+    context: &Context,
+    req: &EmitRequest,
+    m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let ty = req
+        .result_ty
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let data = context.get_type_data(ty);
+    if (data.as_ref() as &dyn std::any::Any)
+        .downcast_ref::<IntegerType>()
+        .is_none()
+    {
+        return Err(tir::PassError::InvalidRuleSet(
+            "integer materializer received a non-integer result type".into(),
+        ));
+    }
+    emit_materializer_marker(context, req, m)
+}
+
+fn bitcast_pattern() -> SemGraph {
+    let mut g = SemGraph::new();
+    let input = symbol(&mut g, 0);
+    let root = g.add_node(SymKind::Bitcast);
+    g.add_edge(root, input);
+    g
+}
+
+fn emit_float_marker(
+    context: &Context,
+    req: &EmitRequest,
+    _m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let ty = req
+        .result_ty
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    Ok(Box::new(ops::constantf(context, 0.0, ty).build()))
+}
+
+#[test]
+fn introduced_integer_materializer_uses_its_class_type_under_float_bitcast() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let f32_ty = FloatType::f32(&context);
+    let region = context.create_region();
+    let block = context.create_block(vec![]);
+    region.add_block(block.id());
+    let func = ops::func(&context, "demo", f32_ty, Some(region.id())).build();
+
+    let mut fb = IRBuilder::new(func.body());
+    let value = ops::constantf(&context, 0.0, f32_ty).build();
+    let result = value.result();
+    fb.insert(value);
+    fb.insert(ops::r#return(&context, result).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        Rule::new("bitcast", bitcast_pattern(), 1, emit_float_marker),
+        materializer_rule(emit_integer_materializer_marker),
+    ];
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("integer materialization under a bitcast should stay integer typed");
+}
+
+#[test]
+fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let i64_ty = IntegerType::new(&context, 64);
+    let region = context.create_region();
+    let block = context.create_block(vec![]);
+    region.add_block(block.id());
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    let mut fb = IRBuilder::new(func.body());
+    let lhs = ops::constant(&context, 5, i64_ty).build();
+    let lhs_result = lhs.result();
+    fb.insert(lhs);
+    let rhs = ops::constant(&context, 7, i64_ty).build();
+    let rhs_result = rhs.result();
+    fb.insert(rhs);
+    let add = ops::addi(&context, lhs_result, rhs_result, i64_ty).build();
+    let add_result = add.result();
+    fb.insert(add);
+    fb.insert(ops::r#return(&context, add_result).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        Rule::new("addi", atomic_pattern(SymKind::Add), 1, emit_add_imm_marker)
+            .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+            .with_operand_imm_ranges(vec![(
+                1,
+                ImmRange {
+                    width: 12,
+                    signed: true,
+                },
+            )]),
+        materializer_rule(emit_materializer_marker),
+    ];
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("selection should materialize the register operand");
+
+    let names: Vec<_> = context
+        .get_region(region.id())
+        .iter(context.clone())
+        .next()
+        .unwrap()
+        .op_ids()
+        .into_iter()
+        .map(|op| context.get_op(op).name)
+        .collect();
+    assert_eq!(names, vec!["muli", "subi", "return"]);
+}
+
 /// Select `add(a, constant)` with a cheap immediate rule bounded to a signed
 /// 12-bit field (`subi` marker) and an expensive register-form fallback.
 fn run_immediate_range(constant: i64) -> Vec<&'static str> {
@@ -1189,6 +1356,113 @@ fn emit_nonzero_marker(
     vec![Box::new(ops::br(context, vec![condition], dest).build())]
 }
 
+fn literal_rhs_pattern(kind: SymKind, value: i64) -> SemGraph {
+    let mut g = SemGraph::new();
+    let lhs = symbol(&mut g, 0);
+    let rhs = g.add_node(SymKind::Constant);
+    g.set_leaf_data(rhs, tir::sem::int_payload(64, value as u64, true));
+    binary(&mut g, kind, lhs, rhs);
+    g
+}
+
+fn emit_unary_branch_marker(
+    context: &Context,
+    req: &EmitRequest,
+    m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let dest = m
+        .block_binding(2)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let lhs = m
+        .value_binding(0)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    Ok(Box::new(ops::br(context, vec![lhs], dest).build()))
+}
+
+#[test]
+fn forced_constant_materialization_does_not_override_branch_rule_cost() {
+    let context = Context::with_default_dialects();
+    let module = ops::module(&context, None).build();
+    let i64_ty = IntegerType::new(&context, 64);
+    let input = context.create_value(i64_ty, None);
+    let input_id = input.id();
+    let region = context.create_region();
+    let entry = context.create_block(vec![input]);
+    let true_block = context.create_block(vec![]);
+    let false_block = context.create_block(vec![]);
+    for block in [&entry, &true_block, &false_block] {
+        region.add_block(block.id());
+    }
+    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+
+    let mut eb = IRBuilder::new(entry.clone());
+    let seven = ops::constant(&context, 7, i64_ty).build();
+    let seven_result = seven.result();
+    eb.insert(seven);
+    let cmp = tir::builtin::CmpIOpBuilder::new(&context)
+        .lhs(input_id)
+        .rhs(seven_result)
+        .predicate("eq")
+        .result_type(IntegerType::new(&context, 1))
+        .build();
+    let condition = cmp.result();
+    eb.insert(cmp);
+    eb.insert(
+        ops::cond_br(
+            &context,
+            condition,
+            vec![],
+            vec![],
+            true_block.id(),
+            false_block.id(),
+        )
+        .build(),
+    );
+    let mut tb = IRBuilder::new(true_block.clone());
+    tb.insert(ops::r#return(&context, seven_result).build());
+    let mut fb = IRBuilder::new(false_block.clone());
+    fb.insert(ops::r#return(&context, input_id).build());
+
+    let mut mb = IRBuilder::new(module.body());
+    mb.insert(func);
+    mb.insert(ops::module_end(&context).build());
+
+    let rules = vec![
+        Rule::new(
+            "expensive-literal-branch",
+            literal_rhs_pattern(SymKind::Eq, 7),
+            100,
+            emit_unary_branch_marker,
+        )
+        .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
+        Rule::new(
+            "cheap-register-branch",
+            atomic_pattern(SymKind::Eq),
+            1,
+            emit_fused_branch_marker,
+        )
+        .with_kind(RuleKind::CondBranch { target_symbol: 2 })
+        .with_operand_constraints(vec![
+            (0, OperandConstraint::Register),
+            (1, OperandConstraint::Register),
+        ]),
+        materializer_rule(emit_materializer_marker),
+    ];
+
+    let mut pm = PassManager::new();
+    pm.nest(FuncOp::name())
+        .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
+    pm.run(&context, context.get_op(module.id()))
+        .expect("branch selection should account for materializer cost");
+
+    let body = block_op_list(&context, entry.id());
+    let branch = body
+        .iter()
+        .find_map(|op| op.clone().as_op::<tir::builtin::BranchOp>())
+        .expect("fused branch");
+    assert_eq!(branch.dest_args().len(), 2, "the cheap branch must win");
+}
+
 fn branch_rule() -> Rule {
     Rule::new(
         "blt-marker",
@@ -1371,6 +1645,48 @@ fn flag_branch_rule_emits_prelude_before_branch() {
     let fused = body[1].clone().as_op::<tir::builtin::BranchOp>().unwrap();
     assert_eq!(fused.dest(), b.true_dest);
     assert_eq!(fused.dest_args(), b.args);
+}
+
+#[test]
+fn register_constrained_branch_does_not_read_an_unmaterialized_constant() {
+    let branch = Rule::new(
+        "jeq-marker",
+        atomic_pattern(SymKind::Eq),
+        1,
+        emit_fused_branch_marker,
+    )
+    .with_kind(RuleKind::CondBranch { target_symbol: 2 })
+    .with_operand_constraints(vec![
+        (0, OperandConstraint::Register),
+        (1, OperandConstraint::Register),
+    ]);
+    let materializer = materializer_rule(emit_materializer_marker);
+    let rules = vec![
+        branch,
+        Rule::new("eq-marker", atomic_pattern(SymKind::Eq), 10, emit_sub),
+        materializer,
+    ];
+
+    let b = guarded_block_with_rules(&[64], rules, |context, fb, args| {
+        let seven = ops::constant(context, 7, IntegerType::new(context, 64)).build();
+        let seven_result = seven.result();
+        fb.insert(seven);
+        let cmp = tir::builtin::CmpIOpBuilder::new(context)
+            .lhs(args[0])
+            .rhs(seven_result)
+            .predicate("eq")
+            .result_type(IntegerType::new(context, 1))
+            .build();
+        let result = cmp.result();
+        fb.insert(cmp);
+        result
+    });
+
+    let names: Vec<_> = block_ops(&b.context, b.region)
+        .iter()
+        .map(|op| op.name)
+        .collect();
+    assert_eq!(names, vec!["muli", "subi", "br", "br"]);
 }
 
 /// A bare i1 condition no branch rule can fuse takes the branch-if-nonzero

@@ -1,6 +1,7 @@
 // RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
 
-// A constant inside the signed 32-bit range materializes with lui+addiw.
+// A constant inside the signed 32-bit range still materializes through the
+// isel decomposition: ((128 << 12) << 12) - 1 == 0x7fffffff.
 // The out-of-range boundary is covered by wide-const-toobig.tir.
 
 module {
@@ -11,5 +12,8 @@ module {
   module_end
 }
 
-// CHECK: lui x10, 524288
-// CHECK: addiw x10, x10, -1
+// CHECK: addi x5, x0, 128
+// CHECK-NEXT: slli x5, x5, 12
+// CHECK-NEXT: addi x5, x5, 0
+// CHECK-NEXT: slli x5, x5, 12
+// CHECK-NEXT: addi x10, x5, -1

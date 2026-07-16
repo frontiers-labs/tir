@@ -214,6 +214,7 @@ impl<'g, V> Blaster<'g, V> {
                 out.extend(self.child_bits(id, 0));
                 Ok(out)
             }
+            Bitcast => Ok(self.child_bits(id, 0)),
             Extract => self.encode_extract(id),
             ZExt => self.encode_extend(id, false),
             SExt => self.encode_extend(id, true),

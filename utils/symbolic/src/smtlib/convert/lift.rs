@@ -173,6 +173,7 @@ where
             ShiftRightLogic => self.bv_app("bvlshr", id),
             ShiftRightArithmetic => self.bv_app("bvashr", id),
             Concat => self.bv_app("concat", id),
+            Bitcast => self.lift(self.children(id)[0], bool_ctx),
 
             If => self.ite(id),
             Extract => self.extract(id),

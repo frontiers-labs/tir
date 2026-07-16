@@ -223,7 +223,7 @@ instruction FMvWX for [F] {
     }
 
     behavior {
-        fd = extract(rs1, 31, 0);
+        fd = bitcast(extract(rs1, 31, 0));
     }
 }
 
@@ -250,7 +250,7 @@ instruction FMvDX for [D64] {
     }
 
     behavior {
-        fd = rs1;
+        fd = bitcast(rs1);
     }
 }
 

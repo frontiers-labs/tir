@@ -1566,6 +1566,7 @@ fn emit_sem_expr(
                 true,
             ))
         }
+        SymKind::Bitcast => child(0),
         SymKind::Extract => {
             let (e, w, _) = child(0)?.as_bv();
             let high = const_child(1)? as u32;

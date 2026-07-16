@@ -132,6 +132,72 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
     }
 }
 
+/// The operands of a value rule's zero-form constant materializer, when one can
+/// be derived: the canonical pattern must be `Add(reg, imm)` over two bare
+/// operand symbols, with the source register in a class `zeroable_class`
+/// accepts (an integer class with a hardwired-zero register) and every other
+/// operand accounted for as the `rd_name` destination or the folded immediate.
+/// The caller guarantees `rd_name` is the sole defined register operand, unread
+/// and untied, with no implicit register reads.
+/// Returns `(source register operand name, its class, immediate symbol)`.
+fn value_zero_form_operands(
+    canon_pattern: &impl tir::graph::Dag<
+        Node = tir::sem::SymKind,
+        Leaf = tir::sem::SymPayload<tir::ValueId>,
+    >,
+    canon_root: tir::graph::NodeId,
+    ops: &[(String, Type)],
+    variable_symbols: &HashMap<String, u32>,
+    rd_name: &str,
+    zeroable_class: impl Fn(&str) -> bool,
+) -> Option<(String, String, u32)> {
+    use tir::sem::{SymKind, SymPayload};
+
+    if *canon_pattern.get_node(canon_root) != SymKind::Add {
+        return None;
+    }
+    let children: Vec<tir::graph::NodeId> = canon_pattern.children(canon_root).collect();
+    if children.len() != 2 {
+        return None;
+    }
+    let symbol_of = |node: tir::graph::NodeId| {
+        (*canon_pattern.get_node(node) == SymKind::Symbol)
+            .then(|| match canon_pattern.get_leaf_data(node) {
+                Some(SymPayload::SymbolId(s)) => Some(*s),
+                _ => None,
+            })
+            .flatten()
+    };
+
+    let mut source = None;
+    let mut imm_sym = None;
+    for &child in &children {
+        let sym = symbol_of(child)?;
+        let operand = ops
+            .iter()
+            .find(|(name, _)| variable_symbols.get(name) == Some(&sym))?;
+        match &operand.1 {
+            Type::Struct(class) if zeroable_class(class) => {
+                source = Some((operand.0.clone(), class.clone()));
+            }
+            Type::Bits(_) | Type::Integer => imm_sym = Some(sym),
+            _ => return None,
+        }
+    }
+    let (source_name, source_class) = source?;
+    let imm_sym = imm_sym?;
+
+    // Every operand must be the destination, the zeroed source, or the folded
+    // immediate — anything else would go unbound in the derived emitter.
+    let accounted = ops.iter().all(|(name, ty)| match ty {
+        Type::Struct(_) => name == rd_name || *name == source_name,
+        Type::Bits(_) | Type::Integer => variable_symbols.get(name) == Some(&imm_sym),
+        Type::String => true,
+        _ => false,
+    });
+    accounted.then_some((source_name, source_class, imm_sym))
+}
+
 /// The boundary symbols an instruction is width-sensitive in: the operands'
 /// upper register bits reach the result, so a value of a different width must
 /// not bind (its bits above the value width are undefined). Comparison

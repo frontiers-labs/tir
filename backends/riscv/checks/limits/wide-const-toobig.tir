@@ -1,8 +1,8 @@
-// RUN: not tir mc --march=rv64i --filetype=asm %s
+// RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
 
-// 0x80000000 is a valid i64 but needs bit 31 set with a zero upper half, which
-// the lui+addiw materializer cannot build. Selection fails loudly ("wide
-// constant materialization is not implemented") rather than miscompiling.
+// 0x80000000 needs bit 31 set with a zero upper half, so RV64 must build it in
+// pieces rather than sign-extending a single LUI/ADDIW pair. The isel
+// decomposition selects (128 << 12) << 12 == 0x80000000.
 
 module {
   func @too_big() -> !i64 {
@@ -11,3 +11,9 @@ module {
   }
   module_end
 }
+
+// CHECK: addi x5, x0, 128
+// CHECK-NEXT: slli x5, x5, 12
+// CHECK-NEXT: addi x5, x5, 0
+// CHECK-NEXT: slli x5, x5, 12
+// CHECK-NEXT: addi x10, x5, 0

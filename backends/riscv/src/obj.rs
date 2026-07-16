@@ -85,9 +85,10 @@ pub(crate) fn object_format(xlen: u32, features: &[crate::Feature]) -> ObjectFor
     }
 }
 
-/// Pre-RA: materialize a `constant` that survived instruction selection
-/// (i.e. one no instruction folded as an immediate) into `addi rd, x0, imm`,
-/// or `lui`+`addiw` (`addi` on rv32) when it does not fit 12 bits.
+/// Pre-RA: integer constants are selected by the e-graph materialize axioms,
+/// so a live `constant` op reaching this hook is a selection bug — fail loudly,
+/// never miscompile. rv32 keeps its specific diagnostic for values a 32-bit
+/// target cannot represent (no rule could ever cover them).
 pub(crate) fn lower_constant_rv32(
     context: &tir::Context,
     op: &tir::OperationRef,
@@ -105,9 +106,9 @@ pub(crate) fn lower_constant_rv64(
 }
 
 fn lower_constant(
-    context: &tir::Context,
+    _context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
+    _rewriter: &mut tir::Rewriter,
     xlen: u32,
 ) -> Result<bool, tir::PassError> {
     use tir::builtin::ConstantOp;
@@ -118,63 +119,16 @@ fn lower_constant(
     let value = tir::backend::int_attr(constant.attributes(), "value").ok_or_else(|| {
         tir::PassError::InvalidRuleSet("constant op without an integer value".to_string())
     })?;
-    let dest = virt(constant.result().number(), crate::RegClass::GPR.id());
 
-    let last = materialize_int(context, op, rewriter, dest, value, xlen)?;
-    rewriter.replace_op(op, last.as_ref())?;
-    Ok(true)
-}
-
-/// The instruction sequence materializing `value` into GPR `dest`: `addi rd,
-/// x0, imm` when it fits 12 bits, else `lui` + `addiw` (`addi` on rv32). All
-/// but the returned final instruction are inserted ahead of `op`.
-fn materialize_int(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-    dest: AttributeValue,
-    value: i64,
-    xlen: u32,
-) -> Result<Box<dyn Operation>, tir::PassError> {
-    if (-2048..2048).contains(&value) {
-        let li = crate::AddImmOpBuilder::new(context)
-            .attr("rd", dest)
-            .attr("rs1", phys(&(crate::RegClass::GPR.id(), 0)))
-            .attr("imm", AttributeValue::Int(value))
-            .build();
-        return Ok(Box::new(li));
-    }
-
-    if i32::try_from(value).is_err() {
+    if xlen == 32 && i32::try_from(value).is_err() {
         return Err(tir::PassError::InvalidRuleSet(format!(
-            "constant {value} does not fit 32 bits; wide constant materialization is not implemented"
+            "constant {value} does not fit the selected 32-bit target"
         )));
     }
-
-    // Split into a sign-adjusted upper-20/lower-12 pair: `lui` then `addiw`
-    // (`addi` on rv32) reconstruct the 32-bit value.
-    let hi = ((value + 0x800) >> 12) & 0xFFFFF;
-    let lo = value - (((value + 0x800) >> 12) << 12);
-    let lui = crate::LoadUpperImmOpBuilder::new(context)
-        .attr("rd", dest.clone())
-        .attr("imm", AttributeValue::Int(hi))
-        .build();
-    rewriter.insert_op_before(op, &lui)?;
-    if xlen == 64 {
-        let add = crate::AddImmWordOpBuilder::new(context)
-            .attr("rd", dest.clone())
-            .attr("rs1", dest)
-            .attr("imm", AttributeValue::Int(lo))
-            .build();
-        Ok(Box::new(add))
-    } else {
-        let add = crate::AddImmOpBuilder::new(context)
-            .attr("rd", dest.clone())
-            .attr("rs1", dest)
-            .attr("imm", AttributeValue::Int(lo))
-            .build();
-        Ok(Box::new(add))
-    }
+    Err(tir::PassError::InvalidRuleSet(format!(
+        "constant {value} survived instruction selection; the materialize \
+         axioms must cover every representable integer constant"
+    )))
 }
 
 /// Pre-RA: materialize an `addr_of` symbol address as the absolute
@@ -206,102 +160,6 @@ pub(crate) fn lower_addr_of(
         .attr("imm", AttributeValue::Str(sym))
         .build();
     rewriter.replace_op(op, &addi)?;
-    Ok(true)
-}
-
-/// Pre-RA: materialize a `constantf` into its bit pattern in a scratch GPR
-/// (the integer `li` sequence) followed by a bit-pattern move into the float
-/// destination: `fmv.w.x` for f32, `fmv.d.x` for f64. f64 needs the whole
-/// binary64 pattern in one integer register, so it is rv64-only (and shares
-/// the integer path's 32-bit materialization limit).
-pub(crate) fn lower_constantf_rv32(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-) -> Result<bool, tir::PassError> {
-    lower_constantf(context, op, rewriter, 32)
-}
-
-pub(crate) fn lower_constantf_rv64(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-) -> Result<bool, tir::PassError> {
-    lower_constantf(context, op, rewriter, 64)
-}
-
-fn lower_constantf(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
-    xlen: u32,
-) -> Result<bool, tir::PassError> {
-    use tir::builtin::{ConstantFOp, FloatType, IntegerType};
-
-    let Some(constant) = op.as_op::<ConstantFOp>() else {
-        return Ok(false);
-    };
-    let value = constant
-        .attributes()
-        .iter()
-        .find_map(|attr| match (&attr.value, attr.name == "value") {
-            (AttributeValue::F64(v), true) => Some(*v),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            tir::PassError::InvalidRuleSet("constantf op without a float value".to_string())
-        })?;
-    let result = constant.result();
-    let width = {
-        let ty = context.get_type_data(context.get_value(result).ty());
-        (ty.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<FloatType>()
-            .map(FloatType::bit_width)
-    };
-
-    let scratch = context
-        .create_value(IntegerType::new(context, xlen), None)
-        .id()
-        .number();
-    let scratch_reg = virt(scratch, crate::RegClass::GPR.id());
-
-    let fmv: Box<dyn Operation> = match width {
-        Some(32) => {
-            // The attribute holds an f64; rounding to f32 yields the constant's
-            // binary32 pattern, sign-extended for the integer materializer.
-            let bits = (value as f32).to_bits() as i32 as i64;
-            let li = materialize_int(context, op, rewriter, scratch_reg.clone(), bits, xlen)?;
-            rewriter.insert_op_before(op, li.as_ref())?;
-            Box::new(
-                crate::FMvWXOpBuilder::new(context)
-                    .attr("fd", virt(result.number(), crate::RegClass::FPR32.id()))
-                    .attr("rs1", scratch_reg)
-                    .build(),
-            )
-        }
-        Some(64) => {
-            if xlen != 64 {
-                return Err(tir::PassError::InvalidRuleSet(
-                    "f64 constants are not supported on rv32 (fmv.d.x needs rv64)".to_string(),
-                ));
-            }
-            let bits = value.to_bits() as i64;
-            let li = materialize_int(context, op, rewriter, scratch_reg.clone(), bits, xlen)?;
-            rewriter.insert_op_before(op, li.as_ref())?;
-            Box::new(
-                crate::FMvDXOpBuilder::new(context)
-                    .attr("fd", virt(result.number(), crate::RegClass::FPR64.id()))
-                    .attr("rs1", scratch_reg)
-                    .build(),
-            )
-        }
-        _ => {
-            return Err(tir::PassError::InvalidRuleSet(
-                "only f32/f64 constants are supported".to_string(),
-            ));
-        }
-    };
-    rewriter.replace_op(op, fmv.as_ref())?;
     Ok(true)
 }
 

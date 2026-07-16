@@ -693,6 +693,7 @@ fn format_builtin(builtin: &BuiltinFunction) -> &'static str {
     match builtin {
         BuiltinFunction::Clamp => "clamp",
         BuiltinFunction::Extract => "extract",
+        BuiltinFunction::Bitcast => "bitcast",
         BuiltinFunction::Log2Ceil => "log2Ceil",
         BuiltinFunction::Regnum => "regnum",
         BuiltinFunction::SExt => "sext",

@@ -252,6 +252,7 @@ impl From<ast::UnOp> for UnOp {
 pub(super) enum BuiltinFunction {
     Clamp,
     Extract,
+    Bitcast,
     #[serde(rename = "log2_ceil")]
     Log2Ceil,
     Regnum,
@@ -288,6 +289,7 @@ impl From<ast::BuiltinFunction> for BuiltinFunction {
         match function {
             ast::BuiltinFunction::Clamp => Self::Clamp,
             ast::BuiltinFunction::Extract => Self::Extract,
+            ast::BuiltinFunction::Bitcast => Self::Bitcast,
             ast::BuiltinFunction::Log2Ceil => Self::Log2Ceil,
             ast::BuiltinFunction::Regnum => Self::Regnum,
             ast::BuiltinFunction::SExt => Self::SExt,

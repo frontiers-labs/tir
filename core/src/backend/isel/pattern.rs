@@ -50,6 +50,14 @@ pub(crate) struct PatternNodeMeta {
     pub(crate) semantic_type: Option<SemType>,
 }
 
+impl PatternNodeMeta {
+    /// The node demands its class in a register: a physical-register operand or
+    /// an explicit register constraint.
+    pub(crate) fn demands_register(&self) -> bool {
+        self.register.is_some() || self.constraint == Some(OperandConstraint::Register)
+    }
+}
+
 impl CompiledIselPattern {
     fn match_types(
         &self,
@@ -74,6 +82,20 @@ impl CompiledIselPattern {
                 class_semantic_type(ctx, egraph, matched.root)
                     .is_none_or(|actual| register.accepts(&actual))
             })
+    }
+
+    /// The operand symbols the pattern reads as registers.
+    pub(crate) fn register_symbols(&self) -> HashSet<u32> {
+        (0..self.pattern.len())
+            .filter_map(|index| {
+                let PatternNode::Var(Var::Symbol(symbol)) =
+                    self.pattern.node(Id::from_raw(index as u32))
+                else {
+                    return None;
+                };
+                self.node_meta[index].demands_register().then_some(*symbol)
+            })
+            .collect()
     }
 
     /// Whether `class` may bind under `pattern_node`: a width requirement rejects
@@ -315,6 +337,57 @@ fn compile_isel_pattern_node(
     memo.insert(node, compiled);
     Some(compiled)
 }
+/// The immediate ranges of the rule set's zero-form constant materializers:
+/// rules whose pattern is `Add(ZExt(0b0, W), imm)` with an immediate-constrained,
+/// range-annotated `imm` (the TMDL-derived `addi rd, zero_reg, imm` li form).
+/// Program constants fitting one of these ranges can be covered by a real
+/// instruction, so the constant bridge injects the matching shape for them.
+pub(crate) fn constant_materializer_ranges(patterns: &[CompiledIselPattern]) -> Vec<ImmRange> {
+    patterns
+        .iter()
+        .filter_map(|compiled| {
+            let root = compiled.pattern.root();
+            let PatternNode::Node(root_node) = compiled.pattern.node(root) else {
+                return None;
+            };
+            if root_node.kind != SymKind::Add || root_node.children.len() != 2 {
+                return None;
+            }
+            let mut has_zero_zext = false;
+            let mut imm_range = None;
+            for &child in &root_node.children {
+                match compiled.pattern.node(child) {
+                    PatternNode::Node(node)
+                        if node.kind == SymKind::ZExt && node.children.len() == 2 =>
+                    {
+                        let zero_value = matches!(
+                            compiled.pattern.node(node.children[0]),
+                            PatternNode::Node(zero)
+                                if zero.kind == SymKind::Constant
+                                    && matches!(
+                                        &zero.payload,
+                                        Some(super::SemPayload::Expr(SymPayload::Int(v)))
+                                            if v.to_u64() == 0
+                                    )
+                        );
+                        let wildcard_width =
+                            matches!(compiled.pattern.node(node.children[1]), PatternNode::Var(_));
+                        has_zero_zext = zero_value && wildcard_width;
+                    }
+                    PatternNode::Var(Var::Symbol(_)) => {
+                        let meta = &compiled.node_meta[child.index()];
+                        if meta.constraint == Some(OperandConstraint::Immediate) {
+                            imm_range = meta.imm_range;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            has_zero_zext.then_some(imm_range).flatten()
+        })
+        .collect()
+}
+
 /// The semantic kinds for which the rule set provides an atomic materializer (a
 /// pattern whose root is that kind with only operand boundaries beneath it).
 pub(crate) fn atomic_kinds(patterns: &[CompiledIselPattern]) -> HashSet<SymKind> {

@@ -343,6 +343,16 @@ fn infer<'a>(
                 }
                 Type::Var(tvg.fresh())
             }
+            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Bitcast) => {
+                let Some(input) = call.arguments.first() else {
+                    return Type::Var(tvg.fresh());
+                };
+                let ty = infer(input, env, tvg, subst, cache, diags, file_name);
+                for arg in &call.arguments[1..] {
+                    infer(arg, env, tvg, subst, cache, diags, file_name);
+                }
+                ty.apply(subst)
+            }
             // `todo()` stands in for unmodeled semantics; it takes no arguments
             // and unifies with whatever context uses it.
             ast::Expr::BuiltinFunction(ast::BuiltinFunction::Todo) => {
@@ -781,5 +791,29 @@ mod tests {
             }}"
         );
         assert!(type_check_source(&src).is_empty());
+    }
+
+    #[test]
+    fn bitcast_preserves_its_operand_type() {
+        let src = "
+            isa Test { param XLEN: Integer = 32; }
+            register_class GPR for [Test] {
+                param ENCODING_LEN: Integer = 5;
+                param WIDTH: Integer = self.XLEN;
+                registers { r0..r31 => {}, }
+            }
+            instruction Bad for [Test] {
+                operands { rd: GPR, text: String, }
+                behavior { rd = bitcast(text); }
+            }
+        ";
+
+        let diagnostics = type_check_source(src);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|(_, diagnostic)| diagnostic.contains("type mismatch")),
+            "bitcast must not erase its operand type: {diagnostics:?}"
+        );
     }
 }

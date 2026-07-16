@@ -9,7 +9,7 @@ use tir_symbolic::egraph::Id;
 use super::FunctionSelection;
 use super::RuleMatch;
 use super::cover::PbqpIselMatch;
-use super::node::class_width;
+use super::node::{class_int_binding, class_width};
 
 #[derive(Clone, Debug)]
 pub(crate) enum BlockDecision {
@@ -138,16 +138,17 @@ impl EmissionBuilder<'_> {
             .map(|(_, c)| self.fs.egraph.find(*c))
             .collect();
         for c in operand_classes {
-            if self.is_introduced(c) {
+            // A materializer's immediate operand binds the rooted class itself
+            // (the injected `Add(zext 0, C)` li form is a member of `C`): not a
+            // real operand dependency, so it must not recurse.
+            if c != class && self.is_introduced(c) {
                 self.emit_introduced(c, anchor, anchor_ty);
             }
         }
 
-        let dest_ty = anchor_ty
-            .or_else(|| {
-                class_width(self.context, &self.fs.egraph, class)
-                    .map(|w| IntegerType::new(self.context, w))
-            })
+        let dest_ty = class_width(self.context, &self.fs.egraph, class)
+            .map(|w| IntegerType::new(self.context, w))
+            .or(anchor_ty)
             .unwrap_or_else(|| IntegerType::new(self.context, 64));
         let dest = self.context.create_value(dest_ty, None).id();
         self.introduced_dest.insert(class, dest);
@@ -170,10 +171,19 @@ impl EmissionBuilder<'_> {
     fn build_rule_match(&self, match_id: usize, consumer: OpId) -> RuleMatch {
         let mut int_bindings = Vec::new();
         let mut value_bindings = Vec::new();
+        let root = self.fs.egraph.find(self.matches[match_id].root);
         for (sym, class) in &self.matches[match_id].bindings.captures.entries {
             let class = self.fs.egraph.find(*class);
-            if let Some(&dest) = self.introduced_dest.get(&class) {
+            // A self-referential operand (a materializer's immediate binds its
+            // own rooted class) resolves to the class's constant, not to the
+            // instruction's own not-yet-written destination.
+            if class != root
+                && let Some(&dest) = self.introduced_dest.get(&class)
+            {
                 value_bindings.push((*sym, dest));
+                if let Some(value) = class_int_binding(&self.fs.egraph, class) {
+                    int_bindings.push((*sym, value));
+                }
                 continue;
             }
             let binding =

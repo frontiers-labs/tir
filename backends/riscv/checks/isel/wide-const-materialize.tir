@@ -1,0 +1,92 @@
+// RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
+
+// A wide integer constant that does not fit addi's 12-bit signed immediate is
+// decomposed by an SMT-proved materialize axiom into a shift/add chain of real
+// RISC-V instructions, instead of surviving selection for the pre-RA hook.
+
+module {
+  func @bit31() -> !i64 {
+    %0 = constant {value = 2147483648} : !i64
+    return %0
+  }
+  // CHECK-LABEL: bit31:
+  // CHECK-NEXT: addi x5, x0, 128
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x10, x5, 0
+  // CHECK-NEXT: jalr x0, 0(x1)
+
+  func @wide() -> !i64 {
+    %0 = constant {value = 1311768467463790320} : !i64
+    return %0
+  }
+  // CHECK-LABEL: wide:
+  // CHECK-NEXT: addi x5, x0, 1
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 564
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 1384
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, -1893
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, -1074
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x10, x5, -272
+  // CHECK-NEXT: jalr x0, 0(x1)
+
+  func @negative() -> !i64 {
+    %0 = constant {value = -1311768467463790320} : !i64
+    return %0
+  }
+  // CHECK-LABEL: negative:
+  // CHECK-NEXT: addi x5, x0, -1
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, -564
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, -1384
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 1893
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 1074
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x10, x5, 272
+  // CHECK-NEXT: jalr x0, 0(x1)
+
+  func @min() -> !i64 {
+    %0 = constant {value = -9223372036854775808} : !i64
+    return %0
+  }
+  // CHECK-LABEL: min:
+  // CHECK-NEXT: addi x5, x0, -8
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x10, x5, 0
+  // CHECK-NEXT: jalr x0, 0(x1)
+
+  func @max() -> !i64 {
+    %0 = constant {value = 9223372036854775807} : !i64
+    return %0
+  }
+  // CHECK-LABEL: max:
+  // CHECK-NEXT: addi x5, x0, -8
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 0
+  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x10, x5, -1
+  // CHECK-NEXT: jalr x0, 0(x1)
+  module_end
+}
