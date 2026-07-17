@@ -17,6 +17,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tir.workspace = true
 tir-adt.workspace = true
+tir-symbolic.workspace = true
 typed-arena.workspace = true
 
 [[bin]]

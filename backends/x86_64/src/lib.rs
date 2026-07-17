@@ -1,5 +1,14 @@
 //! x86-64 backend prototype, generated from the TMDL descriptions in `defs/`.
 
+const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
+    ("main.tmdl", include_str!("../defs/main.tmdl")),
+    ("base.tmdl", include_str!("../defs/base.tmdl")),
+    ("arith_ext.tmdl", include_str!("../defs/arith_ext.tmdl")),
+    ("conditional.tmdl", include_str!("../defs/conditional.tmdl")),
+    ("memory_ext.tmdl", include_str!("../defs/memory_ext.tmdl")),
+    ("float.tmdl", include_str!("../defs/float.tmdl")),
+];
+
 pub use isa::{Feature, get_isel_rules, register_info, register_views, register_widths};
 pub use isa::{TargetConfig, X86_64Dialect};
 
@@ -1182,6 +1191,14 @@ mod isa {
     impl tir::backend::TargetMachine for X86Target {
         fn name(&self) -> &'static str {
             "x86_64"
+        }
+
+        fn model_check_target(&self) -> Option<tir::backend::ModelCheckTarget> {
+            Some(tir::backend::ModelCheckTarget {
+                isa: "X86_64",
+                features: self.config.features.iter().map(Feature::name).collect(),
+                sources: super::MODEL_CHECK_SOURCES,
+            })
         }
 
         fn register_dialects(&self, context: &tir::Context) {

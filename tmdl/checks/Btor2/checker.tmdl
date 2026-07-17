@@ -1,0 +1,16 @@
+// RUN: tmdlc --action=emit-btor2 --isa=TestIsa --output=- %S/../Inputs/smtlib.tmdl | filecheck %s
+
+// CHECK: ; TMDL retirement checker
+// CHECK: {{[0-9]+}} input {{[0-9]+}} insn
+// CHECK: {{[0-9]+}} input {{[0-9]+}} pc
+// CHECK: {{[0-9]+}} input {{[0-9]+}} src0_val
+// CHECK: {{[0-9]+}} input {{[0-9]+}} src1_val
+// CHECK: {{[0-9]+}} input {{[0-9]+}} dst_addr
+// CHECK: {{[0-9]+}} input {{[0-9]+}} dst_we
+// CHECK: {{[0-9]+}} input {{[0-9]+}} dst_val
+// CHECK: {{[0-9]+}} input {{[0-9]+}} next_pc
+// CHECK: {{[0-9]+}} input {{[0-9]+}} valid
+// CHECK: {{[0-9]+}} bad {{[0-9]+}} dst_we_mismatch
+// CHECK: {{[0-9]+}} bad {{[0-9]+}} dst_val_mismatch
+// CHECK: {{[0-9]+}} bad {{[0-9]+}} dst_addr_mismatch
+// CHECK: {{[0-9]+}} bad {{[0-9]+}} next_pc_mismatch

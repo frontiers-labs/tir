@@ -1,6 +1,20 @@
 use tir::helpers::{dialect, operation};
 use tir::{Any, Operation};
 
+const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
+    ("main.tmdl", include_str!("../defs/main.tmdl")),
+    (
+        "data_processing.tmdl",
+        include_str!("../defs/data_processing.tmdl"),
+    ),
+    (
+        "loads_stores.tmdl",
+        include_str!("../defs/loads_stores.tmdl"),
+    ),
+    ("branches.tmdl", include_str!("../defs/branches.tmdl")),
+    ("perf.tmdl", include_str!("../defs/perf.tmdl")),
+];
+
 mod obj;
 
 include!(concat!(env!("OUT_DIR"), "/arm64.rs"));
@@ -644,6 +658,14 @@ pub struct Arm64Target {
 impl tir::backend::TargetMachine for Arm64Target {
     fn name(&self) -> &'static str {
         self.config.canonical_name()
+    }
+
+    fn model_check_target(&self) -> Option<tir::backend::ModelCheckTarget> {
+        Some(tir::backend::ModelCheckTarget {
+            isa: "ARMv8A64",
+            features: self.config.features.iter().map(Feature::name).collect(),
+            sources: MODEL_CHECK_SOURCES,
+        })
     }
 
     fn register_dialects(&self, context: &tir::Context) {

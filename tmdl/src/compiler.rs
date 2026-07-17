@@ -8,6 +8,7 @@ use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::error::{Cheap, Rich};
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, ValueEnum};
 
+use crate::btor2gen::generate_btor2;
 use crate::error::TMDLError;
 use crate::expander::{Diag, MacroTable, StringArena, collect_macros, expand};
 use crate::lexer::{Token, lex};
@@ -21,23 +22,27 @@ use crate::{Span, Spanned};
 pub struct Compiler {
     action: Action,
     inputs: Vec<String>,
+    input_sources: Vec<Option<String>>,
     output: OutputKind,
     dialect: Option<String>,
     isa: Option<String>,
     text_only: bool,
     split_inputs: Vec<String>,
     custom_assembly: bool,
+    btor2_isas: Option<Vec<String>>,
 }
 
 pub struct CompilerBuilder {
     action: Option<Action>,
     inputs: Vec<String>,
+    input_sources: Vec<Option<String>>,
     output: Option<OutputKind>,
     dialect: Option<String>,
     isa: Option<String>,
     text_only: bool,
     split_inputs: Vec<String>,
     custom_assembly: bool,
+    btor2_isas: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +62,7 @@ pub enum Action {
     EmitRust,
     EmitOperationList,
     EmitSmtlib,
+    EmitBtor2,
     EmitMarkdown,
 }
 
@@ -90,12 +96,14 @@ impl Compiler {
         CompilerBuilder {
             action: None,
             inputs: vec![],
+            input_sources: vec![],
             output: None,
             dialect: None,
             isa: None,
             text_only: false,
             split_inputs: vec![],
             custom_assembly: false,
+            btor2_isas: None,
         }
     }
 
@@ -130,6 +138,7 @@ impl Compiler {
             Action::EmitRust
             | Action::EmitOperationList
             | Action::EmitSmtlib
+            | Action::EmitBtor2
             | Action::EmitMarkdown => self.compile_whole_program(),
             Action::EmitExpandedTokens => self.compile_expanded_tokens(),
             _ => self.compile_per_file(),
@@ -233,8 +242,11 @@ impl Compiler {
 
     fn read_sources(&self) -> Result<Vec<String>, TMDLError> {
         let mut sources = Vec::with_capacity(self.inputs.len());
-        for input in &self.inputs {
-            sources.push(std::fs::read_to_string(input)?);
+        for (input, source) in self.inputs.iter().zip(&self.input_sources) {
+            sources.push(match source {
+                Some(source) => source.clone(),
+                None => std::fs::read_to_string(input)?,
+            });
         }
         Ok(sources)
     }
@@ -264,8 +276,11 @@ impl Compiler {
             return Ok(());
         }
 
-        for input in &self.inputs {
-            let source = std::fs::read_to_string(input)?;
+        for (input, source) in self.inputs.iter().zip(&self.input_sources) {
+            let source = match source {
+                Some(source) => source.clone(),
+                None => std::fs::read_to_string(input)?,
+            };
 
             match &self.action {
                 Action::EmitTokens => {
@@ -287,11 +302,11 @@ impl Compiler {
             )
             .exit();
         }
-        if matches!(self.action, Action::EmitSmtlib) && self.isa.is_none() {
+        if matches!(self.action, Action::EmitSmtlib | Action::EmitBtor2) && self.isa.is_none() {
             let mut cmd = Cli::command();
             cmd.error(
                 clap::error::ErrorKind::ArgumentConflict,
-                "--isa must be specified with --action=emit-smtlib",
+                "--isa must be specified with --action=emit-smtlib or --action=emit-btor2",
             )
             .exit();
         }
@@ -379,6 +394,16 @@ impl Compiler {
                     fs::write(path, serde_json::to_vec_pretty(&metadata)?)?;
                 }
             }
+            Action::EmitBtor2 => {
+                let writer: Box<dyn Write> = self.create_output_writer()?;
+                generate_btor2(
+                    self.isa.as_ref().unwrap(),
+                    self.btor2_isas.as_deref(),
+                    &parsed_files,
+                    &item_cache,
+                    writer,
+                )?;
+            }
             Action::EmitMarkdown => match &self.output {
                 OutputKind::Batch(path) => generate_markdown_book(
                     self.dialect.as_ref().unwrap(),
@@ -437,9 +462,29 @@ impl CompilerBuilder {
 
     pub fn add_input(self, path: &str) -> Self {
         let mut inputs = self.inputs;
+        let mut input_sources = self.input_sources;
         inputs.push(path.to_string());
+        input_sources.push(None);
 
-        Self { inputs, ..self }
+        Self {
+            inputs,
+            input_sources,
+            ..self
+        }
+    }
+
+    /// Add a named source without requiring a file at compile time.
+    pub fn add_source(self, name: &str, source: &str) -> Self {
+        let mut inputs = self.inputs;
+        let mut input_sources = self.input_sources;
+        inputs.push(name.to_string());
+        input_sources.push(Some(source.to_string()));
+
+        Self {
+            inputs,
+            input_sources,
+            ..self
+        }
     }
 
     pub fn output(self, output: OutputKind) -> Self {
@@ -477,16 +522,26 @@ impl CompilerBuilder {
         }
     }
 
+    /// Restrict BTOR2 emission to the selected ISA and extension names.
+    pub fn btor2_isas(self, btor2_isas: Vec<String>) -> Self {
+        Self {
+            btor2_isas: Some(btor2_isas),
+            ..self
+        }
+    }
+
     pub fn build(self) -> Compiler {
         Compiler {
             action: self.action.unwrap(),
             inputs: self.inputs,
+            input_sources: self.input_sources,
             output: self.output.unwrap(),
             dialect: self.dialect,
             isa: self.isa,
             text_only: self.text_only,
             split_inputs: self.split_inputs,
             custom_assembly: self.custom_assembly,
+            btor2_isas: self.btor2_isas,
         }
     }
 }

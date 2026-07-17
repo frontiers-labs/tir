@@ -8,7 +8,9 @@ name = "tir"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
+tmdl.workspace = true
 tir.workspace = true
 tir-riscv.workspace = true
 tir-arm64.workspace = true

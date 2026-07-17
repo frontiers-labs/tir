@@ -14,6 +14,7 @@
   - [Declarative Macros](./tmdl/macros.md)
   - [Memory Model](./tmdl/memory_model.md)
   - [SMT Equivalence Checking](./tmdl/smt_verification.md)
+  - [Hardware Model Checking](./tmdl/model_checking.md)
 - [TMDL Parser Design](./tmdl/parser.md)
 - [ISA Programmer's Reference](./generated/isa/index.md)
   - [RISC-V](./generated/isa/riscv/index.md)

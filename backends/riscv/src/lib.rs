@@ -1,6 +1,22 @@
 use tir::helpers::{dialect, operation};
 use tir::{Any, Operation};
 
+const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
+    ("main.tmdl", include_str!("../defs/main.tmdl")),
+    ("base.tmdl", include_str!("../defs/base.tmdl")),
+    (
+        "multiplication.tmdl",
+        include_str!("../defs/multiplication.tmdl"),
+    ),
+    ("float.tmdl", include_str!("../defs/float.tmdl")),
+    ("compressed.tmdl", include_str!("../defs/compressed.tmdl")),
+    ("atomics.tmdl", include_str!("../defs/atomics.tmdl")),
+    ("zifencei.tmdl", include_str!("../defs/zifencei.tmdl")),
+    ("zicsr.tmdl", include_str!("../defs/zicsr.tmdl")),
+    ("perf.tmdl", include_str!("../defs/perf.tmdl")),
+    ("vector.tmdl", include_str!("../defs/vector.tmdl")),
+];
+
 mod compress;
 mod obj;
 mod vsetvli;
@@ -1084,6 +1100,18 @@ pub struct RiscvTarget {
 impl tir::backend::TargetMachine for RiscvTarget {
     fn name(&self) -> &'static str {
         self.config.canonical_name()
+    }
+
+    fn model_check_target(&self) -> Option<tir::backend::ModelCheckTarget> {
+        Some(tir::backend::ModelCheckTarget {
+            isa: if self.config.xlen == 32 {
+                "RV32I"
+            } else {
+                "RV64I"
+            },
+            features: self.config.features.iter().map(Feature::name).collect(),
+            sources: MODEL_CHECK_SOURCES,
+        })
     }
 
     fn register_dialects(&self, context: &tir::Context) {

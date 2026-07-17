@@ -17,6 +17,16 @@ use crate::backend::regalloc::{RegisterAllocationPass, RegisterInfo};
 use crate::backend::sched::MachineModel;
 use crate::backend::{AsmParser, AsmPrinter};
 
+/// TMDL inputs and selected ISA features needed to build a retirement checker.
+pub struct ModelCheckTarget {
+    /// Root TMDL ISA used to resolve architectural parameters.
+    pub isa: &'static str,
+    /// TMDL ISA and extension names enabled for this target selection.
+    pub features: Vec<&'static str>,
+    /// Definition sources embedded into the target backend at build time.
+    pub sources: &'static [(&'static str, &'static str)],
+}
+
 /// A selectable code-generation / simulation target.
 ///
 /// Tools obtain one of these from a registry keyed by `--march`/`--mcpu` and
@@ -25,6 +35,11 @@ use crate::backend::{AsmParser, AsmPrinter};
 pub trait TargetMachine {
     /// Canonical target name (e.g. `riscv64`, `arm64`).
     fn name(&self) -> &'static str;
+
+    /// Embedded instruction semantics for hardware model checking.
+    fn model_check_target(&self) -> Option<ModelCheckTarget> {
+        None
+    }
 
     /// Register the dialects this target needs into `context`.
     ///

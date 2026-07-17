@@ -18,7 +18,8 @@ pub mod target;
 
 pub use operations::*;
 pub use target::{
-    TARGETS, TargetInfo, TargetMachine, select_target, select_target_with_abi, supported_targets,
+    ModelCheckTarget, TARGETS, TargetInfo, TargetMachine, select_target, select_target_with_abi,
+    supported_targets,
 };
 
 // Re-exported so the `register_target!` macro can reference linkme from the

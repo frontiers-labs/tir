@@ -11,6 +11,7 @@ mod common;
 pub mod axioms;
 pub mod llvm_import;
 pub mod mc;
+pub mod model_check;
 pub mod opt;
 pub mod readobj;
 pub mod sched;
@@ -21,6 +22,7 @@ pub fn tools_main() -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Axioms(args) => axioms::run(args),
         Command::Mc(args) => mc::run(args),
+        Command::ModelCheck(args) => model_check::run(args),
         Command::Opt(args) => opt::run(args),
         Command::Readobj(args) => readobj::run(args),
         Command::Sched(args) => sched::run(args),
@@ -34,6 +36,8 @@ pub enum Command {
     Axioms(axioms::ToolArgs),
     /// Compile machine code
     Mc(mc::ToolArgs),
+    /// Model-check a hardware implementation against TMDL semantics
+    ModelCheck(model_check::ToolArgs),
     /// Run optimizations on IR
     Opt(opt::ToolArgs),
     /// Dump headers, symbols and relocations of an object file
