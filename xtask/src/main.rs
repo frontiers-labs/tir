@@ -261,7 +261,6 @@ fn print_help() {
 build            builds TIR project
 check            builds project and runs check tests
 check-only       only runs check tests without building the project
-axioms           checks generated instruction-selection axioms in release mode
 verify <isa> [--shard k/N]
                  run formal ISA verification. Available ISAs: riscv64, riscv32, armv8, x86_64
 isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
