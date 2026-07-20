@@ -1205,9 +1205,13 @@ impl InstructionSelectPass {
                 result_ty: Some(intro.dest_ty),
             };
             let rule = &self.rules[intro.rule_index];
-            let new_op = (rule.emit_fn)(context, &request, &intro.m)?;
             let anchor =
                 OperationRef::new(context.get_op(intro.anchor), Some(block_arc.clone()), None);
+            if let Some(prelude) = rule.prelude_emit {
+                let prelude_op = prelude(context, &request, &intro.m)?;
+                rewriter.insert_op_before(&anchor, prelude_op.as_ref())?;
+            }
+            let new_op = (rule.emit_fn)(context, &request, &intro.m)?;
             rewriter.insert_op_before(&anchor, new_op.as_ref())?;
         }
 

@@ -1051,6 +1051,20 @@ fn emit_slli(
     emit_shift_marker(SymKind::ShiftLeft)(context, req, m)
 }
 
+fn emit_shift_prelude(
+    context: &Context,
+    req: &EmitRequest,
+    m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let value = m
+        .value_binding(0)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let result_ty = req.result_ty.expect("typed result");
+    Ok(Box::new(
+        ops::subi(context, value, value, result_ty).build(),
+    ))
+}
+
 fn emit_srai(
     context: &Context,
     req: &EmitRequest,
@@ -1059,15 +1073,9 @@ fn emit_srai(
     emit_shift_marker(SymKind::ShiftRightArithmetic)(context, req, m)
 }
 
-/// End-to-end square: `extsi(addi(a, b) : i16) : i64` lowers to `add, slli, srai`.
-/// The `add` covers the addi; saturation bridges the un-selectable sign extension
-/// into a `slli`/`srai` pair, and multi-instruction emission materializes the
-/// introduced `slli` (an e-class with no original op) before the `srai`.
-#[test]
-fn square_sign_extension_lowers_to_shift_pair() {
+fn select_sign_extension(slli_rule: Rule) -> Vec<&'static str> {
     let context = Context::with_default_dialects();
     let module = ops::module(&context, None).build();
-
     let i16_ty = IntegerType::new(&context, 16);
     let i64_ty = IntegerType::new(&context, 64);
     let a = context.create_value(i16_ty, None);
@@ -1093,8 +1101,7 @@ fn square_sign_extension_lowers_to_shift_pair() {
 
     let rules = vec![
         Rule::new("add", atomic_pattern(SymKind::Add), 1, emit_add),
-        Rule::new("slli", shift_imm_pattern(SymKind::ShiftLeft), 1, emit_slli)
-            .with_operand_constraints(vec![(1, OperandConstraint::Immediate)]),
+        slli_rule,
         Rule::new(
             "srai",
             shift_imm_pattern(SymKind::ShiftRightArithmetic),
@@ -1108,9 +1115,9 @@ fn square_sign_extension_lowers_to_shift_pair() {
     pm.nest(FuncOp::name())
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
-        .expect("square should select");
+        .expect("sign extension should select");
 
-    let body_ops: Vec<_> = context
+    context
         .get_region(region.id())
         .iter(context.clone())
         .next()
@@ -1118,9 +1125,31 @@ fn square_sign_extension_lowers_to_shift_pair() {
         .op_ids()
         .into_iter()
         .map(|op_id| context.get_op(op_id).name)
-        .collect();
+        .collect()
+}
+
+/// End-to-end square: `extsi(addi(a, b) : i16) : i64` lowers to `add, slli, srai`.
+/// The `add` covers the addi; saturation bridges the un-selectable sign extension
+/// into a `slli`/`srai` pair, and multi-instruction emission materializes the
+/// introduced `slli` (an e-class with no original op) before the `srai`.
+#[test]
+fn square_sign_extension_lowers_to_shift_pair() {
+    let slli_rule = Rule::new("slli", shift_imm_pattern(SymKind::ShiftLeft), 1, emit_slli)
+        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)]);
+    let body_ops = select_sign_extension(slli_rule);
+
     // add (from the addi), then the slli/srai sign-extension idiom, then return.
     assert_eq!(body_ops, vec!["addi", "shli", "shrsi", "return"]);
+}
+
+#[test]
+fn introduced_rule_emits_prelude_before_instruction() {
+    let slli_rule = Rule::new("slli", shift_imm_pattern(SymKind::ShiftLeft), 1, emit_slli)
+        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+        .with_prelude_emitter(emit_shift_prelude);
+    let body_ops = select_sign_extension(slli_rule);
+
+    assert_eq!(body_ops, vec!["addi", "subi", "shli", "shrsi", "return"]);
 }
 
 /// Opaque leaves stand for *unknown* computations: two of them must never
