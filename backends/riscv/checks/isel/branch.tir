@@ -19,7 +19,7 @@ module {
   // CHECK: asm.symbol {name = "slt_branch"
   // CHECK-NOT: riscv.slt
   // CHECK: riscv.blt {rs1 = %virt0:GPR, rs2 = %virt1:GPR, imm = ^bb1}
-  // CHECK-NEXT: riscv.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   func @sle_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "sle"} : !i1
@@ -34,7 +34,7 @@ module {
   // a <= b canonicalizes to b >= a, selecting bge with swapped operands.
   // CHECK: asm.symbol {name = "sle_branch"
   // CHECK: riscv.bge {rs1 = %virt6:GPR, rs2 = %virt5:GPR, imm = ^bb1}
-  // CHECK-NEXT: riscv.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   func @ult_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "ult"} : !i1
@@ -90,7 +90,7 @@ module {
   // hardwired zero register.
   // CHECK: asm.symbol {name = "fallback"
   // CHECK: riscv.bne {rs1 = %virt23:GPR, rs2 = x0, imm = ^bb1}
-  // CHECK-NEXT: riscv.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   func @eq_zero(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i64
@@ -108,7 +108,7 @@ module {
   // CHECK: asm.symbol {name = "eq_zero"
   // CHECK-NOT: riscv.slt
   // CHECK: riscv.beq {rs1 = %virt26:GPR, rs2 = x0, imm = ^bb1}
-  // CHECK-NEXT: riscv.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   func @ne_zero(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i64

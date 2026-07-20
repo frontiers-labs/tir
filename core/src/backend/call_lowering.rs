@@ -15,20 +15,6 @@ pub trait CallEmitter: Send + Sync {
         src: AttributeValue,
     ) -> Box<dyn Operation>;
 
-    fn vcall(
-        &self,
-        context: &Context,
-        callee: String,
-        clobbers: AttributeValue,
-    ) -> Box<dyn Operation>;
-
-    fn vcall_indirect(
-        &self,
-        context: &Context,
-        callee: AttributeValue,
-        clobbers: AttributeValue,
-    ) -> Box<dyn Operation>;
-
     fn stack_arg_store(
         &self,
         _context: &Context,
@@ -185,15 +171,24 @@ impl CallLowering {
                 .map(physical_reg)
                 .collect(),
         );
-        let call = match callee {
-            Callee::Direct(name) => self.emitter.vcall(context, name, clobbers),
-            Callee::Indirect(_) => self.emitter.vcall_indirect(
-                context,
-                virtual_reg(
-                    fresh_callee.expect("indirect callee was detached"),
-                    indirect_class,
-                ),
-                clobbers,
+        let call: Box<dyn Operation> = match callee {
+            Callee::Direct(name) => Box::new(
+                super::VirtualCallOpBuilder::new(context)
+                    .attr("callee", AttributeValue::Str(name))
+                    .attr("clobbers", clobbers)
+                    .build(),
+            ),
+            Callee::Indirect(_) => Box::new(
+                super::VirtualIndirectCallOpBuilder::new(context)
+                    .attr(
+                        "callee_reg",
+                        virtual_reg(
+                            fresh_callee.expect("indirect callee was detached"),
+                            indirect_class,
+                        ),
+                    )
+                    .attr("clobbers", clobbers)
+                    .build(),
             ),
         };
         rewriter.insert_op_before(op, call.as_ref())?;

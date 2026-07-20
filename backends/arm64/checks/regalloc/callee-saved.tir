@@ -23,10 +23,10 @@ module {
 // CHECK: arm64.sub_imm {rd = sp, rn = sp, imm = 16}
 // CHECK: arm64.store_doubleword {rt = x19, rn = sp, imm = 0}
 // CHECK: arm64.store_doubleword {rt = x20, rn = sp, imm = 8}
-// CHECK: arm64.vcall {callee = "ext", clobbers = [GPR[0], GPR[1], GPR[2], GPR[3], GPR[4], GPR[5], GPR[6], GPR[7], GPR[8], GPR[9], GPR[10], GPR[11], GPR[12], GPR[13], GPR[14], GPR[15], GPR[16], GPR[17], VPR[0]
+// CHECK: asm.vcall {callee = "ext", clobbers = [GPR[0], GPR[1], GPR[2], GPR[3], GPR[4], GPR[5], GPR[6], GPR[7], GPR[8], GPR[9], GPR[10], GPR[11], GPR[12], GPR[13], GPR[14], GPR[15], GPR[16], GPR[17], VPR[0]
 // CHECK-SAME: VPR[31]]}
 // Epilogue: restore both and release the frame before the return.
 // CHECK: arm64.load_doubleword {rt = x19, rn = sp, imm = 0}
 // CHECK: arm64.load_doubleword {rt = x20, rn = sp, imm = 8}
 // CHECK: arm64.add_imm {rd = sp, rn = sp, imm = 16}
-// CHECK: arm64.vret
+// CHECK: asm.vret

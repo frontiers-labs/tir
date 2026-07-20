@@ -15,4 +15,4 @@ module {
 // CHECK: arm64.sub
 // CHECK: arm64.and
 // CHECK: arm64.orr {rd = x0,
-// CHECK: arm64.vret
+// CHECK: asm.vret

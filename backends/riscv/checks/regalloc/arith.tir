@@ -18,4 +18,4 @@ module {
 // RV32: riscv.sub
 // CHECK: riscv.and
 // CHECK: riscv.or {rd = x10,
-// CHECK: riscv.vret
+// CHECK: asm.vret

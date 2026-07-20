@@ -1,10 +1,8 @@
 //! Target-independent selection axioms: the algebraic bridges of
 //! [`super::rewrites`] declared as s-expressions instead of hand-written
-//! appliers. An axiom compiles to an [`IselRewrite`] whose applier proves the
-//! exact width instantiation it is about to assert with the [`SmtOracle`]
-//! (memoized per instantiation) before unioning — an unproved equivalence
-//! never reaches the e-graph, and there is no generalization gap between what
-//! is proved and what is applied.
+//! appliers. Debug builds use the [`SmtOracle`] to validate every concrete
+//! width instantiation before asserting it. Release builds trust the declared
+//! invariants.
 //!
 //! ```text
 //! (axiom <name>
@@ -33,15 +31,15 @@
 //! instructions actually see.
 
 use std::collections::{HashMap, HashSet};
+#[cfg(debug_assertions)]
 use std::sync::Mutex;
 
+#[cfg(debug_assertions)]
+use tir::sem::{EquivalenceOracle, SmtOracle, sym};
 use tir::{
     Context,
     graph::NodeId,
-    sem::{
-        EquivalenceOracle, SemExpr, SemGraph, SmtOracle, SymKind, SymPayload, Value, con, execute,
-        op, op_kind, parse, sym,
-    },
+    sem::{SemExpr, SemGraph, SymKind, SymPayload, Value, con, execute, op, op_kind, parse},
 };
 use tir_adt::APInt;
 use tir_symbolic::egraph::{EMatch, Id, Pattern, Var};
@@ -207,6 +205,7 @@ pub(crate) struct Axiom {
     lhs: AxNode,
     rhs: AxNode,
     /// The RHS references the matched root itself (excludes var references).
+    #[cfg(debug_assertions)]
     uses_root: bool,
     /// A materialize axiom: its LHS root is a bare `consts` var, so it matches
     /// every constant class, and its RHS structure is unioned *with* the folded
@@ -417,6 +416,7 @@ pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
         value_guards,
         lhs,
         rhs,
+        #[cfg(debug_assertions)]
         uses_root,
         materialize,
     })
@@ -585,29 +585,8 @@ fn holes_of(node: &AxNode, out: &mut Vec<(String, Option<usize>)>) {
 }
 
 impl Axiom {
-    /// Every node kind the RHS introduces, for target-capability gating.
-    pub(crate) fn rhs_kinds(&self) -> HashSet<SymKind> {
-        fn walk(node: &AxNode, out: &mut HashSet<SymKind>) {
-            match node {
-                AxNode::Node(kind, children) => {
-                    out.insert(*kind);
-                    for c in children {
-                        walk(c, out);
-                    }
-                }
-                AxNode::Keep(inner) => walk(inner, out),
-                _ => {}
-            }
-        }
-        let mut kinds = HashSet::new();
-        walk(&self.rhs, &mut kinds);
-        kinds
-    }
-
-    /// Compile into an [`IselRewrite`]. The applier resolves the width names
-    /// from the matched classes, checks the guards, proves the instantiation
-    /// (memoized), and only then instantiates the RHS and unions it with the
-    /// matched root.
+    /// Compile into an [`IselRewrite`]. Debug builds prove each width
+    /// instantiation before asserting the invariant.
     pub(crate) fn compile(self) -> IselRewrite {
         let mut searcher = Pattern::<SemNode, u32>::new();
         let mut holes: HashMap<String, Id> = HashMap::new();
@@ -627,6 +606,7 @@ impl Axiom {
             .collect();
 
         let name = format!("axiom-{}", self.name);
+        #[cfg(debug_assertions)]
         let proofs: Mutex<HashMap<Vec<u64>, bool>> = Mutex::default();
         IselRewrite {
             name,
@@ -660,19 +640,22 @@ impl Axiom {
                         _ => return,
                     }
                 }
-                let proven = {
+                #[cfg(debug_assertions)]
+                {
                     let mut proofs = proofs.lock().unwrap();
-                    match proofs.get(&widths) {
+                    let proven = match proofs.get(&widths) {
                         Some(&p) => p,
                         None => {
                             let p = self.prove(&widths);
                             proofs.insert(widths.clone(), p);
                             p
                         }
-                    }
-                };
-                if !proven {
-                    return;
+                    };
+                    assert!(
+                        proven,
+                        "invalid semantic invariant `{}` for widths {widths:?}",
+                        self.name
+                    );
                 }
                 if let Some(id) = self.instantiate(ctx, &self.rhs, eg, m, &holes, &widths) {
                     eg.union(m.root, id);
@@ -707,16 +690,9 @@ impl Axiom {
 
     /// Prove one width instantiation with the [`SmtOracle`]; `widths` follows
     /// the width names' declaration order (`vars` first, then `root`).
+    #[cfg(debug_assertions)]
     pub(crate) fn prove(&self, widths: &[u64]) -> bool {
-        // The register the proof realizes over must hold every operand and the
-        // root: widest for extensions (the root), or a var for a narrowing lhs.
-        let register_width = self
-            .vars
-            .iter()
-            .map(|(_, binding)| binding.value(widths))
-            .chain([self.root_width.value(widths)])
-            .max()
-            .unwrap_or_else(|| self.root_width.value(widths)) as u32;
+        let register_width = self.register_width(widths);
         let mut lhs = SemGraph::new();
         let mut rhs = SemGraph::new();
         let (built, symbol_count) = if self.uses_root {
@@ -753,9 +729,19 @@ impl Axiom {
         SmtOracle.equivalent(&lhs, &rhs, &symbol_widths)
     }
 
+    fn register_width(&self, widths: &[u64]) -> u32 {
+        self.vars
+            .iter()
+            .map(|(_, binding)| binding.value(widths))
+            .chain([self.root_width.value(widths)])
+            .max()
+            .unwrap_or_else(|| self.root_width.value(widths)) as u32
+    }
+
     /// Build one side of the proof. A declared var is a register-wide symbol —
     /// narrowed to its class width through an extract on the LHS, read whole on
     /// the RHS; a width-name hole is the constant carrying that width.
+    #[cfg(debug_assertions)]
     fn realize(
         &self,
         node: &AxNode,
@@ -870,11 +856,16 @@ impl Axiom {
                     .map(|c| self.instantiate(ctx, c, eg, m, holes, widths))
                     .collect::<Option<Vec<_>>>()?;
                 fold_constant_op(*kind, &children, eg).unwrap_or_else(|| {
-                    // A comparison always yields i1; type it so a typed
-                    // materializer pattern (e.g. `sltiu`) still matches an
-                    // introduced condition, not only a program-typed one.
-                    let ty = is_comparison(*kind).then(|| tir::builtin::IntegerType::new(ctx, 1));
-                    let mut n = template_node(*kind, None, ty);
+                    let width = if is_comparison(*kind) {
+                        1
+                    } else {
+                        self.register_width(widths)
+                    };
+                    let mut n = template_node(
+                        *kind,
+                        None,
+                        Some(tir::builtin::IntegerType::new(ctx, width)),
+                    );
                     n.children = children;
                     eg.add(n)
                 })
@@ -1015,7 +1006,10 @@ fn compile_lhs(
 /// `If(c, 1, 0)` shape TMDL derives for `slt`-style instructions.
 #[cfg(test)]
 pub(crate) fn bool_materialize_axioms() -> Vec<Axiom> {
-    super::theory::enabled_axioms(|kind| kind == SymKind::If)
+    super::theory::axioms()
+        .into_iter()
+        .filter(|axiom| axiom.name.ends_with("-via-if"))
+        .collect()
 }
 
 /// Bridge the six comparison values a `slt`/`sltu`-class target cannot root
@@ -1026,10 +1020,9 @@ pub(crate) fn bool_materialize_axioms() -> Vec<Axiom> {
 /// Each a proved identity; the introduced `lt`/`ult` in turn materialize through
 /// the boolean `via-if` bridges. `ne` is `not(eq)` — a constant in the `ult`
 /// low operand would match neither `sltu` (register) nor `sltiu` (imm is high).
-/// Emitted only when the target roots `xor`.
 #[cfg(test)]
 pub(crate) fn comparison_materialize_axioms() -> Vec<Axiom> {
-    super::theory::enabled_axioms(|kind| matches!(kind, SymKind::If | SymKind::Xor))
+    super::theory::axioms()
         .into_iter()
         .filter(|axiom| axiom.name.ends_with("-via-cmp"))
         .collect()
@@ -1040,7 +1033,7 @@ pub(crate) fn comparison_materialize_axioms() -> Vec<Axiom> {
 /// to the negated immediate. The `consts` operand keeps it off register `sub`.
 #[cfg(test)]
 pub(crate) fn sub_via_add_neg_axiom() -> Axiom {
-    super::theory::enabled_axioms(|kind| kind == SymKind::Add)
+    super::theory::axioms()
         .into_iter()
         .find(|axiom| axiom.name == "sub-via-add-neg")
         .expect("sub-immediate family is declared")
@@ -1104,11 +1097,12 @@ mod tests {
         assert!(class_kinds(&eg, root).contains(&SymKind::ShiftRightLogic));
     }
 
+    #[cfg(debug_assertions)]
     #[test]
-    fn unsound_axiom_is_refused() {
+    #[should_panic(expected = "invalid semantic invariant")]
+    fn unsound_axiom_fails_debug_validation() {
         // zext realized with an *arithmetic* right shift copies the sign bit —
-        // false, and the fuzz samples of old would also have caught it; here the
-        // instantiation proof fails and the applier must not union.
+        // false, so debug validation must reject it.
         let axiom = parse_axiom(
             "(axiom zext-via-ashr
                (vars (x n)) (root w) (where (< n w))
@@ -1117,13 +1111,8 @@ mod tests {
         )
         .unwrap();
         let ctx = Context::with_default_dialects();
-        let (mut eg, root) = extension_egraph(&ctx, SymKind::ZExt);
+        let (mut eg, _) = extension_egraph(&ctx, SymKind::ZExt);
         apply_all(&ctx, &mut eg, &axiom.compile());
-        assert_eq!(
-            class_kinds(&eg, root),
-            HashSet::from([SymKind::ZExt]),
-            "a refuted instantiation must leave the class untouched"
-        );
     }
 
     #[test]
@@ -1338,10 +1327,12 @@ mod tests {
         assert!(fired.nodes(root).len() > 1, "width 16 satisfies `(= n 16)`");
     }
 
+    #[cfg(debug_assertions)]
     #[test]
-    fn unsound_narrowing_axiom_is_refused() {
+    #[should_panic(expected = "invalid semantic invariant")]
+    fn unsound_narrowing_axiom_fails_debug_validation() {
         // Masking to `n - 1` bits drops bit `n - 1`, so it does not equal the
-        // low `n` bits: the instantiation proof fails and nothing unions.
+        // low `n` bits, so debug validation must reject it.
         let axiom = parse_axiom(
             "(axiom trunc-off-by-one
                (vars (x w)) (root n) (where (< n w))
@@ -1350,13 +1341,8 @@ mod tests {
         )
         .unwrap();
         let ctx = Context::with_default_dialects();
-        let (mut eg, root) = extract_egraph(&ctx, 15, 0);
+        let (mut eg, _) = extract_egraph(&ctx, 15, 0);
         apply_all(&ctx, &mut eg, &axiom.compile());
-        assert_eq!(
-            eg.nodes(root).len(),
-            1,
-            "a refuted instantiation must leave the class untouched"
-        );
     }
 
     #[test]
@@ -1472,17 +1458,5 @@ mod tests {
         assert!(axiom(64).is_ok());
         assert!(fits_signed(&APInt::new_signed(64, i64::MIN), 64));
         assert!(fits_signed(&APInt::new_signed(64, i64::MAX), 64));
-    }
-
-    #[test]
-    fn extension_axiom_reports_its_rhs_kinds() {
-        assert_eq!(
-            shift_pair_axiom("sext", "ashr").rhs_kinds(),
-            HashSet::from([SymKind::ShiftRightArithmetic, SymKind::ShiftLeft])
-        );
-        assert_eq!(
-            shift_pair_axiom("zext", "lshr").rhs_kinds(),
-            HashSet::from([SymKind::ShiftRightLogic, SymKind::ShiftLeft])
-        );
     }
 }

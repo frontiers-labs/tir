@@ -5,11 +5,9 @@
 use tir::Operation;
 use tir::attributes::AttributeValue;
 use tir::backend::binary::{EM_RISCV, ElfClass, ObjectFormatInfo, RelocKind};
+use tir::backend::{VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp};
 
-use crate::{
-    JumpAndLinkOpBuilder, JumpAndLinkRegOpBuilder, VirtualBranchOp, VirtualCallOp,
-    VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
-};
+use crate::{JumpAndLinkOpBuilder, JumpAndLinkRegOpBuilder, phys, virt};
 
 const R_RISCV_BRANCH: u32 = 16;
 const R_RISCV_JAL: u32 = 17;

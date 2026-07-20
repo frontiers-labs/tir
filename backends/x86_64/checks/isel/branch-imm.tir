@@ -20,7 +20,7 @@ module {
   // CHECK: asm.symbol {name = "slt_imm"
   // CHECK: x86_64.cmp_imm {dst = %virt0:GPR, imm = 5}
   // CHECK-NEXT: x86_64.jl {imm = ^bb1}
-  // CHECK-NEXT: x86_64.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   func @eq_imm(%0: !i64) -> !i64 {
     %c = constant {value = 5} : !i64

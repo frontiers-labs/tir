@@ -18,7 +18,7 @@ module {
   // CHECK: asm.symbol {name = "slt_branch"
   // CHECK: arm64.cmp {rn = %virt0:GPR, rm = %virt1:GPR}
   // CHECK-NEXT: arm64.b.lt {imm = ^bb1}
-  // CHECK-NEXT: arm64.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   func @sle_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "sle"} : !i1
@@ -78,7 +78,7 @@ module {
   // two-instruction branch-if-nonzero fallback.
   // CHECK: asm.symbol {name = "fallback"
   // CHECK: arm64.cbnz {rt = %virt{{[0-9]+}}:GPR, imm = ^bb1}
-  // CHECK-NEXT: arm64.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   module_end
 }

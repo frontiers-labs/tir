@@ -16,4 +16,4 @@ module {
 // CHECK: riscv.addi {rd = {{x[0-9]+}}, rs1 = x0, imm = 0}
 // CHECK: riscv.fmv.d.x {fd = {{f[0-9]+}}, rs1 = {{x[0-9]+}}}
 // CHECK: riscv.fadd.d {fd = f10,
-// CHECK: riscv.vret
+// CHECK: asm.vret

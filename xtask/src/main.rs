@@ -18,7 +18,6 @@ fn main() -> anyhow::Result<()> {
         }
         Some("check-only") => check(&sh)?,
         Some("docs") => build_docs(&sh)?,
-        Some("axioms") => check_axioms(&sh)?,
         Some("verify") => {
             let isa = env::args().nth(2);
             match isa.as_deref() {
@@ -56,21 +55,6 @@ fn check(sh: &Shell) -> anyhow::Result<()> {
     // harnesses in each crate's `tests/` directory), so running the test suite
     // exercises them alongside the unit tests.
     cmd!(sh, "cargo test --workspace").run()?;
-
-    Ok(())
-}
-
-fn check_axioms(sh: &Shell) -> anyhow::Result<()> {
-    let root = project_root();
-    sh.change_dir(root);
-
-    for package in ["tir-arm64", "tir-riscv", "tir-x86_64"] {
-        cmd!(
-            sh,
-            "cargo test --release -p {package} committed_isel_axioms_are_fresh -- --ignored"
-        )
-        .run()?;
-    }
 
     Ok(())
 }

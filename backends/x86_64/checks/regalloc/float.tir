@@ -14,8 +14,8 @@ module {
 }
 
 // ISEL:      x86_64.addsd {dst = %virt2:XMM, dst_tied = %virt0:XMM, src = %virt1:XMM}
-// ISEL-NEXT: x86_64.vret
+// ISEL-NEXT: asm.vret
 
 // CHECK:      x86_64.movsd {dst = [[D:xmm[0-9]+]], src = xmm{{[0-9]+}}}
 // CHECK-NEXT: x86_64.addsd {dst = [[D]], src = xmm{{[0-9]+}}}
-// CHECK-NEXT: x86_64.vret
+// CHECK-NEXT: asm.vret

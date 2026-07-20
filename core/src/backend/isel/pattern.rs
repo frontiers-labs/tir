@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     Context,
-    graph::{Dag, Matchable, MetaDag, NodeId, OperandConstraint},
+    graph::{Dag, MetaDag, NodeId, OperandConstraint},
     sem::{SemGraph, SemType, SymKind, SymPayload, TypeUnifier, infer_types},
 };
 use tir_symbolic::egraph::{Id, Pattern, PatternNode, Var};
@@ -386,32 +386,4 @@ pub(crate) fn constant_materializer_ranges(patterns: &[CompiledIselPattern]) -> 
             has_zero_zext.then_some(imm_range).flatten()
         })
         .collect()
-}
-
-/// The semantic kinds for which the rule set provides an atomic materializer (a
-/// pattern whose root is that kind with only operand boundaries beneath it).
-pub(crate) fn atomic_kinds(patterns: &[CompiledIselPattern]) -> HashSet<SymKind> {
-    let ctx = Context::default();
-    let mut kinds = HashSet::new();
-    for compiled in patterns {
-        let root = compiled.pattern.root();
-        let PatternNode::Node(root_node) = compiled.pattern.node(root) else {
-            continue;
-        };
-        if root_node.kind.num_children(&ctx) == 0 {
-            continue;
-        }
-        let children = root_node.children.clone();
-        if !children.is_empty()
-            && children.iter().all(|&child| {
-                matches!(
-                    compiled.pattern.node(child),
-                    PatternNode::Var(Var::Symbol(_))
-                )
-            })
-        {
-            kinds.insert(root_node.kind);
-        }
-    }
-    kinds
 }

@@ -311,6 +311,30 @@ pub mod ops {
 dialect! {
     AsmDialect {
         name: "asm",
-        operations: [SectionOp, SectionEndOp, SymbolOp, SymbolEndOp, LiteralOp, BlockEndOp],
+        operations: [
+            SectionOp,
+            SectionEndOp,
+            SymbolOp,
+            SymbolEndOp,
+            LiteralOp,
+            BlockEndOp,
+            VirtualReturnOp,
+            VirtualBranchOp,
+            VirtualCallOp,
+            VirtualIndirectCallOp,
+        ],
     }
+}
+
+pub fn emit_uncond_branch(
+    context: &tir::Context,
+    dest: tir::BlockId,
+    args: &[tir::ValueId],
+) -> Box<dyn tir::Operation> {
+    Box::new(
+        VirtualBranchOpBuilder::new(context)
+            .dest_args(args.to_vec())
+            .attr("dest", AttributeValue::Block(dest))
+            .build(),
+    )
 }

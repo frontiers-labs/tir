@@ -193,6 +193,60 @@ fn rule_validation_rejects_missing_atomic_materializer() {
     assert!(err.to_string().contains("Mul"));
 }
 
+#[test]
+fn axioms_chain_through_unselectable_kinds() {
+    fn sub_chain_pattern() -> SemGraph {
+        let mut graph = SemGraph::new();
+        let lhs = symbol(&mut graph, 0);
+        let rhs = symbol(&mut graph, 1);
+        let zero = binary(&mut graph, SymKind::Sub, rhs, rhs);
+        let neg = binary(&mut graph, SymKind::Sub, zero, rhs);
+        binary(&mut graph, SymKind::Sub, lhs, neg);
+        graph
+    }
+
+    let context = Context::with_default_dialects();
+    let ty = IntegerType::new(&context, 32);
+    let mut egraph = SemEGraph::new();
+    let lhs = egraph.add(template_node(
+        SymKind::Symbol,
+        Some(SymPayload::SymbolId(0)),
+        Some(ty),
+    ));
+    let rhs = egraph.add(template_node(
+        SymKind::Symbol,
+        Some(SymPayload::SymbolId(1)),
+        Some(ty),
+    ));
+    let mut add = template_node(SymKind::Add, None, Some(ty));
+    add.children = vec![lhs, rhs];
+    let root = egraph.add(add);
+
+    let axioms = "
+        (axiom add-via-neg
+          (vars (a w) (b w)) (root w)
+          (lhs (add a b)) (rhs (sub a (neg b))))
+        (axiom neg-via-sub
+          (vars (x w)) (root w)
+          (lhs (neg x)) (rhs (sub (sub x x) x)))
+    ";
+    let pass = InstructionSelectPass::new(vec![Rule::new(
+        "sub-chain",
+        sub_chain_pattern(),
+        1,
+        emit_sub,
+    )])
+    .with_axioms(axioms);
+    super::rewrites::saturate(&context, &mut egraph, &pass.rewrites, Default::default());
+
+    assert!(
+        pass.compiled_patterns[0]
+            .search(&egraph, &context)
+            .iter()
+            .any(|m| egraph.find(m.root) == egraph.find(root))
+    );
+}
+
 /// A pure subexpression shared by two fused matches is *duplicated*: each
 /// add-mul instruction recomputes the mul internally, and the mul op — no
 /// longer needed as a register value — is consumed.
@@ -906,12 +960,11 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
     sext_node.children = vec![v, width];
     let sext = egraph.add(sext_node);
 
-    let texts = super::synthesis::synthesize_bridge_texts(
-        SymKind::SExt,
-        &std::collections::HashSet::from([SymKind::ShiftLeft, SymKind::ShiftRightArithmetic]),
-    );
-    let text = texts.first().expect("sext bridge discovered");
-    let rewrite = super::axioms::parse_axiom(text).unwrap().compile();
+    let rewrite = super::theory::axioms()
+        .into_iter()
+        .map(super::axioms::Axiom::compile)
+        .find(|rewrite| rewrite.name == "axiom-sext-bridge")
+        .expect("sext bridge enabled");
     super::rewrites::saturate(
         &ctx,
         &mut egraph,
@@ -929,10 +982,8 @@ fn saturation_bridges_sign_extension_to_shift_pair() {
     );
 
     // An immediate `srai` pattern matches the class, with shift amount 64-16=48.
-    // The width requirement on the shifted value must not reject the
-    // rewrite-introduced shl class: it carries no IR type, and introduced
-    // classes are produced at register width by the instructions that
-    // materialize them.
+    // The rewrite-introduced shift classes carry the register width used by the
+    // invariant.
     let compiled = compile_isel_pattern(
         0,
         &shift_imm_pattern(SymKind::ShiftRightArithmetic),
@@ -1053,12 +1104,9 @@ fn square_sign_extension_lowers_to_shift_pair() {
         .with_operand_constraints(vec![(1, OperandConstraint::Immediate)]),
     ];
 
-    // The dev-utility flow: discover the bridge axioms for this rule set
-    // offline, then install the rendered file on the pass.
-    let axioms = super::render_axioms_file(&super::discover_axioms(&rules));
     let mut pm = PassManager::new();
     pm.nest(FuncOp::name())
-        .add_pass(InstructionSelectPass::new(rules).with_axioms(&axioms));
+        .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("square should select");
 

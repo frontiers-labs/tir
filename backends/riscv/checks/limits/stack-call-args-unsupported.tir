@@ -15,5 +15,5 @@ module {
 // CHECK: riscv.addi {rd = x2, rs1 = x2, imm = -16}
 // CHECK: riscv.sd {rs1 = x2, rs2 = {{.*}}, imm = 0}
 // CHECK: riscv.sd {rs1 = x2, rs2 = {{.*}}, imm = 8}
-// CHECK: riscv.vcall {callee = "ext"
+// CHECK: asm.vcall {callee = "ext"
 // CHECK: riscv.addi {rd = x2, rs1 = x2, imm = 16}

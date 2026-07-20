@@ -5,11 +5,11 @@
 use tir::Operation;
 use tir::attributes::AttributeValue;
 use tir::backend::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
+use tir::backend::{VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp};
 
 use crate::{
     AddressPCRelOpBuilder, BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder,
-    MoveWideKeepShiftedOpBuilder, MoveWideZeroOpBuilder, ReturnOpBuilder, VirtualBranchOp,
-    VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp, phys, virt,
+    MoveWideKeepShiftedOpBuilder, MoveWideZeroOpBuilder, ReturnOpBuilder, phys, virt,
 };
 
 const R_AARCH64_ADR_PREL_LO21: u32 = 274;

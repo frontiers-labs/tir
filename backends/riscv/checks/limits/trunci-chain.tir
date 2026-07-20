@@ -19,4 +19,4 @@ module {
 }
 
 // CHECK: asm.symbol {name = "t"
-// CHECK: riscv.vret %0
+// CHECK: asm.vret %0

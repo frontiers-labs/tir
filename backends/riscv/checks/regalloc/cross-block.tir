@@ -27,4 +27,4 @@ module {
 // Add(a,b) in ^bb1, so it sorts to the commutative add's first operand.)
 // CHECK: riscv.add {rd = {{x[0-9]+}}, rs1 = x12, rs2 = x12}
 // CHECK: riscv.add {rd = x10, rs1 = [[V]], rs2 = {{x[0-9]+}}}
-// CHECK: riscv.vret
+// CHECK: asm.vret

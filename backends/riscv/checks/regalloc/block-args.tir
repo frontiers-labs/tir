@@ -21,11 +21,11 @@ module {
 }
 
 // CHECK: riscv.blt {rs1 = x10, rs2 = x11, imm = ^bb1}
-// CHECK: riscv.vbr ^bb2
+// CHECK: asm.vbr ^bb2
 // The taken arm forwards %a into the merge parameter's register (a0 = x10).
 // CHECK: riscv.addi {rd = x10, rs1 = x12, imm = 0}
-// CHECK: riscv.vbr ^bb3
+// CHECK: asm.vbr ^bb3
 // The fallthrough arm forwards %b into the very same register.
 // CHECK: riscv.addi {rd = x10, rs1 = x13, imm = 0}
-// CHECK: riscv.vbr ^bb3
-// CHECK: riscv.vret
+// CHECK: asm.vbr ^bb3
+// CHECK: asm.vret

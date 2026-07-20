@@ -16,4 +16,4 @@ module {
 // CHECK: asm.symbol {name = "addc", arg_regs = [%virt0:GPR]}
 // CHECK-NOT: constant
 // CHECK: riscv.addiw {rd = %virt2:GPR, rs1 = %virt0:GPR, imm = 5}
-// CHECK: riscv.vret
+// CHECK: asm.vret

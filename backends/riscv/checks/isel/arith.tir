@@ -19,4 +19,4 @@ module {
 // RV32: riscv.sub {rd = %virt3:GPR, rs1 = %virt2:GPR, rs2 = %virt1:GPR}
 // CHECK: riscv.and {rd = %virt4:GPR, rs1 = %virt0:GPR, rs2 = %virt3:GPR}
 // CHECK: riscv.or {rd = %virt5:GPR, rs1 = %virt1:GPR, rs2 = %virt4:GPR}
-// CHECK: riscv.vret
+// CHECK: asm.vret

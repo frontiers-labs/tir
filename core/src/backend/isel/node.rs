@@ -25,7 +25,7 @@ pub type SemEGraph = EGraph<SemNode>;
 ///
 /// `ty` is the result type for an op node, the value type for a leaf. `None` on a
 /// *pattern* node means "match any type"; `None` on a *graph* node means the type
-/// is unknown (e.g. an intermediate node of a multi-node semantic expansion). The
+/// is unknown. The
 /// type is stored verbatim from the IR — no width is collapsed or normalized — so
 /// every target can constrain on exactly the widths/classes it distinguishes
 /// (x86/AArch64 8/16/32/64-bit forms, RISC-V word vs XLEN, vector element types,
@@ -299,8 +299,7 @@ pub(crate) fn class_is_pure(egraph: &SemEGraph, class: Id) -> bool {
 }
 
 /// The integer width of an e-class, taken from whichever member carries a known
-/// integer type (the original IR node keeps its type; rewrite-introduced nodes are
-/// left untyped).
+/// integer type.
 pub(crate) fn class_width(ctx: &Context, egraph: &SemEGraph, class: Id) -> Option<u32> {
     egraph
         .nodes(class)

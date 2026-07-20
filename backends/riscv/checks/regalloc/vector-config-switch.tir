@@ -17,4 +17,4 @@ module {
 // CHECK-NEXT: riscv.vadd.vv
 // CHECK-NEXT: riscv.vsetvli {rd = x0, avl = x11, vtypei = 208}
 // CHECK-NEXT: riscv.vmul.vv
-// CHECK: riscv.vret
+// CHECK: asm.vret

@@ -18,4 +18,4 @@ module {
 // CHECK-NEXT: riscv.vadd.vv
 // CHECK-NOT: riscv.vsetvli
 // CHECK: riscv.vmul.vv
-// CHECK: riscv.vret
+// CHECK: asm.vret

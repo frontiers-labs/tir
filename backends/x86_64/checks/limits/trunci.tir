@@ -15,4 +15,4 @@ module {
 // CHECK: asm.symbol {name = "tr"
 // CHECK-NOT: mov
 // CHECK-NOT: and
-// CHECK: x86_64.vret %0
+// CHECK: asm.vret %0

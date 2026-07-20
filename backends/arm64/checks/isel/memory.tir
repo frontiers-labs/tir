@@ -24,4 +24,4 @@ module {
 // CHECK: arm64.load_word_unsigned {rt = %virt4:GPR, rn = %virt2:GPRsp, imm = 0}
 // CHECK: arm64.load_word_unsigned {rt = %virt5:GPR, rn = %virt3:GPRsp, imm = 0}
 // CHECK: arm64.add {rd = %virt6:GPR, rn = %virt4:GPR, rm = %virt5:GPR}
-// CHECK: arm64.vret
+// CHECK: asm.vret

@@ -27,8 +27,9 @@ use crate::{
     CSubWordOpBuilder, CXorOpBuilder, EnvBreakOp, FLoadDoubleOp, FLoadWordOp, FStoreDoubleOp,
     FStoreWordOp, JumpAndLinkRegOp, LoadDoubleWordOp, LoadUpperImmOp, LoadWordOp, OrOp,
     ShiftLeftLogicalImmOp, ShiftRightArithmeticImmOp, ShiftRightLogicalImmOp, StoreDoubleWordOp,
-    StoreWordOp, SubOp, SubWordOp, VirtualReturnOp, XorOp, phys,
+    StoreWordOp, SubOp, SubWordOp, XorOp, phys,
 };
+use tir::backend::VirtualReturnOp;
 
 pub(crate) fn compress_rv32(
     context: &tir::Context,

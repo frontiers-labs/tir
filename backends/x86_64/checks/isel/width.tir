@@ -25,7 +25,7 @@ module {
 // CHECK-NEXT: x86_64.add32 {dst = %virt9:GPR32, dst_tied = %virt2:GPR32, src = %virt3:GPR32}
 // CHECK-NEXT: x86_64.sub16 {dst = %virt10:GPR16, dst_tied = %virt4:GPR16, src = %virt5:GPR16}
 // CHECK-NEXT: x86_64.xor8 {dst = %virt11:GPR8, dst_tied = %virt6:GPR8, src = %virt7:GPR8}
-// CHECK-NEXT: x86_64.vret
+// CHECK-NEXT: asm.vret
 
 // The immediate form is typed the same way: an i32 add with a constant folds
 // into `add_imm32`.

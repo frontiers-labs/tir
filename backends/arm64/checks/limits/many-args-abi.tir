@@ -21,5 +21,5 @@ module {
 // CHECK: arm64.sub_imm {rd = sp, rn = sp, imm = 16}
 // CHECK: arm64.store_doubleword {rt = {{.*}}, rn = sp, imm = 0}
 // CHECK: arm64.store_doubleword {rt = {{.*}}, rn = sp, imm = 8}
-// CHECK: arm64.vcall {callee = "ext"
+// CHECK: asm.vcall {callee = "ext"
 // CHECK: arm64.add_imm {rd = sp, rn = sp, imm = 16}

@@ -11,7 +11,7 @@ module {
 
 // The call lowers to a virtual call carrying the callee symbol; the argument
 // and result travel through x0 via copies and lr is saved across the call.
-// ISEL: arm64.vcall {callee = "foo"
+// ISEL: asm.vcall {callee = "foo"
 
 // The callee's address is unknown until link time: the bl immediate stays
 // zero and an R_AARCH64_CALL26 relocation against the undefined symbol is

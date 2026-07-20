@@ -15,5 +15,5 @@ module {
 
 // CHECK: x86_64.add_imm {dst = rsp, imm = -24}
 // CHECK: x86_64.mov_store_disp {base = rsp, imm = 0, src = {{.*}}}
-// CHECK: x86_64.vcall {callee = "g"
+// CHECK: asm.vcall {callee = "g"
 // CHECK: x86_64.add_imm {dst = rsp, imm = 24}

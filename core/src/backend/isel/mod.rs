@@ -15,7 +15,6 @@ mod emit;
 mod node;
 mod pattern;
 mod rewrites;
-mod synthesis;
 #[cfg(test)]
 mod tests;
 mod theory;
@@ -34,7 +33,6 @@ use tir_symbolic::egraph::{ENode, Id, PatternNode, Var};
 
 pub use node::{SemEGraph, SemNode, SemPayload};
 pub use rewrites::{IselRewrite, SaturationLimits};
-pub use synthesis::{discover_axioms, render_axioms_file};
 pub use tir_symbolic::egraph::EMatch;
 
 use builder::SemDagBuilder;
@@ -705,9 +703,7 @@ pub struct InstructionSelectPass {
     /// (see [`pattern::constant_materializer_ranges`]). Empty means bare
     /// constants stay with the target's pre-RA materialization hook.
     constant_materializer_ranges: Vec<ImmRange>,
-    /// Target-independent algebraic identities the program e-graph is saturated
-    /// with before covering (e.g. discovered `sext`/shift bridges). Populated by
-    /// rewrite discovery; empty means selection is purely syntactic tiling.
+    /// Semantic invariants the program e-graph is saturated with before covering.
     rewrites: Vec<IselRewrite>,
     /// Instructions that define a register implicitly; selection introduces one
     /// ahead of any op whose `implicit_uses` name a matching register.
@@ -742,7 +738,7 @@ impl InstructionSelectPass {
             })
             .collect();
 
-        let rewrites = discover_rewrites(&compiled_patterns);
+        let rewrites = discover_rewrites();
         let constant_materializer_ranges =
             pattern::constant_materializer_ranges(&compiled_patterns);
 
@@ -768,28 +764,18 @@ impl InstructionSelectPass {
         self
     }
 
-    /// Install the algebraic identities used to saturate the program e-graph before
-    /// covering. These are proved equivalences (target-independent bit-vector
-    /// lemmas, or sequences discovered against the target's own instructions), so
-    /// the rule set stays free of hand-written selection rules.
+    /// Install semantic invariants used to saturate the program e-graph.
     pub fn with_rewrites(mut self, rewrites: Vec<IselRewrite>) -> Self {
         self.rewrites = rewrites;
         self
     }
 
-    /// Install the target's discovered bridge axioms (the committed
-    /// `isel.axioms` file the `tir axioms` utility generates). An axiom whose
-    /// RHS needs a kind the rule set has no atomic instruction for is dropped —
-    /// a stale file degrades coverage, never correctness — and every applied
-    /// width instantiation is still proved first (see [`axioms`](self)).
+    /// Install additional semantic invariants.
     pub fn with_axioms(mut self, file: &str) -> Self {
-        let atomics = pattern::atomic_kinds(&self.compiled_patterns);
         for form in axioms::axiom_forms(file) {
             let axiom = axioms::parse_axiom(&form)
                 .unwrap_or_else(|e| panic!("invalid axiom `{form}`: {e}"));
-            if axiom.rhs_kinds().is_subset(&atomics) {
-                self.rewrites.push(axiom.compile());
-            }
+            self.rewrites.push(axiom.compile());
         }
         self
     }

@@ -14,7 +14,7 @@ module {
   // CHECK: asm.symbol {name = "eq_val"
   // CHECK: arm64.cmp {rn = %virt0:GPR, rm = %virt1:GPR}
   // CHECK-NEXT: arm64.cset_eq {rd = %virt2:GPR}
-  // CHECK-NEXT: arm64.vret
+  // CHECK-NEXT: asm.vret
 
   func @ne_val(%0: !i64, %1: !i64) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "ne"} : !i1

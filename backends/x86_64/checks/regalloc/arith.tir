@@ -20,7 +20,7 @@ module {
 // ISEL-NEXT: x86_64.sub {dst = %virt3:GPR, dst_tied = %virt0:GPR, src = %virt2:GPR}
 // ISEL-NEXT: x86_64.imul {dst = %virt4:GPR, dst_tied = %virt1:GPR, src = %virt3:GPR}
 // ISEL-NEXT: x86_64.or {dst = %virt5:GPR, dst_tied = %virt0:GPR, src = %virt4:GPR}
-// ISEL-NEXT: x86_64.vret
+// ISEL-NEXT: asm.vret
 
 // %0 and %1 arrive in rdi and rsi. Each two-address op is preceded by a copy of
 // its tied value into its destination register; %0 stays live to the last op,
@@ -33,4 +33,4 @@ module {
 // CHECK-NEXT: x86_64.imul {dst = [[T3]], src = [[T2]]}
 // CHECK-NEXT: x86_64.mov {dst = rax, src = rdi}
 // CHECK-NEXT: x86_64.or {dst = rax, src = [[T3]]}
-// CHECK-NEXT: x86_64.vret
+// CHECK-NEXT: asm.vret

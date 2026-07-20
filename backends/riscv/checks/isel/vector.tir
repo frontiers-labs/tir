@@ -20,4 +20,4 @@ module {
 // CHECK: asm.symbol {name = "vadd"
 // CHECK-NOT: riscv.vsetivli
 // CHECK: riscv.vadd.vv {vd = %virt2:VR, vs2 = %virt0:VR, vs1 = %virt1:VR, sew = 32, vl = 4}
-// CHECK: riscv.vret
+// CHECK: asm.vret

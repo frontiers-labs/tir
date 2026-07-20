@@ -34,4 +34,4 @@ module {
 // CHECK: riscv.fsd {rs1 = %virt7:GPR, fs2 = %virt1:FPR64, imm = 0}
 // CHECK: riscv.fld {fd = %virt8:FPR64, rs1 = %virt7:GPR, imm = 0}
 // CHECK: riscv.fadd.d {fd = %virt9:FPR64, fs1 = %virt1:FPR64, fs2 = %virt8:FPR64}
-// CHECK: riscv.vret
+// CHECK: asm.vret

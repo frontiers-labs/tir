@@ -25,4 +25,4 @@ module {
 // CHECK-NOT: riscv.vsetivli
 // CHECK: riscv.vadd.vv
 // CHECK: riscv.vmul.vv
-// CHECK: riscv.vret
+// CHECK: asm.vret

@@ -30,11 +30,11 @@ module {
 // CHECK: riscv.fsub.s {fd = %virt3:FPR32, fs1 = %virt2:FPR32, fs2 = %virt1:FPR32}
 // CHECK: riscv.fmul.s {fd = %virt4:FPR32, fs1 = %virt0:FPR32, fs2 = %virt3:FPR32}
 // CHECK: riscv.fdiv.s {fd = %virt5:FPR32, fs1 = %virt4:FPR32, fs2 = %virt1:FPR32}
-// CHECK: riscv.vret
+// CHECK: asm.vret
 
 // CHECK: asm.symbol {name = "fp64", arg_regs = [%virt{{[0-9]+}}:FPR64, %virt{{[0-9]+}}:FPR64]}
 // CHECK: riscv.fadd.d {fd = %virt{{[0-9]+}}:FPR64, fs1 = %virt{{[0-9]+}}:FPR64, fs2 = %virt{{[0-9]+}}:FPR64}
 // CHECK: riscv.fsub.d
 // CHECK: riscv.fmul.d
 // CHECK: riscv.fdiv.d
-// CHECK: riscv.vret
+// CHECK: asm.vret

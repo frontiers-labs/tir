@@ -19,4 +19,4 @@ module {
 // CHECK-NOT: constant
 // CHECK: riscv.addi {rd = %virt2:GPR, rs1 = %virt0:GPR, imm = 2047}
 // CHECK: riscv.addi {rd = %virt4:GPR, rs1 = %virt2:GPR, imm = -2048}
-// CHECK: riscv.vret
+// CHECK: asm.vret

@@ -20,4 +20,4 @@ module {
 // CHECK-NEXT: arm64.fsub
 // CHECK-NEXT: arm64.fmul
 // CHECK-NEXT: arm64.fdiv
-// CHECK-NEXT: arm64.vret
+// CHECK-NEXT: asm.vret

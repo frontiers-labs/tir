@@ -1,12 +1,11 @@
 //! The proved algebraic rewrites used to saturate the program e-graph before
 //! covering, plus the small saturation driver over the [`tir_symbolic`] e-graph.
 
-use tir::{Context, sem::SymKind};
-use tir_symbolic::egraph::{EMatch, Pattern, PatternNode};
+use tir::Context;
+use tir_symbolic::egraph::{EMatch, Pattern};
 
 use super::node::{SemEGraph, SemNode};
-use super::pattern::CompiledIselPattern;
-use super::theory::enabled_axioms;
+use super::theory::axioms;
 
 /// The right-hand side of an [`IselRewrite`]: given the e-graph and a match, assert
 /// the proven equivalence (typically by building nodes and unioning the result with
@@ -71,23 +70,7 @@ pub fn saturate(
     eg.rebuild();
 }
 
-/// The target-independent axioms every rule set gets: the boolean materializer
-/// bridges, included when the rule set has an `If`-rooted materializer (the
-/// `slt`-style "set register to comparison" instructions). Target-specific
-/// bridges are discovered offline by the `tir axioms` utility and installed
-/// through [`super::InstructionSelectPass::with_axioms`]. Every axiom still
-/// proves each width instantiation before it unions (see [`super::axioms`]).
-pub(crate) fn discover_rewrites(patterns: &[CompiledIselPattern]) -> Vec<IselRewrite> {
-    let roots = |kind: SymKind| {
-        patterns.iter().any(|compiled| {
-            matches!(
-                compiled.pattern.node(compiled.pattern.root()),
-                PatternNode::Node(node) if node.kind == kind
-            )
-        })
-    };
-    enabled_axioms(roots)
-        .into_iter()
-        .map(|axiom| axiom.compile())
-        .collect()
+/// The target-independent semantic invariants every rule set gets.
+pub(crate) fn discover_rewrites() -> Vec<IselRewrite> {
+    axioms().into_iter().map(|axiom| axiom.compile()).collect()
 }

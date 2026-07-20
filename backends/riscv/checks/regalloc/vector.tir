@@ -22,4 +22,4 @@ module {
 // CHECK-NEXT: riscv.vadd.vv {vd = {{v[0-9]+}}, vs2 = v8, vs1 = v9
 // CHECK-NOT: riscv.vsetivli
 // CHECK: riscv.vmul.vv {vd = v8
-// CHECK: riscv.vret
+// CHECK: asm.vret

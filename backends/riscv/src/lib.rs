@@ -1,5 +1,5 @@
+use tir::Operation;
 use tir::helpers::{dialect, operation};
-use tir::{Any, Operation};
 
 const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
     ("main.tmdl", include_str!("../defs/main.tmdl")),
@@ -393,91 +393,9 @@ where
     }
 }
 
-operation! {
-    VirtualReturnOp {
-        name: "vret",
-        dialect: "riscv",
-        operands: [value],
-        interfaces: [tir::Terminator],
-    }
-}
-
-impl tir::Terminator for VirtualReturnOp {}
-
-// Virtual control-flow ops: the lowered form of `builtin.br`/`builtin.cond_br`.
-// They carry the successor block references and the values forwarded to each
-// successor's block arguments, deferring branch-target encoding to a later pass
-// (mirroring how `vret` defers the return sequence).
-operation! {
-    VirtualBranchOp {
-        name: "vbr",
-        dialect: "riscv",
-        format: "custom",
-        operands: O {
-            dest_args: "*Any",
-        },
-        attributes: A {
-            dest: "Block",
-        },
-        interfaces: [tir::Terminator],
-    }
-}
-
-impl tir::Terminator for VirtualBranchOp {
-    fn successors(&self) -> Vec<tir::BlockId> {
-        tir::backend::branch_successors(self)
-    }
-}
-
-impl VirtualBranchOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        tir::backend::print_branch(fmt, self, "riscv.vbr")
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        _context: &tir::Context,
-    ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
-}
-
-// Virtual call ops: the lowered form of `builtin.call`/`builtin.indirect_call`.
-// Arguments and results travel through the ABI registers via copies emitted by
-// `lower_calls`; the ops only carry the callee (a symbol whose address is
-// resolved at link time, or an already-colored register) plus the caller-saved
-// clobber list, deferring the actual `jal`/`jalr` encoding to a post-RA pass.
-operation! {
-    VirtualCallOp {
-        name: "vcall",
-        dialect: "riscv",
-        attributes: A {
-            callee: "Str",
-        },
-        roles: R {
-            clobbers: Clobber,
-        },
-    }
-}
-
-operation! {
-    VirtualIndirectCallOp {
-        name: "vcall_indirect",
-        dialect: "riscv",
-        attributes: A {
-            callee_reg: "Register",
-        },
-        roles: R {
-            callee_reg: Use,
-            clobbers: Clobber,
-        },
-    }
-}
-
 dialect! {
     RiscvDialect {
         name: "riscv",
-        operations: [VirtualReturnOp, VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp],
         operation_file: concat!(env!("OUT_DIR"), "/riscv_ops.rs"),
     }
 }
@@ -501,90 +419,36 @@ fn lower_func_and_return_to_asm_symbol(
     op: &tir::OperationRef,
     rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
-    use tir::Operation;
-    use tir::attributes::{AttributeValue, RegisterAttr};
-    use tir::builtin::{FuncOp, ReturnOp};
+    tir::backend::lower::lower_function_and_return(context, op, rewriter, |ty| {
+        argument_register_class(context, ty)
+    })
+}
 
-    if let Some(func) = op.as_op::<FuncOp>() {
-        // asm.symbol regions require an explicit symbol_end terminator.
-        let body = func.body();
-        let has_symbol_end = body
-            .op_ids()
-            .last()
-            .map(|id| context.get_op(*id).name == tir::backend::SymbolEndOp::name())
-            .unwrap_or(false);
-        if !has_symbol_end {
-            let mut b = tir::IRBuilder::new(body);
-            b.insert(tir::backend::SymbolEndOpBuilder::new(context).build());
-        }
-
-        let sym_name = func
-            .attributes()
-            .iter()
-            .find(|a| a.name == "sym_name")
-            .and_then(|a| match &a.value {
-                AttributeValue::Str(s) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-
-        // Argument register class follows the value's type: vectors live in the
-        // vector register file (in the LMUL group class their size implies),
-        // floats in the FPR file at their format's width, everything else in
-        // GPRs.
-        let mut arg_regs = Vec::new();
-        for arg in func.body().arguments().iter() {
-            let ty = context.get_type_data(arg.ty());
-            let ty_any = ty.as_ref() as &dyn std::any::Any;
-            let class = if let Some(vec_ty) = ty_any.downcast_ref::<tir::vector::VectorType>() {
-                let elem = context.get_type_data(vec_ty.element(context));
-                let elem_bits = (elem.as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<tir::builtin::IntegerType>()
-                    .map(|i| i.width())
-                    .unwrap_or(0) as i64;
-                match vec_ty.length() {
-                    Some(lanes) => vsetvli::vr_class_for_bits(lanes as i64 * elem_bits)?,
-                    None => RegClass::VR.id(),
-                }
-            } else if let Some(float_ty) = ty_any.downcast_ref::<tir::builtin::FloatType>() {
-                match float_ty.bit_width() {
-                    32 => RegClass::FPR32.id(),
-                    64 => RegClass::FPR64.id(),
-                    other => {
-                        return Err(tir::PassError::InvalidRuleSet(format!(
-                            "{other}-bit float arguments are not supported (only f32/f64)"
-                        )));
-                    }
-                }
-            } else {
-                RegClass::GPR.id()
-            };
-            arg_regs.push(AttributeValue::Register(RegisterAttr::Virtual {
-                id: arg.id().number(),
-                class: Some(class),
-            }));
-        }
-
-        let lowered = tir::backend::SymbolOpBuilder::new(context)
-            .body(op.op().regions[0])
-            .attr("name", AttributeValue::Str(sym_name))
-            .attr("arg_regs", AttributeValue::Array(arg_regs))
-            .build();
-        rewriter.replace_op(op, &lowered)?;
-        return Ok(true);
+fn argument_register_class(
+    context: &tir::Context,
+    ty: tir::TypeId,
+) -> Result<tir::backend::regalloc::RegClassId, tir::PassError> {
+    let ty = context.get_type_data(ty);
+    let ty = ty.as_ref() as &dyn std::any::Any;
+    if let Some(vector) = ty.downcast_ref::<tir::vector::VectorType>() {
+        let element = context.get_type_data(vector.element(context));
+        let bits = (element.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<tir::builtin::IntegerType>()
+            .map_or(0, tir::builtin::IntegerType::width) as i64;
+        return vector.length().map_or(Ok(RegClass::VR.id()), |lanes| {
+            vsetvli::vr_class_for_bits(lanes as i64 * bits)
+        });
     }
-
-    if let Some(ret) = op.as_op::<ReturnOp>() {
-        let mut builder = VirtualReturnOpBuilder::new(context);
-        if let Some(value) = ret.operands().first().copied() {
-            builder = builder.value(value);
-        }
-        let lowered = builder.build();
-        rewriter.replace_op(op, &lowered)?;
-        return Ok(true);
+    if let Some(float) = ty.downcast_ref::<tir::builtin::FloatType>() {
+        return match float.bit_width() {
+            32 => Ok(RegClass::FPR32.id()),
+            64 => Ok(RegClass::FPR64.id()),
+            width => Err(tir::PassError::InvalidRuleSet(format!(
+                "{width}-bit float arguments are not supported (only f32/f64)"
+            ))),
+        };
     }
-
-    Ok(false)
+    Ok(RegClass::GPR.id())
 }
 
 /// Lower `vector.vector_len` to `vsetvli rd, avl`: the one instruction that both
@@ -624,21 +488,6 @@ fn lower_vector_len(
         .build();
     rewriter.replace_op(op, &lowered)?;
     Ok(true)
-}
-
-/// Emit the deferred unconditional branch (`vbr`, finalized to `jal x0` after
-/// register allocation), forwarding any block arguments.
-fn emit_uncond_branch(
-    context: &tir::Context,
-    dest: tir::BlockId,
-    args: &[tir::ValueId],
-) -> Box<dyn Operation> {
-    Box::new(
-        VirtualBranchOpBuilder::new(context)
-            .dest_args(args.to_vec())
-            .attr("dest", tir::attributes::AttributeValue::Block(dest))
-            .build(),
-    )
 }
 
 /// Emit the branch-if-nonzero fallback for a condition no branch rule fused:
@@ -705,10 +554,9 @@ fn create_isel_pass_for(
         .filter(|f| !COMPRESSED_FEATURES.contains(f))
         .collect();
     tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, &features))
-        .with_axioms(include_str!("isel.axioms"))
         .with_axioms(include_str!("isel-materialize.axioms"))
         .with_branch_emitters(tir::backend::isel::BranchEmitters {
-            uncond: emit_uncond_branch,
+            uncond: tir::backend::emit_uncond_branch,
             cond_nonzero: emit_branch_nonzero,
         })
         .with_op_lowering(lower_func_and_return_to_asm_symbol)
@@ -726,34 +574,6 @@ impl tir::backend::call_lowering::CallEmitter for RiscvCallEmitter {
         src: tir::attributes::AttributeValue,
     ) -> Box<dyn Operation> {
         mv(context, dst, src)
-    }
-
-    fn vcall(
-        &self,
-        context: &tir::Context,
-        callee: String,
-        clobbers: tir::attributes::AttributeValue,
-    ) -> Box<dyn Operation> {
-        Box::new(
-            VirtualCallOpBuilder::new(context)
-                .attr("callee", tir::attributes::AttributeValue::Str(callee))
-                .attr("clobbers", clobbers)
-                .build(),
-        )
-    }
-
-    fn vcall_indirect(
-        &self,
-        context: &tir::Context,
-        callee: tir::attributes::AttributeValue,
-        clobbers: tir::attributes::AttributeValue,
-    ) -> Box<dyn Operation> {
-        Box::new(
-            VirtualIndirectCallOpBuilder::new(context)
-                .attr("callee_reg", callee)
-                .attr("clobbers", clobbers)
-                .build(),
-        )
     }
 
     fn stack_arg_store(
@@ -1647,19 +1467,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "run with `cargo xtask axioms`"]
-    fn committed_isel_axioms_are_fresh() {
-        let context = Context::with_default_dialects();
-        let rules = crate::get_isel_rules(&context, crate::Feature::ALL);
-        let discovered = tir::backend::isel::discover_axioms(&rules);
-        assert_eq!(
-            include_str!("isel.axioms"),
-            tir::backend::isel::render_axioms_file(&discovered),
-            "isel.axioms is stale; run `cargo run -p tir-tools --bin tir -- axioms --write`"
-        );
-    }
-
-    #[test]
     fn isel_rules_filter_by_feature_set() {
         let context = Context::with_default_dialects();
         let rule_names = |features: &[crate::Feature]| -> Vec<&'static str> {
@@ -2386,7 +2193,8 @@ mod tests {
 
     #[test]
     fn regalloc_spills_under_high_register_pressure() {
-        use crate::{AddWordOpBuilder, VirtualReturnOpBuilder, virt};
+        use crate::{AddWordOpBuilder, virt};
+        use tir::backend::VirtualReturnOpBuilder;
         use tir::backend::regalloc::TargetRegAlloc;
 
         let context = Context::with_default_dialects();
@@ -2550,7 +2358,8 @@ mod tests {
 
     #[test]
     fn regalloc_spills_fp_values_through_fp_loads_and_stores() {
-        use crate::{FAddSOpBuilder, VirtualReturnOpBuilder, virt};
+        use crate::{FAddSOpBuilder, virt};
+        use tir::backend::VirtualReturnOpBuilder;
         use tir::backend::regalloc::TargetRegAlloc;
         use tir::builtin::FloatType;
 

@@ -24,4 +24,4 @@ module {
 // CHECK: riscv.lw {rd = %virt4:GPR, rs1 = %virt2:GPR, imm = 0}
 // CHECK: riscv.lw {rd = %virt5:GPR, rs1 = %virt3:GPR, imm = 0}
 // CHECK: riscv.addw {rd = %virt6:GPR, rs1 = %virt4:GPR, rs2 = %virt5:GPR}
-// CHECK: riscv.vret
+// CHECK: asm.vret

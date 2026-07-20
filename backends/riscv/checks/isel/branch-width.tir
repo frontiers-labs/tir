@@ -22,4 +22,4 @@ module {
 
 // CHECK: asm.symbol {name = "pick"
 // CHECK: riscv.blt {rs1 = %virt0:GPR, rs2 = %virt1:GPR, imm = ^bb1}
-// CHECK-NEXT: riscv.vbr ^bb2
+// CHECK-NEXT: asm.vbr ^bb2

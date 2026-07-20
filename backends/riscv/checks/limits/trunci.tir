@@ -17,4 +17,4 @@ module {
 // CHECK-NOT: addiw
 // CHECK-NOT: slli
 // CHECK-NOT: andi
-// CHECK: riscv.vret
+// CHECK: asm.vret

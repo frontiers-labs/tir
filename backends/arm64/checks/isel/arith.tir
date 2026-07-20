@@ -16,4 +16,4 @@ module {
 // CHECK: arm64.sub {rd = %virt3:GPR, rn = %virt2:GPR, rm = %virt1:GPR}
 // CHECK: arm64.and {rd = %virt4:GPR, rn = %virt0:GPR, rm = %virt3:GPR}
 // CHECK: arm64.orr {rd = %virt5:GPR, rn = %virt1:GPR, rm = %virt4:GPR}
-// CHECK: arm64.vret
+// CHECK: asm.vret

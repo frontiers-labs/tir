@@ -16,99 +16,16 @@ mod isa {
     // Generated code: not everything is used by this asm-focused prototype.
     #![allow(dead_code, unused_variables, unused_mut, clippy::all)]
 
+    use tir::Operation;
     use tir::attributes::{AttributeValue, RegisterAttr};
+    use tir::backend::{VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp};
     use tir::helpers::{dialect, operation};
-    use tir::{Any, Operation};
 
     include!(concat!(env!("OUT_DIR"), "/x86_64.rs"));
-
-    // Virtual return: the lowered form of `builtin.return`, deferring the actual
-    // `ret` sequence. Register allocation matches it by name to pin its operand
-    // to the return register.
-    operation! {
-        VirtualReturnOp {
-            name: "vret",
-            dialect: "x86_64",
-            operands: [value],
-            interfaces: [tir::Terminator],
-        }
-    }
-
-    impl tir::Terminator for VirtualReturnOp {}
-
-    // Virtual unconditional branch: emitted by selection for `builtin.br` and
-    // conditional-branch fallthroughs, finalized to `jmp` after register
-    // allocation (its block arguments must be colored first).
-    operation! {
-        VirtualBranchOp {
-            name: "vbr",
-            dialect: "x86_64",
-            format: "custom",
-            operands: O {
-                dest_args: "*Any",
-            },
-            attributes: A {
-                dest: "Block",
-            },
-            interfaces: [tir::Terminator],
-        }
-    }
-
-    impl tir::Terminator for VirtualBranchOp {
-        fn successors(&self) -> Vec<tir::BlockId> {
-            tir::backend::branch_successors(self)
-        }
-    }
-
-    // Virtual call ops: the lowered form of `builtin.call`/`builtin.indirect_call`.
-    // Arguments and results travel through the ABI registers via copies emitted by
-    // `lower_calls`; the ops only carry the callee (a symbol relocated at link time,
-    // or an already-colored register) plus the caller-saved clobber list, deferring
-    // the actual `call` encoding to a post-RA pass.
-    operation! {
-        VirtualCallOp {
-            name: "vcall",
-            dialect: "x86_64",
-            attributes: A {
-                callee: "Str",
-            },
-            roles: R {
-                clobbers: Clobber,
-            },
-        }
-    }
-
-    operation! {
-        VirtualIndirectCallOp {
-            name: "vcall_indirect",
-            dialect: "x86_64",
-            attributes: A {
-                callee_reg: "Register",
-            },
-            roles: R {
-                callee_reg: Use,
-                clobbers: Clobber,
-            },
-        }
-    }
-
-    impl VirtualBranchOp {
-        fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-            tir::backend::print_branch(fmt, self, "x86_64.vbr")
-        }
-
-        fn custom_parse(
-            parser: &mut tir::parse::text::Parser,
-            _context: &tir::Context,
-        ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-            Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-        }
-    }
 
     dialect! {
         X86_64Dialect {
             name: "x86_64",
-            operations: [VirtualReturnOp, VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp],
             operation_file: concat!(env!("OUT_DIR"), "/x86_64_ops.rs"),
         }
     }
@@ -118,73 +35,19 @@ mod isa {
         op: &tir::OperationRef,
         rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
-        use tir::Operation;
-        use tir::builtin::{FuncOp, ReturnOp};
-
-        if let Some(func) = op.as_op::<FuncOp>() {
-            // asm.symbol regions require an explicit symbol_end terminator.
-            let body = func.body();
-            let has_symbol_end = body
-                .op_ids()
-                .last()
-                .map(|id| context.get_op(*id).name == tir::backend::SymbolEndOp::name())
-                .unwrap_or(false);
-            if !has_symbol_end {
-                let mut b = tir::IRBuilder::new(body);
-                b.insert(tir::backend::SymbolEndOpBuilder::new(context).build());
-            }
-
-            let sym_name = func
-                .attributes()
-                .iter()
-                .find(|a| a.name == "sym_name")
-                .and_then(|a| match &a.value {
-                    AttributeValue::Str(s) => Some(s.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let arg_regs = func
-                .body()
-                .arguments()
-                .iter()
-                .map(|arg| {
-                    let ty = context.get_type_data(arg.ty());
-                    let class = if (ty.as_ref() as &dyn std::any::Any)
-                        .downcast_ref::<tir::builtin::FloatType>()
-                        .is_some()
-                    {
-                        RegClass::XMM.id()
-                    } else {
-                        RegClass::GPR.id()
-                    };
-                    AttributeValue::Register(RegisterAttr::Virtual {
-                        id: arg.id().number(),
-                        class: Some(class),
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            let lowered = tir::backend::SymbolOpBuilder::new(context)
-                .body(op.op().regions[0])
-                .attr("name", AttributeValue::Str(sym_name))
-                .attr("arg_regs", AttributeValue::Array(arg_regs))
-                .build();
-            rewriter.replace_op(op, &lowered)?;
-            return Ok(true);
-        }
-
-        if let Some(ret) = op.as_op::<ReturnOp>() {
-            let mut builder = VirtualReturnOpBuilder::new(context);
-            if let Some(value) = ret.operands().first().copied() {
-                builder = builder.value(value);
-            }
-            let lowered = builder.build();
-            rewriter.replace_op(op, &lowered)?;
-            return Ok(true);
-        }
-
-        Ok(false)
+        tir::backend::lower::lower_function_and_return(context, op, rewriter, |ty| {
+            let ty = context.get_type_data(ty);
+            Ok(
+                if (ty.as_ref() as &dyn std::any::Any)
+                    .downcast_ref::<tir::builtin::FloatType>()
+                    .is_some()
+                {
+                    RegClass::XMM.id()
+                } else {
+                    RegClass::GPR.id()
+                },
+            )
+        })
     }
 
     impl X86_64Dialect {
@@ -198,21 +61,6 @@ mod isa {
             id: value,
             class: Some(class),
         })
-    }
-
-    /// Emit the deferred unconditional branch (`vbr`, finalized to `jmp` after
-    /// register allocation), forwarding any block arguments.
-    fn emit_uncond_branch(
-        context: &tir::Context,
-        dest: tir::BlockId,
-        args: &[tir::ValueId],
-    ) -> Box<dyn Operation> {
-        Box::new(
-            VirtualBranchOpBuilder::new(context)
-                .dest_args(args.to_vec())
-                .attr("dest", AttributeValue::Block(dest))
-                .build(),
-        )
     }
 
     /// Emit the branch-if-nonzero fallback for a condition no branch rule
@@ -310,34 +158,6 @@ mod isa {
             src: AttributeValue,
         ) -> Box<dyn Operation> {
             mv(context, dst, src)
-        }
-
-        fn vcall(
-            &self,
-            context: &tir::Context,
-            callee: String,
-            clobbers: AttributeValue,
-        ) -> Box<dyn Operation> {
-            Box::new(
-                VirtualCallOpBuilder::new(context)
-                    .attr("callee", AttributeValue::Str(callee))
-                    .attr("clobbers", clobbers)
-                    .build(),
-            )
-        }
-
-        fn vcall_indirect(
-            &self,
-            context: &tir::Context,
-            callee: AttributeValue,
-            clobbers: AttributeValue,
-        ) -> Box<dyn Operation> {
-            Box::new(
-                VirtualIndirectCallOpBuilder::new(context)
-                    .attr("callee_reg", callee)
-                    .attr("clobbers", clobbers)
-                    .build(),
-            )
         }
 
         fn stack_arg_store(
@@ -1272,9 +1092,8 @@ mod isa {
                 context,
                 self.config.features(),
             ))
-            .with_axioms(include_str!("isel.axioms"))
             .with_branch_emitters(tir::backend::isel::BranchEmitters {
-                uncond: emit_uncond_branch,
+                uncond: tir::backend::emit_uncond_branch,
                 cond_nonzero: emit_branch_nonzero,
             })
             .with_op_lowering(lower_func_and_return_to_asm_symbol)
@@ -1636,19 +1455,6 @@ mod tests {
                 .map(|register| register.1)
                 .collect::<Vec<_>>(),
             vec![3, 5, 12, 13, 14, 15]
-        );
-    }
-
-    #[test]
-    #[ignore = "run with `cargo xtask axioms`"]
-    fn committed_isel_axioms_are_fresh() {
-        let context = tir::Context::with_default_dialects();
-        let rules = crate::get_isel_rules(&context, crate::Feature::ALL);
-        let discovered = tir::backend::isel::discover_axioms(&rules);
-        assert_eq!(
-            include_str!("isel.axioms"),
-            tir::backend::isel::render_axioms_file(&discovered),
-            "isel.axioms is stale; run `cargo run -p tir-tools --bin tir -- axioms --write`"
         );
     }
 }

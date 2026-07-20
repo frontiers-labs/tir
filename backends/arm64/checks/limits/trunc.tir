@@ -15,4 +15,4 @@ module {
 // CHECK: asm.symbol {name = "f"
 // CHECK-NOT: ubfm
 // CHECK-NOT: and
-// CHECK: arm64.vret %0
+// CHECK: asm.vret %0

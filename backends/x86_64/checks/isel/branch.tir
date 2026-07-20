@@ -18,7 +18,7 @@ module {
   // CHECK: asm.symbol {name = "slt_branch"
   // CHECK: x86_64.cmp {dst = %virt0:GPR, src = %virt1:GPR}
   // CHECK-NEXT: x86_64.jl {imm = ^bb1}
-  // CHECK-NEXT: x86_64.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   func @sle_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "sle"} : !i1
@@ -79,7 +79,7 @@ module {
   // CHECK: asm.symbol {name = "fallback"
   // CHECK: x86_64.test {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:GPR}
   // CHECK-NEXT: x86_64.jne {imm = ^bb1}
-  // CHECK-NEXT: x86_64.vbr ^bb2
+  // CHECK-NEXT: asm.vbr ^bb2
 
   module_end
 }

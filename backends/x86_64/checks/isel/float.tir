@@ -20,4 +20,4 @@ module {
 // CHECK-NEXT: x86_64.mulsd {dst = %virt3:XMM, dst_tied = %virt1:XMM, src = %virt2:XMM}
 // CHECK-NEXT: x86_64.subsd {dst = %virt4:XMM, dst_tied = %virt3:XMM, src = %virt0:XMM}
 // CHECK-NEXT: x86_64.divsd {dst = %virt5:XMM, dst_tied = %virt4:XMM, src = %virt1:XMM}
-// CHECK-NEXT: x86_64.vret
+// CHECK-NEXT: asm.vret
