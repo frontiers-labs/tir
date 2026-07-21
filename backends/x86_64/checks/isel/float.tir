@@ -13,6 +13,11 @@ module {
     %5 = divf %4, %1 : !f64
     return %5
   }
+
+  func @convert(%0: !i32) -> !f64 {
+    %1 = sitofp %0 : !f64
+    return %1
+  }
   module_end
 }
 
@@ -21,3 +26,4 @@ module {
 // CHECK-NEXT: x86_64.subsd {dst = %virt4:XMM, dst_tied = %virt3:XMM, src = %virt0:XMM}
 // CHECK-NEXT: x86_64.divsd {dst = %virt5:XMM, dst_tied = %virt4:XMM, src = %virt1:XMM}
 // CHECK-NEXT: asm.vret
+// CHECK:      x86_64.cvtsi2sd32 {dst = %virt7:XMM, src = %virt6:GPR32}

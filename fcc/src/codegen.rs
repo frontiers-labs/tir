@@ -308,13 +308,23 @@ impl FnCodegen<'_> {
         let semantics = self.ast.get_annotation(node).unwrap();
         let mut source = semantics.ty.unwrap();
         for &target in &semantics.conversions {
-            value = self.convert_integer(value, source, target);
+            value = self.convert_scalar(value, source, target);
             source = target;
         }
         value
     }
 
-    fn convert_integer(&mut self, value: ValueId, source: QualType, target: QualType) -> ValueId {
+    fn convert_scalar(&mut self, value: ValueId, source: QualType, target: QualType) -> ValueId {
+        if self.typed.integer_width(source).is_some()
+            && self.typed.integer_is_signed(source) == Some(true)
+            && matches!(self.typed.types().kind(target), TypeKind::Double)
+        {
+            let target_ty = lower_type(self.context, self.typed, target);
+            return self
+                .builder
+                .insert(b::sitofp(self.context, value, target_ty).build())
+                .result();
+        }
         let (Some(source_width), Some(target_width)) = (
             self.typed.integer_width(source),
             self.typed.integer_width(target),
@@ -1393,7 +1403,7 @@ impl FnCodegen<'_> {
                 AstKind::Cast => {
                     let child = ast.children(node).next().unwrap();
                     let value = self.materialize(self.values[&child]);
-                    LoweredExpr::Value(self.convert_integer(
+                    LoweredExpr::Value(self.convert_scalar(
                         value,
                         node_type(self.typed, child),
                         node_type(self.typed, node),

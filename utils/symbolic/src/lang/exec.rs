@@ -544,6 +544,12 @@ fn eval_node<V, M: Memory>(
         SymKind::FSub => float_binop(c(0), c(1), APFloat::sub, "fsub"),
         SymKind::FMul => float_binop(c(0), c(1), APFloat::mul, "fmul"),
         SymKind::FDiv => float_binop(c(0), c(1), APFloat::div, "fdiv"),
+        SymKind::SIToFP => {
+            let value = as_int!(c(0), "sitofp").to_i64();
+            let exponent = as_int!(c(1), "sitofp").to_u64() as u32;
+            let mantissa = as_int!(c(2), "sitofp").to_u64() as u32;
+            Value::Float(APFloat::from_f64(value as f64).convert(exponent, mantissa, false))
+        }
 
         // ── Bitwise (int only) ─────────────────────────────────────────────
         SymKind::Eq => Value::Int(APInt::new(1, bool_result(c(0) == c(1)))),

@@ -523,6 +523,7 @@ fn scalar_root_kind(kind: &tir::sem::SymKind) -> bool {
             | K::FSub
             | K::FMul
             | K::FDiv
+            | K::SIToFP
     )
 }
 
@@ -803,4 +804,3 @@ fn resolve_asm_template_for_instruction<'a>(
 ) -> Option<String> {
     resolve_effective_asm_for_instruction(inst, item_cache).and_then(resolve_string)
 }
-

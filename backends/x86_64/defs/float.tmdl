@@ -186,6 +186,78 @@ instruction Movsd for [X86_64] {
     }
 }
 
+// `movq xmm, r64` copies an integer bit pattern into the low binary64 lane.
+instruction MovqXmmGpr for [X86_64] {
+    param OPNAME: String = "movq_xmm_gpr";
+    param MNEMONIC: String = "movq";
+
+    operands {
+        dst: XMM,
+        src: GPR,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b1,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x6E,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = bitcast(src);
+    }
+}
+
+// Convert a signed 32-bit integer to scalar binary64 (`cvtsi2sd xmm, r32`).
+instruction Cvtsi2sd32 for [X86_64] {
+    param OPNAME: String = "cvtsi2sd32";
+    param MNEMONIC: String = "cvtsi2sd";
+
+    operands {
+        dst: XMM,
+        src: GPR32,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x2A,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = sitofp(src, 11, 52);
+    }
+}
+
+pseudo instruction SelectFloatConstant64 for [X86_64] {
+    param OPNAME: String = "select_float_constant64";
+    operands { dst: XMM, imm: bits<64>, }
+    behavior { dst = bitcast(imm); }
+}
+
 instruction MovsdLoadDisp for [X86_64] {
     param OPNAME: String = "movsd_load_disp";
     param MNEMONIC: String = "movsd";

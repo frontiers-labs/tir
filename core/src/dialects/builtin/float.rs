@@ -143,6 +143,63 @@ operation! {
     }
 }
 
+fn float_format_node(
+    op: &tir::OpInstance,
+    g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+    format: impl FnOnce(&crate::builtin::FloatType) -> u32,
+) -> tir::graph::NodeId {
+    let context = op.context.upgrade();
+    let ty = context.get_value(op.results[0]).ty();
+    let ty = context.get_type_data(ty);
+    let float = (ty.as_ref() as &dyn std::any::Any)
+        .downcast_ref::<crate::builtin::FloatType>()
+        .expect("floating conversion must have a float result");
+    let value = format(float);
+    let width = (u32::BITS - value.leading_zeros()).max(1);
+    let node = g.add_node(tir::sem::SymKind::Constant);
+    g.set_leaf_data(
+        node,
+        tir::sem::SymPayload::Int(tir_adt::APInt::new(width, value as u64)),
+    );
+    node
+}
+
+operation! {
+    SIToFPOp {
+        name: "sitofp",
+        dialect: "builtin",
+        operands: O {
+            input: "crate::builtin::IntegerType",
+        },
+        results: R {
+            result: "crate::builtin::FloatType",
+        },
+        sem: "(set result (sitofp input $float_exponent $float_mantissa))",
+    }
+}
+
+impl SIToFPOp {
+    fn float_exponent(
+        &self,
+        g: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+    ) -> tir::graph::NodeId {
+        float_format_node(&self.0, g, crate::builtin::FloatType::exp_width)
+    }
+
+    fn float_mantissa(
+        &self,
+        g: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+    ) -> tir::graph::NodeId {
+        float_format_node(&self.0, g, crate::builtin::FloatType::mant_width)
+    }
+}
+
 impl ConstantFOpBuilder {
     /// The constant, held as `f64`; every supported format embeds in it exactly.
     pub fn value(self, v: f64) -> Self {

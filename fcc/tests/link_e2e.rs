@@ -216,6 +216,28 @@ fn double_division_executes_through_driver() {
 }
 
 #[test]
+fn double_literal_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "double literal(void) { return 1.5; }\n",
+        "double literal(void); int main(void) { return literal() == 1.5 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
+fn signed_integer_to_double_conversion_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "double convert(int value) { return value; }\n",
+        "double convert(int); int main(void) { return convert(-17) == -17.0 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
 fn signed_integer_division_executes_through_driver() {
     if !cc_available() {
         return;

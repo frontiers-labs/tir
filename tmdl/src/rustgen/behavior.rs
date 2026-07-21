@@ -724,6 +724,7 @@ fn emit_dag_as_code(
                 | tir::sem::SymKind::FSub
                 | tir::sem::SymKind::FMul
                 | tir::sem::SymKind::FDiv
+                | tir::sem::SymKind::SIToFP
                 | tir::sem::SymKind::Bitcast
                 | tir::sem::SymKind::LoadMemory
                 | tir::sem::SymKind::LoadReserved
