@@ -216,6 +216,17 @@ fn double_division_executes_through_driver() {
 }
 
 #[test]
+fn signed_integer_division_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int divide(int lhs, int rhs) { return lhs / rhs; }\n",
+        "int divide(int, int); int main(void) { return divide(-17, 5) == -3 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
 fn double_add_assignment_executes_through_driver() {
     if !cc_available() {
         return;

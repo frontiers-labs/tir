@@ -63,6 +63,143 @@ mod isa {
         })
     }
 
+    fn signed_division_pattern() -> tir::sem::SemGraph {
+        use tir::graph::MutDag;
+
+        let mut graph = tir::sem::SemGraph::new();
+        let lhs = graph.add_node(tir::sem::SymKind::Symbol);
+        graph.set_leaf_data(lhs, tir::sem::SymPayload::SymbolId(0));
+        let rhs = graph.add_node(tir::sem::SymKind::Symbol);
+        graph.set_leaf_data(rhs, tir::sem::SymPayload::SymbolId(1));
+        let result = graph.add_node(tir::sem::SymKind::Div);
+        graph.add_edge(result, lhs);
+        graph.add_edge(result, rhs);
+        graph
+    }
+
+    fn fixed_def(value: tir::ValueId, class: RegClass, index: u16) -> AttributeValue {
+        AttributeValue::Register(RegisterAttr::FixedDef {
+            id: value.number(),
+            class: class.id(),
+            index,
+        })
+    }
+
+    fn emit_sign_extend_dividend32(
+        context: &tir::Context,
+        req: &tir::backend::isel::EmitRequest,
+        matched: &tir::backend::isel::RuleMatch,
+    ) -> Result<Box<dyn Operation>, tir::PassError> {
+        let dividend = matched
+            .value_binding(0)
+            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+        let quotient = *req
+            .results
+            .first()
+            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+        Ok(Box::new(
+            SignExtendDividend32OpBuilder::new(context)
+                .attr("high", phys(RegClass::GPR32.id(), 2))
+                .attr("low", fixed_def(quotient, RegClass::GPR32, 0))
+                .attr("low_tied", virt(dividend.number(), RegClass::GPR32.id()))
+                .build(),
+        ))
+    }
+
+    fn emit_signed_divide32(
+        context: &tir::Context,
+        req: &tir::backend::isel::EmitRequest,
+        matched: &tir::backend::isel::RuleMatch,
+    ) -> Result<Box<dyn Operation>, tir::PassError> {
+        let divisor = matched
+            .value_binding(1)
+            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+        let quotient = *req
+            .results
+            .first()
+            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+        Ok(Box::new(
+            SignedDivide32OpBuilder::new(context)
+                .attr("quotient", fixed_def(quotient, RegClass::GPR32, 0))
+                .attr("remainder", phys(RegClass::GPR32.id(), 2))
+                .attr("divisor", virt(divisor.number(), RegClass::GPR32.id()))
+                .build(),
+        ))
+    }
+
+    fn emit_sign_extend_dividend64(
+        context: &tir::Context,
+        req: &tir::backend::isel::EmitRequest,
+        matched: &tir::backend::isel::RuleMatch,
+    ) -> Result<Box<dyn Operation>, tir::PassError> {
+        let dividend = matched
+            .value_binding(0)
+            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+        let quotient = *req
+            .results
+            .first()
+            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+        Ok(Box::new(
+            SignExtendDividend64OpBuilder::new(context)
+                .attr("high", phys(RegClass::GPR.id(), 2))
+                .attr("low", fixed_def(quotient, RegClass::GPR, 0))
+                .attr("low_tied", virt(dividend.number(), RegClass::GPR.id()))
+                .build(),
+        ))
+    }
+
+    fn emit_signed_divide64(
+        context: &tir::Context,
+        req: &tir::backend::isel::EmitRequest,
+        matched: &tir::backend::isel::RuleMatch,
+    ) -> Result<Box<dyn Operation>, tir::PassError> {
+        let divisor = matched
+            .value_binding(1)
+            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+        let quotient = *req
+            .results
+            .first()
+            .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+        Ok(Box::new(
+            SignedDivide64OpBuilder::new(context)
+                .attr("quotient", fixed_def(quotient, RegClass::GPR, 0))
+                .attr("remainder", phys(RegClass::GPR.id(), 2))
+                .attr("divisor", virt(divisor.number(), RegClass::GPR.id()))
+                .build(),
+        ))
+    }
+
+    fn signed_division_rules() -> Vec<tir::backend::isel::Rule> {
+        use tir::backend::isel::{RegisterCapability, RegisterRequirement, Rule};
+        use tir::graph::OperandConstraint;
+
+        let rule = |name, width, emit, prelude| {
+            let register = RegisterRequirement::whole(RegisterCapability::integer(width));
+            Rule::new(name, signed_division_pattern(), 2, emit)
+                .with_prelude_emitter(prelude)
+                .with_operand_constraints(vec![
+                    (0, OperandConstraint::Register),
+                    (1, OperandConstraint::Register),
+                ])
+                .with_operand_registers(vec![(0, register), (1, register)])
+                .with_result_register(register)
+        };
+        vec![
+            rule(
+                "x86_64.signed_divide32",
+                32,
+                emit_signed_divide32,
+                emit_sign_extend_dividend32,
+            ),
+            rule(
+                "x86_64.signed_divide64",
+                64,
+                emit_signed_divide64,
+                emit_sign_extend_dividend64,
+            ),
+        ]
+    }
+
     /// Emit the branch-if-nonzero fallback for a condition no branch rule
     /// fused: `test cond, cond` + `jne dest`.
     fn emit_branch_nonzero(
@@ -1114,16 +1251,15 @@ mod isa {
         }
 
         fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
-            tir::backend::isel::InstructionSelectPass::new(get_isel_rules(
-                context,
-                self.config.features(),
-            ))
-            .with_branch_emitters(tir::backend::isel::BranchEmitters {
-                uncond: tir::backend::emit_uncond_branch,
-                cond_nonzero: emit_branch_nonzero,
-            })
-            .with_op_lowering(lower_func_and_return_to_asm_symbol)
-            .with_call_lowering(self.abi(), Box::new(X86CallEmitter))
+            let mut rules = get_isel_rules(context, self.config.features());
+            rules.extend(signed_division_rules());
+            tir::backend::isel::InstructionSelectPass::new(rules)
+                .with_branch_emitters(tir::backend::isel::BranchEmitters {
+                    uncond: tir::backend::emit_uncond_branch,
+                    cond_nonzero: emit_branch_nonzero,
+                })
+                .with_op_lowering(lower_func_and_return_to_asm_symbol)
+                .with_call_lowering(self.abi(), Box::new(X86CallEmitter))
         }
 
         fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {

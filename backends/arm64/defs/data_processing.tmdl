@@ -513,6 +513,22 @@ instruction SignedDivide for [ARMv8A64] : ShiftReg {
     }
 }
 
+instruction SignedDivideWord for [ARMv8A64] : ShiftReg {
+    param OPNAME: String = "sdiv_word";
+    param MNEMONIC: String = "sdiv";
+    param SF: bits<1> = 0b0;
+    param OPCODE: bits<6> = 0b000011;
+    schedule { units = [WriteIDiv]; }
+
+    behavior {
+        rd = if extract(rm, 31, 0) == zext(0b0, 32) {
+            zext(0b0, self.XLEN)
+        } else {
+            zext(extract(rn, 31, 0) / extract(rm, 31, 0), self.XLEN)
+        };
+    }
+}
+
 instruction UnsignedDivide for [ARMv8A64] : ShiftReg {
     param MNEMONIC: String = "udiv";
     param OPCODE: bits<6> = 0b000010;

@@ -2,8 +2,7 @@
 
 // Scalar integer extensions beyond the base ALU set: immediate compare/test,
 // group-3 unary ops, CL-count and rotate shifts, widening multiply, and the
-// movzx/movsx register extensions. Division is not modeled: idiv's 128-bit
-// rdx:rax dividend has no faithful representation in the semantic language.
+// movzx/movsx register extensions and fixed-register integer division.
 
 // Group-3 unary `op r/m64`: REX.W + 0xF7 + ModR/M(mod=11, reg=EXT, rm=dst).
 tmpl_runary!(RegUnary, X86_64, GPR, rexw = 0b1)
@@ -90,6 +89,73 @@ instruction ImulWide for [X86_64] : RegUnary {
     behavior {
         GPR::rdx = extract(GPR::rax * dst, (2 * self.XLEN) - 1, self.XLEN);
         GPR::rax = extract(GPR::rax * dst, self.XLEN - 1, 0);
+    }
+}
+
+instruction SignExtendDividend64 for [X86_64] {
+    param OPNAME: String = "sign_extend_dividend64";
+    param MNEMONIC: String = "cqo";
+    operands { high: GPR, low: GPR, }
+    encoding { 0..7 => 0x48, 8..15 => 0x99, }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        high = sext(extract(low, 63, 63), 64);
+        low = low;
+    }
+}
+
+instruction SignExtendDividend32 for [X86_64] {
+    param OPNAME: String = "sign_extend_dividend32";
+    param MNEMONIC: String = "cdq";
+    operands { high: GPR32, low: GPR32, }
+    encoding { 0..7 => 0x99, }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        high = sext(extract(low, 31, 31), 32);
+        low = low;
+    }
+}
+
+instruction SignedDivide64 for [X86_64] {
+    param OPNAME: String = "signed_divide64";
+    param MNEMONIC: String = "idiv";
+    operands { quotient: GPR, remainder: GPR, divisor: GPR, }
+    encoding {
+        0 => divisor[3],
+        1..2 => 0b00,
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0xF7,
+        16..18 => divisor[0..2],
+        19..21 => 0b111,
+        22..23 => 0b11,
+    }
+    asm { "{self.MNEMONIC} {divisor}" }
+    behavior {
+        remainder = (quotient - (quotient / divisor) * divisor)
+            | (remainder & zext(0b0, 64));
+        quotient = quotient / divisor;
+    }
+}
+
+instruction SignedDivide32 for [X86_64] {
+    param OPNAME: String = "signed_divide32";
+    param MNEMONIC: String = "idiv";
+    operands { quotient: GPR32, remainder: GPR32, divisor: GPR32, }
+    encoding {
+        0 => divisor[3],
+        1..3 => 0b000,
+        4..7 => 0b0100,
+        8..15 => 0xF7,
+        16..18 => divisor[0..2],
+        19..21 => 0b111,
+        22..23 => 0b11,
+    }
+    asm { "{self.MNEMONIC} {divisor}" }
+    behavior {
+        remainder = (quotient - (quotient / divisor) * divisor)
+            | (remainder & zext(0b0, 32));
+        quotient = quotient / divisor;
     }
 }
 

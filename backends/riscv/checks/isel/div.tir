@@ -1,0 +1,16 @@
+// RUN: tir mc --march=rv64im --stage=isel %s | filecheck %s
+
+module {
+  func @div32(%0: !i32, %1: !i32) -> !i32 {
+    %2 = divsi %0, %1 : !i32
+    return %2
+  }
+  func @div64(%0: !i64, %1: !i64) -> !i64 {
+    %2 = divsi %0, %1 : !i64
+    return %2
+  }
+  module_end
+}
+
+// CHECK: riscv.divw
+// CHECK: riscv.div

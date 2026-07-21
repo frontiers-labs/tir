@@ -362,6 +362,10 @@ impl FnCodegen<'_> {
                 .builder
                 .insert(b::muli(self.context, lhs, rhs, ty).build())
                 .result(),
+            AstKind::Div | AstKind::DivAssign => self
+                .builder
+                .insert(b::divsi(self.context, lhs, rhs, ty).build())
+                .result(),
             AstKind::BitAnd | AstKind::AndAssign => self
                 .builder
                 .insert(b::andi(self.context, lhs, rhs, ty).build())
@@ -1212,9 +1216,6 @@ impl FnCodegen<'_> {
                     let source_ty = node_type(self.typed, node);
                     let value = match self.typed.types().kind(source_ty) {
                         TypeKind::Double => self.lower_double_binary(kind, l, r),
-                        _ if kind == AstKind::Div => {
-                            return Err(unsupported(ast, node, "expression Div".to_string()));
-                        }
                         _ => self.lower_integer_binary(kind, l, r, source_ty),
                     };
                     LoweredExpr::Value(value)
@@ -1402,8 +1403,6 @@ impl FnCodegen<'_> {
                     let source_ty = node_type(self.typed, lhs_node);
                     let value = if matches!(self.typed.types().kind(source_ty), TypeKind::Double) {
                         self.lower_double_binary(kind, lhs, rhs)
-                    } else if kind == AstKind::DivAssign {
-                        return Err(unsupported(ast, node, "expression DivAssign".to_string()));
                     } else {
                         self.lower_integer_binary(kind, lhs, rhs, source_ty)
                     };

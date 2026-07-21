@@ -45,6 +45,12 @@ pub enum RegisterAttr {
         class: RegClassId,
         index: u16,
     },
+    /// A virtual value defined in one required physical register.
+    FixedDef {
+        id: u32,
+        class: RegClassId,
+        index: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +121,9 @@ impl AttributeValue {
                     }
                 }
                 RegisterAttr::FixedUse { id, class, index } => {
+                    fmt.write(format!("%virt{}:{}@{}", id, class.name(), index))
+                }
+                RegisterAttr::FixedDef { id, class, index } => {
                     fmt.write(format!("%virt{}:{}@{}", id, class.name(), index))
                 }
             },

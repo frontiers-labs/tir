@@ -249,7 +249,9 @@ impl Context {
                 continue;
             };
             let id = match register {
-                RegisterAttr::Virtual { id, .. } | RegisterAttr::FixedUse { id, .. } => id,
+                RegisterAttr::Virtual { id, .. }
+                | RegisterAttr::FixedUse { id, .. }
+                | RegisterAttr::FixedDef { id, .. } => id,
                 RegisterAttr::Physical { .. } => continue,
             };
             let value_id = ValueId::from_number(*id);
@@ -399,7 +401,9 @@ impl Context {
         for attr in &op.attributes {
             if let AttributeValue::Register(register) = &attr.value {
                 match register {
-                    RegisterAttr::Virtual { id, .. } | RegisterAttr::FixedUse { id, .. } => {
+                    RegisterAttr::Virtual { id, .. }
+                    | RegisterAttr::FixedUse { id, .. }
+                    | RegisterAttr::FixedDef { id, .. } => {
                         touched.push(ValueId::from_number(*id));
                     }
                     RegisterAttr::Physical { .. } => {}

@@ -202,12 +202,110 @@ pub fn create_isel_pass(context: &tir::Context) -> tir::backend::isel::Instructi
     create_isel_pass_for(context, Feature::ALL, default_abi())
 }
 
+fn signed_division_pattern(context: &tir::Context, width: Option<u32>) -> tir::sem::SemGraph {
+    use tir::graph::{MetaMutDag, MutDag};
+
+    let mut graph = tir::sem::SemGraph::new();
+    let lhs = graph.add_node(tir::sem::SymKind::Symbol);
+    graph.set_leaf_data(lhs, tir::sem::SymPayload::SymbolId(0));
+    let rhs = graph.add_node(tir::sem::SymKind::Symbol);
+    graph.set_leaf_data(rhs, tir::sem::SymPayload::SymbolId(1));
+    let result = graph.add_node(tir::sem::SymKind::Div);
+    if let Some(width) = width {
+        graph.set_actual_type(result, tir::builtin::IntegerType::new(context, width));
+    }
+    graph.add_edge(result, lhs);
+    graph.add_edge(result, rhs);
+    graph
+}
+
+fn division_register(value: tir::ValueId) -> tir::attributes::AttributeValue {
+    tir::attributes::AttributeValue::Register(tir::attributes::RegisterAttr::Virtual {
+        id: value.number(),
+        class: Some(RegClass::GPR.id()),
+    })
+}
+
+fn division_operands(
+    req: &tir::backend::isel::EmitRequest,
+    matched: &tir::backend::isel::RuleMatch,
+) -> Result<(tir::ValueId, tir::ValueId, tir::ValueId), tir::PassError> {
+    let result = *req
+        .results
+        .first()
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let lhs = matched
+        .value_binding(0)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    let rhs = matched
+        .value_binding(1)
+        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
+    Ok((result, lhs, rhs))
+}
+
+fn emit_signed_divide_word(
+    context: &tir::Context,
+    req: &tir::backend::isel::EmitRequest,
+    matched: &tir::backend::isel::RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let (result, lhs, rhs) = division_operands(req, matched)?;
+    Ok(Box::new(
+        SignedDivideWordOpBuilder::new(context)
+            .attr("rd", division_register(result))
+            .attr("rn", division_register(lhs))
+            .attr("rm", division_register(rhs))
+            .build(),
+    ))
+}
+
+fn emit_signed_divide(
+    context: &tir::Context,
+    req: &tir::backend::isel::EmitRequest,
+    matched: &tir::backend::isel::RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    let (result, lhs, rhs) = division_operands(req, matched)?;
+    Ok(Box::new(
+        SignedDivideOpBuilder::new(context)
+            .attr("rd", division_register(result))
+            .attr("rn", division_register(lhs))
+            .attr("rm", division_register(rhs))
+            .build(),
+    ))
+}
+
+fn signed_division_rules(context: &tir::Context) -> Vec<tir::backend::isel::Rule> {
+    use tir::backend::isel::{RegisterCapability, RegisterRequirement, Rule};
+    use tir::graph::OperandConstraint;
+
+    let rule = |name, width, whole, emit| {
+        let capability = RegisterCapability::integer(64);
+        let register = if whole {
+            RegisterRequirement::whole(capability)
+        } else {
+            RegisterRequirement::low_bits(capability)
+        };
+        Rule::new(name, signed_division_pattern(context, width), 30, emit)
+            .with_operand_constraints(vec![
+                (0, OperandConstraint::Register),
+                (1, OperandConstraint::Register),
+            ])
+            .with_operand_registers(vec![(0, register), (1, register)])
+            .with_result_register(register)
+    };
+    vec![
+        rule("arm64.sdivw.c", Some(32), false, emit_signed_divide_word),
+        rule("arm64.sdiv.c", None, true, emit_signed_divide),
+    ]
+}
+
 fn create_isel_pass_for(
     context: &tir::Context,
     features: &[Feature],
     abi: &'static tir::backend::abi::AbiInfo,
 ) -> tir::backend::isel::InstructionSelectPass {
-    tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, features))
+    let mut rules = get_isel_rules(context, features);
+    rules.extend(signed_division_rules(context));
+    tir::backend::isel::InstructionSelectPass::new(rules)
         .with_branch_emitters(tir::backend::isel::BranchEmitters {
             uncond: tir::backend::emit_uncond_branch,
             cond_nonzero: emit_branch_nonzero,

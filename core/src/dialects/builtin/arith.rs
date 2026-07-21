@@ -111,6 +111,25 @@ impl crate::OpCost for MulIOp {
 }
 
 operation! {
+    DivSIOp {
+        name: "divsi",
+        dialect: "builtin",
+        operands: O {
+            lhs: "crate::builtin::IntegerType",
+            rhs: "crate::builtin::IntegerType",
+        },
+        results: R {
+            result: "crate::builtin::IntegerType",
+        },
+        interfaces: [SameOperandType, IntegerArithmetic],
+        sem: "(set result (div lhs rhs))",
+    }
+}
+
+impl SameOperandType for DivSIOp {}
+impl IntegerArithmetic for DivSIOp {}
+
+operation! {
     AndIOp {
         name: "andi",
         dialect: "builtin",
