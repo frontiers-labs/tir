@@ -47,6 +47,7 @@ dialect! {
             DivSIOp,
             DivUIOp,
             RemSIOp,
+            RemUIOp,
             AndIOp,
             OrIOp,
             XOrIOp,

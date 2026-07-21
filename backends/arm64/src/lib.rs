@@ -561,6 +561,16 @@ fn lower_divrem_pseudo(
         SignedDivideWordOpBuilder,
         MultiplySubWordOpBuilder
     );
+    lower_remainder!(
+        SelectUnsignedRemainderOp,
+        UnsignedDivideOpBuilder,
+        MultiplySubOpBuilder
+    );
+    lower_remainder!(
+        SelectUnsignedRemainderWordOp,
+        UnsignedDivideWordOpBuilder,
+        MultiplySubWordOpBuilder
+    );
     Ok(false)
 }
 

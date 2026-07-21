@@ -187,6 +187,20 @@ mod isa {
             MovOpBuilder,
             RegClass::GPR
         );
+        lower_remainder!(
+            SelectUnsignedRemainder32Op,
+            ZeroExtendDividend32OpBuilder,
+            UnsignedDivide32OpBuilder,
+            Mov32OpBuilder,
+            RegClass::GPR32
+        );
+        lower_remainder!(
+            SelectUnsignedRemainder64Op,
+            ZeroExtendDividend64OpBuilder,
+            UnsignedDivide64OpBuilder,
+            MovOpBuilder,
+            RegClass::GPR
+        );
         Ok(false)
     }
 

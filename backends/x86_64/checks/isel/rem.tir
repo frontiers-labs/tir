@@ -10,14 +10,30 @@ module {
     %2 = remsi %0, %1 : !i64
     return %2
   }
+  func @remu32(%0: !i32, %1: !i32) -> !i32 {
+    %2 = remui %0, %1 : !i32
+    return %2
+  }
+  func @remu64(%0: !i64, %1: !i64) -> !i64 {
+    %2 = remui %0, %1 : !i64
+    return %2
+  }
   module_end
 }
 
 // ISEL: x86_64.select_signed_remainder32
 // ISEL: x86_64.select_signed_remainder64
+// ISEL: x86_64.select_unsigned_remainder32
+// ISEL: x86_64.select_unsigned_remainder64
 // REGALLOC: x86_64.sign_extend_dividend32
 // REGALLOC: x86_64.signed_divide32
 // REGALLOC: x86_64.mov32
 // REGALLOC: x86_64.sign_extend_dividend64
 // REGALLOC: x86_64.signed_divide64
+// REGALLOC: x86_64.mov
+// REGALLOC: x86_64.zero_extend_dividend32
+// REGALLOC: x86_64.unsigned_divide32
+// REGALLOC: x86_64.mov32
+// REGALLOC: x86_64.zero_extend_dividend64
+// REGALLOC: x86_64.unsigned_divide64
 // REGALLOC: x86_64.mov

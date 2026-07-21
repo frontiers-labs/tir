@@ -264,6 +264,20 @@ pseudo instruction SelectSignedRemainder32 for [X86_64] {
     }
 }
 
+pseudo instruction SelectUnsignedRemainder64 for [X86_64] {
+    param OPNAME: String = "select_unsigned_remainder64";
+    operands { remainder: GPR, lhs: GPR, divisor: GPR, }
+    behavior { remainder = lhs ~% divisor; }
+}
+
+pseudo instruction SelectUnsignedRemainder32 for [X86_64] {
+    param OPNAME: String = "select_unsigned_remainder32";
+    operands { remainder: GPR32, lhs: GPR32, divisor: GPR32, }
+    behavior {
+        remainder = zext(extract(lhs, 31, 0) ~% extract(divisor, 31, 0), self.XLEN);
+    }
+}
+
 // Rotates share the 0xC1 shift-immediate layout. Both shifts of the rotate pair
 // are computed with the count masked to the operand width, so a zero count
 // degenerates to `dst | dst`.

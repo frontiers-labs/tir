@@ -10,12 +10,26 @@ module {
     %2 = remsi %0, %1 : !i64
     return %2
   }
+  func @remu32(%0: !i32, %1: !i32) -> !i32 {
+    %2 = remui %0, %1 : !i32
+    return %2
+  }
+  func @remu64(%0: !i64, %1: !i64) -> !i64 {
+    %2 = remui %0, %1 : !i64
+    return %2
+  }
   module_end
 }
 
 // ISEL: arm64.select_srem_word
 // ISEL: arm64.select_srem
+// ISEL: arm64.select_urem_word
+// ISEL: arm64.select_urem
 // REGALLOC: arm64.sdiv_word
 // REGALLOC: arm64.msub_word
 // REGALLOC: arm64.sdiv
+// REGALLOC: arm64.msub
+// REGALLOC: arm64.udiv_word
+// REGALLOC: arm64.msub_word
+// REGALLOC: arm64.udiv
 // REGALLOC: arm64.msub

@@ -168,6 +168,25 @@ impl SameOperandType for RemSIOp {}
 impl IntegerArithmetic for RemSIOp {}
 
 operation! {
+    RemUIOp {
+        name: "remui",
+        dialect: "builtin",
+        operands: O {
+            lhs: "crate::builtin::IntegerType",
+            rhs: "crate::builtin::IntegerType",
+        },
+        results: R {
+            result: "crate::builtin::IntegerType",
+        },
+        interfaces: [SameOperandType, IntegerArithmetic],
+        sem: "(set result (urem lhs rhs))",
+    }
+}
+
+impl SameOperandType for RemUIOp {}
+impl IntegerArithmetic for RemUIOp {}
+
+operation! {
     AndIOp {
         name: "andi",
         dialect: "builtin",
