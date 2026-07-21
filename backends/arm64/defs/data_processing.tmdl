@@ -544,6 +544,50 @@ instruction UnsignedDivide for [ARMv8A64] : ShiftReg {
     }
 }
 
+instruction UnsignedDivideWord for [ARMv8A64] : ShiftReg {
+    param OPNAME: String = "udiv_word";
+    param MNEMONIC: String = "udiv";
+    param SF: bits<1> = 0b0;
+    param OPCODE: bits<6> = 0b000010;
+    schedule { units = [WriteIDiv]; }
+
+    behavior {
+        rd = if extract(rm, 31, 0) == zext(0b0, 32) {
+            zext(0b0, self.XLEN)
+        } else {
+            zext(extract(rn, 31, 0) ~/ extract(rm, 31, 0), self.XLEN)
+        };
+    }
+}
+
+pseudo instruction SelectSignedDivide for [ARMv8A64] {
+    param OPNAME: String = "select_sdiv";
+    operands { rd: GPR, rn: GPR, rm: GPR, }
+    behavior { rd = rn / rm; }
+}
+
+pseudo instruction SelectSignedDivideWord for [ARMv8A64] {
+    param OPNAME: String = "select_sdiv_word";
+    operands { rd: GPR, rn: GPR, rm: GPR, }
+    behavior {
+        rd = sext(extract(rn, 31, 0) / extract(rm, 31, 0), self.XLEN);
+    }
+}
+
+pseudo instruction SelectUnsignedDivide for [ARMv8A64] {
+    param OPNAME: String = "select_udiv";
+    operands { rd: GPR, rn: GPR, rm: GPR, }
+    behavior { rd = rn ~/ rm; }
+}
+
+pseudo instruction SelectUnsignedDivideWord for [ARMv8A64] {
+    param OPNAME: String = "select_udiv_word";
+    operands { rd: GPR, rn: GPR, rm: GPR, }
+    behavior {
+        rd = zext(extract(rn, 31, 0) ~/ extract(rm, 31, 0), self.XLEN);
+    }
+}
+
 // `lsr`/`asr` immediate (UBFM/SBFM with immr = shift, imms = 63).
 instruction LogicalShiftRightImm for [ARMv8A64] : ShiftRightImmTemplate {
     param MNEMONIC: String = "lsr";

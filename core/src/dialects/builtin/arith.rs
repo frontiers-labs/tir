@@ -130,6 +130,25 @@ impl SameOperandType for DivSIOp {}
 impl IntegerArithmetic for DivSIOp {}
 
 operation! {
+    DivUIOp {
+        name: "divui",
+        dialect: "builtin",
+        operands: O {
+            lhs: "crate::builtin::IntegerType",
+            rhs: "crate::builtin::IntegerType",
+        },
+        results: R {
+            result: "crate::builtin::IntegerType",
+        },
+        interfaces: [SameOperandType, IntegerArithmetic],
+        sem: "(set result (udiv lhs rhs))",
+    }
+}
+
+impl SameOperandType for DivUIOp {}
+impl IntegerArithmetic for DivUIOp {}
+
+operation! {
     AndIOp {
         name: "andi",
         dialect: "builtin",

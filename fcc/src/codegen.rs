@@ -362,9 +362,16 @@ impl FnCodegen<'_> {
                 .builder
                 .insert(b::muli(self.context, lhs, rhs, ty).build())
                 .result(),
+            AstKind::Div | AstKind::DivAssign
+                if self.typed.integer_is_signed(source_ty).unwrap() =>
+            {
+                self.builder
+                    .insert(b::divsi(self.context, lhs, rhs, ty).build())
+                    .result()
+            }
             AstKind::Div | AstKind::DivAssign => self
                 .builder
-                .insert(b::divsi(self.context, lhs, rhs, ty).build())
+                .insert(b::divui(self.context, lhs, rhs, ty).build())
                 .result(),
             AstKind::BitAnd | AstKind::AndAssign => self
                 .builder

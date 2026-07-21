@@ -543,72 +543,6 @@ const COMPRESSED_FEATURES: &[Feature] = &[
     Feature::Zcf,
 ];
 
-fn signed_div_word_pattern(context: &tir::Context) -> tir::sem::SemGraph {
-    use tir::graph::{MetaMutDag, MutDag};
-
-    let mut graph = tir::sem::SemGraph::new();
-    let lhs = graph.add_node(tir::sem::SymKind::Symbol);
-    graph.set_leaf_data(lhs, tir::sem::SymPayload::SymbolId(0));
-    let rhs = graph.add_node(tir::sem::SymKind::Symbol);
-    graph.set_leaf_data(rhs, tir::sem::SymPayload::SymbolId(1));
-    let result = graph.add_node(tir::sem::SymKind::Div);
-    graph.set_actual_type(result, tir::builtin::IntegerType::new(context, 32));
-    graph.add_edge(result, lhs);
-    graph.add_edge(result, rhs);
-    graph
-}
-
-fn emit_signed_div_word(
-    context: &tir::Context,
-    req: &tir::backend::isel::EmitRequest,
-    matched: &tir::backend::isel::RuleMatch,
-) -> Result<Box<dyn Operation>, tir::PassError> {
-    use tir::attributes::{AttributeValue, RegisterAttr};
-
-    let result = req
-        .results
-        .first()
-        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
-    let lhs = matched
-        .value_binding(0)
-        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
-    let rhs = matched
-        .value_binding(1)
-        .ok_or(tir::PassError::RewriteFailed(req.op_id()))?;
-    let register = |value: tir::ValueId| {
-        AttributeValue::Register(RegisterAttr::Virtual {
-            id: value.number(),
-            class: Some(RegClass::GPR.id()),
-        })
-    };
-    Ok(Box::new(
-        DivWordOpBuilder::new(context)
-            .attr("rd", register(*result))
-            .attr("rs1", register(lhs))
-            .attr("rs2", register(rhs))
-            .build(),
-    ))
-}
-
-fn signed_div_word_rule(context: &tir::Context) -> tir::backend::isel::Rule {
-    use tir::backend::isel::{RegisterCapability, RegisterRequirement, Rule};
-    use tir::graph::OperandConstraint;
-
-    let register = RegisterRequirement::low_bits(RegisterCapability::integer(64));
-    Rule::new(
-        "riscv.divw.c",
-        signed_div_word_pattern(context),
-        5,
-        emit_signed_div_word,
-    )
-    .with_operand_constraints(vec![
-        (0, OperandConstraint::Register),
-        (1, OperandConstraint::Register),
-    ])
-    .with_operand_registers(vec![(0, register), (1, register)])
-    .with_result_register(register)
-}
-
 fn create_isel_pass_for(
     context: &tir::Context,
     features: &[Feature],
@@ -619,11 +553,7 @@ fn create_isel_pass_for(
         .copied()
         .filter(|f| !COMPRESSED_FEATURES.contains(f))
         .collect();
-    let mut rules = get_isel_rules(context, &features);
-    if features.contains(&Feature::RVM64) {
-        rules.push(signed_div_word_rule(context));
-    }
-    tir::backend::isel::InstructionSelectPass::new(rules)
+    tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, &features))
         .with_axioms(include_str!("isel-materialize.axioms"))
         .with_branch_emitters(tir::backend::isel::BranchEmitters {
             uncond: tir::backend::emit_uncond_branch,
