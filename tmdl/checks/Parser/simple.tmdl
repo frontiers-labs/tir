@@ -298,6 +298,7 @@
 // CHECK-NEXT:         Instruction(
 // CHECK-NEXT:             Instruction {
 // CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 pseudo: false,
 // CHECK-NEXT:                 name: "Add",
 // CHECK-NEXT:                 for_isas: [
 // CHECK-NEXT:                     "TestIsa32",

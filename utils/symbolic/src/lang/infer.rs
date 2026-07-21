@@ -410,6 +410,20 @@ fn canon_rebuild<V: Clone>(
         return inner;
     }
 
+    if matches!(kind, SymKind::SExt | SymKind::ZExt)
+        && children.len() == 2
+        && matches!(
+            graph.get_node(children[0]),
+            SymKind::Div | SymKind::UDiv | SymKind::SRem | SymKind::URem
+        )
+        && let Some(width) = infer_widths(graph, |_| None)[children[0].index()]
+    {
+        let inner = canon_rebuild(graph, children[0], immediate_symbols, out, memo, forced);
+        forced.insert(inner.index(), width);
+        memo.insert(node.index(), inner);
+        return inner;
+    }
+
     // SExt(Extract(inner, hi, 0), _) -> inner forced to width hi+1.
     if kind == SymKind::SExt
         && children.len() == 2
@@ -562,7 +576,7 @@ fn canon_rebuild<V: Clone>(
 
 #[cfg(test)]
 mod type_tests {
-    use tir_graph::{GenericDag, MutDag};
+    use tir_graph::{Dag, GenericDag, MutDag};
 
     use super::*;
     use crate::lang::{FloatFormat, SemType, infer_types};
@@ -661,5 +675,40 @@ mod type_tests {
                 &SemType::Float(FloatFormat::new(8, 23)),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn selection_drops_extension_of_narrow_division_result() {
+        let mut graph = Graph::new();
+        let lhs = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(lhs, SymPayload::SymbolId(0));
+        let rhs = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(rhs, SymPayload::SymbolId(1));
+        let hi = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(hi, SymPayload::Int(APInt::new(32, 31)));
+        let lo = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(lo, SymPayload::Int(APInt::new(32, 0)));
+        let lhs_word = graph.add_node(SymKind::Extract);
+        graph.add_edge(lhs_word, lhs);
+        graph.add_edge(lhs_word, hi);
+        graph.add_edge(lhs_word, lo);
+        let rhs_word = graph.add_node(SymKind::Extract);
+        graph.add_edge(rhs_word, rhs);
+        graph.add_edge(rhs_word, hi);
+        graph.add_edge(rhs_word, lo);
+        let div = graph.add_node(SymKind::Div);
+        graph.add_edge(div, lhs_word);
+        graph.add_edge(div, rhs_word);
+        let width = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(width, SymPayload::Int(APInt::new(32, 64)));
+        let root = graph.add_node(SymKind::SExt);
+        graph.add_edge(root, div);
+        graph.add_edge(root, width);
+
+        let (canonical, root, forced_widths) =
+            canonicalize_for_selection(&graph, root, &HashSet::new());
+
+        assert_eq!(*canonical.get_node(root), SymKind::Div);
+        assert_eq!(forced_widths[root.index()], Some(32));
     }
 }

@@ -216,6 +216,7 @@ pub struct Template {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instruction {
     pub doc: Option<String>,
+    pub pseudo: bool,
     pub name: String,
     pub for_isas: Vec<String>,
     pub parent_template: Option<String>,

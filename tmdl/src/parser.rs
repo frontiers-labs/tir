@@ -599,8 +599,11 @@ where
 {
     let ident = select! { Token::Identifier(ident) => ident.to_string() };
 
-    just(Token::KwInstruction)
-        .ignore_then(ident)
+    just(Token::KwPseudo)
+        .or_not()
+        .then_ignore(just(Token::KwInstruction))
+        .map(|pseudo| pseudo.is_some())
+        .then(ident)
         .then(for_isas().or_not())
         .then(just(Token::Colon).ignore_then(ident).or_not())
         .then(
@@ -616,7 +619,7 @@ where
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|(((name, for_isas), parent_template), body), e| {
+        .map_with(|((((pseudo, name), for_isas), parent_template), body), e| {
             let params = body
                 .iter()
                 .filter_map(|b| match b {
@@ -676,6 +679,7 @@ where
 
             Instruction {
                 doc: None,
+                pseudo,
                 name,
                 for_isas: for_isas.unwrap_or_default(),
                 parent_template,

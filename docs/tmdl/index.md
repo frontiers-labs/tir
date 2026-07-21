@@ -48,7 +48,9 @@ The primary goals for our DSL are:
 
 1. Providing an accurate representation of Instruction Set Architecture in
    terms of assembly syntax and binary encoding. Providing definitions for ASM
-   pseudo-instructions, like TableGen does, is out of scope.
+   pseudo-instructions, like TableGen does, is out of scope. Selection-only
+   pseudos may describe a typed semantic operation that a backend lowers before
+   register allocation; they have no assembly syntax or encoding.
 2. Provide means to capture documentation for ISAs and render it in a
    human-readable format, like Markdown or HTML.
 3. Provide means to capture semantics of the instructions in a way that is 

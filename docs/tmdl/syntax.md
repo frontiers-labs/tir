@@ -57,6 +57,7 @@ TMDL files contain a sequence of items in any order:
 - `register_class` — defines physical registers for one or more ISAs.
 - `template` — reusable instruction template with parameters/operands/encoding/asm.
 - `instruction` — concrete instruction (may inherit from a template) with behavior.
+- `pseudo instruction` — selection-only semantic operation with no encoding.
 
 ### ISA Definition
 
@@ -209,6 +210,10 @@ instruction Add for [RV32I, RV64I] : RType {
 
 - Same structure as `template` with optional inheritance and `for [...]`.
 - `behavior` — required; describes semantics using the expression language. Statements execute in order. Operand and fixed-register reads start as instruction-entry snapshots; assigning a name updates that name for later statements without changing a different operand that aliases the same physical register. Basic assignments and arithmetic/bitwise ops are supported.
+- Prefixing the declaration with `pseudo` omits the encoding and assembly
+  requirements. Its behavior still generates a typed instruction-selection
+  rule; the target must lower the generated operation before register
+  allocation.
 - Builtin functions usable in behaviors: `sext`/`zext` (width extension),
   `extract`, `clamp`, `log2Ceil`, `load`/`store` (memory), and `trap(cause)` —
   raise a synchronous exception with a constant cause code (e.g. RISC-V

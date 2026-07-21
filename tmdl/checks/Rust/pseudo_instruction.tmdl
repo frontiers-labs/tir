@@ -1,0 +1,35 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa TestIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class GPR for [TestIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0..x3 => {},
+    }
+}
+
+pseudo instruction Divide for [TestIsa] {
+    param OPNAME: String = "divide";
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    behavior {
+        rd = rs1 / rs2;
+    }
+}
+
+// CHECK: DivideOp { name : "divide"
+// CHECK: fn isel_pattern_divide(
+// CHECK: tir::sem::SymKind::Div
+// CHECK: fn emit_isel_divide(
+// CHECK: DivideOpBuilder::new(context)
+// CHECK-NOT: fn encode_divide(

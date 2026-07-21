@@ -13,6 +13,10 @@ use expr::Expr;
 
 const VERSION: u8 = 1;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// # TMDL checked AST
 /// Versioned, checked TMDL abstract syntax tree.
 #[derive(Serialize, JsonSchema)]
@@ -146,6 +150,8 @@ enum Item {
     /// An instruction declaration. Inherited template fields are not duplicated.
     Instruction {
         name: String,
+        #[serde(skip_serializing_if = "is_false")]
+        pseudo: bool,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         isas: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -258,6 +264,7 @@ impl From<&ast::Item> for Item {
             },
             ast::Item::Instruction(instruction) => Self::Instruction {
                 name: instruction.name.clone(),
+                pseudo: instruction.pseudo,
                 isas: instruction.for_isas.clone(),
                 template: instruction.parent_template.clone(),
                 parameters: parameters(&instruction.params),

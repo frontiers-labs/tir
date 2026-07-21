@@ -993,6 +993,9 @@
                 "$ref": "#/$defs/Parameter"
               }
             },
+            "pseudo": {
+              "type": "boolean"
+            },
             "schedule": {
               "type": "array",
               "items": {

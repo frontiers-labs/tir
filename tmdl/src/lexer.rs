@@ -93,6 +93,8 @@ pub enum Token<'a> {
     KwTemplate,
     /// `instruction`
     KwInstruction,
+    /// `pseudo`
+    KwPseudo,
     /// `param`
     KwParam,
     /// `operands`
@@ -209,6 +211,7 @@ pub(crate) fn lexer<'src>()
         "parameters" => Token::KwParameters,
         "template" => Token::KwTemplate,
         "instruction" => Token::KwInstruction,
+        "pseudo" => Token::KwPseudo,
         "param" => Token::KwParam,
         "operands" => Token::KwOperands,
         "encoding" => Token::KwEncoding,
@@ -306,6 +309,7 @@ impl<'a> fmt::Display for Token<'a> {
             Token::KwRegisters => f.write_str("registers"),
             Token::KwTemplate => f.write_str("template"),
             Token::KwInstruction => f.write_str("instruction"),
+            Token::KwPseudo => f.write_str("pseudo"),
             Token::KwParam => f.write_str("param"),
             Token::KwOperands => f.write_str("operands"),
             Token::KwEncoding => f.write_str("encoding"),
