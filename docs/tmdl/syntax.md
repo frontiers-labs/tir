@@ -14,7 +14,7 @@ see the Motivation section of the [docs](index.md).
   - Decimal: `0`, `42`, `1234`
   - Hex: `0x1f`, `0XDEAD` (also supports a leading `-`)
   - Binary: `0b1010` (decimal/hex/binary are available in expressions)
-- Punctuation and operators used across the grammar: `{ } [ ] ( ) , : ; => .. = + - * / & ^ | . < >`
+- Punctuation and operators used across the grammar: `{ } [ ] ( ) , : ; => .. = + - * / % ~ & ^ | . < >`
 
 ## Types
 
@@ -35,7 +35,7 @@ Expressions are used in parameters, encodings, asm templates, and behavior.
 - Calls: `foo(a, b)` (reserved for future extensions).
 - Grouping: `(expr)`
 - Binary operators and precedence:
-  - Highest: `*` `/`
+  - Highest: `*` `/` `~/` `%` `~%`
   - Next: `+` `-` `|` `&` `^` `<<` `>>` (these share the same precedence tier)
 
 Blocks and if‑expressions are supported for richer constructs:

@@ -71,7 +71,7 @@ mod isa {
         })
     }
 
-    fn lower_division_pseudo(
+    fn lower_divrem_pseudo(
         context: &tir::Context,
         op: &tir::OperationRef,
         rewriter: &mut tir::Rewriter,
@@ -88,7 +88,7 @@ mod isa {
                 })
                 .ok_or_else(|| {
                     tir::PassError::InvalidRuleSet(format!(
-                        "division pseudo is missing virtual '{name}'"
+                        "division/remainder pseudo is missing virtual '{name}'"
                     ))
                 })
         };
@@ -117,6 +117,38 @@ mod isa {
             };
         }
 
+        macro_rules! lower_remainder {
+            ($Pseudo:ty, $Prelude:ident, $Divide:ident, $Move:ident, $class:expr) => {
+                if op.as_op::<$Pseudo>().is_some() {
+                    let remainder = value("remainder")?;
+                    let lhs = value("lhs")?;
+                    let divisor = value("divisor")?;
+                    let class = $class;
+                    let ty = context.get_value(remainder).ty();
+                    let quotient = context.create_value(ty, None).id();
+                    let high = context.create_value(ty, None).id();
+                    let prelude = $Prelude::new(context)
+                        .attr("high", fixed_def(high, class, 2))
+                        .attr("low", fixed_def(quotient, class, 0))
+                        .attr("low_tied", virt(lhs.number(), class.id()))
+                        .build();
+                    let divide = $Divide::new(context)
+                        .attr("quotient", fixed_def(quotient, class, 0))
+                        .attr("remainder", fixed_def(high, class, 2))
+                        .attr("divisor", virt(divisor.number(), class.id()))
+                        .build();
+                    let copy = $Move::new(context)
+                        .attr("dst", virt(remainder.number(), class.id()))
+                        .attr("src", virt(high.number(), class.id()))
+                        .build();
+                    rewriter.insert_op_before(op, &prelude)?;
+                    rewriter.insert_op_before(op, &divide)?;
+                    rewriter.replace_op(op, &copy)?;
+                    return Ok(true);
+                }
+            };
+        }
+
         lower!(
             SelectSignedDivide32Op,
             SignExtendDividend32OpBuilder,
@@ -139,6 +171,20 @@ mod isa {
             SelectUnsignedDivide64Op,
             ZeroExtendDividend64OpBuilder,
             UnsignedDivide64OpBuilder,
+            RegClass::GPR
+        );
+        lower_remainder!(
+            SelectSignedRemainder32Op,
+            SignExtendDividend32OpBuilder,
+            SignedDivide32OpBuilder,
+            Mov32OpBuilder,
+            RegClass::GPR32
+        );
+        lower_remainder!(
+            SelectSignedRemainder64Op,
+            SignExtendDividend64OpBuilder,
+            SignedDivide64OpBuilder,
+            MovOpBuilder,
             RegClass::GPR
         );
         Ok(false)
@@ -1215,7 +1261,7 @@ mod isa {
         }
 
         fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![lower_division_pseudo, lower_constant, lower_addr_of]
+            vec![lower_divrem_pseudo, lower_constant, lower_addr_of]
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {

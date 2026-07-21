@@ -686,6 +686,8 @@ fn format_binary_operator(operator: &BinOp) -> (&'static str, u8) {
         BinOp::Mul => ("*", 8),
         BinOp::Div => ("/", 8),
         BinOp::UnsignedDiv => ("/u", 8),
+        BinOp::SignedRem => ("%", 8),
+        BinOp::UnsignedRem => ("~%", 8),
     }
 }
 

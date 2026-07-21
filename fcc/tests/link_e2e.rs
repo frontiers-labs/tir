@@ -227,6 +227,28 @@ fn signed_integer_division_executes_through_driver() {
 }
 
 #[test]
+fn signed_integer_remainder_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int mod_signed(int lhs, int rhs) { return lhs % rhs; }\n",
+        "int mod_signed(int, int); int main(void) { return mod_signed(-17, 5) == -2 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
+fn signed_integer_remainder_assignment_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int mod_assign(int lhs, int rhs) { lhs %= rhs; return lhs; }\n",
+        "int mod_assign(int, int); int main(void) { return mod_assign(-17, 5) == -2 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
 fn unsigned_integer_division_executes_through_driver() {
     if !cc_available() {
         return;

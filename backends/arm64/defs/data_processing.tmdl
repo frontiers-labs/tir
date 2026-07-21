@@ -462,6 +462,17 @@ instruction MultiplySub for [ARMv8A64] : DataProc3Src {
     }
 }
 
+instruction MultiplySubWord for [ARMv8A64] : DataProc3Src {
+    param OPNAME: String = "msub_word";
+    param MNEMONIC: String = "msub";
+    param SF: bits<1> = 0b0;
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rd = zext(extract(ra, 31, 0) - extract(rn * rm, 31, 0), self.XLEN);
+    }
+}
+
 // MUL is MADD with ra = xzr.
 instruction Multiply for [ARMv8A64] : DataProc3SrcZr {
     param MNEMONIC: String = "mul";
@@ -585,6 +596,20 @@ pseudo instruction SelectUnsignedDivideWord for [ARMv8A64] {
     operands { rd: GPR, rn: GPR, rm: GPR, }
     behavior {
         rd = zext(extract(rn, 31, 0) ~/ extract(rm, 31, 0), self.XLEN);
+    }
+}
+
+pseudo instruction SelectSignedRemainder for [ARMv8A64] {
+    param OPNAME: String = "select_srem";
+    operands { rd: GPR, rn: GPR, rm: GPR, }
+    behavior { rd = rn % rm; }
+}
+
+pseudo instruction SelectSignedRemainderWord for [ARMv8A64] {
+    param OPNAME: String = "select_srem_word";
+    operands { rd: GPR, rn: GPR, rm: GPR, }
+    behavior {
+        rd = sext(extract(rn, 31, 0) % extract(rm, 31, 0), self.XLEN);
     }
 }
 

@@ -87,8 +87,7 @@ instruction DivU for [RVM] : MulDivOp {
     }
 }
 
-// Signed remainder; remainder by zero yields the dividend. The MIN/-1 case
-// (remainder 0) falls out of the `rs1 - (rs1 / rs2) * rs2` identity.
+// Signed remainder; remainder by zero yields the dividend.
 instruction Rem for [RVM] : MulDivOp {
     param MNEMONIC: String = "rem";
     param FUNCT3: bits<3> = 0b110;
@@ -96,7 +95,7 @@ instruction Rem for [RVM] : MulDivOp {
         if rs2 == zext(0b0, self.XLEN) {
             rd = rs1;
         } else {
-            rd = rs1 - (rs1 / rs2) * rs2;
+            rd = rs1 % rs2;
         }
     }
 }
@@ -109,7 +108,7 @@ instruction RemU for [RVM] : MulDivOp {
         if rs2 == zext(0b0, self.XLEN) {
             rd = rs1;
         } else {
-            rd = rs1 - (rs1 ~/ rs2) * rs2;
+            rd = rs1 ~% rs2;
         }
     }
 }
@@ -156,8 +155,7 @@ instruction RemWord for [RVM64] : MulDivOpWord {
         if extract(rs2, 31, 0) == zext(0b0, 32) {
             rd = sext(extract(rs1, 31, 0), self.XLEN);
         } else {
-            rd = sext(extract(rs1, 31, 0)
-                      - (extract(rs1, 31, 0) / extract(rs2, 31, 0)) * extract(rs2, 31, 0),
+            rd = sext(extract(rs1, 31, 0) % extract(rs2, 31, 0),
                       self.XLEN);
         }
     }
@@ -171,8 +169,7 @@ instruction RemUWord for [RVM64] : MulDivOpWord {
         if extract(rs2, 31, 0) == zext(0b0, 32) {
             rd = sext(extract(rs1, 31, 0), self.XLEN);
         } else {
-            rd = sext(extract(rs1, 31, 0)
-                      - (extract(rs1, 31, 0) ~/ extract(rs2, 31, 0)) * extract(rs2, 31, 0),
+            rd = sext(extract(rs1, 31, 0) ~% extract(rs2, 31, 0),
                       self.XLEN);
         }
     }

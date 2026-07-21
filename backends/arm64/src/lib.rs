@@ -477,7 +477,7 @@ fn create_regalloc_pass_for(
     tir::backend::regalloc::RegisterAllocationPass::with_abi(Box::new(Arm64RegAlloc), abi)
 }
 
-fn lower_division_pseudo(
+fn lower_divrem_pseudo(
     context: &tir::Context,
     op: &tir::OperationRef,
     rewriter: &mut tir::Rewriter,
@@ -489,7 +489,9 @@ fn lower_division_pseudo(
             .find(|attr| attr.name == name)
             .map(|attr| attr.value.clone())
             .ok_or_else(|| {
-                tir::PassError::InvalidRuleSet(format!("division pseudo is missing '{name}'"))
+                tir::PassError::InvalidRuleSet(format!(
+                    "division/remainder pseudo is missing '{name}'"
+                ))
             })
     };
 
@@ -511,6 +513,54 @@ fn lower_division_pseudo(
     lower!(SelectSignedDivideWordOp, SignedDivideWordOpBuilder);
     lower!(SelectUnsignedDivideOp, UnsignedDivideOpBuilder);
     lower!(SelectUnsignedDivideWordOp, UnsignedDivideWordOpBuilder);
+
+    macro_rules! lower_remainder {
+        ($Pseudo:ty, $Divide:ident, $MultiplySub:ident) => {
+            if op.as_op::<$Pseudo>().is_some() {
+                let rd = attr("rd")?;
+                let result = match &rd {
+                    tir::attributes::AttributeValue::Register(
+                        tir::attributes::RegisterAttr::Virtual { id, .. },
+                    ) => tir::ValueId::from_number(*id),
+                    _ => {
+                        return Err(tir::PassError::InvalidRuleSet(
+                            "remainder pseudo result is not virtual".to_string(),
+                        ));
+                    }
+                };
+                let quotient = context
+                    .create_value(context.get_value(result).ty(), None)
+                    .id();
+                let lhs = attr("rn")?;
+                let rhs = attr("rm")?;
+                let divide = $Divide::new(context)
+                    .attr("rd", virt(quotient.number(), RegClass::GPR.id()))
+                    .attr("rn", lhs.clone())
+                    .attr("rm", rhs.clone())
+                    .build();
+                let remainder = $MultiplySub::new(context)
+                    .attr("rd", rd)
+                    .attr("rn", virt(quotient.number(), RegClass::GPR.id()))
+                    .attr("rm", rhs)
+                    .attr("ra", lhs)
+                    .build();
+                rewriter.insert_op_before(op, &divide)?;
+                rewriter.replace_op(op, &remainder)?;
+                return Ok(true);
+            }
+        };
+    }
+
+    lower_remainder!(
+        SelectSignedRemainderOp,
+        SignedDivideOpBuilder,
+        MultiplySubOpBuilder
+    );
+    lower_remainder!(
+        SelectSignedRemainderWordOp,
+        SignedDivideWordOpBuilder,
+        MultiplySubWordOpBuilder
+    );
     Ok(false)
 }
 
@@ -597,11 +647,7 @@ impl tir::backend::TargetMachine for Arm64Target {
     }
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        vec![
-            lower_division_pseudo,
-            obj::lower_constant,
-            obj::lower_addr_of,
-        ]
+        vec![lower_divrem_pseudo, obj::lower_constant, obj::lower_addr_of]
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
@@ -1528,6 +1574,14 @@ mod tests {
             .attr("ra", gpr(3))
             .build();
         assert_eq!(word(msub.id()), 0x9B028C20, "msub x0, x1, x2, x3");
+
+        let msub_word = crate::MultiplySubWordOpBuilder::new(&context)
+            .attr("rd", gpr(0))
+            .attr("rn", gpr(1))
+            .attr("rm", gpr(2))
+            .attr("ra", gpr(3))
+            .build();
+        assert_eq!(word(msub_word.id()), 0x1B028C20, "msub w0, w1, w2, w3");
 
         let mul = crate::MultiplyOpBuilder::new(&context)
             .attr("rd", gpr(0))

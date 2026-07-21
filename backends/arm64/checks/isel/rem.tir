@@ -1,0 +1,21 @@
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s --check-prefix=ISEL
+// RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s --check-prefix=REGALLOC
+
+module {
+  func @rem32(%0: !i32, %1: !i32) -> !i32 {
+    %2 = remsi %0, %1 : !i32
+    return %2
+  }
+  func @rem64(%0: !i64, %1: !i64) -> !i64 {
+    %2 = remsi %0, %1 : !i64
+    return %2
+  }
+  module_end
+}
+
+// ISEL: arm64.select_srem_word
+// ISEL: arm64.select_srem
+// REGALLOC: arm64.sdiv_word
+// REGALLOC: arm64.msub_word
+// REGALLOC: arm64.sdiv
+// REGALLOC: arm64.msub

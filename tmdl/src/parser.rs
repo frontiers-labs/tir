@@ -1611,7 +1611,11 @@ where
             .or(just(Token::Tilde)
                 .then(just(Token::ForwardSlash))
                 .to(BinOp::UnsignedDiv))
-            .or(just(Token::ForwardSlash).to(BinOp::Div));
+            .or(just(Token::ForwardSlash).to(BinOp::Div))
+            .or(just(Token::Tilde)
+                .then(just(Token::Percent))
+                .to(BinOp::UnsignedRem))
+            .or(just(Token::Percent).to(BinOp::SignedRem));
         let product = unary
             .clone()
             .foldl_with(op.then(expr).repeated(), |a, (op, b), e| {

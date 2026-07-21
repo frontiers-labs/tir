@@ -373,6 +373,10 @@ impl FnCodegen<'_> {
                 .builder
                 .insert(b::divui(self.context, lhs, rhs, ty).build())
                 .result(),
+            AstKind::Mod | AstKind::ModAssign => self
+                .builder
+                .insert(b::remsi(self.context, lhs, rhs, ty).build())
+                .result(),
             AstKind::BitAnd | AstKind::AndAssign => self
                 .builder
                 .insert(b::andi(self.context, lhs, rhs, ty).build())
@@ -1214,7 +1218,11 @@ impl FnCodegen<'_> {
                             .result(),
                     )
                 }
-                kind @ (AstKind::Add | AstKind::Sub | AstKind::Mul | AstKind::Div) => {
+                kind @ (AstKind::Add
+                | AstKind::Sub
+                | AstKind::Mul
+                | AstKind::Div
+                | AstKind::Mod) => {
                     let mut children = ast.children(node);
                     let lhs = self.values[&children.next().unwrap()];
                     let rhs = self.values[&children.next().unwrap()];
@@ -1388,6 +1396,7 @@ impl FnCodegen<'_> {
                 | AstKind::SubAssign
                 | AstKind::MulAssign
                 | AstKind::DivAssign
+                | AstKind::ModAssign
                 | AstKind::ShlAssign
                 | AstKind::ShrAssign
                 | AstKind::AndAssign

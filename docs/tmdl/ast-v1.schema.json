@@ -164,6 +164,8 @@
         "multiply",
         "divide",
         "unsigned_divide",
+        "signed_remainder",
+        "unsigned_remainder",
         "equal",
         "not_equal",
         "less_than",

@@ -29,6 +29,8 @@ pub enum Token<'a> {
     Dash,
     /// `/`
     ForwardSlash,
+    /// `%`
+    Percent,
     /// `*`
     Asterisk,
     /// `&`
@@ -193,6 +195,7 @@ pub(crate) fn lexer<'src>()
         just('-').to(Token::Dash),
         just('*').to(Token::Asterisk),
         just('/').to(Token::ForwardSlash),
+        just('%').to(Token::Percent),
         just('|').to(Token::Pipe),
         just('.').to(Token::Dot),
         just('&').to(Token::Ampersand),
@@ -286,6 +289,7 @@ impl<'a> fmt::Display for Token<'a> {
             Token::Colon => f.write_char(':'),
             Token::Semicolon => f.write_char(';'),
             Token::ForwardSlash => f.write_str("/"),
+            Token::Percent => f.write_str("%"),
             Token::BackSlash => f.write_str("\\"),
             Token::Comma => f.write_str(","),
             Token::Ampersand => f.write_char('&'),
