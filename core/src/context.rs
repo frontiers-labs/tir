@@ -590,16 +590,20 @@ impl Context {
         &self,
         op: Arc<OpInstance>,
     ) -> Option<Box<I>> {
-        let converter = {
-            let inner = self.0.read();
-            inner
-                .op_interface_converters
-                .get(&(op.dialect(), op.name(), std::any::TypeId::of::<I>()))
-                .copied()
-        }?;
-
+        let converter = self.find_op_interface::<I>(&op)?;
         let erased = converter(op);
         downcast_op_interface::<I>(erased)
+    }
+
+    pub(crate) fn find_op_interface<I: ?Sized + 'static>(
+        &self,
+        op: &OpInstance,
+    ) -> Option<OpInterfaceConverter> {
+        self.0
+            .read()
+            .op_interface_converters
+            .get(&(op.dialect(), op.name(), std::any::TypeId::of::<I>()))
+            .copied()
     }
 
     pub fn get_parser(&self, dialect: &str, name: &str) -> Result<OperationParser, Error> {
@@ -864,6 +868,7 @@ mod tests {
         )
         .build();
 
+        assert!(context.get_op(add.id()).has_interface::<dyn Commutative>());
         let iface = context
             .get_op(add.id())
             .as_interface::<dyn Commutative>()

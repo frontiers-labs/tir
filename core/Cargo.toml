@@ -14,6 +14,9 @@ parking_lot = "0.12.3"
 thiserror = "2.0.12"
 ariadne.workspace = true
 
+[build-dependencies]
+tir-pdl = { path = "../utils/pdl", default-features = false }
+
 [dev-dependencies]
 tir-lit = { path = "../utils/lit" }
 criterion = { workspace = true, features = ["html_reports"] }

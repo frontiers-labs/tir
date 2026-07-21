@@ -239,7 +239,7 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
                         }
                         // A commutative binary operator matches in both operand
                         // orders.
-                        let orders = if template.commutative() && node_children.len() == 2 {
+                        let orders = if enode.commutative() && node_children.len() == 2 {
                             2
                         } else {
                             1

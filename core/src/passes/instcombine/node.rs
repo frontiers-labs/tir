@@ -34,6 +34,7 @@ pub enum Node {
         name: &'static str,
         ty: TypeId,
         attrs: Vec<NamedAttribute>,
+        commutative: bool,
         cost: u32,
         prov: OpProv,
         args: Vec<Id>,
@@ -44,7 +45,12 @@ pub enum Node {
 
 impl Node {
     /// A seeded op: identity/`ty`/attrs from `instance`, `cost` from its [`OpCost`] interface.
-    pub fn seeded(instance: &Arc<OpInstance>, ty: TypeId, args: Vec<Id>) -> Self {
+    pub fn seeded(
+        instance: &Arc<OpInstance>,
+        ty: TypeId,
+        commutative: bool,
+        args: Vec<Id>,
+    ) -> Self {
         let cost = instance
             .clone()
             .as_interface::<dyn OpCost>()
@@ -54,28 +60,39 @@ impl Node {
             name: instance.name,
             ty,
             attrs: instance.attributes.clone(),
+            commutative,
             cost,
             prov: OpProv::Seeded(instance.id),
             args,
         }
     }
 
-    /// An op the rewrite at `idx` introduces (no attributes), with result `ty` and modeled `cost`.
     pub fn introduced<O: Operation>(ty: TypeId, cost: u32, idx: usize, args: Vec<Id>) -> Self {
         Self::Op {
             dialect: O::dialect(),
             name: O::name(),
             ty,
             attrs: Vec::new(),
+            commutative: false,
             cost,
             prov: OpProv::Introduced(idx),
             args,
         }
     }
 
-    /// An LHS-pattern template for op `O`: matched on dialect+name and arity, with a wildcard type.
     pub fn pattern<O: Operation>(args: Vec<Id>) -> Self {
         Self::introduced::<O>(any_type(), 0, usize::MAX, args)
+    }
+
+    pub fn gamma_pattern(args: Vec<Id>) -> Self {
+        let any = ValueId::from_number(u32::MAX);
+        Self::Gate(
+            GateNode::Gamma {
+                value: any,
+                cond: any,
+            },
+            args,
+        )
     }
 
     /// A leaf gate standing for block-argument `value`.
@@ -116,6 +133,16 @@ impl ENode for Node {
             Node::Gate(_, args) | Node::Op { args, .. } => args,
             Node::Const { .. } => &mut [],
         }
+    }
+
+    fn commutative(&self) -> bool {
+        matches!(
+            self,
+            Node::Op {
+                commutative: true,
+                ..
+            }
+        )
     }
 
     fn hash_cons(&self) -> u64 {
@@ -292,6 +319,7 @@ mod tests {
             name,
             ty,
             attrs,
+            commutative: false,
             cost: 1,
             prov: OpProv::Introduced(0),
             args,
@@ -354,5 +382,28 @@ mod tests {
 
         // Searching is read-only: classes remain distinct.
         assert_ne!(g.find(a32), g.find(a64));
+    }
+
+    #[test]
+    fn graph_operation_controls_commutative_matching() {
+        let mut g: EGraph<Node> = EGraph::new();
+        let zero = g.add(konst(32, 0));
+        let x = g.add(konst(32, 1));
+        let mut addi = op("addi", ty(32), vec![], vec![zero, x]);
+        let Node::Op { commutative, .. } = &mut addi else {
+            unreachable!()
+        };
+        *commutative = true;
+        let root = g.add(addi);
+
+        let mut pattern: Pattern<Node, u32> = Pattern::new();
+        let variable = pattern.var(Var::Symbol(0));
+        let literal = pattern.var(Var::Int(APInt::new(32, 0)));
+        pattern.add(op("addi", any_type(), vec![], vec![variable, literal]));
+
+        let matches = pattern.search(&g);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(g.find(matches[0].root), g.find(root));
+        assert_eq!(matches[0].subst.get(&Var::Symbol(0)), Some(g.find(x)));
     }
 }

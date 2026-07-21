@@ -281,6 +281,13 @@ impl OpInstance {
         let context = self.context.upgrade();
         context.get_op_interface::<I>(self.clone())
     }
+
+    pub fn has_interface<I: ?Sized + 'static>(&self) -> bool {
+        self.context
+            .upgrade()
+            .find_op_interface::<I>(self)
+            .is_some()
+    }
 }
 
 impl Default for OpId {
