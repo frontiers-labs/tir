@@ -25,7 +25,7 @@ jobs:
           tool: mdbook,mdbook-mermaid
       - name: Build docs
         run: cargo xtask docs
-      - uses: actions/upload-pages-artifact@v3.0.1
+      - uses: actions/upload-pages-artifact@v5
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         with:
           path: book
