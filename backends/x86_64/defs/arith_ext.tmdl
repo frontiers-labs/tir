@@ -293,6 +293,38 @@ instruction Movsxd for [X86_64] {
     }
 }
 
+// `mov r32, r/m32` (0x8B): a 32-bit move zeroes the upper 32 bits of the
+// destination, so it is the register-to-register 32-to-64 zero extension.
+instruction Movzxd for [X86_64] {
+    param OPNAME: String = "movzxd";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR,
+        src: GPR,
+    }
+
+    encoding {
+        0 => src[3],
+        1 => 0b0,
+        2 => dst[3],
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0x8B,
+        16..18 => src[0..2],
+        19..21 => dst[0..2],
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = src & zext(0xFFFFFFFF, self.XLEN);
+    }
+}
+
 // `movabs r64, imm64` (REX.W + 0xB8+rd io): the full-width constant
 // materializer (lui/movz parity); the register number's low bits live in the
 // opcode byte.

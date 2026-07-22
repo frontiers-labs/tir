@@ -252,6 +252,39 @@ instruction Cvtsi2sd32 for [X86_64] {
     }
 }
 
+// Convert a signed 64-bit integer to scalar binary64 (`cvtsi2sd xmm, r64`).
+instruction Cvtsi2sd64 for [X86_64] {
+    param OPNAME: String = "cvtsi2sd64";
+    param MNEMONIC: String = "cvtsi2sd";
+
+    operands {
+        dst: XMM,
+        src: GPR,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b1,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x2A,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = sitofp(src, 11, 52);
+    }
+}
+
 instruction MovsdLoadDisp for [X86_64] {
     param OPNAME: String = "movsd_load_disp";
     param MNEMONIC: String = "movsd";

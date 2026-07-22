@@ -847,6 +847,38 @@ instruction SCvtfDoubleWord for [ARMv8A64] {
     }
 }
 
+// Convert the low unsigned 32-bit integer in a general register to binary64.
+instruction UCvtfDoubleWord for [ARMv8A64] {
+    param MNEMONIC: String = "ucvtf";
+    param OPNAME: String = "ucvtf_d_w";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        fd: FPR64,
+        rn: GPR,
+    }
+
+    encoding {
+        0..4 => fd,
+        5..9 => rn,
+        10..15 => 0b000000,
+        16..18 => 0b011,
+        19..20 => 0b00,
+        21 => 0b1,
+        22..23 => 0b01,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rn}"
+    }
+
+    behavior {
+        fd = uitofp(extract(rn, 31, 0), 11, 52);
+    }
+}
+
 instruction FMoveRegisterDouble for [ARMv8A64] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_reg64";

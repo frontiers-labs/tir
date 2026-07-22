@@ -16,6 +16,7 @@ const OP_VOCABULARY: &[(&str, SymKind)] = &[
     ("fmul", SymKind::FMul),
     ("fdiv", SymKind::FDiv),
     ("sitofp", SymKind::SIToFP),
+    ("uitofp", SymKind::UIToFP),
     ("zip", SymKind::Zip),
     ("split", SymKind::Split),
     ("sext", SymKind::SExt),

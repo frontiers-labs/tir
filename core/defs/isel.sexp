@@ -8,6 +8,7 @@
   (axiom zext-shifts (vars (x n)) (root w) (where (< n w))
     (lhs (zext x w)) (rhs (lshr (shl x (- w n)) (- w n))))
 
+
   (axiom neg-sub (vars (x w)) (root w) (lhs (neg x)) (rhs (sub 0 x)))
   (axiom neg-mul (vars (x w)) (root w) (lhs (neg x)) (rhs (mul (ones w) x)))
 

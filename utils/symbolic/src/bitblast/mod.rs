@@ -2,6 +2,7 @@
 //! Node bit vectors are little-endian (bit 0 = LSB); operands precede their parents.
 
 mod arith;
+mod fp;
 #[cfg(test)]
 mod tests;
 
@@ -219,6 +220,8 @@ impl<'g, V> Blaster<'g, V> {
             ZExt => self.encode_extend(id, false),
             SExt => self.encode_extend(id, true),
             If => self.encode_ite(id),
+            SIToFP => self.encode_int_to_float(id, true),
+            UIToFP => self.encode_int_to_float(id, false),
             other => Err(BitblastError::Unsupported(other)),
         }
     }

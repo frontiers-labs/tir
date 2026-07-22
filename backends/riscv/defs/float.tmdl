@@ -225,6 +225,35 @@ instruction FCvtDW for [D] {
     }
 }
 
+// Convert the low unsigned 32-bit integer in an integer register to binary64.
+instruction FCvtDWU for [D] {
+    param MNEMONIC: String = "fcvt.d.wu";
+    param RM: bits<3> = 0b111;
+    param OPCODE: bits<7> = 0b1010011;
+
+    operands {
+        fd: FPR64,
+        rs1: GPR,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => fd,
+        12..14 => RM,
+        15..19 => rs1,
+        20..24 => 0b00001,
+        25..31 => 0b1101001,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rs1}"
+    }
+
+    behavior {
+        fd = uitofp(extract(rs1, 31, 0), 11, 52);
+    }
+}
+
 // Register copies use FSGNJ with both sources equal, preserving every bit.
 instruction FMoveS for [F] {
     param MNEMONIC: String = "fsgnj.s";

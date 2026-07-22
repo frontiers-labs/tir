@@ -856,16 +856,20 @@ impl Axiom {
                     .map(|c| self.instantiate(ctx, c, eg, m, holes, widths))
                     .collect::<Option<Vec<_>>>()?;
                 fold_constant_op(*kind, &children, eg).unwrap_or_else(|| {
-                    let width = if is_comparison(*kind) {
-                        1
+                    // Float conversions carry the IEEE result type named by their
+                    // exponent/mantissa operands; every other node is register-wide
+                    // integer (comparisons a single bit).
+                    let ty = if matches!(*kind, SymKind::SIToFP | SymKind::UIToFP) {
+                        conversion_float_type(ctx, eg, &children)
                     } else {
-                        self.register_width(widths)
+                        let width = if is_comparison(*kind) {
+                            1
+                        } else {
+                            self.register_width(widths)
+                        };
+                        tir::builtin::IntegerType::new(ctx, width)
                     };
-                    let mut n = template_node(
-                        *kind,
-                        None,
-                        Some(tir::builtin::IntegerType::new(ctx, width)),
-                    );
+                    let mut n = template_node(*kind, None, Some(ty));
                     n.children = children;
                     eg.add(n)
                 })
@@ -899,6 +903,20 @@ impl Axiom {
             AxNode::Root | AxNode::Keep(..) => None,
         }
     }
+}
+
+/// The IEEE result type of a conversion node from its exponent/mantissa operand
+/// classes; falls back to double when either is not a bound constant.
+fn conversion_float_type(ctx: &Context, eg: &SemEGraph, children: &[Id]) -> tir::TypeId {
+    let format = |slot: usize| {
+        children
+            .get(slot)
+            .and_then(|&c| class_int_binding(eg, c))
+            .map(|v| v.to_u64() as u32)
+    };
+    let exp = format(1).unwrap_or(11);
+    let mant = format(2).unwrap_or(52);
+    tir::builtin::FloatType::new(ctx, exp, mant)
 }
 
 /// Execute a pure op over `(value, width)` constant operands via a throwaway
@@ -1043,6 +1061,50 @@ pub(crate) fn sub_via_add_neg_axiom() -> Axiom {
 mod tests {
     use super::*;
     use tir::builtin::IntegerType;
+
+    /// `uitofp(symbol : i32, 11, 52) : f64` — the unsigned-conversion root.
+    fn uitofp_egraph(ctx: &Context) -> (SemEGraph, Id) {
+        let i32 = IntegerType::new(ctx, 32);
+        let f64 = tir::builtin::FloatType::new(ctx, 11, 52);
+        let mut eg = SemEGraph::new();
+        let x = eg.add(template_node(
+            SymKind::Symbol,
+            Some(SymPayload::SymbolId(0)),
+            Some(i32),
+        ));
+        let exp = eg.add(template_node(
+            SymKind::Constant,
+            Some(SymPayload::Int(APInt::new(16, 11))),
+            None,
+        ));
+        let mant = eg.add(template_node(
+            SymKind::Constant,
+            Some(SymPayload::Int(APInt::new(16, 52))),
+            None,
+        ));
+        let mut node = template_node(SymKind::UIToFP, None, Some(f64));
+        node.children = vec![x, exp, mant];
+        let root = eg.add(node);
+        (eg, root)
+    }
+
+    #[test]
+    fn unsigned_conversion_bridges_to_signed_of_a_masked_value() {
+        let ctx = Context::with_default_dialects();
+        let (mut eg, root) = uitofp_egraph(&ctx);
+        let axiom = parse_axiom(
+            "(axiom uitofp-via-sitofp (vars (x n)) (root 64) (where (= n 32))
+               (lhs (uitofp x 11 52))
+               (rhs (sitofp (and x (zext (const 4294967295 32) 64)) 11 52)))",
+        )
+        .unwrap();
+        apply_all(&ctx, &mut eg, &axiom.compile());
+        assert!(
+            class_kinds(&eg, root).contains(&SymKind::SIToFP),
+            "the proved bridge must union a sitofp form, got {:?}",
+            class_kinds(&eg, root)
+        );
+    }
 
     /// Apply `rewrite` to every current match and rebuild.
     fn apply_all(ctx: &Context, eg: &mut SemEGraph, rewrite: &IselRewrite) {

@@ -716,6 +716,7 @@ fn format_builtin(builtin: &BuiltinFunction) -> &'static str {
         BuiltinFunction::FMul => "fmul",
         BuiltinFunction::FDiv => "fdiv",
         BuiltinFunction::SIToFP => "sitofp",
+        BuiltinFunction::UIToFP => "uitofp",
         BuiltinFunction::Todo => "todo",
     }
 }

@@ -1637,7 +1637,12 @@ fn emit_sem_expr(
         // Stores are effect statements, handled by `BehaviorEmitter::store`.
         SymKind::StoreMemory | SymKind::Sqrt | SymKind::Fma => None,
         // IEEE float arithmetic has no bit-vector model here.
-        SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv | SymKind::SIToFP => None,
+        SymKind::FAdd
+        | SymKind::FSub
+        | SymKind::FMul
+        | SymKind::FDiv
+        | SymKind::SIToFP
+        | SymKind::UIToFP => None,
         SymKind::Map | SymKind::Zip | SymKind::IterConcat => None,
         SymKind::Split | SymKind::Reduce | SymKind::Arg => None,
         // Load-reserved reads memory (the reservation is a state effect, set by

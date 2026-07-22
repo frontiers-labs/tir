@@ -200,6 +200,42 @@ impl SIToFPOp {
     }
 }
 
+operation! {
+    UIToFPOp {
+        name: "uitofp",
+        dialect: "builtin",
+        operands: O {
+            input: "crate::builtin::IntegerType",
+        },
+        results: R {
+            result: "crate::builtin::FloatType",
+        },
+        sem: "(set result (uitofp input $float_exponent $float_mantissa))",
+    }
+}
+
+impl UIToFPOp {
+    fn float_exponent(
+        &self,
+        g: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+    ) -> tir::graph::NodeId {
+        float_format_node(&self.0, g, crate::builtin::FloatType::exp_width)
+    }
+
+    fn float_mantissa(
+        &self,
+        g: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+    ) -> tir::graph::NodeId {
+        float_format_node(&self.0, g, crate::builtin::FloatType::mant_width)
+    }
+}
+
 impl ConstantFOpBuilder {
     /// The constant, held as `f64`; every supported format embeds in it exactly.
     pub fn value(self, v: f64) -> Self {

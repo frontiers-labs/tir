@@ -30,7 +30,7 @@ pub fn infer_types<V>(
                 inference.unify(&child(1), &ty)?;
                 ty
             }
-            SymKind::SIToFP => {
+            SymKind::SIToFP | SymKind::UIToFP => {
                 let operand = inference.fresh_bits();
                 inference.unify(&child(0), &operand)?;
                 for slot in 1..3 {
@@ -222,7 +222,7 @@ pub fn infer_widths<V>(
                 | SymKind::FMul
                 | SymKind::FDiv => child_width(0),
 
-                SymKind::SIToFP => match (
+                SymKind::SIToFP | SymKind::UIToFP => match (
                     children.get(1).and_then(|&c| const_u64(graph, c)),
                     children.get(2).and_then(|&c| const_u64(graph, c)),
                 ) {

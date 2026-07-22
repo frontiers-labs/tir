@@ -316,14 +316,18 @@ impl FnCodegen<'_> {
 
     fn convert_scalar(&mut self, value: ValueId, source: QualType, target: QualType) -> ValueId {
         if self.typed.integer_width(source).is_some()
-            && self.typed.integer_is_signed(source) == Some(true)
             && matches!(self.typed.types().kind(target), TypeKind::Double)
         {
             let target_ty = lower_type(self.context, self.typed, target);
-            return self
-                .builder
-                .insert(b::sitofp(self.context, value, target_ty).build())
-                .result();
+            return if self.typed.integer_is_signed(source) == Some(true) {
+                self.builder
+                    .insert(b::sitofp(self.context, value, target_ty).build())
+                    .result()
+            } else {
+                self.builder
+                    .insert(b::uitofp(self.context, value, target_ty).build())
+                    .result()
+            };
         }
         let (Some(source_width), Some(target_width)) = (
             self.typed.integer_width(source),

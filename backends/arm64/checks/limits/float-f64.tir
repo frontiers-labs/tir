@@ -16,6 +16,10 @@ module {
     %1 = sitofp %0 : !f64
     return %1
   }
+  func @convert_unsigned(%0: !i32) -> !f64 {
+    %1 = uitofp %0 : !f64
+    return %1
+  }
   module_end
 }
 
@@ -27,4 +31,7 @@ module {
 // CHECK-NEXT: asm.vret
 // CHECK: asm.symbol {name = "convert", arg_regs = [%virt{{[0-9]+}}:GPR]}
 // CHECK: arm64.scvtf_d_w {fd = %virt{{[0-9]+}}:FPR64, rn = %virt{{[0-9]+}}:GPR}
+// CHECK: asm.vret
+// CHECK: asm.symbol {name = "convert_unsigned", arg_regs = [%virt{{[0-9]+}}:GPR]}
+// CHECK: arm64.ucvtf_d_w {fd = %virt{{[0-9]+}}:FPR64, rn = %virt{{[0-9]+}}:GPR}
 // CHECK: asm.vret

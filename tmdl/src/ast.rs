@@ -585,6 +585,8 @@ pub enum BuiltinFunction {
     FDiv,
     /// Signed integer to IEEE 754 binary floating point.
     SIToFP,
+    /// Unsigned integer to IEEE 754 binary floating point.
+    UIToFP,
     /// `todo()`: the instruction's semantics are not modeled. It suppresses
     /// instruction-selection rule generation (the op still exists, prints, and
     /// parses) and its `execute()` traps. For behaviors the TMDL expression
@@ -1662,6 +1664,13 @@ impl Call {
                 let exponent = self.arguments[1].lower_with_ctx(ctx);
                 let mantissa = self.arguments[2].lower_with_ctx(ctx);
                 ctx.add_node(tir::sem::SymKind::SIToFP, &[input, exponent, mantissa])
+            }
+            BuiltinFunction::UIToFP => {
+                assert!(self.arguments.len() == 3, "uitofp requires 3 arguments");
+                let input = self.arguments[0].lower_with_ctx(ctx);
+                let exponent = self.arguments[1].lower_with_ctx(ctx);
+                let mantissa = self.arguments[2].lower_with_ctx(ctx);
+                ctx.add_node(tir::sem::SymKind::UIToFP, &[input, exponent, mantissa])
             }
             // `todo()` marks unmodeled semantics; rustgen suppresses selection-rule
             // and `execute()` lowering for such behaviors, so this is never reached.

@@ -400,3 +400,127 @@ fn width_changing_ops() {
         "(declare-const x (_ BitVec 4))(assert (= (ite (bvult x #x8) #x1 #x2) #x2))"
     ));
 }
+
+// ----- integer-to-float conversion circuits -----
+
+mod fp {
+    use super::super::*;
+    use crate::lang::infer_widths;
+    use tir_adt::APInt;
+    use tir_graph::{GenericDag, MutDag, NodeId};
+
+    type G = GenericDag<SymKind, SymPayload<()>>;
+
+    fn con(g: &mut G, value: u64, width: u32) -> NodeId {
+        let n = g.add_node(SymKind::Constant);
+        g.set_leaf_data(n, SymPayload::Int(APInt::new(width, value)));
+        n
+    }
+
+    fn op(g: &mut G, kind: SymKind, children: &[NodeId]) -> NodeId {
+        let n = g.add_node(kind);
+        for &c in children {
+            g.add_edge(n, c);
+        }
+        n
+    }
+
+    /// Whether `kind(value:vwidth, 11, 52)` provably equals the f64 bit pattern
+    /// `expected`: the `Ne` root is unsatisfiable exactly when the two agree.
+    fn converts_to(kind: SymKind, value: u64, vwidth: u32, expected: u64) -> bool {
+        let mut g = G::new();
+        let v = con(&mut g, value, vwidth);
+        let e = con(&mut g, 11, 16);
+        let m = con(&mut g, 52, 16);
+        let fp = op(&mut g, kind, &[v, e, m]);
+        let want = con(&mut g, expected, 64);
+        op(&mut g, SymKind::Ne, &[fp, want]);
+        let widths = infer_widths(&g, |_| None);
+        matches!(blast(&g, &widths).unwrap().solve(), SolveOutcome::Unsat)
+    }
+
+    #[test]
+    fn unsigned_small_powers_are_exact() {
+        assert!(converts_to(SymKind::UIToFP, 0, 32, 0.0f64.to_bits()));
+        assert!(converts_to(SymKind::UIToFP, 1, 32, 1.0f64.to_bits()));
+        assert!(converts_to(SymKind::UIToFP, 2, 32, 2.0f64.to_bits()));
+        assert!(converts_to(SymKind::UIToFP, 3, 32, 3.0f64.to_bits()));
+        let max32 = 0xFFFF_FFFFu64;
+        assert!(converts_to(
+            SymKind::UIToFP,
+            max32,
+            32,
+            (max32 as f64).to_bits()
+        ));
+    }
+
+    #[test]
+    fn unsigned_high_bit_set_is_not_negative() {
+        // 0x8000_0000 as unsigned is +2147483648.0, not the signed -2^31.
+        let v = 0x8000_0000u64;
+        assert!(converts_to(SymKind::UIToFP, v, 32, (v as f64).to_bits()));
+    }
+
+    #[test]
+    fn signed_64bit_negatives_round_trip() {
+        for v in [1i64, -1, 42, -42, i32::MIN as i64, i64::MIN, i64::MAX] {
+            assert!(
+                converts_to(SymKind::SIToFP, v as u64, 64, (v as f64).to_bits()),
+                "sitofp {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn rounding_is_ties_to_even() {
+        // Values needing round-to-nearest-even in the 53-bit significand.
+        for v in [
+            (1u64 << 53) + 1,
+            (1u64 << 53) + 3,
+            (1u64 << 62) + 511,
+            u64::MAX,
+        ] {
+            assert!(
+                converts_to(SymKind::UIToFP, v, 64, (v as f64).to_bits()),
+                "uitofp {v}"
+            );
+        }
+    }
+
+    fn sym(g: &mut G, id: u32) -> NodeId {
+        let n = g.add_node(SymKind::Symbol);
+        g.set_leaf_data(n, SymPayload::SymbolId(id));
+        n
+    }
+
+    /// Whether `uitofp(x:32)` and `sitofp(x zero-extended to `ext`)` are provably
+    /// equal over all 32-bit `x` — the x86 selection bridge, `false` if refutable.
+    fn bridge_holds(ext: u64) -> bool {
+        let mut g = G::new();
+        let x = sym(&mut g, 0);
+        let e = con(&mut g, 11, 16);
+        let m = con(&mut g, 52, 16);
+        let lhs = op(&mut g, SymKind::UIToFP, &[x, e, m]);
+        let width = con(&mut g, ext, 16);
+        let widened = op(&mut g, SymKind::ZExt, &[x, width]);
+        let rhs = op(&mut g, SymKind::SIToFP, &[widened, e, m]);
+        op(&mut g, SymKind::Ne, &[lhs, rhs]);
+        let widths = infer_widths(&g, |id| match g.get_leaf_data(id) {
+            Some(SymPayload::SymbolId(_)) => Some(32),
+            _ => None,
+        });
+        matches!(blast(&g, &widths).unwrap().solve(), SolveOutcome::Unsat)
+    }
+
+    #[test]
+    fn unsigned_bridges_to_signed_via_zero_extend() {
+        assert!(bridge_holds(64), "uitofp(x) == sitofp(zext(x, 64))");
+    }
+
+    #[test]
+    fn no_extend_is_unsound_for_high_bit_inputs() {
+        // Extending to 32 (a no-op) leaves the sign bit interpreted, so the
+        // signed reading disagrees for x >= 2^31 and the bridge must not prove.
+        assert!(!bridge_holds(32), "sitofp at 32 bits differs from uitofp");
+    }
+}

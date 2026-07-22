@@ -1,0 +1,14 @@
+; x86-64-specific instruction-selection axioms.
+;
+; x86 has no direct unsigned-integer-to-double conversion. A binary64 unsigned
+; conversion of a 32-bit integer equals the signed conversion of its 64-bit
+; zero-extension, since masking to 32 bits clears the sign bit:
+;
+;   uitofp(x, f64) == sitofp(x & 0xFFFFFFFF, f64)
+;
+; The mask is shaped as the `mov r32, r32` zeroing move (`movzxd`) so selection
+; covers it with that instruction feeding `cvtsi2sd r64`. The identity is proved
+; by bit-blasting both conversions through the IEEE round-to-nearest circuit.
+(axiom uitofp-via-sitofp (vars (x n)) (root 64) (where (= n 32))
+  (lhs (uitofp x 11 52))
+  (rhs (sitofp (and x (zext (const 4294967295 32) 64)) (const 11 4) (const 52 6))))

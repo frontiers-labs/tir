@@ -84,6 +84,9 @@ pub enum SymKind {
     /// Convert a signed integer to an IEEE 754 binary format. Arguments are
     /// the integer, exponent width, and mantissa width.
     SIToFP,
+    /// Convert an unsigned integer to an IEEE 754 binary format. Arguments are
+    /// the integer, exponent width, and mantissa width.
+    UIToFP,
     /// `[iter, body]`: map `body` over each lane, element bound via `Arg(0)` (or
     /// `Arg(0)`/`Arg(1)` for a `Zip` pair); value is the iterator of results.
     // #[arity = 2]
@@ -171,7 +174,8 @@ impl SymKind {
             | SymKind::LoadReserved
             | SymKind::Fence
             | SymKind::Fma
-            | SymKind::SIToFP => 3,
+            | SymKind::SIToFP
+            | SymKind::UIToFP => 3,
             SymKind::StoreMemory | SymKind::StoreConditional => 4,
             SymKind::AtomicRmw => 5,
             _ => 2,

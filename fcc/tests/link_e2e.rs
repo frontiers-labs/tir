@@ -238,6 +238,17 @@ fn signed_integer_to_double_conversion_executes_through_driver() {
 }
 
 #[test]
+fn unsigned_integer_to_double_conversion_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "double convert(unsigned int value) { return value; }\n",
+        "double convert(unsigned int); int main(void) { return convert(4000000000u) == 4000000000.0 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
 fn signed_integer_division_executes_through_driver() {
     if !cc_available() {
         return;
