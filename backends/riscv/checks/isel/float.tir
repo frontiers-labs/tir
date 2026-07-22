@@ -22,6 +22,10 @@ module {
     %5 = divf %4, %1 : !f64
     return %5
   }
+  func @convert(%0: !i32) -> !f64 {
+    %1 = sitofp %0 : !f64
+    return %1
+  }
   module_end
 }
 
@@ -37,4 +41,8 @@ module {
 // CHECK: riscv.fsub.d
 // CHECK: riscv.fmul.d
 // CHECK: riscv.fdiv.d
+// CHECK: asm.vret
+
+// CHECK: asm.symbol {name = "convert", arg_regs = [%virt{{[0-9]+}}:GPR]}
+// CHECK: riscv.fcvt.d.w {fd = %virt{{[0-9]+}}:FPR64, rs1 = %virt{{[0-9]+}}:GPR}
 // CHECK: asm.vret
