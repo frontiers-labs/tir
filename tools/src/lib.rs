@@ -16,6 +16,7 @@ pub mod model_check;
 pub mod opt;
 pub mod readobj;
 pub mod sched;
+pub mod spirv_io;
 
 pub fn tools_main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
@@ -27,6 +28,8 @@ pub fn tools_main() -> Result<(), Box<dyn Error>> {
         Command::Readobj(args) => readobj::run(args),
         Command::Sched(args) => sched::run(args),
         Command::LlvmImport(args) => llvm_import::run(args),
+        Command::SpirvImport(args) => spirv_io::import(args),
+        Command::SpirvExport(args) => spirv_io::export(args),
     }
 }
 
@@ -44,6 +47,10 @@ pub enum Command {
     Sched(sched::ToolArgs),
     /// Import LLVM textual IR into TIR
     LlvmImport(llvm_import::ToolArgs),
+    /// Import a SPIR-V binary into human-readable TIR
+    SpirvImport(spirv_io::ImportArgs),
+    /// Export human-readable TIR to a SPIR-V binary
+    SpirvExport(spirv_io::ExportArgs),
 }
 
 #[derive(Parser)]
