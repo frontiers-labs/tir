@@ -66,6 +66,7 @@ dialect! {
             SIToFPOp,
             UIToFPOp,
             FPToSIOp,
+            FPToUIOp,
             BranchOp,
             CondBranchOp,
             CallOp,

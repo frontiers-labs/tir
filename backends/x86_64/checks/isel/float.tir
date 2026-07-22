@@ -26,6 +26,10 @@ module {
     %1 = fptosi %0 : !i32
     return %1
   }
+  func @convert_to_unsigned(%0: !f64) -> !i32 {
+    %1 = fptoui %0 : !i32
+    return %1
+  }
   module_end
 }
 
@@ -39,3 +43,4 @@ module {
 // CHECK-NEXT: x86_64.cvtsi2sd64 {dst = %virt9:XMM, src = %virt10:GPR}
 // CHECK:      x86_64.select_unsigned_integer_to_double32 {dst = %virt9:XMM, src = %virt8:GPR32}
 // CHECK:      x86_64.cvttsd2si32 {dst = %virt11:GPR32, src = %virt10:XMM}
+// CHECK:      x86_64.select_double_to_unsigned_integer32 {dst = %virt{{[0-9]+}}:GPR32, src = %virt{{[0-9]+}}:XMM}

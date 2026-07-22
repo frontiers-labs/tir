@@ -209,6 +209,10 @@
         "fsub",
         "fmul",
         "fdiv",
+        "sitofp",
+        "uitofp",
+        "fptosi",
+        "fptoui",
         "todo"
       ]
     },

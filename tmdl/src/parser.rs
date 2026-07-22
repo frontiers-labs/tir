@@ -1466,6 +1466,7 @@ where
                 "sitofp" => Some(BuiltinFunction::SIToFP),
                 "uitofp" => Some(BuiltinFunction::UIToFP),
                 "fptosi" => Some(BuiltinFunction::FPToSI),
+                "fptoui" => Some(BuiltinFunction::FPToUI),
                 "todo" => Some(BuiltinFunction::Todo),
                 _ => None,
             }

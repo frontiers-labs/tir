@@ -561,6 +561,11 @@ fn eval_node<V, M: Memory>(
             let width = as_int!(c(1), "fptosi").to_u64() as u32;
             Value::Int(APInt::new_signed(width, value))
         }
+        SymKind::FPToUI => {
+            let value = as_float!(c(0), "fptoui").to_f64() as u64;
+            let width = as_int!(c(1), "fptoui").to_u64() as u32;
+            Value::Int(APInt::new(width, value))
+        }
 
         // ── Bitwise (int only) ─────────────────────────────────────────────
         SymKind::Eq => Value::Int(APInt::new(1, bool_result(c(0) == c(1)))),

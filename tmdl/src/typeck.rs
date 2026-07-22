@@ -449,7 +449,9 @@ fn infer<'a>(
                 }
                 Type::Var(tvg.fresh())
             }
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::FPToSI) => {
+            ast::Expr::BuiltinFunction(
+                ast::BuiltinFunction::FPToSI | ast::BuiltinFunction::FPToUI,
+            ) => {
                 for arg in &call.arguments {
                     infer(arg, env, tvg, subst, cache, diags, file_name);
                 }

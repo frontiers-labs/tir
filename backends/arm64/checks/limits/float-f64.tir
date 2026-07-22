@@ -24,6 +24,10 @@ module {
     %1 = fptosi %0 : !i32
     return %1
   }
+  func @convert_to_unsigned(%0: !f64) -> !i32 {
+    %1 = fptoui %0 : !i32
+    return %1
+  }
   module_end
 }
 
@@ -41,4 +45,7 @@ module {
 // CHECK: asm.vret
 // CHECK: asm.symbol {name = "convert_to_signed"
 // CHECK: arm64.fcvtzs_w_d {rd = %virt{{[0-9]+}}:GPR, fa = %virt{{[0-9]+}}:FPR64}
+// CHECK: asm.vret
+// CHECK: asm.symbol {name = "convert_to_unsigned"
+// CHECK: arm64.fcvtzu_w_d {rd = %virt{{[0-9]+}}:GPR, fa = %virt{{[0-9]+}}:FPR64}
 // CHECK: asm.vret

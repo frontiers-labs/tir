@@ -18,6 +18,7 @@ const OP_VOCABULARY: &[(&str, SymKind)] = &[
     ("sitofp", SymKind::SIToFP),
     ("uitofp", SymKind::UIToFP),
     ("fptosi", SymKind::FPToSI),
+    ("fptoui", SymKind::FPToUI),
     ("zip", SymKind::Zip),
     ("split", SymKind::Split),
     ("sext", SymKind::SExt),
@@ -280,6 +281,7 @@ where
             "zext" => Some(Some(SymKind::ZExt)),
             "trunc" => Some(None),
             "fptosi" => Some(Some(SymKind::FPToSI)),
+            "fptoui" => Some(Some(SymKind::FPToUI)),
             _ => None,
         }
     {
@@ -287,7 +289,7 @@ where
         let width = hooks.result_width().ok_or(BuildError::MissingWidth)?;
         return Ok(match kind {
             Some(kind) => {
-                let width_bits = if kind == SymKind::FPToSI {
+                let width_bits = if matches!(kind, SymKind::FPToSI | SymKind::FPToUI) {
                     (u64::BITS - width.leading_zeros()).max(1)
                 } else {
                     16

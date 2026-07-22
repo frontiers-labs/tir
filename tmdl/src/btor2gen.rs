@@ -363,6 +363,7 @@ fn emit(graph: &ExprPostGraph, node: NodeId, r: &Resolver<'_>, b: &mut Btor2) ->
         | ExprKind::SIToFP
         | ExprKind::UIToFP
         | ExprKind::FPToSI
+        | ExprKind::FPToUI
         | ExprKind::Map
         | ExprKind::Zip
         | ExprKind::IterConcat

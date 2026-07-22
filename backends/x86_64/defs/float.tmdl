@@ -324,6 +324,45 @@ instruction Cvttsd2si32 for [X86_64] {
     }
 }
 
+// Convert scalar binary64 to a signed 64-bit integer, truncating toward zero.
+instruction Cvttsd2si64 for [X86_64] {
+    param OPNAME: String = "cvttsd2si64";
+    param MNEMONIC: String = "cvttsd2si";
+
+    operands {
+        dst: GPR,
+        src: XMM,
+    }
+
+    encoding {
+        0..7 => 0xF2,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b1,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x2C,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = fptosi(src, 64);
+    }
+}
+
+pseudo instruction SelectDoubleToUnsignedInteger32 for [X86_64] {
+    param OPNAME: String = "select_double_to_unsigned_integer32";
+    operands { dst: GPR32, src: XMM, }
+    behavior { dst = fptoui(src, 32); }
+}
+
 pseudo instruction SelectFloatConstant64 for [X86_64] {
     param OPNAME: String = "select_float_constant64";
     operands { dst: XMM, imm: bits<64>, }

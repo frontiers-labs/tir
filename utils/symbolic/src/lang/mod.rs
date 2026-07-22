@@ -90,6 +90,9 @@ pub enum SymKind {
     /// Convert an IEEE 754 binary value to a signed integer. Arguments are the
     /// float and destination integer width; rounding is toward zero.
     FPToSI,
+    /// Convert an IEEE 754 binary value to an unsigned integer. Arguments are
+    /// the float and destination integer width; rounding is toward zero.
+    FPToUI,
     /// `[iter, body]`: map `body` over each lane, element bound via `Arg(0)` (or
     /// `Arg(0)`/`Arg(1)` for a `Zip` pair); value is the iterator of results.
     // #[arity = 2]

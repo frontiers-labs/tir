@@ -13,6 +13,10 @@ module {
     %1 = fptosi %0 : !i32
     return %1
   }
+  func @convert_to_unsigned(%0: !f64) -> !i32 {
+    %1 = fptoui %0 : !i32
+    return %1
+  }
   module_end
 }
 
@@ -25,4 +29,7 @@ module {
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
 // CHECK: convert_to_signed:
 // CHECK-NEXT: [0x00, 0x00, 0x78, 0x1E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: convert_to_unsigned:
+// CHECK-NEXT: [0x00, 0x00, 0x79, 0x1E]
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
