@@ -909,12 +909,12 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
             }
 
             fn from_op_instance(instance: std::sync::Arc<tir::OpInstance>) -> Self {
-                assert_eq!(instance.name(), #name);
+                assert_eq!(instance.name(), tir::OperationName::of::<Self>());
                 #struct_name(instance)
             }
 
             fn from_op_instance_dyn(instance: std::sync::Arc<tir::OpInstance>) -> Box<dyn tir::Operation> {
-                assert_eq!(instance.name(), #name);
+                assert_eq!(instance.name(), tir::OperationName::of::<Self>());
                 Box::new(#struct_name(instance))
             }
 
@@ -987,17 +987,14 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
                 #attributes_binding
                 #segment_sizes_attr
 
-                let instance = tir::OpInstance {
-                    id: tir::OpId::invalid(),
-                    name: #name,
-                    dialect: #dialect,
-                    context: self.context.as_context_ref(),
-                    operands: operand_vec,
-                    results: result_vec,
+                let instance = tir::OpInstance::new::<#struct_name>(
+                    self.context.as_context_ref(),
+                    operand_vec,
+                    result_vec,
                     regions,
                     attributes,
-                    attribute_roles: #struct_name::attribute_roles(),
-                };
+                    #struct_name::attribute_roles(),
+                );
 
                 let instance = self.context.add_operation(instance);
 

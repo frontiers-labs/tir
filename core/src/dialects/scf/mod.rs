@@ -97,7 +97,7 @@ impl TokenScope for ForOp {
 impl tir::Verifiable for ForOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         verify_single_block_region_has_terminator(context, self.body(), "scf.for body")?;
-        verify_loop_carried(context, self, "scf.for")
+        verify_loop_carried(context, self)
     }
 }
 
@@ -211,7 +211,7 @@ impl tir::Verifiable for WhileOp {
         )?;
         verify_single_block_region_has_terminator(context, self.body(), "scf.while body")?;
         verify_while_condition(context, self)?;
-        verify_loop_carried(context, self, "scf.while")
+        verify_loop_carried(context, self)
     }
 }
 
@@ -576,10 +576,12 @@ fn carried_argument(context: &Context, body: &Arc<tir::Block>) -> Value {
 
 /// Verify a loop's carried value: a result requires a matching init operand, a single
 /// carried body argument, and a matching yielded value; a resultless loop has none.
-fn verify_loop_carried(context: &Context, op: &impl LoopOp, label: &str) -> Result<(), Error> {
+fn verify_loop_carried<T: LoopOp + Operation>(context: &Context, op: &T) -> Result<(), Error> {
+    let label = format!("{}.{}", T::dialect(), T::name());
     let body = op.body_block();
     let terminator = context.get_op(*body.op_ids().last().unwrap());
-    let yielded = (terminator.dialect == "scf" && terminator.name == "yield")
+    let yielded = terminator
+        .is::<YieldOp>()
         .then(|| terminator.operands.first().copied())
         .flatten();
     let token = TokenType::new(context);
@@ -598,12 +600,13 @@ fn verify_loop_carried(context: &Context, op: &impl LoopOp, label: &str) -> Resu
             "{label} body must have at most one token scope"
         )));
     }
-    if terminator.dialect != "scf" || !matches!(terminator.name, "yield" | "break" | "continue") {
+    if !terminator.is::<YieldOp>() && !terminator.is::<BreakOp>() && !terminator.is::<ContinueOp>()
+    {
         return Err(Error::VerificationError(format!(
             "{label} body must end with scf.yield, scf.break, or scf.continue"
         )));
     }
-    if matches!(terminator.name, "break" | "continue")
+    if (terminator.is::<BreakOp>() || terminator.is::<ContinueOp>())
         && (scope_args.len() != 1 || terminator.operands != [scope_args[0].id()])
     {
         return Err(Error::VerificationError(format!(
@@ -627,7 +630,7 @@ fn verify_loop_carried(context: &Context, op: &impl LoopOp, label: &str) -> Resu
                     "{label} body must carry one argument of the result type"
                 )));
             }
-            if terminator.name != "yield" || yielded.map(|v| context.get_value(v).ty()) != Some(ty)
+            if !terminator.is::<YieldOp>() || yielded.map(|v| context.get_value(v).ty()) != Some(ty)
             {
                 return Err(Error::VerificationError(format!(
                     "{label} body must yield the carried value"
@@ -648,7 +651,7 @@ fn verify_loop_carried(context: &Context, op: &impl LoopOp, label: &str) -> Resu
 fn verify_while_condition(context: &Context, op: &WhileOp) -> Result<(), Error> {
     let block = op.condition_region();
     let terminator = context.get_op(*block.op_ids().last().unwrap());
-    if terminator.dialect != "scf" || terminator.name != "condition" {
+    if !terminator.is::<ConditionOp>() {
         return Err(Error::VerificationError(
             "scf.while condition must end with scf.condition".to_string(),
         ));

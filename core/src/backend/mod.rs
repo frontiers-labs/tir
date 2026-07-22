@@ -257,12 +257,11 @@ pub fn register_attr(
 /// Print a virtual branch/terminator op for debugging: its mnemonic, operands as
 /// `%N`, then each block-reference attribute as `^bbN`. Shared by the targets'
 /// virtual branch ops so successor formatting is not duplicated per target.
-pub fn print_branch(
+pub fn print_branch<T: tir::Operation>(
     fmt: &mut tir::IRFormatter,
-    op: &dyn tir::Operation,
-    mnemonic: &str,
+    op: &T,
 ) -> Result<(), std::fmt::Error> {
-    fmt.write(mnemonic)?;
+    fmt.write(format!("{}.{}", T::dialect(), T::name()))?;
     for (i, value) in op.operands().iter().enumerate() {
         fmt.write(if i == 0 { " " } else { ", " })?;
         fmt.write(format!("%{}", value.number()))?;

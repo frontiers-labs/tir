@@ -97,7 +97,7 @@ impl Terminator for VirtualBranchOp {
 
 impl VirtualBranchOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        super::print_branch(fmt, self, "asm.vbr")
+        super::print_branch(fmt, self)
     }
 
     fn custom_parse(

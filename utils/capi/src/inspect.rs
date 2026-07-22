@@ -48,7 +48,7 @@ fn attr_value(ctx: &tir::Context, op: u32, i: usize) -> Option<AttributeValue> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tir_op_name(ctx: *const tir::Context, op: u32) -> *mut c_char {
     with_context(ctx, std::ptr::null_mut(), |ctx| {
-        op_instance(ctx, op).map_or(std::ptr::null_mut(), |o| into_cstring(o.name.to_string()))
+        op_instance(ctx, op).map_or(std::ptr::null_mut(), |o| into_cstring(o.name().to_string()))
     })
 }
 
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn tir_op_name(ctx: *const tir::Context, op: u32) -> *mut 
 pub unsafe extern "C" fn tir_op_dialect(ctx: *const tir::Context, op: u32) -> *mut c_char {
     with_context(ctx, std::ptr::null_mut(), |ctx| {
         op_instance(ctx, op).map_or(std::ptr::null_mut(), |o| {
-            into_cstring(o.dialect.to_string())
+            into_cstring(o.dialect().to_string())
         })
     })
 }

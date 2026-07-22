@@ -119,7 +119,7 @@ impl PipelineParser<'_> {
         self.skip_ws();
         if self.pos < self.bytes.len() && self.bytes[self.pos] == b'(' {
             self.pos += 1;
-            let nested = pm.nest(name);
+            let nested = pm.nest_parsed(name);
             self.parse_list(nested)?;
             self.skip_ws();
             if self.pos >= self.bytes.len() || self.bytes[self.pos] != b')' {
@@ -157,16 +157,38 @@ impl std::fmt::Display for PassError {
 impl std::error::Error for PassError {}
 
 #[derive(Debug, Clone, Copy)]
+/// Selects the operation kind on which a pass runs.
+///
+/// Operation targets must be constructed from an operation type:
+///
+/// ```compile_fail
+/// let _ = tir::PassTarget::Operation("builtin.func");
+/// ```
 pub enum PassTarget {
     Any,
-    Operation(&'static str),
+    Operation(OperationTarget),
+}
+
+#[derive(Debug, Clone, Copy)]
+/// A type-safe operation target stored by [`PassTarget`].
+pub struct OperationTarget {
+    dialect: &'static str,
+    name: &'static str,
 }
 
 impl PassTarget {
+    /// Targets operations of type `T`.
+    pub fn operation<T: Operation>() -> Self {
+        Self::Operation(OperationTarget {
+            dialect: T::dialect(),
+            name: T::name(),
+        })
+    }
+
     fn matches(&self, op: &OpInstance) -> bool {
         match self {
             PassTarget::Any => true,
-            PassTarget::Operation(name) => op.name == *name,
+            PassTarget::Operation(target) => op.is_name(target.dialect, target.name),
         }
     }
 }
@@ -199,8 +221,13 @@ impl OperationRef {
         self.position
     }
 
-    pub fn name(&self) -> &'static str {
-        self.op.name
+    pub fn name(&self) -> crate::OperationName {
+        self.op.name()
+    }
+
+    /// Returns whether the referenced operation has type `T`.
+    pub fn is<T: Operation>(&self) -> bool {
+        self.op.is::<T>()
     }
 
     pub fn as_op<T: Operation>(&self) -> Option<T> {
@@ -252,7 +279,7 @@ impl Rewriter {
         let block = target
             .block
             .as_ref()
-            .ok_or(PassError::MissingBlock(target.name()))?;
+            .ok_or(PassError::MissingBlock(target.name().as_str()))?;
         if block.replace_op(target.op.id, new_op.id()) {
             // Rewrite SSA uses of the old results to the new op's results when the
             // shapes line up, so consumers don't dangle on the erased op's values.
@@ -281,7 +308,7 @@ impl Rewriter {
         let block = target
             .block
             .as_ref()
-            .ok_or(PassError::MissingBlock(target.name()))?;
+            .ok_or(PassError::MissingBlock(target.name().as_str()))?;
         if block.remove_op(target.op.id) {
             self.context.detach_op_uses(&target.op);
             self.context.remove_operation(target.op.id);
@@ -304,7 +331,7 @@ impl Rewriter {
         let block = target
             .block
             .as_ref()
-            .ok_or(PassError::MissingBlock(target.name()))?;
+            .ok_or(PassError::MissingBlock(target.name().as_str()))?;
         let position = block
             .op_ids()
             .iter()
@@ -319,8 +346,8 @@ impl Rewriter {
 /// or a dialect-qualified name (`builtin.func`).
 fn matches_op_name(op: &OpInstance, spec: &str) -> bool {
     match spec.split_once('.') {
-        Some((dialect, name)) => op.dialect == dialect && op.name == name,
-        None => op.name == spec,
+        Some((dialect, name)) => op.is_name(dialect, name),
+        None => op.name().as_str() == spec,
     }
 }
 
@@ -350,9 +377,12 @@ impl PassManager {
         self
     }
 
-    /// Nest a sub-pipeline under every op matching `op_name`. The name may be
-    /// dialect-qualified (`builtin.func`) or bare (`func`).
-    pub fn nest(&mut self, op_name: impl Into<String>) -> &mut PassManager {
+    /// Nest a sub-pipeline under every operation of type `T`.
+    pub fn nest<T: Operation>(&mut self) -> &mut PassManager {
+        self.nest_parsed(format!("{}.{}", T::dialect(), T::name()))
+    }
+
+    fn nest_parsed(&mut self, op_name: impl Into<String>) -> &mut PassManager {
         self.passes.push(PassNode::Nested {
             op_name: op_name.into(),
             manager: PassManager::new(),
@@ -465,7 +495,7 @@ mod tests {
         }
 
         fn target(&self) -> PassTarget {
-            PassTarget::Operation(AddIOp::name())
+            PassTarget::operation::<AddIOp>()
         }
 
         fn run(
@@ -522,7 +552,7 @@ mod tests {
         module_builder.insert(func);
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(AddToSubPass);
+        pm.nest::<FuncOp>().add_pass(AddToSubPass);
 
         pm.run(&context, context.get_op(module.id()))
             .expect("pass pipeline should succeed");
@@ -530,7 +560,7 @@ mod tests {
         let op_names: Vec<_> = func_body
             .op_ids()
             .into_iter()
-            .map(|op_id| context.get_op(op_id).name)
+            .map(|op_id| context.get_op(op_id).name().as_str())
             .collect();
 
         assert_eq!(op_names, vec!["subi", "return"]);

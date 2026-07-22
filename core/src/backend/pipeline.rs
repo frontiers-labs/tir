@@ -3,11 +3,11 @@
 //! Ordering matters: `vcond_br` is lowered to a real conditional branch plus
 //! `vbr` *before* register allocation because its condition is an SSA value
 //! the allocator must color, while `vret`/`vbr` are finalized *after* it
-//! because the allocator matches `vret` by name to precolor return values.
+//! because the allocator identifies `vret` to precolor return values.
 
 use tir::{
-    AnalysisManager, Context, IntegerArithmetic, Operation, OperationRef, Pass, PassError,
-    PassManager, PassTarget, PreservedAnalyses, Rewriter,
+    AnalysisManager, Context, IntegerArithmetic, OperationRef, Pass, PassError, PassManager,
+    PassTarget, PreservedAnalyses, Rewriter,
     builtin::{FuncOp, IntegerType},
 };
 
@@ -99,7 +99,7 @@ pub fn build_pipeline(
 ) -> PassManager {
     let mut pm = PassManager::new();
     pm.add_pass(TargetIntegerLegalizer::new(target));
-    pm.nest(FuncOp::name()).add_pass(target.isel_pass(context));
+    pm.nest::<FuncOp>().add_pass(target.isel_pass(context));
     // Remove pure instructions left dead by selection (e.g. a value recomputed in
     // a consumer's block by cross-block fusion). Runs while results are still
     // virtual registers, so it must precede register allocation.

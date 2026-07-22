@@ -308,7 +308,33 @@ mod tests {
     use std::sync::Arc;
     use tir::backend::regalloc::RegClassInfo;
     use tir::builtin::{IntegerType, ops};
-    use tir::{Block, IRBuilder, TypeId, ValueId};
+    use tir::{Block, IRBuilder, Operation, TypeId, ValueId};
+
+    tir::helpers::operation! {
+        PhysDefOp {
+            name: "phys_def",
+            dialect: "test",
+            attributes: A {
+                r: "Register",
+            },
+            roles: R {
+                r: Def,
+            },
+        }
+    }
+
+    tir::helpers::operation! {
+        PhysUseOp {
+            name: "phys_use",
+            dialect: "test",
+            attributes: A {
+                r: "Register",
+            },
+            roles: R {
+                r: Use,
+            },
+        }
+    }
 
     static R_CLASS: RegClassInfo = RegClassInfo {
         name: "R",
@@ -420,28 +446,21 @@ mod tests {
     // Append an op that reads (`is_def == false`) or writes (`is_def == true`) the
     // physical register `class[index]` via a role-tagged register attribute.
     fn phys_op(context: &Context, block: &Arc<Block>, class: RegClassId, index: u16, is_def: bool) {
-        use tir::OpInstance;
-        use tir::attributes::{AttributeRole, AttributeValue, NamedAttribute, RegisterAttr};
+        use tir::attributes::{AttributeValue, RegisterAttr};
 
-        static DEF_ROLES: &[(&str, AttributeRole)] = &[("r", AttributeRole::Def)];
-        static USE_ROLES: &[(&str, AttributeRole)] = &[("r", AttributeRole::Use)];
-
-        let instance = OpInstance {
-            id: Default::default(),
-            name: "test.phys",
-            dialect: "test",
-            context: context.as_context_ref(),
-            operands: Vec::new(),
-            results: Vec::new(),
-            regions: Vec::new(),
-            attributes: vec![NamedAttribute::new(
-                "r",
-                AttributeValue::Register(RegisterAttr::Physical { class, index }),
-            )],
-            attribute_roles: if is_def { DEF_ROLES } else { USE_ROLES },
+        let register = AttributeValue::Register(RegisterAttr::Physical { class, index });
+        let id = if is_def {
+            PhysDefOpBuilder::new(context)
+                .attr("r", register)
+                .build()
+                .id()
+        } else {
+            PhysUseOpBuilder::new(context)
+                .attr("r", register)
+                .build()
+                .id()
         };
-        let op = context.add_operation(instance);
-        block.insert(block.len(), op.id);
+        block.insert(block.len(), id);
     }
 
     // A fixed-register read protocol: `def P; def v1; use P; use v1`. `v1` is live

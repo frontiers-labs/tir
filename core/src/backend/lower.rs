@@ -27,7 +27,7 @@ pub fn lower_function_and_return(
         if body
             .op_ids()
             .last()
-            .is_none_or(|id| context.get_op(*id).name != super::SymbolEndOp::name())
+            .is_none_or(|id| !context.get_op(*id).is::<super::SymbolEndOp>())
         {
             tir::IRBuilder::new(body).insert(super::SymbolEndOpBuilder::new(context).build());
         }

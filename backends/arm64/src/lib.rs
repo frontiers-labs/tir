@@ -743,7 +743,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should lower the conditional branch");
 
@@ -754,7 +754,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert_eq!(body, vec!["add", "cbnz", "vbr", "symbol_end"]);
 
@@ -807,7 +807,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should select the flag-mediated branch pair");
 
@@ -821,7 +821,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert_eq!(body, vec!["cmp", "b.lt", "vbr", "symbol_end"]);
     }
@@ -854,7 +854,7 @@ mod tests {
                             AttributeValue::Register(RegisterAttr::Virtual { .. })
                         ),
                         "op {} still has a virtual register in attr {}",
-                        op.name,
+                        op.name().as_str(),
                         attr.name
                     );
                 }
@@ -904,7 +904,7 @@ mod tests {
 
         module.verify(&context).expect("invalid module");
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should succeed");
 
@@ -915,7 +915,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert_eq!(body, vec!["add", "vret", "symbol_end"]);
 
@@ -970,7 +970,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should succeed");
 
@@ -981,7 +981,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert_eq!(body, vec!["add", "sub", "and", "orr", "vret", "symbol_end"]);
     }
@@ -1016,7 +1016,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.add_pass(create_regalloc_pass());
         pm.run(&context, context.get_op(module.id()))
             .expect("isel + regalloc should succeed");
@@ -1031,7 +1031,7 @@ mod tests {
             .op_ids()
             .into_iter()
             .map(|id| context.get_op(id))
-            .find(|op| op.name == "add")
+            .find(|op| op.is::<crate::AddOp>())
             .expect("the add must survive selection");
 
         assert_eq!(phys_of(&add_op, "rn"), Some((RegClass::GPR.id(), 0)));
@@ -1188,7 +1188,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert!(
             names.contains(&"store_doubleword"),
@@ -1223,12 +1223,12 @@ mod tests {
         let gprsp = |i: u16| phys(&(RegClass::GPRsp.id(), i));
         let word = |id: tir::OpId| -> u32 {
             let inst = context.get_op(id);
-            let enc = encoders[inst.name](&inst)
-                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name));
+            let enc = encoders[inst.name().as_str()](&inst)
+                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name().as_str()));
             assert!(
                 enc.fixups.is_empty(),
                 "unexpected fixups for '{}'",
-                inst.name
+                inst.name().as_str()
             );
             u32::from_le_bytes(enc.bytes.try_into().unwrap())
         };
@@ -1308,8 +1308,8 @@ mod tests {
         let encoders = crate::get_instruction_encoders();
         let reencode = |id: tir::OpId| -> u32 {
             let inst = context.get_op(id);
-            let enc = encoders[inst.name](&inst)
-                .unwrap_or_else(|| panic!("'{}' failed to re-encode", inst.name));
+            let enc = encoders[inst.name().as_str()](&inst)
+                .unwrap_or_else(|| panic!("'{}' failed to re-encode", inst.name().as_str()));
             u32::from_le_bytes(enc.bytes.try_into().unwrap())
         };
 
@@ -1383,12 +1383,12 @@ mod tests {
         let gprsp = |i: u16| phys(&(RegClass::GPRsp.id(), i));
         let word = |id: tir::OpId| -> u32 {
             let inst = context.get_op(id);
-            let enc = encoders[inst.name](&inst)
-                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name));
+            let enc = encoders[inst.name().as_str()](&inst)
+                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name().as_str()));
             assert!(
                 enc.fixups.is_empty(),
                 "unexpected fixups for '{}'",
-                inst.name
+                inst.name().as_str()
             );
             u32::from_le_bytes(enc.bytes.try_into().unwrap())
         };
@@ -1716,7 +1716,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should lower the call");
 
@@ -1729,7 +1729,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert_eq!(
             body,
@@ -1800,7 +1800,7 @@ mod tests {
         let names: Vec<_> = block
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         // The lr save lives in a callee-saved register (x19..x28 per AAPCS64),
         // preserved by the prologue right after the frame is reserved and
@@ -1827,7 +1827,7 @@ mod tests {
             .op_ids()
             .into_iter()
             .map(|id| context.get_op(id))
-            .find(|op| op.name == "bl")
+            .find(|op| op.is::<crate::BranchLinkOp>())
             .expect("the call must finalize to bl");
         // bl targets the callee symbol (a link-time fixup).
         assert!(bl.attributes.iter().any(|a| a.name == "imm"
@@ -1889,7 +1889,7 @@ mod tests {
             .op_ids()
             .into_iter()
             .map(|id| context.get_op(id))
-            .find(|op| op.name == "blr")
+            .find(|op| op.is::<crate::BranchLinkRegOp>())
             .expect("the indirect call must finalize to blr");
         // The callee register was colored to a real register distinct from the
         // argument being passed in x0.

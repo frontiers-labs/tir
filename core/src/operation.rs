@@ -8,6 +8,62 @@ use crate::{
 };
 use std::{any::Any, sync::Arc};
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OperationName(&'static str);
+
+impl OperationName {
+    pub fn of<T: Operation>() -> Self {
+        Self(T::name())
+    }
+
+    /// Returns the textual spelling used by IR parsers and printers.
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl std::fmt::Display for OperationName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::fmt::Debug for OperationName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("OperationName").field(&self.0).finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DialectName(&'static str);
+
+impl DialectName {
+    pub fn of<T: crate::Dialect>() -> Self {
+        Self(T::name())
+    }
+
+    pub fn of_operation<T: Operation>() -> Self {
+        Self(T::dialect())
+    }
+
+    /// Returns the textual spelling used by IR parsers and printers.
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl std::fmt::Display for DialectName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::fmt::Debug for DialectName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DialectName").field(&self.0).finish()
+    }
+}
+
 pub type ErasedOpInterface = Box<dyn Any>;
 pub type OpInterfaceConverter = fn(Arc<OpInstance>) -> ErasedOpInterface;
 
@@ -193,8 +249,7 @@ fn verify_token_region_arguments(
             }
         }
     }
-    if instance.dialect == "builtin"
-        && instance.name == "func"
+    if instance.is::<crate::builtin::FuncOp>()
         && instance.attributes.iter().any(|attribute| {
             attribute.name == "ret_type"
                 && matches!(
@@ -236,8 +291,8 @@ pub trait OpDefVerifiable {
 #[derive(Debug, Clone)]
 pub struct OpInstance {
     pub id: OpId,
-    pub name: &'static str,
-    pub dialect: &'static str,
+    name: &'static str,
+    dialect: &'static str,
     pub context: ContextRef,
     pub operands: Vec<ValueId>,
     pub results: Vec<ValueId>,
@@ -251,12 +306,64 @@ pub struct OpInstance {
 }
 
 impl OpInstance {
-    pub fn name(&self) -> &'static str {
-        self.name
+    pub fn new<T: Operation>(
+        context: ContextRef,
+        operands: Vec<ValueId>,
+        results: Vec<ValueId>,
+        regions: Vec<RegionId>,
+        attributes: Vec<crate::attributes::NamedAttribute>,
+        attribute_roles: &'static [(&'static str, crate::attributes::AttributeRole)],
+    ) -> Self {
+        Self {
+            id: OpId::invalid(),
+            name: T::name(),
+            dialect: T::dialect(),
+            context,
+            operands,
+            results,
+            regions,
+            attributes,
+            attribute_roles,
+        }
     }
 
-    pub fn dialect(&self) -> &'static str {
-        self.dialect
+    /// Constructs an operation selected from textual input at a parser boundary.
+    pub fn new_dynamic(
+        identity: (&'static str, &'static str),
+        context: ContextRef,
+        operands: Vec<ValueId>,
+        results: Vec<ValueId>,
+        regions: Vec<RegionId>,
+        attributes: Vec<crate::attributes::NamedAttribute>,
+        attribute_roles: &'static [(&'static str, crate::attributes::AttributeRole)],
+    ) -> Self {
+        let (dialect, name) = identity;
+        Self {
+            id: OpId::invalid(),
+            name,
+            dialect,
+            context,
+            operands,
+            results,
+            regions,
+            attributes,
+            attribute_roles,
+        }
+    }
+
+    /// Returns an opaque name for textual output, not operation identity.
+    ///
+    /// ```compile_fail
+    /// fn is_function(op: &tir::OpInstance) -> bool {
+    ///     op.name() == "func"
+    /// }
+    /// ```
+    pub fn name(&self) -> OperationName {
+        OperationName(self.name)
+    }
+
+    pub fn dialect(&self) -> DialectName {
+        DialectName(self.dialect)
     }
 
     /// The block that holds this operation, or `None` if it is detached or the root.
@@ -264,8 +371,17 @@ impl OpInstance {
         self.context.upgrade().parent_block(self.id)
     }
 
+    /// Returns whether this instance has operation type `T`.
+    pub fn is<T: Operation>(&self) -> bool {
+        self.dialect == T::dialect() && self.name == T::name()
+    }
+
+    pub(crate) fn is_name(&self, dialect: &str, name: &str) -> bool {
+        self.dialect == dialect && self.name == name
+    }
+
     pub fn as_op<T: Operation + Sized>(self: Arc<Self>) -> Option<T> {
-        if self.name == T::name() {
+        if self.is::<T>() {
             Some(T::from_op_instance(self))
         } else {
             None

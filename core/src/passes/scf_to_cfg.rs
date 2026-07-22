@@ -5,8 +5,8 @@ use crate::analysis::{AnalysisManager, PreservedAnalyses};
 use crate::builtin::{FuncOp, IntegerType, ReturnOp, TokenType, ops as b};
 use crate::scf;
 use crate::{
-    Block, Context, IRBuilder, Operation, OperationRef, Pass, PassError, PassTarget, RegionId,
-    Rewriter, Value, ValueId,
+    Block, Context, IRBuilder, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter,
+    Value, ValueId,
 };
 
 #[derive(Clone, Copy)]
@@ -29,11 +29,7 @@ impl ScfToCfgPass {
         for block in context.get_region(region).iter(context.clone()) {
             for op_id in block.op_ids() {
                 let op = context.get_op(op_id);
-                if op.dialect == "scf"
-                    && (op.clone().as_op::<scf::ForOp>().is_some()
-                        || op.clone().as_op::<scf::WhileOp>().is_some()
-                        || op.clone().as_op::<scf::IfOp>().is_some())
-                {
+                if op.is::<scf::ForOp>() || op.is::<scf::WhileOp>() || op.is::<scf::IfOp>() {
                     return Some((block, op));
                 }
             }
@@ -107,20 +103,14 @@ impl ScfToCfgPass {
     ) -> Result<(), PassError> {
         let terminator_id = *block.op_ids().last().unwrap();
         let terminator = context.get_op(terminator_id);
-        let (operands, destination) = if terminator.dialect == "scf"
-            && terminator.clone().as_op::<scf::YieldOp>().is_some()
-        {
+        let (operands, destination) = if terminator.is::<scf::YieldOp>() {
             (terminator.operands.clone(), destination)
-        } else if terminator.dialect == "scf"
-            && terminator.clone().as_op::<scf::BreakOp>().is_some()
-        {
+        } else if terminator.is::<scf::BreakOp>() {
             let target = loop_targets.get(&terminator.operands[0]).ok_or_else(|| {
                 PassError::InvalidRuleSet("scf.break has no enclosing loop".to_string())
             })?;
             (vec![], target.break_dest)
-        } else if terminator.dialect == "scf"
-            && terminator.clone().as_op::<scf::ContinueOp>().is_some()
-        {
+        } else if terminator.is::<scf::ContinueOp>() {
             let target = loop_targets.get(&terminator.operands[0]).ok_or_else(|| {
                 PassError::InvalidRuleSet("scf.continue has no enclosing loop".to_string())
             })?;
@@ -177,7 +167,7 @@ impl ScfToCfgPass {
         IRBuilder::new(block)
             .insert(b::br(context, init.into_iter().collect(), condition.id()).build());
         let terminator = context.get_op(*condition.op_ids().last().unwrap());
-        if terminator.dialect != "scf" || terminator.name != "condition" {
+        if !terminator.is::<scf::ConditionOp>() {
             return Err(PassError::InvalidRuleSet(
                 "SCF while condition must end with scf.condition".to_string(),
             ));
@@ -364,7 +354,7 @@ impl Pass for ScfToCfgPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::Operation(FuncOp::name())
+        PassTarget::operation::<FuncOp>()
     }
 
     fn run(

@@ -204,7 +204,7 @@ impl Pass for LowerCirStructsPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::Operation(ModuleOp::name())
+        PassTarget::operation::<ModuleOp>()
     }
 
     fn run(
@@ -491,16 +491,16 @@ impl LowerCirControlFlowPass {
         }
         op_ids[..op_ids.len() - 1].iter().all(|op_id| {
             let op = context.get_op(*op_id);
-            if op.dialect == "cir" && op.clone().as_op::<cir::IfOp>().is_some() {
+            if op.is::<cir::IfOp>() {
                 return op
                     .regions
                     .iter()
                     .all(|region| Self::body_is_structured(context, *region));
             }
-            if op.dialect == "cir" && op.clone().as_op::<cir::WhileOp>().is_some() {
+            if op.is::<cir::WhileOp>() {
                 return Self::while_is_structured(context, &op);
             }
-            if op.dialect == "cir" && op.clone().as_op::<cir::ForOp>().is_some() {
+            if op.is::<cir::ForOp>() {
                 return Self::for_is_structured(context, &op);
             }
             op.regions.is_empty()
@@ -531,11 +531,10 @@ impl LowerCirControlFlowPass {
         for block in context.get_region(region).iter(context.clone()) {
             for op_id in block.op_ids() {
                 let op = context.get_op(op_id);
-                if op.dialect == "cir"
-                    && (op.clone().as_op::<cir::WhileOp>().is_some()
-                        || op.clone().as_op::<cir::ForOp>().is_some()
-                        || op.clone().as_op::<cir::DoOp>().is_some()
-                        || op.clone().as_op::<cir::IfOp>().is_some())
+                if op.is::<cir::WhileOp>()
+                    || op.is::<cir::ForOp>()
+                    || op.is::<cir::DoOp>()
+                    || op.is::<cir::IfOp>()
                 {
                     return Some((block, op));
                 }
@@ -1047,7 +1046,7 @@ impl Pass for LowerCirControlFlowPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::Operation(FuncOp::name())
+        PassTarget::operation::<FuncOp>()
     }
 
     fn run(

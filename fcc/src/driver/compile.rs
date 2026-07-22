@@ -120,7 +120,7 @@ pub(super) fn emit_machine_code(
 
     let mut pm = tir::PassManager::new();
     pm.add_pass(crate::passes::LowerCirStructsPass::new());
-    let function_pipeline = pm.nest(tir::builtin::FuncOp::name());
+    let function_pipeline = pm.nest::<tir::builtin::FuncOp>();
     function_pipeline.add_pass(crate::passes::LowerCirControlFlowPass::new());
     function_pipeline.add_pass(tir::passes::Mem2RegPass::new());
     function_pipeline.add_pass(tir::passes::InstCombinePass::new());

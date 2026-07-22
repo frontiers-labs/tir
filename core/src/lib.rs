@@ -50,9 +50,9 @@ pub use interfaces::{
 pub use ir_formatter::IRFormatter;
 pub use operand::Operand;
 pub use operation::{
-    ErasedOpInterface, ImplementsOpInterface, OpDefVerifiable, OpId, OpInstance,
-    OpInterfaceConverter, Operation, Verifiable, downcast_op_interface, erase_op_interface,
-    op_interface_converter, verify_op_tree,
+    DialectName, ErasedOpInterface, ImplementsOpInterface, OpDefVerifiable, OpId, OpInstance,
+    OpInterfaceConverter, Operation, OperationName, Verifiable, downcast_op_interface,
+    erase_op_interface, op_interface_converter, verify_op_tree,
 };
 pub use pass::{
     OperationRef, PASSES, Pass, PassError, PassInfo, PassManager, PassTarget, Rewriter, build_pass,

@@ -24,8 +24,8 @@ use std::rc::Rc;
 use crate::analysis::{DominatingEdgeFacts, DominatorTree, GSA, GateNode};
 use crate::graph::Dag;
 use crate::{
-    AnalysisManager, BlockId, ConstantLike, Context, OpId, Operation, OperationRef, Pass,
-    PassError, PassTarget, PreservedAnalyses, RegionGuard, RegionId, Rewriter, TypeId, ValueId,
+    AnalysisManager, BlockId, ConstantLike, Context, OpId, OperationRef, Pass, PassError,
+    PassTarget, PreservedAnalyses, RegionGuard, RegionId, Rewriter, TypeId, ValueId,
     builtin::{FuncOp, ops},
     utils::APInt,
 };
@@ -53,7 +53,7 @@ impl Pass for InstCombinePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::Operation(FuncOp::name())
+        PassTarget::operation::<FuncOp>()
     }
 
     fn run(

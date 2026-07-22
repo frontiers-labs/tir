@@ -57,12 +57,14 @@ impl AsmPrinter {
         context: &Context,
         op: &OpInstance,
     ) -> Result<Option<String>, AsmPrintError> {
-        let Some(printer) = self.instruction_printers.get(op.name()) else {
+        let Some(printer) = self.instruction_printers.get(op.name().as_str()) else {
             return Ok(None);
         };
         printer(context, op)
             .map(Some)
-            .ok_or(AsmPrintError::InvalidInstruction { op: op.name() })
+            .ok_or(AsmPrintError::InvalidInstruction {
+                op: op.name().as_str(),
+            })
     }
 
     pub fn print_module(
@@ -83,13 +85,13 @@ impl AsmPrinter {
     ) -> Result<(), AsmPrintError> {
         for op_id in block.op_ids() {
             let op = context.get_op(op_id);
-            if op.name() == ModuleEndOp::name()
-                || op.name() == SectionEndOp::name()
-                || op.name() == SymbolEndOp::name()
-                || op.name() == BlockEndOp::name()
+            if op.is::<ModuleEndOp>()
+                || op.is::<SectionEndOp>()
+                || op.is::<SymbolEndOp>()
+                || op.is::<BlockEndOp>()
                 // External declarations produce no assembly; references resolve
                 // at link time.
-                || op.name() == DeclareOp::name()
+                || op.is::<DeclareOp>()
             {
                 continue;
             }
@@ -177,10 +179,14 @@ impl AsmPrinter {
                 .as_interface::<dyn MachineInstruction>()
                 .is_some()
             {
-                return Err(AsmPrintError::MissingInstructionPrinter { op: op.name() });
+                return Err(AsmPrintError::MissingInstructionPrinter {
+                    op: op.name().as_str(),
+                });
             }
 
-            return Err(AsmPrintError::UnsupportedOp { op: op.name() });
+            return Err(AsmPrintError::UnsupportedOp {
+                op: op.name().as_str(),
+            });
         }
         Ok(())
     }

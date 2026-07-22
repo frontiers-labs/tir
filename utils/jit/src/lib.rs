@@ -79,7 +79,7 @@ impl Jit {
         // Promote memory to SSA so alloca/load/store IR reaches selectable form,
         // mirroring the frontend pipeline.
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name())
+        pm.nest::<FuncOp>()
             .add_pass(tir::passes::Mem2RegPass::new());
         pm.run(&context, module_op.clone())
             .map_err(|e| JitError::Pipeline(format!("mem2reg: {e}")))?;

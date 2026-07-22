@@ -17,12 +17,12 @@ pub fn construct_dialect(item: TokenStream) -> TokenStream {
         types,
     } = parse_macro_input!(item as Dialect);
 
-    let register_operations = make_register_operations(&name, &operations);
+    let register_operations = make_register_operations(&struct_name, &operations);
     let register_types = make_register_types(&name, &types);
 
     quote! {
         pub struct #struct_name {
-            dyn_converters: std::collections::HashMap<&'static str, fn(std::sync::Arc<tir::OpInstance>) -> Box<dyn tir::Operation>>,
+            dyn_converters: std::collections::HashMap<tir::OperationName, fn(std::sync::Arc<tir::OpInstance>) -> Box<dyn tir::Operation>>,
             parsers: std::collections::HashMap<&'static str, fn(&mut tir::parse::text::Parser<'_>, &tir::Context) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)>>,
             type_parsers: std::collections::HashMap<&'static str, tir::TypeParser>,
         }
@@ -44,8 +44,8 @@ pub fn construct_dialect(item: TokenStream) -> TokenStream {
             #register_types
 
             fn get_dyn_op(&self, op: std::sync::Arc<tir::OpInstance>) -> Box<dyn tir::Operation> {
-               assert_eq!(op.dialect(), #name);
-               let converter = self.dyn_converters.get(op.name()).unwrap();
+               assert_eq!(op.dialect(), tir::DialectName::of::<Self>());
+               let converter = self.dyn_converters.get(&op.name()).unwrap();
                converter(op)
             }
 
@@ -197,13 +197,13 @@ fn expr_as_file_path(expr: &Expr) -> syn::Result<String> {
     }
 }
 
-fn make_register_operations(dialect_name: &str, operations: &[Ident]) -> proc_macro2::TokenStream {
+fn make_register_operations(dialect: &Ident, operations: &[Ident]) -> proc_macro2::TokenStream {
     let op = operations
         .iter()
         .map(|name| {
             quote! {
-                assert_eq!(#name::dialect(), #dialect_name);
-                self.dyn_converters.insert(#name::name(), #name::from_op_instance_dyn);
+                assert_eq!(tir::DialectName::of_operation::<#name>(), tir::DialectName::of::<#dialect>());
+                self.dyn_converters.insert(tir::OperationName::of::<#name>(), #name::from_op_instance_dyn);
                 self.parsers.insert(#name::name(), #name::parse);
                 #name::register_interfaces(context);
             }

@@ -12,13 +12,14 @@
 //! instruction.
 
 use tir::attributes::{AttributeValue, RegisterAttr};
+use tir::backend::{SymbolOp, VirtualCallOp, VirtualIndirectCallOp};
 use tir::builtin::IntegerType;
 use tir::{
     AnalysisManager, Context, OpId, OperationRef, Pass, PassError, PassTarget, PreservedAnalyses,
     Rewriter,
 };
 
-use crate::{AddImmOpBuilder, VSetIVliOpBuilder, VSetVliOpBuilder};
+use crate::{AddImmOpBuilder, VSetIVliOp, VSetIVliOpBuilder, VSetVliOp, VSetVliOpBuilder};
 
 /// The largest AVL `vsetivli`'s 5-bit unsigned immediate encodes.
 const UIMM5_MAX: i64 = 31;
@@ -202,7 +203,7 @@ impl Pass for InsertVsetvliPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::Operation("symbol")
+        PassTarget::operation::<SymbolOp>()
     }
 
     fn run(
@@ -235,40 +236,37 @@ impl Pass for InsertVsetvliPass {
                         .find(|a| a.name == name)
                         .map(|a| a.value.clone())
                 };
-                match body_op.name {
+                if body_op.is::<VSetVliOp>() || body_op.is::<VSetIVliOp>() {
                     // An existing configuration instruction (e.g. selected for a
                     // `vector.vector_len`) satisfies demands on its AVL, and —
                     // when its grant is live (`rd` a virtual register) — demands
                     // on the granted count, since `vl` equals `rd`'s value.
-                    "vsetvli" | "vsetivli" => {
-                        state =
-                            attr("vtypei")
-                                .as_ref()
-                                .and_then(config_key)
-                                .and_then(|vtypei_key| match vtypei_key {
-                                    ConfigKey::Imm(vtypei) => {
-                                        let mut keys: Vec<ConfigKey> = attr("avl")
-                                            .as_ref()
-                                            .and_then(config_key)
-                                            .into_iter()
-                                            .collect();
-                                        if let Some(AttributeValue::Register(
-                                            RegisterAttr::Virtual { id, .. },
-                                        )) = attr("rd")
-                                        {
-                                            keys.push(ConfigKey::Vreg(id));
-                                        }
-                                        Some(ConfigState { keys, vtypei })
-                                    }
-                                    ConfigKey::Vreg(_) => None,
-                                });
-                        continue;
-                    }
-                    "vcall" | "vcall_indirect" => {
-                        state = None;
-                        continue;
-                    }
-                    _ => {}
+                    state = attr("vtypei")
+                        .as_ref()
+                        .and_then(config_key)
+                        .and_then(|vtypei_key| match vtypei_key {
+                            ConfigKey::Imm(vtypei) => {
+                                let mut keys: Vec<ConfigKey> = attr("avl")
+                                    .as_ref()
+                                    .and_then(config_key)
+                                    .into_iter()
+                                    .collect();
+                                if let Some(AttributeValue::Register(RegisterAttr::Virtual {
+                                    id,
+                                    ..
+                                })) = attr("rd")
+                                {
+                                    keys.push(ConfigKey::Vreg(id));
+                                }
+                                Some(ConfigState { keys, vtypei })
+                            }
+                            ConfigKey::Vreg(_) => None,
+                        });
+                    continue;
+                }
+                if body_op.is::<VirtualCallOp>() || body_op.is::<VirtualIndirectCallOp>() {
+                    state = None;
+                    continue;
                 }
                 let Some(avl) = attr("vl") else {
                     continue;
@@ -281,7 +279,7 @@ impl Pass for InsertVsetvliPass {
                 let Some(AttributeValue::Int(sew)) = attr("sew") else {
                     return Err(PassError::InvalidRuleSet(format!(
                         "vector op '{}' demands a vector length but no element width",
-                        body_op.name
+                        body_op.name().as_str()
                     )));
                 };
                 // LMUL legalization: an op whose demanded elements exceed one

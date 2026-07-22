@@ -135,7 +135,7 @@ impl<'a> SemDagBuilder<'a> {
     }
 
     pub(crate) fn build_for_op(&mut self, op: &std::sync::Arc<OpInstance>) -> Option<Id> {
-        if op.name == "constantf" {
+        if op.is::<crate::builtin::ConstantFOp>() {
             return self.float_constant_class(op);
         }
         if let Some(class) = self.build_memory_effect(op) {
@@ -249,9 +249,9 @@ impl<'a> SemDagBuilder<'a> {
         let value_ty = Some(self.context.get_value(value).ty());
         let class = if let Some(def_op_id) = self.value_to_def.get(&value).copied() {
             let def = self.context.get_op(def_op_id);
-            if def.name == "constant" {
+            if def.is::<crate::builtin::ConstantOp>() {
                 self.constant_class(&def, value, value_ty)
-            } else if def.name == "constantf" {
+            } else if def.is::<crate::builtin::ConstantFOp>() {
                 self.float_constant_class(&def)
                     .unwrap_or_else(|| self.add_input_value(value, value_ty))
             } else {

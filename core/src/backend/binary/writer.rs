@@ -124,13 +124,13 @@ impl BinaryWriter {
     ) -> Result<(), BinaryEmitError> {
         for op_id in block.op_ids() {
             let op = context.get_op(op_id);
-            if op.name == ModuleEndOp::name()
-                || op.name == SectionEndOp::name()
-                || op.name == SymbolEndOp::name()
-                || op.name == BlockEndOp::name()
+            if op.is::<ModuleEndOp>()
+                || op.is::<SectionEndOp>()
+                || op.is::<SymbolEndOp>()
+                || op.is::<BlockEndOp>()
                 // External declarations contribute nothing to the object; their
                 // symbols materialize as undefined entries via relocations.
-                || op.name == DeclareOp::name()
+                || op.is::<DeclareOp>()
             {
                 continue;
             }
@@ -206,22 +206,22 @@ impl BinaryWriter {
         op: &Arc<tir::OpInstance>,
         state: &mut WalkState,
     ) -> Result<(), BinaryEmitError> {
-        let Some(encoder) = self.encoders.get(op.name) else {
+        let Some(encoder) = self.encoders.get(op.name().as_str()) else {
             if op
                 .clone()
                 .as_interface::<dyn MachineInstruction>()
                 .is_some()
             {
                 return Err(BinaryEmitError::MissingEncoder {
-                    op: op.name.to_string(),
+                    op: op.name().to_string(),
                 });
             }
             return Err(BinaryEmitError::UnsupportedOp {
-                op: op.name.to_string(),
+                op: op.name().to_string(),
             });
         };
         let encoded = encoder(op).ok_or_else(|| BinaryEmitError::CannotEncode {
-            op: op.name.to_string(),
+            op: op.name().to_string(),
         })?;
 
         let section = state
@@ -239,7 +239,7 @@ impl BinaryWriter {
                 section,
                 offset,
                 len,
-                op: op.name.to_string(),
+                op: op.name().to_string(),
                 target: fixup.target,
             });
         }

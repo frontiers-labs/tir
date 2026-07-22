@@ -7,7 +7,18 @@ include!(concat!(env!("OUT_DIR"), "/ptx.rs"));
 dialect! {
     PtxDialect {
         name: "ptx",
+        operations: [LabelOp],
         operation_file: concat!(env!("OUT_DIR"), "/ptx_ops.rs"),
+    }
+}
+
+operation! {
+    LabelOp {
+        name: "label",
+        dialect: "ptx",
+        attributes: A {
+            name: "Str",
+        }
     }
 }
 

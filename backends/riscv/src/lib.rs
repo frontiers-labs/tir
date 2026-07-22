@@ -1210,7 +1210,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect()
     }
 
@@ -1235,7 +1235,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should lower the branch");
 
@@ -1281,7 +1281,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should lower the conditional branch");
 
@@ -1550,7 +1550,7 @@ mod tests {
 
         module.verify(&context).expect("invalid module");
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("pass pipeline should succeed");
 
@@ -1566,7 +1566,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert_eq!(
             body,
@@ -1609,7 +1609,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("pass pipeline should succeed");
 
@@ -1620,7 +1620,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert_eq!(body, vec!["sllw", "vret", "symbol_end"]);
     }
@@ -1657,7 +1657,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("pass pipeline should succeed");
 
@@ -1668,7 +1668,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         // The lowered IR prints (slliw is registered in the dialect, so get_dyn_op
         // resolves it — an unregistered op would panic here).
@@ -1686,7 +1686,7 @@ mod tests {
             .op_ids()
             .into_iter()
             .map(|id| context.get_op(id))
-            .find(|op| op.name == "slliw")
+            .find(|op| op.is::<crate::ShiftLeftLogicalImmWordOp>())
             .expect("slliw should be selected");
         assert!(
             slliw
@@ -1750,7 +1750,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("pass pipeline should succeed");
 
@@ -1761,7 +1761,7 @@ mod tests {
             .unwrap()
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert!(
             body.contains(&"addi") && !body.contains(&"constant"),
@@ -1797,7 +1797,7 @@ mod tests {
                             AttributeValue::Register(RegisterAttr::Virtual { .. })
                         ),
                         "op {} still has a virtual register in attr {}",
-                        op.name,
+                        op.name().as_str(),
                         attr.name
                     );
                 }
@@ -1835,7 +1835,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.add_pass(create_regalloc_pass());
         pm.run(&context, context.get_op(module.id()))
             .expect("isel + regalloc should succeed");
@@ -1852,7 +1852,7 @@ mod tests {
             .op_ids()
             .into_iter()
             .map(|id| context.get_op(id))
-            .find(|op| op.name == "addw")
+            .find(|op| op.is::<crate::AddWordOp>())
             .expect("the add must have selected to addw");
 
         assert_eq!(phys_of(&add_op, "rs1"), Some((RegClass::GPR.id(), 10)));
@@ -1904,7 +1904,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.add_pass(create_regalloc_pass());
         pm.run(&context, context.get_op(module.id()))
             .expect("isel + regalloc should succeed");
@@ -1966,7 +1966,7 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name()).add_pass(create_isel_pass(&context));
+        pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
         pm.run(&context, context.get_op(module.id()))
             .expect("isel should lower the call");
 
@@ -2061,7 +2061,7 @@ mod tests {
             .op_ids()
             .into_iter()
             .map(|id| context.get_op(id))
-            .find(|op| op.name == "jal")
+            .find(|op| op.is::<crate::JumpAndLinkOp>())
             .expect("the call must finalize to jal");
         // jal links through ra and targets the callee symbol (a link-time fixup).
         assert_eq!(phys_of(&jal, "rd"), Some((RegClass::GPR.id(), 1)));
@@ -2122,7 +2122,10 @@ mod tests {
             .op_ids()
             .into_iter()
             .map(|id| context.get_op(id))
-            .find(|op| op.name == "jalr" && phys_of(op, "rd") == Some((RegClass::GPR.id(), 1)))
+            .find(|op| {
+                op.is::<crate::JumpAndLinkRegOp>()
+                    && phys_of(op, "rd") == Some((RegClass::GPR.id(), 1))
+            })
             .expect("the indirect call must finalize to a linking jalr");
         // The callee register was colored to a real register distinct from the
         // argument being passed in a0.
@@ -2290,7 +2293,7 @@ mod tests {
         let names: Vec<&str> = block
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert!(
             names.contains(&"sd"),
@@ -2449,7 +2452,7 @@ mod tests {
         let names: Vec<&str> = block
             .op_ids()
             .into_iter()
-            .map(|id| context.get_op(id).name)
+            .map(|id| context.get_op(id).name().as_str())
             .collect();
         assert!(
             names.contains(&"fsw"),
@@ -2487,12 +2490,12 @@ mod tests {
         let gpr = |i: u16| phys(&(RegClass::GPR.id(), i));
         let word = |id: tir::OpId| -> u32 {
             let inst = context.get_op(id);
-            let enc = encoders[inst.name](&inst)
-                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name));
+            let enc = encoders[inst.name().as_str()](&inst)
+                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name().as_str()));
             assert!(
                 enc.fixups.is_empty(),
                 "unexpected fixups for '{}'",
-                inst.name
+                inst.name().as_str()
             );
             u32::from_le_bytes(enc.bytes.try_into().unwrap())
         };
@@ -2571,8 +2574,8 @@ mod tests {
         let fpr64 = |i: u16| phys(&(RegClass::FPR64.id(), i));
         let word = |id: tir::OpId| -> u32 {
             let inst = context.get_op(id);
-            let enc = encoders[inst.name](&inst)
-                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name));
+            let enc = encoders[inst.name().as_str()](&inst)
+                .unwrap_or_else(|| panic!("'{}' failed to encode", inst.name().as_str()));
             u32::from_le_bytes(enc.bytes.try_into().unwrap())
         };
 

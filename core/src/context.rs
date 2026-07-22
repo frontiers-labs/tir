@@ -581,7 +581,7 @@ impl Context {
     pub(crate) fn get_dyn_op(&self, op: Arc<OpInstance>) -> Box<dyn Operation> {
         let inner = self.0.read();
 
-        let dialect = inner.dialects.get(op.dialect()).unwrap();
+        let dialect = inner.dialects.get(op.dialect().as_str()).unwrap();
 
         dialect.get_dyn_op(op)
     }
@@ -594,7 +594,11 @@ impl Context {
             let inner = self.0.read();
             inner
                 .op_interface_converters
-                .get(&(op.dialect(), op.name(), std::any::TypeId::of::<I>()))
+                .get(&(
+                    op.dialect().as_str(),
+                    op.name().as_str(),
+                    std::any::TypeId::of::<I>(),
+                ))
                 .copied()
         }?;
 

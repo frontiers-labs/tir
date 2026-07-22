@@ -2,12 +2,10 @@
 mod tests {
     use crate::codegen::codegen;
     use crate::diagnostics::{Span, intern_file};
+    use crate::lexer::Token;
     use crate::parser::parse;
     use crate::sema::analyze;
     use logos::Logos;
-    use tir::Operation;
-
-    use crate::lexer::Token;
 
     fn fcc_context() -> tir::Context {
         let context = tir::Context::with_default_dialects();
@@ -179,7 +177,7 @@ int main(void) { printf("hello"); return 0; }"#,
     fn lower_cir_control_flow(src: &str) -> String {
         let (context, module) = lower(src);
         let mut passes = tir::PassManager::new();
-        let function_pipeline = passes.nest(tir::builtin::FuncOp::name());
+        let function_pipeline = passes.nest::<tir::builtin::FuncOp>();
         function_pipeline.add_pass(crate::passes::LowerCirControlFlowPass::new());
         function_pipeline.add_pass(tir::passes::Mem2RegPass::new());
         passes
@@ -247,7 +245,7 @@ int main(void) { printf("hello"); return 0; }"#,
         .expect("parse multiblock CIR");
         let mut passes = tir::PassManager::new();
         passes
-            .nest(tir::builtin::FuncOp::name())
+            .nest::<tir::builtin::FuncOp>()
             .add_pass(crate::passes::LowerCirControlFlowPass::new());
         passes
             .run(&context, context.get_op(tir::Operation::id(&module)))

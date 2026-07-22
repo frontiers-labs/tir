@@ -16,10 +16,11 @@ use std::collections::HashMap;
 
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
 use tir::backend::asm_syntax::{AsmSyntaxPart, InstrSyntax};
+use tir::backend::{SectionOp, SymbolEndOp, SymbolOp};
 use tir::builtin::{ModuleEndOpBuilder, ModuleOp, ModuleOpBuilder};
 use tir::{Context, IRBuilder, OpId, OpInstance, Operation};
 
-const LABEL_OP: &str = "label";
+use super::{LabelOp, LabelOpBuilder};
 
 // ---------------------------------------------------------------------------
 // Tokenizer
@@ -559,17 +560,15 @@ fn parse_instruction(
 }
 
 fn build_op(context: &Context, name: &'static str, attributes: Vec<NamedAttribute>) -> OpId {
-    let inst = OpInstance {
-        id: OpId::invalid(),
-        name,
-        dialect: "ptx",
-        context: context.as_context_ref(),
-        operands: vec![],
-        results: vec![],
-        regions: vec![],
+    let inst = OpInstance::new_dynamic(
+        ("ptx", name),
+        context.as_context_ref(),
+        vec![],
+        vec![],
+        vec![],
         attributes,
-        attribute_roles: &[],
-    };
+        &[],
+    );
     context.add_operation(inst).id
 }
 
@@ -599,11 +598,10 @@ pub fn parse(context: &Context, text: &str) -> Result<ModuleOp, String> {
         let body = symbol.body();
         for item in body_items(&kernel.body) {
             let id = match item {
-                BodyItem::Label(name) => build_op(
-                    context,
-                    LABEL_OP,
-                    vec![NamedAttribute::new("name", AttributeValue::Str(name))],
-                ),
+                BodyItem::Label(name) => LabelOpBuilder::new(context)
+                    .attr("name", AttributeValue::Str(name))
+                    .build()
+                    .id(),
                 BodyItem::Instruction(line) => {
                     let (op_name, attrs) = parse_instruction(&index, line.trim())?;
                     build_op(context, op_name, attrs)
@@ -650,7 +648,7 @@ fn render_operand(op: &OpInstance, name: &str) -> Result<String, String> {
         .iter()
         .find(|a| a.name == name)
         .map(|a| &a.value)
-        .ok_or_else(|| format!("op `{}` missing operand `{name}`", op.name))?;
+        .ok_or_else(|| format!("op `{}` missing operand `{name}`", op.name().as_str()))?;
     Ok(match value {
         AttributeValue::Register(RegisterAttr::Physical { class, index }) => {
             format!("{}{}", class.name().to_lowercase(), index)
@@ -696,7 +694,7 @@ pub fn print(context: &Context, module: &ModuleOp) -> Result<String, String> {
     let mut out = String::new();
     for op_id in module.body().op_ids() {
         let op = context.get_op(op_id);
-        if op.name != "section" {
+        if !op.is::<SectionOp>() {
             continue;
         }
         if let Some(preamble) = attr_str(&op, "ptx_preamble")
@@ -707,7 +705,7 @@ pub fn print(context: &Context, module: &ModuleOp) -> Result<String, String> {
         }
         for sym_id in region_ops(context, &op) {
             let sym = context.get_op(sym_id);
-            if sym.name != "symbol" {
+            if !sym.is::<SymbolOp>() {
                 continue;
             }
             out.push('\n');
@@ -724,20 +722,20 @@ pub fn print(context: &Context, module: &ModuleOp) -> Result<String, String> {
             }
             for body_id in region_ops(context, &sym) {
                 let body_op = context.get_op(body_id);
-                match body_op.name {
-                    "symbol_end" => {}
-                    LABEL_OP => {
-                        let name = attr_str(&body_op, "name").unwrap_or_default();
-                        out.push('\n');
-                        out.push_str(&name);
-                        out.push_str(":\n");
-                    }
-                    name => {
-                        let syntax = by_op
-                            .get(name)
-                            .ok_or_else(|| format!("no syntax for op `{name}`"))?;
-                        print_instruction(&body_op, syntax, &mut out)?;
-                    }
+                if body_op.is::<SymbolEndOp>() {
+                    continue;
+                }
+                if body_op.is::<LabelOp>() {
+                    let name = attr_str(&body_op, "name").unwrap_or_default();
+                    out.push('\n');
+                    out.push_str(&name);
+                    out.push_str(":\n");
+                } else {
+                    let name = body_op.name().as_str();
+                    let syntax = by_op
+                        .get(name)
+                        .ok_or_else(|| format!("no syntax for op `{name}`"))?;
+                    print_instruction(&body_op, syntax, &mut out)?;
                 }
             }
             out.push_str("}\n");

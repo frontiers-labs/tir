@@ -22,6 +22,7 @@ use tir::{
 };
 
 use crate::backend::liveness::{self, Liveness, PhysReg};
+use crate::backend::{SymbolOp, VirtualBranchOp, VirtualReturnOp};
 use crate::ptr::AllocaOp;
 
 /// Architectural metadata for one register class.
@@ -566,7 +567,7 @@ impl Pass for RegisterAllocationPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::Operation("symbol")
+        PassTarget::operation::<SymbolOp>()
     }
 
     fn run(
@@ -809,7 +810,7 @@ impl RegisterAllocationPass {
         for &block_id in blocks {
             for op_id in context.get_block(block_id).op_ids() {
                 let op = context.get_op(op_id);
-                if op.name != "vbr" || op.operands.is_empty() {
+                if !op.is::<VirtualBranchOp>() || op.operands.is_empty() {
                     continue;
                 }
                 let args: Vec<u32> = op.operands.iter().map(|v| v.number()).collect();
@@ -969,7 +970,7 @@ impl RegisterAllocationPass {
         }
         for &block_id in blocks {
             for op_id in context.get_block(block_id).op_ids() {
-                if context.get_op(op_id).name != "vret" {
+                if !context.get_op(op_id).is::<VirtualReturnOp>() {
                     continue;
                 }
                 let target = op_ref_in(context, block_id, op_id);
@@ -1427,7 +1428,7 @@ fn abi_precolor(
     for &block_id in blocks {
         for op_id in context.get_block(block_id).op_ids() {
             let body_op = context.get_op(op_id);
-            if body_op.name != "vret" {
+            if !body_op.is::<VirtualReturnOp>() {
                 continue;
             }
             let Some(value) = body_op.operands.first().copied() else {

@@ -515,7 +515,7 @@ impl FunctionSelection {
         self.any_class_value(class, |v| {
             self.value_to_def
                 .get(v)
-                .is_none_or(|op| context.get_op(*op).name != "constant")
+                .is_none_or(|op| !context.get_op(*op).is::<crate::builtin::ConstantOp>())
         })
     }
 
@@ -896,7 +896,7 @@ impl InstructionSelectPass {
                     if let Some(root) = builder.build_for_op(&op) {
                         roots_by_op.insert(op_id, root);
                     } else if !self.constant_materializer_ranges.is_empty()
-                        && op.name == "constant"
+                        && op.is::<crate::builtin::ConstantOp>()
                         && let Some(&result) = op.results.first()
                     {
                         constant_candidates.push((op_id, builder.build_from_value(result)));
@@ -1322,7 +1322,7 @@ impl InstructionSelectPass {
         // a register use), so the maintained def-use chain now reports zero uses.
         for op_id in block_arc.op_ids() {
             let op = context.get_op(op_id);
-            if op.name != "constant" {
+            if !op.is::<crate::builtin::ConstantOp>() {
                 continue;
             }
             if op.results.iter().all(|v| !context.is_value_used(*v)) {
@@ -1573,7 +1573,7 @@ impl InstructionSelectPass {
                 );
             } else if internal_classes.contains(&class) {
                 op_decisions.insert(op_id, BlockDecision::Consume);
-            } else if context.get_op(op_id).name == "constant" {
+            } else if context.get_op(op_id).is::<crate::builtin::ConstantOp>() {
                 // No decision: an uncovered constant survives for a target hook
                 // to diagnose or lower, while the dead-constant sweep reaps it
                 // once every consumer folded the immediate.

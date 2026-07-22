@@ -130,7 +130,7 @@ fn pbqp_selector_consumes_internal_nodes_of_selected_pattern() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -142,7 +142,7 @@ fn pbqp_selector_consumes_internal_nodes_of_selected_pattern() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect();
     assert_eq!(body_ops, vec!["addi", "return"]);
 
@@ -185,7 +185,7 @@ fn rule_validation_rejects_missing_atomic_materializer() {
     let rules = vec![Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add)];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     let err = pm
         .run(&context, context.get_op(module.id()))
@@ -290,7 +290,7 @@ fn pbqp_selector_duplicates_shared_pure_internal_nodes() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -302,7 +302,7 @@ fn pbqp_selector_duplicates_shared_pure_internal_nodes() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect();
     assert_eq!(body_ops, vec!["addi", "addi", "return"]);
 }
@@ -346,7 +346,7 @@ fn shared_value_with_uncoverable_use_stays_materialized() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -358,7 +358,7 @@ fn shared_value_with_uncoverable_use_stays_materialized() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect();
     assert_eq!(body_ops, vec!["muli", "addi", "return"]);
 }
@@ -430,7 +430,7 @@ fn cost_model_override_changes_selection() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_cost_model(Box::new(NoFusionCostModel)));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -442,7 +442,7 @@ fn cost_model_override_changes_selection() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect();
     // With fusion priced out, the default add-mul cost-1 win is overridden.
     assert_eq!(body_ops, vec!["muli", "addi", "return"]);
@@ -490,7 +490,7 @@ fn composite_rule_falls_back_to_atomic_cover() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -502,7 +502,7 @@ fn composite_rule_falls_back_to_atomic_cover() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect();
     assert_eq!(body_ops, vec!["addi", "muli", "addi", "return"]);
 }
@@ -572,7 +572,7 @@ fn selection_is_type_aware() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -584,7 +584,7 @@ fn selection_is_type_aware() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect();
     // i32 add -> the type-constrained rule (subi stand-in); i64 add -> fallback addi.
     assert_eq!(body_ops, vec!["subi", "addi", "return"]);
@@ -639,7 +639,7 @@ fn run_inner_typed_fusion(inner_width: Option<u32>) -> Vec<&'static str> {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -651,7 +651,7 @@ fn run_inner_typed_fusion(inner_width: Option<u32>) -> Vec<&'static str> {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect()
 }
 
@@ -776,7 +776,7 @@ fn introduced_integer_materializer_uses_its_class_type_under_float_bitcast() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("integer materialization under a bitcast should stay integer typed");
@@ -822,7 +822,7 @@ fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("selection should materialize the register operand");
@@ -834,7 +834,7 @@ fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op| context.get_op(op).name)
+        .map(|op| context.get_op(op).name().as_str())
         .collect();
     assert_eq!(names, vec!["muli", "subi", "return"]);
 }
@@ -880,7 +880,7 @@ fn run_immediate_range(constant: i64) -> Vec<&'static str> {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -892,7 +892,7 @@ fn run_immediate_range(constant: i64) -> Vec<&'static str> {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect()
 }
 
@@ -1112,7 +1112,7 @@ fn select_sign_extension(slli_rule: Rule) -> Vec<&'static str> {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("sign extension should select");
@@ -1124,7 +1124,7 @@ fn select_sign_extension(slli_rule: Rule) -> Vec<&'static str> {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect()
 }
 
@@ -1270,7 +1270,7 @@ fn memory_ops_select_via_interfaces() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("memory ops should select through their interfaces");
@@ -1282,7 +1282,7 @@ fn memory_ops_select_via_interfaces() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect();
     // store -> muli marker, load -> shli marker; the alloca is untouched.
     assert_eq!(body_ops, vec!["alloca", "muli", "shli", "return"]);
@@ -1368,7 +1368,7 @@ fn merged_value_classes_resolve_to_earliest_def() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_rewrites(vec![union_mul_add]));
     pm.run(&context, context.get_op(module.id()))
         .expect("merged classes should still select");
@@ -1384,7 +1384,7 @@ fn merged_value_classes_resolve_to_earliest_def() {
         .map(|op_id| context.get_op(op_id))
         .collect();
     // Both the mul and the (merged) add lower through the cheaper mul rule.
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["muli", "muli", "subi", "return"]);
 
     // The sub operand resolves to the *earliest* definition of the merged class
@@ -1527,7 +1527,7 @@ fn forced_constant_materialization_does_not_override_branch_rule_cost() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
     pm.run(&context, context.get_op(module.id()))
         .expect("branch selection should account for materializer cost");
@@ -1609,7 +1609,7 @@ fn guarded_block_with_rules(
     mb.insert(ops::module_end(&context).build());
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
     pm.run(&context, context.get_op(module.id()))
         .expect("branch selection should succeed");
@@ -1652,7 +1652,7 @@ fn guard_fuses_comparison_and_consumes_compare() {
     });
 
     let body = block_ops(&b.context, b.region);
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["br", "br"], "cmpi must be consumed");
 
     // The fused branch reads the compared values and targets the true block.
@@ -1709,7 +1709,7 @@ fn flag_branch_rule_emits_prelude_before_branch() {
     });
 
     let body = block_ops(&b.context, b.region);
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(
         names,
         vec!["subi", "br", "br"],
@@ -1761,7 +1761,7 @@ fn register_constrained_branch_does_not_read_an_unmaterialized_constant() {
 
     let names: Vec<_> = block_ops(&b.context, b.region)
         .iter()
-        .map(|op| op.name)
+        .map(|op| op.name().as_str())
         .collect();
     assert_eq!(names, vec!["muli", "subi", "br", "br"]);
 }
@@ -1773,7 +1773,7 @@ fn guard_without_matching_rule_uses_nonzero_fallback() {
     let b = guarded_block(&[1], |_, _, args| args[0]);
 
     let body = block_ops(&b.context, b.region);
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["br", "br"]);
 
     let nonzero = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
@@ -1829,7 +1829,7 @@ fn bare_bool_guard_selects_zero_compare_branch() {
     let b = guarded_block_with_rules(&[1], vec![rule], |_, _, args| args[0]);
 
     let body = block_ops(&b.context, b.region);
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["br", "br"]);
 
     let fused = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
@@ -1886,14 +1886,14 @@ fn escaping_compare_materializes_and_fuses() {
         Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
     ];
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
     pm.run(&context, context.get_op(module.id()))
         .expect("selection should succeed");
 
     let names: Vec<_> = block_ops(&context, region.id())
         .iter()
-        .map(|op| op.name)
+        .map(|op| op.name().as_str())
         .collect();
     // cmpi -> subi marker (materialized), addi stays selected, then the fused
     // branch marker and the fallthrough.
@@ -1949,7 +1949,7 @@ fn width_constraint_gates_comparison_fusion() {
         let rules =
             vec![branch_rule().with_operand_registers(vec![(0, requirement), (1, requirement)])];
         let mut pm = PassManager::new();
-        pm.nest(FuncOp::name())
+        pm.nest::<FuncOp>()
             .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
         pm.run(&context, context.get_op(module.id()))
             .map(|()| block_ops(&context, region.id()).len())
@@ -2047,7 +2047,7 @@ fn run_dominated_compare(
         .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
     ];
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
     pm.run(&context, context.get_op(module.id()))
         .expect("dominated selection should succeed");
@@ -2075,7 +2075,7 @@ fn block_op_list(context: &Context, block: tir::BlockId) -> Vec<std::sync::Arc<t
 fn dominated_block_folds_redundant_compare_and_branch() {
     let r = run_dominated_compare("slt", true, "slt", false);
     let body = block_op_list(&r.context, r.body);
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(
         names,
         vec!["br"],
@@ -2091,7 +2091,7 @@ fn dominated_block_folds_redundant_compare_and_branch() {
 fn false_edge_assumes_complement_comparison() {
     let r = run_dominated_compare("slt", false, "sge", false);
     let body = block_op_list(&r.context, r.body);
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["br"]);
     let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
     assert_eq!(jump.dest(), r.u);
@@ -2104,7 +2104,7 @@ fn false_edge_assumes_complement_comparison() {
 fn eq_edge_congruence_folds_swapped_compare() {
     let r = run_dominated_compare("eq", true, "eq", true);
     let body = block_op_list(&r.context, r.body);
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["br"]);
     let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
     assert_eq!(jump.dest(), r.u);
@@ -2149,7 +2149,7 @@ fn guard_edge_arguments_are_rejected() {
     mb.insert(ops::module_end(&context).build());
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name()).add_pass(
+    pm.nest::<FuncOp>().add_pass(
         InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
     );
     let err = pm
@@ -2197,7 +2197,7 @@ fn equal_cost_tie_breaks_to_more_specific_rule() {
     ];
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("pass pipeline should succeed");
@@ -2209,7 +2209,7 @@ fn equal_cost_tie_breaks_to_more_specific_rule() {
         .unwrap()
         .op_ids()
         .into_iter()
-        .map(|op_id| context.get_op(op_id).name)
+        .map(|op_id| context.get_op(op_id).name().as_str())
         .collect();
     assert_eq!(body_ops, vec!["subi", "return"]);
 }
@@ -2268,14 +2268,14 @@ fn fact_inherited_two_levels_folds_grandchild_compare() {
     mb.insert(ops::module_end(&context).build());
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name()).add_pass(
+    pm.nest::<FuncOp>().add_pass(
         InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
     );
     pm.run(&context, context.get_op(module.id()))
         .expect("nested dominated selection should succeed");
 
     let body = block_op_list(&context, gc.id());
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["br"], "grandchild compare folds to a jump");
     let jump = body[0].clone().as_op::<tir::builtin::BranchOp>().unwrap();
     assert_eq!(jump.dest(), u.id(), "the true successor is taken");
@@ -2323,14 +2323,14 @@ fn non_dominated_join_block_does_not_fold() {
     mb.insert(ops::module_end(&context).build());
 
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name()).add_pass(
+    pm.nest::<FuncOp>().add_pass(
         InstructionSelectPass::new(vec![branch_rule()]).with_branch_emitters(branch_emitters()),
     );
     pm.run(&context, context.get_op(module.id()))
         .expect("selection should succeed");
 
     let body = block_op_list(&context, m.id());
-    let names: Vec<_> = body.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
     // The compare fuses into the branch (marker `br`) plus the fallthrough — two
     // ops, not the single jump a fold would produce.
     assert_eq!(
@@ -2410,14 +2410,14 @@ fn eq_guard_folds_value_to_immediate() {
         Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
     ];
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
     pm.run(&context, context.get_op(module.id()))
         .expect("selection should succeed");
 
     let names: Vec<_> = block_op_list(&context, bb1.id())
         .iter()
-        .map(|op| op.name)
+        .map(|op| op.name().as_str())
         .collect();
     // The immediate rule fired (its `subi` marker), so `a` folded to the immediate
     // under the eq guard rather than reading a register.
@@ -2474,14 +2474,14 @@ fn refuses_cross_block_binding_to_non_escaping_value() {
         Rule::new("add", atomic_pattern(SymKind::Add), 1, emit_add),
     ];
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules));
     pm.run(&context, context.get_op(module.id()))
         .expect("selection should succeed");
 
     let entry_sub = block_op_list(&context, entry.id())[0].results[0];
     let bb1_ops = block_op_list(&context, bb1.id());
-    let names: Vec<_> = bb1_ops.iter().map(|op| op.name).collect();
+    let names: Vec<_> = bb1_ops.iter().map(|op| op.name().as_str()).collect();
     // %e is selected standalone (its own subi) and the add reads it.
     assert_eq!(names, vec!["subi", "addi", "return"]);
     let bb1_sub = bb1_ops[0].results[0];
@@ -2560,13 +2560,13 @@ fn eq_fact_binds_through_bindable_member() {
         .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
     ];
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
     pm.run(&context, context.get_op(module.id()))
         .expect("selection should succeed via the bindable member");
 
     let body_ops = block_op_list(&context, body.id());
-    let names: Vec<_> = body_ops.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body_ops.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["addi", "return"]);
     let addi = &body_ops[0];
     assert!(
@@ -2646,13 +2646,13 @@ fn branch_reads_register_of_constant_merged_operand() {
         .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
     ];
     let mut pm = PassManager::new();
-    pm.nest(FuncOp::name())
+    pm.nest::<FuncOp>()
         .add_pass(InstructionSelectPass::new(rules).with_branch_emitters(branch_emitters()));
     pm.run(&context, context.get_op(module.id()))
         .expect("selection should succeed with the register binding");
 
     let body_ops = block_op_list(&context, body.id());
-    let names: Vec<_> = body_ops.iter().map(|op| op.name).collect();
+    let names: Vec<_> = body_ops.iter().map(|op| op.name().as_str()).collect();
     assert_eq!(names, vec!["br", "br"], "slt fused into a branch");
     let fused = body_ops[0]
         .clone()

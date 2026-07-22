@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::Operation;
 use crate::analysis::DominatorTree;
 use crate::graph::{Dag, NodeId};
 use crate::{
@@ -37,7 +36,7 @@ impl Pass for Mem2RegPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::Operation(FuncOp::name())
+        PassTarget::operation::<FuncOp>()
     }
 
     fn run(

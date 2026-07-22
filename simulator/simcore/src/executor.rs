@@ -567,7 +567,7 @@ impl Executor {
                 .clone()
                 .as_interface::<dyn MachineInstruction>()
                 .ok_or_else(|| SimTrap::InvalidInstruction {
-                    op: op.name,
+                    op: op.name().as_str(),
                     reason: "operation does not implement MachineInstruction".to_string(),
                 })?;
             if trace.instructions {
@@ -653,7 +653,7 @@ impl Executor {
                 .clone()
                 .as_interface::<dyn MachineInstruction>()
                 .ok_or_else(|| SimTrap::InvalidInstruction {
-                    op: op.name,
+                    op: op.name().as_str(),
                     reason: "operation does not implement MachineInstruction".to_string(),
                 })?;
             if trace.instructions {
