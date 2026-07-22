@@ -421,6 +421,33 @@ instruction FMvDX for [D64] {
     }
 }
 
+instruction FMvXD for [D64] {
+    param MNEMONIC: String = "fmv.x.d";
+    param OPCODE: bits<7> = 0b1010011;
+
+    operands {
+        rd: GPR,
+        fs1: FPR64,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => 0b000,
+        15..19 => fs1,
+        20..24 => 0b00000,
+        25..31 => 0b1110001,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fs1}"
+    }
+
+    behavior {
+        rd = bitcast(fs1);
+    }
+}
+
 // FP loads/stores. Besides load/store selection (the float destination
 // capability keeps `flw` from overlapping `lw`), these are the spill/reload
 // instructions register allocation emits for FPR values.

@@ -1,7 +1,10 @@
 use crate::operation;
 
 use crate as tir;
-use crate::{Commutative, ConstantLike, IntegerArithmetic, OpCost, SameOperandType};
+use crate::{
+    Any, Commutative, ConstantLike, Context, Error, IntegerArithmetic, OpCost, Operation,
+    SameOperandType,
+};
 
 operation! {
     ConstantOp {
@@ -425,6 +428,50 @@ operation! {
             result: "crate::builtin::IntegerType",
         },
         sem: "(set result (trunc input))",
+    }
+}
+
+operation! {
+    BitcastOp {
+        name: "bitcast",
+        dialect: "builtin",
+        verifier: "true",
+        operands: O {
+            input: "Any",
+        },
+        results: R {
+            result: "Any",
+        },
+        sem: "(set result (bitcast input))",
+    }
+}
+
+impl tir::Verifiable for BitcastOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        let width = |value| {
+            let ty = context.get_value(value).ty();
+            let ty = context.get_type_data(ty);
+            let ty = ty.as_ref() as &dyn std::any::Any;
+            ty.downcast_ref::<crate::builtin::IntegerType>()
+                .map(crate::builtin::IntegerType::width)
+                .or_else(|| {
+                    ty.downcast_ref::<crate::builtin::FloatType>()
+                        .map(crate::builtin::FloatType::bit_width)
+                })
+        };
+        let input_width = width(self.operands()[0]);
+        let result_width = width(self.result());
+        if input_width.is_none() || result_width.is_none() {
+            return Err(Error::VerificationError(
+                "bitcast requires scalar integer or floating-point types".to_string(),
+            ));
+        }
+        if input_width != result_width {
+            return Err(Error::VerificationError(
+                "bitcast source and result widths must match".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 

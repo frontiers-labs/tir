@@ -17,6 +17,14 @@ module {
     %1 = fptoui %0 : !i32
     return %1
   }
+  func @bits_to_double(%0: !i64) -> !f64 {
+    %1 = bitcast %0 : !f64
+    return %1
+  }
+  func @double_to_bits(%0: !f64) -> !i64 {
+    %1 = bitcast %0 : !i64
+    return %1
+  }
   module_end
 }
 
@@ -32,4 +40,10 @@ module {
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
 // CHECK: convert_to_unsigned:
 // CHECK-NEXT: [0x00, 0x00, 0x79, 0x1E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: bits_to_double:
+// CHECK-NEXT: [0x00, 0x00, 0x67, 0x9E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: double_to_bits:
+// CHECK-NEXT: [0x00, 0x00, 0x66, 0x9E]
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]

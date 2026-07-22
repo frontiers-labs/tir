@@ -1,0 +1,20 @@
+// RUN: tir opt %s | filecheck %s
+
+module {
+  func @to_double(%0: !i64) -> !f64 {
+    %1 = bitcast %0 : !f64
+    return %1
+  }
+  func @to_integer(%0: !f64) -> !i64 {
+    %1 = bitcast %0 : !i64
+    return %1
+  }
+  module_end
+}
+
+// CHECK: func @to_double(%0: !i64) -> !f64 {
+// CHECK-NEXT: %1 = bitcast %0 : !f64
+// CHECK-NEXT: return %1
+// CHECK: func @to_integer(%{{[0-9]+}}: !f64) -> !i64 {
+// CHECK-NEXT: %{{[0-9]+}} = bitcast %{{[0-9]+}} : !i64
+// CHECK-NEXT: return %{{[0-9]+}}

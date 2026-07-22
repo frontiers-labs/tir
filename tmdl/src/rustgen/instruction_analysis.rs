@@ -519,6 +519,7 @@ fn scalar_root_kind(kind: &tir::sem::SymKind) -> bool {
             | K::ShiftLeft
             | K::ShiftRightLogic
             | K::ShiftRightArithmetic
+            | K::Bitcast
             | K::FAdd
             | K::FSub
             | K::FMul

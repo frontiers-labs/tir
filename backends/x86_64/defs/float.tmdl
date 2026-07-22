@@ -219,6 +219,39 @@ instruction MovqXmmGpr for [X86_64] {
     }
 }
 
+// `movq r64, xmm` copies the low binary64 lane into an integer register.
+instruction MovqGprXmm for [X86_64] {
+    param OPNAME: String = "movq_gpr_xmm";
+    param MNEMONIC: String = "movq";
+
+    operands {
+        dst: GPR,
+        src: XMM,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => dst[3],
+        9 => 0b0,
+        10 => src[3],
+        11 => 0b1,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x7E,
+        32..34 => dst[0..2],
+        35..37 => src[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = bitcast(src);
+    }
+}
+
 // Convert a signed 32-bit integer to scalar binary64 (`cvtsi2sd xmm, r32`).
 instruction Cvtsi2sd32 for [X86_64] {
     param OPNAME: String = "cvtsi2sd32";

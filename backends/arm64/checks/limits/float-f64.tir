@@ -28,6 +28,14 @@ module {
     %1 = fptoui %0 : !i32
     return %1
   }
+  func @bits_to_double(%0: !i64) -> !f64 {
+    %1 = bitcast %0 : !f64
+    return %1
+  }
+  func @double_to_bits(%0: !f64) -> !i64 {
+    %1 = bitcast %0 : !i64
+    return %1
+  }
   module_end
 }
 
@@ -48,4 +56,10 @@ module {
 // CHECK: asm.vret
 // CHECK: asm.symbol {name = "convert_to_unsigned"
 // CHECK: arm64.fcvtzu_w_d {rd = %virt{{[0-9]+}}:GPR, fa = %virt{{[0-9]+}}:FPR64}
+// CHECK: asm.vret
+// CHECK: asm.symbol {name = "bits_to_double"
+// CHECK: arm64.fmov_d_x {fd = %virt{{[0-9]+}}:FPR64, rn = %virt{{[0-9]+}}:GPR}
+// CHECK: asm.vret
+// CHECK: asm.symbol {name = "double_to_bits"
+// CHECK: arm64.fmov_x_d {rd = %virt{{[0-9]+}}:GPR, fa = %virt{{[0-9]+}}:FPR64}
 // CHECK: asm.vret

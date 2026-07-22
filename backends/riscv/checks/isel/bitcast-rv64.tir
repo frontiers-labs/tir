@@ -1,0 +1,20 @@
+// RUN: tir mc --march=rv64ifd --stage=isel %s | filecheck %s
+
+module {
+  func @bits_to_double(%0: !i64) -> !f64 {
+    %1 = bitcast %0 : !f64
+    return %1
+  }
+  func @double_to_bits(%0: !f64) -> !i64 {
+    %1 = bitcast %0 : !i64
+    return %1
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "bits_to_double"
+// CHECK: riscv.fmv.d.x {fd = %virt{{[0-9]+}}:FPR64, rs1 = %virt{{[0-9]+}}:GPR}
+// CHECK: asm.vret
+// CHECK: asm.symbol {name = "double_to_bits"
+// CHECK: riscv.fmv.x.d {rd = %virt{{[0-9]+}}:GPR, fs1 = %virt{{[0-9]+}}:FPR64}
+// CHECK: asm.vret

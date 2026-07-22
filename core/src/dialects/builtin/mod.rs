@@ -58,6 +58,7 @@ dialect! {
             ExtSIOp,
             ExtUIOp,
             TruncIOp,
+            BitcastOp,
             ConstantFOp,
             AddFOp,
             SubFOp,

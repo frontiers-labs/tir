@@ -708,7 +708,7 @@ fn emit_instructions<'a>(
             {
                 pattern_widths[canon_root.index()] = Some(width);
             }
-            let (pattern_stmts, _root_var) =
+            let (mut pattern_stmts, root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
             // The destination's full guarded semantics, emitted alongside the
             // relaxed pattern so pass construction proves the guard drop sound.
@@ -732,6 +732,20 @@ fn emit_instructions<'a>(
                 }
                 None => (quote! {}, quote! {}),
             };
+            if *tir::graph::Dag::get_node(&canon_pattern, canon_root)
+                == tir::sem::SymKind::Bitcast
+                && let Some(dst_class) = dst_class
+                && float_classes.contains(dst_class)
+                && let Some(width) = literal_register_class_width(files, dst_class)
+            {
+                let result_ty = match width {
+                    32 => quote! { tir::builtin::FloatType::f32(_context) },
+                    64 => quote! { tir::builtin::FloatType::f64(_context) },
+                    _ => unreachable!("unsupported scalar float register width {width}"),
+                };
+                pattern_stmts.insert(0, quote! { use tir::graph::MetaMutDag as _; });
+                pattern_stmts.push(quote! { g.set_actual_type(#root_var, #result_ty); });
+            }
             let operand_register_call = emit_operand_register_call(
                 &ops,
                 &semantics.variable_symbols,
