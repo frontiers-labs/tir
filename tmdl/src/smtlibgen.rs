@@ -1643,6 +1643,7 @@ fn emit_sem_expr(
         | SymKind::FDiv
         | SymKind::SIToFP
         | SymKind::UIToFP => None,
+        SymKind::FPToSI => None,
         SymKind::Map | SymKind::Zip | SymKind::IterConcat => None,
         SymKind::Split | SymKind::Reduce | SymKind::Arg => None,
         // Load-reserved reads memory (the reservation is a state effect, set by

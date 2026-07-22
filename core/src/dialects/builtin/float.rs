@@ -236,6 +236,20 @@ impl UIToFPOp {
     }
 }
 
+operation! {
+    FPToSIOp {
+        name: "fptosi",
+        dialect: "builtin",
+        operands: O {
+            input: "crate::builtin::FloatType",
+        },
+        results: R {
+            result: "crate::builtin::IntegerType",
+        },
+        sem: "(set result (fptosi input))",
+    }
+}
+
 impl ConstantFOpBuilder {
     /// The constant, held as `f64`; every supported format embeds in it exactly.
     pub fn value(self, v: f64) -> Self {

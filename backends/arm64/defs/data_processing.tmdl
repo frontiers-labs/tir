@@ -879,6 +879,36 @@ instruction UCvtfDoubleWord for [ARMv8A64] {
     }
 }
 
+// Convert binary64 to a signed 32-bit integer, truncating toward zero.
+instruction FCvtzsWordDouble for [ARMv8A64] {
+    param MNEMONIC: String = "fcvtzs";
+    param OPNAME: String = "fcvtzs_w_d";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR,
+        fa: FPR64,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => fa,
+        10..18 => 0b000000000,
+        19..20 => 0b11,
+        21..23 => 0b011,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = zext(fptosi(fa, 32), self.XLEN);
+    }
+}
+
 instruction FMoveRegisterDouble for [ARMv8A64] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_reg64";

@@ -329,6 +329,16 @@ impl FnCodegen<'_> {
                     .result()
             };
         }
+        if matches!(self.typed.types().kind(source), TypeKind::Double)
+            && self.typed.integer_width(target).is_some()
+            && self.typed.integer_is_signed(target) == Some(true)
+        {
+            let target_ty = lower_type(self.context, self.typed, target);
+            return self
+                .builder
+                .insert(b::fptosi(self.context, value, target_ty).build())
+                .result();
+        }
         let (Some(source_width), Some(target_width)) = (
             self.typed.integer_width(source),
             self.typed.integer_width(target),

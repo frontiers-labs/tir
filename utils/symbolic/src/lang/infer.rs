@@ -44,6 +44,15 @@ pub fn infer_types<V>(
                     _ => inference.fresh_float(),
                 }
             }
+            SymKind::FPToSI => {
+                let operand = inference.fresh_float();
+                inference.unify(&child(0), &operand)?;
+                let width = inference.fresh_bits();
+                inference.unify(&child(1), &width)?;
+                const_u64(graph, children[1])
+                    .map(|width| SemType::bits(width as u32))
+                    .unwrap_or_else(|| inference.fresh_bits())
+            }
             SymKind::Eq
             | SymKind::Ne
             | SymKind::Lt
@@ -229,6 +238,11 @@ pub fn infer_widths<V>(
                     (Some(exponent), Some(mantissa)) => Some(1 + exponent as u32 + mantissa as u32),
                     _ => None,
                 },
+
+                SymKind::FPToSI => children
+                    .get(1)
+                    .and_then(|&c| const_u64(graph, c))
+                    .map(|width| width as u32),
 
                 // As wide as its arms (the then-branch).
                 SymKind::If => child_width(1),
@@ -463,6 +477,7 @@ fn canon_rebuild<V: Clone>(
                 | SymKind::ShiftLeft
                 | SymKind::ShiftRightLogic
                 | SymKind::ShiftRightArithmetic
+                | SymKind::FPToSI
         )
         && let Some(width) = infer_widths(graph, |_| None)[children[0].index()]
     {

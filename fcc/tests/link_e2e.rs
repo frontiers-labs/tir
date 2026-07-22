@@ -249,6 +249,17 @@ fn unsigned_integer_to_double_conversion_executes_through_driver() {
 }
 
 #[test]
+fn double_to_signed_integer_conversion_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int convert(double value) { return value; }\n",
+        "int convert(double); int main(void) { return convert(-17.75) == -17 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
 fn signed_integer_division_executes_through_driver() {
     if !cc_available() {
         return;

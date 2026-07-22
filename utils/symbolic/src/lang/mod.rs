@@ -87,6 +87,9 @@ pub enum SymKind {
     /// Convert an unsigned integer to an IEEE 754 binary format. Arguments are
     /// the integer, exponent width, and mantissa width.
     UIToFP,
+    /// Convert an IEEE 754 binary value to a signed integer. Arguments are the
+    /// float and destination integer width; rounding is toward zero.
+    FPToSI,
     /// `[iter, body]`: map `body` over each lane, element bound via `Arg(0)` (or
     /// `Arg(0)`/`Arg(1)` for a `Zip` pair); value is the iterator of results.
     // #[arity = 2]

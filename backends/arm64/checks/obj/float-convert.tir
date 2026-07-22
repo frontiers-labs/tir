@@ -9,6 +9,10 @@ module {
     %1 = uitofp %0 : !f64
     return %1
   }
+  func @convert_to_signed(%0: !f64) -> !i32 {
+    %1 = fptosi %0 : !i32
+    return %1
+  }
   module_end
 }
 
@@ -18,4 +22,7 @@ module {
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
 // CHECK: convert_unsigned:
 // CHECK-NEXT: [0x00, 0x00, 0x63, 0x1E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: convert_to_signed:
+// CHECK-NEXT: [0x00, 0x00, 0x78, 0x1E]
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]

@@ -254,6 +254,34 @@ instruction FCvtDWU for [D] {
     }
 }
 
+// Convert binary64 to a signed 32-bit integer, truncating toward zero.
+instruction FCvtWD for [D] {
+    param MNEMONIC: String = "fcvt.w.d";
+    param OPCODE: bits<7> = 0b1010011;
+
+    operands {
+        rd: GPR,
+        fs1: FPR64,
+    }
+
+    encoding {
+        0..6 => OPCODE,
+        7..11 => rd,
+        12..14 => 0b001,
+        15..19 => fs1,
+        20..24 => 0b00000,
+        25..31 => 0b1100001,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fs1}"
+    }
+
+    behavior {
+        rd = sext(fptosi(fs1, 32), self.XLEN);
+    }
+}
+
 // Register copies use FSGNJ with both sources equal, preserving every bit.
 instruction FMoveS for [F] {
     param MNEMONIC: String = "fsgnj.s";

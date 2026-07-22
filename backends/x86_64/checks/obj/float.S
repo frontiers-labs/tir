@@ -14,6 +14,7 @@ fp:
 	movsd xmm8, xmm0
 	movq xmm9, r10
 	cvtsi2sd xmm0, rax
+	cvttsd2si eax, xmm0
 
 # CHECK: fp:
 # addsd xmm0, xmm1: opcode 58, ModR/M=11 reg(0) rm(1) = C1.
@@ -30,3 +31,5 @@ fp:
 # CHECK-NEXT: [0x66, 0x4D, 0x0F, 0x6E, 0xCA]
 # cvtsi2sd xmm0, rax: F2 prefix, REX.W=48, opcode 2A, ModR/M C0.
 # CHECK-NEXT: [0xF2, 0x48, 0x0F, 0x2A, 0xC0]
+# cvttsd2si eax, xmm0: F2 prefix, empty REX=40, opcode 2C, ModR/M C0.
+# CHECK-NEXT: [0xF2, 0x40, 0x0F, 0x2C, 0xC0]
