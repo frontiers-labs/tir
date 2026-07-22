@@ -20,7 +20,7 @@ jobs:
         shard: [0, 1, 2, 3]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install solver build dependencies and binutils stubs
@@ -38,7 +38,7 @@ jobs:
           echo "$HOME/bin" >> "$GITHUB_PATH"
       - name: Cache Bitwuzla
         id: cache-bitwuzla
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/verify/bitwuzla
           key: bitwuzla-8d1eb01093ae54d9b4586456b69c3bf31000a4c2
@@ -57,12 +57,12 @@ jobs:
           echo "$GITHUB_WORKSPACE/target/verify/bitwuzla/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/target/verify/bitwuzla/lib:$GITHUB_WORKSPACE/target/verify/bitwuzla/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
       - name: Cache the Sail model snapshot
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/verify/snapshots
           key: isla-snapshot-${{ matrix.isa }}-d8b31014643035a3b11071e56ef30001de3f52ab
       - name: Cache Sail traces
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/verify/smt/${{ matrix.isa }}/cache
           key: smt-traces-${{ matrix.isa }}-${{ matrix.shard }}-${{ hashFiles('Cargo.lock', 'utils/verify/**', format('xtask/verify-smt-{0}.toml', matrix.isa)) }}
@@ -70,13 +70,13 @@ jobs:
         run: cargo xtask verify ${{ matrix.isa }} --shard ${{ matrix.shard }}/4
       - name: Upload report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smt-report-${{ matrix.isa }}-${{ matrix.shard }}
           path: target/verify/smt/${{ matrix.isa }}/report.json
       - name: Upload counterexample queries
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smt-queries-${{ matrix.isa }}-${{ matrix.shard }}
           path: target/verify/smt/${{ matrix.isa }}/queries/
@@ -86,7 +86,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: smt-report-*
           path: reports
@@ -94,7 +94,7 @@ jobs:
         run: |
           mapfile -t files < <(find reports -name report.json -print | sort)
           jq -s '{reports: ., totals: {verified: (map(.verified) | add), divergences: (map(.failed) | add), unknown: (map(.unknown) | add), excluded: (map(.excluded_paths) | add), wall_ms_max: (map(.wall_ms) | max)}}' "${files[@]}" > smt-report.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: smt-report
           path: smt-report.json
