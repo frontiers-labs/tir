@@ -2075,6 +2075,7 @@ dependencies = [
  "tir-graph",
  "tir-lit",
  "tir-macros",
+ "tir-pdl",
  "tir-symbolic",
 ]
 
@@ -2114,6 +2115,7 @@ dependencies = [
  "libfuzzer-sys",
  "tir",
  "tir-arm64",
+ "tir-pdl",
  "tir-riscv",
  "tmdl",
 ]
@@ -2192,6 +2194,20 @@ dependencies = [
  "quote",
  "syn",
  "tir-symbolic",
+]
+
+[[package]]
+name = "tir-pdl"
+version = "0.1.0"
+dependencies = [
+ "ariadne",
+ "chumsky",
+ "clap",
+ "logos",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

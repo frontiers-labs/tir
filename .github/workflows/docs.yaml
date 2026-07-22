@@ -15,7 +15,7 @@ jobs:
   build:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -25,7 +25,7 @@ jobs:
           tool: mdbook,mdbook-mermaid
       - name: Build docs
         run: cargo xtask docs
-      - uses: actions/upload-pages-artifact@v3.0.1
+      - uses: actions/upload-pages-artifact@v5
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         with:
           path: book
@@ -43,4 +43,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

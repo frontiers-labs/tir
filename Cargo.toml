@@ -26,6 +26,7 @@ members = [
     "utils/jit",
     "tools",
     "gpu",
+    "utils/pdl",
 ]
 
 [workspace.dependencies]

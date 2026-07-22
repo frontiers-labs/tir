@@ -1,0 +1,13 @@
+group AnyInt = int<_>;
+
+rule add-zero: builtin.addi(x: int<W>, 0) => x;
+rule mul-one: builtin.muli(x: int<W>, 1) => x;
+rule mul-zero: builtin.muli(x: int<W>, 0) => const<W>(0);
+rule mul-pow2-to-shl:
+  builtin.muli(x: int<W>, c: const) => builtin.shli(x, const<W>(ctz(c)))
+  where popcount(c) == 1, c != 1;
+rule sub-self: builtin.subi(x: int<W>, x) => const<W>(0);
+
+rule gamma-true: #gamma(1, t, f) => t;
+rule gamma-false: #gamma(0, t, f) => f;
+rule gamma-same: #gamma(c, x, x) => x;

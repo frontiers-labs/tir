@@ -97,10 +97,11 @@ impl Seeder<'_> {
         if is_pure_value(&instance) {
             let ty = self.context.get_value(instance.results[0]).ty();
             let mut args = self.kids(n);
-            if is_commutative(&instance) {
+            let commutative = instance.has_interface::<dyn Commutative>();
+            if commutative {
                 args.sort_by_key(|id| id.index());
             }
-            return self.eg.add(Node::seeded(&instance, ty, args));
+            return self.eg.add(Node::seeded(&instance, ty, commutative, args));
         }
 
         // A multi-result or effectful op is an opaque input leaf for the result this node stands for.
@@ -147,11 +148,4 @@ fn is_pure_value(instance: &Arc<OpInstance>) -> bool {
             .as_dyn_op()
             .semantic_expr(&mut crate::sem::SemGraph::new())
             .is_some()
-}
-
-fn is_commutative(instance: &Arc<OpInstance>) -> bool {
-    instance
-        .clone()
-        .as_interface::<dyn Commutative>()
-        .is_some_and(|c| c.is_commutative())
 }
