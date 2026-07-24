@@ -65,7 +65,6 @@ compile/20010408-1.c
 compile/20010421-1.c
 compile/20010423-1.c
 compile/20010426-1.c
-compile/20010503-1.c
 compile/20010510-1.c
 compile/20010518-1.c
 compile/20010518-2.c
@@ -174,7 +173,6 @@ compile/20031125-2.c
 compile/20031203-1.c
 compile/20031203-2.c
 compile/20031203-3.c
-compile/20031208-1.c
 compile/20031220-1.c
 compile/20031220-2.c
 compile/20031227-1.c
@@ -184,7 +182,6 @@ compile/20040121-1.c
 compile/20040124-1.c
 compile/20040130-1.c
 compile/20040214-2.c
-compile/20040219-1.c
 compile/20040220-1.c
 compile/20040303-1.c
 compile/20040303-2.c
@@ -335,7 +332,6 @@ compile/20160205-1.c
 compile/20160615-1.c
 compile/20161123-1.c
 compile/20161124-1.c
-compile/20170419-1.c
 compile/20180309-1.c
 compile/20180605-1.c
 compile/20180915-1.c
@@ -355,7 +351,6 @@ compile/900313-1.c
 compile/900407-1.c
 compile/900516-1.c
 compile/920301-1.c
-compile/920409-1.c
 compile/920409-2.c
 compile/920410-1.c
 compile/920413-1.c
@@ -415,7 +410,6 @@ compile/920825-1.c
 compile/920825-2.c
 compile/920826-1.c
 compile/920828-1.c
-compile/920829-1.c
 compile/920831-1.c
 compile/920902-1.c
 compile/920917-1.c
@@ -453,7 +447,6 @@ compile/930120-1.c
 compile/930126-1.c
 compile/930210-1.c
 compile/930217-1.c
-compile/930222-1.c
 compile/930325-1.c
 compile/930326-1.c
 compile/930411-1.c
@@ -530,7 +523,6 @@ compile/960319-1.c
 compile/960514-1.c
 compile/960829-1.c
 compile/961004-1.c
-compile/961010-1.c
 compile/961019-1.c
 compile/961031-1.c
 compile/961126-1.c
@@ -554,7 +546,6 @@ compile/981001-2.c
 compile/981001-3.c
 compile/981001-4.c
 compile/981006-1.c
-compile/981007-1.c
 compile/981107-1.c
 compile/981223-1.c
 compile/990107-1.c
@@ -583,7 +574,6 @@ compile/991229-2.c
 compile/991229-3.c
 compile/BUG1.c
 compile/BUG11.c
-compile/BUG12.c
 compile/BUG13.c
 compile/BUG16.c
 compile/BUG17.c
@@ -640,7 +630,6 @@ compile/attr-used-retain-1.c
 compile/attr-used-retain-2.c
 compile/b.c
 compile/b3.c
-compile/b88.c
 compile/bad.c
 compile/band.c
 compile/bb0.c
@@ -716,12 +705,10 @@ compile/dm.c
 compile/dshift.c
 compile/e.c
 compile/ex.c
-compile/f1.c
 compile/f2.c
 compile/fix-trunc-mem-1.c
 compile/flo.c
 compile/float.c
-compile/flt_const.c
 compile/foo.c
 compile/forgetcc.c
 compile/fq.c
@@ -782,7 +769,6 @@ compile/mangle-1.c
 compile/mbyte.c
 compile/mchar.c
 compile/mcmp.c
-compile/mdouble.c
 compile/memcpy-1.c
 compile/memcpy-2.c
 compile/memtst.c
@@ -1157,7 +1143,6 @@ compile/pr40797.c
 compile/pr40964.c
 compile/pr41006-1.c
 compile/pr41006-2.c
-compile/pr41016.c
 compile/pr41101.c
 compile/pr41163.c
 compile/pr41181.c
@@ -1242,7 +1227,6 @@ compile/pr46461.c
 compile/pr46534.c
 compile/pr46547-1.c
 compile/pr46637.c
-compile/pr46832.c
 compile/pr46856.c
 compile/pr46866.c
 compile/pr46883.c
@@ -1381,7 +1365,6 @@ compile/pr64494.c
 compile/pr65153.c
 compile/pr65163.c
 compile/pr65241.c
-compile/pr65540.c
 compile/pr65593.c
 compile/pr65595.c
 compile/pr65680.c
@@ -1496,7 +1479,6 @@ compile/pr86123.c
 compile/pr86637-2.c
 compile/pr87110.c
 compile/pr87468.c
-compile/pr87473.c
 compile/pr87647.c
 compile/pr88140.c
 compile/pr88347.c
@@ -1729,7 +1711,6 @@ execute/20000717-4.c
 execute/20000717-5.c
 execute/20000722-1.c
 execute/20000726-1.c
-execute/20000731-1.c
 execute/20000801-1.c
 execute/20000801-2.c
 execute/20000801-3.c
@@ -1798,7 +1779,6 @@ execute/20011121-1.c
 execute/20011126-1.c
 execute/20011126-2.c
 execute/20011128-1.c
-execute/20011217-1.c
 execute/20011219-1.c
 execute/20011223-1.c
 execute/20020107-1.c
@@ -1915,7 +1895,6 @@ execute/20040709-2.c
 execute/20040709-3.c
 execute/20040811-1.c
 execute/20040823-1.c
-execute/20040831-1.c
 execute/20040917-1.c
 execute/20041011-1.c
 execute/20041019-1.c
@@ -2100,7 +2079,6 @@ execute/920612-1.c
 execute/920612-2.c
 execute/920618-1.c
 execute/920625-1.c
-execute/920710-1.c
 execute/920721-2.c
 execute/920721-3.c
 execute/920721-4.c
@@ -2156,7 +2134,6 @@ execute/930608-1.c
 execute/930614-1.c
 execute/930614-2.c
 execute/930622-1.c
-execute/930622-2.c
 execute/930628-1.c
 execute/930702-1.c
 execute/930713-1.c
@@ -2288,7 +2265,6 @@ execute/981206-1.c
 execute/990106-1.c
 execute/990106-2.c
 execute/990127-1.c
-execute/990127-2.c
 execute/990128-1.c
 execute/990130-1.c
 execute/990208-1.c
@@ -2307,10 +2283,8 @@ execute/990628-1.c
 execute/990804-1.c
 execute/990811-1.c
 execute/990826-0.c
-execute/990829-1.c
 execute/991014-1.c
 execute/991016-1.c
-execute/991019-1.c
 execute/991023-1.c
 execute/991030-1.c
 execute/991112-1.c
@@ -2511,7 +2485,6 @@ execute/comp-goto-1.c
 execute/comp-goto-2.c
 execute/complex-1.c
 execute/complex-2.c
-execute/complex-3.c
 execute/complex-4.c
 execute/complex-5.c
 execute/complex-6.c
@@ -2541,7 +2514,6 @@ execute/gofast.c
 execute/ieee/20001122-1.c
 execute/ieee/20010114-2.c
 execute/ieee/20010226-1.c
-execute/ieee/20011123-1.c
 execute/ieee/20030331-1.c
 execute/ieee/20041213-1.c
 execute/ieee/920518-1.c
@@ -2557,7 +2529,6 @@ execute/ieee/cdivchkd.c
 execute/ieee/cdivchkf.c
 execute/ieee/cdivchkld.c
 execute/ieee/compare-fp-1.c
-execute/ieee/compare-fp-2.c
 execute/ieee/compare-fp-4.c
 execute/ieee/copysign1.c
 execute/ieee/copysign2.c
@@ -2576,7 +2547,6 @@ execute/ieee/fp-cmp-4f.c
 execute/ieee/fp-cmp-4l.c
 execute/ieee/fp-cmp-5.c
 execute/ieee/fp-cmp-6.c
-execute/ieee/fp-cmp-7.c
 execute/ieee/fp-cmp-8.c
 execute/ieee/fp-cmp-8f.c
 execute/ieee/fp-cmp-8l.c
@@ -2590,21 +2560,16 @@ execute/ieee/mzero2.c
 execute/ieee/mzero3.c
 execute/ieee/mzero4.c
 execute/ieee/mzero5.c
-execute/ieee/mzero6.c
 execute/ieee/pr108540-1.c
-execute/ieee/pr108540-2.c
-execute/ieee/pr109008.c
 execute/ieee/pr109386.c
 execute/ieee/pr119002.c
 execute/ieee/pr28634.c
-execute/ieee/pr29302-1.c
 execute/ieee/pr30704.c
 execute/ieee/pr38016.c
 execute/ieee/pr50310.c
 execute/ieee/pr67218.c
 execute/ieee/pr72824-2.c
 execute/ieee/pr72824.c
-execute/ieee/pr84235.c
 execute/ieee/unsafe-fp-assoc-1.c
 execute/ieee/unsafe-fp-assoc.c
 execute/index-1.c
@@ -2813,7 +2778,6 @@ execute/pr28982b.c
 execute/pr29006.c
 execute/pr29156.c
 execute/pr29695-2.c
-execute/pr29798.c
 execute/pr30185.c
 execute/pr30314.c
 execute/pr30778.c
@@ -3004,7 +2968,6 @@ execute/pr58419.c
 execute/pr58431.c
 execute/pr58564.c
 execute/pr58570.c
-execute/pr58574.c
 execute/pr58640-2.c
 execute/pr58640.c
 execute/pr58662.c
