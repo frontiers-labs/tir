@@ -21,19 +21,23 @@ module {
   module_end
 }
 
-// ISEL: x86_64.select_signed_remainder32
-// ISEL: x86_64.select_signed_remainder64
-// ISEL: x86_64.select_unsigned_remainder32
-// ISEL: x86_64.select_unsigned_remainder64
-// REGALLOC: x86_64.sign_extend_dividend32
-// REGALLOC: x86_64.signed_divide32
-// REGALLOC: x86_64.mov32
-// REGALLOC: x86_64.sign_extend_dividend64
-// REGALLOC: x86_64.signed_divide64
-// REGALLOC: x86_64.mov
-// REGALLOC: x86_64.zero_extend_dividend32
-// REGALLOC: x86_64.unsigned_divide32
-// REGALLOC: x86_64.mov32
-// REGALLOC: x86_64.zero_extend_dividend64
-// REGALLOC: x86_64.unsigned_divide64
-// REGALLOC: x86_64.mov
+// The remainder is read out of the high register (rdx/edx) the division writes,
+// so the same idiv/div serves it: no imul/sub recomputation.
+
+// ISEL: sign_extend_dividend32
+// ISEL-NEXT: signed_divide32
+// ISEL-SAME: edx_def = %[[R32:.*]]:GPR32@2
+// ISEL: sign_extend_dividend
+// ISEL-NEXT: signed_divide
+// ISEL-SAME: rdx_def = %[[R64:.*]]:GPR@2
+// ISEL: zero_extend_dividend32
+// ISEL-NEXT: unsigned_divide32
+// ISEL: zero_extend_dividend
+// ISEL-NEXT: unsigned_divide
+
+// The remainder register (rdx) differs from the return register (rax), so a
+// move copies it into place before the return.
+// REGALLOC-LABEL: name = "rem64"
+// REGALLOC: signed_divide {dst = rsi, rax = GPR[0], rax_def = GPR[0], rdx = GPR[2], rdx_def = GPR[2]}
+// REGALLOC: mov {dst = rax, src = rdx}
+// REGALLOC: asm.vret

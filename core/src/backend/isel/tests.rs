@@ -2664,3 +2664,89 @@ fn branch_reads_register_of_constant_merged_operand() {
         "the branch reads register x, not the folded immediate"
     );
 }
+
+// ── Guarded-relaxation gate (Stage 3) ───────────────────────────────────────
+
+fn constant(g: &mut SemGraph, value: u64, width: u32) -> tir::graph::NodeId {
+    let node = g.add_node(SymKind::Constant);
+    g.set_leaf_data(node, SymPayload::Int(tir_adt::APInt::new(width, value)));
+    node
+}
+
+fn ternary(
+    g: &mut SemGraph,
+    kind: SymKind,
+    a: tir::graph::NodeId,
+    b: tir::graph::NodeId,
+    c: tir::graph::NodeId,
+) -> tir::graph::NodeId {
+    let node = g.add_node(kind);
+    g.add_edge(node, a);
+    g.add_edge(node, b);
+    g.add_edge(node, c);
+    node
+}
+
+fn div_pattern() -> SemGraph {
+    let mut g = SemGraph::new();
+    let a = symbol(&mut g, 0);
+    let b = symbol(&mut g, 1);
+    binary(&mut g, SymKind::Div, a, b);
+    g
+}
+
+fn emit_unreachable(
+    _context: &Context,
+    _req: &EmitRequest,
+    _m: &RuleMatch,
+) -> Result<Box<dyn Operation>, tir::PassError> {
+    unreachable!("the relaxation gate never emits")
+}
+
+/// `If(Eq(b, guard_rhs), ones, Div(lhs, rhs))` — the riscv-div shape, with the
+/// guard constant and the else-arm operand order made configurable so the tests
+/// can build both the sound rule and the two unsound variants.
+fn guarded_div(guard_rhs: u64, else_swapped: bool) -> SemGraph {
+    let mut g = SemGraph::new();
+    let a = symbol(&mut g, 0);
+    let b = symbol(&mut g, 1);
+    let (num, den) = if else_swapped { (b, a) } else { (a, b) };
+    let div = binary(&mut g, SymKind::Div, num, den);
+    let guard_const = constant(&mut g, guard_rhs, 64);
+    let cond = binary(&mut g, SymKind::Eq, b, guard_const);
+    let ones = constant(&mut g, u64::MAX, 64);
+    ternary(&mut g, SymKind::If, cond, ones, div);
+    g
+}
+
+#[test]
+fn guarded_div_rule_with_correct_relaxation_is_accepted() {
+    let rule = Rule::new("div", div_pattern(), 1, emit_unreachable)
+        .with_guarded_semantics(guarded_div(0, false));
+    assert!(InstructionSelectPass::try_new(vec![rule]).is_ok());
+}
+
+#[test]
+fn guarded_div_rule_with_wrong_guard_region_is_rejected() {
+    // Guarding on `b == 1` instead of `b == 0` leaves the pure `div` unequal to
+    // the behavior at `b == 1` (where `div(a,1) == a`, not all-ones).
+    let rule = Rule::new("div", div_pattern(), 1, emit_unreachable)
+        .with_guarded_semantics(guarded_div(1, false));
+    match InstructionSelectPass::try_new(vec![rule]) {
+        Err(tir::PassError::InvalidRuleSet(msg)) => assert!(msg.contains("div")),
+        Err(other) => panic!("expected InvalidRuleSet, got {other:?}"),
+        Ok(_) => panic!("expected InvalidRuleSet, rule was accepted"),
+    }
+}
+
+#[test]
+fn guarded_div_rule_with_mismatched_else_arm_is_rejected() {
+    // The else arm computes `div(b, a)` while the selection pattern is `div(a, b)`.
+    let rule = Rule::new("div", div_pattern(), 1, emit_unreachable)
+        .with_guarded_semantics(guarded_div(0, true));
+    match InstructionSelectPass::try_new(vec![rule]) {
+        Err(tir::PassError::InvalidRuleSet(msg)) => assert!(msg.contains("div")),
+        Err(other) => panic!("expected InvalidRuleSet, got {other:?}"),
+        Ok(_) => panic!("expected InvalidRuleSet, rule was accepted"),
+    }
+}

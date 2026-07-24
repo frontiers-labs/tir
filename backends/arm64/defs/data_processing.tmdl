@@ -506,21 +506,17 @@ instruction SignedMultiplyHigh for [ARMv8A64] : DataProc3SrcZr {
 }
 
 // A64 division: division by zero yields 0 (no trap); INT_MIN / -1 wraps.
-// Both arms of an if-expression are evaluated, so the divisor is patched to 1
-// in the zero case (`~(rm | -rm) >> 63` is 1 exactly when rm == 0); the
-// select then discards that dummy quotient.
 instruction SignedDivide for [ARMv8A64] : ShiftReg {
     param MNEMONIC: String = "sdiv";
     param OPCODE: bits<6> = 0b000011;
     schedule { units = [WriteIDiv]; }
 
     behavior {
-        rd = if rm == zext(0b0, self.XLEN) {
-            zext(0b0, self.XLEN)
+        if rm == zext(0b0, self.XLEN) {
+            rd = zext(0b0, self.XLEN);
         } else {
-            rn / (rm | zext(extract(~(rm | (zext(0b0, self.XLEN) - rm)),
-                self.XLEN - 1, self.XLEN - 1), self.XLEN))
-        };
+            rd = rn / rm;
+        }
     }
 }
 
@@ -532,11 +528,11 @@ instruction SignedDivideWord for [ARMv8A64] : ShiftReg {
     schedule { units = [WriteIDiv]; }
 
     behavior {
-        rd = if extract(rm, 31, 0) == zext(0b0, 32) {
-            zext(0b0, self.XLEN)
+        if extract(rm, 31, 0) == zext(0b0, 32) {
+            rd = zext(0b0, self.XLEN);
         } else {
-            zext(extract(rn, 31, 0) / extract(rm, 31, 0), self.XLEN)
-        };
+            rd = zext(extract(rn, 31, 0) / extract(rm, 31, 0), self.XLEN);
+        }
     }
 }
 
@@ -546,12 +542,11 @@ instruction UnsignedDivide for [ARMv8A64] : ShiftReg {
     schedule { units = [WriteIDiv]; }
 
     behavior {
-        rd = if rm == zext(0b0, self.XLEN) {
-            zext(0b0, self.XLEN)
+        if rm == zext(0b0, self.XLEN) {
+            rd = zext(0b0, self.XLEN);
         } else {
-            rn ~/ (rm | zext(extract(~(rm | (zext(0b0, self.XLEN) - rm)),
-                self.XLEN - 1, self.XLEN - 1), self.XLEN))
-        };
+            rd = rn ~/ rm;
+        }
     }
 }
 
@@ -563,67 +558,11 @@ instruction UnsignedDivideWord for [ARMv8A64] : ShiftReg {
     schedule { units = [WriteIDiv]; }
 
     behavior {
-        rd = if extract(rm, 31, 0) == zext(0b0, 32) {
-            zext(0b0, self.XLEN)
+        if extract(rm, 31, 0) == zext(0b0, 32) {
+            rd = zext(0b0, self.XLEN);
         } else {
-            zext(extract(rn, 31, 0) ~/ extract(rm, 31, 0), self.XLEN)
-        };
-    }
-}
-
-pseudo instruction SelectSignedDivide for [ARMv8A64] {
-    param OPNAME: String = "select_sdiv";
-    operands { rd: GPR, rn: GPR, rm: GPR, }
-    behavior { rd = rn / rm; }
-}
-
-pseudo instruction SelectSignedDivideWord for [ARMv8A64] {
-    param OPNAME: String = "select_sdiv_word";
-    operands { rd: GPR, rn: GPR, rm: GPR, }
-    behavior {
-        rd = sext(extract(rn, 31, 0) / extract(rm, 31, 0), self.XLEN);
-    }
-}
-
-pseudo instruction SelectUnsignedDivide for [ARMv8A64] {
-    param OPNAME: String = "select_udiv";
-    operands { rd: GPR, rn: GPR, rm: GPR, }
-    behavior { rd = rn ~/ rm; }
-}
-
-pseudo instruction SelectUnsignedDivideWord for [ARMv8A64] {
-    param OPNAME: String = "select_udiv_word";
-    operands { rd: GPR, rn: GPR, rm: GPR, }
-    behavior {
-        rd = zext(extract(rn, 31, 0) ~/ extract(rm, 31, 0), self.XLEN);
-    }
-}
-
-pseudo instruction SelectSignedRemainder for [ARMv8A64] {
-    param OPNAME: String = "select_srem";
-    operands { rd: GPR, rn: GPR, rm: GPR, }
-    behavior { rd = rn % rm; }
-}
-
-pseudo instruction SelectSignedRemainderWord for [ARMv8A64] {
-    param OPNAME: String = "select_srem_word";
-    operands { rd: GPR, rn: GPR, rm: GPR, }
-    behavior {
-        rd = sext(extract(rn, 31, 0) % extract(rm, 31, 0), self.XLEN);
-    }
-}
-
-pseudo instruction SelectUnsignedRemainder for [ARMv8A64] {
-    param OPNAME: String = "select_urem";
-    operands { rd: GPR, rn: GPR, rm: GPR, }
-    behavior { rd = rn ~% rm; }
-}
-
-pseudo instruction SelectUnsignedRemainderWord for [ARMv8A64] {
-    param OPNAME: String = "select_urem_word";
-    operands { rd: GPR, rn: GPR, rm: GPR, }
-    behavior {
-        rd = zext(extract(rn, 31, 0) ~% extract(rm, 31, 0), self.XLEN);
+            rd = zext(extract(rn, 31, 0) ~/ extract(rm, 31, 0), self.XLEN);
+        }
     }
 }
 

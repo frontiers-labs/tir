@@ -1,0 +1,75 @@
+// A statement-level guarded assignment (`if cond { rd = a } else { rd = b }`,
+// riscv `div`'s divide-by-zero shape) emits the destination's full guarded
+// semantics alongside the guard-relaxed selection pattern, so pass construction
+// can prove the relaxation sound. A plain unguarded behavior emits no companion.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa GuardIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class GPR for [GuardIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0..x3 => {                         },
+    }
+}
+
+instruction GuardedDiv for [GuardIsa] {
+    param MNEMONIC: String = "gdiv";
+    param OPNAME: String = "guarded_div";
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        0..6 => 0b0110011,
+        7..11 => rd,
+        15..19 => rs1,
+        20..24 => rs2,
+    }
+
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+
+    behavior {
+        if rs2 == zext(0b0, self.XLEN) {
+            rd = sext(0b1, self.XLEN);
+        } else {
+            rd = rs1 / rs2;
+        }
+    }
+}
+
+instruction PlainAdd for [GuardIsa] {
+    param MNEMONIC: String = "gadd";
+    param OPNAME: String = "plain_add";
+
+    operands {
+        rd: GPR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        0..6 => 0b0110111,
+        7..11 => rd,
+        15..19 => rs1,
+        20..24 => rs2,
+    }
+
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+
+    behavior { rd = rs1 + rs2; }
+}
+
+// The guarded instruction emits both a guarded-semantics builder function and the
+// rule's `.with_guarded_semantics(...)` call; the plain instruction emits neither.
+// CHECK-DAG: fn isel_guarded_guardeddiv
+// CHECK-DAG: .with_guarded_semantics(isel_guarded_guardeddiv(context))
+// CHECK-NOT: fn isel_guarded_plainadd

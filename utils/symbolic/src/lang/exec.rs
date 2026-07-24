@@ -230,6 +230,43 @@ fn coerce_ints(a: APInt, b: APInt) -> (APInt, APInt) {
     (widen(a, width), widen(b, width))
 }
 
+/// Evaluate an integer division/remainder kind with SMT-LIB div-by-zero rules,
+/// matching the bitblaster: `bvudiv x 0 = ~0`, `bvsdiv x 0` is `-1` for a
+/// non-negative dividend and `1` otherwise, and both remainders return the
+/// dividend. A nonzero divisor defers to APInt, whose signed ops already wrap
+/// `MIN / -1`. `None` for any other kind, or for `Div` over floats (handled by
+/// the float path).
+fn eval_divrem(kind: SymKind, c: &impl Fn(usize) -> Value) -> Option<Value> {
+    let (signed, quotient) = match kind {
+        SymKind::Div => (true, true),
+        SymKind::UDiv => (false, true),
+        SymKind::SRem => (true, false),
+        SymKind::URem => (false, false),
+        _ => return None,
+    };
+    let (Value::Int(a), Value::Int(b)) = (c(0), c(1)) else {
+        return None;
+    };
+    let (a, b) = coerce_ints(a, b);
+    let width = a.width();
+    let result = if b.is_zero() {
+        match (signed, quotient) {
+            (false, true) => APInt::max_value(width, false),
+            (true, true) if a.with_signed(true).is_negative() => APInt::new_signed(width, 1),
+            (true, true) => APInt::new_signed(width, -1),
+            (_, false) => a,
+        }
+    } else {
+        match (signed, quotient) {
+            (true, true) => a.sdiv(&b),
+            (false, true) => a.udiv(&b),
+            (true, false) => a.srem(&b),
+            (false, false) => a.urem(&b),
+        }
+    };
+    Some(Value::Int(result))
+}
+
 /// The IEEE binary format of a `width`-bit register value, for the float kinds'
 /// bit-reinterpreting integer path. Only binary32/binary64 registers exist.
 fn float_format(width: u32, op: &str) -> (u32, u32) {
@@ -411,6 +448,15 @@ fn eval_node<V, M: Memory>(
     }
 
     let c = |idx: usize| child_val(graph, node, idx, cache);
+
+    // Integer division and remainder are total under SMT-LIB div-by-zero rules,
+    // matching the bitblaster. An if-guarded behavior (e.g. riscv `div`) evaluates
+    // its dead arm eagerly, so a zero divisor must fold rather than trap in the
+    // asserting APInt path `scalar_op` would take.
+    if let Some(result) = eval_divrem(*graph.get_kind(node), &c) {
+        cache[node.index()] = Some(result.clone());
+        return Ok(result);
+    }
 
     if let Some(op) = scalar_op(*graph.get_kind(node)) {
         let operands = (0..op.arity)
@@ -866,6 +912,34 @@ mod tests {
         let b = sym(&mut g, 1);
         inner(&mut g, SymKind::URem, &[a, b]);
         assert_eq!(as_u64(execute(&g, &[uv(7), uv(3)])), 1);
+    }
+
+    fn exec_bin(kind: SymKind, a: Value, b: Value) -> Value {
+        let mut g = Graph::new();
+        let x = sym(&mut g, 0);
+        let y = sym(&mut g, 1);
+        inner(&mut g, kind, &[x, y]);
+        execute(&g, &[a, b])
+    }
+
+    #[test]
+    fn division_by_zero_follows_smtlib_conventions() {
+        assert_eq!(
+            as_u64(exec_bin(SymKind::UDiv, uv(7), uv(0))),
+            u32::MAX as u64
+        );
+        assert_eq!(as_u64(exec_bin(SymKind::URem, uv(7), uv(0))), 7);
+        assert_eq!(as_i64(exec_bin(SymKind::Div, iv(7), iv(0))), -1);
+        assert_eq!(as_i64(exec_bin(SymKind::Div, iv(-7), iv(0))), 1);
+        assert_eq!(as_i64(exec_bin(SymKind::SRem, iv(-7), iv(0))), -7);
+        assert_eq!(as_i64(exec_bin(SymKind::SRem, iv(7), iv(0))), 7);
+    }
+
+    #[test]
+    fn signed_division_overflow_wraps() {
+        let min = i32::MIN as i64;
+        assert_eq!(as_i64(exec_bin(SymKind::Div, iv(min), iv(-1))), min);
+        assert_eq!(as_i64(exec_bin(SymKind::SRem, iv(min), iv(-1))), 0);
     }
 
     #[test]

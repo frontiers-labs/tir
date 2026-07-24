@@ -1,5 +1,4 @@
-// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s --check-prefix=ISEL
-// RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s --check-prefix=REGALLOC
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
 
 module {
   func @div32(%0: !i32, %1: !i32) -> !i32 {
@@ -21,11 +20,7 @@ module {
   module_end
 }
 
-// ISEL: arm64.select_sdiv_word
-// ISEL: arm64.select_sdiv
-// ISEL: arm64.select_udiv_word
-// ISEL: arm64.select_udiv
-// REGALLOC: arm64.sdiv_word
-// REGALLOC: arm64.sdiv
-// REGALLOC: arm64.udiv_word
-// REGALLOC: arm64.udiv
+// CHECK: arm64.sdiv_word
+// CHECK: arm64.sdiv
+// CHECK: arm64.udiv_word
+// CHECK: arm64.udiv

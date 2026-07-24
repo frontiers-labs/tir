@@ -149,6 +149,12 @@ impl SameOperandType for DivUIOp {}
 impl IntegerArithmetic for DivUIOp {}
 
 operation! {
+    // Remainder is defined by the Euclidean identity rather than a primitive
+    // srem/urem, so the semantic form matches the canonical sub-mul-div target
+    // that TMDL rem/remu behaviors reduce to and selects through the e-graph
+    // without an unprovable rewrite. This total form equals bvsrem/bvurem
+    // everywhere, including rhs=0 (a - x*0 = a) and MIN/-1 (0). IR-level
+    // partiality (C's UB at rhs=0) is unchanged.
     RemSIOp {
         name: "remsi",
         dialect: "builtin",
@@ -160,7 +166,7 @@ operation! {
             result: "crate::builtin::IntegerType",
         },
         interfaces: [SameOperandType, IntegerArithmetic],
-        sem: "(set result (srem lhs rhs))",
+        sem: "(set result (sub lhs (mul (div lhs rhs) rhs)))",
     }
 }
 
@@ -179,7 +185,7 @@ operation! {
             result: "crate::builtin::IntegerType",
         },
         interfaces: [SameOperandType, IntegerArithmetic],
-        sem: "(set result (urem lhs rhs))",
+        sem: "(set result (sub lhs (mul (udiv lhs rhs) rhs)))",
     }
 }
 

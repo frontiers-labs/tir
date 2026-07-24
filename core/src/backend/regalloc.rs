@@ -587,7 +587,7 @@ impl Pass for RegisterAllocationPass {
         self.lower_tied_operands(context, rewriter, &blocks)?;
         self.lower_block_args(context, rewriter, &blocks)?;
 
-        let mut abi = abi_precolor(
+        let abi = abi_precolor(
             context,
             op,
             &info,
@@ -595,8 +595,8 @@ impl Pass for RegisterAllocationPass {
             self.target.as_ref(),
             rewriter,
             &blocks,
+            fixed_precolor,
         )?;
-        abi.precolor.extend(fixed_precolor);
 
         let mut frame = FrameState::new(self.abi.stack.slot_size);
         let stack_allocas = collect_stack_allocas(context, &blocks, &mut frame);
@@ -1382,6 +1382,7 @@ fn next_abi_register(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn abi_precolor(
     context: &Context,
     op: &OperationRef,
@@ -1390,8 +1391,12 @@ fn abi_precolor(
     target: &dyn TargetRegAlloc,
     rewriter: &mut Rewriter,
     blocks: &[BlockId],
+    // Fixed-register precolors (e.g. a `FixedDef` result pinned to `rdx`), seeded
+    // so the return handler sees a value already pinned elsewhere and breaks the
+    // point conflict with a copy into the return register instead of double-pinning.
+    fixed_precolor: HashMap<u32, PhysReg>,
 ) -> Result<AbiPrecolor, PassError> {
-    let mut precolor: HashMap<u32, PhysReg> = HashMap::new();
+    let mut precolor: HashMap<u32, PhysReg> = fixed_precolor;
     let mut stack_args = Vec::new();
 
     // Argument vregs: the symbol's `arg_regs` attribute carries each argument's

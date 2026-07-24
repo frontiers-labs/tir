@@ -25,8 +25,11 @@ use tir::{
     AnalysisManager, Block, BlockId, BranchGuard, BranchTerminator, Context, OpId, Operation,
     OperationRef, Pass, PassError, PassTarget, PreservedAnalyses, Rewriter, TypeId, ValueId,
     analysis::{DominatingEdgeFacts, DominatorTree, EdgeFact},
-    graph::OperandConstraint,
-    sem::{SemGraph, SymKind, SymPayload},
+    graph::{Dag, MutDag, NodeId, OperandConstraint},
+    sem::{
+        EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
+        definedness_condition, infer_widths,
+    },
 };
 use tir_adt::APInt;
 use tir_symbolic::egraph::{ENode, Id, PatternNode, Var};
@@ -323,6 +326,13 @@ pub struct Rule {
     /// representable range must not bind (its encoding would truncate). Symbols
     /// absent here accept any constant.
     pub operand_imm_ranges: Vec<(u32, ImmRange)>,
+    /// The destination's full guarded semantics as an `If` tree, when the behavior
+    /// assigns the result under a guard (e.g. riscv `div`'s divide-by-zero case).
+    /// [`Rule::pattern`] is the guard-relaxed pure op that actually selects; this
+    /// companion lets pass construction *prove* the relaxation sound (the pure op
+    /// equals the guarded behavior wherever the IR op is defined). `None` for plain
+    /// unguarded or sequential multi-assignment behaviors.
+    pub guarded_semantics: Option<SemGraph>,
     pub emit_fn: RuleEmitFn,
 }
 
@@ -338,6 +348,7 @@ impl Rule {
             operand_registers: Vec::new(),
             result_register: None,
             operand_imm_ranges: Vec::new(),
+            guarded_semantics: None,
             emit_fn,
         }
     }
@@ -376,6 +387,14 @@ impl Rule {
     /// Mark this rule as a conditional branch (see [`RuleKind::CondBranch`]).
     pub fn with_kind(mut self, kind: RuleKind) -> Self {
         self.kind = kind;
+        self
+    }
+
+    /// Attach the destination's full guarded semantics (see
+    /// [`Rule::guarded_semantics`]), so pass construction proves that relaxing to
+    /// [`Rule::pattern`] is sound.
+    pub fn with_guarded_semantics(mut self, guarded: SemGraph) -> Self {
+        self.guarded_semantics = Some(guarded);
         self
     }
 
@@ -719,8 +738,228 @@ pub struct InstructionSelectPass {
     solved: HashSet<OpId>,
 }
 
+/// Prove, for every rule carrying [`Rule::guarded_semantics`], that relaxing the
+/// guarded behavior to its pure [`Rule::pattern`] is sound: the pure op equals the
+/// guarded behavior wherever the IR op is defined. An unprovable rule is reported
+/// as [`PassError::InvalidRuleSet`] naming the rule and the failed obligation.
+fn prove_guarded_relaxations(rules: &[Rule]) -> Result<(), PassError> {
+    for rule in rules {
+        let Some(guarded) = &rule.guarded_semantics else {
+            continue;
+        };
+        prove_relaxation(rule, guarded).map_err(PassError::InvalidRuleSet)?;
+    }
+    Ok(())
+}
+
+fn relaxation_error(rule: &Rule, why: &str) -> String {
+    format!("rule `{}`: {why}", rule.name)
+}
+
+/// Prove `D(pattern) => guarded_semantics == pattern` for one guarded rule.
+fn prove_relaxation(rule: &Rule, guarded: &SemGraph) -> Result<(), String> {
+    let if_root = guarded
+        .root()
+        .ok_or_else(|| relaxation_error(rule, "empty guarded semantics"))?;
+    if *guarded.get_node(if_root) != SymKind::If {
+        return Err(relaxation_error(
+            rule,
+            "guarded semantics must be rooted at an `if`",
+        ));
+    }
+    let else_arm = guarded
+        .children(if_root)
+        .nth(2)
+        .ok_or_else(|| relaxation_error(rule, "guarded `if` lacks an else arm"))?;
+
+    // The else arm, canonicalized exactly as the selection pattern is, must *be*
+    // the selection pattern: only then is the proved relaxation the one selection
+    // performs. This is what rejects an else arm that computes a different op.
+    let immediate_symbols: HashSet<u32> = rule
+        .operand_constraints
+        .iter()
+        .filter(|(_, c)| matches!(c, OperandConstraint::Immediate))
+        .map(|(symbol, _)| *symbol)
+        .collect();
+    let (canon_else, canon_root, _) =
+        canonicalize_for_selection(guarded, else_arm, &immediate_symbols);
+    let pattern_root = rule
+        .pattern
+        .root()
+        .ok_or_else(|| relaxation_error(rule, "empty selection pattern"))?;
+    if !subgraphs_equal(&canon_else, canon_root, &rule.pattern, pattern_root) {
+        return Err(relaxation_error(
+            rule,
+            "guarded else arm does not match the selection pattern",
+        ));
+    }
+
+    // Prove the relaxation at the target register width baked into the behavior
+    // (the `if`'s arm width).
+    let register_width = infer_widths(guarded, |_| None)[if_root.index()].unwrap_or(64);
+    if !relaxation_holds(guarded, if_root, else_arm, register_width) {
+        return Err(relaxation_error(
+            rule,
+            &format!(
+                "guard relaxation `D(pattern) => guarded == pattern` is not valid \
+                 at register width {register_width}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether the subgraphs rooted at `r1`/`r2` are structurally identical (same
+/// kinds, leaf payloads and children, in order). Generic over the graph backend so
+/// the canonicalizer's [`GenericDag`](tir::graph::GenericDag) output compares
+/// against the [`SemGraph`] selection pattern.
+fn subgraphs_equal<L: PartialEq>(
+    g1: &impl Dag<Node = SymKind, Leaf = L>,
+    r1: NodeId,
+    g2: &impl Dag<Node = SymKind, Leaf = L>,
+    r2: NodeId,
+) -> bool {
+    if g1.get_node(r1) != g2.get_node(r2) || g1.get_leaf_data(r1) != g2.get_leaf_data(r2) {
+        return false;
+    }
+    let c1: Vec<NodeId> = g1.children(r1).collect();
+    let c2: Vec<NodeId> = g2.children(r2).collect();
+    c1.len() == c2.len()
+        && c1
+            .iter()
+            .zip(&c2)
+            .all(|(&a, &b)| subgraphs_equal(g1, a, g2, b))
+}
+
+/// Copy the subgraph under `node` into `dst`, preserving DAG sharing through `memo`.
+fn copy_subgraph(
+    src: &SemGraph,
+    node: NodeId,
+    dst: &mut SemGraph,
+    memo: &mut HashMap<usize, NodeId>,
+) -> NodeId {
+    if let Some(&copied) = memo.get(&node.index()) {
+        return copied;
+    }
+    let children: Vec<NodeId> = src
+        .children(node)
+        .map(|c| copy_subgraph(src, c, dst, memo))
+        .collect();
+    let copied = dst.add_node(*src.get_node(node));
+    if let Some(data) = src.get_leaf_data(node) {
+        dst.set_leaf_data(copied, data.clone());
+    }
+    for child in children {
+        dst.add_edge(copied, child);
+    }
+    memo.insert(node.index(), copied);
+    copied
+}
+
+/// The conjunction of definedness conditions of every partial-kind node reachable
+/// from `root`, appended to `g`; `None` when the subgraph holds no partial op.
+fn definedness_of(g: &mut SemGraph, root: NodeId, widths: &[Option<u32>]) -> Option<NodeId> {
+    let mut conditions = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if !seen.insert(node.index()) {
+            continue;
+        }
+        stack.extend(g.children(node).collect::<Vec<_>>());
+        if let Some(cond) = definedness_condition(g, node, widths) {
+            conditions.push(cond);
+        }
+    }
+    conditions.into_iter().reduce(|a, b| {
+        let and = g.add_node(SymKind::And);
+        g.add_edge(and, a);
+        g.add_edge(and, b);
+        and
+    })
+}
+
+/// Whether relaxing `guarded` to its (guard-dropped) else arm is sound: the guard
+/// region must lie inside the region where the pure op is undefined. Concretely,
+/// prove `D(else) AND guard_cond` is unsatisfiable — the guard fires only where the
+/// IR op is undefined, so outside the guard the instruction already computes the
+/// pure op (the shared else arm) and the drop loses nothing.
+///
+/// This is the tractable form of `D(pattern) => guarded == pattern`: since the else
+/// arm *is* the pattern, that obligation is `(D AND guard_cond) => (then == else)`,
+/// discharged here by refuting its antecedent. `D`'s divisor-nonzero test and the
+/// guard's divisor-zero test share the divisor symbol, so the conflict closes by
+/// unit propagation without the SAT solver ever entering the divider circuit (the
+/// full-equality form forces it through a divider miter — seconds, not
+/// milliseconds).
+fn relaxation_holds(
+    guarded: &SemGraph,
+    if_root: NodeId,
+    else_arm: NodeId,
+    register_width: u32,
+) -> bool {
+    let guard_cond = match guarded.children(if_root).next() {
+        Some(cond) => cond,
+        None => return false,
+    };
+
+    let mut g = SemGraph::new();
+    let mut memo = HashMap::new();
+    copy_subgraph(guarded, if_root, &mut g, &mut memo);
+    let cond = memo[&guard_cond.index()];
+    let else_copy = memo[&else_arm.index()];
+
+    let widths = infer_widths(&g, |id| match g.get_leaf_data(id) {
+        Some(SymPayload::SymbolId(_)) => Some(register_width),
+        _ => None,
+    });
+    // A total else arm (no partial op) has no definedness slack; the antecedent is
+    // then the guard alone, so relaxing is sound only if the guard is never taken.
+    let defined = definedness_of(&mut g, else_copy, &widths).unwrap_or_else(|| {
+        let always = g.add_node(SymKind::Constant);
+        g.set_leaf_data(always, SymPayload::Int(APInt::new(1, 1)));
+        always
+    });
+    let conflict = g.add_node(SymKind::And);
+    g.add_edge(conflict, defined);
+    g.add_edge(conflict, cond);
+    debug_assert_eq!(g.root(), Some(conflict));
+
+    let mut never = SemGraph::new();
+    let zero = never.add_node(SymKind::Constant);
+    never.set_leaf_data(zero, SymPayload::Int(APInt::new(1, 0)));
+
+    let symbol_count = symbol_ids(&g).into_iter().max().map_or(0, |m| m + 1) as usize;
+    let symbol_widths = vec![register_width; symbol_count];
+    SmtOracle.equivalent(&g, &never, &symbol_widths)
+}
+
+fn symbol_ids(g: &SemGraph) -> Vec<u32> {
+    (0..g.len())
+        .filter_map(|i| match g.get_leaf_data(NodeId::from_index(i)) {
+            Some(SymPayload::SymbolId(id)) => Some(*id),
+            _ => None,
+        })
+        .collect()
+}
+
 impl InstructionSelectPass {
+    /// Build the pass, panicking if a guarded rule's relaxation cannot be proved.
+    /// The generated backends call this: an unprovable rule is a target-definition
+    /// bug that must fail loudly, not at runtime.
     pub fn new(rules: Vec<Rule>) -> Self {
+        Self::try_new(rules).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Build the pass, returning [`PassError::InvalidRuleSet`] naming the offending
+    /// rule when a guarded rule's guard-relaxation obligation
+    /// `D(pattern) => guarded_semantics == pattern` does not hold.
+    pub fn try_new(rules: Vec<Rule>) -> Result<Self, PassError> {
+        prove_guarded_relaxations(&rules)?;
+        Ok(Self::build(rules))
+    }
+
+    fn build(rules: Vec<Rule>) -> Self {
         let compiled_patterns: Vec<_> = rules
             .iter()
             .enumerate()

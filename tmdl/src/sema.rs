@@ -1204,7 +1204,7 @@ fn check_instruction_consistent(
     // encoding is allowed there and simply produces no encoder.
     let effective_encoding = resolve_effective_encoding_for_instruction(instruction, item_cache);
     if effective_encoding.is_empty() {
-        if !text_only && !instruction.pseudo {
+        if !text_only {
             diags.push((
                 file_name.to_string(),
                 Rich::custom(
@@ -1232,7 +1232,7 @@ fn check_instruction_consistent(
             &params_cache,
             file_name,
         ));
-    } else if !instruction.pseudo {
+    } else {
         diags.push((
             file_name.to_string(),
             Rich::custom(

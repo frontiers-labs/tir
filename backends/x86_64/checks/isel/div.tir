@@ -1,0 +1,39 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s --check-prefix=ISEL
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s --check-prefix=REGALLOC
+
+module {
+  func @div32(%0: !i32, %1: !i32) -> !i32 {
+    %2 = divsi %0, %1 : !i32
+    return %2
+  }
+  func @div64(%0: !i64, %1: !i64) -> !i64 {
+    %2 = divsi %0, %1 : !i64
+    return %2
+  }
+  func @divu32(%0: !i32, %1: !i32) -> !i32 {
+    %2 = divui %0, %1 : !i32
+    return %2
+  }
+  func @divu64(%0: !i64, %1: !i64) -> !i64 {
+    %2 = divui %0, %1 : !i64
+    return %2
+  }
+  module_end
+}
+
+// The quotient lands in the low dividend register (rax/eax), which is also the
+// integer return register, so no move follows the division.
+
+// ISEL: sign_extend_dividend32
+// ISEL: signed_divide32
+// ISEL: sign_extend_dividend
+// ISEL: signed_divide
+// ISEL: zero_extend_dividend32
+// ISEL: unsigned_divide32
+// ISEL: zero_extend_dividend
+// ISEL: unsigned_divide
+
+// REGALLOC-LABEL: name = "div64"
+// REGALLOC: sign_extend_dividend {rax = GPR[0], rdx_def = GPR[2]}
+// REGALLOC: signed_divide {dst = rsi, rax = GPR[0], rax_def = GPR[0], rdx = GPR[2], rdx_def = GPR[2]}
+// REGALLOC: asm.vret

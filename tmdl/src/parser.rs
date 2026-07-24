@@ -599,11 +599,8 @@ where
 {
     let ident = select! { Token::Identifier(ident) => ident.to_string() };
 
-    just(Token::KwPseudo)
-        .or_not()
-        .then_ignore(just(Token::KwInstruction))
-        .map(|pseudo| pseudo.is_some())
-        .then(ident)
+    just(Token::KwInstruction)
+        .ignore_then(ident)
         .then(for_isas().or_not())
         .then(just(Token::Colon).ignore_then(ident).or_not())
         .then(
@@ -619,7 +616,7 @@ where
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|((((pseudo, name), for_isas), parent_template), body), e| {
+        .map_with(|(((name, for_isas), parent_template), body), e| {
             let params = body
                 .iter()
                 .filter_map(|b| match b {
@@ -679,7 +676,6 @@ where
 
             Instruction {
                 doc: None,
-                pseudo,
                 name,
                 for_isas: for_isas.unwrap_or_default(),
                 parent_template,
@@ -1611,11 +1607,7 @@ where
             .or(just(Token::Tilde)
                 .then(just(Token::ForwardSlash))
                 .to(BinOp::UnsignedDiv))
-            .or(just(Token::ForwardSlash).to(BinOp::Div))
-            .or(just(Token::Tilde)
-                .then(just(Token::Percent))
-                .to(BinOp::UnsignedRem))
-            .or(just(Token::Percent).to(BinOp::SignedRem));
+            .or(just(Token::ForwardSlash).to(BinOp::Div));
         let product = unary
             .clone()
             .foldl_with(op.then(expr).repeated(), |a, (op, b), e| {

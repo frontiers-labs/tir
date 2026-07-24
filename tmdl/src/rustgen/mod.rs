@@ -298,6 +298,7 @@ include!("scheduling.rs");
 include!("register_traits.rs");
 include!("flag_analysis.rs");
 include!("flag_emission.rs");
+include!("fixed_register_emission.rs");
 include!("instruction_analysis.rs");
 include!("assembly.rs");
 include!("behavior.rs");

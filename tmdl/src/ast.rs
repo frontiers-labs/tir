@@ -216,7 +216,6 @@ pub struct Template {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instruction {
     pub doc: Option<String>,
-    pub pseudo: bool,
     pub name: String,
     pub for_isas: Vec<String>,
     pub parent_template: Option<String>,
@@ -493,8 +492,6 @@ pub enum BinOp {
     Mul,
     Div,
     UnsignedDiv,
-    SignedRem,
-    UnsignedRem,
     Equal,
     NotEqual,
     LessThan,
@@ -1270,8 +1267,6 @@ impl Binary {
             BinOp::Mul => ctx.add_node(K::Mul, &[lhs, rhs]),
             BinOp::Div => ctx.add_node(K::Div, &[lhs, rhs]),
             BinOp::UnsignedDiv => ctx.add_node(K::UDiv, &[lhs, rhs]),
-            BinOp::SignedRem => ctx.add_node(K::SRem, &[lhs, rhs]),
-            BinOp::UnsignedRem => ctx.add_node(K::URem, &[lhs, rhs]),
             BinOp::Equal => ctx.add_node(K::Eq, &[lhs, rhs]),
             BinOp::NotEqual => ctx.add_node(K::Ne, &[lhs, rhs]),
             BinOp::LessThan => ctx.add_node(K::Lt, &[lhs, rhs]),

@@ -280,12 +280,15 @@ pub fn canonicalize_for_selection<V: Clone>(
         &mut forced,
     );
 
-    let mut widths = vec![None; out.len()];
-    for (index, width) in forced {
-        if let Some(slot) = widths.get_mut(index) {
-            *slot = Some(width);
-        }
-    }
+    // Propagate the forced leaf widths (from the extract/extension collapses) through
+    // inference so interior narrow arithmetic is typed too: a collapsed extension pins
+    // its whole sub-tree to a known width, and a node left untyped here would be read
+    // as width-sensitive and demand full-width operands (e.g. the `Div` inside riscv
+    // `remw`'s `Sub(x, Mul(Div(x,y), y))`). Forced widths still win over inference.
+    let inferred = infer_widths(&out, |node| forced.get(&node.index()).copied());
+    let widths = (0..out.len())
+        .map(|index| forced.get(&index).copied().or(inferred[index]))
+        .collect();
     (out, new_root, widths)
 }
 
@@ -410,11 +413,34 @@ fn canon_rebuild<V: Clone>(
         return inner;
     }
 
+    // Collapse `sext/zext(e, w)` to the bare `e` forced to its inferred width `n`
+    // when `e` roots pure integer arithmetic that inference pins to a known width:
+    // selection canonicalization runs under the junk-upper Narrow contract, so a
+    // pattern that materializes `ext(e_n, w)` provides at least the low `n` bits of
+    // `e_n`, and consumers of a narrow class re-narrow through their own operand-width
+    // constraints — the extension is a view, not a computation. This is what types
+    // interior narrow arithmetic (e.g. the `Div` inside riscv `remw`'s Euclidean
+    // `Sub(x, Mul(Div(x,y), y))`). The allowlist excludes comparisons: `zext(x < y,
+    // w)` is the register materialization of a 1-bit result (riscv `slt`), where the
+    // extension is a computation, not a view, and collapsing it would drop the
+    // materializer the rule set requires for that comparison kind.
     if matches!(kind, SymKind::SExt | SymKind::ZExt)
         && children.len() == 2
         && matches!(
             graph.get_node(children[0]),
-            SymKind::Div | SymKind::UDiv | SymKind::SRem | SymKind::URem
+            SymKind::Add
+                | SymKind::Sub
+                | SymKind::Mul
+                | SymKind::Div
+                | SymKind::UDiv
+                | SymKind::SRem
+                | SymKind::URem
+                | SymKind::And
+                | SymKind::Or
+                | SymKind::Xor
+                | SymKind::ShiftLeft
+                | SymKind::ShiftRightLogic
+                | SymKind::ShiftRightArithmetic
         )
         && let Some(width) = infer_widths(graph, |_| None)[children[0].index()]
     {
@@ -710,5 +736,57 @@ mod type_tests {
 
         assert_eq!(*canonical.get_node(root), SymKind::Div);
         assert_eq!(forced_widths[root.index()], Some(32));
+    }
+
+    // riscv `remw` = sext(x_w32 - (x_w32 / y_w32) * y_w32, 64): the extension wraps a
+    // compound Euclidean remainder, not a bare division, so the collapse must fire on
+    // the inferred width of the whole sub-tree and type the interior `Div` as narrow.
+    #[test]
+    fn selection_types_the_interior_division_of_a_narrow_remainder() {
+        let mut graph = Graph::new();
+        let lhs = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(lhs, SymPayload::SymbolId(0));
+        let rhs = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(rhs, SymPayload::SymbolId(1));
+        let hi = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(hi, SymPayload::Int(APInt::new(32, 31)));
+        let lo = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(lo, SymPayload::Int(APInt::new(32, 0)));
+        let word = |graph: &mut Graph, src| {
+            let e = graph.add_node(SymKind::Extract);
+            graph.add_edge(e, src);
+            graph.add_edge(e, hi);
+            graph.add_edge(e, lo);
+            e
+        };
+        let div_lhs = word(&mut graph, lhs);
+        let div_rhs = word(&mut graph, rhs);
+        let div = graph.add_node(SymKind::Div);
+        graph.add_edge(div, div_lhs);
+        graph.add_edge(div, div_rhs);
+        let mul_rhs = word(&mut graph, rhs);
+        let mul = graph.add_node(SymKind::Mul);
+        graph.add_edge(mul, div);
+        graph.add_edge(mul, mul_rhs);
+        let sub_lhs = word(&mut graph, lhs);
+        let sub = graph.add_node(SymKind::Sub);
+        graph.add_edge(sub, sub_lhs);
+        graph.add_edge(sub, mul);
+        let width = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(width, SymPayload::Int(APInt::new(32, 64)));
+        let root = graph.add_node(SymKind::SExt);
+        graph.add_edge(root, sub);
+        graph.add_edge(root, width);
+
+        let (canonical, root, forced_widths) =
+            canonicalize_for_selection(&graph, root, &HashSet::new());
+
+        assert_eq!(*canonical.get_node(root), SymKind::Sub);
+        assert_eq!(forced_widths[root.index()], Some(32));
+        let interior_division = (0..canonical.len())
+            .map(NodeId::from_index)
+            .find(|&node| *canonical.get_node(node) == SymKind::Div)
+            .expect("the remainder keeps an interior division");
+        assert_eq!(forced_widths[interior_division.index()], Some(32));
     }
 }

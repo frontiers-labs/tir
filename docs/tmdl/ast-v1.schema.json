@@ -164,8 +164,6 @@
         "multiply",
         "divide",
         "unsigned_divide",
-        "signed_remainder",
-        "unsigned_remainder",
         "equal",
         "not_equal",
         "less_than",
@@ -994,9 +992,6 @@
               "items": {
                 "$ref": "#/$defs/Parameter"
               }
-            },
-            "pseudo": {
-              "type": "boolean"
             },
             "schedule": {
               "type": "array",

@@ -16,13 +16,100 @@ fn analyze_instruction_semantics(
     )?;
     let fixed_register_by_class = split_fixed_registers(&lowering.register_symbols);
 
+    let guarded_semantics = defined_register_operands.first().and_then(|dst| {
+        analyze_guarded_semantics(
+            inst,
+            dst,
+            numeric_params,
+            isa_param_values,
+            register_index_map,
+        )
+    });
+
     Some(InstructionSemantics {
         pattern,
         root: lowering.root,
         variable_symbols: lowering.variable_symbols,
         fixed_register_by_class,
         register_symbols: lowering.register_symbols,
+        guarded_semantics,
     })
+}
+
+/// The destination's full guarded semantics `If(cond, then, else)` when the
+/// behavior is a statement-level `if cond { dst = t } else { dst = e }`. The else
+/// arm is lowered first, so its operand symbol ids match the guard-relaxed
+/// selection pattern (which lowers the else arm alone) — a prerequisite for the
+/// pass-construction relaxation proof to share the pattern's op node.
+fn analyze_guarded_semantics(
+    inst: &ast::Instruction,
+    dst: &str,
+    numeric_params: &HashMap<String, i64>,
+    isa_param_values: &HashMap<String, i64>,
+    register_index_map: &HashMap<(String, String), u32>,
+) -> Option<(tir::sem::SemGraph, tir::graph::NodeId)> {
+    use tir::graph::MutDag;
+    let (cond, then_value, else_value) = guarded_assignment_shape(&inst.behavior, dst)?;
+    // Resolve `self.XLEN` and friends to their concrete per-ISA width (the value
+    // `execute()` uses, e.g. 64 for RV32+RV64), so the guarded semantics is a
+    // width-concrete graph the relaxation proof can bit-blast — patterns keep it
+    // symbolic, but this companion exists only to be proved.
+    let mut concrete_params = numeric_params.clone();
+    for (name, value) in isa_param_values {
+        concrete_params.entry(name.clone()).or_insert(*value);
+    }
+    let mut graph = tir::sem::SemGraph::new();
+    let (roots, _) = ast::Expr::lower_all_to_sema_with_isa(
+        &[else_value, cond, then_value],
+        &mut graph,
+        &concrete_params,
+        isa_param_values,
+        register_index_map,
+    )?;
+    let [else_root, cond_root, then_root] = roots.as_slice() else {
+        return None;
+    };
+    let if_node = graph.add_node(tir::sem::SymKind::If);
+    graph.add_edge(if_node, *cond_root);
+    graph.add_edge(if_node, *then_root);
+    graph.add_edge(if_node, *else_root);
+    Some((graph, if_node))
+}
+
+/// Match `if cond { dst = then } else { dst = else }`, returning the condition and
+/// the two arm values. `None` for any other shape (including a single `dst = if …`
+/// assignment, whose value is an `If` expression, not a statement guard).
+fn guarded_assignment_shape<'a>(
+    behavior: &'a ast::Expr,
+    dst: &str,
+) -> Option<(&'a ast::Expr, &'a ast::Expr, &'a ast::Expr)> {
+    let ast::Expr::If(if_expr) = unwrap_single_stmt(behavior) else {
+        return None;
+    };
+    let else_arm = if_expr.else_.as_deref()?;
+    let then_value = single_assignment_value(&if_expr.then, dst)?;
+    let else_value = single_assignment_value(else_arm, dst)?;
+    Some((&if_expr.cond, then_value, else_value))
+}
+
+/// Unwrap a block holding a single statement to that statement; otherwise the
+/// expression itself.
+fn unwrap_single_stmt(expr: &ast::Expr) -> &ast::Expr {
+    match expr {
+        ast::Expr::Block(b) if b.stmts.len() == 1 => &b.stmts[0],
+        other => other,
+    }
+}
+
+/// The value of a lone `dst = value` assignment inside `expr` (a block arm or a
+/// bare assignment).
+fn single_assignment_value<'a>(expr: &'a ast::Expr, dst: &str) -> Option<&'a ast::Expr> {
+    match unwrap_single_stmt(expr) {
+        ast::Expr::Assign(a) if assignment_dest_name(&a.dest).as_deref() == Some(dst) => {
+            Some(&a.value)
+        }
+        _ => None,
+    }
 }
 
 fn split_fixed_registers(symbols: &HashMap<(String, u32), u32>) -> HashMap<String, Option<u16>> {

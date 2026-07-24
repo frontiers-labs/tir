@@ -29,8 +29,6 @@ pub enum Token<'a> {
     Dash,
     /// `/`
     ForwardSlash,
-    /// `%`
-    Percent,
     /// `*`
     Asterisk,
     /// `&`
@@ -95,8 +93,6 @@ pub enum Token<'a> {
     KwTemplate,
     /// `instruction`
     KwInstruction,
-    /// `pseudo`
-    KwPseudo,
     /// `param`
     KwParam,
     /// `operands`
@@ -195,7 +191,6 @@ pub(crate) fn lexer<'src>()
         just('-').to(Token::Dash),
         just('*').to(Token::Asterisk),
         just('/').to(Token::ForwardSlash),
-        just('%').to(Token::Percent),
         just('|').to(Token::Pipe),
         just('.').to(Token::Dot),
         just('&').to(Token::Ampersand),
@@ -214,7 +209,6 @@ pub(crate) fn lexer<'src>()
         "parameters" => Token::KwParameters,
         "template" => Token::KwTemplate,
         "instruction" => Token::KwInstruction,
-        "pseudo" => Token::KwPseudo,
         "param" => Token::KwParam,
         "operands" => Token::KwOperands,
         "encoding" => Token::KwEncoding,
@@ -289,7 +283,6 @@ impl<'a> fmt::Display for Token<'a> {
             Token::Colon => f.write_char(':'),
             Token::Semicolon => f.write_char(';'),
             Token::ForwardSlash => f.write_str("/"),
-            Token::Percent => f.write_str("%"),
             Token::BackSlash => f.write_str("\\"),
             Token::Comma => f.write_str(","),
             Token::Ampersand => f.write_char('&'),
@@ -313,7 +306,6 @@ impl<'a> fmt::Display for Token<'a> {
             Token::KwRegisters => f.write_str("registers"),
             Token::KwTemplate => f.write_str("template"),
             Token::KwInstruction => f.write_str("instruction"),
-            Token::KwPseudo => f.write_str("pseudo"),
             Token::KwParam => f.write_str("param"),
             Token::KwOperands => f.write_str("operands"),
             Token::KwEncoding => f.write_str("encoding"),

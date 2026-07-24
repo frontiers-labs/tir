@@ -6,7 +6,7 @@
 //! graph alias core builds into, the `AsSemExpr` trait, and constant folding via
 //! [`Operation::semantic_expr`].
 
-use crate::graph::{MutDag, NodeId, NodeMeta, PostOrderDag};
+use crate::graph::{Dag, MutDag, NodeId, NodeMeta, PostOrderDag};
 use crate::{Operation, ValueId};
 
 pub use tir_symbolic::lang::{
@@ -29,6 +29,56 @@ pub(crate) use discover::{con, op};
 /// over `SymPayload<ValueId>` leaves, annotated with [`NodeMeta`] so a node can
 /// carry its originating op and inferred type.
 pub type SemGraph = PostOrderDag<SymKind, SymPayload<ValueId>, NodeMeta>;
+
+/// The definedness condition of a partial integer operation, materialized as new
+/// nodes in `g` over the operation's own operands. The partial kinds are the
+/// IR-level division/remainder ops, undefined at a zero divisor (and, for the
+/// signed forms, at the `MIN / -1` overflow point). Returns the condition's root,
+/// or `None` when `node`'s kind is total. `widths` must give every existing
+/// node's bit width (e.g. from [`infer_widths`]); the operand width sizes the
+/// emitted constants.
+///
+/// This is the metadata the guard-relaxation gate consumes: a guarded target
+/// instruction may be relaxed to the pure partial op exactly where the op is
+/// defined, so `D(pattern)` is the antecedent of the relaxation obligation.
+pub fn definedness_condition(
+    g: &mut SemGraph,
+    node: NodeId,
+    widths: &[Option<u32>],
+) -> Option<NodeId> {
+    let signed = match *g.get_node(node) {
+        SymKind::Div | SymKind::SRem => true,
+        SymKind::UDiv | SymKind::URem => false,
+        _ => return None,
+    };
+    let operands: Vec<NodeId> = g.children(node).collect();
+    let [lhs, rhs] = operands.as_slice() else {
+        return None;
+    };
+    let (lhs, rhs) = (*lhs, *rhs);
+    let width = widths.get(rhs.index()).copied().flatten()?;
+
+    let zero = con(g, 0, width);
+    let nonzero = op(g, SymKind::Ne, &[rhs, zero]);
+    if !signed {
+        return Some(nonzero);
+    }
+    let min = con(g, 1u64 << (width - 1), width);
+    let all_ones = con(g, ones_mask(width), width);
+    let is_min = op(g, SymKind::Eq, &[lhs, min]);
+    let is_neg_one = op(g, SymKind::Eq, &[rhs, all_ones]);
+    let overflow = op(g, SymKind::And, &[is_min, is_neg_one]);
+    let no_overflow = op(g, SymKind::Not, &[overflow]);
+    Some(op(g, SymKind::And, &[nonzero, no_overflow]))
+}
+
+fn ones_mask(width: u32) -> u64 {
+    if width >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    }
+}
 
 /// Build an operation's semantic expression into any graph backend. Unlike
 /// [`Operation::semantic_expr`] (nailed to [`SemGraph`] so it stays `dyn`-callable),

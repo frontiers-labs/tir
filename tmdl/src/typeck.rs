@@ -223,8 +223,6 @@ fn infer<'a>(
                 | ast::BinOp::Mul
                 | ast::BinOp::Div
                 | ast::BinOp::UnsignedDiv
-                | ast::BinOp::SignedRem
-                | ast::BinOp::UnsignedRem
                 | ast::BinOp::BitwiseAnd
                 | ast::BinOp::BitwiseOr
                 | ast::BinOp::BitwiseXor => {

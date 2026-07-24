@@ -319,6 +319,14 @@ fn emit_instructions<'a>(
                 let field_ident = format_ident!("{}", name);
                 items.push(quote! { #field_ident: Use });
             }
+            items.extend(fixed_register_role_items(
+                inst,
+                &ops,
+                &register_index_map,
+                &register_name_map,
+                &flag_classes,
+                &pc_classes,
+            ));
             quote! { #(#items,)* }
         };
 
@@ -702,6 +710,28 @@ fn emit_instructions<'a>(
             }
             let (pattern_stmts, _root_var) =
                 emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+            // The destination's full guarded semantics, emitted alongside the
+            // relaxed pattern so pass construction proves the guard drop sound.
+            let guarded_fn_ident = format_ident!("isel_guarded_{}", inst.name.to_lowercase());
+            let (guarded_emitter, guarded_semantics_call) = match &semantics.guarded_semantics {
+                Some((guarded, guarded_root)) => {
+                    let guarded_widths = tir::sem::infer_widths(guarded, |_| None);
+                    let (guarded_stmts, _) =
+                        emit_dag_as_code(guarded, *guarded_root, &guarded_widths);
+                    (
+                        quote! {
+                            fn #guarded_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
+                                use tir::graph::MutDag;
+                                let mut g = tir::sem::SemGraph::new();
+                                #(#guarded_stmts)*
+                                g
+                            }
+                        },
+                        quote! { .with_guarded_semantics(#guarded_fn_ident(context)) },
+                    )
+                }
+                None => (quote! {}, quote! {}),
+            };
             let operand_register_call = emit_operand_register_call(
                 &ops,
                 &semantics.variable_symbols,
@@ -776,6 +806,8 @@ fn emit_instructions<'a>(
                     g
                 }
 
+                #guarded_emitter
+
                 fn #emit_fn_ident(
                     context: &tir::Context,
                     req: &tir::backend::isel::EmitRequest,
@@ -805,6 +837,7 @@ fn emit_instructions<'a>(
                         #operand_register_call
                         #result_register_call
                         #operand_imm_range_call
+                        #guarded_semantics_call
                         ,
                     );
                 }
@@ -1704,6 +1737,14 @@ fn emit_instructions<'a>(
             &register_index_map,
             &pc_classes,
             &flag_classes,
+            &mut isel_rule_emitters,
+            &mut isel_rule_inits,
+        )?;
+        emit_fixed_register_rules(
+            files,
+            item_cache,
+            &register_index_map,
+            &register_name_map,
             &mut isel_rule_emitters,
             &mut isel_rule_inits,
         )?;
