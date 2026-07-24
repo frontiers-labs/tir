@@ -11,7 +11,7 @@
 use tir::graph::{Dag, NodeId, PostOrderDag};
 
 use crate::diagnostics::Span;
-use crate::lexer::IntegerLiteral;
+use crate::lexer::{FloatingLiteral, IntegerLiteral};
 
 /// The AST: node payloads ([`AstNode`], kind + source span) live in the DAG's
 /// dense vector, while the variable-sized leaf payload sits in its side table.
@@ -191,6 +191,7 @@ pub enum AstKind {
     Var,
     String,
     Int,
+    FloatLiteral,
     Character,
 }
 
@@ -240,6 +241,7 @@ pub enum AstLeaf {
     Var(String),
     String(String),
     Int(IntegerLiteral),
+    Float(FloatingLiteral),
     Character(String),
     Type(CType),
 }
@@ -476,6 +478,10 @@ fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
         },
         AstKind::Int => match ast.get_leaf_data(id) {
             Some(AstLeaf::Int(value)) => format!("Int {}", value.spelling),
+            _ => unreachable!(),
+        },
+        AstKind::FloatLiteral => match ast.get_leaf_data(id) {
+            Some(AstLeaf::Float(value)) => format!("Float {}", value.spelling),
             _ => unreachable!(),
         },
         AstKind::Character => match ast.get_leaf_data(id) {

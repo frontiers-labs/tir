@@ -135,8 +135,11 @@ impl<'a> SemDagBuilder<'a> {
     }
 
     pub(crate) fn build_for_op(&mut self, op: &std::sync::Arc<OpInstance>) -> Option<Id> {
+        // A standalone `constantf` is left for the target's pre-RA hook, like a
+        // bare integer `constant`; only as an operand (see `build_from_value`)
+        // does it fold into a consumer via `float_constant_class`.
         if op.is::<crate::builtin::ConstantFOp>() {
-            return self.float_constant_class(op);
+            return None;
         }
         if let Some(class) = self.build_memory_effect(op) {
             return Some(class);

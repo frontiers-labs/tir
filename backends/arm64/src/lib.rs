@@ -477,6 +477,36 @@ fn create_regalloc_pass_for(
     tir::backend::regalloc::RegisterAllocationPass::with_abi(Box::new(Arm64RegAlloc), abi)
 }
 
+/// Pre-RA: materialize a `constantf` that survived instruction selection into
+/// an integer sequence plus `fmov d, x`.
+fn lower_float_constant(
+    context: &tir::Context,
+    op: &tir::OperationRef,
+    rewriter: &mut tir::Rewriter,
+) -> Result<bool, tir::PassError> {
+    use tir::builtin::ConstantFOp;
+
+    let Some(constant) = op.as_op::<ConstantFOp>() else {
+        return Ok(false);
+    };
+    let Some(bits) = tir::backend::f64_constant_bits(context, &constant) else {
+        return Ok(false);
+    };
+    let temp = context
+        .create_value(tir::builtin::IntegerType::new(context, 64), None)
+        .id();
+    let integer = virt(temp.number(), RegClass::GPR.id());
+    for instruction in obj::materialize_integer(context, integer.clone(), bits as u64) {
+        rewriter.insert_op_before(op, instruction.as_ref())?;
+    }
+    let move_bits = FMovGeneralToDoubleOpBuilder::new(context)
+        .attr("fd", virt(constant.result().number(), RegClass::FPR64.id()))
+        .attr("rn", integer)
+        .build();
+    rewriter.replace_op(op, &move_bits)?;
+    Ok(true)
+}
+
 /// The AArch64 (ARMv8-A) target, selected via `--march`/`--mcpu`.
 pub struct Arm64Target {
     config: TargetConfig,
@@ -560,7 +590,11 @@ impl tir::backend::TargetMachine for Arm64Target {
     }
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        vec![obj::lower_constant, obj::lower_addr_of]
+        vec![
+            lower_float_constant,
+            obj::lower_constant,
+            obj::lower_addr_of,
+        ]
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
@@ -1352,6 +1386,7 @@ mod tests {
             (0x1E600843, "fmul d3, d2, d0"),
             (0x1E601000, "fmov d0, #2.0"),
             (0x9E660064, "fmov x4, d3"),
+            (0x9E670064, "fmov d4, x3"),
             (0x4E080C00, "dup v0.2d, x0"),
             (0x4EE18402, "add v2.2d, v0.2d, v1.2d"),
             (0x4EA18403, "add v3.4s, v0.4s, v1.4s"),

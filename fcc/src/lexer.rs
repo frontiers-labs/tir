@@ -10,6 +10,23 @@ pub struct IntegerLiteral {
     pub spelling: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FloatingLiteral {
+    pub value: f64,
+    pub spelling: String,
+}
+
+fn parse_floating_literal(spelling: &str) -> Option<FloatingLiteral> {
+    spelling
+        .replace('\'', "")
+        .parse()
+        .ok()
+        .map(|value| FloatingLiteral {
+            value,
+            spelling: spelling.to_string(),
+        })
+}
+
 fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
     let suffix_start = spelling.trim_end_matches(['u', 'U', 'l', 'L']).len();
     let digits = spelling[..suffix_start].replace('\'', "");
@@ -142,6 +159,8 @@ pub enum Token {
     // Or regular expressions.
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     Identifier(String),
+    #[regex(r"([0-9][0-9']*\.[0-9']*|\.[0-9][0-9']*)([eE][+-]?[0-9][0-9']*)?|[0-9][0-9']*[eE][+-]?[0-9][0-9']*", |lex| parse_floating_literal(lex.slice()))]
+    FloatingLiteral(FloatingLiteral),
     #[regex("0[xX][0-9a-fA-F'][0-9a-fA-F']*[uUlL]*|0[bB][01'][01']*[uUlL]*|[0-9][0-9']*[uUlL]*", |lex| parse_integer_literal(lex.slice()))]
     IntegerLiteral(IntegerLiteral),
     #[regex(r#"(u8|u|U|L)?'([^'\\]|\\.)+'"#, |lex| lex.slice().to_string())]
@@ -300,6 +319,7 @@ impl fmt::Display for Token {
             Token::HashHash => f.write_str("##"),
             Token::Hash => f.write_str("#"),
             Token::Identifier(s) => f.write_str(s),
+            Token::FloatingLiteral(n) => f.write_str(&n.spelling),
             Token::IntegerLiteral(n) => f.write_str(&n.spelling),
             Token::CharacterLiteral(s) => f.write_str(s),
             Token::StringLiteral(s) => write!(f, "\"{s}\""),

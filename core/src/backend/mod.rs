@@ -290,6 +290,24 @@ pub fn branch_successors(op: &dyn tir::Operation) -> Vec<tir::BlockId> {
         .collect()
 }
 
+/// The IEEE-754 bit pattern of an f64 `constantf`, as the immediate a
+/// materializing move takes. `None` unless the constant's result is f64.
+pub fn f64_constant_bits(context: &tir::Context, op: &crate::builtin::ConstantFOp) -> Option<i64> {
+    let ty = context.get_value(op.result()).ty();
+    let is_f64 = (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
+        .downcast_ref::<crate::builtin::FloatType>()
+        .is_some_and(|float| float.bit_width() == 64);
+    if !is_f64 {
+        return None;
+    }
+    crate::Operation::attributes(op)
+        .iter()
+        .find_map(|attr| match attr.value {
+            AttributeValue::F64(value) if attr.name == "value" => Some(value.to_bits() as i64),
+            _ => None,
+        })
+}
+
 pub fn int_attr(attrs: &[tir::attributes::NamedAttribute], name: &str) -> Option<i64> {
     attrs.iter().find_map(|attr| {
         if attr.name != name {

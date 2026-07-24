@@ -991,6 +991,7 @@ impl Analyzer<'_> {
                     ValueCategory::Value,
                 )
             }
+            AstKind::FloatLiteral => (self.types.intern(TypeKind::Double), ValueCategory::Value),
             AstKind::Character => (int, ValueCategory::Value),
             AstKind::String => {
                 let char_ty = self.types.intern(TypeKind::Integer(IntegerKind::Char));

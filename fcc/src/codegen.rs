@@ -1114,6 +1114,19 @@ impl FnCodegen<'_> {
                             .result(),
                     )
                 }
+                AstKind::FloatLiteral => {
+                    let AstLeaf::Float(n) = ast.get_leaf_data(node).unwrap() else {
+                        unreachable!("floating literal node carries a floating payload");
+                    };
+                    LoweredExpr::Value(
+                        self.builder
+                            .insert(
+                                b::constantf(self.context, n.value, FloatType::f64(self.context))
+                                    .build(),
+                            )
+                            .result(),
+                    )
+                }
                 AstKind::Character => {
                     let AstLeaf::Character(spelling) = ast.get_leaf_data(node).unwrap() else {
                         unreachable!("character node carries a character payload");

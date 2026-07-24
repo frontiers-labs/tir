@@ -73,30 +73,41 @@ pub(crate) fn lower_constant(
     let value = tir::backend::int_attr(constant.attributes(), "value").ok_or_else(|| {
         tir::PassError::InvalidRuleSet("constant op without an integer value".to_string())
     })?;
-    let bits = value as u64;
     let dest = virt(constant.result().number(), crate::RegClass::GPR.id());
-    let mut last: Box<dyn Operation> = Box::new(
+    let mut instructions = materialize_integer(context, dest, value as u64);
+    let last = instructions.pop().unwrap();
+    for instruction in instructions {
+        rewriter.insert_op_before(op, instruction.as_ref())?;
+    }
+    rewriter.replace_op(op, last.as_ref())?;
+    Ok(true)
+}
+
+pub(crate) fn materialize_integer(
+    context: &tir::Context,
+    dest: AttributeValue,
+    bits: u64,
+) -> Vec<Box<dyn Operation>> {
+    let mut instructions: Vec<Box<dyn Operation>> = vec![Box::new(
         MoveWideZeroOpBuilder::new(context)
             .attr("rd", dest.clone())
             .attr("imm", AttributeValue::Int((bits & 0xffff) as i64))
             .build(),
-    );
+    )];
     for halfword in 1..4 {
         let part = ((bits >> (halfword * 16)) & 0xffff) as i64;
         if part == 0 {
             continue;
         }
-        rewriter.insert_op_before(op, last.as_ref())?;
-        last = Box::new(
+        instructions.push(Box::new(
             MoveWideKeepShiftedOpBuilder::new(context)
                 .attr("rd", dest.clone())
                 .attr("imm", AttributeValue::Int(part))
                 .attr("hw", AttributeValue::Int(halfword))
                 .build(),
-        );
+        ));
     }
-    rewriter.replace_op(op, last.as_ref())?;
-    Ok(true)
+    instructions
 }
 
 /// Pre-RA: materialize an `addr_of` symbol address as `adr rd, sym`. The

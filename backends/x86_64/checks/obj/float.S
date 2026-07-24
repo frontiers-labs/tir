@@ -12,6 +12,7 @@ fp:
 	mulsd xmm4, xmm5
 	divsd xmm14, xmm15
 	movsd xmm8, xmm0
+	movq xmm9, r10
 
 # CHECK: fp:
 # addsd xmm0, xmm1: opcode 58, ModR/M=11 reg(0) rm(1) = C1.
@@ -24,3 +25,5 @@ fp:
 # CHECK-NEXT: [0xF2, 0x45, 0x0F, 0x5E, 0xF7]
 # movsd xmm8, xmm0: REX.R=44, opcode 10, ModR/M=11 reg(8&7=0) rm(0) = C0.
 # CHECK-NEXT: [0xF2, 0x44, 0x0F, 0x10, 0xC0]
+# movq xmm9, r10: 66 prefix, REX.WRB=4D, opcode 6E, ModR/M=11 reg(1) rm(2) = CA.
+# CHECK-NEXT: [0x66, 0x4D, 0x0F, 0x6E, 0xCA]

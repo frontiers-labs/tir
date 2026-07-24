@@ -1,7 +1,4 @@
-// RUN: not tir mc --march=x86_64 --filetype=obj-ascii %s
-
-// FINDING G3 (isel-gap): float constants are never materialized; `constantf`
-// survives selection and object emission fails: "cannot encode 'constantf'".
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 module {
   func @f() -> !f64 {
@@ -10,3 +7,7 @@ module {
   }
   module_end
 }
+
+// CHECK: x86_64.movabs
+// CHECK: x86_64.movq_xmm_gpr
+// CHECK-NOT: constantf

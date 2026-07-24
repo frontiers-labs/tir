@@ -63,6 +63,37 @@ mod isa {
         })
     }
 
+    /// Pre-RA: materialize a `constantf` that survived instruction selection
+    /// into `movabs r64, bits` + `movq xmm, r64`.
+    fn lower_float_constant(
+        context: &tir::Context,
+        op: &tir::OperationRef,
+        rewriter: &mut tir::Rewriter,
+    ) -> Result<bool, tir::PassError> {
+        use tir::builtin::ConstantFOp;
+
+        let Some(constant) = op.as_op::<ConstantFOp>() else {
+            return Ok(false);
+        };
+        let Some(bits) = tir::backend::f64_constant_bits(context, &constant) else {
+            return Ok(false);
+        };
+        let temp = context
+            .create_value(tir::builtin::IntegerType::new(context, 64), None)
+            .id();
+        let materialize = MovAbsOpBuilder::new(context)
+            .attr("dst", virt(temp.number(), RegClass::GPR.id()))
+            .attr("imm", AttributeValue::Int(bits))
+            .build();
+        let move_bits = MovqXmmGprOpBuilder::new(context)
+            .attr("dst", virt(constant.result().number(), RegClass::XMM.id()))
+            .attr("src", virt(temp.number(), RegClass::GPR.id()))
+            .build();
+        rewriter.insert_op_before(op, &materialize)?;
+        rewriter.replace_op(op, &move_bits)?;
+        Ok(true)
+    }
+
     /// Emit the branch-if-nonzero fallback for a condition no branch rule
     /// fused: `test cond, cond` + `jne dest`.
     fn emit_branch_nonzero(
@@ -1134,7 +1165,7 @@ mod isa {
         }
 
         fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![lower_constant, lower_addr_of]
+            vec![lower_float_constant, lower_constant, lower_addr_of]
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {

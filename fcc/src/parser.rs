@@ -427,6 +427,15 @@ where
                     id
                 },
             );
+            let floating = select! { Token::FloatingLiteral(n) => n }.map_with(
+                |n, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                    let tok = e.span().start;
+                    let st = &mut e.state().0;
+                    let id = st.add(AstKind::FloatLiteral, tok);
+                    st.ast.set_leaf_data(id, AstLeaf::Float(n));
+                    id
+                },
+            );
             let character = select! { Token::CharacterLiteral(value) => value }.map_with(
                 |value, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                     let tok = e.span().start;
@@ -472,6 +481,7 @@ where
             });
             let primary = choice((
                 literal,
+                floating,
                 character,
                 string,
                 call,

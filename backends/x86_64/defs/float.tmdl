@@ -252,12 +252,6 @@ instruction Cvtsi2sd32 for [X86_64] {
     }
 }
 
-pseudo instruction SelectFloatConstant64 for [X86_64] {
-    param OPNAME: String = "select_float_constant64";
-    operands { dst: XMM, imm: bits<64>, }
-    behavior { dst = bitcast(imm); }
-}
-
 instruction MovsdLoadDisp for [X86_64] {
     param OPNAME: String = "movsd_load_disp";
     param MNEMONIC: String = "movsd";
