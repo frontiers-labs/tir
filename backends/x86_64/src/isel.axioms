@@ -12,3 +12,7 @@
 (axiom uitofp-via-sitofp (vars (x n)) (root 64) (where (= n 32))
   (lhs (uitofp x 11 52))
   (rhs (sitofp (and x (zext (const 4294967295 32) 64)) (const 11 4) (const 52 6))))
+
+(axiom fptoui-via-fptosi (vars (x)) (root 32)
+  (lhs (fptoui x))
+  (rhs (extract (fptosi x (const 64 7)) (const 31 6) (const 0 1))))

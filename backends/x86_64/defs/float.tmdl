@@ -318,12 +318,6 @@ instruction Cvtsi2sd64 for [X86_64] {
     }
 }
 
-pseudo instruction SelectUnsignedIntegerToDouble32 for [X86_64] {
-    param OPNAME: String = "select_unsigned_integer_to_double32";
-    operands { dst: XMM, src: GPR32, }
-    behavior { dst = uitofp(src, 11, 52); }
-}
-
 // Convert scalar binary64 to a signed 32-bit integer, truncating toward zero.
 instruction Cvttsd2si32 for [X86_64] {
     param OPNAME: String = "cvttsd2si32";
@@ -388,18 +382,6 @@ instruction Cvttsd2si64 for [X86_64] {
     behavior {
         dst = fptosi(src, 64);
     }
-}
-
-pseudo instruction SelectDoubleToUnsignedInteger32 for [X86_64] {
-    param OPNAME: String = "select_double_to_unsigned_integer32";
-    operands { dst: GPR32, src: XMM, }
-    behavior { dst = fptoui(src, 32); }
-}
-
-pseudo instruction SelectFloatConstant64 for [X86_64] {
-    param OPNAME: String = "select_float_constant64";
-    operands { dst: XMM, imm: bits<64>, }
-    behavior { dst = bitcast(imm); }
 }
 
 instruction MovsdLoadDisp for [X86_64] {
