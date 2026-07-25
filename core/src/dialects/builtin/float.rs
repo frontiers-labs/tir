@@ -254,6 +254,53 @@ operation! {
     }
 }
 
+/// Build the target-independent semantic graph for a `cmpf` predicate.
+///
+/// Backend flag composition uses the same graph so its proved reader rules
+/// match the builtin operation exactly.
+pub fn cmpf_semantics(
+    g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+    predicate: &str,
+) -> Option<tir::graph::NodeId> {
+    use tir::sem::SymKind;
+
+    let mut operand = |index| {
+        let leaf = g.add_node(SymKind::Symbol);
+        g.set_leaf_data(leaf, tir::sem::SymPayload::SymbolId(index));
+        leaf
+    };
+    let lhs = operand(0);
+    let rhs = operand(1);
+    let one = (predicate == "une").then(|| {
+        let one = g.add_node(SymKind::Constant);
+        g.set_leaf_data(one, tir::sem::SymPayload::Int(tir_adt::APInt::new(1, 1)));
+        one
+    });
+    let mut binary = |kind, lhs, rhs| {
+        let node = g.add_node(kind);
+        g.add_edge(node, lhs);
+        g.add_edge(node, rhs);
+        node
+    };
+    Some(match predicate {
+        "oeq" | "une" => {
+            let left_ge = binary(SymKind::Ge, lhs, rhs);
+            let right_ge = binary(SymKind::Ge, rhs, lhs);
+            let ordered_equal = binary(SymKind::And, left_ge, right_ge);
+            if predicate == "une" {
+                binary(SymKind::Xor, ordered_equal, one.unwrap())
+            } else {
+                ordered_equal
+            }
+        }
+        "olt" => binary(SymKind::Lt, lhs, rhs),
+        "ogt" => binary(SymKind::Lt, rhs, lhs),
+        "oge" => binary(SymKind::Ge, lhs, rhs),
+        "ole" => binary(SymKind::Ge, rhs, lhs),
+        _ => return None,
+    })
+}
+
 impl CmpFOp {
     fn cmp_expr(
         &self,
@@ -262,49 +309,13 @@ impl CmpFOp {
             Leaf = tir::sem::SymPayload<tir::ValueId>,
         >,
     ) -> Option<tir::graph::NodeId> {
-        use tir::sem::SymKind;
-
         let predicate = self.0.attributes.iter().find_map(|attribute| {
             (attribute.name == "predicate").then_some(match &attribute.value {
                 tir::attributes::AttributeValue::Str(value) => Some(value.as_str()),
                 _ => None,
             })
         })??;
-        let mut operand = |index| {
-            let leaf = g.add_node(SymKind::Symbol);
-            g.set_leaf_data(leaf, tir::sem::SymPayload::SymbolId(index));
-            leaf
-        };
-        let lhs = operand(0);
-        let rhs = operand(1);
-        let one = (predicate == "une").then(|| {
-            let one = g.add_node(SymKind::Constant);
-            g.set_leaf_data(one, tir::sem::SymPayload::Int(tir_adt::APInt::new(1, 1)));
-            one
-        });
-        let mut binary = |kind, lhs, rhs| {
-            let node = g.add_node(kind);
-            g.add_edge(node, lhs);
-            g.add_edge(node, rhs);
-            node
-        };
-        Some(match predicate {
-            "oeq" | "une" => {
-                let left_ge = binary(SymKind::Ge, lhs, rhs);
-                let right_ge = binary(SymKind::Ge, rhs, lhs);
-                let ordered_equal = binary(SymKind::And, left_ge, right_ge);
-                if predicate == "une" {
-                    binary(SymKind::Xor, ordered_equal, one.unwrap())
-                } else {
-                    ordered_equal
-                }
-            }
-            "olt" => binary(SymKind::Lt, lhs, rhs),
-            "ogt" => binary(SymKind::Lt, rhs, lhs),
-            "oge" => binary(SymKind::Ge, lhs, rhs),
-            "ole" => binary(SymKind::Ge, rhs, lhs),
-            _ => return None,
-        })
+        cmpf_semantics(g, predicate)
     }
 }
 

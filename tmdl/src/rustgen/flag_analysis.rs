@@ -737,11 +737,21 @@ fn comparison_candidate(
     (g, root)
 }
 
+fn floating_equality_candidate(negate: bool) -> (tir::sem::SemGraph, tir::graph::NodeId) {
+    let mut g = tir::sem::SemGraph::new();
+    let predicate = if negate { "une" } else { "oeq" };
+    let root = tir::builtin::cmpf_semantics(&mut g, predicate)
+        .expect("the builtin floating comparison predicate must be valid");
+    (g, root)
+}
+
 /// The comparison the composed flag condition is provably equivalent to, if
-/// any: the six canonical predicates `cmpi` lowers to, in both operand orders.
-/// Integer candidates pass a fuzz filter before the SMT proof. Float candidates
-/// go directly through the type-aware SMT proof so IEEE comparison semantics are
-/// retained. A wrong flag formula derives no rule instead of a miscompiling one.
+/// any. Integer candidates are the canonical predicates `cmpi` lowers to, in
+/// both operand orders. Floating equality candidates use the exact compound
+/// graphs from `cmpf`. Integer candidates pass a fuzz filter before the SMT
+/// proof. Float candidates go directly through the type-aware SMT proof so IEEE
+/// comparison semantics are retained. A wrong flag formula derives no rule
+/// instead of a miscompiling one.
 fn find_equivalent_comparison(
     composed: &tir::sem::SemGraph,
     symbols: &ComparisonSymbols,
@@ -761,6 +771,9 @@ fn find_equivalent_comparison(
     ];
     let fuzz = FuzzOracle::default();
     for (kind, swap) in CANDIDATES {
+        if symbols.floating && matches!(kind, SymKind::Eq | SymKind::Ne) {
+            continue;
+        }
         let (candidate, root) = comparison_candidate(*kind, *swap);
         let equivalent = if symbols.floating {
             SmtOracle.equivalent_typed(composed, &candidate, &symbols.types)
@@ -770,6 +783,14 @@ fn find_equivalent_comparison(
         };
         if equivalent {
             return Some((candidate, root));
+        }
+    }
+    if symbols.floating {
+        for negate in [false, true] {
+            let (candidate, root) = floating_equality_candidate(negate);
+            if SmtOracle.equivalent_typed(composed, &candidate, &symbols.types) {
+                return Some((candidate, root));
+            }
         }
     }
     None

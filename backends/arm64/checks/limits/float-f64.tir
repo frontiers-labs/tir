@@ -36,6 +36,30 @@ module {
     %1 = bitcast %0 : !i64
     return %1
   }
+  func @less(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "olt"} : !i1
+    return %2
+  }
+  func @less_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "ole"} : !i1
+    return %2
+  }
+  func @greater(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "ogt"} : !i1
+    return %2
+  }
+  func @greater_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "oge"} : !i1
+    return %2
+  }
+  func @equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "oeq"} : !i1
+    return %2
+  }
+  func @not_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "une"} : !i1
+    return %2
+  }
   module_end
 }
 
@@ -63,3 +87,21 @@ module {
 // CHECK: asm.symbol {name = "double_to_bits"
 // CHECK: arm64.fmov_x_d {rd = %virt{{[0-9]+}}:GPR, fa = %virt{{[0-9]+}}:FPR64}
 // CHECK: asm.vret
+// CHECK-LABEL: asm.symbol {name = "less"
+// CHECK: arm64.fcmp_d
+// CHECK-NEXT: arm64.cset_gt
+// CHECK-LABEL: asm.symbol {name = "less_equal"
+// CHECK: arm64.fcmp_d
+// CHECK-NEXT: arm64.cset_ge
+// CHECK-LABEL: asm.symbol {name = "greater"
+// CHECK: arm64.fcmp_d
+// CHECK-NEXT: arm64.cset_gt
+// CHECK-LABEL: asm.symbol {name = "greater_equal"
+// CHECK: arm64.fcmp_d
+// CHECK-NEXT: arm64.cset_ge
+// CHECK-LABEL: asm.symbol {name = "equal"
+// CHECK: arm64.fcmp_d
+// CHECK-NEXT: arm64.cset_eq
+// CHECK-LABEL: asm.symbol {name = "not_equal"
+// CHECK: arm64.fcmp_d
+// CHECK-NEXT: arm64.cset_ne

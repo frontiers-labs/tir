@@ -97,5 +97,5 @@ module {
 // CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK:      x86_64.ucomisd
 // CHECK-NEXT: x86_64.set{{a|ae}}
-// CHECK-NEXT: x86_64.and
+// CHECK:      x86_64.and
 // CHECK-NEXT: x86_64.xor_imm

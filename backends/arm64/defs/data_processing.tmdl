@@ -815,6 +815,53 @@ instruction FDivDouble for [ARMv8A64] : FPArith64 {
     }
 }
 
+instruction FCmpDouble for [ARMv8A64] {
+    param MNEMONIC: String = "fcmp";
+    param OPNAME: String = "fcmp_d";
+
+    operands {
+        fa: FPR64,
+        fb: FPR64,
+    }
+
+    encoding {
+        0..4 => 0b00000,
+        5..9 => fa,
+        10..15 => 0b001000,
+        16..20 => fb,
+        21..31 => 0b00011110011,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fa}, {fb}"
+    }
+
+    behavior {
+        PSTATE::n = if fa < fb {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::z = if fa == fb {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if (fa != fa) | (fb != fb) {
+            zext(0b1, 1)
+        } else if fa < fb {
+            zext(0b0, 1)
+        } else {
+            zext(0b1, 1)
+        };
+        PSTATE::v = if (fa != fa) | (fb != fb) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+    }
+}
+
 // Convert the low signed 32-bit integer in a general register to binary64.
 instruction SCvtfDoubleWord for [ARMv8A64] {
     param MNEMONIC: String = "scvtf";

@@ -623,8 +623,11 @@ comparisons are false for unordered operands, while signed zero still compares
 equal. Ordered inequality is that one-bit result XOR `1`. This lets the e-graph
 cover equality using whichever proved ordered comparisons a target provides,
 and keeps the materialized boolean canonical without a target-specific rule.
-The one-bit `and` materialization bridge also makes an instruction whose formal
-behavior returns that conjunction directly available as a single cover.
+The one-bit `and` and `xor` materialization bridges also make instructions whose
+formal behavior returns either expression directly available as a single cover.
+Floating flag-reader composition proves equality and inequality against these
+same compound graphs, so a real compare plus condition-set pair can cover them
+without introducing an atomic float `eq`/`ne` rule.
 
 A guard matching no canonical comparison (e.g. a branch on overflow alone)
 derives no rule; the instruction still assembles, encodes, and simulates.

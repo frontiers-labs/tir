@@ -81,6 +81,6 @@ mod tests {
     fn checked_theory_declares_builtin_axioms() {
         let theory = theory();
 
-        assert_eq!(theory.axioms.len(), 49);
+        assert_eq!(theory.axioms.len(), 50);
     }
 }

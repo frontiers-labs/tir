@@ -25,6 +25,30 @@ module {
     %1 = bitcast %0 : !i64
     return %1
   }
+  func @less(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "olt"} : !i1
+    return %2
+  }
+  func @less_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "ole"} : !i1
+    return %2
+  }
+  func @greater(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "ogt"} : !i1
+    return %2
+  }
+  func @greater_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "oge"} : !i1
+    return %2
+  }
+  func @equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "oeq"} : !i1
+    return %2
+  }
+  func @not_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "une"} : !i1
+    return %2
+  }
   module_end
 }
 
@@ -46,4 +70,28 @@ module {
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
 // CHECK: double_to_bits:
 // CHECK-NEXT: [0x00, 0x00, 0x66, 0x9E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: less:
+// CHECK-NEXT: [0x20, 0x20, 0x60, 0x1E]
+// CHECK-NEXT: [0xE0, 0xD7, 0x9F, 0x9A]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: less_equal:
+// CHECK-NEXT: [0x20, 0x20, 0x60, 0x1E]
+// CHECK-NEXT: [0xE0, 0xB7, 0x9F, 0x9A]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: greater:
+// CHECK-NEXT: [0x00, 0x20, 0x61, 0x1E]
+// CHECK-NEXT: [0xE0, 0xD7, 0x9F, 0x9A]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: greater_equal:
+// CHECK-NEXT: [0x00, 0x20, 0x61, 0x1E]
+// CHECK-NEXT: [0xE0, 0xB7, 0x9F, 0x9A]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: equal:
+// CHECK-NEXT: [0x00, 0x20, 0x61, 0x1E]
+// CHECK-NEXT: [0xE0, 0x17, 0x9F, 0x9A]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: not_equal:
+// CHECK-NEXT: [0x00, 0x20, 0x61, 0x1E]
+// CHECK-NEXT: [0xE0, 0x07, 0x9F, 0x9A]
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
