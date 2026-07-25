@@ -53,16 +53,13 @@ pub fn infer_types<V>(
                     .map(|width| SemType::bits(width as u32))
                     .unwrap_or_else(|| inference.fresh_bits())
             }
-            SymKind::Eq
-            | SymKind::Ne
-            | SymKind::Lt
-            | SymKind::Le
-            | SymKind::Gt
-            | SymKind::Ge
-            | SymKind::ULt
-            | SymKind::ULe
-            | SymKind::UGt
-            | SymKind::UGe => {
+            SymKind::Eq | SymKind::Ne | SymKind::Lt | SymKind::Le | SymKind::Gt | SymKind::Ge => {
+                let operand = inference.fresh_type();
+                inference.unify(&child(0), &operand)?;
+                inference.unify(&child(1), &operand)?;
+                SemType::bits(1)
+            }
+            SymKind::ULt | SymKind::ULe | SymKind::UGt | SymKind::UGe => {
                 let operand = inference.fresh_bits();
                 inference.unify(&child(0), &operand)?;
                 inference.unify(&child(1), &operand)?;

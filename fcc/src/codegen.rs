@@ -1397,35 +1397,62 @@ impl FnCodegen<'_> {
                     let rhs_node = children.next().unwrap();
                     let lhs = self.materialize(self.values[&lhs_node]);
                     let rhs = self.materialize(self.values[&rhs_node]);
-                    let signed = self
-                        .typed
-                        .integer_is_signed(node_type(self.typed, lhs_node))
-                        .unwrap_or(true);
-                    let predicate = match (kind, signed) {
-                        (AstKind::Lt, true) => "slt",
-                        (AstKind::Lt, false) => "ult",
-                        (AstKind::Gt, true) => "sgt",
-                        (AstKind::Gt, false) => "ugt",
-                        (AstKind::Le, true) => "sle",
-                        (AstKind::Le, false) => "ule",
-                        (AstKind::Ge, true) => "sge",
-                        (AstKind::Ge, false) => "uge",
-                        (AstKind::Eq, _) => "eq",
-                        (AstKind::Ne, _) => "ne",
-                        _ => unreachable!(),
-                    };
-                    LoweredExpr::Value(
-                        self.builder
-                            .insert(
-                                b::CmpIOpBuilder::new(self.context)
-                                    .lhs(lhs)
-                                    .rhs(rhs)
-                                    .predicate(predicate)
-                                    .result_type(IntegerType::new(self.context, 1))
-                                    .build(),
-                            )
-                            .result(),
-                    )
+                    if matches!(
+                        self.typed.types().kind(node_type(self.typed, lhs_node)),
+                        TypeKind::Double
+                    ) {
+                        let predicate = match kind {
+                            AstKind::Lt => "olt",
+                            AstKind::Gt => "ogt",
+                            AstKind::Le => "ole",
+                            AstKind::Ge => "oge",
+                            AstKind::Eq => "oeq",
+                            AstKind::Ne => "une",
+                            _ => unreachable!(),
+                        };
+                        LoweredExpr::Value(
+                            self.builder
+                                .insert(
+                                    b::CmpFOpBuilder::new(self.context)
+                                        .lhs(lhs)
+                                        .rhs(rhs)
+                                        .predicate(predicate)
+                                        .result_type(IntegerType::new(self.context, 1))
+                                        .build(),
+                                )
+                                .result(),
+                        )
+                    } else {
+                        let signed = self
+                            .typed
+                            .integer_is_signed(node_type(self.typed, lhs_node))
+                            .unwrap_or(true);
+                        let predicate = match (kind, signed) {
+                            (AstKind::Lt, true) => "slt",
+                            (AstKind::Lt, false) => "ult",
+                            (AstKind::Gt, true) => "sgt",
+                            (AstKind::Gt, false) => "ugt",
+                            (AstKind::Le, true) => "sle",
+                            (AstKind::Le, false) => "ule",
+                            (AstKind::Ge, true) => "sge",
+                            (AstKind::Ge, false) => "uge",
+                            (AstKind::Eq, _) => "eq",
+                            (AstKind::Ne, _) => "ne",
+                            _ => unreachable!(),
+                        };
+                        LoweredExpr::Value(
+                            self.builder
+                                .insert(
+                                    b::CmpIOpBuilder::new(self.context)
+                                        .lhs(lhs)
+                                        .rhs(rhs)
+                                        .predicate(predicate)
+                                        .result_type(IntegerType::new(self.context, 1))
+                                        .build(),
+                                )
+                                .result(),
+                        )
+                    }
                 }
                 AstKind::Comma => {
                     let rhs = ast.children(node).nth(1).unwrap();

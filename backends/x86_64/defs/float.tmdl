@@ -152,6 +152,57 @@ instruction Divsd for [X86_64] : FpArith {
     }
 }
 
+instruction Ucomisd for [X86_64] {
+    param MNEMONIC: String = "ucomisd";
+
+    operands {
+        lhs: XMM,
+        rhs: XMM,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => rhs[3],
+        9 => 0b0,
+        10 => lhs[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x2E,
+        32..34 => rhs[0..2],
+        35..37 => lhs[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {lhs}, {rhs}"
+    }
+
+    behavior {
+        EFLAGS::cf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else if lhs < rhs {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::pf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else if lhs == rhs {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = zext(0b0, 1);
+        EFLAGS::of = zext(0b0, 1);
+    }
+}
+
 // `movsd xmm_dst, xmm_src` (F2 0F 10 /r): register-to-register scalar-double
 // move. Emitted by register allocation to copy a value before a two-address FP
 // op overwrites it; the reg/rm layout matches `FpArith`.

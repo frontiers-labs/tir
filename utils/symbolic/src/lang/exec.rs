@@ -230,6 +230,19 @@ fn coerce_ints(a: APInt, b: APInt) -> (APInt, APInt) {
     (widen(a, width), widen(b, width))
 }
 
+fn scalar_equal(lhs: Value, rhs: Value) -> bool {
+    match (lhs, rhs) {
+        (Value::Int(lhs), Value::Int(rhs)) => {
+            let (lhs, rhs) = coerce_ints(lhs, rhs);
+            lhs == rhs
+        }
+        (Value::Float(lhs), Value::Float(rhs)) => {
+            matches!(lhs.compare(&rhs), Some(std::cmp::Ordering::Equal))
+        }
+        _ => panic!("eq requires matching scalar operands"),
+    }
+}
+
 /// Evaluate an integer division/remainder kind with SMT-LIB div-by-zero rules,
 /// matching the bitblaster: `bvudiv x 0 = ~0`, `bvsdiv x 0` is `-1` for a
 /// non-negative dividend and `1` otherwise, and both remainders return the
@@ -568,8 +581,8 @@ fn eval_node<V, M: Memory>(
         }
 
         // ── Bitwise (int only) ─────────────────────────────────────────────
-        SymKind::Eq => Value::Int(APInt::new(1, bool_result(c(0) == c(1)))),
-        SymKind::Ne => Value::Int(APInt::new(1, bool_result(c(0) != c(1)))),
+        SymKind::Eq => Value::Int(APInt::new(1, bool_result(scalar_equal(c(0), c(1))))),
+        SymKind::Ne => Value::Int(APInt::new(1, bool_result(!scalar_equal(c(0), c(1))))),
         SymKind::Lt => cmp_op!(c, slt, lt, "lt"),
         SymKind::Le => cmp_op!(c, sle, le, "le"),
         SymKind::Gt => cmp_op!(c, sgt, gt, "gt"),

@@ -161,7 +161,7 @@ fn emit_flag_branch_rules(
             if d_sem.variable_symbols.len() != 2 {
                 continue;
             }
-            let Some(symbol_widths) = definer_symbol_widths(files, d, d_sem) else {
+            let Some(symbols) = definer_comparison_symbols(files, d, d_sem) else {
                 continue;
             };
 
@@ -183,7 +183,7 @@ fn emit_flag_branch_rules(
             let (composed, _) = fold_constant_subtrees(&spliced, spliced_root);
 
             let Some((candidate, candidate_root)) =
-                find_equivalent_comparison(&composed, &symbol_widths)
+                find_equivalent_comparison(&composed, &symbols)
             else {
                 continue;
             };
@@ -724,7 +724,7 @@ fn emit_flag_reader_rules(
             if d_sem.variable_symbols.len() != 2 {
                 continue;
             }
-            let Some(symbol_widths) = definer_symbol_widths(files, d, d_sem) else {
+            let Some(symbols) = definer_comparison_symbols(files, d, d_sem) else {
                 continue;
             };
 
@@ -746,7 +746,7 @@ fn emit_flag_reader_rules(
             let (composed, _) = fold_constant_subtrees(&spliced, spliced_root);
 
             let Some((candidate, candidate_root)) =
-                find_equivalent_comparison(&composed, &symbol_widths)
+                find_equivalent_comparison(&composed, &symbols)
             else {
                 continue;
             };

@@ -38,6 +38,10 @@ module {
     %1 = bitcast %0 : !i64
     return %1
   }
+  func @less(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "olt"} : !i1
+    return %2
+  }
   module_end
 }
 
@@ -54,3 +58,5 @@ module {
 // CHECK-NEXT: x86_64.mov32 {dst = %virt{{[0-9]+}}:GPR32, src = %virt{{[0-9]+}}:GPR32}
 // CHECK:      x86_64.movq_xmm_gpr {dst = %virt{{[0-9]+}}:XMM, src = %virt{{[0-9]+}}:GPR}
 // CHECK:      x86_64.movq_gpr_xmm {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM}
+// CHECK:      x86_64.ucomisd {lhs = %virt{{[0-9]+}}:XMM, rhs = %virt{{[0-9]+}}:XMM}
+// CHECK-NEXT: x86_64.seta {dst = %virt{{[0-9]+}}:GPR8}

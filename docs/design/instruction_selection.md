@@ -611,6 +611,13 @@ ahead of the terminator. Everything else (the `Dead` alternative consuming the
 compare, boundary-forced materialization, dominating-edge assumptions) is the
 same machinery as the fused single-instruction path.
 
+Comparison proof is semantic-type aware. Integer flag definers use the ordinary
+bit-vector oracle. A definer whose operands belong to a TMDL `float` register
+class seeds the same comparison graph with its binary floating-point type, so
+`eq`/`ne` and ordered inequalities use IEEE NaN and signed-zero semantics during
+bit-blasting. The resulting pattern remains the target-independent comparison
+kind and is kept in the floating domain by its register requirements.
+
 A guard matching no canonical comparison (e.g. a branch on overflow alone)
 derives no rule; the instruction still assembles, encodes, and simulates.
 

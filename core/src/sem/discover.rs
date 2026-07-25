@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 
 use tir_adt::APInt;
-use tir_symbolic::bitblast::{SolveOutcome, blast};
-use tir_symbolic::lang::infer_widths;
+use tir_symbolic::bitblast::{SolveOutcome, blast, blast_with_types};
+use tir_symbolic::lang::{SemType, Width, infer_types, infer_widths};
 
 use crate::ValueId;
 use crate::graph::{Dag, GenericDag, MutDag, NodeId};
@@ -91,6 +91,16 @@ impl EquivalenceOracle for SmtOracle {
 }
 
 impl SmtOracle {
+    /// Prove equivalence while preserving the semantic domains of shared symbols.
+    pub fn equivalent_typed(
+        &self,
+        lhs: &SemGraph,
+        rhs: &SemGraph,
+        symbol_types: &[SemType],
+    ) -> bool {
+        self.prove_typed(lhs, rhs, symbol_types)
+    }
+
     fn prove(
         &self,
         lhs: &SemGraph,
@@ -124,6 +134,47 @@ impl SmtOracle {
             Ok(b) => matches!(b.solve(), SolveOutcome::Unsat),
             Err(_) => false,
         }
+    }
+
+    fn prove_typed(&self, lhs: &SemGraph, rhs: &SemGraph, symbol_types: &[SemType]) -> bool {
+        let (Some(lhs_root), Some(rhs_root)) = (lhs.root(), rhs.root()) else {
+            return false;
+        };
+        let mut g = OracleGraph::new();
+        let mut symbols = HashMap::new();
+        let l = copy_reachable(lhs, lhs_root, &mut g, &mut symbols, &mut HashMap::new());
+        let r = copy_reachable(rhs, rhs_root, &mut g, &mut symbols, &mut HashMap::new());
+        let ne = g.add_node(SymKind::Ne);
+        g.add_edge(ne, l);
+        g.add_edge(ne, r);
+
+        let symbol_type = |id: NodeId| match g.get_leaf_data(id) {
+            Some(SymPayload::SymbolId(id)) => symbol_types.get(*id as usize).cloned(),
+            _ => None,
+        };
+        let Ok(types) = infer_types(&g, symbol_type) else {
+            return false;
+        };
+        let widths = infer_widths(&g, |id| symbol_type(id).and_then(semantic_width));
+        match (widths[l.index()], widths[r.index()]) {
+            (Some(lhs), Some(rhs)) if lhs == rhs => {}
+            _ => return false,
+        }
+        matches!(
+            blast_with_types(&g, &widths, &types).map(|blasted| blasted.solve()),
+            Ok(SolveOutcome::Unsat)
+        )
+    }
+}
+
+fn semantic_width(ty: SemType) -> Option<u32> {
+    match ty {
+        SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width)) => Some(width),
+        SemType::Float(format) => match (format.exponent, format.mantissa) {
+            (Width::Const(exponent), Width::Const(mantissa)) => Some(1 + exponent + mantissa),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

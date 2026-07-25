@@ -22,15 +22,14 @@ register_class PC for [X86_64] {
 }
 
 // Status flags written by compare-style instructions and read by conditional
-// jumps. Only the four flags the jcc family consumes are modeled (cf/zf/sf/of);
-// af/pf are omitted until an instruction reads them. The registers carry no
-// encoding slots, so the class is never allocated.
+// jumps. The registers carry no encoding slots, so the class is never allocated.
 register_class EFLAGS for [X86_64] {
     param ENCODING_LEN: Integer = 0;
     param WIDTH: Integer = 1;
 
     registers {
         cf => { traits = [status_flag] },
+        pf => { traits = [status_flag] },
         zf => { traits = [status_flag] },
         sf => { traits = [status_flag] },
         of => { traits = [status_flag] },

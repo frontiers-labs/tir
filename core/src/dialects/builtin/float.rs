@@ -237,6 +237,75 @@ impl UIToFPOp {
 }
 
 operation! {
+    CmpFOp {
+        name: "cmpf",
+        dialect: "builtin",
+        attributes: A {
+            predicate: "Str",
+        },
+        operands: O {
+            lhs: "crate::builtin::FloatType",
+            rhs: "crate::builtin::FloatType",
+        },
+        results: R {
+            result: "crate::Integer<1>",
+        },
+        sem: "(set result $cmp_expr)",
+    }
+}
+
+impl CmpFOp {
+    fn cmp_expr(
+        &self,
+        g: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+    ) -> Option<tir::graph::NodeId> {
+        use tir::sem::SymKind;
+
+        let predicate = self.0.attributes.iter().find_map(|attribute| {
+            (attribute.name == "predicate").then_some(match &attribute.value {
+                tir::attributes::AttributeValue::Str(value) => Some(value.as_str()),
+                _ => None,
+            })
+        })??;
+        let (kind, swap) = match predicate {
+            "oeq" => (SymKind::Eq, false),
+            "une" => (SymKind::Ne, false),
+            "olt" => (SymKind::Lt, false),
+            "ogt" => (SymKind::Lt, true),
+            "oge" => (SymKind::Ge, false),
+            "ole" => (SymKind::Ge, true),
+            _ => return None,
+        };
+        let mut operand = |index| {
+            let leaf = g.add_node(SymKind::Symbol);
+            g.set_leaf_data(leaf, tir::sem::SymPayload::SymbolId(index));
+            leaf
+        };
+        let (lhs, rhs) = if swap {
+            (operand(1), operand(0))
+        } else {
+            (operand(0), operand(1))
+        };
+        let node = g.add_node(kind);
+        g.add_edge(node, lhs);
+        g.add_edge(node, rhs);
+        Some(node)
+    }
+}
+
+impl CmpFOpBuilder {
+    pub fn predicate(self, predicate: &str) -> Self {
+        self.attr(
+            "predicate",
+            tir::attributes::AttributeValue::Str(predicate.to_string()),
+        )
+    }
+}
+
+operation! {
     FPToSIOp {
         name: "fptosi",
         dialect: "builtin",
