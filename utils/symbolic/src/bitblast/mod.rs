@@ -105,22 +105,15 @@ pub fn blast<V>(
     graph: &GenericDag<SymKind, SymPayload<V>>,
     widths: &[Option<u32>],
 ) -> Result<Blasted, BitblastError> {
-    blast_inner(graph, widths, None)
+    blast_with_types(graph, widths, &[])
 }
 
-/// Bit-blast a graph with semantic types for overloaded scalar operations.
+/// Bit-blast a graph with semantic types for overloaded scalar operations. An
+/// empty `types` leaves every node in the bit-vector domain.
 pub fn blast_with_types<V>(
     graph: &GenericDag<SymKind, SymPayload<V>>,
     widths: &[Option<u32>],
     types: &[SemType],
-) -> Result<Blasted, BitblastError> {
-    blast_inner(graph, widths, Some(types))
-}
-
-fn blast_inner<V>(
-    graph: &GenericDag<SymKind, SymPayload<V>>,
-    widths: &[Option<u32>],
-    types: Option<&[SemType]>,
 ) -> Result<Blasted, BitblastError> {
     let mut b = Blaster::new(graph, widths, types);
     for i in 0..graph.len() {
@@ -150,14 +143,14 @@ pub(crate) struct Blaster<'g, V> {
     sym_bits: HashMap<u32, Vec<Lit>>,
     graph: &'g GenericDag<SymKind, SymPayload<V>>,
     widths: &'g [Option<u32>],
-    types: Option<&'g [SemType]>,
+    types: &'g [SemType],
 }
 
 impl<'g, V> Blaster<'g, V> {
     fn new(
         graph: &'g GenericDag<SymKind, SymPayload<V>>,
         widths: &'g [Option<u32>],
-        types: Option<&'g [SemType]>,
+        types: &'g [SemType],
     ) -> Self {
         let mut solver = Solver::new();
         let one = Lit::positive(solver.new_var());
@@ -241,19 +234,17 @@ impl<'g, V> Blaster<'g, V> {
             ShiftLeft => self.shift(id, Shift::Left),
             ShiftRightLogic => self.shift(id, Shift::Logical),
             ShiftRightArithmetic => self.shift(id, Shift::Arithmetic),
-            Eq if self.is_float_comparison(id) => self.encode_float_compare(id, kind),
+            Eq | Ne | Lt | Le | Gt | Ge if self.is_float_comparison(id) => {
+                self.encode_float_compare(id, kind)
+            }
             Eq => {
                 let (a, b) = self.binop_bits(id);
                 Ok(vec![self.eq_bits(&a, &b)])
             }
-            Ne if self.is_float_comparison(id) => self.encode_float_compare(id, kind),
             Ne => {
                 let (a, b) = self.binop_bits(id);
                 let eq = self.eq_bits(&a, &b);
                 Ok(vec![eq.negate()])
-            }
-            Lt | Le | Gt | Ge if self.is_float_comparison(id) => {
-                self.encode_float_compare(id, kind)
             }
             ULt | ULe | UGt | UGe | Lt | Le | Gt | Ge => self.compare(id, kind),
             Concat => {
@@ -296,13 +287,10 @@ impl<'g, V> Blaster<'g, V> {
     }
 
     fn is_float_comparison(&self, id: NodeId) -> bool {
-        let Some(types) = self.types else {
-            return false;
-        };
         self.graph
             .children(id)
             .next()
-            .is_some_and(|child| matches!(types.get(child.index()), Some(SemType::Float(_))))
+            .is_some_and(|child| matches!(self.types.get(child.index()), Some(SemType::Float(_))))
     }
 
     fn encode_symbol(&mut self, id: NodeId) -> Result<Vec<Lit>, BitblastError> {

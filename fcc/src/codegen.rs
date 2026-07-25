@@ -443,6 +443,63 @@ impl FnCodegen<'_> {
         }
     }
 
+    fn lower_integer_compare(
+        &mut self,
+        kind: AstKind,
+        lhs: ValueId,
+        rhs: ValueId,
+        source_ty: QualType,
+    ) -> ValueId {
+        let signed = self.typed.integer_is_signed(source_ty).unwrap_or(true);
+        let predicate = match (kind, signed) {
+            (AstKind::Lt, true) => "slt",
+            (AstKind::Lt, false) => "ult",
+            (AstKind::Gt, true) => "sgt",
+            (AstKind::Gt, false) => "ugt",
+            (AstKind::Le, true) => "sle",
+            (AstKind::Le, false) => "ule",
+            (AstKind::Ge, true) => "sge",
+            (AstKind::Ge, false) => "uge",
+            (AstKind::Eq, _) => "eq",
+            (AstKind::Ne, _) => "ne",
+            _ => unreachable!(),
+        };
+        self.builder
+            .insert(
+                b::CmpIOpBuilder::new(self.context)
+                    .lhs(lhs)
+                    .rhs(rhs)
+                    .predicate(predicate)
+                    .result_type(IntegerType::new(self.context, 1))
+                    .build(),
+            )
+            .result()
+    }
+
+    /// C comparisons are ordered (false when either operand is NaN), except
+    /// `!=`, which is the unordered-inclusive negation of `==`.
+    fn lower_double_compare(&mut self, kind: AstKind, lhs: ValueId, rhs: ValueId) -> ValueId {
+        let predicate = match kind {
+            AstKind::Lt => "olt",
+            AstKind::Gt => "ogt",
+            AstKind::Le => "ole",
+            AstKind::Ge => "oge",
+            AstKind::Eq => "oeq",
+            AstKind::Ne => "une",
+            _ => unreachable!(),
+        };
+        self.builder
+            .insert(
+                b::CmpFOpBuilder::new(self.context)
+                    .lhs(lhs)
+                    .rhs(rhs)
+                    .predicate(predicate)
+                    .result_type(IntegerType::new(self.context, 1))
+                    .build(),
+            )
+            .result()
+    }
+
     fn lower_double_binary(&mut self, kind: AstKind, lhs: ValueId, rhs: ValueId) -> ValueId {
         let ty = FloatType::f64(self.context);
         match kind {
@@ -1397,62 +1454,12 @@ impl FnCodegen<'_> {
                     let rhs_node = children.next().unwrap();
                     let lhs = self.materialize(self.values[&lhs_node]);
                     let rhs = self.materialize(self.values[&rhs_node]);
-                    if matches!(
-                        self.typed.types().kind(node_type(self.typed, lhs_node)),
-                        TypeKind::Double
-                    ) {
-                        let predicate = match kind {
-                            AstKind::Lt => "olt",
-                            AstKind::Gt => "ogt",
-                            AstKind::Le => "ole",
-                            AstKind::Ge => "oge",
-                            AstKind::Eq => "oeq",
-                            AstKind::Ne => "une",
-                            _ => unreachable!(),
-                        };
-                        LoweredExpr::Value(
-                            self.builder
-                                .insert(
-                                    b::CmpFOpBuilder::new(self.context)
-                                        .lhs(lhs)
-                                        .rhs(rhs)
-                                        .predicate(predicate)
-                                        .result_type(IntegerType::new(self.context, 1))
-                                        .build(),
-                                )
-                                .result(),
-                        )
-                    } else {
-                        let signed = self
-                            .typed
-                            .integer_is_signed(node_type(self.typed, lhs_node))
-                            .unwrap_or(true);
-                        let predicate = match (kind, signed) {
-                            (AstKind::Lt, true) => "slt",
-                            (AstKind::Lt, false) => "ult",
-                            (AstKind::Gt, true) => "sgt",
-                            (AstKind::Gt, false) => "ugt",
-                            (AstKind::Le, true) => "sle",
-                            (AstKind::Le, false) => "ule",
-                            (AstKind::Ge, true) => "sge",
-                            (AstKind::Ge, false) => "uge",
-                            (AstKind::Eq, _) => "eq",
-                            (AstKind::Ne, _) => "ne",
-                            _ => unreachable!(),
-                        };
-                        LoweredExpr::Value(
-                            self.builder
-                                .insert(
-                                    b::CmpIOpBuilder::new(self.context)
-                                        .lhs(lhs)
-                                        .rhs(rhs)
-                                        .predicate(predicate)
-                                        .result_type(IntegerType::new(self.context, 1))
-                                        .build(),
-                                )
-                                .result(),
-                        )
-                    }
+                    let operand_ty = node_type(self.typed, lhs_node);
+                    let value = match self.typed.types().kind(operand_ty) {
+                        TypeKind::Double => self.lower_double_compare(kind, lhs, rhs),
+                        _ => self.lower_integer_compare(kind, lhs, rhs, operand_ty),
+                    };
+                    LoweredExpr::Value(value)
                 }
                 AstKind::Comma => {
                     let rhs = ast.children(node).nth(1).unwrap();

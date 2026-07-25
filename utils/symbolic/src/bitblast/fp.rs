@@ -1,18 +1,20 @@
-//! Integer-to-float conversion circuits (`SIToFP`/`UIToFP`) as combinational
-//! bit-vector logic, so the QF_BV oracle can prove float-conversion identities.
-//! All vectors little-endian (bit 0 = LSB). Round-to-nearest, ties-to-even; the
-//! input range (≤64 bits) never overflows the exponent, so no infinity/NaN path.
+//! Float comparison and integer/float conversion circuits (`SIToFP`/`UIToFP`)
+//! as combinational bit-vector logic, so the QF_BV oracle can prove
+//! floating-point identities. All vectors little-endian (bit 0 = LSB).
+//! Conversions round to nearest, ties-to-even; the input range (≤64 bits) never
+//! overflows the exponent, so no infinity/NaN path.
 
 use tir_graph::{Dag, NodeId};
 
 use super::{BitblastError, Blaster};
+use crate::lang::SymKind;
 use crate::sat::Lit;
 
 impl<V> Blaster<'_, V> {
     pub(super) fn encode_float_compare(
         &mut self,
         id: NodeId,
-        kind: crate::lang::SymKind,
+        kind: SymKind,
     ) -> Result<Vec<Lit>, BitblastError> {
         let lhs = self.child_bits(id, 0);
         let rhs = self.child_bits(id, 1);
@@ -32,13 +34,14 @@ impl<V> Blaster<'_, V> {
         let lhs_nan = self.float_is_nan(lhs_fraction, lhs_exponent);
         let rhs_nan = self.float_is_nan(rhs_fraction, rhs_exponent);
         let unordered = self.gate_or(lhs_nan, rhs_nan);
+        let ordered = unordered.negate();
 
         let lhs_zero = self.float_is_zero(lhs_fraction, lhs_exponent);
         let rhs_zero = self.float_is_zero(rhs_fraction, rhs_exponent);
         let both_zero = self.gate_and(lhs_zero, rhs_zero);
         let bit_equal = self.eq_bits(&lhs, &rhs);
         let equal_value = self.gate_or(bit_equal, both_zero);
-        let ordered_equal = self.gate_and(unordered.negate(), equal_value);
+        let ordered_equal = self.gate_and(ordered, equal_value);
 
         let signs_differ = self.gate_xor(lhs_sign, rhs_sign);
         let negative_before_positive = self.gate_and(lhs_sign, signs_differ);
@@ -49,22 +52,17 @@ impl<V> Blaster<'_, V> {
         let same_sign_less = self.gate_mux(lhs_sign, negative_less, positive_less);
         let numeric_less = self.gate_mux(signs_differ, negative_before_positive, same_sign_less);
         let nonzero_less = self.gate_and(both_zero.negate(), numeric_less);
-        let ordered_less = self.gate_and(unordered.negate(), nonzero_less);
+        let ordered_less = self.gate_and(ordered, nonzero_less);
 
-        let comparable = unordered.negate();
-        let ordered_greater = {
-            let not_less = ordered_less.negate();
-            let not_equal = ordered_equal.negate();
-            let greater = self.gate_and(not_less, not_equal);
-            self.gate_and(comparable, greater)
-        };
+        let neither_less_nor_equal = self.gate_and(ordered_less.negate(), ordered_equal.negate());
+        let ordered_greater = self.gate_and(ordered, neither_less_nor_equal);
         let result = match kind {
-            crate::lang::SymKind::Eq => ordered_equal,
-            crate::lang::SymKind::Ne => ordered_equal.negate(),
-            crate::lang::SymKind::Lt => ordered_less,
-            crate::lang::SymKind::Le => self.gate_and(comparable, ordered_greater.negate()),
-            crate::lang::SymKind::Gt => ordered_greater,
-            crate::lang::SymKind::Ge => self.gate_and(comparable, ordered_less.negate()),
+            SymKind::Eq => ordered_equal,
+            SymKind::Ne => ordered_equal.negate(),
+            SymKind::Lt => ordered_less,
+            SymKind::Le => self.gate_and(ordered, ordered_greater.negate()),
+            SymKind::Gt => ordered_greater,
+            SymKind::Ge => self.gate_and(ordered, ordered_less.negate()),
             _ => unreachable!(),
         };
         Ok(vec![result])
