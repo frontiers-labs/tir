@@ -196,6 +196,69 @@ instruction FDivD for [D] : FPArith64 {
     }
 }
 
+template FPCompare64 for [D] {
+    param MNEMONIC: String;
+    param FUNCT3: bits<3>;
+
+    operands {
+        rd: GPR,
+        fs1: FPR64,
+        fs2: FPR64,
+    }
+
+    encoding {
+        0..6 => 0b1010011,
+        7..11 => rd,
+        12..14 => FUNCT3,
+        15..19 => fs1,
+        20..24 => fs2,
+        25..31 => 0b1010001,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fs1}, {fs2}"
+    }
+}
+
+instruction FLtD for [D] : FPCompare64 {
+    param MNEMONIC: String = "flt.d";
+    param FUNCT3: bits<3> = 0b001;
+
+    behavior {
+        rd = if fs1 < fs2 {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction FLeD for [D] : FPCompare64 {
+    param MNEMONIC: String = "fle.d";
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        rd = if fs2 >= fs1 {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+instruction FEqD for [D] : FPCompare64 {
+    param MNEMONIC: String = "feq.d";
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        rd = if (fs1 >= fs2) & (fs2 >= fs1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
 // Convert the low signed 32-bit integer in an integer register to binary64.
 instruction FCvtDW for [D] {
     param MNEMONIC: String = "fcvt.d.w";

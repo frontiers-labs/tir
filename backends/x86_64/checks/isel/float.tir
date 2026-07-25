@@ -86,14 +86,16 @@ module {
 // CHECK-NEXT: x86_64.seta
 // CHECK:      x86_64.ucomisd
 // CHECK-NEXT: x86_64.setae
+// CHECK-LABEL: asm.symbol {name = "equal"
 // CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.setae
+// CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.setae
+// CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK-NEXT: x86_64.and
+// CHECK-LABEL: asm.symbol {name = "not_equal"
 // CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.setae
+// CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.setae
+// CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK-NEXT: x86_64.and
 // CHECK-NEXT: x86_64.xor_imm

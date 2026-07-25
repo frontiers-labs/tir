@@ -103,6 +103,8 @@
     (rhs (if root (zext (const 1 1) (const 1 1)) (zext (const 0 1) (const 1 1)))))
   (axiom uge-via-if (root 1) (lhs (uge a b))
     (rhs (if root (zext (const 1 1) (const 1 1)) (zext (const 0 1) (const 1 1)))))
+  (axiom and-via-if (vars (a 1) (b 1)) (root 1) (lhs (and a b))
+    (rhs (if root (zext (const 1 1) (const 1 1)) (zext (const 0 1) (const 1 1)))))
 
   (axiom eq-via-cmp (vars (a w) (b w)) (root 1) (lhs (eq a b)) (rhs (ult (xor a b) 1)))
   (axiom ne-via-cmp (vars (a w) (b w)) (root 1) (lhs (ne a b)) (rhs (xor (ult (xor a b) 1) (const 1 1))))
