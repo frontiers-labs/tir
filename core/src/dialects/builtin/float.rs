@@ -270,29 +270,41 @@ impl CmpFOp {
                 _ => None,
             })
         })??;
-        let (kind, swap) = match predicate {
-            "oeq" => (SymKind::Eq, false),
-            "une" => (SymKind::Ne, false),
-            "olt" => (SymKind::Lt, false),
-            "ogt" => (SymKind::Lt, true),
-            "oge" => (SymKind::Ge, false),
-            "ole" => (SymKind::Ge, true),
-            _ => return None,
-        };
         let mut operand = |index| {
             let leaf = g.add_node(SymKind::Symbol);
             g.set_leaf_data(leaf, tir::sem::SymPayload::SymbolId(index));
             leaf
         };
-        let (lhs, rhs) = if swap {
-            (operand(1), operand(0))
-        } else {
-            (operand(0), operand(1))
+        let lhs = operand(0);
+        let rhs = operand(1);
+        let one = (predicate == "une").then(|| {
+            let one = g.add_node(SymKind::Constant);
+            g.set_leaf_data(one, tir::sem::SymPayload::Int(tir_adt::APInt::new(1, 1)));
+            one
+        });
+        let mut binary = |kind, lhs, rhs| {
+            let node = g.add_node(kind);
+            g.add_edge(node, lhs);
+            g.add_edge(node, rhs);
+            node
         };
-        let node = g.add_node(kind);
-        g.add_edge(node, lhs);
-        g.add_edge(node, rhs);
-        Some(node)
+        Some(match predicate {
+            "oeq" | "une" => {
+                let left_ge = binary(SymKind::Ge, lhs, rhs);
+                let right_ge = binary(SymKind::Ge, rhs, lhs);
+                let ordered_equal = binary(SymKind::And, left_ge, right_ge);
+                if predicate == "une" {
+                    binary(SymKind::Xor, ordered_equal, one.unwrap())
+                } else {
+                    ordered_equal
+                }
+            }
+            "olt" => binary(SymKind::Lt, lhs, rhs),
+            "ogt" => binary(SymKind::Lt, rhs, lhs),
+            "oge" => binary(SymKind::Ge, lhs, rhs),
+            "ole" => binary(SymKind::Ge, rhs, lhs),
+            _ => return None,
+        })
     }
 }
 

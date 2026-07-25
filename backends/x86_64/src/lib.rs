@@ -641,6 +641,8 @@ mod isa {
         ri_norex!(SarImm8Op, SarImm8NorexOpBuilder, B);
 
         reg1_norex!(SetEqOp, SetEqNorexOpBuilder, "dst", B);
+        reg1_norex!(SetParityOp, SetParityNorexOpBuilder, "dst", B);
+        reg1_norex!(SetNoParityOp, SetNoParityNorexOpBuilder, "dst", B);
         reg1_norex!(SetNotEqOp, SetNotEqNorexOpBuilder, "dst", B);
         reg1_norex!(SetLessOp, SetLessNorexOpBuilder, "dst", B);
         reg1_norex!(SetGreaterEqOp, SetGreaterEqNorexOpBuilder, "dst", B);

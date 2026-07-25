@@ -42,6 +42,26 @@ module {
     %2 = cmpf %0, %1 {predicate = "olt"} : !i1
     return %2
   }
+  func @less_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "ole"} : !i1
+    return %2
+  }
+  func @greater(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "ogt"} : !i1
+    return %2
+  }
+  func @greater_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "oge"} : !i1
+    return %2
+  }
+  func @equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "oeq"} : !i1
+    return %2
+  }
+  func @not_equal(%0: !f64, %1: !f64) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "une"} : !i1
+    return %2
+  }
   module_end
 }
 
@@ -60,3 +80,20 @@ module {
 // CHECK:      x86_64.movq_gpr_xmm {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM}
 // CHECK:      x86_64.ucomisd {lhs = %virt{{[0-9]+}}:XMM, rhs = %virt{{[0-9]+}}:XMM}
 // CHECK-NEXT: x86_64.seta {dst = %virt{{[0-9]+}}:GPR8}
+// CHECK:      x86_64.ucomisd
+// CHECK-NEXT: x86_64.setae
+// CHECK:      x86_64.ucomisd
+// CHECK-NEXT: x86_64.seta
+// CHECK:      x86_64.ucomisd
+// CHECK-NEXT: x86_64.setae
+// CHECK:      x86_64.ucomisd
+// CHECK-NEXT: x86_64.setae
+// CHECK:      x86_64.ucomisd
+// CHECK-NEXT: x86_64.setae
+// CHECK-NEXT: x86_64.and
+// CHECK:      x86_64.ucomisd
+// CHECK-NEXT: x86_64.setae
+// CHECK:      x86_64.ucomisd
+// CHECK-NEXT: x86_64.setae
+// CHECK-NEXT: x86_64.and
+// CHECK-NEXT: x86_64.xor_imm

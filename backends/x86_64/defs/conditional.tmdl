@@ -2,7 +2,7 @@
 
 // The rest of the EFLAGS consumers: the remaining jcc conditions, setcc
 // (cset/slt parity) and cmovcc (csel parity). Condition guards mirror the
-// jcc family in base.tmdl; only cf/zf/sf/of are modeled.
+// jcc family in base.tmdl.
 
 // `setcc r/m8`: REX + 0x0F + 0x90|cc + ModR/M(mod=11, reg=0, rm=dst).
 template SetccReg for [X86_64] {
@@ -69,6 +69,8 @@ jcc_ops!(
 // setcc family.
 
 setcc_ops!(
+    (SetParity,    "setp",  0x9A, { EFLAGS::pf == zext(0b1, 1) }),
+    (SetNoParity,  "setnp", 0x9B, { EFLAGS::pf == zext(0b0, 1) }),
     (SetEq,        "sete",  0x94, { EFLAGS::zf == zext(0b1, 1) }),
     (SetNotEq,     "setne", 0x95, { EFLAGS::zf == zext(0b0, 1) }),
     (SetLess,      "setl",  0x9C, { EFLAGS::sf != EFLAGS::of }),
@@ -82,6 +84,8 @@ setcc_ops!(
 )
 
 setcc_norex!(
+    (SetParityNorex,    "setp_norex",  "setp",  0x9A),
+    (SetNoParityNorex,  "setnp_norex", "setnp", 0x9B),
     (SetEqNorex,        "sete_norex",  "sete",  0x94),
     (SetNotEqNorex,     "setne_norex", "setne", 0x95),
     (SetLessNorex,      "setl_norex",  "setl",  0x9C),

@@ -618,6 +618,12 @@ class seeds the same comparison graph with its binary floating-point type, so
 bit-blasting. The resulting pattern remains the target-independent comparison
 kind and is kept in the floating domain by its register requirements.
 
+Ordered floating equality is represented as `(a >= b) & (b >= a)`: both
+comparisons are false for unordered operands, while signed zero still compares
+equal. Ordered inequality is that one-bit result XOR `1`. This lets the e-graph
+cover equality using whichever proved ordered comparisons a target provides,
+and keeps the materialized boolean canonical without a target-specific rule.
+
 A guard matching no canonical comparison (e.g. a branch on overflow alone)
 derives no rule; the instruction still assembles, encodes, and simulates.
 

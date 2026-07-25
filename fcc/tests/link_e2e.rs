@@ -287,6 +287,61 @@ fn double_less_than_executes_through_driver() {
 }
 
 #[test]
+fn double_less_equal_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int less_equal(double left, double right) { return left <= right; }\n",
+        "int less_equal(double, double); int main(void) { double nan = 0.0 / 0.0; return less_equal(-1.25, 2.5) == 1 && less_equal(2.5, 2.5) == 1 && less_equal(3.0, 2.0) == 0 && less_equal(nan, 2.0) == 0 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
+fn double_greater_than_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int greater(double left, double right) { return left > right; }\n",
+        "int greater(double, double); int main(void) { double nan = 0.0 / 0.0; return greater(3.0, 2.0) == 1 && greater(2.0, 2.0) == 0 && greater(-1.25, 2.5) == 0 && greater(nan, 2.0) == 0 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
+fn double_greater_equal_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int greater_equal(double left, double right) { return left >= right; }\n",
+        "int greater_equal(double, double); int main(void) { double nan = 0.0 / 0.0; return greater_equal(3.0, 2.0) == 1 && greater_equal(2.0, 2.0) == 1 && greater_equal(-1.25, 2.5) == 0 && greater_equal(nan, 2.0) == 0 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
+fn double_equal_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int equal(double left, double right) { return left == right; }\n",
+        "int equal(double, double); int main(void) { double nan = 0.0 / 0.0; return equal(2.5, 2.5) == 1 && equal(-1.25, 2.5) == 0 && equal(nan, nan) == 0 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
+fn double_not_equal_executes_through_driver() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int not_equal(double left, double right) { return left != right; }\n",
+        "int not_equal(double, double); int main(void) { double nan = 0.0 / 0.0; return not_equal(2.5, 2.5) == 0 && not_equal(-1.25, 2.5) == 1 && not_equal(nan, nan) == 1 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
 fn signed_integer_division_executes_through_driver() {
     if !cc_available() {
         return;
