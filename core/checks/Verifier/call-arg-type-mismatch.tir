@@ -1,0 +1,13 @@
+// RUN: not tir opt --verify %s
+
+// Overloads resolve on exact argument types: an i64 argument does not select
+// the i32 overload.
+
+module {
+  declare @f(!i32) -> !i32
+  func @caller(%0: !i64) -> !i32 {
+    %1 = call @f(%0 : !i64) -> !i32
+    return %1
+  }
+  module_end
+}

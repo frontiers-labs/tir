@@ -1,0 +1,11 @@
+// RUN: not tir opt --verify %s
+
+// A call must name a function the module's symbol table knows about.
+
+module {
+  func @caller(%0: !i32) -> !i32 {
+    %1 = call @missing(%0 : !i32) -> !i32
+    return %1
+  }
+  module_end
+}

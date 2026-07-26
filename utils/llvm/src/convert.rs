@@ -19,8 +19,48 @@ pub fn import(context: &Context, module: &ast::Module) -> Result<builtin::Module
     for func in &module.functions {
         builder.insert(lower_function(context, func)?);
     }
+    declare_external_callees(context, &m, &mut builder);
     builder.insert(bops::module_end(context).build());
     Ok(m)
+}
+
+/// LLVM `declare` lines carry no body and are not parsed, so a call to a
+/// function this module does not define is reconstructed as a declaration from
+/// the call site's types.
+fn declare_external_callees(
+    context: &Context,
+    module: &builtin::ModuleOp,
+    builder: &mut IRBuilder,
+) {
+    let table = tir::SymbolTable::build(context, tir::Operation::id(module));
+    let mut declarations = Vec::new();
+    for op in module.body().iter(context.clone()) {
+        let Some(func) = op.as_op::<builtin::FuncOp>() else {
+            continue;
+        };
+        for op in func.body().iter(context.clone()) {
+            let Some(call) = op.as_op::<builtin::CallOp>() else {
+                continue;
+            };
+            let args: Vec<_> = call
+                .args()
+                .iter()
+                .map(|arg| context.get_value(*arg).ty())
+                .collect();
+            let callee = call.callee();
+            if table.resolve(&callee, &args).is_some()
+                || declarations
+                    .iter()
+                    .any(|(name, types, _)| name == &callee && types == &args)
+            {
+                continue;
+            }
+            declarations.push((callee, args, context.get_value(call.result()).ty()));
+        }
+    }
+    for (name, args, ret) in declarations {
+        builder.insert(builtin::declare_op(context, &name, ret, &args));
+    }
 }
 
 fn lower_type(context: &Context, ty: &Type) -> TypeId {

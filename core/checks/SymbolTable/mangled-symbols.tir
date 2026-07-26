@@ -1,0 +1,16 @@
+// RUN: tir opt --pass=check-unique-symbols %s | filecheck %s
+
+// Once each overload carries a distinct name, the module is ready for lowering.
+
+module {
+  func @f_i32(%0: !i32) -> !i32 {
+    return %0
+  }
+  func @f_f64(%1: !f64) -> !f64 {
+    return %1
+  }
+  module_end
+}
+
+// CHECK: func @f_i32(
+// CHECK: func @f_f64(

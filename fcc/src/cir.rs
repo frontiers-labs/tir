@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use tir::attributes::AttributeValue;
 use tir::parse::common::Cursor;
+use tir::symbol_table::visibility_of;
 use tir::{
-    Context, Error, IRFormatter, Operation, Terminator, TirType, TokenScope, Type, TypeConstraint,
-    TypeId, Value, ValueId, dialect, operation, parse::Span,
+    Context, Error, IRFormatter, Operation, Symbol, Terminator, TirType, TokenScope, Type,
+    TypeConstraint, TypeId, Value, ValueId, Visibility, dialect, operation, parse::Span,
 };
 
 pub mod ops {
@@ -50,6 +51,7 @@ operation! {
     GlobalOp {
         name: "global",
         dialect: "cir",
+        interfaces: [Symbol],
         attributes: A {
             sym_name: "Str",
             bytes: "Array",
@@ -58,6 +60,37 @@ operation! {
         },
     }
 }
+
+/// A named object: it owns its name outright, so it carries no signature and
+/// cannot be overloaded.
+macro_rules! data_symbol {
+    ($op:ty) => {
+        impl Symbol for $op {
+            fn symbol_name(&self) -> String {
+                self.sym_name()
+            }
+
+            fn symbol_signature(&self) -> Option<Vec<TypeId>> {
+                None
+            }
+
+            fn symbol_result_type(&self) -> Option<TypeId> {
+                None
+            }
+
+            fn symbol_visibility(&self) -> Visibility {
+                visibility_of(self)
+            }
+
+            fn is_definition(&self) -> bool {
+                true
+            }
+        }
+    };
+}
+
+data_symbol!(GlobalOp);
+data_symbol!(ZeroGlobalOp);
 
 impl GlobalOp {
     pub fn sym_name(&self) -> String {
@@ -123,6 +156,7 @@ operation! {
     ZeroGlobalOp {
         name: "zero_global",
         dialect: "cir",
+        interfaces: [Symbol],
         attributes: A {
             sym_name: "Str",
             size: "UInt",

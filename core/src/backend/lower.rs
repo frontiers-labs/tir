@@ -18,9 +18,9 @@ pub fn lower_function_and_return(
     rewriter: &mut Rewriter,
     argument_class: impl Fn(TypeId) -> Result<RegClassId, PassError>,
 ) -> Result<bool, PassError> {
-    use tir::Operation;
     use tir::attributes::{AttributeValue, RegisterAttr};
     use tir::builtin::{FuncOp, MakeTupleOp, ReturnOp, TupleGetOp, TupleType};
+    use tir::{Operation, Symbol};
 
     if let Some(func) = op.as_op::<FuncOp>() {
         let body = func.body();
@@ -130,6 +130,9 @@ pub fn lower_function_and_return(
             .attr("arg_regs", AttributeValue::Array(arguments));
         if let Some(result_address) = result_address {
             symbol = symbol.attr("result_address", result_address);
+        }
+        if func.symbol_visibility() == tir::Visibility::Private {
+            symbol = symbol.attr("binding", AttributeValue::Str("local".to_string()));
         }
         let symbol = symbol.build();
         rewriter.replace_op(op, &symbol)?;

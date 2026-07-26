@@ -2,6 +2,7 @@
 // RUN: tir mc --march=arm64 --filetype=obj -o - %s | tir readobj - | filecheck %s
 
 module {
+  declare @foo(!i64) -> !i64
   func @caller(%0: !i64) -> !i64 {
     %1 = call @foo(%0 : !i64) -> !i64
     return %1

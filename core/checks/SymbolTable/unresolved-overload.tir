@@ -1,0 +1,14 @@
+// RUN: not tir opt --pass=check-unique-symbols %s
+
+// Backends emit one object symbol per name, so every overload must have been
+// mangled away before lowering.
+
+module {
+  func @f(%0: !i32) -> !i32 {
+    return %0
+  }
+  func @f(%1: !f64) -> !f64 {
+    return %1
+  }
+  module_end
+}

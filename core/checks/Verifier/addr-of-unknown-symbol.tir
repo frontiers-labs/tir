@@ -1,0 +1,11 @@
+// RUN: not tir opt --verify %s
+
+// Taking the address of a symbol the module does not define is an error.
+
+module {
+  func @f() -> !ptr.p {
+    %0 = addr_of {sym_name = "missing"} : !ptr.p
+    return %0
+  }
+  module_end
+}

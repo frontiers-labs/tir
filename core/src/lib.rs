@@ -26,6 +26,7 @@ mod region;
 pub mod region_format;
 pub mod schema;
 pub mod sem;
+pub mod symbol_table;
 mod ty;
 pub mod utils;
 mod value;
@@ -45,7 +46,7 @@ pub use error::Error;
 pub use interfaces::{
     BranchGuard, BranchTerminator, Commutative, ConstantFold, ConstantLike, IntegerArithmetic,
     LoopLike, MemoryRead, MemoryWrite, OpCost, PromotableAllocation, RegionGuard, SameOperandType,
-    Terminator, TokenScope,
+    Symbol, Terminator, TokenScope, Visibility,
 };
 pub use ir_formatter::IRFormatter;
 pub use operand::Operand;
@@ -63,6 +64,7 @@ pub use schema::{
     AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, TYPE_SCHEMAS, TypeArg, TypeParam, TypeParamKind,
     TypeSchema, build_type, schema_json, type_schema_json,
 };
+pub use symbol_table::{SymbolEntry, SymbolTable};
 pub use ty::{Any, Type, TypeConstraint, TypeId, TypeParser};
 pub use value::{Use, UseSite, Value, ValueId};
 

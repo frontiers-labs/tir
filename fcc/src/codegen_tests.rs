@@ -6,6 +6,7 @@ mod tests {
     use crate::parser::parse;
     use crate::sema::analyze;
     use logos::Logos;
+    use tir::attributes::AttributeValue;
 
     fn fcc_context() -> tir::Context {
         let context = tir::Context::with_default_dialects();
@@ -46,6 +47,54 @@ mod tests {
         let mut formatter = tir::IRFormatter::new(&mut out);
         tir::Operation::print(&module, &mut formatter).unwrap();
         out
+    }
+
+    #[test]
+    fn prototype_of_defined_function_is_not_emitted_twice() {
+        // A prototype and the definition it announces are the same symbol, so
+        // only the definition may reach the module's symbol table.
+        let (context, module) = lower("int f(int); int f(int x) { return x; }");
+        tir::verify_op_tree(&context, tir::Operation::id(&module)).expect("module verifies");
+    }
+
+    #[test]
+    fn tentative_global_definition_defines_one_symbol() {
+        // A tentative definition and the definition that completes it name the
+        // same object.
+        let (context, module) = lower("int x; int x = 5;");
+        tir::verify_op_tree(&context, tir::Operation::id(&module)).expect("module verifies");
+    }
+
+    #[test]
+    fn global_and_function_cannot_share_a_name() {
+        // A data symbol owns its name outright, so no overload may hide behind
+        // it. C rejects this, so the conflict is built directly.
+        let context = fcc_context();
+        let module = tir::builtin::ops::module(&context, None).build();
+        let mut builder = tir::IRBuilder::new(module.body());
+        builder.insert(
+            crate::cir::ZeroGlobalOpBuilder::new(&context)
+                .attr("sym_name", AttributeValue::Str("x".to_string()))
+                .attr("size", AttributeValue::UInt(4))
+                .attr("align", AttributeValue::UInt(4))
+                .build(),
+        );
+        let region = context.create_region();
+        region.add_block(context.create_block(vec![]).id());
+        let func = tir::builtin::ops::func(
+            &context,
+            "x",
+            tir::builtin::UnitType::new(&context),
+            Some(region.id()),
+        )
+        .build();
+        tir::IRBuilder::new(func.body())
+            .insert(tir::builtin::ops::r#return(&context, tir::Operand::none()).build());
+        builder.insert(func);
+        builder.insert(tir::builtin::ops::module_end(&context).build());
+
+        tir::verify_op_tree(&context, tir::Operation::id(&module))
+            .expect_err("a data symbol and a function cannot share a name");
     }
 
     /// Codegen behaviour is checked by the LIT tests under `fcc/checks/Codegen`.

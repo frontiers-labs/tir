@@ -1,6 +1,42 @@
 use crate::sem::Value;
 use crate::utils::APInt;
-use crate::{BlockId, Context, Operation, RegionId, ValueId};
+use crate::{BlockId, Context, Operation, RegionId, TypeId, ValueId};
+
+/// Whether a symbol may be referenced from outside the module that defines it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Public,
+    Private,
+}
+
+/// An operation that defines a named entity in the enclosing module's symbol
+/// table. Functions are overloadable and key on their argument types; data
+/// symbols carry no signature and own their name outright.
+pub trait Symbol {
+    fn symbol_name(&self) -> String;
+
+    /// `None` for a symbol that cannot be overloaded (a global, a struct
+    /// definition); `Some(argument types)` for one that keys on a signature.
+    fn symbol_signature(&self) -> Option<Vec<TypeId>>;
+
+    /// The type a call to this symbol produces; `None` for a symbol that is not
+    /// callable.
+    fn symbol_result_type(&self) -> Option<TypeId>;
+
+    fn symbol_visibility(&self) -> Visibility;
+
+    /// Whether the symbol has a body here rather than naming an external
+    /// definition.
+    fn is_definition(&self) -> bool;
+
+    fn verify_interface(
+        &self,
+        _this: &dyn Operation,
+        _context: &Context,
+    ) -> Result<(), crate::Error> {
+        Ok(())
+    }
+}
 
 /// An operation whose nested regions execute under a known fact about a value — e.g.
 /// a structured `if` whose then/else bodies run when the condition is true/false.

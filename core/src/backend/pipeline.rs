@@ -13,7 +13,7 @@ use tir::{
 
 use crate::backend::TargetMachine;
 use crate::backend::lower::OpLoweringPass;
-use crate::passes::{DeadCodeEliminationPass, LowerMemoryIntrinsicsPass};
+use crate::passes::{CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopAfter {
@@ -98,6 +98,8 @@ pub fn build_pipeline(
     stop: StopAfter,
 ) -> PassManager {
     let mut pm = PassManager::new();
+    // Object symbols are unique by name, so overloads must already be mangled.
+    pm.add_pass(CheckUniqueSymbolsPass::new());
     pm.add_pass(LowerMemoryIntrinsicsPass::new());
     pm.add_pass(TargetIntegerLegalizer::new(target));
     pm.nest::<FuncOp>().add_pass(target.isel_pass(context));

@@ -23,6 +23,36 @@ operation! {
     }
 }
 
+impl tir::Verifiable for CallOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        verify_call_metadata(self, context, &self.args(), "call")?;
+        let arg_types: Vec<_> = self
+            .args()
+            .iter()
+            .map(|arg| context.get_value(*arg).ty())
+            .collect();
+        let callee = self.callee();
+        let Some(resolved) =
+            tir::symbol_table::resolve_symbol_use(context, self.id(), &callee, Some(&arg_types))?
+        else {
+            return Ok(());
+        };
+
+        let result_type = context.get_value(self.result()).ty();
+        if resolved.result_type != Some(result_type) {
+            return Err(Error::VerificationError(format!(
+                "call to '{}' produces {}, but the callee returns {}",
+                tir::symbol_table::format_symbol(context, &callee, Some(&arg_types)),
+                context.type_to_string(result_type),
+                resolved
+                    .result_type
+                    .map_or_else(|| "nothing".to_string(), |ty| context.type_to_string(ty))
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl CallOp {
     pub fn callee(&self) -> String {
         callee_attr(self)
@@ -98,12 +128,6 @@ impl CallOpBuilder {
                     .collect(),
             ),
         )
-    }
-}
-
-impl tir::Verifiable for CallOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_call_metadata(self, context, &self.args(), "call")
     }
 }
 

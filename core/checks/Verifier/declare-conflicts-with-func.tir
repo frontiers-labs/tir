@@ -1,0 +1,12 @@
+// RUN: not tir opt --verify %s
+
+// A declaration names an external definition; declaring a function that this
+// module also defines is a redefinition of the same symbol.
+
+module {
+  declare @f(!i32) -> !i32
+  func @f(%0: !i32) -> !i32 {
+    return %0
+  }
+  module_end
+}

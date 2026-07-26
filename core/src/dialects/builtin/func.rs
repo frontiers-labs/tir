@@ -1,9 +1,10 @@
 use crate::Any;
 use crate::builtin::UnitType;
 use crate::operation;
+use crate::symbol_table::{symbol_name_of, visibility_of};
 
 use crate as tir;
-use crate::{Context, Error, Operation, Terminator};
+use crate::{Context, Error, Operation, Symbol, Terminator, Visibility};
 
 operation! {
     FuncOp {
@@ -11,6 +12,7 @@ operation! {
         dialect: "builtin",
         format: "custom",
         verifier: "true",
+        interfaces: [Symbol],
         attributes: A {
             sym_name: "Str",
             ret_type: "Type",
@@ -79,12 +81,39 @@ impl FuncOp {
     pub fn argument_alignments(&self) -> Vec<u64> {
         super::argument_alignments(self)
     }
+}
 
+impl Symbol for FuncOp {
+    fn symbol_name(&self) -> String {
+        symbol_name_of(self)
+    }
+
+    fn symbol_signature(&self) -> Option<Vec<tir::TypeId>> {
+        Some(self.body().arguments().iter().map(tir::Value::ty).collect())
+    }
+
+    fn symbol_result_type(&self) -> Option<tir::TypeId> {
+        Some(self.ret_type())
+    }
+
+    fn symbol_visibility(&self) -> Visibility {
+        visibility_of(self)
+    }
+
+    fn is_definition(&self) -> bool {
+        true
+    }
+}
+
+impl FuncOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         use tir::Operation;
 
         // func @name(%0: i32, %1: i32) -> i32 {
         fmt.write("func")?;
+        if self.symbol_visibility() == Visibility::Private {
+            fmt.write(" private")?;
+        }
 
         // Print symbol name
         let sym_name = self
@@ -136,6 +165,8 @@ impl FuncOp {
         context: &tir::Context,
     ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
         use tir::parse::common::Cursor;
+
+        let is_private = parser.parse_token("private");
 
         // Parse @name
         let sym_name = parser
@@ -202,6 +233,12 @@ impl FuncOp {
         }
         if let Some(argument_alignments) = argument_alignments {
             builder = builder.attr("argument_alignments", argument_alignments);
+        }
+        if is_private {
+            builder = builder.attr(
+                "sym_visibility",
+                tir::attributes::AttributeValue::Str("private".to_string()),
+            );
         }
 
         Ok(Box::new(builder.build()))
