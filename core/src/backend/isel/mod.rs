@@ -754,8 +754,8 @@ pub struct InstructionSelectPass {
     constant_materializer_ranges: Vec<ImmRange>,
     /// Floating-point widths target instructions can materialize from integer bits.
     float_constant_materializer_widths: HashSet<u32>,
-    /// Address width inferred from the target's natural integer load rules.
-    pointer_width: Option<u32>,
+    /// The target's own data layout, applying where the IR declares none.
+    default_layout: Option<crate::attributes::AttributeValue>,
     /// Semantic invariants the program e-graph is saturated with before covering.
     rewrites: Vec<IselRewrite>,
     /// Instructions that define a register implicitly; selection introduces one
@@ -1029,14 +1029,13 @@ impl InstructionSelectPass {
                     .any(|range| range.width >= *width)
             })
             .collect();
-        let pointer_width = pattern::natural_pointer_width(&compiled_patterns);
 
         Self {
             rules,
             compiled_patterns,
             constant_materializer_ranges,
             float_constant_materializer_widths,
-            pointer_width,
+            default_layout: None,
             rewrites,
             branch_emitters: None,
             cost_model: Box::new(DefaultIselCostModel),
@@ -1059,6 +1058,13 @@ impl InstructionSelectPass {
     /// Install semantic invariants used to saturate the program e-graph.
     pub fn with_rewrites(mut self, rewrites: Vec<IselRewrite>) -> Self {
         self.rewrites = rewrites;
+        self
+    }
+
+    /// Install the target's own data layout, which the pass reads where the IR
+    /// declares none (see [`DataLayout::for_op_with_default`](crate::DataLayout)).
+    pub fn with_data_layout(mut self, spec: Option<crate::attributes::AttributeValue>) -> Self {
+        self.default_layout = spec;
         self
     }
 
@@ -1193,6 +1199,15 @@ impl InstructionSelectPass {
             }
         }
 
+        // Pointer width is a data layout fact, so it comes from the layout in
+        // scope at this function, over the target's own.
+        let pointer_width = crate::DataLayout::for_op_with_default(
+            context,
+            op.op().id,
+            self.default_layout.as_ref(),
+        )
+        .and_then(|layout| layout.pointer_size());
+
         // Lower every block's ops through one builder so its `value_to_class`
         // memoization unifies classes across blocks (cross-block CSE). Class ids
         // are resolved through `find` afterwards because saturation may merge them.
@@ -1203,7 +1218,7 @@ impl InstructionSelectPass {
         let mut constant_candidates: Vec<(OpId, Id)> = Vec::new();
         let value_to_class = {
             let mut builder =
-                SemDagBuilder::new(context, &value_to_def, gsa, &mut egraph, self.pointer_width);
+                SemDagBuilder::new(context, &value_to_def, gsa, &mut egraph, pointer_width);
             for &block_id in &block_ids {
                 for op_id in context.get_block(block_id).op_ids() {
                     let op = context.get_op(op_id);

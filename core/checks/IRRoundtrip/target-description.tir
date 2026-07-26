@@ -1,0 +1,20 @@
+// RUN: tir opt %s | filecheck %s
+// Printing hoists the specs back into aliases, so re-parsing our own output
+// yields the same file.
+// RUN: tir opt %s | tir opt | filecheck %s
+
+#dl = {endianness = "little", stack_alignment = 128, types = {i32 = {abi = 32}, p = {abi = 64, size = 64}}}
+#env = {arch = "riscv64", cpu = "generic", features = ["m", "c"]}
+
+module {data_layout = #dl, target_env = #env} {
+  func @f() -> !i32 {
+    %0 = constant {value = 1} : !i32
+    return %0
+  }
+  module_end
+}
+
+// CHECK: #data_layout = {endianness = "little", stack_alignment = 128, types = {i32 = {abi = 32}, p = {abi = 64, size = 64}}}
+// CHECK: #target_env = {arch = "riscv64", cpu = "generic", features = ["m", "c"]}
+// CHECK: module {data_layout = #data_layout, target_env = #target_env} {
+// CHECK-NEXT: func @f() -> !i32 {

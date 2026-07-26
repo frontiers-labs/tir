@@ -51,9 +51,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
 
     let mut rendered = String::new();
     let mut fmt = IRFormatter::new(&mut rendered);
-    module
-        .print(&mut fmt)
-        .map_err(|e| format!("failed to print IR: {e}"))?;
+    tir::print_ir(&module, &context, &mut fmt).map_err(|e| format!("failed to print IR: {e}"))?;
 
     write_output(args.output.as_os_str(), &rendered).map_err(|e| e.into())
 }

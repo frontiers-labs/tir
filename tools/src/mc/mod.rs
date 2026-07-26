@@ -8,16 +8,17 @@ use tir::backend::binary::{render_ascii, write_elf};
 use tir::backend::pipeline::{StopAfter, build_pipeline};
 use tir::{Context, IRFormatter, Operation};
 
-use crate::common::{InputKind, parse_module};
+use crate::common::{InputKind, parse_module, parse_tir, read_input, resolve_kind};
 
 #[derive(Args)]
 pub struct ToolArgs {
     /// Target CPU
     #[arg(long)]
     mcpu: Option<String>,
-    /// Target architecture
+    /// Target architecture. Defaults to the `arch` the input's `target_env`
+    /// declares, which only TIR input can carry.
     #[arg(long)]
-    march: String,
+    march: Option<String>,
     /// Target feature toggles (e.g. `+m,-zmmul`), applied on top of `--march`.
     #[arg(long)]
     mattr: Option<String>,
@@ -60,22 +61,42 @@ pub enum FileType {
 }
 
 pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
-    let target = tir::backend::select_target_with_abi(
-        &args.march,
-        args.mcpu.as_deref(),
-        args.mattr.as_deref(),
-        args.mabi.as_deref(),
-    )?;
+    let select = |march: &str| {
+        tir::backend::select_target_with_abi(
+            march,
+            args.mcpu.as_deref(),
+            args.mattr.as_deref(),
+            args.mabi.as_deref(),
+        )
+    };
 
     let context = Context::with_default_dialects();
-    target.register_dialects(&context);
+    let kind = resolve_kind(args.input.as_ref(), args.kind.unwrap_or_default());
 
-    let (module, needs_lowering) = parse_module(
-        target.as_ref(),
-        &context,
-        args.input.as_ref(),
-        args.kind.unwrap_or_default(),
-    )?;
+    // Without --march the module says what it targets, so it is parsed first —
+    // with the default dialects only, which is enough for IR that still needs
+    // lowering.
+    let (target, module, needs_lowering) = match args.march.as_deref() {
+        Some(march) => {
+            let target = select(march)?;
+            target.register_dialects(&context);
+            let (module, needs_lowering) =
+                parse_module(target.as_ref(), &context, args.input.as_ref(), kind)?;
+            (target, module, needs_lowering)
+        }
+        None if kind == InputKind::Assembly => {
+            return Err("--march is required for assembly input".into());
+        }
+        None => {
+            let module = parse_tir(&context, &read_input(args.input.as_ref())?)?;
+            let arch = tir::TargetEnv::for_op(&context, module.id())
+                .and_then(|env| env.arch().map(str::to_string))
+                .ok_or("no --march given and the input declares no target_env 'arch'")?;
+            let target = select(&arch)?;
+            target.register_dialects(&context);
+            (target, module, true)
+        }
+    };
 
     if needs_lowering {
         tir::verify_op_tree(&context, module.id())
@@ -115,10 +136,16 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         },
         Some(FileType::Obj) | Some(FileType::ObjAscii) => {
             let fmt = target.object_format().ok_or_else(|| {
-                format!("target '{}' does not support object emission", args.march)
+                format!(
+                    "target '{}' does not support object emission",
+                    target.name()
+                )
             })?;
             let writer = target.binary_writer(&context).ok_or_else(|| {
-                format!("target '{}' does not support object emission", args.march)
+                format!(
+                    "target '{}' does not support object emission",
+                    target.name()
+                )
             })?;
             let obj = writer
                 .write_module(&context, &module, &fmt)
@@ -131,8 +158,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         None => {
             let mut rendered = String::new();
             let mut fmt = IRFormatter::new(&mut rendered);
-            module
-                .print(&mut fmt)
+            tir::print_ir(&module, &context, &mut fmt)
                 .map_err(|e| format!("failed to print IR: {e}"))?;
             rendered.into_bytes()
         }

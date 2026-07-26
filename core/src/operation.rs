@@ -207,6 +207,7 @@ pub fn verify_op_tree(context: &Context, op_id: OpId) -> Result<(), Error> {
 
     let instance = context.get_op(op_id);
     verify_token_region_arguments(context, &instance)?;
+    verify_scoped_metadata(&instance)?;
     instance.clone().as_dyn_op().verify(context)?;
 
     for region_id in instance.regions.clone() {
@@ -218,6 +219,18 @@ pub fn verify_op_tree(context: &Context, op_id: OpId) -> Result<(), Error> {
         }
     }
 
+    Ok(())
+}
+
+/// Checks the metadata specs this op contributes to its nested scopes.
+fn verify_scoped_metadata(instance: &Arc<OpInstance>) -> Result<(), Error> {
+    for attribute in &instance.attributes {
+        if attribute.name == crate::DATA_LAYOUT {
+            crate::layout::verify_spec(&attribute.value)?;
+        } else if attribute.name == crate::TARGET_ENV {
+            crate::target_env::verify_spec(&attribute.value)?;
+        }
+    }
     Ok(())
 }
 

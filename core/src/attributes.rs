@@ -107,6 +107,9 @@ impl AttributeValue {
                 fmt.write("]")
             }
             AttributeValue::Dict(map) => {
+                if let Some(alias) = fmt.attribute_alias(self).map(str::to_string) {
+                    return fmt.write(format!("#{alias}"));
+                }
                 fmt.write("{")?;
                 let mut first = true;
                 for (k, v) in map.iter() {

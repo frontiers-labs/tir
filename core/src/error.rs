@@ -22,6 +22,8 @@ pub enum Error {
     ExpectedSymbolName,
     #[error("Unknown value reference '%{0}'")]
     UnknownValueRef(String),
+    #[error("Unknown attribute alias '#{0}'")]
+    UnknownAttributeAlias(String),
     #[error("Operation verification failed: {0}")]
     VerificationError(String),
 }

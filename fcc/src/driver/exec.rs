@@ -242,8 +242,7 @@ fn run_compile_action(
             );
             let mut ir = String::new();
             let mut fmt = tir::IRFormatter::new(&mut ir);
-            use tir::Operation;
-            module.print(&mut fmt).unwrap_or_else(|e| {
+            tir::print_ir(&module, &context, &mut fmt).unwrap_or_else(|e| {
                 eprintln!("fcc: error: failed to print IR: {e}");
                 std::process::exit(1);
             });

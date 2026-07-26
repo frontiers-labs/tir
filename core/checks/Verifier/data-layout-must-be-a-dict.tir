@@ -1,0 +1,7 @@
+// RUN: not tir opt --verify %s
+
+// A data layout is a dictionary of entries, never a bare value.
+
+module {data_layout = 64} {
+  module_end
+}

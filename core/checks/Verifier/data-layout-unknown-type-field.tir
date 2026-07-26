@@ -1,0 +1,8 @@
+// RUN: not tir opt --verify %s
+
+// A type entry describes size and alignment only, so a misspelled field is
+// rejected rather than silently ignored.
+
+module {data_layout = {types = {i32 = {alignment = 32}}}} {
+  module_end
+}

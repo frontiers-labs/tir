@@ -27,23 +27,7 @@ pub fn parse_module(
 ) -> Result<(ModuleOp, bool), Box<dyn Error>> {
     let input = read_input(input_path)?;
 
-    let ty = match kind {
-        InputKind::Auto => {
-            if let Some(inp) = input_path.and_then(|i| i.to_str())
-                && (inp.ends_with(".S")
-                    || inp.ends_with(".s")
-                    || inp.ends_with(".asm")
-                    || inp.ends_with(".ptx"))
-            {
-                InputKind::Assembly
-            } else {
-                InputKind::Tir
-            }
-        }
-        _ => kind,
-    };
-
-    match ty {
+    match resolve_kind(input_path, kind) {
         InputKind::Assembly => {
             // A target with its own assembly syntax (e.g. PTX) parses text
             // directly; otherwise fall back to the shared flat assembler.
@@ -61,14 +45,36 @@ pub fn parse_module(
                 false,
             ))
         }
-        InputKind::Tir => Ok((
-            tir::parse::ir::parse_ir::<ModuleOp>(context, &input).map_err(|(span, err)| {
-                format!("failed to parse input at byte {}: {err:?}", span.0)
-            })?,
-            true,
-        )),
+        InputKind::Tir => Ok((parse_tir(context, &input)?, true)),
         InputKind::Auto => unreachable!(),
     }
+}
+
+/// Whether the input holds TIR or assembly, resolving [`InputKind::Auto`] by
+/// file extension.
+pub fn resolve_kind(input_path: Option<&OsString>, kind: InputKind) -> InputKind {
+    if kind != InputKind::Auto {
+        return kind;
+    }
+    let is_assembly = input_path
+        .and_then(|path| path.to_str())
+        .is_some_and(|path| {
+            [".S", ".s", ".asm", ".ptx"]
+                .iter()
+                .any(|extension| path.ends_with(extension))
+        });
+    if is_assembly {
+        InputKind::Assembly
+    } else {
+        InputKind::Tir
+    }
+}
+
+/// Parse TIR text into a module. Needs no target: the dialects the text uses
+/// must already be registered.
+pub fn parse_tir(context: &Context, input: &str) -> Result<ModuleOp, Box<dyn Error>> {
+    tir::parse::ir::parse_ir::<ModuleOp>(context, input)
+        .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0).into())
 }
 
 pub fn read_input(path: Option<&OsString>) -> Result<String, io::Error> {

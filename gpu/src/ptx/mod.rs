@@ -40,6 +40,34 @@ impl tir::backend::TargetMachine for PtxTarget {
 
     fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
         tir::backend::isel::InstructionSelectPass::new(get_isel_rules(context, Feature::ALL))
+            .with_data_layout(self.data_layout())
+    }
+
+    fn data_layout(&self) -> Option<tir::attributes::AttributeValue> {
+        Some(tir::data_layout_spec(
+            tir::Endianness::Little,
+            // PTX has no ABI stack: locals live in `.local` space, and `.param`
+            // space is 8-byte aligned.
+            64,
+            &[
+                ("i1", 8, 8),
+                ("i8", 8, 8),
+                ("i16", 16, 16),
+                ("i32", 32, 32),
+                ("i64", 64, 64),
+                ("f32", 32, 32),
+                ("f64", 64, 64),
+                ("p", 64, 64),
+            ],
+        ))
+    }
+
+    fn target_env(&self) -> Option<tir::attributes::AttributeValue> {
+        let features: Vec<String> = Feature::ALL
+            .iter()
+            .map(|feature| feature.name().to_ascii_lowercase())
+            .collect();
+        Some(tir::target_env_spec(self.name(), &features))
     }
 
     fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {

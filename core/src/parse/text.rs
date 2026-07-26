@@ -21,6 +21,9 @@ pub struct Parser<'src> {
     /// contiguous. Stays flat across nested regions: the printer emits globally
     /// unique value numbers, so a single namespace is enough.
     value_names: HashMap<String, ValueId>,
+    /// Attribute values bound to `#name` in the file preamble, so a long spec
+    /// (a data layout, say) is written once and referenced where it applies.
+    aliases: HashMap<String, AttributeValue>,
 }
 
 impl<'src> Parser<'src> {
@@ -30,7 +33,13 @@ impl<'src> Parser<'src> {
             position: 0,
             region_parse: None,
             value_names: HashMap::new(),
+            aliases: HashMap::new(),
         }
+    }
+
+    /// Bind `#name` to an attribute value for the rest of this parse.
+    pub(crate) fn define_alias(&mut self, name: &str, value: AttributeValue) {
+        self.aliases.insert(name.to_string(), value);
     }
 
     /// Bind a textual SSA name to the value id allocated for it.
@@ -99,6 +108,17 @@ impl<'src> Parser<'src> {
         &mut self,
         context: &crate::Context,
     ) -> Result<Option<AttributeValue>, (Span, crate::Error)> {
+        if self.parse_token("#") {
+            let name = self
+                .parse_ident()
+                .ok_or_else(|| (self.span(), crate::Error::ExpectedToken("alias name")))?;
+            return self.aliases.get(name).cloned().map(Some).ok_or_else(|| {
+                (
+                    self.span(),
+                    crate::Error::UnknownAttributeAlias(name.to_string()),
+                )
+            });
+        }
         if let Some(value) = self.parse_string() {
             return Ok(Some(AttributeValue::Str(value.to_string())));
         }

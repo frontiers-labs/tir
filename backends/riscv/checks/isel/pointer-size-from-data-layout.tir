@@ -1,0 +1,17 @@
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
+
+// Loading a pointer needs the pointer's width, which is a data layout fact: an
+// rv64 target loads eight bytes (`ld`), but the layout this module declares
+// makes its pointers 32 bits wide, so the same load becomes an `lw`.
+
+#data_layout = {endianness = "little", stack_alignment = 128, types = {p = {size = 32, abi = 32}}}
+
+module {data_layout = #data_layout} {
+  func @deref(%0: !ptr.p<!ptr.p>) -> !ptr.p {
+    %1 = ptr.load %0 : !ptr.p
+    return %1
+  }
+  module_end
+}
+
+// CHECK: riscv.lw {rd = %virt1:GPR, rs1 = %virt0:GPR, imm = 0}

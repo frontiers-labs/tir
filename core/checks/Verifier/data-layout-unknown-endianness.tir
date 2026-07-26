@@ -1,0 +1,7 @@
+// RUN: not tir opt --verify %s
+
+// Byte order is little or big; nothing else is a byte order.
+
+module {data_layout = {endianness = "middle"}} {
+  module_end
+}

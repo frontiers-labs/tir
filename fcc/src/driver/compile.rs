@@ -54,15 +54,18 @@ pub(super) fn lower_to_ir(
     march: Option<&str>,
     mabi: Option<&str>,
 ) -> tir::builtin::ModuleOp {
-    let target = match march {
-        Some(march) => tir::backend::select_target_with_abi(march, None, None, mabi)
-            .and_then(|target| crate::sema::TargetProfile::for_abi(march, target.abi())),
-        None => crate::sema::TargetProfile::host(),
-    }
-    .unwrap_or_else(|error| {
+    let fail = |error: String| -> ! {
         eprintln!("fcc: error: {error}; pass --march explicitly");
         std::process::exit(1);
+    };
+    let machine = march.map(|march| {
+        tir::backend::select_target_with_abi(march, None, None, mabi).unwrap_or_else(|e| fail(e))
     });
+    let target = match (march, &machine) {
+        (Some(march), Some(machine)) => crate::sema::TargetProfile::for_abi(march, machine.abi()),
+        _ => crate::sema::TargetProfile::host(),
+    }
+    .unwrap_or_else(|e| fail(e));
     let typed =
         crate::sema::analyze_with_target(unit, options, target).unwrap_or_else(|diagnostics| {
             for diagnostic in diagnostics {
@@ -70,10 +73,42 @@ pub(super) fn lower_to_ir(
             }
             std::process::exit(1);
         });
-    crate::codegen::codegen(context, &typed).unwrap_or_else(|d| {
+    let module = crate::codegen::codegen(context, &typed).unwrap_or_else(|d| {
         d.eprint();
         std::process::exit(1);
-    })
+    });
+    match &machine {
+        Some(machine) => describe_target(context, &module, machine.as_ref()),
+        None => module,
+    }
+}
+
+/// Record the target's data layout and hardware description on the module, so
+/// the emitted IR carries the ABI it was compiled for instead of depending on
+/// the driver flags to be lowered correctly.
+fn describe_target(
+    context: &tir::Context,
+    module: &tir::builtin::ModuleOp,
+    machine: &dyn tir::backend::TargetMachine,
+) -> tir::builtin::ModuleOp {
+    use tir::Operation;
+
+    let mut attributes = context.get_op(module.id()).attributes.clone();
+    let specs = [
+        (tir::DATA_LAYOUT, machine.data_layout()),
+        (tir::TARGET_ENV, machine.target_env()),
+    ];
+    for (name, spec) in specs {
+        if let Some(spec) = spec {
+            attributes.push(tir::attributes::NamedAttribute::new(name, spec));
+        }
+    }
+    context.set_op_attributes(module.id(), attributes);
+    // Op handles are snapshots, so the caller needs the updated one.
+    context
+        .get_op(module.id())
+        .as_op::<tir::builtin::ModuleOp>()
+        .expect("the module keeps its identity")
 }
 
 pub(super) fn fcc_context() -> tir::Context {

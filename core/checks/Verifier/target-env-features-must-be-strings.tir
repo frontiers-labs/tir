@@ -1,0 +1,7 @@
+// RUN: not tir opt --verify %s
+
+// Features name ISA extensions, so the list holds strings.
+
+module {target_env = {arch = "riscv64", features = [64]}} {
+  module_end
+}

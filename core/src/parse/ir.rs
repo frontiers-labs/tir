@@ -16,6 +16,7 @@ type BlockLabel = (u32, Vec<(String, crate::TypeId)>, Vec<NamedAttribute>);
 pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, Error)> {
     let mut parser = TextParser::new(src);
 
+    parse_attribute_aliases(&mut parser, context)?;
     let op = parse_single_op(&mut parser, context)?;
     let any: Box<dyn Any> = op.into_any();
     any.downcast::<T>()
@@ -29,7 +30,33 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
 /// context; its results receive fresh value ids.
 pub fn parse_op(context: &Context, src: &str) -> Result<Box<dyn Operation>, (Span, Error)> {
     let mut parser = TextParser::new(src);
+    parse_attribute_aliases(&mut parser, context)?;
     parse_single_op(&mut parser, context)
+}
+
+/// Consume the file preamble of `#name = value` attribute aliases, binding each
+/// for the rest of the parse. Aliases are file-scoped: they are defined before
+/// the top-level operation and referenced from any attribute inside it.
+fn parse_attribute_aliases<'src>(
+    parser: &mut TextParser<'src>,
+    context: &Context,
+) -> ParseResult<()> {
+    parser.skip_trivia();
+    while parser.peek_char() == Some('#') {
+        parser.parse_token("#");
+        let name = parser
+            .parse_ident()
+            .ok_or_else(|| (parser.span(), Error::ExpectedToken("alias name")))?
+            .to_string();
+        if !parser.parse_token("=") {
+            return Err((parser.span(), Error::ExpectedToken("=")));
+        }
+        let value = parser
+            .parse_attribute_value(context)?
+            .ok_or_else(|| (parser.span(), Error::ExpectedToken("attribute value")))?;
+        parser.define_alias(&name, value);
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_single_op<'src>(
@@ -327,5 +354,39 @@ impl<'src> TextParser<'src> {
             .indices
             .insert(index, block.id());
         Ok(block)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ir;
+    use crate::builtin::ModuleOp;
+    use crate::{Context, DataLayout, Endianness, Error, Operation};
+
+    #[test]
+    fn an_alias_stands_in_for_an_attribute_value() {
+        let context = Context::with_default_dialects();
+        let src = r#"#dl = {endianness = "little"}
+
+module {data_layout = #dl} {
+  module_end
+}"#;
+
+        let module = parse_ir::<ModuleOp>(&context, src).expect("parse module");
+
+        let layout = DataLayout::for_op(&context, module.id()).expect("layout in scope");
+        assert_eq!(layout.endianness(), Some(Endianness::Little));
+    }
+
+    #[test]
+    fn an_undefined_alias_is_rejected() {
+        let context = Context::with_default_dialects();
+        let src = "module {data_layout = #missing} {\n  module_end\n}";
+
+        let Err((_, error)) = parse_ir::<ModuleOp>(&context, src) else {
+            panic!("an undefined alias must be rejected");
+        };
+
+        assert!(matches!(error, Error::UnknownAttributeAlias(name) if name == "missing"));
     }
 }

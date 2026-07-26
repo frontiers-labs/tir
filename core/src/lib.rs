@@ -17,16 +17,20 @@ mod error;
 pub mod graph;
 mod interfaces;
 mod ir_formatter;
+mod layout;
 mod operand;
 mod operation;
 mod pass;
 pub mod passes;
 pub mod pbqp;
+mod print;
 mod region;
 pub mod region_format;
 pub mod schema;
+mod scoped_attr;
 pub mod sem;
 pub mod symbol_table;
+mod target_env;
 mod ty;
 pub mod utils;
 mod value;
@@ -49,6 +53,7 @@ pub use interfaces::{
     Symbol, Terminator, TokenScope, Visibility,
 };
 pub use ir_formatter::IRFormatter;
+pub use layout::{DATA_LAYOUT, DataLayout, Endianness, data_layout_spec};
 pub use operand::Operand;
 pub use operation::{
     DialectName, ErasedOpInterface, ImplementsOpInterface, OpDefVerifiable, OpId, OpInstance,
@@ -59,12 +64,15 @@ pub use pass::{
     OperationRef, PASSES, Pass, PassError, PassInfo, PassManager, PassTarget, Rewriter, build_pass,
     parse_pipeline, registered_passes,
 };
+pub use print::print_ir;
 pub use region::{Region, RegionId};
 pub use schema::{
     AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, TYPE_SCHEMAS, TypeArg, TypeParam, TypeParamKind,
     TypeSchema, build_type, schema_json, type_schema_json,
 };
+pub use scoped_attr::{AttributeDict, scoped_dict};
 pub use symbol_table::{SymbolEntry, SymbolTable};
+pub use target_env::{TARGET_ENV, TargetEnv, target_env_spec};
 pub use ty::{Any, Type, TypeConstraint, TypeId, TypeParser};
 pub use value::{Use, UseSite, Value, ValueId};
 

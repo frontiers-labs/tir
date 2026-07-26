@@ -60,6 +60,20 @@ pub trait TargetMachine {
     /// visible through the other.
     fn register_info(&self) -> RegisterInfo;
 
+    /// How this target lays data out, as a [`tir::DATA_LAYOUT`] spec. It applies
+    /// where the IR itself declares no layout, so a module carrying its own
+    /// [`data_layout`](tir::DATA_LAYOUT) always wins. `None` for a target that
+    /// does not describe its layout yet.
+    fn data_layout(&self) -> Option<tir::attributes::AttributeValue> {
+        None
+    }
+
+    /// This target's hardware description, as a [`tir::TARGET_ENV`] spec, with
+    /// the same precedence as [`data_layout`](Self::data_layout).
+    fn target_env(&self) -> Option<tir::attributes::AttributeValue> {
+        None
+    }
+
     fn abis(&self) -> &'static [crate::backend::abi::AbiInfo] {
         &[]
     }

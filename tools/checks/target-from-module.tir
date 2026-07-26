@@ -1,0 +1,18 @@
+// RUN: tir mc --stage=isel %s | filecheck %s
+// An explicit --march still wins over what the module declares.
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s --check-prefix=ARM64
+
+// With no --march the module's own target environment selects the backend.
+
+#target_env = {arch = "riscv64"}
+
+module {target_env = #target_env} {
+  func @add(%0: !i32, %1: !i32) -> !i32 {
+    %2 = addi %0, %1 : !i32
+    return %2
+  }
+  module_end
+}
+
+// CHECK: riscv.addw
+// ARM64: arm64.add
