@@ -23,7 +23,8 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     AnalysisManager, Block, BlockId, BranchGuard, BranchTerminator, Context, OpId, Operation,
-    OperationRef, Pass, PassError, PassTarget, PreservedAnalyses, Rewriter, TypeId, ValueId,
+    OperationRef, Pass, PassError, PassTarget, PreservedAnalyses, Rewriter, Terminator, TypeId,
+    ValueId,
     analysis::{DominatingEdgeFacts, DominatorTree, EdgeFact, GSA, GateNode},
     graph::{Dag, MutDag, NodeId, OperandConstraint},
     sem::{
@@ -40,10 +41,10 @@ pub use tir_symbolic::egraph::EMatch;
 
 use builder::SemDagBuilder;
 use cover::{
-    CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative, PbqpIselMatch,
-    build_eclass_cover, completeness_error, prune_dominated_matches,
+    BoundaryDemand, CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative,
+    PbqpIselMatch, build_eclass_cover, completeness_error, prune_dominated_matches,
 };
-use emit::{BlockDecision, BlockPlan, EmissionBuilder, GuardBranch, TerminatorPlan};
+use emit::{BlockPlan, GuardBranch, ScheduledEmit, TerminatorPlan, resolve_match, schedule_tiles};
 use node::{
     class_int_binding, class_width, is_comparison, is_low_extract_view, kind_is_pure,
     low_extract_source, template_node,
@@ -82,6 +83,14 @@ impl RuleMatch {
         for (sym, dest) in &mut self.block_bindings {
             if *sym == symbol {
                 *dest = block;
+            }
+        }
+    }
+
+    fn remap_values(&mut self, remaps: &HashMap<ValueId, ValueId>) {
+        for (_, value) in &mut self.value_bindings {
+            if let Some(replacement) = remaps.get(value) {
+                *value = *replacement;
             }
         }
     }
@@ -131,14 +140,6 @@ pub struct EmitRequest<'a> {
 }
 
 impl<'a> EmitRequest<'a> {
-    fn for_op(op: &'a OperationRef, context: &Context) -> Self {
-        Self {
-            op: Some(op),
-            results: &op.op().results,
-            result_ty: op.op().results.first().map(|v| context.get_value(*v).ty()),
-        }
-    }
-
     /// The op id for diagnostics; invalid for an introduced instruction.
     pub fn op_id(&self) -> OpId {
         self.op.map(|op| op.op().id).unwrap_or_default()
@@ -465,20 +466,12 @@ struct FunctionSelection {
     /// The block defining each value, or `None` for a block argument / entry input
     /// (always available in a register).
     value_block: HashMap<ValueId, Option<BlockId>>,
-    /// Values with at least one original use outside their defining block: these are
-    /// guaranteed materialized in a register, so a dominated block may bind them.
-    externally_bound: HashSet<ValueId>,
     /// E-classes used as an operand by more than one consumer (function-wide). A
     /// memory effect in such a class cannot be internalized into a match.
     shared_classes: HashSet<Id>,
-    /// Op-root e-classes whose value some consumer can never internalize — a use by
-    /// an op no match reaches, or by an op in a different block — so the defining op
-    /// must never be consumed.
-    must_materialize: HashSet<Id>,
-    /// Constant values consumed by an op that selection cannot rewrite (a return,
-    /// a call): the defining block's cover must root a materializer match for them
-    /// instead of leaving the constant to the pre-RA hook.
-    force_constant_values: HashSet<ValueId>,
+    /// Classes selected at their defining block because a surviving reader needs
+    /// their register value.
+    demand: HashSet<(Id, BlockId)>,
     /// Control-flow edges retained when gate values are reified.
     control: HashMap<BlockId, Vec<ControlReification>>,
     /// Canonical classes seeded from reducible γ/μ gates. An algebraic `If`
@@ -522,16 +515,6 @@ impl FunctionSelection {
             .any(|m| self.ops_by_root.contains_key(&m))
     }
 
-    fn is_constant_root(&self, context: &Context, class: Id) -> bool {
-        class_int_binding(&self.egraph, class).is_some()
-            || self.base_members(class).any(|member| {
-                self.ops_by_root.get(&member).is_some_and(|ops| {
-                    ops.iter()
-                        .any(|op| context.get_op(*op).is::<crate::builtin::ConstantFOp>())
-                })
-            })
-    }
-
     /// Whether any base member of `class` is used as an operand by more than one
     /// consumer (so a memory effect in it cannot be internalized).
     fn is_shared(&self, class: Id) -> bool {
@@ -544,14 +527,13 @@ impl FunctionSelection {
             .any(|member| self.reifiable_gates.contains(&member))
     }
 
-    /// Whether `class` must keep a materializing alternative: a function-wide
-    /// requirement (any base member) or the block-local `overlay` (fused-branch
-    /// boundaries and materialized guard conditions, keyed by scoped rep).
-    fn requires_materialization(&self, class: Id, overlay: &HashSet<Id>) -> bool {
-        overlay.contains(&class)
-            || self
-                .base_members(class)
-                .any(|m| self.must_materialize.contains(&m))
+    fn demanded_at(&self, class: Id, block: BlockId, overlay: &HashSet<Id>) -> bool {
+        overlay.contains(&class) || self.placed_at(class, block)
+    }
+
+    fn placed_at(&self, class: Id, block: BlockId) -> bool {
+        self.base_members(class)
+            .any(|member| self.demand.contains(&(member, block)))
     }
 
     /// Whether any base member of `class` computes an IR value (a candidate for a
@@ -570,72 +552,31 @@ impl FunctionSelection {
         })
     }
 
-    /// Whether the class carries an IR value that still exists after selection:
-    /// a block input, or the result of any op but a bare `constant`/`constantf`
-    /// (which is erased once selection or the target's pre-RA hook is done with
-    /// it). Only such a value satisfies a register operand externally.
-    ///
-    /// A proven-constant class carries none: whatever op computed it (a `constant`,
-    /// or an `extsi` of one) is erased in favour of a constant materializer, so its
-    /// value defines no register.
-    fn has_surviving_value(&self, context: &Context, class: Id) -> bool {
-        if class_int_binding(&self.egraph, class).is_some() {
-            return false;
-        }
-        self.any_class_value(class, |v| {
-            self.value_to_def.get(v).is_none_or(|op| {
-                let op = context.get_op(*op);
-                !op.is::<crate::builtin::ConstantOp>() && !op.is::<crate::builtin::ConstantFOp>()
-            })
-        })
-    }
-
-    /// Whether the cover must root a materializer match for `class` (see
-    /// [`FunctionSelection::force_constant_values`]).
-    fn forces_constant_materialization(&self, class: Id, block: BlockId) -> bool {
-        self.any_class_value(class, |value| {
-            self.force_constant_values.contains(value)
-                && self.value_block.get(value) == Some(&Some(block))
-        })
-    }
-
-    fn has_materialized_constant_value(
-        &self,
-        dom: &DominatorTree,
-        class: Id,
-        block: BlockId,
-    ) -> bool {
-        self.any_class_value(class, |value| {
-            if !self.force_constant_values.contains(value) {
-                return false;
-            }
-            match self.value_block.get(value).copied().flatten() {
-                Some(def_block) if def_block == block => true,
-                Some(def_block) => {
-                    dom.dominates(def_block, block) && self.externally_bound.contains(value)
-                }
-                None => false,
-            }
-        })
-    }
-
-    /// Whether External satisfies a boundary's register requirement for `class`:
-    /// a value that outlives selection backs the class. Without materializer
-    /// rules (`no_materializer_rules`), a bare constant also qualifies: the
-    /// target's pre-RA hook still lowers surviving constants. With them, every
-    /// constant needing a register must root a materializer match.
-    fn externally_bindable(
+    fn available_at(
         &self,
         context: &Context,
         dom: &DominatorTree,
         class: Id,
         block: BlockId,
-        no_materializer_rules: bool,
     ) -> bool {
-        self.has_surviving_value(context, class)
-            || self.has_materialized_constant_value(dom, class, block)
-            || (no_materializer_rules
-                && (self.has_values(class) || class_int_binding(&self.egraph, class).is_some()))
+        self.any_class_value(class, |value| {
+            let Some(&def) = self.value_to_def.get(value) else {
+                return true;
+            };
+            let op = context.get_op(def);
+            let Some(def_block) = context.parent_block(def) else {
+                return true;
+            };
+            if !self.op_root.contains_key(&def) {
+                if op.is::<crate::builtin::ConstantOp>() || op.is::<crate::builtin::ConstantFOp>() {
+                    return false;
+                }
+                return def_block == block || dom.dominates(def_block, block);
+            }
+            def_block != block
+                && dom.dominates(def_block, block)
+                && self.placed_at(class, def_block)
+        })
     }
 
     /// Resolve `class` to operands for consumer op `consumer` in `block`: the
@@ -644,6 +585,12 @@ impl FunctionSelection {
     /// selection, and emission, so collect-time acceptance implies emit-time
     /// success. A valueless class yields neither — resolvable only as an
     /// introduced dest the caller expects the cover to materialize.
+    ///
+    /// `bind_pending_tiles` lets a caller that is about to demand the class in
+    /// this block (guard selection: fused-branch boundary operands join the
+    /// overlay) bind a same-block op-rooted value whose tile will define it.
+    /// Every other caller passes `false`: an op-rooted def with no tile is
+    /// erased by the extraction, so only surviving values may bind.
     fn resolve_binding(
         &self,
         dom: &DominatorTree,
@@ -651,10 +598,11 @@ impl FunctionSelection {
         class: Id,
         block: BlockId,
         consumer: OpId,
+        bind_pending_tiles: bool,
     ) -> Binding {
         Binding {
             int: class_int_binding(&self.egraph, class),
-            value: self.register_value(dom, context, class, block, consumer),
+            value: self.register_value(dom, context, class, block, consumer, bind_pending_tiles),
         }
     }
 
@@ -673,6 +621,7 @@ impl FunctionSelection {
         class: Id,
         block: BlockId,
         consumer: OpId,
+        bind_pending_tiles: bool,
     ) -> Option<ValueId> {
         // A low-bit truncation re-views its operand's register: bind the operand
         // (chasing a chain of truncations), never the erased truncation itself.
@@ -693,10 +642,23 @@ impl FunctionSelection {
                         if !context.get_block(block).is_before(def, consumer) {
                             continue;
                         }
+                        if !bind_pending_tiles && self.op_root.contains_key(&def) {
+                            continue;
+                        }
                         (0, self.op_position[&def], v.number())
                     }
                     Some(def_block) => {
-                        if !dom.dominates(def_block, block) || !self.externally_bound.contains(&v) {
+                        if !dom.dominates(def_block, block) {
+                            continue;
+                        }
+                        // A def the extraction places dominates by construction;
+                        // an op selection never touches (an alloca, a call)
+                        // survives with its original value.
+                        let def = self.value_to_def[&v];
+                        let survives = !self.op_root.contains_key(&def)
+                            && !context.get_op(def).is::<crate::builtin::ConstantOp>()
+                            && !context.get_op(def).is::<crate::builtin::ConstantFOp>();
+                        if !survives && !self.placed_at(class, def_block) {
                             continue;
                         }
                         (2, self.dom_distance(dom, block, def_block), v.number())
@@ -708,6 +670,16 @@ impl FunctionSelection {
             }
         }
         best.map(|(_, v)| v)
+    }
+
+    /// The class whose tile defines the register a low-extract view re-reads:
+    /// `class` itself unless it is a chain of low-bit truncations.
+    fn chase_low_extract(&self, class: Id) -> Id {
+        let mut class = self.egraph.find(class);
+        while let Some(source) = low_extract_source(&self.egraph, class) {
+            class = source;
+        }
+        class
     }
 
     /// Steps up the dominator chain from `from` to `to` (closer dominators rank
@@ -780,9 +752,6 @@ pub struct InstructionSelectPass {
     /// (see [`pattern::constant_materializer_ranges`]). Empty means bare
     /// constants stay with the target's pre-RA materialization hook.
     constant_materializer_ranges: Vec<ImmRange>,
-    /// Ranges whose materializer specifically uses an add from a hardwired zero
-    /// register; only these need the structural `zero + immediate` bridge.
-    zero_form_constant_materializer_ranges: Vec<ImmRange>,
     /// Floating-point widths target instructions can materialize from integer bits.
     float_constant_materializer_widths: HashSet<u32>,
     /// Address width inferred from the target's natural integer load rules.
@@ -801,6 +770,7 @@ pub struct InstructionSelectPass {
     /// cannot be selected), populated up front when the pass visits each function.
     plans: HashMap<BlockId, Result<BlockPlan, String>>,
     emitted_blocks: HashSet<BlockId>,
+    emitted_values: HashMap<ValueId, ValueId>,
     /// Function roots already solved, so a re-visit does not rebuild the graph.
     solved: HashSet<OpId>,
 }
@@ -1047,17 +1017,16 @@ impl InstructionSelectPass {
             .collect();
 
         let rewrites = discover_rewrites();
-        let constant_materializer_ranges =
-            pattern::constant_materializer_ranges(&compiled_patterns);
-        let zero_form_constant_materializer_ranges =
-            pattern::zero_form_constant_materializer_ranges(&compiled_patterns);
+        let constant_materializer_ranges: Vec<_> = compiled_patterns
+            .iter()
+            .filter_map(CompiledIselPattern::constant_materializer_range)
+            .collect();
         let float_constant_materializer_widths = declared_float_constant_materializer_widths
             .into_iter()
             .filter(|width| {
-                !zero_form_constant_materializer_ranges.is_empty()
-                    || constant_materializer_ranges
-                        .iter()
-                        .any(|range| range.width >= *width)
+                constant_materializer_ranges
+                    .iter()
+                    .any(|range| range.width >= *width)
             })
             .collect();
         let pointer_width = pattern::natural_pointer_width(&compiled_patterns);
@@ -1066,7 +1035,6 @@ impl InstructionSelectPass {
             rules,
             compiled_patterns,
             constant_materializer_ranges,
-            zero_form_constant_materializer_ranges,
             float_constant_materializer_widths,
             pointer_width,
             rewrites,
@@ -1076,6 +1044,7 @@ impl InstructionSelectPass {
             call_lowering: None,
             plans: HashMap::new(),
             emitted_blocks: HashSet::new(),
+            emitted_values: HashMap::new(),
             solved: HashSet::new(),
         }
     }
@@ -1238,21 +1207,22 @@ impl InstructionSelectPass {
             for &block_id in &block_ids {
                 for op_id in context.get_block(block_id).op_ids() {
                     let op = context.get_op(op_id);
-                    if let Some(root) = builder.build_for_op(&op) {
+                    if let Some(root) = builder.build_for_op(&op).or_else(|| {
+                        op.is::<crate::builtin::ConstantOp>()
+                            .then(|| builder.build_from_value(op.results[0]))
+                    }) {
                         roots_by_op.insert(op_id, root);
-                    } else if ((!self.constant_materializer_ranges.is_empty()
-                        && op.is::<crate::builtin::ConstantOp>())
-                        || (op.is::<crate::builtin::ConstantFOp>()
-                            && op.results.first().is_some_and(|result| {
-                                let ty = context.get_value(*result).ty();
-                                let data = context.get_type_data(ty);
-                                (data.as_ref() as &dyn std::any::Any)
-                                    .downcast_ref::<tir::builtin::FloatType>()
-                                    .is_some_and(|ty| {
-                                        self.float_constant_materializer_widths
-                                            .contains(&ty.bit_width())
-                                    })
-                            })))
+                    } else if (op.is::<crate::builtin::ConstantFOp>()
+                        && op.results.first().is_some_and(|result| {
+                            let ty = context.get_value(*result).ty();
+                            let data = context.get_type_data(ty);
+                            (data.as_ref() as &dyn std::any::Any)
+                                .downcast_ref::<tir::builtin::FloatType>()
+                                .is_some_and(|ty| {
+                                    self.float_constant_materializer_widths
+                                        .contains(&ty.bit_width())
+                                })
+                        }))
                         && let Some(&result) = op.results.first()
                     {
                         constant_candidates.push((op_id, builder.build_from_value(result)));
@@ -1359,8 +1329,6 @@ impl InstructionSelectPass {
 
         seed_bare_condition_terms(context, &mut egraph, &control);
 
-        bridge_constant_materializers(&mut egraph, &self.zero_form_constant_materializer_ranges);
-
         // Canonicalize the side tables through `find`: saturation may merge classes,
         // so every id recorded against the pre-saturation graph is re-resolved here.
         let mut ops_by_root: HashMap<Id, Vec<OpId>> = HashMap::new();
@@ -1386,12 +1354,6 @@ impl InstructionSelectPass {
                 .or_default()
                 .push(value);
         }
-        for (&op, &root) in &roots_by_op {
-            let class = egraph.find(root);
-            for result in &context.get_op(op).results {
-                class_values.entry(class).or_default().push(*result);
-            }
-        }
         for values in class_values.values_mut() {
             values.sort_by_key(|v| v.number());
             values.dedup();
@@ -1403,21 +1365,6 @@ impl InstructionSelectPass {
                 value_block
                     .entry(value)
                     .or_insert_with(|| value_to_def.get(&value).map(|op| op_block[op]));
-            }
-        }
-
-        // A value with an original use outside its defining block is guaranteed
-        // materialized in a register, so a dominated block may bind it.
-        let mut externally_bound = HashSet::new();
-        for (&value, &def_op) in &value_to_def {
-            let def_block = op_block[&def_op];
-            if context
-                .get_value(value)
-                .uses()
-                .iter()
-                .any(|u| op_block.get(&u.op()).copied() != Some(def_block))
-            {
-                externally_bound.insert(value);
             }
         }
 
@@ -1442,75 +1389,71 @@ impl InstructionSelectPass {
             }
         }
 
-        // A value used by an op no match can reach (it lowered to no e-graph root)
-        // or by an op in a different block can never be recomputed inside a fused
-        // instruction, so its class must keep a materializing alternative. A use by
-        // a guarded terminator is exempt (branch selection recomputes the condition
-        // inside the branch, or re-adds the materialization requirement itself).
         let guards = || {
             control
                 .values()
                 .flatten()
                 .filter_map(ControlReification::guard)
         };
-        let guard_ops: HashSet<OpId> = guards().map(|guard| guard.op).collect();
+        let guard_by_op: HashMap<OpId, &BlockGuard> =
+            guards().map(|guard| (guard.op, guard)).collect();
         let guard_condition_ops: HashSet<OpId> = guards()
             .filter_map(|guard| value_to_def.get(&guard.condition).copied())
             .collect();
-        let mut must_materialize = HashSet::new();
-        for (&op, &root) in &roots_by_op {
-            let escapes = context.get_op(op).results.iter().any(|result| {
-                // (a) a use in another block — captured exactly by `externally_bound`.
-                externally_bound.contains(result)
-                    // (b) a same-block use no match reaches and that is not a guard.
-                    || context.get_value(*result).uses().iter().any(|u| {
-                        !roots_by_op.contains_key(&u.op()) && !guard_ops.contains(&u.op())
-                    })
-            });
-            if escapes {
-                must_materialize.insert(egraph.find(root));
-            }
-        }
-
-        // A proven constant consumed by an op that selection cannot rewrite (a
-        // return, a call) must reach that consumer in a register. Forcing the
-        // cover to root a materializer match there moves the `li` into selection;
-        // a wide cross-block constant is forced at its dominating definition;
-        // constants whose consumers all fold them as immediates keep their
-        // zero-cost External alternative.
-        let mut force_constant_values: HashSet<ValueId> = HashSet::new();
-        let needs_forced_materialization = |result: ValueId, class: Id| {
+        let needs_register = |result: ValueId, class: Id, def_block: BlockId| {
             let unselected_use = context.get_value(result).uses().iter().any(|u| {
-                !roots_by_op.contains_key(&u.op())
-                    && !guard_ops.contains(&u.op())
-                    && !guard_condition_ops.contains(&u.op())
+                if roots_by_op.contains_key(&u.op()) || guard_condition_ops.contains(&u.op()) {
+                    return false;
+                }
+                // A guard's condition is recomputed by branch selection, but an
+                // edge argument the same terminator forwards needs the register.
+                match guard_by_op.get(&u.op()) {
+                    Some(guard) => {
+                        result != guard.condition
+                            || guard.true_args.contains(&result)
+                            || guard.false_args.contains(&result)
+                    }
+                    None => true,
+                }
             });
-            let wide_cross_block = externally_bound.contains(&result)
+            let cross_block = context
+                .get_value(result)
+                .uses()
+                .iter()
+                .any(|u| op_block.get(&u.op()).copied() != Some(def_block));
+            let cross_block_register = cross_block
                 && class_int_binding(&egraph, class).is_some_and(|value| {
                     !self
                         .constant_materializer_ranges
                         .iter()
                         .any(|range| range.contains(&value))
-                });
-            unselected_use || wide_cross_block
+                })
+                || cross_block && class_int_binding(&egraph, class).is_none();
+            unselected_use || cross_block_register
         };
-        for (&op_id, &class) in &roots_by_op {
-            if class_int_binding(&egraph, class).is_none() {
-                continue;
+        // A low-bit truncation re-views its source's register, so demand lands
+        // on the chased source class — the one a tile can define.
+        let chase = |egraph: &SemEGraph, class: Id| {
+            let mut class = egraph.find(class);
+            while let Some(source) = low_extract_source(egraph, class) {
+                class = source;
             }
+            class
+        };
+        let mut demand = HashSet::new();
+        for (&op_id, &class) in &roots_by_op {
+            let def_block = op_block[&op_id];
             for &result in &context.get_op(op_id).results {
-                if needs_forced_materialization(result, class) {
-                    force_constant_values.insert(result);
+                if needs_register(result, class, def_block) {
+                    demand.insert((chase(&egraph, class), def_block));
                 }
             }
         }
         for &(op_id, class) in &constant_candidates {
-            if !context.get_op(op_id).is::<crate::builtin::ConstantFOp>() {
-                continue;
-            }
+            let def_block = op_block[&op_id];
             for &result in &context.get_op(op_id).results {
-                if needs_forced_materialization(result, class) {
-                    force_constant_values.insert(result);
+                if needs_register(result, class, def_block) {
+                    demand.insert((chase(&egraph, class), def_block));
                 }
             }
         }
@@ -1535,10 +1478,8 @@ impl InstructionSelectPass {
             op_position,
             value_to_def,
             value_block,
-            externally_bound,
             shared_classes,
-            must_materialize,
-            force_constant_values,
+            demand,
             control,
             reifiable_gates,
             prepared,
@@ -1612,38 +1553,100 @@ impl InstructionSelectPass {
             return Ok(());
         }
 
-        let plan = match self.plans.get(&block.id()) {
+        let mut plan = match self.plans.get(&block.id()) {
             Some(Ok(plan)) => plan.clone(),
             Some(Err(message)) => return Err(PassError::InvalidRuleSet(message.clone())),
             None => return Ok(()),
         };
 
         let block_arc = context.get_block(block.id());
-
-        // Insert pre-consumer materializations first, in operand-first order,
-        // each ahead of its anchor op. The request carries only the fresh
-        // destination value because the backing IR op, if any, is consumed.
-        for intro in &plan.introduced {
+        let anchor = block_arc
+            .op_ids()
+            .into_iter()
+            .find(|op| {
+                context
+                    .get_op(*op)
+                    .as_interface::<dyn Terminator>()
+                    .is_some()
+            })
+            .map(|op| OperationRef::new(context.get_op(op), Some(block_arc.clone()), None));
+        for scheduled in &plan.schedule {
+            let source = scheduled
+                .source_op
+                .map(|op| OperationRef::new(context.get_op(op), Some(block_arc.clone()), None));
+            let mut m = scheduled.m.clone();
+            m.remap_values(&self.emitted_values);
             let request = EmitRequest {
-                op: None,
-                results: std::slice::from_ref(&intro.dest),
-                result_ty: Some(intro.dest_ty),
+                op: source.as_ref(),
+                results: &scheduled.results,
+                result_ty: scheduled.result_ty,
             };
-            let rule = &self.rules[intro.rule_index];
-            let anchor =
-                OperationRef::new(context.get_op(intro.anchor), Some(block_arc.clone()), None);
+            let rule = &self.rules[scheduled.rule_index];
+            let tile_anchor = scheduled
+                .anchor
+                .map(|op| OperationRef::new(context.get_op(op), Some(block_arc.clone()), None))
+                .or_else(|| anchor.clone());
             if let Some(prelude) = rule.prelude_emit {
-                let prelude_op = prelude(context, &request, &intro.m)?;
-                rewriter.insert_op_before(&anchor, prelude_op.as_ref())?;
+                let op = prelude(context, &request, &m)?;
+                if let Some(anchor) = &tile_anchor {
+                    rewriter.insert_op_before(anchor, op.as_ref())?;
+                } else {
+                    block_arc.insert(block_arc.len(), op.id());
+                }
             }
-            let new_op = (rule.emit_fn)(context, &request, &intro.m)?;
-            rewriter.insert_op_before(&anchor, new_op.as_ref())?;
+            let op = (rule.emit_fn)(context, &request, &m)?;
+            if let Some(anchor) = &tile_anchor {
+                rewriter.insert_op_before(anchor, op.as_ref())?;
+            } else {
+                block_arc.insert(block_arc.len(), op.id());
+            }
+            for (&old, new) in scheduled
+                .results
+                .iter()
+                .zip(context.get_op(op.id()).results.iter())
+            {
+                self.emitted_values.insert(old, *new);
+            }
+        }
+        for (old, new) in &plan.value_remaps {
+            let new = self.emitted_values.get(new).copied().unwrap_or(*new);
+            if *old != new {
+                self.emitted_values.insert(*old, new);
+                context.replace_value_uses(*old, new);
+            }
         }
 
-        // Lower the terminators first: a fused conditional branch reads its
-        // operand *values* (not the condition register), so the condition's
-        // defining op — possibly erased as Dead below — must lose its last use
-        // before the main loop runs.
+        for terminator in &mut plan.terminators {
+            match terminator {
+                TerminatorPlan::Guard {
+                    branch,
+                    true_args,
+                    false_args,
+                    ..
+                } => {
+                    if let GuardBranch::Fused { m, .. } = branch {
+                        m.remap_values(&self.emitted_values);
+                    } else if let GuardBranch::Nonzero { condition } = branch
+                        && let Some(replacement) = self.emitted_values.get(condition)
+                    {
+                        *condition = *replacement;
+                    }
+                    for value in true_args.iter_mut().chain(false_args) {
+                        if let Some(replacement) = self.emitted_values.get(value) {
+                            *value = *replacement;
+                        }
+                    }
+                }
+                TerminatorPlan::Jump { args, .. } => {
+                    for value in args {
+                        if let Some(replacement) = self.emitted_values.get(value) {
+                            *value = *replacement;
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(emitters) = &self.branch_emitters {
             for terminator in &plan.terminators {
                 match terminator {
@@ -1714,68 +1717,9 @@ impl InstructionSelectPass {
             }
         }
 
-        // Rewrite the original ops in reverse block order — consumers before
-        // defs — so when a def's replacement remaps SSA uses of its results
-        // (`replace_op`), every already-emitted consumer is visible. Positions
-        // are resolved by id, so the insertions above do not invalidate this.
-        let commit_order: Vec<OpId> = block_arc
-            .op_ids()
-            .into_iter()
-            .rev()
-            .filter(|op_id| plan.op_decisions.contains_key(op_id))
-            .collect();
-        for op_id in &commit_order {
-            let decision = &plan.op_decisions[op_id];
-            let op_ref = OperationRef::new(context.get_op(*op_id), Some(block_arc.clone()), None);
-            match decision {
-                BlockDecision::Emit { rule_index, m } => {
-                    let rule = &self.rules[*rule_index];
-                    let request = EmitRequest::for_op(&op_ref, context);
-                    // A materializer with a prelude (a flag-mediated `cset`/
-                    // `setcc`) emits its flag-setting definer immediately ahead
-                    // of the value instruction that reads the flags.
-                    if let Some(prelude) = rule.prelude_emit {
-                        let prelude_op = prelude(context, &request, m)?;
-                        rewriter.insert_op_before(&op_ref, prelude_op.as_ref())?;
-                    }
-                    let new_op = (rule.emit_fn)(context, &request, m)?;
-                    rewriter.replace_op(&op_ref, new_op.as_ref())?;
-                }
-                BlockDecision::Consume => {
-                    rewriter.erase_op(&op_ref)?;
-                }
-                BlockDecision::ForwardOperand => {
-                    // Read the operand now, not at plan time: `replace_value_uses`
-                    // keeps every live op's operand list current, so a forward-order
-                    // commit sees the already-chased value and a reverse-order commit
-                    // sees the still-live intermediate whose own forward re-chases.
-                    let op = context.get_op(*op_id);
-                    if let (Some(&result), Some(&operand)) =
-                        (op.results.first(), op.operands.first())
-                    {
-                        context.replace_value_uses(result, operand);
-                    }
-                    rewriter.erase_op(&op_ref)?;
-                }
-            }
-        }
-
-        // Drop constants left dead by selection: an immediate operand folds its
-        // constant into the instruction's attribute (e.g. `slliw`'s `imm`), so the
-        // defining `constant` op no longer feeds anything. It binds to an *immediate
-        // boundary*, never an interior node, so the cover gives it neither Emit nor
-        // Consume and it lingers as dead code. Replacing the consumer detached the
-        // constant's operand use, and the folded immediate is an `Int` attribute (not
-        // a register use), so the maintained def-use chain now reports zero uses.
-        for op_id in block_arc.op_ids() {
-            let op = context.get_op(op_id);
-            if !op.is::<crate::builtin::ConstantOp>() {
-                continue;
-            }
-            if op.results.iter().all(|v| !context.is_value_used(*v)) {
-                let op_ref = OperationRef::new(op, Some(block_arc.clone()), None);
-                rewriter.erase_op(&op_ref)?;
-            }
+        for op in plan.erase_ops.into_iter().rev() {
+            let op = OperationRef::new(context.get_op(op), Some(block_arc.clone()), None);
+            rewriter.erase_op(&op)?;
         }
 
         Ok(())
@@ -1826,8 +1770,6 @@ impl InstructionSelectPass {
         let matches = self.collect_block_matches(
             context,
             fs,
-            dom,
-            block_id,
             &op_refs,
             &block_op_by_root,
             &guard_classes,
@@ -1844,12 +1786,8 @@ impl InstructionSelectPass {
 
         // Resolve each guarded terminator: fuse its condition into a branch-rule
         // instruction when one matches, else fall back to the target's
-        // branch-if-nonzero (which needs the condition materialized). Fused
-        // branches read their operands as registers, so those classes join the
-        // block's materialization overlay; a condition consumed only by its fused
-        // branch may instead go Dead (its defining op is erased).
+        // branch-if-nonzero (which needs the condition materialized).
         let mut mm_overlay: HashSet<Id> = HashSet::new();
-        let mut fused_conditions = HashSet::new();
         let mut terminators = Vec::new();
         for edge in control {
             let guard = match edge {
@@ -1886,14 +1824,15 @@ impl InstructionSelectPass {
             let branch = match self.best_guard_branch(context, fs, dom, block_id, guard, candidates)
             {
                 Some((rule_index, m, boundary_classes)) => {
+                    // A low-extract boundary re-views its source's register, so
+                    // the demand lands on the chased source class.
                     for boundary in boundary_classes {
-                        mm_overlay.insert(fs.egraph.find(boundary));
+                        mm_overlay.insert(fs.chase_low_extract(boundary));
                     }
-                    fused_conditions.insert(class);
                     GuardBranch::Fused { rule_index, m }
                 }
                 None => {
-                    mm_overlay.insert(class);
+                    mm_overlay.insert(fs.chase_low_extract(class));
                     GuardBranch::Nonzero {
                         condition: guard.condition,
                     }
@@ -1909,75 +1848,54 @@ impl InstructionSelectPass {
             });
         }
 
-        let dead_allowed: HashSet<Id> = fused_conditions
-            .iter()
-            .copied()
-            .filter(|class| !fs.requires_materialization(*class, &mm_overlay))
-            .collect();
-
-        if let Some(message) = completeness_error(&fs.egraph, &block_roots, &matches, &dead_allowed)
-        {
-            return Err(message);
-        }
-        // The cover still runs with no value matches when a fused condition can
-        // go Dead: its defining op must receive the Consume decision. Without
-        // either, only constant-proven op roots (a dominating-edge assumption)
-        // need decisions — their consumers fold the immediate, so they are
-        // erased.
-        if matches.is_empty() && dead_allowed.is_empty() {
-            let mut op_decisions = HashMap::new();
-            for &op_id in &op_ids {
-                let Some(class) = fs.op_root.get(&op_id).map(|c| fs.egraph.find(*c)) else {
-                    continue;
-                };
-                if !fs.requires_materialization(class, &mm_overlay)
-                    && class_int_binding(&fs.egraph, class).is_some()
-                {
-                    op_decisions.insert(op_id, BlockDecision::Consume);
-                } else if is_low_extract_view(&fs.egraph, class)
-                    && !context.get_op(op_id).operands.is_empty()
-                {
-                    op_decisions.insert(op_id, BlockDecision::ForwardOperand);
-                }
-            }
-            return Ok(BlockPlan {
-                op_decisions,
-                terminators,
-                ..BlockPlan::default()
-            });
-        }
-
         // Restrict the cover to the closure of B's op-root and guard-condition
         // classes under the surviving matches' bindings (so rewrite-introduced
         // intermediates reached from B are covered, but nothing from other blocks).
         let covered = closure_classes(&fs.egraph, &block_roots, &guard_classes, &matches);
+        let demanded: HashSet<Id> = covered
+            .iter()
+            .copied()
+            .filter(|class| {
+                fs.demanded_at(*class, block_id, &mm_overlay)
+                    || (block_roots.contains(class) && !node::class_is_pure(&fs.egraph, *class))
+            })
+            .collect();
+        let available = |class| {
+            if fs.is_reifiable_gate(class) {
+                return false;
+            }
+            // A low-extract view owns no register of its own: it re-views its
+            // source's. So it is available exactly when that source is — either
+            // already in a register, or extracted here (the source's tile
+            // defines the register the view reads). Treating the view itself as
+            // unconditionally available would leave a demanded class with no
+            // tile and its erased value dangling.
+            let source = fs.chase_low_extract(class);
+            let source_available = fs.available_at(context, dom, source, block_id)
+                || (self.constant_materializer_ranges.is_empty()
+                    && class_int_binding(&fs.egraph, source).is_some());
+            if source == class {
+                source_available
+            } else {
+                source_available || demanded.contains(&source)
+            }
+        };
+        if let Some(message) =
+            completeness_error(&fs.egraph, &demanded, &matches, &available, &|class| {
+                fs.is_reifiable_gate(class)
+            })
+        {
+            return Err(message);
+        }
 
         let cover = build_eclass_cover(
             &fs.egraph,
-            &block_roots,
             &covered,
             &cover::ClassPolicies {
-                must_materialize: &|class| fs.requires_materialization(class, &mm_overlay),
-                force_materialize: &|class| fs.forces_constant_materialization(class, block_id),
-                externally_bindable: &|class| {
-                    fs.externally_bindable(
-                        context,
-                        dom,
-                        class,
-                        block_id,
-                        self.constant_materializer_ranges.is_empty(),
-                    )
-                },
-                root_bindable: &|class, consumer| {
-                    consumer.is_some_and(|consumer| {
-                        fs.resolve_binding(dom, context, class, block_id, consumer)
-                            .value
-                            .is_some()
-                    })
-                },
+                demanded: &|class| demanded.contains(&fs.egraph.find(class)),
+                available: &available,
                 reifiable_gate: &|class| fs.is_reifiable_gate(class),
             },
-            &dead_allowed,
             &matches,
         )
         .ok_or_else(|| {
@@ -1989,83 +1907,195 @@ impl InstructionSelectPass {
             format!("no feasible instruction cover for {block_id:?}: {ops}")
         })?;
 
-        // The match chosen as Root for each e-class, and the classes consumed as an
-        // interior node of some selected match.
         let mut root_match: HashMap<Id, usize> = HashMap::new();
-        let mut internal_classes: HashSet<Id> = HashSet::new();
+        let mut reified = HashSet::new();
         for (node, choice) in cover.choices.iter().enumerate() {
             match choice {
-                PbqpIselAlternative::Root { match_id } => {
+                PbqpIselAlternative::Tile { match_id } => {
                     root_match.insert(cover.classes[node], *match_id);
                 }
-                // A Dead condition's defining op is erased like a consumed
-                // internal: the fused branch recomputes the value.
-                PbqpIselAlternative::Internal { .. } | PbqpIselAlternative::Dead => {
-                    internal_classes.insert(cover.classes[node]);
+                PbqpIselAlternative::Reify => {
+                    reified.insert(cover.classes[node]);
                 }
-                PbqpIselAlternative::External | PbqpIselAlternative::Reify => {}
+                PbqpIselAlternative::NotDemanded => {}
             }
         }
+        let required_available: HashSet<Id> = root_match
+            .values()
+            .flat_map(|match_id| &matches[*match_id].bindings.pattern_nodes)
+            .filter(|binding| binding.is_boundary && binding.demand == BoundaryDemand::Register)
+            .map(|binding| fs.egraph.find(binding.class))
+            .filter(|class| !root_match.contains_key(class) && !reified.contains(class))
+            .collect();
+        let mut positions: HashMap<Id, usize> = block_op_by_root
+            .iter()
+            .filter_map(|(&class, op)| {
+                op_ids
+                    .iter()
+                    .position(|candidate| candidate == op)
+                    .map(|position| (class, position))
+            })
+            .collect();
+        // Pull each pure tile up to its earliest consumer's position: surviving
+        // mid-block ops (calls) and other tiles read their operands in block
+        // order, so a tile must precede every consumer even when its original op
+        // (a constant merged into an earlier class) sits after one.
+        loop {
+            let mut changed = false;
+            for (&class, &match_id) in &root_match {
+                let Some(&consumer_pos) = positions.get(&class) else {
+                    continue;
+                };
+                for binding in &matches[match_id].bindings.pattern_nodes {
+                    let leaf = fs.egraph.find(binding.class);
+                    if leaf == class
+                        || !binding.is_boundary
+                        || binding.demand != BoundaryDemand::Register
+                        || !root_match.contains_key(&leaf)
+                        || !node::class_is_pure(&fs.egraph, leaf)
+                    {
+                        continue;
+                    }
+                    if positions.get(&leaf).is_none_or(|p| *p > consumer_pos) {
+                        positions.insert(leaf, consumer_pos);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let tiles = schedule_tiles(&fs.egraph, &matches, &root_match, &positions)
+            .ok_or_else(|| format!("cyclic instruction schedule for {block_id:?}"))?;
 
-        let mut emit = EmissionBuilder {
-            fs,
-            dom,
-            block: block_id,
-            matches: &matches,
-            root_match: &root_match,
-            context,
-            introduced_dest: HashMap::new(),
-            introduced: Vec::new(),
+        let mut destinations = HashMap::new();
+        let mut tile_results = HashMap::new();
+        for &(class, _) in &tiles {
+            let source_op = block_op_by_root.get(&class).copied();
+            let mut results = source_op
+                .map(|op| context.get_op(op).results.clone())
+                .unwrap_or_default();
+            let mut result_ty = results.first().map(|value| context.get_value(*value).ty());
+            if results.is_empty() && node::class_is_pure(&fs.egraph, class) {
+                let ty = class_width(context, &fs.egraph, class)
+                    .map(|width| tir::builtin::IntegerType::new(context, width))
+                    .unwrap_or_else(|| tir::builtin::IntegerType::new(context, 64));
+                results.push(context.create_value(ty, None).id());
+                result_ty = Some(ty);
+            }
+            if let Some(&result) = results.first() {
+                destinations.insert(class, result);
+            }
+            tile_results.insert(class, (source_op, results, result_ty));
+        }
+
+        let consumer = op_ids.last().copied().unwrap();
+        let schedule = tiles
+            .into_iter()
+            .map(|(class, match_id)| {
+                let (source_op, results, result_ty) = tile_results.remove(&class).unwrap();
+                ScheduledEmit {
+                    rule_index: matches[match_id].rule_index,
+                    m: resolve_match(
+                        fs,
+                        dom,
+                        context,
+                        block_id,
+                        source_op.unwrap_or(consumer),
+                        &matches[match_id],
+                        &destinations,
+                    ),
+                    source_op,
+                    anchor: positions.get(&class).map(|&position| op_ids[position]),
+                    results,
+                    result_ty,
+                }
+            })
+            .collect();
+
+        let mut value_remaps = Vec::new();
+        let mut remap_class_values = |class: Id, destination: ValueId| {
+            for member in fs.base_members(class) {
+                if let Some(values) = fs.class_values.get(&member) {
+                    value_remaps.extend(
+                        values
+                            .iter()
+                            .copied()
+                            .filter(|value| {
+                                *value != destination
+                                    && fs.value_block.get(value) == Some(&Some(block_id))
+                            })
+                            .map(|value| (value, destination)),
+                    );
+                }
+            }
         };
-
-        let mut op_decisions = HashMap::new();
-        for &op_id in &op_ids {
-            let Some(class) = fs.op_root.get(&op_id).map(|c| fs.egraph.find(*c)) else {
+        for (&class, &destination) in &destinations {
+            remap_class_values(class, destination);
+        }
+        // A demanded class satisfied by availability (a dominating placement, or
+        // a value the scope's facts merged in) schedules no tile, but its
+        // block-local values must still resolve to the available register.
+        for &class in &demanded {
+            if destinations.contains_key(&class) || reified.contains(&class) {
+                continue;
+            }
+            if let Some(destination) = fs
+                .resolve_binding(dom, context, class, block_id, consumer, false)
+                .value
+            {
+                remap_class_values(class, destination);
+            }
+        }
+        for &op in &op_ids {
+            let Some(mut class) = fs.op_root.get(&op).map(|class| fs.egraph.find(*class)) else {
                 continue;
             };
-            if let Some(&match_id) = root_match.get(&class) {
-                if matches[match_id].introduced {
-                    op_decisions.insert(op_id, BlockDecision::Consume);
-                    continue;
-                }
-                let result_ty = context
-                    .get_op(op_id)
-                    .results
-                    .first()
-                    .map(|v| context.get_value(*v).ty());
-                let m = emit.resolve_match(match_id, op_id, result_ty);
-                op_decisions.insert(
-                    op_id,
-                    BlockDecision::Emit {
-                        rule_index: matches[match_id].rule_index,
-                        m,
-                    },
+            // A view the extraction tiled in its own right already defines the
+            // op's result; only an untiled view forwards its source's register.
+            if !is_low_extract_view(&fs.egraph, class) || destinations.contains_key(&class) {
+                continue;
+            }
+            while let Some(source) = low_extract_source(&fs.egraph, class) {
+                class = source;
+            }
+            if let Some(source) = destinations.get(&class).copied().or_else(|| {
+                fs.resolve_binding(dom, context, class, block_id, consumer, false)
+                    .value
+            }) {
+                value_remaps.extend(
+                    context
+                        .get_op(op)
+                        .results
+                        .iter()
+                        .copied()
+                        .map(|value| (value, source)),
                 );
-            } else if internal_classes.contains(&class) {
-                op_decisions.insert(op_id, BlockDecision::Consume);
-            } else if context.get_op(op_id).is::<crate::builtin::ConstantOp>() {
-                // No decision: an uncovered constant survives for a target hook
-                // to diagnose or lower, while the dead-constant sweep reaps it
-                // once every consumer folded the immediate.
-            } else if !fs.requires_materialization(class, &mm_overlay)
-                && class_int_binding(&fs.egraph, class).is_some()
-            {
-                // The class is proven constant under the block's assumption:
-                // consumers fold the immediate (or read the merged input value's
-                // register), so the defining op is erased.
-                op_decisions.insert(op_id, BlockDecision::Consume);
-            } else if is_low_extract_view(&fs.egraph, class)
-                && !context.get_op(op_id).operands.is_empty()
-            {
-                // A low-bit truncation re-views its operand's register: forward
-                // the operand to consumers and erase the op (zero instructions).
-                op_decisions.insert(op_id, BlockDecision::ForwardOperand);
             }
         }
+        let terminator_ops: HashSet<OpId> = terminators
+            .iter()
+            .map(|terminator| match terminator {
+                TerminatorPlan::Guard { op, .. } | TerminatorPlan::Jump { op, .. } => *op,
+            })
+            .collect();
+        let erase_ops = op_ids
+            .into_iter()
+            .filter(|op| fs.op_root.contains_key(op))
+            .filter(|op| !terminator_ops.contains(op))
+            .filter(|op| {
+                fs.op_root.get(op).is_none_or(|class| {
+                    let class = fs.egraph.find(*class);
+                    !reified.contains(&class) && !required_available.contains(&class)
+                })
+            })
+            .collect();
 
         Ok(BlockPlan {
-            op_decisions,
-            introduced: emit.introduced,
+            schedule,
+            erase_ops,
+            value_remaps,
             terminators,
         })
     }
@@ -2139,14 +2169,19 @@ impl InstructionSelectPass {
             // A register operand may read a bare constant only when another use
             // already forces that constant to be materialized.
             for (symbol, class) in &captures.entries {
-                let binding = fs.resolve_binding(dom, context, *class, block, guard.op);
+                // Prefer a surviving/available value; bind a same-block pending
+                // tile only when none exists — then the overlay demand forces
+                // that tile (the class cannot be available, so NotDemanded is
+                // never offered) and the bound value is defined.
+                let mut binding = fs.resolve_binding(dom, context, *class, block, guard.op, false);
+                if binding.value.is_none() {
+                    binding = fs.resolve_binding(dom, context, *class, block, guard.op, true);
+                }
                 match binding.int {
                     Some(v) => {
                         if register_symbols.contains(symbol)
-                            && !fs.has_surviving_value(context, *class)
-                            && !binding
-                                .value
-                                .is_some_and(|value| fs.force_constant_values.contains(&value))
+                            && !fs.available_at(context, dom, *class, block)
+                            && !fs.placed_at(*class, block)
                         {
                             resolvable = false;
                             break;
@@ -2201,16 +2236,12 @@ impl InstructionSelectPass {
         &self,
         context: &Context,
         fs: &FunctionSelection,
-        dom: &DominatorTree,
-        block: BlockId,
         op_refs: &HashMap<OpId, OperationRef>,
         block_op_by_root: &HashMap<Id, OpId>,
         guard_classes: &HashSet<Id>,
         base_matches: Option<&[Vec<EMatch<u32>>]>,
     ) -> Vec<PbqpIselMatch> {
         let mut matches = Vec::new();
-        let constant_register_dependencies =
-            self.constant_register_dependencies(context, fs, base_matches);
         for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
             let rule = &self.rules[compiled.rule_index];
             // Branch rules select terminators, not values (see `best_guard_branch`).
@@ -2252,11 +2283,9 @@ impl InstructionSelectPass {
                     .nodes(root)
                     .iter()
                     .any(|n| !n.children().is_empty());
-                let introduced = !fs.is_op_root(root)
-                    && (is_computed
-                        || (constant_register_dependencies.contains(&root)
-                            && compiled.constant_materializer_range().is_some()));
-                if block_op.is_none() && !is_guard_class && !introduced {
+                let synthetic = !fs.is_op_root(root)
+                    && (is_computed || compiled.constant_materializer_range().is_some());
+                if block_op.is_none() && !is_guard_class && !synthetic {
                     continue;
                 }
 
@@ -2305,37 +2334,47 @@ impl InstructionSelectPass {
                     .map(|index| Id::from_raw(index as u32))
                     .map(|pattern_node| {
                         let meta = &compiled.node_meta[pattern_node.index()];
+                        // Constants are boundary-like: pure, folded into the
+                        // encoding, never consumed by the match — so the same
+                        // constant class (e.g. the literal 0) can sit inside one
+                        // match and under a boundary of another without making
+                        // the cover infeasible.
+                        let is_boundary = meta.is_boundary || meta.is_constant;
+                        let demand = if meta.demands_register()
+                            || (meta.is_boundary
+                                && meta.constraint.is_none()
+                                && meta.register.is_none()
+                                && !structural_boundaries.contains(&pattern_node))
+                        {
+                            cover::BoundaryDemand::Register
+                        } else if meta.constraint == Some(tir::graph::OperandConstraint::Immediate)
+                            || meta.is_constant
+                        {
+                            cover::BoundaryDemand::Immediate
+                        } else {
+                            cover::BoundaryDemand::Structural
+                        };
+                        let mut class = fs.egraph.find(m.binding(pattern_node));
+                        // A register boundary on a low-extract view reads the
+                        // chased source's register, so the cover's edges, the
+                        // schedule's dependencies, and availability all target
+                        // the class a tile can actually define.
+                        if is_boundary && demand == cover::BoundaryDemand::Register {
+                            class = fs.chase_low_extract(class);
+                        }
                         PatternNodeBinding {
                             pattern_node,
-                            class: fs.egraph.find(m.binding(pattern_node)),
-                            // Constants are boundary-like: pure, folded into the
-                            // encoding, never consumed by the match — so the same
-                            // constant class (e.g. the literal 0) can sit inside one
-                            // match and under a boundary of another without making
-                            // the cover infeasible.
-                            is_boundary: meta.is_boundary || meta.is_constant,
-                            demand: if meta.demands_register()
-                                || (meta.is_boundary
-                                    && meta.constraint.is_none()
-                                    && meta.register.is_none()
-                                    && !structural_boundaries.contains(&pattern_node))
-                            {
-                                cover::BoundaryDemand::Register
-                            } else if meta.constraint
-                                == Some(tir::graph::OperandConstraint::Immediate)
-                                || meta.is_constant
-                            {
-                                cover::BoundaryDemand::Immediate
-                            } else {
-                                cover::BoundaryDemand::Structural
-                            },
+                            class,
+                            is_boundary,
+                            demand,
                         }
                     })
                     .collect();
-                // A match register-reading its own root class would compute the
-                // value from itself (matching the injected li form's `Add(zext 0,
-                // C)` member of `C` with a register-operand rule); only an
-                // immediate self-binding (the li rules) is coherent.
+                // Extraction is acyclic: a tile may not register-read its own
+                // root class (it would compute the value from itself). Identity
+                // members put e.g. `add(x, 0)` inside `x`'s class, so an
+                // add-with-immediate rule roots on `x` while register-binding
+                // `x` — a zero-progress tile, never selectable.
                 if pattern_nodes.iter().any(|binding| {
                     binding.is_boundary
                         && binding.demand == cover::BoundaryDemand::Register
@@ -2367,140 +2406,11 @@ impl InstructionSelectPass {
                     pattern_root,
                     bindings,
                     cost,
-                    consumer: block_op,
-                    introduced,
                 });
             }
         }
         prune_dominated_matches(&self.compiled_patterns, &mut matches);
-        let mut consumer_by_class = block_op_by_root.clone();
-        loop {
-            let mut changed = false;
-            for matched in &matches {
-                let root = fs.egraph.find(matched.root);
-                let Some(&consumer) = consumer_by_class.get(&root) else {
-                    continue;
-                };
-                for binding in &matched.bindings.pattern_nodes {
-                    let class = fs.egraph.find(binding.class);
-                    if class == root {
-                        continue;
-                    }
-                    match consumer_by_class.get_mut(&class) {
-                        Some(existing) if fs.op_position[&consumer] < fs.op_position[existing] => {
-                            *existing = consumer;
-                            changed = true;
-                        }
-                        None => {
-                            consumer_by_class.insert(class, consumer);
-                            changed = true;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        for matched in &mut matches {
-            let root = fs.egraph.find(matched.root);
-            let propagated_consumer = consumer_by_class.get(&root).copied();
-            if matched.consumer.is_none() {
-                matched.consumer = propagated_consumer;
-            }
-            if !matched.introduced
-                && self.compiled_patterns[matched.pattern_index]
-                    .constant_materializer_range()
-                    .is_some()
-                && !fs.requires_materialization(root, &HashSet::new())
-                && !fs.forces_constant_materialization(root, block)
-                && propagated_consumer.is_some_and(|consumer| {
-                    block_op_by_root.get(&root).is_some_and(|producer| {
-                        fs.op_position[&consumer] < fs.op_position[producer]
-                    })
-                })
-            {
-                matched.introduced = true;
-                matched.consumer = propagated_consumer;
-            }
-        }
-
-        let introduced_roots: HashSet<Id> = matches
-            .iter()
-            .filter(|matched| matched.introduced)
-            .map(|matched| fs.egraph.find(matched.root))
-            .collect();
-        matches.retain(|matched| {
-            let Some(consumer) = matched.consumer else {
-                return true;
-            };
-            matched
-                .bindings
-                .captures
-                .entries
-                .iter()
-                .all(|(symbol, class)| {
-                    let class = fs.egraph.find(*class);
-                    let binding = fs.resolve_binding(dom, context, class, block, consumer);
-                    let can_introduce =
-                        class != fs.egraph.find(matched.root) && introduced_roots.contains(&class);
-                    match self.compiled_patterns[matched.pattern_index].capture_meta(*symbol) {
-                        Some(meta) if meta.constraint == Some(OperandConstraint::Register) => {
-                            binding.value.is_some() || can_introduce
-                        }
-                        Some(meta) if meta.constraint == Some(OperandConstraint::Immediate) => {
-                            binding.int.is_some()
-                        }
-                        _ => {
-                            binding.int.is_some()
-                                || binding.value.is_some()
-                                || can_introduce
-                                || !fs.has_values(class)
-                        }
-                    }
-                })
-        });
         matches
-    }
-
-    fn constant_register_dependencies(
-        &self,
-        context: &Context,
-        fs: &FunctionSelection,
-        base_matches: Option<&[Vec<EMatch<u32>>]>,
-    ) -> HashSet<Id> {
-        let mut dependencies = HashSet::new();
-        for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
-            if compiled.is_copy() || compiled.constant_materializer_range().is_some() {
-                continue;
-            }
-            let fresh;
-            let matches = if let Some(cache) = base_matches {
-                &cache[pattern_index]
-            } else {
-                fresh = compiled.search_with_legality(&fs.egraph, context, &|node, class| {
-                    value_match_allowed(fs, context, compiled, compiled.pattern.root(), node, class)
-                });
-                &fresh
-            };
-            for matched in matches {
-                if !fs.is_constant_root(context, fs.egraph.find(matched.root)) {
-                    continue;
-                }
-                for index in 0..compiled.pattern.len() {
-                    let node = Id::from_raw(index as u32);
-                    let meta = &compiled.node_meta[index];
-                    if meta.is_boundary && meta.demands_register() {
-                        let class = fs.egraph.find(matched.binding(node));
-                        if class_int_binding(&fs.egraph, class).is_some() {
-                            dependencies.insert(class);
-                        }
-                    }
-                }
-            }
-        }
-        dependencies
     }
 }
 
@@ -2677,61 +2587,6 @@ fn seed_bare_condition_terms(
         ne.children = vec![class, zext];
         let ne = egraph.add(ne);
         egraph.union(class, ne);
-    }
-    egraph.rebuild();
-}
-
-/// Bridge each constant class that fits a zero-form materializer's immediate to
-/// the `Add(zext(0b0, W), C)` shape those rules match — the TMDL-derived
-/// `addi rd, x0, imm` li form — so a bare constant can be covered by a real
-/// instruction rooted on its own class, with the zero operand wired to the
-/// hardwired-zero register by the rule's emitter:
-///
-/// * the injected `add` is a true value equivalence (`0 + C == C` at any
-///   width), and the `zext(0b0, W)` zero is the same shape the branch
-///   zero-comparison axioms and the derived zero-form rules already share;
-/// * only classes whose constant lands in a materializer's `ImmRange` gain the
-///   member, so a wide constant keeps its bare class and selects through the
-///   materialize decomposition axioms into a shift/add chain instead.
-///
-/// Runs over every constant class, not just program-`constant` roots: the
-/// materialize axioms decompose a wide constant into narrower ones, and each
-/// narrowed constant that finally fits the immediate must gain the li form to
-/// be covered. Structural, not an axiom (same standard as the zero-comparison
-/// guard seed): the equivalence is universally true, but the trigger is target
-/// immediate-range membership, decided from the rule set — a saturation axiom
-/// would need the range as a value guard yet compute nothing new. It belongs
-/// here as a targeted post-saturation injection.
-fn bridge_constant_materializers(egraph: &mut SemEGraph, ranges: &[ImmRange]) {
-    if ranges.is_empty() {
-        return;
-    }
-    let zero = egraph.add(template_node(
-        SymKind::Constant,
-        Some(SymPayload::Int(APInt::new(1, 0))),
-        None,
-    ));
-    let width = egraph.add(template_node(
-        SymKind::Constant,
-        Some(SymPayload::Int(APInt::new(1, 1))),
-        None,
-    ));
-    let mut zext = template_node(SymKind::ZExt, None, None);
-    zext.children = vec![zero, width];
-    let zext = egraph.add(zext);
-    let classes: Vec<Id> = egraph.classes().map(|c| c.id()).collect();
-    for class in classes {
-        let class = egraph.find(class);
-        let Some(value) = class_int_binding(egraph, class) else {
-            continue;
-        };
-        if !ranges.iter().any(|range| range.contains(&value)) {
-            continue;
-        }
-        let mut add = template_node(SymKind::Add, None, None);
-        add.children = vec![egraph.find(zext), class];
-        let add = egraph.add(add);
-        egraph.union(class, add);
     }
     egraph.rebuild();
 }

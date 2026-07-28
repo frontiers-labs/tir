@@ -6,12 +6,21 @@
 // i64 still selects `add`.
 
 module {
-  func @widths(%0: !i64, %1: !i64, %2: !i32, %3: !i32, %4: !i16, %5: !i16, %6: !i8, %7: !i8) -> !i64 {
-    %8 = addi %0, %1 : !i64
-    %9 = addi %2, %3 : !i32
-    %10 = subi %4, %5 : !i16
-    %11 = xori %6, %7 : !i8
-    return %8
+  func @width64(%0: !i64, %1: !i64) -> !i64 {
+    %2 = addi %0, %1 : !i64
+    return %2
+  }
+  func @width32(%0: !i32, %1: !i32) -> !i32 {
+    %2 = addi %0, %1 : !i32
+    return %2
+  }
+  func @width16(%0: !i16, %1: !i16) -> !i16 {
+    %2 = subi %0, %1 : !i16
+    return %2
+  }
+  func @width8(%0: !i8, %1: !i8) -> !i8 {
+    %2 = xori %0, %1 : !i8
+    return %2
   }
   func @imm(%0: !i32) -> !i32 {
     %1 = constant {value = 5} : !i32
@@ -21,11 +30,10 @@ module {
   module_end
 }
 
-// CHECK:      x86_64.add {dst = %virt8:GPR, dst_tied = %virt0:GPR, src = %virt1:GPR}
-// CHECK-NEXT: x86_64.add32 {dst = %virt9:GPR32, dst_tied = %virt2:GPR32, src = %virt3:GPR32}
-// CHECK-NEXT: x86_64.sub16 {dst = %virt10:GPR16, dst_tied = %virt4:GPR16, src = %virt5:GPR16}
-// CHECK-NEXT: x86_64.xor8 {dst = %virt11:GPR8, dst_tied = %virt6:GPR8, src = %virt7:GPR8}
-// CHECK-NEXT: asm.vret
+// CHECK:      x86_64.add {dst = %virt2:GPR, dst_tied = %virt0:GPR, src = %virt1:GPR}
+// CHECK:      x86_64.add32 {dst = %virt{{[0-9]+}}:GPR32, dst_tied = %virt{{[0-9]+}}:GPR32, src = %virt{{[0-9]+}}:GPR32}
+// CHECK:      x86_64.sub16 {dst = %virt{{[0-9]+}}:GPR16, dst_tied = %virt{{[0-9]+}}:GPR16, src = %virt{{[0-9]+}}:GPR16}
+// CHECK:      x86_64.xor8 {dst = %virt{{[0-9]+}}:GPR8, dst_tied = %virt{{[0-9]+}}:GPR8, src = %virt{{[0-9]+}}:GPR8}
 
 // The immediate form is typed the same way: an i32 add with a constant folds
 // into `add_imm32`.

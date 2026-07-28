@@ -1,0 +1,31 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A low-bit truncation re-views its source's register, so it owns no register
+// of its own. Under `^bb2`'s dominating-edge fact the returned constant 0 is
+// proven equal to that view's class, but the view's source is neither in a
+// register at `^bb2` nor extracted there — so the constant must still be
+// materialized. Treating a view as unconditionally available left the class
+// with no instruction and the return reading an undefined value.
+
+module {
+  func @demanded_low_view_constant(%0: !i64) -> !i32 {
+    %1 = constant {value = 32} : !i64
+    %2 = shrui %0, %1 : !i64
+    %3 = trunci %2 : !i32
+    %4 = constant {value = 0} : !i32
+    %5 = cmpi %3, %4 {predicate = "ne"} : !i1
+    cond_br %5, ^bb1, ^bb2
+  ^bb1:
+    %6 = constant {value = 3} : !i32
+    return %6
+  ^bb2:
+    %7 = constant {value = 0} : !i32
+    return %7
+  }
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "demanded_low_view_constant"
+// CHECK: ^bb2:
+// CHECK-NEXT: x86_64.mov_imm {dst = %virt[[ZERO:[0-9]+]]:GPR, imm = 0}
+// CHECK-NEXT: asm.vret %[[ZERO]]

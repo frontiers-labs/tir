@@ -82,8 +82,10 @@ module {
 // CHECK:      x86_64.movzxd {dst = %virt[[ZEXT:[0-9]+]]:GPR, src = %virt8:GPR}
 // CHECK-NEXT: x86_64.cvtsi2sd64 {dst = %virt9:XMM, src = %virt[[ZEXT]]:GPR}
 // CHECK:      x86_64.cvttsd2si32 {dst = %virt11:GPR32, src = %virt10:XMM}
+// The i32 result is the low half of the 64-bit conversion: a zero-instruction
+// re-view, so no truncating mov follows.
 // CHECK:      x86_64.cvttsd2si64 {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM}
-// CHECK-NEXT: x86_64.mov32 {dst = %virt{{[0-9]+}}:GPR32, src = %virt{{[0-9]+}}:GPR32}
+// CHECK-NEXT: asm.vret
 // CHECK:      x86_64.movq_xmm_gpr {dst = %virt{{[0-9]+}}:XMM, src = %virt{{[0-9]+}}:GPR}
 // CHECK:      x86_64.movq_gpr_xmm {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM}
 // CHECK-LABEL: asm.symbol {name = "shared_zero"

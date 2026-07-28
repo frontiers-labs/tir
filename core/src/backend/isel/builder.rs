@@ -148,14 +148,18 @@ impl<'a> SemDagBuilder<'a> {
         if op.is::<crate::builtin::ConstantFOp>() {
             return None;
         }
-        if let Some(class) = self.build_memory_effect(op) {
-            return Some(class);
+        let class = if let Some(class) = self.build_memory_effect(op) {
+            class
+        } else {
+            let operands = self.build_operands(&op.operands);
+            let mut graph = SemGraph::new();
+            let root = op.clone().as_dyn_op().semantic_expr(&mut graph)?;
+            self.lower_typed(&graph, root, &operands)
+        };
+        for result in &op.results {
+            self.value_to_class.insert(*result, class);
         }
-
-        let operands = self.build_operands(&op.operands);
-        let mut graph = SemGraph::new();
-        let root = op.clone().as_dyn_op().semantic_expr(&mut graph)?;
-        Some(self.lower_typed(&graph, root, &operands))
+        Some(class)
     }
 
     fn build_operands(&mut self, operands: &[ValueId]) -> Vec<Id> {

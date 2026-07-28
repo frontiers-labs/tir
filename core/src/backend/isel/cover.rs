@@ -4,11 +4,11 @@
 use std::collections::{HashMap, HashSet};
 
 use tir::{
-    OpId, ValueId,
-    pbqp::{self, INF_COST, PbqpAlternative, PbqpMatrix, PbqpProblem},
+    ValueId,
+    pbqp::{self, INF_COST, PbqpMatrix, PbqpProblem},
     sem::SymKind,
 };
-use tir_symbolic::egraph::{ENode, Id};
+use tir_symbolic::egraph::Id;
 
 use super::RuleMatch;
 use super::node::{
@@ -93,26 +93,14 @@ pub(crate) struct FullMatchBindings {
 
 #[derive(Clone, Debug)]
 pub(crate) enum PbqpIselAlternative {
-    /// A terminal value already available outside this cover, or an unselected
-    /// rewrite-introduced class. Boundary compatibility accepts the latter only
-    /// when it really has an externally bindable value.
-    External,
+    NotDemanded,
     /// Preserve a gated SSA value as control-flow edge assignments. Terminator
     /// emission already performs those assignments; this alternative accounts
     /// for their cost against an `If`/`Theta`-rooted value rule.
     Reify,
-    Root {
+    Tile {
         match_id: usize,
     },
-    Internal {
-        match_id: usize,
-        pattern_node: Id,
-    },
-    /// The class's value is not needed in a register: its only consumer is a
-    /// fused conditional branch that recomputes the condition from its own
-    /// operands. Unlike `External`, `Dead` never satisfies a boundary's
-    /// materialization requirement — the defining op is erased.
-    Dead,
 }
 
 #[derive(Clone, Debug)]
@@ -123,10 +111,6 @@ pub(crate) struct PbqpIselMatch {
     pub(crate) pattern_root: Id,
     pub(crate) bindings: FullMatchBindings,
     pub(crate) cost: u64,
-    /// The original op before which every register boundary must be available.
-    pub(crate) consumer: Option<OpId>,
-    /// A root without an original op is emitted before its consuming instruction.
-    pub(crate) introduced: bool,
 }
 /// A solved cover: the chosen alternative for every PBQP node and the e-class
 /// each PBQP node stands for (same index).
@@ -135,58 +119,29 @@ pub(crate) struct ClassCover {
     pub(crate) classes: Vec<Id>,
 }
 
-/// Per-class predicates the cover consults (all derived from the function-wide
-/// side tables): `must_materialize` bars consuming alternatives,
-/// `force_materialize` drops the free External alternative when a materializer
-/// match roots the class, `externally_bindable` says whether External satisfies
-/// a boundary's register requirement, `root_bindable` says whether an op-backed
-/// Root is available before its consumer, and `reifiable_gate` marks the classes
-/// seeded from GSA gates, the only ones offered Reify.
 pub(crate) struct ClassPolicies<'a> {
-    pub(crate) must_materialize: &'a dyn Fn(Id) -> bool,
-    pub(crate) force_materialize: &'a dyn Fn(Id) -> bool,
-    pub(crate) externally_bindable: &'a dyn Fn(Id) -> bool,
-    pub(crate) root_bindable: &'a dyn Fn(Id, Option<OpId>) -> bool,
+    pub(crate) demanded: &'a dyn Fn(Id) -> bool,
+    pub(crate) available: &'a dyn Fn(Id) -> bool,
     pub(crate) reifiable_gate: &'a dyn Fn(Id) -> bool,
 }
 
-/// Build and solve the PBQP cover over the supplied `classes` (B's op-root and
-/// guard classes closed under the matches' bindings): one PBQP node per class,
-/// alternatives drawn from the instruction-pattern `matches`, and root -> bound
-/// class compatibility derived from each match's bindings. `op_roots` are B's
-/// op-root classes. A class that is neither terminal nor a B op-root receives an
-/// External opt-out so alternatives reachable only through an unchosen match do
-/// not make the whole cover infeasible. Returns `None` if the instance is
-/// infeasible (a class with no valid alternative).
 pub(crate) fn build_eclass_cover(
     egraph: &SemEGraph,
-    op_roots: &HashSet<Id>,
     classes: &[Id],
     policies: &ClassPolicies,
-    dead_allowed: &HashSet<Id>,
     matches: &[PbqpIselMatch],
 ) -> Option<ClassCover> {
     let classes: Vec<Id> = classes.to_vec();
     let index: HashMap<Id, usize> = classes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
     let class_index = |c: Id| index.get(&egraph.find(c)).copied();
 
-    let is_terminal = |c: Id| egraph.nodes(c).iter().any(|n| n.children().is_empty());
-
-    // A forced class (a constant that must reach an unselected consumer in a
-    // register) with a materializer match rooted on it loses the zero-cost
-    // External alternative, so the cover emits the materializer instead of
-    // leaving the constant to a later target hook. Without a rooted match,
-    // External stays so that hook can diagnose or lower the unsupported case.
-    let rooted: HashSet<Id> = matches.iter().map(|m| egraph.find(m.root)).collect();
-
     let mut alternatives_by_node = vec![Vec::<PbqpIselAlternative>::new(); classes.len()];
     for (i, &c) in classes.iter().enumerate() {
+        if !(policies.demanded)(c) || (policies.available)(c) {
+            alternatives_by_node[i].push(PbqpIselAlternative::NotDemanded);
+        }
         if (policies.reifiable_gate)(c) {
             alternatives_by_node[i].push(PbqpIselAlternative::Reify);
-        } else if (is_terminal(c) || !op_roots.contains(&c))
-            && !((policies.force_materialize)(c) && rooted.contains(&c))
-        {
-            alternatives_by_node[i].push(PbqpIselAlternative::External);
         }
     }
 
@@ -194,40 +149,7 @@ pub(crate) fn build_eclass_cover(
         let Some(root_index) = class_index(m.root) else {
             continue;
         };
-        alternatives_by_node[root_index].push(PbqpIselAlternative::Root { match_id });
-        for binding in &m.bindings.pattern_nodes {
-            // Saturation may collapse an interior into the match's root class.
-            // Root already covers it; a second Internal alternative on the same
-            // PBQP node would make the match's coherence set contradictory.
-            if binding.is_boundary
-                || binding.pattern_node == m.pattern_root
-                || egraph.find(binding.class) == egraph.find(m.root)
-                || (policies.must_materialize)(egraph.find(binding.class))
-            {
-                continue;
-            }
-            let Some(child_index) = class_index(binding.class) else {
-                continue;
-            };
-            alternatives_by_node[child_index].push(PbqpIselAlternative::Internal {
-                match_id,
-                pattern_node: binding.pattern_node,
-            });
-        }
-    }
-
-    for &c in dead_allowed {
-        if let Some(i) = class_index(c) {
-            alternatives_by_node[i].push(PbqpIselAlternative::Dead);
-        }
-    }
-
-    for (i, &c) in classes.iter().enumerate() {
-        if alternatives_by_node[i].is_empty()
-            && (is_terminal(c) || !op_roots.contains(&c) || is_low_extract_view(egraph, c))
-        {
-            alternatives_by_node[i].push(PbqpIselAlternative::External);
-        }
+        alternatives_by_node[root_index].push(PbqpIselAlternative::Tile { match_id });
     }
 
     if alternatives_by_node.iter().any(Vec::is_empty) {
@@ -239,55 +161,14 @@ pub(crate) fn build_eclass_cover(
         let costs = alternatives
             .iter()
             .map(|alternative| match alternative {
-                PbqpIselAlternative::Root { match_id } => matches[*match_id].cost,
+                PbqpIselAlternative::Tile { match_id } => matches[*match_id].cost,
                 PbqpIselAlternative::Reify => REIFY_COST,
-                PbqpIselAlternative::External
-                | PbqpIselAlternative::Internal { .. }
-                | PbqpIselAlternative::Dead => 0,
+                PbqpIselAlternative::NotDemanded => 0,
             })
             .collect();
         problem.add_node(costs);
     }
 
-    for (match_id, m) in matches.iter().enumerate() {
-        let mut coherent = Vec::new();
-        for (node, alternatives) in alternatives_by_node.iter().enumerate() {
-            for (alternative, pbqp_alt) in alternatives.iter().enumerate() {
-                // A pure internal class is *not* coherence-tied to the match: the
-                // instruction recomputes it (duplication), so the match stays
-                // selectable even when the class is claimed by another match or
-                // materialized in its own right. Only the root and memory-effect
-                // internals stand and fall with the match.
-                let belongs_to_match = match pbqp_alt {
-                    PbqpIselAlternative::Root {
-                        match_id: alt_match,
-                    } => *alt_match == match_id,
-                    PbqpIselAlternative::Internal {
-                        match_id: alt_match,
-                        ..
-                    } => *alt_match == match_id && !class_is_pure(egraph, classes[node]),
-                    PbqpIselAlternative::External
-                    | PbqpIselAlternative::Reify
-                    | PbqpIselAlternative::Dead => false,
-                };
-                if belongs_to_match {
-                    coherent.push(PbqpAlternative {
-                        node: pbqp::PbqpNodeId::from_index(node),
-                        alternative,
-                    });
-                }
-            }
-        }
-        if m.bindings.pattern_nodes.len() > 1 {
-            problem.add_coherence_set(coherent);
-        }
-    }
-
-    // Edges connect each match's root class to every class the match binds: the
-    // root alternative imposes the match's requirements (materialized boundary
-    // operands, same-match memory internals) directly, so they don't depend on
-    // the choices of intermediate pattern nodes. Deduplicated so each ordered
-    // class pair gets one compatibility matrix.
     let mut edge_pairs: HashSet<(usize, usize)> = HashSet::new();
     for m in matches {
         let Some(ri) = class_index(m.root) else {
@@ -297,35 +178,77 @@ pub(crate) fn build_eclass_cover(
             if let Some(ci) = class_index(binding.class)
                 && ri != ci
             {
-                edge_pairs.insert((ri, ci));
+                edge_pairs.insert(ordered_pair(ri, ci));
             }
         }
     }
 
-    for (pi, ci) in edge_pairs {
-        let child_class = classes[ci];
-        let parent_alts = &alternatives_by_node[pi];
-        let child_alts = &alternatives_by_node[ci];
-        let mut matrix = PbqpMatrix::zero(parent_alts.len(), child_alts.len());
+    let effect_footprints: Vec<HashSet<Id>> = matches
+        .iter()
+        .map(|matched| {
+            matched
+                .bindings
+                .pattern_nodes
+                .iter()
+                .filter(|binding| {
+                    !binding.is_boundary
+                        && binding.pattern_node != matched.pattern_root
+                        && !class_is_pure(egraph, binding.class)
+                })
+                .map(|binding| egraph.find(binding.class))
+                .collect()
+        })
+        .collect();
+    for (lhs, left) in matches.iter().enumerate() {
+        let Some(li) = class_index(left.root) else {
+            continue;
+        };
+        for (rhs, right) in matches.iter().enumerate().skip(lhs + 1) {
+            if effect_footprints[lhs].is_disjoint(&effect_footprints[rhs]) {
+                continue;
+            }
+            let Some(ri) = class_index(right.root) else {
+                continue;
+            };
+            if li != ri {
+                edge_pairs.insert(ordered_pair(li, ri));
+            }
+        }
+    }
 
-        for (parent_alt_idx, parent_alt) in parent_alts.iter().enumerate() {
-            for (child_alt_idx, child_alt) in child_alts.iter().enumerate() {
-                if !alternatives_compatible(
-                    egraph,
-                    child_class,
-                    parent_alt,
-                    child_alt,
-                    matches,
-                    policies.externally_bindable,
-                    policies.root_bindable,
-                ) {
-                    matrix.set(parent_alt_idx, child_alt_idx, INF_COST);
+    for (li, ri) in edge_pairs {
+        let left_class = classes[li];
+        let right_class = classes[ri];
+        let left_alts = &alternatives_by_node[li];
+        let right_alts = &alternatives_by_node[ri];
+        let mut matrix = PbqpMatrix::zero(left_alts.len(), right_alts.len());
+
+        for (left_idx, left_alt) in left_alts.iter().enumerate() {
+            for (right_idx, right_alt) in right_alts.iter().enumerate() {
+                let compatible =
+                    alternatives_compatible(
+                        egraph,
+                        right_class,
+                        left_alt,
+                        right_alt,
+                        matches,
+                        policies.available,
+                    ) && alternatives_compatible(
+                        egraph,
+                        left_class,
+                        right_alt,
+                        left_alt,
+                        matches,
+                        policies.available,
+                    ) && !effect_tiles_conflict(left_alt, right_alt, &effect_footprints);
+                if !compatible {
+                    matrix.set(left_idx, right_idx, INF_COST);
                 }
             }
         }
         problem.add_edge(
-            pbqp::PbqpNodeId::from_index(pi),
-            pbqp::PbqpNodeId::from_index(ci),
+            pbqp::PbqpNodeId::from_index(li),
+            pbqp::PbqpNodeId::from_index(ri),
             matrix,
         );
     }
@@ -339,6 +262,23 @@ pub(crate) fn build_eclass_cover(
         .map(|(node, choice)| alternatives_by_node[node][choice].clone())
         .collect();
     Some(ClassCover { choices, classes })
+}
+
+fn ordered_pair(lhs: usize, rhs: usize) -> (usize, usize) {
+    if lhs < rhs { (lhs, rhs) } else { (rhs, lhs) }
+}
+
+fn effect_tiles_conflict(
+    lhs: &PbqpIselAlternative,
+    rhs: &PbqpIselAlternative,
+    footprints: &[HashSet<Id>],
+) -> bool {
+    let (PbqpIselAlternative::Tile { match_id: lhs }, PbqpIselAlternative::Tile { match_id: rhs }) =
+        (lhs, rhs)
+    else {
+        return false;
+    };
+    !footprints[*lhs].is_disjoint(&footprints[*rhs])
 }
 
 /// Drop matches dominated by an interchangeable alternative: same root class,
@@ -414,45 +354,28 @@ pub(crate) fn prune_dominated_matches(
     matches.retain(|_| *kept.next().unwrap());
 }
 
-/// Coverage completeness: every op-root e-class must be emittable as an instruction
-/// (it roots some match) or consumable by a parent match (it is an interior node of
-/// some match). A non-terminal op-root that is neither cannot be selected by this
-/// rule set — even after saturation — so selection fails with a diagnostic.
-/// Classes in `exempt` (guard conditions covered by a fused branch, with no other
-/// consumer needing the value) are skipped.
 pub(crate) fn completeness_error(
     egraph: &SemEGraph,
-    op_roots: &HashSet<Id>,
+    demanded: &HashSet<Id>,
     matches: &[PbqpIselMatch],
-    exempt: &HashSet<Id>,
+    available: &dyn Fn(Id) -> bool,
+    reifiable: &dyn Fn(Id) -> bool,
 ) -> Option<String> {
-    let mut has_root: HashSet<Id> = HashSet::new();
-    let mut has_internal: HashSet<Id> = HashSet::new();
-    for m in matches {
-        has_root.insert(egraph.find(m.root));
-        for binding in &m.bindings.pattern_nodes {
-            if !binding.is_boundary && binding.pattern_node != m.pattern_root {
-                has_internal.insert(egraph.find(binding.class));
-            }
-        }
-    }
+    let rooted: HashSet<Id> = matches
+        .iter()
+        .map(|matched| egraph.find(matched.root))
+        .collect();
 
     let mut missing: Vec<SymKind> = Vec::new();
-    for &class in op_roots {
+    for &class in demanded {
         let class = egraph.find(class);
-        if egraph.nodes(class).iter().any(|n| n.children().is_empty()) {
+        if rooted.contains(&class)
+            || available(class)
+            || reifiable(class)
+            || is_low_extract_view(egraph, class)
+        {
             continue;
         }
-        // A low-bit truncation is a re-view of its operand's register, covered
-        // as External with zero instructions (see `is_low_extract_view`).
-        if is_low_extract_view(egraph, class) {
-            continue;
-        }
-        if has_root.contains(&class) || has_internal.contains(&class) || exempt.contains(&class) {
-            continue;
-        }
-        // Prefer a member that isn't a rewrite-introduced `If` bridge, so the
-        // diagnostic names the original semantic kind (e.g. the comparison).
         let nodes = egraph.nodes(class);
         if let Some(kind) = nodes
             .iter()
@@ -483,113 +406,38 @@ pub(crate) fn alternatives_compatible(
     parent_alt: &PbqpIselAlternative,
     child_alt: &PbqpIselAlternative,
     matches: &[PbqpIselMatch],
-    externally_bindable: &dyn Fn(Id) -> bool,
-    root_bindable: &dyn Fn(Id, Option<OpId>) -> bool,
+    available: &dyn Fn(Id) -> bool,
 ) -> bool {
-    match child_requirement(egraph, child, parent_alt, matches) {
-        // A boundary requirement is satisfied by the class rooting its own
-        // instruction, or by External when the class reaches the operand
-        // externally: for a register, it carries a surviving value; a valueless
-        // synthetic class can satisfy it only by rooting an introduced match,
-        // and an op-backed Root must precede the consumer. For an immediate, any
-        // constant class satisfies the requirement by folding into the encoding.
-        Some(req @ (ChildRequirement::Materialized { .. } | ChildRequirement::Immediate)) => {
-            match child_alt {
-                PbqpIselAlternative::Root { match_id } => match req {
-                    ChildRequirement::Materialized {
-                        match_id: parent_match,
-                    } => {
-                        matches[*match_id].introduced
-                            || root_bindable(child, matches[parent_match].consumer)
-                    }
-                    ChildRequirement::Immediate => true,
-                    ChildRequirement::SameMatch { .. } => unreachable!(),
-                },
-                PbqpIselAlternative::Reify => true,
-                PbqpIselAlternative::External => match req {
-                    ChildRequirement::Materialized { .. } => externally_bindable(child),
-                    _ => class_int_binding(egraph, child).is_some(),
-                },
-                PbqpIselAlternative::Internal { .. } | PbqpIselAlternative::Dead => false,
-            }
-        }
-        Some(ChildRequirement::SameMatch {
-            match_id,
-            pattern_node,
-        }) => matches!(
-            child_alt,
-            PbqpIselAlternative::Internal {
-                match_id: child_match,
-                pattern_node: child_pattern_node,
-            } if *child_match == match_id && *child_pattern_node == pattern_node
-        ),
-        None => true,
-    }
-}
-
-/// What the parent alternative's match demands of a class it binds. A boundary
-/// binding needs the value in a register (even if the match also recomputes it
-/// at another node). An internal binding of a *pure* class demands nothing: the
-/// instruction recomputes the value, so the class is free to be internal to
-/// another match, materialized by its own instruction, or both (duplication).
-/// Only a memory-effect internal must belong to exactly this match.
-pub(crate) fn child_requirement(
-    egraph: &SemEGraph,
-    child: Id,
-    parent_alt: &PbqpIselAlternative,
-    matches: &[PbqpIselMatch],
-) -> Option<ChildRequirement> {
-    let match_id = match parent_alt {
-        PbqpIselAlternative::Root { match_id } | PbqpIselAlternative::Internal { match_id, .. } => {
-            *match_id
-        }
-        PbqpIselAlternative::External | PbqpIselAlternative::Reify | PbqpIselAlternative::Dead => {
-            return None;
-        }
+    let PbqpIselAlternative::Tile { match_id } = parent_alt else {
+        return true;
     };
-
-    let m = &matches[match_id];
-    let mut internal_node = None;
-    let mut register_boundary = false;
-    let mut immediate_boundary = false;
-    for binding in &m.bindings.pattern_nodes {
-        // A copy pattern's bare-symbol root binds the wider source while the
-        // match root is its low Extract view, so that root node is still a real
-        // boundary dependency.
+    let matched = &matches[*match_id];
+    let mut register = false;
+    let mut immediate = false;
+    let mut owned_effect = false;
+    for binding in &matched.bindings.pattern_nodes {
         if binding.class != child
-            || (binding.pattern_node == m.pattern_root && binding.class == m.root)
+            || (binding.pattern_node == matched.pattern_root && binding.class == matched.root)
         {
             continue;
         }
         if binding.is_boundary {
-            match binding.demand {
-                BoundaryDemand::Register => register_boundary = true,
-                BoundaryDemand::Immediate => immediate_boundary = true,
-                BoundaryDemand::Structural => {}
-            }
-        } else if internal_node.is_none() {
-            internal_node = Some(binding.pattern_node);
+            register |= binding.demand == BoundaryDemand::Register;
+            immediate |= binding.demand == BoundaryDemand::Immediate;
+        } else if binding.pattern_node != matched.pattern_root && !class_is_pure(egraph, child) {
+            owned_effect = true;
         }
     }
-
-    if register_boundary {
-        return Some(ChildRequirement::Materialized { match_id });
+    if register {
+        match child_alt {
+            PbqpIselAlternative::Tile { .. } | PbqpIselAlternative::Reify => true,
+            PbqpIselAlternative::NotDemanded => available(child),
+        }
+    } else if immediate {
+        class_int_binding(egraph, child).is_some()
+    } else if owned_effect {
+        matches!(child_alt, PbqpIselAlternative::NotDemanded)
+    } else {
+        true
     }
-    if immediate_boundary {
-        return Some(ChildRequirement::Immediate);
-    }
-    match internal_node {
-        Some(_) if class_is_pure(egraph, child) => None,
-        Some(pattern_node) => Some(ChildRequirement::SameMatch {
-            match_id,
-            pattern_node,
-        }),
-        None => None,
-    }
-}
-
-pub(crate) enum ChildRequirement {
-    Materialized { match_id: usize },
-    Immediate,
-    SameMatch { match_id: usize, pattern_node: Id },
 }

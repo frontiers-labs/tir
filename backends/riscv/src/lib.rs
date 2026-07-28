@@ -1338,15 +1338,18 @@ mod tests {
         let (cond_id, x_id) = (args[0].id(), args[1].id());
 
         let t = context.create_block(vec![]);
-        let f = context.create_block(vec![]);
+        let f_arg = context.create_value(i32, None);
+        let f = context.create_block(vec![f_arg]);
 
         let mut fb = IRBuilder::new(func.body());
         let add = ops::addi(&context, x_id, x_id, i32).build();
+        let sum = add.result();
         fb.insert(add);
         // A bare i1 condition (a block argument): no branch rule can fuse it,
         // so selection falls back to `andi` the defined bit out + `bne … x0, t`
-        // plus the deferred `vbr f`.
-        fb.insert(ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build());
+        // plus the deferred `vbr f`. The add result rides the false edge, so it
+        // is demanded and selects.
+        fb.insert(ops::cond_br(&context, cond_id, vec![], vec![sum], t.id(), f.id()).build());
 
         let mut mb = IRBuilder::new(module.body());
         mb.insert(func);

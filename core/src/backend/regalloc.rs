@@ -663,7 +663,12 @@ impl Pass for RegisterAllocationPass {
             // forcing a longer-lived value to spill instead is what actually relieves
             // pressure and lets the spill loop converge (spilling a temp would just
             // reload it at the same congested point, cascading without progress).
-            let protected = frame.temps.clone();
+            // Alloca address vregs are also unspillable: their defining op carries
+            // no register attributes (the address is materialized only after
+            // assignment), so a spill would leave the slot unwritten and every
+            // reload reading garbage.
+            let mut protected = frame.temps.clone();
+            protected.extend(stack_allocas.iter().map(|alloca| alloca.vreg));
             let spill_cost = |v: u32| -> u64 {
                 if protected.contains(&v) {
                     INF_COST

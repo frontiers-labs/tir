@@ -1120,7 +1120,6 @@ execute/pr56837.c
 execute/pr56982.c
 execute/pr57130.c
 execute/pr57144.c
-execute/pr57281.c
 execute/pr57321.c
 execute/pr57344-1.c
 execute/pr57344-2.c

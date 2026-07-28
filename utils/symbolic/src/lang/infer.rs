@@ -405,6 +405,17 @@ fn is_immediate_leaf<V>(
         )
 }
 
+fn is_extended_zero<V>(
+    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+    node: NodeId,
+) -> bool {
+    if *graph.get_node(node) != SymKind::ZExt {
+        return false;
+    }
+    let children: Vec<NodeId> = graph.children(node).collect();
+    children.len() == 2 && const_u64(graph, children[0]) == Some(0)
+}
+
 fn canon_rebuild<V: Clone>(
     graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
     node: NodeId,
@@ -419,6 +430,21 @@ fn canon_rebuild<V: Clone>(
 
     let kind = *graph.get_node(node);
     let children: Vec<NodeId> = graph.children(node).collect();
+
+    if kind == SymKind::Add
+        && let [lhs, rhs] = children.as_slice()
+        && let Some(value) = if is_extended_zero(graph, *lhs) {
+            Some(*rhs)
+        } else if is_extended_zero(graph, *rhs) {
+            Some(*lhs)
+        } else {
+            None
+        }
+    {
+        let value = canon_rebuild(graph, value, immediate_symbols, out, memo, forced);
+        memo.insert(node.index(), value);
+        return value;
+    }
 
     // Target behaviors spell width-specific literals as extended bitvectors;
     // source IR carries the same literal directly at its use width.
@@ -778,6 +804,31 @@ mod type_tests {
 
         assert_eq!(*canonical.get_node(root), SymKind::Div);
         assert_eq!(forced_widths[root.index()], Some(32));
+    }
+
+    #[test]
+    fn selection_drops_addition_of_zero_extended_zero() {
+        let mut graph = Graph::new();
+        let zero = graph.add_node(SymKind::Constant);
+        graph.set_leaf_data(zero, SymPayload::Int(APInt::new(1, 0)));
+        let width = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(width, SymPayload::SymbolId(0));
+        let extended_zero = graph.add_node(SymKind::ZExt);
+        graph.add_edge(extended_zero, zero);
+        graph.add_edge(extended_zero, width);
+        let value = graph.add_node(SymKind::Symbol);
+        graph.set_leaf_data(value, SymPayload::SymbolId(1));
+        let root = graph.add_node(SymKind::Add);
+        graph.add_edge(root, extended_zero);
+        graph.add_edge(root, value);
+
+        let (canonical, root, _) = canonicalize_for_selection(&graph, root, &HashSet::new());
+
+        assert_eq!(*canonical.get_node(root), SymKind::Symbol);
+        assert_eq!(
+            canonical.get_leaf_data(root),
+            Some(&SymPayload::SymbolId(1))
+        );
     }
 
     // riscv `remw` = sext(x_w32 - (x_w32 / y_w32) * y_w32, 64): the extension wraps a

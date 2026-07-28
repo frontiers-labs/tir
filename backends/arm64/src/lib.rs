@@ -781,15 +781,18 @@ mod tests {
         let (cond_id, x_id) = (args[0].id(), args[1].id());
 
         let t = context.create_block(vec![]);
-        let f = context.create_block(vec![]);
+        let f_arg = context.create_value(i64, None);
+        let f = context.create_block(vec![f_arg]);
 
         let mut fb = IRBuilder::new(func.body());
         let add = ops::addi(&context, x_id, x_id, i64).build();
+        let sum = add.result();
         fb.insert(add);
         // A bare i1 condition (a block argument) defines only bit 0 of its
         // register, so it lowers through the masking fallback: `and #1` plus
-        // `cbnz`, then the deferred `vbr f`.
-        fb.insert(ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build());
+        // `cbnz`, then the deferred `vbr f`. The add result rides the false
+        // edge, so it is demanded and selects.
+        fb.insert(ops::cond_br(&context, cond_id, vec![], vec![sum], t.id(), f.id()).build());
 
         let mut mb = IRBuilder::new(module.body());
         mb.insert(func);

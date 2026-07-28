@@ -1,9 +1,9 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// Signed extension uses the direct instruction. The zero-extension shift pair's
-// constant count uses the immediate form, not the by-`cl` form: a register the
-// behavior reads by path (`GPR::rcx`) reads that register's value, leaving a
-// constant count to the immediate form.
+// Signed extension uses the direct instruction. Zero-extension selects the
+// mask form: the 0xFFFFFFFF constant is an ordinary materializable class, so
+// the cover roots a `movabs` for it and `and`s the source — never a by-`cl`
+// shift (a register the behavior reads by path reads that register's value).
 
 module {
   func @se(%0: !i32) -> !i64 {
@@ -19,5 +19,5 @@ module {
 
 // CHECK-NOT: rcx = 32
 // CHECK: x86_64.movsxd
-// CHECK: x86_64.shl {{.*}}imm = 32
-// CHECK: x86_64.shr {{.*}}imm = 32
+// CHECK: x86_64.movabs {dst = %virt[[MASK:[0-9]+]]:GPR, imm = 4294967295}
+// CHECK: x86_64.and {dst = %virt{{[0-9]+}}:GPR, dst_tied = %virt[[MASK]]:GPR, src = %virt{{[0-9]+}}:GPR}

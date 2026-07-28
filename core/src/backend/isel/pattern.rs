@@ -72,15 +72,7 @@ impl CompiledIselPattern {
                 .then_some(meta.imm_range)
                 .flatten();
         }
-        zero_form_materializer_range(self)
-    }
-
-    pub(crate) fn capture_meta(&self, symbol: u32) -> Option<&PatternNodeMeta> {
-        (0..self.pattern.len()).find_map(|index| {
-            let node = Id::from_raw(index as u32);
-            matches!(self.pattern.node(node), PatternNode::Var(Var::Symbol(found)) if *found == symbol)
-                .then_some(&self.node_meta[index])
-        })
+        None
     }
 
     fn match_types(
@@ -237,7 +229,7 @@ pub(crate) fn compile_isel_pattern(
     operand_imm_ranges: &[(u32, ImmRange)],
     result_register: Option<RegisterRequirement>,
 ) -> Option<CompiledIselPattern> {
-    let root = expr.root()?;
+    let root = canonical_pattern_root(expr, expr.root()?);
     let inferred_types = infer_types(expr, |_| None).ok()?;
     let mut pattern = Pattern::new();
     let mut node_meta = Vec::new();
@@ -273,6 +265,37 @@ pub(crate) fn compile_isel_pattern(
         result_register,
         copy,
     })
+}
+
+fn canonical_pattern_root(expr: &SemGraph, root: NodeId) -> NodeId {
+    if *expr.get_node(root) != SymKind::Add {
+        return root;
+    }
+    let children: Vec<NodeId> = expr.children(root).collect();
+    let [lhs, rhs] = children.as_slice() else {
+        return root;
+    };
+    if is_extended_zero(expr, *lhs) {
+        *rhs
+    } else if is_extended_zero(expr, *rhs) {
+        *lhs
+    } else {
+        root
+    }
+}
+
+fn is_extended_zero(expr: &SemGraph, node: NodeId) -> bool {
+    if *expr.get_node(node) != SymKind::ZExt {
+        return false;
+    }
+    let children: Vec<NodeId> = expr.children(node).collect();
+    let [value, _] = children.as_slice() else {
+        return false;
+    };
+    matches!(
+        expr.get_leaf_data(*value),
+        Some(SymPayload::Int(value)) if value.to_u64() == 0
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -373,27 +396,6 @@ fn compile_isel_pattern_node(
     memo.insert(node, compiled);
     Some(compiled)
 }
-/// The immediate ranges of the rule set's constant materializers: bare
-/// immediate rules such as `movz`/`mov imm`, plus zero-form rules whose pattern
-/// is `Add(ZExt(0b0, W), imm)` (the TMDL-derived `addi rd, zero_reg, imm` form).
-/// Program constants fitting one of these ranges can be rooted by a real
-/// instruction rather than surviving to a target lowering hook.
-pub(crate) fn constant_materializer_ranges(patterns: &[CompiledIselPattern]) -> Vec<ImmRange> {
-    patterns
-        .iter()
-        .filter_map(CompiledIselPattern::constant_materializer_range)
-        .collect()
-}
-
-pub(crate) fn zero_form_constant_materializer_ranges(
-    patterns: &[CompiledIselPattern],
-) -> Vec<ImmRange> {
-    patterns
-        .iter()
-        .filter_map(zero_form_materializer_range)
-        .collect()
-}
-
 pub(crate) fn natural_pointer_width(patterns: &[CompiledIselPattern]) -> Option<u32> {
     patterns
         .iter()
@@ -418,43 +420,4 @@ pub(crate) fn natural_pointer_width(patterns: &[CompiledIselPattern]) -> Option<
             (width == result.capability.width).then_some(width)
         })
         .max()
-}
-
-fn zero_form_materializer_range(compiled: &CompiledIselPattern) -> Option<ImmRange> {
-    let root = compiled.pattern.root();
-    let PatternNode::Node(root_node) = compiled.pattern.node(root) else {
-        return None;
-    };
-    if root_node.kind != SymKind::Add || root_node.children.len() != 2 {
-        return None;
-    }
-    let mut has_zero_zext = false;
-    let mut imm_range = None;
-    for &child in &root_node.children {
-        match compiled.pattern.node(child) {
-            PatternNode::Node(node) if node.kind == SymKind::ZExt && node.children.len() == 2 => {
-                let zero_value = matches!(
-                    compiled.pattern.node(node.children[0]),
-                    PatternNode::Node(zero)
-                        if zero.kind == SymKind::Constant
-                            && matches!(
-                                &zero.payload,
-                                Some(super::SemPayload::Expr(SymPayload::Int(v)))
-                                    if v.to_u64() == 0
-                            )
-                );
-                let wildcard_width =
-                    matches!(compiled.pattern.node(node.children[1]), PatternNode::Var(_));
-                has_zero_zext = zero_value && wildcard_width;
-            }
-            PatternNode::Var(Var::Symbol(_)) => {
-                let meta = &compiled.node_meta[child.index()];
-                if meta.constraint == Some(OperandConstraint::Immediate) {
-                    imm_range = meta.imm_range;
-                }
-            }
-            _ => {}
-        }
-    }
-    has_zero_zext.then_some(imm_range).flatten()
 }
