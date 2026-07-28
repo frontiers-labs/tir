@@ -463,14 +463,6 @@ fn lower_type(context: &Context, typed: &TypedAst, ty: QualType) -> TypeId {
 
 fn source_type_layout(typed: &TypedAst, ty: QualType) -> (u64, u64) {
     match typed.types().kind(ty) {
-        TypeKind::Integer(_) => {
-            let size = u64::from(typed.integer_width(ty).unwrap() / 8);
-            (size, size)
-        }
-        TypeKind::Pointer(_) => {
-            let size = u64::from(typed.target().pointer_width() / 8);
-            (size, size)
-        }
         TypeKind::Array(element, Some(length)) => {
             let (size, align) = source_type_layout(typed, *element);
             (size * length, align)
@@ -479,11 +471,7 @@ fn source_type_layout(typed: &TypedAst, ty: QualType) -> (u64, u64) {
             let record = typed.record(*id).unwrap();
             (record.size, record.align)
         }
-        TypeKind::Float => (4, 4),
-        TypeKind::Double => (8, 8),
-        TypeKind::LongDouble => (16, 16),
-        TypeKind::Enum(_) => (4, 4),
-        _ => (1, 1),
+        kind => typed.target().scalar_layout(kind).unwrap_or((1, 1)),
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tir::backend::abi::{AbiInfo, ArgumentGroupAlignment, ClassifierKind, Overflow, ValueKind};
+use tir::backend::abi::{ArgumentGroupAlignment, ClassifierKind, Overflow, ValueKind};
 use tir::graph::{Dag, MutDag, NodeId};
 
 use crate::ast::{
@@ -69,15 +69,58 @@ pub enum IntegerKind {
     UnsignedLongLong,
 }
 
+/// The TIR layout classes fcc's scalar C types map onto. Which class a C type
+/// takes is C's rule; how wide and how aligned that class is, is the target's
+/// to declare.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DataModel {
-    Ilp32,
-    Lp64,
+pub(crate) enum LayoutClass {
+    I8,
+    I16,
+    I32,
+    I64,
+    F32,
+    F64,
+    Pointer,
+}
+
+impl LayoutClass {
+    const ALL: [Self; 7] = [
+        Self::I8,
+        Self::I16,
+        Self::I32,
+        Self::I64,
+        Self::F32,
+        Self::F64,
+        Self::Pointer,
+    ];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::Pointer => "p",
+        }
+    }
+
+    fn of_width(bits: u32) -> Self {
+        match bits {
+            8 => Self::I8,
+            16 => Self::I16,
+            32 => Self::I32,
+            _ => Self::I64,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TargetProfile {
-    model: DataModel,
+    /// Size and ABI alignment of each [`LayoutClass`], in bytes, as the
+    /// target's data layout declares them.
+    scalars: [(u64, u64); LayoutClass::ALL.len()],
     plain_char_signed: bool,
     abi_classifier: ClassifierKind,
     integer_argument_registers: usize,
@@ -90,79 +133,50 @@ pub struct TargetProfile {
 impl TargetProfile {
     pub fn for_march(march: &str) -> Result<Self, String> {
         let target = tir::backend::select_target(march, None, None)?;
-        Self::for_abi(march, target.abi())
+        Self::for_target(march, target.as_ref())
     }
 
-    fn for_data_model(march: &str) -> Result<Self, String> {
-        let normalized = march.to_ascii_lowercase();
-        if normalized.starts_with("riscv32") || normalized.starts_with("rv32") {
-            Ok(Self {
-                model: DataModel::Ilp32,
-                plain_char_signed: true,
-                abi_classifier: ClassifierKind::Riscv,
-                integer_argument_registers: 0,
-                float_argument_registers: 0,
-                float_argument_overflow: Overflow::Stack,
-                argument_group_alignment: None,
-                indirect_result_argument_slots: None,
-            })
-        } else if normalized.starts_with("riscv64")
-            || normalized.starts_with("rv64")
-            || normalized == "x86_64"
-        {
-            Ok(Self {
-                model: DataModel::Lp64,
-                plain_char_signed: true,
-                abi_classifier: if normalized == "x86_64" {
-                    ClassifierKind::Sysv
-                } else {
-                    ClassifierKind::Riscv
-                },
-                integer_argument_registers: 0,
-                float_argument_registers: 0,
-                float_argument_overflow: Overflow::Stack,
-                argument_group_alignment: None,
-                indirect_result_argument_slots: None,
-            })
-        } else if normalized.starts_with("arm64") || normalized.starts_with("aarch64") {
-            Ok(Self {
-                model: DataModel::Lp64,
-                plain_char_signed: false,
-                abi_classifier: ClassifierKind::Aapcs64,
-                integer_argument_registers: 0,
-                float_argument_registers: 0,
-                float_argument_overflow: Overflow::Stack,
-                argument_group_alignment: None,
-                indirect_result_argument_slots: None,
-            })
-        } else {
-            Err(format!("no C data model for target '{march}'"))
+    /// Derive the C profile from what the target itself declares: scalar sizes
+    /// and alignments from its data layout, the rest from its ABI. fcc keeps no
+    /// table of its own, so every spelling the backend accepts works here too.
+    pub(crate) fn for_target(
+        march: &str,
+        machine: &dyn tir::backend::TargetMachine,
+    ) -> Result<Self, String> {
+        let layout = machine
+            .data_layout()
+            .as_ref()
+            .and_then(tir::DataLayout::from_value)
+            .ok_or_else(|| format!("target '{march}' declares no data layout"))?;
+        let mut scalars = [(0, 0); LayoutClass::ALL.len()];
+        for class in LayoutClass::ALL {
+            let (size, align) = layout
+                .class_layout(class.key())
+                .ok_or_else(|| format!("target '{march}' declares no '{}' layout", class.key()))?;
+            scalars[class as usize] = (u64::from(size / 8), u64::from(align / 8));
         }
-    }
-
-    pub(crate) fn for_abi(march: &str, abi: &AbiInfo) -> Result<Self, String> {
-        let mut profile = Self::for_data_model(march)?;
-        profile.abi_classifier = abi.classifier;
-        profile.integer_argument_registers = abi
+        let abi = machine.abi();
+        let float_arguments = abi
             .args
             .iter()
-            .find(|sequence| sequence.kind == ValueKind::Int)
-            .map_or(0, |sequence| sequence.regs.len());
-        profile.float_argument_registers = abi
-            .args
-            .iter()
-            .find(|sequence| sequence.kind == ValueKind::Float)
-            .map_or(0, |sequence| sequence.regs.len());
-        profile.float_argument_overflow = abi
-            .args
-            .iter()
-            .find(|sequence| sequence.kind == ValueKind::Float)
-            .map_or(Overflow::Chain(ValueKind::Int), |sequence| {
-                sequence.overflow
-            });
-        profile.argument_group_alignment = abi.argument_group_alignment;
-        profile.indirect_result_argument_slots = abi.indirect_result_argument_slots();
-        Ok(profile)
+            .find(|sequence| sequence.kind == ValueKind::Float);
+        Ok(Self {
+            scalars,
+            plain_char_signed: abi.classifier != ClassifierKind::Aapcs64,
+            abi_classifier: abi.classifier,
+            integer_argument_registers: abi
+                .args
+                .iter()
+                .find(|sequence| sequence.kind == ValueKind::Int)
+                .map_or(0, |sequence| sequence.regs.len()),
+            float_argument_registers: float_arguments.map_or(0, |sequence| sequence.regs.len()),
+            float_argument_overflow: float_arguments
+                .map_or(Overflow::Chain(ValueKind::Int), |sequence| {
+                    sequence.overflow
+                }),
+            argument_group_alignment: abi.argument_group_alignment,
+            indirect_result_argument_slots: abi.indirect_result_argument_slots(),
+        })
     }
 
     pub fn host() -> Result<Self, String> {
@@ -170,9 +184,39 @@ impl TargetProfile {
     }
 
     pub fn pointer_width(self) -> u32 {
-        match self.model {
-            DataModel::Ilp32 => 32,
-            DataModel::Lp64 => 64,
+        self.class_layout(LayoutClass::Pointer).0 as u32 * 8
+    }
+
+    /// Size and ABI alignment of a layout class, in bytes.
+    pub(crate) fn class_layout(self, class: LayoutClass) -> (u64, u64) {
+        self.scalars[class as usize]
+    }
+
+    /// Size and ABI alignment of a scalar C type, in bytes. Aggregates have no
+    /// layout class of their own and are laid out from their members instead.
+    pub(crate) fn scalar_layout(self, kind: &TypeKind) -> Option<(u64, u64)> {
+        let class = match kind {
+            TypeKind::Integer(kind) => LayoutClass::of_width(self.integer_width(*kind)),
+            TypeKind::Enum(_) => LayoutClass::I32,
+            TypeKind::Float => LayoutClass::F32,
+            TypeKind::Double => LayoutClass::F64,
+            // `long double` maps onto no TIR layout class: fcc carries it as an
+            // opaque object rather than an arithmetic type, so its ABI size and
+            // alignment have nowhere in the data layout to come from.
+            TypeKind::LongDouble => return Some((16, 16)),
+            TypeKind::Pointer(_) => LayoutClass::Pointer,
+            _ => return None,
+        };
+        Some(self.class_layout(class))
+    }
+
+    /// The C integer kind of a pointer difference, and of an object size. A
+    /// 32-bit layout ranks them as `int`, every wider one as `long`.
+    fn pointer_sized_integer(self) -> IntegerKind {
+        if self.pointer_width() == 32 {
+            IntegerKind::Int
+        } else {
+            IntegerKind::Long
         }
     }
 
@@ -371,16 +415,11 @@ struct Symbol {
 }
 
 pub fn analyze(ast: Ast, options: LangOptions) -> Result<TypedAst, Vec<Diagnostic>> {
-    let target = TargetProfile::host().unwrap_or(TargetProfile {
-        model: DataModel::Lp64,
-        plain_char_signed: true,
-        abi_classifier: ClassifierKind::Sysv,
-        integer_argument_registers: 0,
-        float_argument_registers: 0,
-        float_argument_overflow: Overflow::Stack,
-        argument_group_alignment: None,
-        indirect_result_argument_slots: None,
-    });
+    // Where the host has no backend, fall back to a modeled target rather than
+    // a hand-written profile, so the layout still comes from a description.
+    let target = TargetProfile::host()
+        .or_else(|_| TargetProfile::for_march("x86_64"))
+        .expect("x86_64 is always modeled");
     analyze_with_target(ast, options, target)
 }
 
@@ -1734,14 +1773,10 @@ impl Analyzer<'_> {
                             if self.types.kind(*left) == self.types.kind(*right)
                                 && self.type_size(*left).is_some() =>
                         {
-                            Some(match self.target.model {
-                                DataModel::Ilp32 => {
-                                    self.types.intern(TypeKind::Integer(IntegerKind::Int))
-                                }
-                                DataModel::Lp64 => {
-                                    self.types.intern(TypeKind::Integer(IntegerKind::Long))
-                                }
-                            })
+                            Some(
+                                self.types
+                                    .intern(TypeKind::Integer(self.target.pointer_sized_integer())),
+                            )
                         }
                         _ => None,
                     }
@@ -2094,14 +2129,9 @@ impl Analyzer<'_> {
                         .into(),
                     );
                 }
-                let size_ty = match self.target.model {
-                    DataModel::Ilp32 => self
-                        .types
-                        .intern(TypeKind::Integer(IntegerKind::UnsignedInt)),
-                    DataModel::Lp64 => self
-                        .types
-                        .intern(TypeKind::Integer(IntegerKind::UnsignedLong)),
-                };
+                let size_ty = self.types.intern(TypeKind::Integer(unsigned_corresponding(
+                    self.target.pointer_sized_integer(),
+                )));
                 self.ast.set_annotation(
                     node,
                     NodeSemantics {
@@ -2627,18 +2657,6 @@ impl Analyzer<'_> {
 
     fn type_layout(&self, ty: QualType) -> Option<(u64, u64)> {
         match self.types.kind(ty) {
-            TypeKind::Integer(kind) => {
-                let size = (self.target.integer_width(*kind) / 8) as u64;
-                Some((size, size))
-            }
-            TypeKind::Enum(_) => Some((4, 4)),
-            TypeKind::Float => Some((4, 4)),
-            TypeKind::Double => Some((8, 8)),
-            TypeKind::LongDouble => Some((16, 16)),
-            TypeKind::Pointer(_) => {
-                let size = (self.target.pointer_width() / 8) as u64;
-                Some((size, size))
-            }
             TypeKind::Array(element, Some(length)) => {
                 let (size, align) = self.type_layout(*element)?;
                 Some((size.checked_mul(*length)?, align))
@@ -2649,7 +2667,7 @@ impl Analyzer<'_> {
                 .map(|&index| &self.records[index])
                 .filter(|record| record.size != 0)
                 .map(|record| (record.size, record.align)),
-            _ => None,
+            kind => self.target.scalar_layout(kind),
         }
     }
 

@@ -58,14 +58,11 @@ pub(super) fn lower_to_ir(
         eprintln!("fcc: error: {error}; pass --march explicitly");
         std::process::exit(1);
     };
-    let machine = march.map(|march| {
-        tir::backend::select_target_with_abi(march, None, None, mabi).unwrap_or_else(|e| fail(e))
-    });
-    let target = match (march, &machine) {
-        (Some(march), Some(machine)) => crate::sema::TargetProfile::for_abi(march, machine.abi()),
-        _ => crate::sema::TargetProfile::host(),
-    }
-    .unwrap_or_else(|e| fail(e));
+    let march = march.unwrap_or(std::env::consts::ARCH);
+    let machine =
+        tir::backend::select_target_with_abi(march, None, None, mabi).unwrap_or_else(|e| fail(e));
+    let target =
+        crate::sema::TargetProfile::for_target(march, machine.as_ref()).unwrap_or_else(|e| fail(e));
     let typed =
         crate::sema::analyze_with_target(unit, options, target).unwrap_or_else(|diagnostics| {
             for diagnostic in diagnostics {
@@ -77,10 +74,7 @@ pub(super) fn lower_to_ir(
         d.eprint();
         std::process::exit(1);
     });
-    match &machine {
-        Some(machine) => describe_target(context, &module, machine.as_ref()),
-        None => module,
-    }
+    describe_target(context, &module, machine.as_ref())
 }
 
 /// Record the target's data layout and hardware description on the module, so

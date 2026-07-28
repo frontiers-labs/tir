@@ -90,7 +90,15 @@ impl DataLayout {
 
     /// Width of a pointer, in bits.
     pub fn pointer_size(&self) -> Option<u32> {
-        bits(self.type_entry("p")?.get("size"))
+        self.class_layout("p").map(|(size, _)| size)
+    }
+
+    /// Size and ABI alignment of a layout class named directly (`i32`, `f64`,
+    /// `p`), in bits. For front ends, which map their own types onto a class
+    /// before they hold a TIR type to key on.
+    pub fn class_layout(&self, class: &str) -> Option<(u32, u32)> {
+        let entry = self.type_entry(class)?;
+        Some((bits(entry.get("size"))?, bits(entry.get("abi"))?))
     }
 
     /// Width of `ty` in bits: the declared `size` of its layout class, falling
@@ -307,6 +315,16 @@ mod tests {
         let layout = layout(&context, "{types = {p = {size = 32, abi = 32}}}");
 
         assert_eq!(layout.pointer_size(), Some(32));
+    }
+
+    #[test]
+    fn a_class_layout_is_read_without_a_type() {
+        let context = Context::with_default_dialects();
+
+        let layout = layout(&context, "{types = {f64 = {size = 64, abi = 32}}}");
+
+        assert_eq!(layout.class_layout("f64"), Some((64, 32)));
+        assert_eq!(layout.class_layout("f32"), None);
     }
 
     #[test]
