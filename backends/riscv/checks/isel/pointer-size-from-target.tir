@@ -1,0 +1,17 @@
+// RUN: tir mc --march=riscv32 --stage=isel %s | filecheck %s --check-prefix=RV32
+// RUN: tir mc --march=riscv64 --stage=isel %s | filecheck %s --check-prefix=RV64
+
+// Where the module declares no layout, the target's own applies: riscv's
+// declared pointer size follows XLEN, so the same load is four bytes wide on
+// rv32 and eight on rv64.
+
+module {
+  func @deref(%0: !ptr.p<!ptr.p>) -> !ptr.p {
+    %1 = ptr.load %0 : !ptr.p
+    return %1
+  }
+  module_end
+}
+
+// RV32: riscv.lw
+// RV64: riscv.ld

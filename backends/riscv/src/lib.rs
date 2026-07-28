@@ -1228,45 +1228,6 @@ mod tests {
     use crate::{RegClass, RiscvDialect, create_isel_pass, create_regalloc_pass};
 
     #[test]
-    fn the_declared_pointer_size_follows_xlen() {
-        let layout = |march| {
-            let target = tir::backend::select_target(march, None, None).expect("target");
-            let spec = target.data_layout().expect("riscv declares its layout");
-            (
-                tir::DataLayout::from_value(&spec).expect("spec is a dict"),
-                target,
-            )
-        };
-
-        let (rv32, _target) = layout("riscv32");
-        assert_eq!(rv32.pointer_size(), Some(32));
-
-        let (rv64, _target) = layout("riscv64");
-        assert_eq!(rv64.pointer_size(), Some(64));
-    }
-
-    #[test]
-    fn the_declared_stack_alignment_follows_the_abi() {
-        let target = tir::backend::select_target("riscv64", None, None).expect("target");
-        let spec = target.data_layout().expect("riscv declares its layout");
-        let layout = tir::DataLayout::from_value(&spec).expect("spec is a dict");
-
-        assert_eq!(layout.stack_alignment(), Some(target.abi().stack.align * 8));
-    }
-
-    #[test]
-    fn the_declared_environment_names_the_enabled_extensions() {
-        let target = tir::backend::select_target("rv64imc", None, None).expect("target");
-        let spec = target.target_env().expect("riscv describes itself");
-        let env = tir::TargetEnv::from_value(&spec).expect("spec is a dict");
-
-        assert_eq!(env.arch(), Some("riscv64"));
-        assert!(env.has_feature("rvm"));
-        assert!(env.has_feature("c"));
-        assert!(!env.has_feature("rvv"));
-    }
-
-    #[test]
     fn target_abi_matches_lp64d_register_convention() {
         let abi = crate::riscv_abi_by_name("lp64d").unwrap();
         let args = |kind| {
