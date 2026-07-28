@@ -268,6 +268,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
     let mut signatures = HashMap::new();
     let mut globals = HashMap::new();
     let mut defined_functions = HashSet::new();
+    let mut declared_functions = HashSet::new();
     // Entities already given storage: an initialized definition claims the
     // object outright, and repeated tentative definitions reserve it once.
     let mut reserved_globals = HashSet::new();
@@ -332,9 +333,10 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     unreachable!("prototype node carries a function payload");
                 };
                 let entity = node_entity(typed, item);
-                // The definition declares the same symbol; emitting both would
-                // define it twice.
-                if defined_functions.contains(&entity) {
+                // A symbol is named once however many times C declares it: the
+                // definition already declares it, and a repeated prototype
+                // re-declares the same entity rather than overloading it.
+                if defined_functions.contains(&entity) || !declared_functions.insert(entity) {
                     continue;
                 }
                 let sig = signatures.get(&entity).unwrap();
