@@ -158,34 +158,113 @@ enum Reduction {
     },
 }
 
+enum Undo {
+    NodeCost {
+        node: usize,
+        alternative: usize,
+        old_cost: u64,
+    },
+    EdgeAdded {
+        lhs: usize,
+        rhs: usize,
+    },
+    EdgeRemoved {
+        lhs: usize,
+        rhs: usize,
+        matrix: PbqpMatrix,
+    },
+    EdgeChanged {
+        lhs: usize,
+        rhs: usize,
+        old_matrix: PbqpMatrix,
+    },
+    NodeDeactivated {
+        node: usize,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct Checkpoint {
+    undo_len: usize,
+    reductions_len: usize,
+}
+
 pub fn solve(problem: &PbqpProblem) -> Result<PbqpSolution, PbqpSolveError> {
     Solver::new(problem.clone()).solve(problem)
 }
 
-#[derive(Clone)]
 struct Solver {
     problem: PbqpProblem,
     active: Vec<bool>,
+    active_count: usize,
     reductions: Vec<Reduction>,
     /// Per-node neighbor set, maintained alongside `problem.edges` so neighbor
     /// queries are O(degree) rather than a full O(edges) scan — the difference
     /// between the solver being usable and unusable at register-allocation scale.
     adjacency: Vec<BTreeSet<usize>>,
+    degrees: Vec<usize>,
+    reducible: BTreeSet<usize>,
+    finite_alternatives: Vec<usize>,
+    coherence_groups_by_alternative: Vec<Vec<Vec<usize>>>,
+    infeasible: BTreeSet<usize>,
+    recording_undo: bool,
+    undo: Vec<Undo>,
 }
 
 impl Solver {
     fn new(problem: PbqpProblem) -> Self {
-        let active = vec![true; problem.node_count()];
-        let mut adjacency = vec![BTreeSet::new(); problem.node_count()];
+        let node_count = problem.node_count();
+        let active = vec![true; node_count];
+        let mut adjacency = vec![BTreeSet::new(); node_count];
         for &(a, b) in problem.edges.keys() {
             adjacency[a].insert(b);
             adjacency[b].insert(a);
         }
+        let degrees: Vec<_> = adjacency.iter().map(BTreeSet::len).collect();
+        let reducible = degrees
+            .iter()
+            .enumerate()
+            .filter_map(|(node, &degree)| (degree <= 2).then_some(node))
+            .collect();
+        let finite_alternatives: Vec<usize> = problem
+            .node_costs
+            .iter()
+            .map(|costs| costs.iter().filter(|&&cost| cost < INF_COST).count())
+            .collect();
+        let infeasible = finite_alternatives
+            .iter()
+            .enumerate()
+            .filter_map(|(node, &finite)| (finite == 0).then_some(node))
+            .collect();
+        let mut coherence_groups_by_alternative: Vec<Vec<Vec<usize>>> = problem
+            .node_costs
+            .iter()
+            .map(|costs| vec![Vec::new(); costs.len()])
+            .collect();
+        for (group_index, group) in problem.coherence_sets.iter().enumerate() {
+            for alternative in group {
+                let node = alternative.node.index();
+                if let Some(groups) = coherence_groups_by_alternative
+                    .get_mut(node)
+                    .and_then(|alternatives| alternatives.get_mut(alternative.alternative))
+                {
+                    groups.push(group_index);
+                }
+            }
+        }
         Self {
             problem,
             active,
+            active_count: node_count,
             reductions: Vec::new(),
             adjacency,
+            degrees,
+            reducible,
+            finite_alternatives,
+            coherence_groups_by_alternative,
+            infeasible,
+            recording_undo: false,
+            undo: Vec::new(),
         }
     }
 
@@ -199,18 +278,22 @@ impl Solver {
         // register-allocation scale; the per-node reductions below already respect
         // INF through saturating cost arithmetic, so a single pass suffices.
         self.normalize_and_propagate()?;
+        self.undo.clear();
 
-        while let Some(node) = self.next_active_node() {
+        self.solve_prepared(original)
+    }
+
+    fn solve_prepared(&mut self, original: &PbqpProblem) -> Result<PbqpSolution, PbqpSolveError> {
+        while self.active_count > 0 {
+            let node = self
+                .next_active_node()
+                .expect("an active PBQP node must be available");
             match self.degree(node) {
                 0 => self.reduce_fixed(node)?,
                 1 => self.reduce_r1(node)?,
                 2 => self.reduce_r2(node)?,
                 _ => return self.solve_rn(node, original),
             }
-            // The reductions read edge costs directly via `edge_cost`, so a global
-            // re-normalization pass per step is redundant; only feasibility needs
-            // re-checking after the reduction folds costs into the surviving nodes.
-            self.ensure_feasible()?;
         }
 
         let choices = self.reconstruct()?;
@@ -249,6 +332,7 @@ impl Solver {
     fn normalize_and_propagate(&mut self) -> Result<(), PbqpSolveError> {
         loop {
             let normalized = self.normalize_edges();
+            self.rebuild_infeasible();
             let propagated = self.propagate_infinities();
             self.ensure_feasible()?;
             if !normalized && !propagated {
@@ -281,11 +365,18 @@ impl Solver {
                     .min()
                     .unwrap_or(INF_COST);
                 if min >= INF_COST {
-                    self.problem.node_costs[lhs][row] = INF_COST;
+                    add_tracked_cost(
+                        &mut self.problem.node_costs[lhs][row],
+                        &mut self.finite_alternatives[lhs],
+                        INF_COST,
+                    );
                     changed = true;
                 } else if min > 0 {
-                    self.problem.node_costs[lhs][row] =
-                        add_cost(self.problem.node_costs[lhs][row], min);
+                    add_tracked_cost(
+                        &mut self.problem.node_costs[lhs][row],
+                        &mut self.finite_alternatives[lhs],
+                        min,
+                    );
                     for col in 0..matrix.cols() {
                         let cost = matrix.get(row, col);
                         if cost < INF_COST {
@@ -309,11 +400,18 @@ impl Solver {
                     .min()
                     .unwrap_or(INF_COST);
                 if min >= INF_COST {
-                    self.problem.node_costs[rhs][col] = INF_COST;
+                    add_tracked_cost(
+                        &mut self.problem.node_costs[rhs][col],
+                        &mut self.finite_alternatives[rhs],
+                        INF_COST,
+                    );
                     changed = true;
                 } else if min > 0 {
-                    self.problem.node_costs[rhs][col] =
-                        add_cost(self.problem.node_costs[rhs][col], min);
+                    add_tracked_cost(
+                        &mut self.problem.node_costs[rhs][col],
+                        &mut self.finite_alternatives[rhs],
+                        min,
+                    );
                     for row in 0..matrix.rows() {
                         let cost = matrix.get(row, col);
                         if cost < INF_COST {
@@ -330,9 +428,7 @@ impl Solver {
         }
 
         for key in zero_edges {
-            self.problem.edges.remove(&key);
-            self.adjacency[key.0].remove(&key.1);
-            self.adjacency[key.1].remove(&key.0);
+            self.remove_edge(key.0, key.1);
             changed = true;
         }
 
@@ -340,7 +436,6 @@ impl Solver {
     }
 
     fn propagate_infinities(&mut self) -> bool {
-        let mut changed = false;
         let mut queue: VecDeque<PbqpAlternative> = self
             .problem
             .node_costs
@@ -357,23 +452,27 @@ impl Solver {
                     })
             })
             .collect();
+        self.propagate_queue(&mut queue)
+    }
+
+    fn propagate_queue(&mut self, queue: &mut VecDeque<PbqpAlternative>) -> bool {
+        let mut changed = false;
 
         while let Some(impossible) = queue.pop_front() {
-            let coherent_members: Vec<_> = self
-                .problem
-                .coherence_sets
-                .iter()
-                .filter(|group| group.contains(&impossible))
-                .flat_map(|group| group.iter().copied())
-                .collect();
-            for member in coherent_members {
-                if self.mark_impossible(member) {
-                    queue.push_back(member);
-                    changed = true;
+            let node = impossible.node.index();
+            let group_indices =
+                self.coherence_groups_by_alternative[node][impossible.alternative].clone();
+            for group_index in group_indices {
+                let coherent_members = self.problem.coherence_sets[group_index].clone();
+                for member in coherent_members {
+                    if self.mark_impossible(member) {
+                        queue.push_back(member);
+                        changed = true;
+                    }
                 }
             }
 
-            for neighbor in self.neighbors(impossible.node.index()) {
+            for neighbor in self.neighbors(node) {
                 for alternative in 0..self.problem.node_costs[neighbor].len() {
                     let candidate = PbqpAlternative {
                         node: PbqpNodeId::from_index(neighbor),
@@ -382,7 +481,8 @@ impl Solver {
                     if self.problem.node_costs[neighbor][alternative] >= INF_COST {
                         continue;
                     }
-                    if !self.has_supported_pair(candidate) && self.mark_impossible(candidate) {
+                    if !self.has_supported_pair(candidate, node) && self.mark_impossible(candidate)
+                    {
                         queue.push_back(candidate);
                         changed = true;
                     }
@@ -393,66 +493,99 @@ impl Solver {
         changed
     }
 
-    fn has_supported_pair(&self, alternative: PbqpAlternative) -> bool {
+    fn propagate_new_infinities(
+        &mut self,
+        mut queue: VecDeque<PbqpAlternative>,
+    ) -> Result<(), PbqpSolveError> {
+        self.propagate_queue(&mut queue);
+        self.ensure_feasible()
+    }
+
+    fn has_supported_pair(&self, alternative: PbqpAlternative, neighbor: usize) -> bool {
         let node = alternative.node.index();
-        self.neighbors(node).into_iter().all(|neighbor| {
-            (0..self.problem.node_costs[neighbor].len()).any(|neighbor_alt| {
-                self.problem.node_costs[neighbor][neighbor_alt] < INF_COST
-                    && self.edge_cost(node, alternative.alternative, neighbor, neighbor_alt)
-                        < INF_COST
-            })
+        (0..self.problem.node_costs[neighbor].len()).any(|neighbor_alt| {
+            self.problem.node_costs[neighbor][neighbor_alt] < INF_COST
+                && self.edge_cost(node, alternative.alternative, neighbor, neighbor_alt) < INF_COST
         })
     }
 
     fn mark_impossible(&mut self, alternative: PbqpAlternative) -> bool {
         let node = alternative.node.index();
-        if self.problem.node_costs[node][alternative.alternative] >= INF_COST {
+        let old_cost = self.problem.node_costs[node][alternative.alternative];
+        if old_cost >= INF_COST {
             return false;
         }
+        if self.recording_undo {
+            self.undo.push(Undo::NodeCost {
+                node,
+                alternative: alternative.alternative,
+                old_cost,
+            });
+        }
         self.problem.node_costs[node][alternative.alternative] = INF_COST;
+        self.finite_alternatives[node] -= 1;
+        self.refresh_feasibility(node);
         true
     }
 
+    fn add_node_cost(&mut self, node: usize, alternative: usize, cost: u64) -> bool {
+        let old_cost = self.problem.node_costs[node][alternative];
+        let new_cost = add_cost(old_cost, cost);
+        if new_cost == old_cost {
+            return false;
+        }
+        if self.recording_undo {
+            self.undo.push(Undo::NodeCost {
+                node,
+                alternative,
+                old_cost,
+            });
+        }
+        self.problem.node_costs[node][alternative] = new_cost;
+        if old_cost < INF_COST && new_cost >= INF_COST {
+            self.finite_alternatives[node] -= 1;
+            self.refresh_feasibility(node);
+            true
+        } else {
+            false
+        }
+    }
+
     fn ensure_feasible(&self) -> Result<(), PbqpSolveError> {
-        for (node, costs) in self.problem.node_costs.iter().enumerate() {
-            if self.active[node] && costs.iter().all(|&cost| cost >= INF_COST) {
-                return Err(PbqpSolveError::Infeasible {
-                    node: PbqpNodeId::from_index(node),
-                });
-            }
+        if let Some(&node) = self.infeasible.first() {
+            return Err(PbqpSolveError::Infeasible {
+                node: PbqpNodeId::from_index(node),
+            });
         }
         Ok(())
     }
 
     fn next_active_node(&self) -> Option<usize> {
-        self.active.iter().position(|active| *active)
+        self.reducible
+            .first()
+            .copied()
+            .or_else(|| self.active.iter().position(|active| *active))
     }
 
     fn degree(&self, node: usize) -> usize {
-        self.adjacency[node]
-            .iter()
-            .filter(|&&n| self.active[n])
-            .count()
+        self.degrees[node]
     }
 
     fn neighbors(&self, node: usize) -> Vec<usize> {
-        self.adjacency[node]
-            .iter()
-            .copied()
-            .filter(|&n| self.active[n])
-            .collect()
+        self.adjacency[node].iter().copied().collect()
     }
 
     fn reduce_fixed(&mut self, node: usize) -> Result<(), PbqpSolveError> {
         let alternative = self.cheapest_alternative(node)?;
         self.reductions.push(Reduction::Fixed { node, alternative });
-        self.active[node] = false;
+        self.deactivate(node);
         Ok(())
     }
 
     fn reduce_r1(&mut self, node: usize) -> Result<(), PbqpSolveError> {
         let neighbor = self.neighbors(node)[0];
         let mut choices = vec![None; self.problem.node_costs[neighbor].len()];
+        let mut impossible = VecDeque::new();
 
         for (neighbor_alt, choice) in choices.iter_mut().enumerate() {
             let mut best = INF_COST;
@@ -467,19 +600,23 @@ impl Solver {
                     best_alt = Some(node_alt);
                 }
             }
-            self.problem.node_costs[neighbor][neighbor_alt] =
-                add_cost(self.problem.node_costs[neighbor][neighbor_alt], best);
+            if self.add_node_cost(neighbor, neighbor_alt, best) {
+                impossible.push_back(PbqpAlternative {
+                    node: PbqpNodeId::from_index(neighbor),
+                    alternative: neighbor_alt,
+                });
+            }
             *choice = best_alt;
         }
 
         self.remove_incident_edges(node);
-        self.active[node] = false;
+        self.deactivate(node);
         self.reductions.push(Reduction::R1 {
             node,
             neighbor,
             choices_by_neighbor_alt: choices,
         });
-        Ok(())
+        self.propagate_new_infinities(impossible)
     }
 
     fn reduce_r2(&mut self, node: usize) -> Result<(), PbqpSolveError> {
@@ -515,7 +652,7 @@ impl Solver {
         }
 
         self.remove_incident_edges(node);
-        self.active[node] = false;
+        self.deactivate(node);
         self.add_or_accumulate_edge(left, right, folded);
         self.reductions.push(Reduction::R2 {
             node,
@@ -524,40 +661,54 @@ impl Solver {
             right_alternatives: self.problem.node_costs[right].len(),
             choices_by_neighbor_alts: choices,
         });
-        Ok(())
+        let mut impossible = VecDeque::new();
+        self.prune_unsupported_alternatives(left, right, &mut impossible);
+        self.propagate_new_infinities(impossible)
     }
 
     fn solve_rn(
-        &self,
+        &mut self,
         node: usize,
         original: &PbqpProblem,
     ) -> Result<PbqpSolution, PbqpSolveError> {
-        for alternative in self.locally_ordered_alternatives(node)? {
-            let mut branch = self.clone();
-            branch.reduce_rn(node, alternative);
-            match branch.solve(original) {
+        let alternatives = self.locally_ordered_alternatives(node)?;
+        self.recording_undo = true;
+        let checkpoint = self.checkpoint();
+        for alternative in alternatives {
+            self.rollback(checkpoint);
+            if let Err(PbqpSolveError::Infeasible { .. }) = self.reduce_rn(node, alternative) {
+                continue;
+            }
+            match self.solve_prepared(original) {
                 Ok(solution) => return Ok(solution),
                 Err(PbqpSolveError::Infeasible { .. }) => {}
                 Err(error) => return Err(error),
             }
         }
+        self.rollback(checkpoint);
         Err(PbqpSolveError::Infeasible {
             node: PbqpNodeId::from_index(node),
         })
     }
 
-    fn reduce_rn(&mut self, node: usize, alternative: usize) {
+    fn reduce_rn(&mut self, node: usize, alternative: usize) -> Result<(), PbqpSolveError> {
+        let mut impossible = VecDeque::new();
         for neighbor in self.neighbors(node) {
             for neighbor_alt in 0..self.problem.node_costs[neighbor].len() {
                 let cost = self.edge_cost(node, alternative, neighbor, neighbor_alt);
-                self.problem.node_costs[neighbor][neighbor_alt] =
-                    add_cost(self.problem.node_costs[neighbor][neighbor_alt], cost);
+                if self.add_node_cost(neighbor, neighbor_alt, cost) {
+                    impossible.push_back(PbqpAlternative {
+                        node: PbqpNodeId::from_index(neighbor),
+                        alternative: neighbor_alt,
+                    });
+                }
             }
         }
 
         self.remove_incident_edges(node);
-        self.active[node] = false;
+        self.deactivate(node);
         self.reductions.push(Reduction::Fixed { node, alternative });
+        self.propagate_new_infinities(impossible)
     }
 
     fn cheapest_alternative(&self, node: usize) -> Result<usize, PbqpSolveError> {
@@ -628,33 +779,178 @@ impl Solver {
             PbqpNodeId::from_index(rhs),
             matrix,
         );
-        self.problem
-            .edges
-            .entry((a, b))
-            .and_modify(|existing| {
-                for row in 0..existing.rows() {
-                    for col in 0..existing.cols() {
-                        existing.add_assign(row, col, matrix.get(row, col));
-                    }
+        if let Some(existing) = self.problem.edges.get_mut(&(a, b)) {
+            if self.recording_undo {
+                self.undo.push(Undo::EdgeChanged {
+                    lhs: a,
+                    rhs: b,
+                    old_matrix: existing.clone(),
+                });
+            }
+            for row in 0..existing.rows() {
+                for col in 0..existing.cols() {
+                    existing.add_assign(row, col, matrix.get(row, col));
                 }
-            })
-            .or_insert(matrix);
-        self.adjacency[a].insert(b);
-        self.adjacency[b].insert(a);
+            }
+        } else {
+            self.insert_edge_raw(a, b, matrix);
+            if self.recording_undo {
+                self.undo.push(Undo::EdgeAdded { lhs: a, rhs: b });
+            }
+        }
+    }
+
+    fn prune_unsupported_alternatives(
+        &mut self,
+        lhs: usize,
+        rhs: usize,
+        impossible: &mut VecDeque<PbqpAlternative>,
+    ) {
+        for (node, neighbor) in [(lhs, rhs), (rhs, lhs)] {
+            for alternative in 0..self.problem.node_costs[node].len() {
+                let candidate = PbqpAlternative {
+                    node: PbqpNodeId::from_index(node),
+                    alternative,
+                };
+                if self.problem.node_costs[node][alternative] < INF_COST
+                    && !self.has_supported_pair(candidate, neighbor)
+                    && self.mark_impossible(candidate)
+                {
+                    impossible.push_back(candidate);
+                }
+            }
+        }
     }
 
     fn remove_incident_edges(&mut self, node: usize) {
         let neighbors: Vec<usize> = self.adjacency[node].iter().copied().collect();
         for neighbor in neighbors {
-            self.adjacency[neighbor].remove(&node);
-            let key = if node < neighbor {
-                (node, neighbor)
-            } else {
-                (neighbor, node)
-            };
-            self.problem.edges.remove(&key);
+            self.remove_edge(node, neighbor);
         }
-        self.adjacency[node].clear();
+    }
+
+    fn remove_edge(&mut self, lhs: usize, rhs: usize) {
+        let key = if lhs < rhs { (lhs, rhs) } else { (rhs, lhs) };
+        if let Some(matrix) = self.remove_edge_raw(key.0, key.1)
+            && self.recording_undo
+        {
+            self.undo.push(Undo::EdgeRemoved {
+                lhs: key.0,
+                rhs: key.1,
+                matrix,
+            });
+        }
+    }
+
+    fn remove_edge_raw(&mut self, lhs: usize, rhs: usize) -> Option<PbqpMatrix> {
+        let matrix = self.problem.edges.remove(&(lhs, rhs))?;
+        self.adjacency[lhs].remove(&rhs);
+        self.adjacency[rhs].remove(&lhs);
+        self.degrees[lhs] -= 1;
+        self.degrees[rhs] -= 1;
+        self.refresh_reducible(lhs);
+        self.refresh_reducible(rhs);
+        Some(matrix)
+    }
+
+    fn insert_edge_raw(&mut self, lhs: usize, rhs: usize, matrix: PbqpMatrix) {
+        let previous = self.problem.edges.insert((lhs, rhs), matrix);
+        debug_assert!(previous.is_none());
+        self.adjacency[lhs].insert(rhs);
+        self.adjacency[rhs].insert(lhs);
+        self.degrees[lhs] += 1;
+        self.degrees[rhs] += 1;
+        self.refresh_reducible(lhs);
+        self.refresh_reducible(rhs);
+    }
+
+    fn deactivate(&mut self, node: usize) {
+        debug_assert_eq!(self.degrees[node], 0);
+        if self.recording_undo {
+            self.undo.push(Undo::NodeDeactivated { node });
+        }
+        self.active[node] = false;
+        self.active_count -= 1;
+        self.reducible.remove(&node);
+        self.refresh_feasibility(node);
+    }
+
+    fn refresh_reducible(&mut self, node: usize) {
+        if self.active[node] && self.degrees[node] <= 2 {
+            self.reducible.insert(node);
+        } else {
+            self.reducible.remove(&node);
+        }
+    }
+
+    fn refresh_feasibility(&mut self, node: usize) {
+        if self.active[node] && self.finite_alternatives[node] == 0 {
+            self.infeasible.insert(node);
+        } else {
+            self.infeasible.remove(&node);
+        }
+    }
+
+    fn rebuild_infeasible(&mut self) {
+        self.infeasible.clear();
+        for node in 0..self.active.len() {
+            if self.active[node] && self.finite_alternatives[node] == 0 {
+                self.infeasible.insert(node);
+            }
+        }
+    }
+
+    fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            undo_len: self.undo.len(),
+            reductions_len: self.reductions.len(),
+        }
+    }
+
+    fn rollback(&mut self, checkpoint: Checkpoint) {
+        while self.undo.len() > checkpoint.undo_len {
+            match self.undo.pop().unwrap() {
+                Undo::NodeCost {
+                    node,
+                    alternative,
+                    old_cost,
+                } => {
+                    let cost = &mut self.problem.node_costs[node][alternative];
+                    if *cost >= INF_COST && old_cost < INF_COST {
+                        self.finite_alternatives[node] += 1;
+                    } else if *cost < INF_COST && old_cost >= INF_COST {
+                        self.finite_alternatives[node] -= 1;
+                    }
+                    *cost = old_cost;
+                    self.refresh_feasibility(node);
+                }
+                Undo::EdgeAdded { lhs, rhs } => {
+                    self.remove_edge_raw(lhs, rhs)
+                        .expect("an added PBQP edge must exist during rollback");
+                }
+                Undo::EdgeRemoved { lhs, rhs, matrix } => {
+                    self.insert_edge_raw(lhs, rhs, matrix);
+                }
+                Undo::EdgeChanged {
+                    lhs,
+                    rhs,
+                    old_matrix,
+                } => {
+                    *self
+                        .problem
+                        .edges
+                        .get_mut(&(lhs, rhs))
+                        .expect("a changed PBQP edge must exist during rollback") = old_matrix;
+                }
+                Undo::NodeDeactivated { node } => {
+                    self.active[node] = true;
+                    self.active_count += 1;
+                    self.refresh_reducible(node);
+                    self.refresh_feasibility(node);
+                }
+            }
+        }
+        self.reductions.truncate(checkpoint.reductions_len);
     }
 
     fn reconstruct(&self) -> Result<Vec<usize>, PbqpSolveError> {
@@ -729,6 +1025,18 @@ fn add_cost(lhs: u64, rhs: u64) -> u64 {
         INF_COST
     } else {
         lhs.saturating_add(rhs).min(INF_COST)
+    }
+}
+
+fn add_tracked_cost(cost: &mut u64, finite_alternatives: &mut usize, added: u64) -> bool {
+    let old_cost = *cost;
+    let new_cost = add_cost(old_cost, added);
+    *cost = new_cost;
+    if old_cost < INF_COST && new_cost >= INF_COST {
+        *finite_alternatives -= 1;
+        true
+    } else {
+        false
     }
 }
 
@@ -843,6 +1151,24 @@ mod tests {
     }
 
     #[test]
+    fn exact_reductions_precede_rn_decisions() {
+        let mut problem = PbqpProblem::new();
+        let center = problem.add_node(vec![0, 1]);
+        let same_choice = PbqpMatrix::new(2, 2, vec![0, INF_COST, INF_COST, 0]);
+
+        for _ in 0..3 {
+            let middle = problem.add_node(vec![0, 0]);
+            let leaf = problem.add_node(vec![10, 0]);
+            problem.add_edge(center, middle, same_choice.clone());
+            problem.add_edge(middle, leaf, same_choice.clone());
+        }
+
+        let solution = solve(&problem).expect("PBQP should be solvable");
+        assert_eq!(solution.choices[center.index()], 1);
+        assert_eq!(solution.total_cost, 1);
+    }
+
+    #[test]
     fn rn_backtracks_when_local_choice_is_globally_infeasible() {
         let mut problem = PbqpProblem::new();
         let center = problem.add_node(vec![0, 1]);
@@ -858,6 +1184,57 @@ mod tests {
         let solution = solve(&problem).expect("PBQP should try the feasible Rn alternative");
         assert_eq!(solution.choices[center.index()], 1);
         assert_eq!(solution.total_cost, 1);
+    }
+
+    #[test]
+    fn rn_propagates_branch_infinities_through_coherence_sets() {
+        let mut problem = PbqpProblem::new();
+        let center = problem.add_node(vec![0, 1]);
+        let a = problem.add_node(vec![0, 0]);
+        let b = problem.add_node(vec![0, INF_COST]);
+        let c = problem.add_node(vec![0, 0]);
+        let same_choice = PbqpMatrix::new(2, 2, vec![0, INF_COST, INF_COST, 0]);
+        let penalty = PbqpMatrix::new(2, 2, vec![0, 0, 0, 1]);
+
+        problem.add_edge(center, a, same_choice);
+        for (lhs, rhs) in [(center, b), (center, c), (a, b), (a, c), (b, c)] {
+            problem.add_edge(lhs, rhs, penalty.clone());
+        }
+        problem.add_coherence_set(vec![
+            PbqpAlternative {
+                node: a,
+                alternative: 1,
+            },
+            PbqpAlternative {
+                node: b,
+                alternative: 0,
+            },
+        ]);
+
+        let solution = solve(&problem).expect("PBQP should try the coherent Rn alternative");
+        assert_eq!(solution.choices[center.index()], 1);
+    }
+
+    #[test]
+    fn rn_restores_reductions_before_trying_the_next_alternative() {
+        let mut problem = PbqpProblem::new();
+        let center = problem.add_node(vec![0, 1]);
+        let a = problem.add_node(vec![0, 0]);
+        let b = problem.add_node(vec![0, 0]);
+        let c = problem.add_node(vec![0, 0]);
+        let same_choice = PbqpMatrix::new(2, 2, vec![0, INF_COST, INF_COST, 0]);
+        let penalty = PbqpMatrix::new(2, 2, vec![0, 0, 0, 1]);
+
+        problem.add_edge(center, a, same_choice.clone());
+        problem.add_edge(center, b, penalty.clone());
+        problem.add_edge(center, c, penalty);
+        problem.add_edge(a, b, same_choice.clone());
+        problem.add_edge(b, c, same_choice);
+        problem.add_edge(a, c, PbqpMatrix::new(2, 2, vec![INF_COST, 0, 0, 0]));
+
+        let solution = solve(&problem).expect("PBQP should restore the failed Rn branch");
+        assert_eq!(solution.choices[center.index()], 1);
+        assert_eq!(solution.total_cost, 3);
     }
 
     /// Equal-cost optima must not be decided by hash iteration order: the same
