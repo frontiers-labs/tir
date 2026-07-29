@@ -306,7 +306,6 @@ execute/20170401-2.c
 execute/20170419-1.c
 execute/20171008-1.c
 execute/20180112-1.c
-execute/20180131-1.c
 execute/20180226-1.c
 execute/20180921-1.c
 execute/20181120-1.c
