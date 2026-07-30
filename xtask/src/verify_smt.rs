@@ -351,8 +351,8 @@ const ISA_SPECS: &[IsaSpec] = &[
         initial_registers: &[],
         reg_names: X86_REG_NAMES,
         // rflags bit layout: cf=0, zf=6, sf=7, of=11 (Intel SDM). TMDL EFLAGS
-        // slots cf=0, zf=1, sf=2, of=3 (declaration order).
-        flag_reg: Some(("rflags", "eflags", &[(0, 0), (1, 6), (2, 7), (3, 11)])),
+        // slots cf=0, pf=1, zf=2, sf=3, of=4 (declaration order).
+        flag_reg: Some(("rflags", "eflags", &[(0, 0), (2, 6), (3, 7), (4, 11)])),
         simplify: false,
         align_pc: false,
         canonical_addrs: true,
@@ -1576,12 +1576,8 @@ fn build_query(
     };
     // A read of a bitfield flag register pins each mapped bit of the symbolic
     // initial value to that flag slot's initial TMDL state.
-    if let Some((_, class, bit_map)) = spec.flag_reg {
-        let idx_w = bit_map
-            .iter()
-            .map(|(s, _)| 64 - s.leading_zeros())
-            .max()
-            .unwrap_or(1);
+    if let Some((_, class, _)) = spec.flag_reg {
+        let idx_w = model.classes[class].index_width;
         for (slot, var, bit) in &trace.flag_reads {
             let _ = writeln!(
                 q,
@@ -1624,11 +1620,7 @@ fn build_query(
     // unmodeled, so Sail's flag writes are ignored for them.
     if let Some((_, class, bit_map)) = spec.flag_reg {
         if instr.write_classes.iter().any(|written| written == class) {
-            let idx_w = bit_map
-                .iter()
-                .map(|(s, _)| 64 - s.leading_zeros())
-                .max()
-                .unwrap_or(1);
+            let idx_w = model.classes[class].index_width;
             for (slot, _) in bit_map {
                 let sail = trace.flag_writes.get(slot).cloned().unwrap_or_else(|| {
                     flat_read_register(model, class, "st0", &format!("(_ bv{slot} {idx_w})"))
@@ -2012,25 +2004,45 @@ fn run_z3(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output> {
         .args(["-smt2", "-T:30", "smt.random_seed=0"])
         .arg(path)
         .output()?;
-    let stdout = String::from_utf8_lossy(&first.stdout);
-    let final_status = stdout
-        .lines()
-        .rfind(|line| matches!(*line, "sat" | "unsat" | "unknown"));
+    let statuses = solver_statuses(&first);
+    let final_status = statuses.last().map(String::as_str);
     if matches!(final_status, Some("sat" | "unsat")) {
         return Ok(first);
     }
-    Ok(Command::new(&tools.z3)
+    let second = Command::new(&tools.z3)
         .args(["-smt2", "-T:30", "smt.random_seed=1"])
         .arg(path)
-        .output()?)
+        .output()?;
+    anyhow::ensure!(
+        !solver_statuses(&second).is_empty(),
+        "z3 rejected {}:\n{}{}",
+        path.display(),
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    Ok(second)
 }
 
 fn solver_statuses(output: &std::process::Output) -> Vec<String> {
-    String::from_utf8_lossy(&output.stdout)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let statuses = stdout
         .lines()
         .filter(|line| matches!(*line, "sat" | "unsat" | "unknown"))
         .map(str::to_string)
-        .collect()
+        .collect::<Vec<_>>();
+    let expected_model_error = statuses.last().is_some_and(|status| status == "unsat");
+    let errors = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("(error "))
+        .collect::<Vec<_>>();
+    if errors
+        .iter()
+        .any(|line| !(expected_model_error && line.contains("model is not available")))
+        || (!output.status.success() && errors.is_empty())
+    {
+        return Vec::new();
+    }
+    statuses
 }
 
 fn run_solver(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output> {
@@ -2141,5 +2153,99 @@ mod tests {
         let words = encode_words(instruction, &[vec![5, 0]]);
         assert_eq!(words, [5 << 7 | 3]);
         assert_eq!(decode_operands(instruction, &words)[0][0], 5);
+    }
+
+    #[test]
+    fn x86_flag_queries_use_eflags_storage_slots() {
+        let spec = ISA_SPECS.iter().find(|spec| spec.name == "x86_64").unwrap();
+        let model = FlatModel {
+            fields: vec![],
+            classes: [
+                (
+                    "eflags".into(),
+                    RegisterClassMetadata {
+                        name: "eflags".into(),
+                        storage: "eflags".into(),
+                        index_width: 3,
+                        value_width: 1,
+                        storage_width: 1,
+                        zero_index: None,
+                        bit_offset: 0,
+                    },
+                ),
+                (
+                    "gpr".into(),
+                    RegisterClassMetadata {
+                        name: "gpr".into(),
+                        storage: "gpr".into(),
+                        index_width: 4,
+                        value_width: 64,
+                        storage_width: 64,
+                        zero_index: None,
+                        bit_offset: 0,
+                    },
+                ),
+            ]
+            .into(),
+        };
+        let instruction = Instruction {
+            name: "cmp".into(),
+            writes_pc: false,
+            width_bits: 8,
+            operands: vec![],
+            supported: true,
+            write_classes: vec!["eflags".into()],
+            uses_reservation: false,
+            pc_source_operands: vec![],
+            memory_accesses: vec![],
+            encoding: vec![],
+            flat_execute: Some(HashMap::new()),
+        };
+        let trace = analyze_trace(
+            spec,
+            &[tir_verify::TraceEvent::ReadRegister {
+                name: "rflags".into(),
+                fields: vec![],
+                value: tir_verify::TraceValue {
+                    smt: "v0".into(),
+                    symbolic: true,
+                    fields: HashMap::new(),
+                },
+            }],
+        );
+
+        let query = build_query(spec, &model, &instruction, &[], &trace, None);
+
+        for (slot, bit) in [(0, 0), (2, 6), (3, 7), (4, 11)] {
+            assert!(query.contains(&format!(
+                "((_ extract {bit} {bit}) v0) (select st0_eflags (_ bv{slot} 3))"
+            )));
+        }
+    }
+
+    #[test]
+    fn solver_errors_are_not_statuses() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"(error \"sort mismatch\")\nsat\n".to_vec(),
+            stderr: vec![],
+        };
+
+        assert!(solver_statuses(&output).is_empty());
+    }
+
+    #[test]
+    fn unavailable_model_after_unsat_keeps_status() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: b"unsat\n(error \"model is not available\")\n".to_vec(),
+            stderr: vec![],
+        };
+
+        assert_eq!(solver_statuses(&output), ["unsat"]);
     }
 }
