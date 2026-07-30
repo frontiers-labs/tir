@@ -1366,14 +1366,17 @@ impl FnCodegen<'_> {
             };
         }
         if matches!(self.typed.types().kind(source), TypeKind::Double)
-            && self.typed.integer_width(target).is_some()
+            && let Some(target_width) = self.typed.integer_width(target)
         {
             let target_ty = lower_type(self.context, self.typed, target);
             return if self.typed.integer_is_signed(target) == Some(true) {
                 self.builder
                     .insert(b::fptosi(self.context, value, target_ty).build())
                     .result()
-            } else if self.typed.integer_width(target).unwrap() < 64 {
+            } else if target_width < 64 {
+                // Every value an unsigned type narrower than 64 bits can hold is
+                // also representable as a signed 64-bit integer, so the truncated
+                // signed conversion is exact and avoids a narrow `fptoui`.
                 let wide = IntegerType::new(self.context, 64);
                 let converted = self
                     .builder
@@ -3357,15 +3360,7 @@ impl FnCodegen<'_> {
                                 )
                                 .result();
                             self.builder
-                                .insert(
-                                    p::ptradd(
-                                        self.context,
-                                        old,
-                                        offset,
-                                        lower_type(self.context, self.typed, operand_ty),
-                                    )
-                                    .build(),
-                                )
+                                .insert(p::ptradd(self.context, old, offset, elem).build())
                                 .result()
                         } else {
                             let one = self

@@ -419,6 +419,23 @@ fn local_array_storage_is_contiguous() {
 }
 
 #[test]
+fn many_escaping_locals_keep_distinct_addresses_across_a_call() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "void observe(int *a, int *b, int *c, int *d, int *e, int *f, int *g, int *h)\n\
+         { *a += 1; *b += 2; *c += 3; *d += 4; *e += 5; *f += 6; *g += 7; *h += 8; }\n\
+         int sum_locals(void) {\n\
+             int a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, h = 8;\n\
+             observe(&a, &b, &c, &d, &e, &f, &g, &h);\n\
+             return a + b + c + d + e + f + g + h;\n\
+         }\n",
+        "int sum_locals(void); int main(void) { return sum_locals() == 72 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
 fn local_array_decays_when_passed_to_function() {
     if !cc_available() {
         return;

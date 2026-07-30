@@ -1848,18 +1848,13 @@ impl Analyzer<'_> {
                     );
                     (error, ValueCategory::Value)
                 } else if let Some(result) = pointer_result {
-                    let integer_operand =
-                        if matches!(self.types.kind(operands[0]), TypeKind::Pointer(_)) {
-                            1
-                        } else {
-                            0
-                        };
-                    if matches!(
-                        self.types.kind(operands[integer_operand]),
-                        TypeKind::Enum(_)
-                    ) {
-                        let promoted = self.integer_promotion(operands[integer_operand]);
-                        self.record_conversion(children[integer_operand], promoted);
+                    // The scaling in codegen reads the index operand's width, so an
+                    // enum index has to reach it as its promoted integer type.
+                    for (index, &operand) in operands.iter().enumerate() {
+                        if matches!(self.types.kind(operand), TypeKind::Enum(_)) {
+                            let promoted = self.integer_promotion(operand);
+                            self.record_conversion(children[index], promoted);
+                        }
                     }
                     let TypeKind::Pointer(pointee) = self.types.kind(result) else {
                         unreachable!("pointer arithmetic result has pointer type")

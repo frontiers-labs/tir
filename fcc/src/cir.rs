@@ -73,16 +73,6 @@ operation! {
     }
 }
 
-impl GlobalStringOp {
-    pub fn sym_name(&self) -> String {
-        string_attribute(self, "sym_name")
-    }
-
-    pub fn value(&self) -> String {
-        string_attribute(self, "value")
-    }
-}
-
 /// A named object: it owns its name outright, so it carries no signature and
 /// cannot be overloaded.
 macro_rules! data_symbol {
@@ -113,6 +103,16 @@ macro_rules! data_symbol {
 
 data_symbol!(GlobalOp);
 data_symbol!(ZeroGlobalOp);
+
+impl GlobalStringOp {
+    pub fn sym_name(&self) -> String {
+        string_attribute(self, "sym_name")
+    }
+
+    pub fn value(&self) -> String {
+        string_attribute(self, "value")
+    }
+}
 
 impl GlobalOp {
     pub fn sym_name(&self) -> String {

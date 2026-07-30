@@ -1979,6 +1979,8 @@ fn finish_record(
             name: frame.name.clone(),
         },
     );
+    // Nested definitions come before the fields: sema lays a record out in child
+    // order, and a field of a nested type needs that type's size already known.
     for nested in frame.nested_records {
         state.0.ast.add_edge(record, nested);
     }

@@ -568,25 +568,9 @@ pub trait TargetRegAlloc: Send + Sync {
         )))
     }
 
-    /// Build instruction(s) that materialize `[frame + offset]` into `dst`.
+    /// Build instruction(s) that materialize `[frame + offset]` into the virtual
+    /// register `dst`.
     fn emit_frame_address(
-        &self,
-        _context: &Context,
-        dst: &PhysReg,
-        _frame: &PhysReg,
-        _offset: i64,
-    ) -> Result<Vec<Box<dyn Operation>>, PassError> {
-        Err(PassError::InvalidRuleSet(format!(
-            "stack allocation addresses are not supported for register class {}",
-            dst.0.name()
-        )))
-    }
-
-    fn rematerializes_frame_addresses(&self) -> bool {
-        false
-    }
-
-    fn emit_virtual_frame_address(
         &self,
         _context: &Context,
         _dst: u32,
@@ -595,7 +579,7 @@ pub trait TargetRegAlloc: Send + Sync {
         _offset: i64,
     ) -> Result<Vec<Box<dyn Operation>>, PassError> {
         Err(PassError::InvalidRuleSet(format!(
-            "virtual stack allocation addresses are not supported for register class {}",
+            "stack allocation addresses are not supported for register class {}",
             class.name()
         )))
     }
@@ -668,16 +652,7 @@ impl Pass for RegisterAllocationPass {
         let mut frame = FrameState::new(self.abi.stack.slot_size);
         frame.reserve(outgoing_size);
         let stack_allocas = collect_stack_allocas(context, &blocks, &mut frame);
-        let rematerialize_allocas = self.target.rematerializes_frame_addresses();
-        if rematerialize_allocas {
-            self.rematerialize_stack_allocas(
-                context,
-                rewriter,
-                &blocks,
-                &stack_allocas,
-                &mut frame,
-            )?;
-        }
+        self.rematerialize_stack_allocas(context, rewriter, &blocks, &stack_allocas, &mut frame)?;
         let assignment = loop {
             // Recomputed each round: spills insert ops within blocks but never add
             // or remove edges, so the CFG is stable across rounds.
@@ -691,14 +666,7 @@ impl Pass for RegisterAllocationPass {
             // forcing a longer-lived value to spill instead is what actually relieves
             // pressure and lets the spill loop converge (spilling a temp would just
             // reload it at the same congested point, cascading without progress).
-            // Alloca address vregs are also unspillable: their defining op carries
-            // no register attributes (the address is materialized only after
-            // assignment), so a spill would leave the slot unwritten and every
-            // reload reading garbage.
-            let mut protected = frame.temps.clone();
-            if !rematerialize_allocas {
-                protected.extend(stack_allocas.iter().map(|alloca| alloca.vreg));
-            }
+            let protected = frame.temps.clone();
             let spill_cost = |v: u32| -> u64 {
                 if protected.contains(&v) {
                     INF_COST
@@ -760,9 +728,6 @@ impl Pass for RegisterAllocationPass {
             0
         };
         let frame_size = frame.size(self.abi.stack.align) + call_alignment_pad;
-        if !rematerialize_allocas {
-            self.insert_stack_alloca_addresses(context, rewriter, &assignment, &stack_allocas)?;
-        }
         erase_stack_allocas(context, rewriter, &stack_allocas)?;
         self.insert_incoming_stack_arg_loads(
             context,
@@ -788,6 +753,12 @@ impl RegisterAllocationPass {
         self.abi.sp
     }
 
+    /// Replace every use of an `alloca` result with a frame address computed
+    /// immediately before that use. Rematerializing keeps each address live for a
+    /// single instruction instead of spanning the whole function, which is what
+    /// lets bodies with many address-taken locals allocate at all: an alloca vreg
+    /// cannot be spilled (its defining op carries no register attributes, so the
+    /// slot would never be written), so a long-lived one pins a register forever.
     fn rematerialize_stack_allocas(
         &self,
         context: &Context,
@@ -796,9 +767,12 @@ impl RegisterAllocationPass {
         allocas: &[StackAlloca],
         frame: &mut FrameState,
     ) -> Result<(), PassError> {
-        let info = self.target.register_info();
-        let default_class = info.default_integer_class(self.abi);
+        if allocas.is_empty() {
+            return Ok(());
+        }
+        let default_class = self.target.register_info().default_integer_class(self.abi);
         let frame_register = self.frame_register();
+        let mut sites = Vec::new();
         for alloca in allocas {
             let class = vreg_class_in(context, blocks, alloca.vreg)
                 .or(default_class)
@@ -808,25 +782,25 @@ impl RegisterAllocationPass {
                         alloca.vreg
                     ))
                 })?;
-            let ty = context.get_value(ValueId::from_number(alloca.vreg)).ty();
-            for &block in blocks {
-                let op_ids = context.get_block(block).op_ids();
-                for op_id in op_ids {
-                    if op_id == alloca.op_id || !context.has_operation(op_id) {
-                        continue;
-                    }
-                    let op = context.get_op(op_id);
-                    if !liveness::op_regs(&op)
-                        .uses
-                        .iter()
-                        .any(|register| is_vreg(register, alloca.vreg))
+            sites.push((alloca, class));
+        }
+        for &block in blocks {
+            for op_id in context.get_block(block).op_ids() {
+                if !context.has_operation(op_id) {
+                    continue;
+                }
+                let uses = liveness::op_regs(&context.get_op(op_id)).uses;
+                for &(alloca, class) in &sites {
+                    if op_id == alloca.op_id
+                        || !uses.iter().any(|register| is_vreg(register, alloca.vreg))
                     {
                         continue;
                     }
+                    let ty = context.get_value(ValueId::from_number(alloca.vreg)).ty();
                     let fresh = context.create_value(ty, None).id().number();
                     frame.temps.insert(fresh);
                     let target = op_ref_in(context, block, op_id);
-                    for address in self.target.emit_virtual_frame_address(
+                    for address in self.target.emit_frame_address(
                         context,
                         fresh,
                         class,
@@ -1199,29 +1173,6 @@ impl RegisterAllocationPass {
                 .target
                 .emit_incoming_stack_arg_load(context, &dst, &frame, offset)?;
             rewriter.insert_op_before(&target, load.as_ref())?;
-        }
-        Ok(())
-    }
-
-    fn insert_stack_alloca_addresses(
-        &self,
-        context: &Context,
-        rewriter: &mut Rewriter,
-        assignment: &HashMap<u32, PhysReg>,
-        allocas: &[StackAlloca],
-    ) -> Result<(), PassError> {
-        let frame = self.frame_register();
-        for alloca in allocas {
-            let Some(dst) = assignment.get(&alloca.vreg) else {
-                continue;
-            };
-            let target = op_ref_in(context, alloca.block, alloca.op_id);
-            for op in self
-                .target
-                .emit_frame_address(context, dst, &frame, alloca.offset)?
-            {
-                rewriter.insert_op_before(&target, op.as_ref())?;
-            }
         }
         Ok(())
     }
