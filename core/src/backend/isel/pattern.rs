@@ -155,6 +155,7 @@ impl CompiledIselPattern {
     /// Matches across the whole e-graph, honoring only the boundary constraints
     /// (register/immediate/width) — the entry used where no block-level legality
     /// applies (conditional-branch selection).
+    #[cfg(test)]
     pub(crate) fn search(
         &self,
         egraph: &SemEGraph,
@@ -181,10 +182,48 @@ impl CompiledIselPattern {
             .collect()
     }
 
+    pub(crate) fn search_roots_with_legality(
+        &self,
+        egraph: &SemEGraph,
+        ctx: &Context,
+        roots: impl IntoIterator<Item = Id>,
+        allowed: &dyn Fn(Id, Id) -> bool,
+    ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
+        if self.copy {
+            return self.search_low_bit_copies_at(egraph, ctx, roots);
+        }
+        self.pattern
+            .search_roots_with_legality(egraph, roots, allowed)
+            .into_iter()
+            .filter(|matched| self.match_types(egraph, ctx, matched))
+            .collect()
+    }
+
+    pub(crate) fn search_roots(
+        &self,
+        egraph: &SemEGraph,
+        ctx: &Context,
+        roots: impl IntoIterator<Item = Id>,
+    ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
+        self.search_roots_with_legality(egraph, ctx, roots, &|node, class| {
+            self.boundary_ok(egraph, ctx, node, class)
+        })
+    }
+
     /// A copy rule roots on the low-bit `Extract` view of a wider class, binding
     /// its bare symbol to the view's source — rooting on the source class itself
     /// would make the copy self-referential.
     fn search_low_bit_copies(&self, egraph: &SemEGraph, ctx: &Context) -> Vec<EMatch<u32>> {
+        let roots: Vec<_> = egraph.classes().map(|class| class.id()).collect();
+        self.search_low_bit_copies_at(egraph, ctx, roots)
+    }
+
+    fn search_low_bit_copies_at(
+        &self,
+        egraph: &SemEGraph,
+        ctx: &Context,
+        roots: impl IntoIterator<Item = Id>,
+    ) -> Vec<EMatch<u32>> {
         let root_node = self.pattern.root();
         let PatternNode::Var(var @ Var::Symbol(_)) = self.pattern.node(root_node) else {
             unreachable!("copy pattern is a bare symbol")
@@ -193,10 +232,10 @@ impl CompiledIselPattern {
         if meta.constraint == Some(OperandConstraint::Immediate) {
             return Vec::new();
         }
-        egraph
-            .classes()
-            .filter_map(|class| {
-                let root = egraph.find(class.id());
+        roots
+            .into_iter()
+            .filter_map(|root| {
+                let root = egraph.find(root);
                 let source = low_extract_source(egraph, root)?;
                 let width = low_extract_width(egraph, root)?;
                 let source_ty = class_semantic_type(ctx, egraph, source)?;

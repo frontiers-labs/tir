@@ -21,7 +21,7 @@ pub struct PbqpAlternative {
     pub alternative: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PbqpMatrix {
     rows: usize,
     cols: usize,
@@ -68,7 +68,7 @@ impl PbqpMatrix {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PbqpProblem {
     node_costs: Vec<Vec<u64>>,
     edges: BTreeMap<(usize, usize), PbqpMatrix>,

@@ -1,8 +1,10 @@
 //! The proved algebraic rewrites used to saturate the program e-graph before
 //! covering, plus the small saturation driver over the [`tir_symbolic`] e-graph.
 
+use std::collections::HashSet;
+
 use tir::Context;
-use tir_symbolic::egraph::{EMatch, Pattern};
+use tir_symbolic::egraph::{EMatch, ENode, Id, Pattern};
 
 use super::node::{SemEGraph, SemNode};
 use super::theory::axioms;
@@ -48,13 +50,40 @@ pub fn saturate(
     rewrites: &[IselRewrite],
     limits: SaturationLimits,
 ) {
+    saturate_impl(ctx, eg, rewrites, limits, None);
+}
+
+/// Saturate only expressions reachable from `roots`. Scoped assumptions use
+/// this after the base graph has already been saturated globally.
+pub fn saturate_roots(
+    ctx: &Context,
+    eg: &mut SemEGraph,
+    rewrites: &[IselRewrite],
+    limits: SaturationLimits,
+    roots: impl IntoIterator<Item = Id>,
+) {
+    let roots = reachable_roots(eg, roots);
+    saturate_impl(ctx, eg, rewrites, limits, Some(roots));
+}
+
+fn saturate_impl(
+    ctx: &Context,
+    eg: &mut SemEGraph,
+    rewrites: &[IselRewrite],
+    limits: SaturationLimits,
+    mut roots: Option<HashSet<Id>>,
+) {
     for _ in 0..limits.max_iterations {
         let mut matches = Vec::new();
         for (index, rw) in rewrites.iter().enumerate() {
             if rw.post_saturation {
                 continue;
             }
-            for m in rw.searcher.search(eg) {
+            let found = match &roots {
+                Some(roots) => rw.searcher.search_roots(eg, roots.iter().copied()),
+                None => rw.searcher.search(eg),
+            };
+            for m in found {
                 matches.push((index, m));
             }
         }
@@ -67,6 +96,9 @@ pub fn saturate(
             (rewrites[*index].apply)(ctx, eg, m);
         }
         eg.rebuild();
+        if let Some(roots) = &mut roots {
+            *roots = reachable_roots(eg, std::mem::take(roots));
+        }
 
         if (eg.num_classes(), eg.total_size()) == before || eg.num_classes() >= limits.max_classes {
             break;
@@ -79,17 +111,32 @@ pub fn saturate(
         .enumerate()
         .filter(|(_, rewrite)| rewrite.post_saturation)
         .flat_map(|(index, rewrite)| {
-            rewrite
-                .searcher
-                .search(eg)
-                .into_iter()
-                .map(move |matched| (index, matched))
+            let found = match &roots {
+                Some(roots) => rewrite.searcher.search_roots(eg, roots.iter().copied()),
+                None => rewrite.searcher.search(eg),
+            };
+            found.into_iter().map(move |matched| (index, matched))
         })
         .collect();
     for (index, matched) in &matches {
         (rewrites[*index].apply)(ctx, eg, matched);
     }
     eg.rebuild();
+}
+
+pub(crate) fn reachable_roots(eg: &SemEGraph, roots: impl IntoIterator<Item = Id>) -> HashSet<Id> {
+    let mut reachable = HashSet::new();
+    let mut pending: Vec<_> = roots.into_iter().collect();
+    while let Some(root) = pending.pop() {
+        let root = eg.find(root);
+        if !reachable.insert(root) {
+            continue;
+        }
+        for node in eg.nodes(root) {
+            pending.extend(node.children().iter().map(|child| eg.find(*child)));
+        }
+    }
+    reachable
 }
 
 /// The target-independent semantic invariants every rule set gets.

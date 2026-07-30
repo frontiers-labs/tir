@@ -156,17 +156,40 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
         eg: &EGraph<N>,
         allowed: &dyn Fn(Id, Id) -> bool,
     ) -> Vec<EMatch<S>> {
+        let roots: Vec<Id> = match &self.nodes[self.root.index()] {
+            PatternNode::Node(template) => eg.classes_with_op(template.op_key()),
+            _ => eg.classes().map(|c| c.id()).collect(),
+        };
+        self.search_roots_with_legality(eg, roots, allowed)
+    }
+
+    /// Match only the requested root classes.
+    pub fn search_roots(
+        &self,
+        eg: &EGraph<N>,
+        roots: impl IntoIterator<Item = Id>,
+    ) -> Vec<EMatch<S>> {
+        self.search_roots_with_legality(eg, roots, &|_, _| true)
+    }
+
+    /// Like [`Self::search_roots`], with caller-side legality pruning.
+    pub fn search_roots_with_legality(
+        &self,
+        eg: &EGraph<N>,
+        roots: impl IntoIterator<Item = Id>,
+        allowed: &dyn Fn(Id, Id) -> bool,
+    ) -> Vec<EMatch<S>> {
         let mut out = Vec::new();
         let mut goals: Vec<(Id, Id)> = Vec::new();
         // Bindings borrow the pattern's `Var`s; names are cloned only when a full match is emitted.
         let mut subst: Vec<(&Var<S>, Id)> = Vec::new();
         let mut bound: Vec<Option<Id>> = vec![None; self.nodes.len()];
-        let roots: Vec<Id> = match &self.nodes[self.root.index()] {
-            PatternNode::Node(template) => eg.classes_with_op(template.op_key()),
-            _ => eg.classes().map(|c| c.id()).collect(),
-        };
+        let mut seen = std::collections::HashSet::new();
         for root in roots {
             let root = eg.find(root);
+            if !seen.insert(root) {
+                continue;
+            }
             goals.push((self.root, root));
             self.solve(
                 eg, root, &mut goals, &mut subst, &mut bound, allowed, &mut out,
@@ -396,6 +419,20 @@ mod tests {
         assert_eq!(g.find(m.root), g.find(root));
         assert_eq!(m.subst.get(&Var::Symbol("x")), Some(g.find(a)));
         assert_eq!(m.subst.get(&Var::Symbol("y")), Some(g.find(b)));
+    }
+
+    #[test]
+    fn search_roots_only_visits_requested_classes() {
+        let mut g = EGraph::new();
+        let a = sym(&mut g, 0);
+        let b = sym(&mut g, 1);
+        let c = sym(&mut g, 2);
+        let requested = add(&mut g, a, b);
+        add(&mut g, b, c);
+
+        let matches = add_pattern().search_roots(&g, [requested]);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(g.find(matches[0].root), g.find(requested));
     }
 
     #[test]

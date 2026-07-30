@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     ValueId,
-    pbqp::{self, INF_COST, PbqpMatrix, PbqpProblem},
+    pbqp::{self, INF_COST, PbqpMatrix, PbqpProblem, PbqpSolution},
     sem::SymKind,
 };
 use tir_symbolic::egraph::Id;
@@ -125,11 +125,14 @@ pub(crate) struct ClassPolicies<'a> {
     pub(crate) reifiable_gate: &'a dyn Fn(Id) -> bool,
 }
 
+pub(crate) type CoverSolutionCache = HashMap<PbqpProblem, PbqpSolution>;
+
 pub(crate) fn build_eclass_cover(
     egraph: &SemEGraph,
     classes: &[Id],
     policies: &ClassPolicies,
     matches: &[PbqpIselMatch],
+    cache: &mut CoverSolutionCache,
 ) -> Option<ClassCover> {
     let classes: Vec<Id> = classes.to_vec();
     let index: HashMap<Id, usize> = classes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
@@ -154,6 +157,15 @@ pub(crate) fn build_eclass_cover(
 
     if alternatives_by_node.iter().any(Vec::is_empty) {
         return None;
+    }
+    if classes
+        .iter()
+        .all(|&class| !(policies.demanded)(class) || (policies.available)(class))
+    {
+        return Some(ClassCover {
+            choices: vec![PbqpIselAlternative::NotDemanded; classes.len()],
+            classes,
+        });
     }
 
     let mut problem = PbqpProblem::new();
@@ -215,7 +227,6 @@ pub(crate) fn build_eclass_cover(
             }
         }
     }
-
     for (li, ri) in edge_pairs {
         let left_class = classes[li];
         let right_class = classes[ri];
@@ -253,7 +264,14 @@ pub(crate) fn build_eclass_cover(
         );
     }
 
-    let solution = pbqp::solve(&problem).ok()?;
+    let solution = match cache.get(&problem) {
+        Some(solution) => solution.clone(),
+        None => {
+            let solution = pbqp::solve(&problem).ok()?;
+            cache.insert(problem, solution.clone());
+            solution
+        }
+    };
     let choices = solution
         .choices
         .iter()

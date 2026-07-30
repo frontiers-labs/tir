@@ -5,16 +5,69 @@
 
 use std::fmt::Write;
 use std::hint::black_box;
+use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use logos::Logos;
 
+use fcc::cir::CirDialect;
 use fcc::codegen::codegen;
 use fcc::diagnostics::{Span, intern_file};
 use fcc::lexer::Token;
 use fcc::parser::parse;
+use fcc::passes::{LowerCirControlFlowPass, LowerCirStructsPass};
 use fcc::sema::{TypedAst, analyze};
-use tir::{Context, Operation};
+use tir::backend::TargetMachine;
+use tir::backend::pipeline::{StopAfter, build_pipeline};
+use tir::builtin::FuncOp;
+use tir::passes::{InstCombinePass, Mem2RegPass, ScfToCfgPass};
+use tir::{Context, Operation, PassManager};
+
+const GCC_20011219_1: &str = r#"
+extern void abort (void);
+extern void exit (int);
+
+enum X { A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q };
+
+void bar (const char *x, int y, const char *z)
+{
+}
+
+long foo (enum X x, const void *y)
+{
+  long a;
+
+  switch (x)
+    {
+    case K:
+      a = *(long *)y;
+      break;
+    case L:
+      a = *(long *)y;
+      break;
+    case M:
+      a = *(long *)y;
+      break;
+    case N:
+      a = *(long *)y;
+      break;
+    case O:
+      a = *(long *)y;
+      break;
+    default:
+      bar ("foo", 1, "bar");
+    }
+  return a;
+}
+
+int main ()
+{
+  long i = 24;
+  if (foo (N, &i) != 24)
+    abort ();
+  exit (0);
+}
+"#;
 
 /// Build a translation unit with `funcs` functions, each declaring `stmts`
 /// locals over progressively deeper expressions before returning one.
@@ -67,6 +120,35 @@ fn parse_src(src: &str) -> TypedAst {
     let options = Default::default();
     let ast = parse(&tokens, options).expect("parse");
     analyze(ast, options).expect("sema")
+}
+
+fn lower_before_instcombine(ast: &TypedAst) -> (Context, tir::builtin::ModuleOp) {
+    let context = Context::with_default_dialects();
+    context.register_dialect::<CirDialect>();
+    let module = codegen(&context, ast).unwrap();
+
+    let mut pm = PassManager::new();
+    pm.add_pass(LowerCirStructsPass::new());
+    let function_pipeline = pm.nest::<FuncOp>();
+    function_pipeline.add_pass(LowerCirControlFlowPass::new());
+    function_pipeline.add_pass(Mem2RegPass::new());
+    pm.run(&context, context.get_op(module.id())).unwrap();
+    (context, module)
+}
+
+fn lower_before_isel(ast: &TypedAst) -> (Context, tir::builtin::ModuleOp, Box<dyn TargetMachine>) {
+    let (context, module) = lower_before_instcombine(ast);
+    let target =
+        tir::backend::select_target_with_abi("x86_64", None, None, None).expect("x86_64 target");
+    target.register_dialects(&context);
+
+    let mut pm = PassManager::new();
+    let function_pipeline = pm.nest::<FuncOp>();
+    function_pipeline.add_pass(InstCombinePass::new());
+    function_pipeline.add_pass(ScfToCfgPass::new());
+    pm.run(&context, context.get_op(module.id())).unwrap();
+    fcc::codegen::lower_data(&context, &module).unwrap();
+    (context, module, target)
 }
 
 fn bench_codegen(c: &mut Criterion) {
@@ -136,11 +218,53 @@ fn bench_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_gcc_20011219_1(c: &mut Criterion) {
+    let ast = parse_src(GCC_20011219_1);
+    let mut group = c.benchmark_group("fcc/gcc_20011219_1");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+
+    group.bench_function("instcombine", |b| {
+        b.iter_batched(
+            || lower_before_instcombine(&ast),
+            |(context, module)| {
+                let mut pm = PassManager::new();
+                pm.nest::<FuncOp>().add_pass(InstCombinePass::new());
+                pm.run(&context, context.get_op(module.id())).unwrap();
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("instruction_selection", |b| {
+        b.iter_batched(
+            || lower_before_isel(&ast),
+            |(context, module, target)| {
+                let mut pm = build_pipeline(target.as_ref(), &context, StopAfter::ISel);
+                pm.run(&context, context.get_op(module.id())).unwrap();
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("backend_through_finalize", |b| {
+        b.iter_batched(
+            || lower_before_isel(&ast),
+            |(context, module, target)| {
+                let mut pm = build_pipeline(target.as_ref(), &context, StopAfter::Finalize);
+                pm.run(&context, context.get_op(module.id())).unwrap();
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_codegen,
     bench_codegen_expr_heavy,
     bench_mem2reg,
-    bench_pipeline
+    bench_pipeline,
+    bench_gcc_20011219_1
 );
 criterion_main!(benches);

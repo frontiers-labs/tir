@@ -2,8 +2,8 @@
 //!
 //! The whole function's operations are lowered into one shared e-graph of
 //! semantic expressions ([`builder`]), saturated with proved algebraic rewrites
-//! ([`rewrites`]), and then covered *per block* — each inside its own
-//! dominating-edge assumption scope — by the target's instruction patterns
+//! ([`rewrites`]), and then covered *per block* while traversing the
+//! dominating-edge assumption scopes — by the target's instruction patterns
 //! ([`pattern`]), e-matched by the shared [`tir_symbolic::egraph`] engine, via a
 //! PBQP instance over e-classes ([`cover`]). The solved cover becomes an emission
 //! plan ([`emit`]) the pass commits through the rewriter.
@@ -25,7 +25,7 @@ use tir::{
     AnalysisManager, Block, BlockId, BranchGuard, BranchTerminator, Context, OpId, Operation,
     OperationRef, Pass, PassError, PassTarget, PreservedAnalyses, Rewriter, Terminator, TypeId,
     ValueId,
-    analysis::{DominatingEdgeFacts, DominatorTree, EdgeFact, GSA, GateNode},
+    analysis::{DominatingEdgeFacts, DominatorTree, GSA, GateNode},
     graph::{Dag, MutDag, NodeId, OperandConstraint},
     sem::{
         EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
@@ -41,8 +41,9 @@ pub use tir_symbolic::egraph::EMatch;
 
 use builder::SemDagBuilder;
 use cover::{
-    BoundaryDemand, CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative,
-    PbqpIselMatch, build_eclass_cover, completeness_error, prune_dominated_matches,
+    BoundaryDemand, CaptureBindings, CoverSolutionCache, FullMatchBindings, PatternNodeBinding,
+    PbqpIselAlternative, PbqpIselMatch, build_eclass_cover, completeness_error,
+    prune_dominated_matches,
 };
 use emit::{BlockPlan, GuardBranch, ScheduledEmit, TerminatorPlan, resolve_match, schedule_tiles};
 use node::{
@@ -1126,10 +1127,27 @@ impl InstructionSelectPass {
         // e-match is block-independent: search once here and reuse for all such
         // blocks (fact-bearing blocks re-search under their scope).
         let base_matches = self.base_value_matches(&fs, context);
+        let mut cover_cache = CoverSolutionCache::new();
+        let mut visited = HashSet::new();
+        if let Some(root) = dom.root() {
+            self.solve_dominator_subtree(
+                context,
+                &mut fs,
+                &dom,
+                &facts,
+                root,
+                false,
+                &base_matches,
+                &mut cover_cache,
+                &mut visited,
+            );
+        }
+        // Preserve the old behavior for unreachable blocks, which are absent
+        // from the dominator tree and therefore carry no dominating-edge facts.
         for region_id in &op.op().regions {
             let region = context.get_region(*region_id);
             for block in region.iter(context.clone()) {
-                if block.is_empty() {
+                if block.is_empty() || visited.contains(&block.id()) {
                     continue;
                 }
                 let plan = self.solve_block(
@@ -1137,11 +1155,66 @@ impl InstructionSelectPass {
                     &block,
                     &mut fs,
                     &dom,
-                    facts.facts(block.id()),
+                    false,
                     &base_matches,
+                    &mut cover_cache,
                 );
                 self.plans.insert(block.id(), plan);
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn solve_dominator_subtree(
+        &mut self,
+        context: &Context,
+        fs: &mut FunctionSelection,
+        dom: &DominatorTree,
+        facts: &DominatingEdgeFacts,
+        node: NodeId,
+        inherited_scope: bool,
+        base_matches: &[Vec<EMatch<u32>>],
+        cover_cache: &mut CoverSolutionCache,
+        visited: &mut HashSet<BlockId>,
+    ) {
+        let Some(block_id) = dom.block(node) else {
+            return;
+        };
+        visited.insert(block_id);
+
+        let own_fact = facts.own_fact(block_id);
+        if let Some(fact) = own_fact {
+            fs.egraph.push_context();
+            if let Some(expr) = fs.prepared.get(&fact.condition) {
+                assert_fact(context, &mut fs.egraph, expr, fact.holds);
+            }
+            fs.egraph.rebuild();
+        }
+        let scoped = inherited_scope || own_fact.is_some();
+
+        let block = context.get_block(block_id);
+        if !block.is_empty() {
+            let plan =
+                self.solve_block(context, &block, fs, dom, scoped, base_matches, cover_cache);
+            self.plans.insert(block_id, plan);
+        }
+
+        let children: Vec<_> = dom.children(node).collect();
+        for child in children {
+            self.solve_dominator_subtree(
+                context,
+                fs,
+                dom,
+                facts,
+                child,
+                scoped,
+                base_matches,
+                cover_cache,
+                visited,
+            );
+        }
+        if own_fact.is_some() {
+            fs.egraph.pop_context();
         }
     }
 
@@ -1501,39 +1574,35 @@ impl InstructionSelectPass {
         }
     }
 
-    /// Solve one block against the shared graph inside its assumption scope: assert
-    /// every dominating-edge fact (generalizing the former single-fact path to a
-    /// vector), scoped-saturate, solve, and pop.
+    /// Solve one block against its live dominator scope, saturating and matching
+    /// only classes reachable from the block's roots.
+    #[allow(clippy::too_many_arguments)]
     fn solve_block(
         &self,
         context: &Context,
         block: &Block,
         fs: &mut FunctionSelection,
         dom: &DominatorTree,
-        facts: &[EdgeFact],
+        scoped: bool,
         base_matches: &[Vec<EMatch<u32>>],
+        cover_cache: &mut CoverSolutionCache,
     ) -> Result<BlockPlan, String> {
-        let scoped = !facts.is_empty();
+        let root_seeds = block_root_seeds(block, fs);
         if scoped {
             let egraph = &mut fs.egraph;
-            let prepared = &fs.prepared;
-            egraph.push_context();
-            for fact in facts {
-                if let Some(expr) = prepared.get(&fact.condition) {
-                    assert_fact(context, egraph, expr, fact.holds);
-                }
-            }
-            egraph.rebuild();
-            rewrites::saturate(context, egraph, &self.rewrites, Default::default());
+            rewrites::saturate_roots(
+                context,
+                egraph,
+                &self.rewrites,
+                Default::default(),
+                root_seeds.iter().copied(),
+            );
         }
+        let match_roots = rewrites::reachable_roots(&fs.egraph, root_seeds);
         // Under a scope the graph differs from the base, so re-search; a fact-free
         // block reuses the cached base matches.
         let cached = (!scoped).then_some(base_matches);
-        let plan = self.solve_block_inner(context, block, fs, dom, cached);
-        if scoped {
-            fs.egraph.pop_context();
-        }
-        plan
+        self.solve_block_inner(context, block, fs, dom, &match_roots, cached, cover_cache)
     }
 
     /// Create a trampoline block forwarding `args` to `dest` through the target's
@@ -1742,13 +1811,16 @@ impl InstructionSelectPass {
 
     /// Solve `block` against the (already scoped) shared graph, restricting
     /// matching and the cover to what `block` computes.
+    #[allow(clippy::too_many_arguments)]
     fn solve_block_inner(
         &self,
         context: &Context,
         block: &Block,
         fs: &FunctionSelection,
         dom: &DominatorTree,
+        match_roots: &HashSet<Id>,
         base_matches: Option<&[Vec<EMatch<u32>>]>,
+        cover_cache: &mut CoverSolutionCache,
     ) -> Result<BlockPlan, String> {
         let block_id = block.id();
         let op_ids = block.op_ids();
@@ -1788,6 +1860,7 @@ impl InstructionSelectPass {
             &op_refs,
             &block_op_by_root,
             &guard_classes,
+            match_roots,
             base_matches,
         );
 
@@ -1796,7 +1869,7 @@ impl InstructionSelectPass {
         let guard_branch_hits = if guard_classes.is_empty() {
             HashMap::new()
         } else {
-            self.guard_branch_hits(context, fs)
+            self.guard_branch_hits(context, fs, &guard_classes)
         };
 
         // Resolve each guarded terminator: fuse its condition into a branch-rule
@@ -1912,6 +1985,7 @@ impl InstructionSelectPass {
                 reifiable_gate: &|class| fs.is_reifiable_gate(class),
             },
             &matches,
+            cover_cache,
         )
         .ok_or_else(|| {
             let ops = op_ids
@@ -2122,6 +2196,7 @@ impl InstructionSelectPass {
         &self,
         context: &Context,
         fs: &FunctionSelection,
+        guard_classes: &HashSet<Id>,
     ) -> HashMap<Id, Vec<(usize, EMatch<u32>)>> {
         let mut hits: HashMap<Id, Vec<(usize, EMatch<u32>)>> = HashMap::new();
         for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
@@ -2131,7 +2206,7 @@ impl InstructionSelectPass {
             ) {
                 continue;
             }
-            for m in compiled.search(&fs.egraph, context) {
+            for m in compiled.search_roots(&fs.egraph, context, guard_classes.iter().copied()) {
                 hits.entry(fs.egraph.find(m.root))
                     .or_default()
                     .push((pattern_index, m));
@@ -2254,9 +2329,22 @@ impl InstructionSelectPass {
         op_refs: &HashMap<OpId, OperationRef>,
         block_op_by_root: &HashMap<Id, OpId>,
         guard_classes: &HashSet<Id>,
+        match_roots: &HashSet<Id>,
         base_matches: Option<&[Vec<EMatch<u32>>]>,
     ) -> Vec<PbqpIselMatch> {
         let mut matches = Vec::new();
+        let local_roots: Vec<_> = match_roots.iter().copied().collect();
+        let mut local_roots_by_op: HashMap<u64, Vec<Id>> = HashMap::new();
+        if base_matches.is_none() {
+            for &root in &local_roots {
+                for node in fs.egraph.nodes(root) {
+                    let roots = local_roots_by_op.entry(node.op_key()).or_default();
+                    if !roots.contains(&root) {
+                        roots.push(root);
+                    }
+                }
+            }
+        }
         for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
             let rule = &self.rules[compiled.rule_index];
             // Branch rules select terminators, not values (see `best_guard_branch`).
@@ -2272,9 +2360,21 @@ impl InstructionSelectPass {
             let raw: &[EMatch<u32>] = if let Some(cache) = base_matches {
                 &cache[pattern_index]
             } else {
-                fresh = compiled.search_with_legality(&fs.egraph, context, &|node, class| {
-                    value_match_allowed(fs, context, compiled, pattern_root, node, class)
-                });
+                let roots = match compiled.pattern.node(pattern_root) {
+                    PatternNode::Node(node) => local_roots_by_op
+                        .get(&node.op_key())
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
+                    PatternNode::Var(_) => local_roots.as_slice(),
+                };
+                fresh = compiled.search_roots_with_legality(
+                    &fs.egraph,
+                    context,
+                    roots.iter().copied(),
+                    &|node, class| {
+                        value_match_allowed(fs, context, compiled, pattern_root, node, class)
+                    },
+                );
                 &fresh
             };
             for m in raw {
@@ -2500,6 +2600,23 @@ fn gate_kind_is_speculatable(kind: SymKind) -> bool {
                 | SymKind::StateTry
                 | SymKind::StateHandler
         )
+}
+
+fn block_root_seeds(block: &Block, fs: &FunctionSelection) -> HashSet<Id> {
+    let mut roots: HashSet<_> = block
+        .op_ids()
+        .into_iter()
+        .filter_map(|op| fs.op_root.get(&op).copied())
+        .collect();
+    roots.extend(
+        fs.control
+            .get(&block.id())
+            .into_iter()
+            .flatten()
+            .filter_map(ControlReification::guard)
+            .map(|guard| guard.class),
+    );
+    roots
 }
 
 /// Whether `class` may bind under `pattern_node` in a value match, before the
