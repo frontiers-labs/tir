@@ -218,8 +218,12 @@ fn add_default_defines(
         ("__GNUC_MINOR__", "2"),
         ("__GNUC_PATCHLEVEL__", "1"),
         ("__STDC__", "1"),
+        ("__STDC_HOSTED__", "1"),
         ("__LP64__", "1"),
         ("__CHAR_BIT__", "8"),
+        ("__extension__", ""),
+        ("__inline", "inline"),
+        ("__inline__", "inline"),
     ];
     if cfg!(target_os = "macos") {
         predefined.push(("__APPLE__", "1"));

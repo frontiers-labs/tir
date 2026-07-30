@@ -472,6 +472,114 @@ instruction MovStoreDispSib for [X86_64] {
     behavior { }
 }
 
+instruction Mov32LoadDispSib for [X86_64] {
+    param OPNAME: String = "mov_load32_disp_sib";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR32,
+        base: GPRsib,
+        imm: bits<32>,
+    }
+
+    encoding {
+        rex!({ base[3] }, { dst[3] }, 0b0)
+        8..15 => 0x8B,
+        16..18 => 0b100,
+        19..21 => dst[0..2],
+        22..23 => 0b10,
+        24..31 => 0x24,
+        32..63 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior { }
+}
+
+instruction Mov32StoreDispSib for [X86_64] {
+    param OPNAME: String = "mov_store32_disp_sib";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        base: GPRsib,
+        imm: bits<32>,
+        src: GPR32,
+    }
+
+    encoding {
+        rex!({ base[3] }, { src[3] }, 0b0)
+        8..15 => 0x89,
+        16..18 => 0b100,
+        19..21 => src[0..2],
+        22..23 => 0b10,
+        24..31 => 0x24,
+        32..63 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior { }
+}
+
+instruction Mov8LoadDispSib for [X86_64] {
+    param OPNAME: String = "mov_load8_disp_sib";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR8,
+        base: GPRsib,
+        imm: bits<32>,
+    }
+
+    encoding {
+        rex!({ base[3] }, { dst[3] }, 0b0)
+        8..15 => 0x8A,
+        16..18 => 0b100,
+        19..21 => dst[0..2],
+        22..23 => 0b10,
+        24..31 => 0x24,
+        32..63 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior { }
+}
+
+instruction Mov8StoreDispSib for [X86_64] {
+    param OPNAME: String = "mov_store8_disp_sib";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        base: GPRsib,
+        imm: bits<32>,
+        src: GPR8,
+    }
+
+    encoding {
+        rex!({ base[3] }, { src[3] }, 0b0)
+        8..15 => 0x88,
+        16..18 => 0b100,
+        19..21 => src[0..2],
+        22..23 => 0b10,
+        24..31 => 0x24,
+        32..63 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior { }
+}
+
 // `movzx/movsx r64, size ptr [base]`: REX.W + 0x0F + opcode +
 // ModR/M(mod=00, reg=dst, rm=base). Each instruction overrides the asm to
 // spell its memory operand width (`byte ptr`/`word ptr`).
@@ -749,6 +857,118 @@ instruction MovStoreDisp for [X86_64] {
 
     behavior {
         store(base + sext(imm, self.XLEN), 8, src);
+    }
+}
+
+instruction Mov32LoadDisp for [X86_64] {
+    param OPNAME: String = "mov_load32_disp";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR32,
+        base: GPR,
+        imm: bits<32>,
+    }
+
+    encoding {
+        rex!({ base[3] }, { dst[3] }, 0b0)
+        8..15 => 0x8B,
+        16..18 => base[0..2],
+        19..21 => dst[0..2],
+        22..23 => 0b10,
+        24..55 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior {
+        dst = load(base + sext(imm, self.XLEN), 4, 0b0);
+    }
+}
+
+instruction Mov32StoreDisp for [X86_64] {
+    param OPNAME: String = "mov_store32_disp";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        base: GPR,
+        imm: bits<32>,
+        src: GPR32,
+    }
+
+    encoding {
+        rex!({ base[3] }, { src[3] }, 0b0)
+        8..15 => 0x89,
+        16..18 => base[0..2],
+        19..21 => src[0..2],
+        22..23 => 0b10,
+        24..55 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior {
+        store(base + sext(imm, self.XLEN), 4, src);
+    }
+}
+
+instruction Mov8LoadDisp for [X86_64] {
+    param OPNAME: String = "mov_load8_disp";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        dst: GPR8,
+        base: GPR,
+        imm: bits<32>,
+    }
+
+    encoding {
+        rex!({ base[3] }, { dst[3] }, 0b0)
+        8..15 => 0x8A,
+        16..18 => base[0..2],
+        19..21 => dst[0..2],
+        22..23 => 0b10,
+        24..55 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior {
+        dst = load(base + sext(imm, self.XLEN), 1, 0b0);
+    }
+}
+
+instruction Mov8StoreDisp for [X86_64] {
+    param OPNAME: String = "mov_store8_disp";
+    param MNEMONIC: String = "mov";
+
+    operands {
+        base: GPR,
+        imm: bits<32>,
+        src: GPR8,
+    }
+
+    encoding {
+        rex!({ base[3] }, { src[3] }, 0b0)
+        8..15 => 0x88,
+        16..18 => base[0..2],
+        19..21 => src[0..2],
+        22..23 => 0b10,
+        24..55 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior {
+        store(base + sext(imm, self.XLEN), 1, src);
     }
 }
 

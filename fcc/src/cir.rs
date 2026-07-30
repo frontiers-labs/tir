@@ -12,10 +12,10 @@ use tir::{
 pub mod ops {
     pub use super::{
         BreakOp, ConditionOp, ContinueOp, CopyStructOp, DefineStructOp, DoOp, ForOp, GetMemberOp,
-        GlobalOp, GotoOp, IfOp, LabelOp, StringOp, VaArgOp, VaEndOp, VaStartOp, WhileOp, YieldOp,
-        ZeroGlobalOp, r#break, condition, r#continue, copy_struct, define_struct, r#do, r#for,
-        get_member, global, r#goto, r#if, label, string, va_arg, va_end, va_start, r#while,
-        r#yield, zero_global,
+        GlobalOp, GlobalStringOp, GotoOp, IfOp, LabelOp, StringOp, VaArgOp, VaEndOp, VaStartOp,
+        WhileOp, YieldOp, ZeroGlobalOp, r#break, condition, r#continue, copy_struct, define_struct,
+        r#do, r#for, get_member, global, global_string, r#goto, r#if, label, string, va_arg,
+        va_end, va_start, r#while, r#yield, zero_global,
     };
 }
 
@@ -25,6 +25,7 @@ dialect! {
         operations: [
             StringOp,
             GlobalOp,
+            GlobalStringOp,
             ZeroGlobalOp,
             DefineStructOp,
             GetMemberOp,
@@ -58,6 +59,27 @@ operation! {
             relocations: "Array",
             align: "UInt",
         },
+    }
+}
+
+operation! {
+    GlobalStringOp {
+        name: "global_string",
+        dialect: "cir",
+        attributes: A {
+            sym_name: "Str",
+            value: "Str",
+        },
+    }
+}
+
+impl GlobalStringOp {
+    pub fn sym_name(&self) -> String {
+        string_attribute(self, "sym_name")
+    }
+
+    pub fn value(&self) -> String {
+        string_attribute(self, "value")
     }
 }
 

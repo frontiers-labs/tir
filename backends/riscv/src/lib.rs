@@ -643,6 +643,7 @@ impl tir::backend::call_lowering::CallEmitter for RiscvCallEmitter {
         _context: &tir::Context,
         _abi: &tir::backend::abi::AbiInfo,
         _outgoing_size: u32,
+        _vector_register_args: u8,
     ) -> Vec<Box<dyn Operation>> {
         Vec::new()
     }

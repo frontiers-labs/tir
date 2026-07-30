@@ -96,6 +96,29 @@ fn compile_and_link_in_one_step() {
 }
 
 #[test]
+fn system_headers_compile_across_translation_units() {
+    if !cc_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("helper.c"),
+        "#include <stdio.h>\nint helper(void) { return printf(\"fcc\"); }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.c"),
+        "#include <stdio.h>\nint helper(void); int main(void) { return helper() != 3; }\n",
+    )
+    .unwrap();
+    run_fcc(
+        dir.path(),
+        &["cc", "-O2", "helper.c", "main.c", "-o", "program"],
+    );
+    assert_eq!(exit_code(&run_program(dir.path(), "program")), 0);
+}
+
+#[test]
 fn separate_compile_then_link() {
     if !cc_available() {
         return;
@@ -121,6 +144,16 @@ int main(void) { puts("fcc output"); return 0; }
     let output = run_program(dir.path(), "output");
     assert_eq!(exit_code(&output), 0);
     assert_eq!(output.stdout, b"fcc output\n");
+}
+
+#[test]
+fn variadic_double_argument_matches_host_compiler() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_matches_host(
+        "int printf(const char *format, ...); int main(void) { printf(\"%.1f\\n\", 1.5); return 0; }\n",
+    );
 }
 
 #[test]
@@ -310,6 +343,17 @@ fn pointer_addition_scales_by_pointee_size() {
 }
 
 #[test]
+fn pointer_increment_scales_by_pointee_size() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "int *advance(int **value) { return (*value)++; }\n",
+        "int *advance(int **); int main(void) { int values[2]; int *value = values; return advance(&value) == values && value == values + 1 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
 fn pointer_subtraction_scales_by_pointee_size() {
     if !cc_available() {
         return;
@@ -350,6 +394,17 @@ fn pointer_subscript_scales_by_pointee_size() {
     assert_fcc_object_executes_with_host(
         "int third(int *values) { return values[2]; }\n",
         "int third(int *); int main(void) { int values[3] = {11, 22, 37}; return third(values) == 37 ? 0 : 1; }\n",
+    );
+}
+
+#[test]
+fn enum_subscript_scales_by_element_size() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_object_executes_with_host(
+        "enum Index { SECOND = 1 }; int select(int *values, enum Index index) { return values[index]; }\n",
+        "enum Index { SECOND = 1 }; int select(int *, enum Index); int main(void) { int values[2] = {11, 37}; return select(values, SECOND) == 37 ? 0 : 1; }\n",
     );
 }
 
@@ -1788,6 +1843,18 @@ fn nested_record_initializer_zero_fills_fields() {
 }
 
 #[test]
+fn nested_anonymous_record_type_is_defined() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_matches_host(
+        "struct Holder { int tag; union { int number; char bytes[4]; } value; };\n\
+         int main(void) { struct Holder holder = {0}; holder.value.number = 42;\n\
+         return holder.value.number != 42; }\n",
+    );
+}
+
+#[test]
 fn chained_field_designator_selects_nested_member() {
     if !cc_available() {
         return;
@@ -1973,6 +2040,28 @@ fn global_pointer_initializer_emits_a_relocation() {
     }
     assert_fcc_matches_host(
         "int target = 42; int *pointer = &target; int main(void) { return *pointer - 42; }\n",
+    );
+}
+
+#[test]
+fn global_array_of_string_pointers_emits_relocations() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_matches_host(
+        "char *values[2] = {\"first\", \"second\"};\n\
+         int main(void) { return values[0][0] + values[1][0] - 'f' - 's'; }\n",
+    );
+}
+
+#[test]
+fn global_pointer_array_accepts_cast_string_literals() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_matches_host(
+        "unsigned char *values[2] = {(unsigned char *)\"a\", (unsigned char *)\"b\"};\n\
+         int main(void) { return values[0][0] + values[1][0] - 'a' - 'b'; }\n",
     );
 }
 

@@ -2398,8 +2398,7 @@ impl InstructionSelectPass {
                     .nodes(root)
                     .iter()
                     .any(|n| !n.children().is_empty());
-                let synthetic = !fs.is_op_root(root)
-                    && (is_computed || compiled.constant_materializer_range().is_some());
+                let synthetic = is_computed || compiled.constant_materializer_range().is_some();
                 if block_op.is_none() && !is_guard_class && !synthetic {
                     continue;
                 }

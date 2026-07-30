@@ -402,7 +402,12 @@ fn render_leaf_ctype(ty: &CType) -> String {
 pub fn render(ast: &Ast) -> String {
     let mut out = String::new();
     if let Some(root) = ast.root() {
-        render_node(ast, root, 0, &mut out);
+        let mut pending = vec![(root, 0)];
+        while let Some((node, depth)) = pending.pop() {
+            render_node(ast, node, depth, &mut out);
+            let children = ast.children(node).collect::<Vec<_>>();
+            pending.extend(children.into_iter().rev().map(|child| (child, depth + 1)));
+        }
     }
     out
 }
@@ -606,7 +611,4 @@ fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
     };
 
     writeln!(out, "{:indent$}{label}", "", indent = depth * 2).unwrap();
-    for child in ast.children(id) {
-        render_node(ast, child, depth + 1, out);
-    }
 }

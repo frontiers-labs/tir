@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use logos::{Lexer, Logos};
@@ -32,6 +32,8 @@ enum PreprocToken {
     Define,
     #[token("undef")]
     Undef,
+    #[token("include_next")]
+    IncludeNext,
     #[token("include")]
     Include,
     #[token("elifdef")]
@@ -68,12 +70,6 @@ enum PreprocToken {
     // General identifier (after all keywords so keywords take priority).
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     Identifier(String),
-
-    // Paths for #include.
-    #[regex(r#""[^"]*""#)]
-    QuotedPath,
-    #[regex(r"<[^>]*>")]
-    AnglePath,
 
     // Integer literals for #if expression evaluation.
     #[regex(r"(0[xX][0-9a-fA-F][0-9a-fA-F_]*|[0-9][0-9_]*)([uU]([lL]|ll|LL)?|([lL]|ll|LL)[uU]?)?", |lex| {
@@ -478,6 +474,8 @@ struct Frame {
     /// Resolved path of this frame's file. Its parent directory is the search
     /// base for quoted includes appearing in this file.
     path: PathBuf,
+    /// Position in the `-I`/system search order that resolved this file.
+    include_search_index: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -526,6 +524,16 @@ impl TokenStream {
                 break;
             }
         }
+        let mut lexer = Token::lexer(remainder);
+        while let Some(token) = lexer.next() {
+            let span = lexer.span();
+            if span.start >= consumed {
+                break;
+            }
+            if matches!(token, Ok(Token::Comment(_))) {
+                consumed = consumed.max(span.end);
+            }
+        }
         let new_offset = source_len - remainder.len() + consumed;
         if let Some(frame) = self.frames.last_mut() {
             frame.offset = new_offset;
@@ -540,24 +548,47 @@ impl TokenStream {
     /// Resolve an `#include` to its `(path, contents)`, or `None` if not found.
     /// Quoted includes search the including file's directory first; both forms
     /// then search `user` (`-I` order) and `system` directories.
-    fn resolve_include(&self, path: &str, quoted: bool) -> Option<(PathBuf, String)> {
-        let includer_dir = if quoted {
-            self.frames
-                .last()
-                .and_then(|f| f.path.parent())
-                .map(Path::to_path_buf)
-        } else {
-            None
-        };
-        includer_dir
+    fn resolve_include(
+        &self,
+        path: &str,
+        quoted: bool,
+    ) -> Option<(PathBuf, String, Option<usize>)> {
+        if quoted && let Some(dir) = self.frames.last().and_then(|frame| frame.path.parent()) {
+            let candidate = dir.join(path);
+            if let Ok(content) = std::fs::read_to_string(&candidate) {
+                return Some((candidate, content, None));
+            }
+        }
+        self.include_paths
+            .user
             .iter()
-            .chain(&self.include_paths.user)
             .chain(&self.include_paths.system)
-            .find_map(|dir| {
+            .enumerate()
+            .find_map(|(index, dir)| {
                 let candidate = dir.join(path);
                 std::fs::read_to_string(&candidate)
                     .ok()
-                    .map(|content| (candidate, content))
+                    .map(|content| (candidate, content, Some(index)))
+            })
+    }
+
+    fn resolve_include_next(&self, path: &str) -> Option<(PathBuf, String, Option<usize>)> {
+        let start = self
+            .frames
+            .last()
+            .and_then(|frame| frame.include_search_index)
+            .map_or(0, |index| index + 1);
+        self.include_paths
+            .user
+            .iter()
+            .chain(&self.include_paths.system)
+            .enumerate()
+            .skip(start)
+            .find_map(|(index, dir)| {
+                let candidate = dir.join(path);
+                std::fs::read_to_string(&candidate)
+                    .ok()
+                    .map(|content| (candidate, content, Some(index)))
             })
     }
 
@@ -612,24 +643,40 @@ impl TokenStream {
                 self.skip_line(source.len(), pp.remainder());
             }
 
-            Some(Ok(PreprocToken::Include)) if !skipping => {
-                let (path, quoted) = match pp.next() {
-                    Some(Ok(PreprocToken::QuotedPath)) => (unquote(pp.slice()), true),
-                    Some(Ok(PreprocToken::AnglePath)) => (unquote(pp.slice()), false),
+            Some(Ok(directive @ (PreprocToken::Include | PreprocToken::IncludeNext)))
+                if !skipping =>
+            {
+                let remainder = pp.remainder();
+                let include = logical_line(remainder);
+                let include = include.trim_start();
+                let (delimiter, quoted) = match include.chars().next() {
+                    Some('"') => ('"', true),
+                    Some('<') => ('>', false),
                     _ => {
-                        self.skip_line(source.len(), pp.remainder());
+                        self.skip_line(source.len(), remainder);
                         return;
                     }
                 };
-                self.skip_line(source.len(), pp.remainder());
-                match self.resolve_include(&path, quoted) {
-                    Some((resolved, content)) => {
+                let Some(end) = include[1..].find(delimiter) else {
+                    self.skip_line(source.len(), remainder);
+                    return;
+                };
+                let path = include[1..end + 1].to_string();
+                self.skip_line(source.len(), remainder);
+                let resolved = if directive == PreprocToken::IncludeNext {
+                    self.resolve_include_next(&path)
+                } else {
+                    self.resolve_include(&path, quoted)
+                };
+                match resolved {
+                    Some((resolved, content, include_search_index)) => {
                         let file = intern_file(&resolved.to_string_lossy(), &content);
                         self.frames.push(Frame {
                             source: file_source(file),
                             offset: 0,
                             file,
                             path: resolved,
+                            include_search_index,
                         });
                     }
                     None => {
@@ -674,10 +721,10 @@ impl TokenStream {
 
             Some(Ok(PreprocToken::If)) => {
                 let remainder = pp.remainder();
-                let line_end = remainder.find('\n').unwrap_or(remainder.len());
+                let expression = logical_line(remainder);
                 let result = !skipping
                     && eval_if_expr(
-                        &remainder[..line_end],
+                        &expression,
                         &self.defines,
                         Span::new(self.current_file(), directive_start),
                     ) != 0;
@@ -694,13 +741,12 @@ impl TokenStream {
 
             Some(Ok(PreprocToken::Elif)) => {
                 let remainder = pp.remainder();
-                let line_end = remainder.find('\n').unwrap_or(remainder.len());
-                let expr_str = &remainder[..line_end];
+                let expression = logical_line(remainder);
                 let span = Span::new(self.current_file(), directive_start);
                 if let Some(top) = self.cond_stack.last_mut() {
                     *top = match *top {
                         CondState::Inactive => {
-                            if eval_if_expr(expr_str, &self.defines, span) != 0 {
+                            if eval_if_expr(&expression, &self.defines, span) != 0 {
                                 CondState::Active
                             } else {
                                 CondState::Inactive
@@ -1204,11 +1250,6 @@ impl TokenStream {
     }
 }
 
-/// Strip the surrounding `"..."` or `<...>` delimiters from an include path.
-fn unquote(spelling: &str) -> String {
-    spelling[1..spelling.len() - 1].to_string()
-}
-
 /// Build a lazy preprocessed token stream over a source file.
 ///
 /// * `name`          — file name shown in diagnostics (e.g. a path or `<stdin>`)
@@ -1239,6 +1280,7 @@ pub fn preprocessed(
             offset: 0,
             file,
             path: PathBuf::from(name),
+            include_search_index: None,
         }],
         defines,
         pending: VecDeque::new(),

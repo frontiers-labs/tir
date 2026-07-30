@@ -267,6 +267,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
     }
     let mut signatures = HashMap::new();
     let mut globals = HashMap::new();
+    let mut global_strings = BTreeMap::new();
     let mut defined_functions = HashSet::new();
     let mut declared_functions = HashSet::new();
     // Entities already given storage: an initialized definition claims the
@@ -295,6 +296,15 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                         elem: lower_type(context, typed, node_type(typed, item)),
                     },
                 );
+                for node in ast.preorder(item) {
+                    let Some(AstLeaf::String(value)) = ast.get_leaf_data(node) else {
+                        continue;
+                    };
+                    let next = global_strings.len();
+                    global_strings
+                        .entry(value.clone())
+                        .or_insert_with(|| format!(".L.global.str{next}"));
+                }
             }
             AstKind::RecordDecl | AstKind::EnumDecl | AstKind::Typedef | AstKind::Attribute => {}
             _ => return Err(unsupported(ast, item, "top-level item".to_string())),
@@ -322,6 +332,15 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                 .attr("fields", AttributeValue::Array(fields))
                 .attr("size", AttributeValue::UInt(record.size))
                 .attr("align", AttributeValue::UInt(record.align))
+                .build(),
+        );
+    }
+
+    for (value, name) in &global_strings {
+        module_builder.insert(
+            cir::GlobalStringOpBuilder::new(context)
+                .attr("sym_name", AttributeValue::Str(name.clone()))
+                .attr("value", AttributeValue::Str(value.clone()))
                 .build(),
         );
     }
@@ -373,8 +392,13 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     }
                     continue;
                 };
-                let Some(data) = constant_initializer_data(typed, &globals, source_ty, initializer)
-                else {
+                let Some(data) = constant_initializer_data(
+                    typed,
+                    &globals,
+                    &global_strings,
+                    source_ty,
+                    initializer,
+                ) else {
                     return Err(unsupported(
                         ast,
                         initializer,
@@ -478,6 +502,7 @@ fn source_type_layout(typed: &TypedAst, ty: QualType) -> (u64, u64) {
 fn constant_initializer_data(
     typed: &TypedAst,
     globals: &HashMap<EntityId, Global>,
+    global_strings: &BTreeMap<String, String>,
     target: QualType,
     initializer: NodeId,
 ) -> Option<ConstantData> {
@@ -492,8 +517,14 @@ fn constant_initializer_data(
             })
         }
         TypeKind::Pointer(_) => {
+            let initializer = if ast.get_node(initializer).kind == AstKind::Cast {
+                ast.children(initializer).next()?
+            } else {
+                initializer
+            };
             let referent = match ast.get_node(initializer).kind {
                 AstKind::AddressOf => ast.children(initializer).next()?,
+                AstKind::String => initializer,
                 AstKind::Var
                     if ast
                         .get_annotation(initializer)
@@ -503,7 +534,9 @@ fn constant_initializer_data(
                 }
                 _ => return None,
             };
-            let symbol = if ast
+            let symbol = if let Some(AstLeaf::String(value)) = ast.get_leaf_data(referent) {
+                global_strings.get(value)?.clone()
+            } else if ast
                 .get_annotation(referent)
                 .is_some_and(|info| info.category == ValueCategory::Function)
             {
@@ -528,7 +561,7 @@ fn constant_initializer_data(
         TypeKind::Array(_, Some(_)) | TypeKind::Record(_)
             if ast.get_node(initializer).kind == AstKind::InitializerList =>
         {
-            constant_aggregate_initializer_data(typed, globals, target, initializer)
+            constant_aggregate_initializer_data(typed, globals, global_strings, target, initializer)
         }
         _ => None,
     }
@@ -537,6 +570,7 @@ fn constant_initializer_data(
 fn constant_aggregate_initializer_data(
     typed: &TypedAst,
     globals: &HashMap<EntityId, Global>,
+    global_strings: &BTreeMap<String, String>,
     target: QualType,
     initializer: NodeId,
 ) -> Option<ConstantData> {
@@ -555,7 +589,8 @@ fn constant_aggregate_initializer_data(
     };
     for (path, value) in entries {
         let (selected_type, offset) = initializer_subobject(typed, target, path)?;
-        let value = constant_initializer_data(typed, globals, selected_type, *value)?;
+        let value =
+            constant_initializer_data(typed, globals, global_strings, selected_type, *value)?;
         write_constant_data(&mut data, offset as usize, value);
     }
     Some(data)
@@ -1337,6 +1372,15 @@ impl FnCodegen<'_> {
             return if self.typed.integer_is_signed(target) == Some(true) {
                 self.builder
                     .insert(b::fptosi(self.context, value, target_ty).build())
+                    .result()
+            } else if self.typed.integer_width(target).unwrap() < 64 {
+                let wide = IntegerType::new(self.context, 64);
+                let converted = self
+                    .builder
+                    .insert(b::fptosi(self.context, value, wide).build())
+                    .result();
+                self.builder
+                    .insert(b::trunci(self.context, converted, target_ty).build())
                     .result()
             } else {
                 self.builder
@@ -3294,19 +3338,50 @@ impl FnCodegen<'_> {
                         .builder
                         .insert(p::load(self.context, ptr, elem).build())
                         .result();
-                    let one = self
-                        .builder
-                        .insert(b::constant(self.context, 1, elem).build())
-                        .result();
-                    let new = if matches!(kind, AstKind::PreInc | AstKind::PostInc) {
-                        self.builder
-                            .insert(b::addi(self.context, old, one, elem).build())
-                            .result()
-                    } else {
-                        self.builder
-                            .insert(b::subi(self.context, old, one, elem).build())
-                            .result()
-                    };
+                    let operand_ty = node_type(self.typed, child);
+                    let increment = matches!(kind, AstKind::PreInc | AstKind::PostInc);
+                    let new =
+                        if let TypeKind::Pointer(pointee) = self.typed.types().kind(operand_ty) {
+                            let offset_ty =
+                                IntegerType::new(self.context, self.typed.target().pointer_width());
+                            let size = source_type_layout(self.typed, *pointee).0 as i64;
+                            let offset = self
+                                .builder
+                                .insert(
+                                    b::constant(
+                                        self.context,
+                                        if increment { size } else { -size },
+                                        offset_ty,
+                                    )
+                                    .build(),
+                                )
+                                .result();
+                            self.builder
+                                .insert(
+                                    p::ptradd(
+                                        self.context,
+                                        old,
+                                        offset,
+                                        lower_type(self.context, self.typed, operand_ty),
+                                    )
+                                    .build(),
+                                )
+                                .result()
+                        } else {
+                            let one = self
+                                .builder
+                                .insert(b::constant(self.context, 1, elem).build())
+                                .result();
+                            if increment {
+                                self.builder
+                                    .insert(b::addi(self.context, old, one, elem).build())
+                                    .result()
+                            } else {
+                                self.builder
+                                    .insert(b::subi(self.context, old, one, elem).build())
+                                    .result()
+                            }
+                        };
                     self.builder
                         .insert(p::store(self.context, new, ptr).build());
                     LoweredExpr::Value(if matches!(kind, AstKind::PostInc | AstKind::PostDec) {
@@ -3620,6 +3695,12 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
                 global.relocations(),
                 global.align(),
             ));
+            rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
+        } else if let Some(string) = op.clone().as_op::<cir::GlobalStringOp>() {
+            let label = string.sym_name();
+            let value = string.value();
+            labels.insert(value.clone(), label.clone());
+            strings.push((label, decode_c_escapes(&value)));
             rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
         } else if let Some(global) = op.clone().as_op::<cir::ZeroGlobalOp>() {
             zero_globals.push((global.sym_name(), global.size(), global.align()));

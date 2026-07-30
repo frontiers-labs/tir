@@ -38,6 +38,7 @@ pub trait CallEmitter: Send + Sync {
         _context: &Context,
         _abi: &AbiInfo,
         _outgoing_size: u32,
+        _vector_register_args: u8,
     ) -> Vec<Box<dyn Operation>> {
         Vec::new()
     }
@@ -344,7 +345,18 @@ impl CallLowering {
             fresh_args.push(detach(rewriter, arg, location.class())?);
         }
 
-        for prefix in self.emitter.call_prefix(context, self.abi, outgoing_size) {
+        let vector_register_args = argument_values
+            .iter()
+            .zip(&argument_locations)
+            .filter(|&(value, location)| {
+                matches!(location, ArgumentLocation::Register(_))
+                    && value_kind(context, *value) == ValueKind::Float
+            })
+            .count() as u8;
+        for prefix in
+            self.emitter
+                .call_prefix(context, self.abi, outgoing_size, vector_register_args)
+        {
             rewriter.insert_op_before(op, prefix.as_ref())?;
         }
         for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {

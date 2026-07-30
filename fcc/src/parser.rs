@@ -1325,6 +1325,7 @@ struct RecordFrame {
     kind: RecordKind,
     id: RecordId,
     name: Option<String>,
+    nested_records: Vec<NodeId>,
     fields: Vec<NodeId>,
     pending_field: Option<DeclSpecPrefix>,
 }
@@ -1572,6 +1573,7 @@ impl<'a> DeclParser<'a> {
                 let Some(parent) = frames.last_mut() else {
                     return Ok((ty, Some(record)));
                 };
+                parent.nested_records.push(record);
                 let prefix = parent.pending_field.take().unwrap();
                 let specs = finish_decl_specs(prefix, ty, Some(record));
                 parent
@@ -1631,6 +1633,7 @@ impl<'a> DeclParser<'a> {
             kind,
             id: record_id,
             name,
+            nested_records: Vec::new(),
             fields: Vec::new(),
             pending_field: None,
         });
@@ -1976,6 +1979,9 @@ fn finish_record(
             name: frame.name.clone(),
         },
     );
+    for nested in frame.nested_records {
+        state.0.ast.add_edge(record, nested);
+    }
     for field in frame.fields {
         state.0.ast.add_edge(record, field);
     }

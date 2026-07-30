@@ -562,6 +562,10 @@ impl Analyzer<'_> {
         let mut offset = 0;
         let mut record_align = 1;
         for field in children {
+            if self.ast.get_node(field).kind == AstKind::RecordDecl {
+                self.record_declaration(field);
+                continue;
+            }
             let Some(AstLeaf::Field { name, ty }) = self.ast.get_leaf_data(field).cloned() else {
                 continue;
             };
@@ -1101,6 +1105,10 @@ impl Analyzer<'_> {
             self.is_arithmetic(ty) || matches!(self.types.kind(ty), TypeKind::Pointer(_))
         };
         if valid {
+            if kind == AstKind::Switch {
+                let promoted = self.integer_promotion(ty);
+                self.record_conversion(condition, promoted);
+            }
             return;
         }
         let statement = match kind {
@@ -1840,6 +1848,19 @@ impl Analyzer<'_> {
                     );
                     (error, ValueCategory::Value)
                 } else if let Some(result) = pointer_result {
+                    let integer_operand =
+                        if matches!(self.types.kind(operands[0]), TypeKind::Pointer(_)) {
+                            1
+                        } else {
+                            0
+                        };
+                    if matches!(
+                        self.types.kind(operands[integer_operand]),
+                        TypeKind::Enum(_)
+                    ) {
+                        let promoted = self.integer_promotion(operands[integer_operand]);
+                        self.record_conversion(children[integer_operand], promoted);
+                    }
                     let TypeKind::Pointer(pointee) = self.types.kind(result) else {
                         unreachable!("pointer arithmetic result has pointer type")
                     };
