@@ -1,14 +1,11 @@
 execute/20000112-1.c
 execute/20000223-1.c
 execute/20000227-1.c
-execute/20000314-1.c
 execute/20000314-3.c
 execute/20000403-1.c
 execute/20000412-1.c
 execute/20000412-3.c
 execute/20000412-5.c
-execute/20000412-6.c
-execute/20000511-1.c
 execute/20000519-1.c
 execute/20000528-1.c
 execute/20000605-1.c
@@ -19,7 +16,6 @@ execute/20000706-5.c
 execute/20000715-1.c
 execute/20000717-1.c
 execute/20000717-3.c
-execute/20000717-4.c
 execute/20000717-5.c
 execute/20000722-1.c
 execute/20000726-1.c
@@ -40,8 +36,6 @@ execute/20001026-1.c
 execute/20001027-1.c
 execute/20001101.c
 execute/20001111-1.c
-execute/20001121-1.c
-execute/20001124-1.c
 execute/20001203-1.c
 execute/20001203-2.c
 execute/20001228-1.c
@@ -54,7 +48,6 @@ execute/20010325-1.c
 execute/20010329-1.c
 execute/20010409-1.c
 execute/20010518-2.c
-execute/20010520-1.c
 execute/20010604-1.c
 execute/20010605-1.c
 execute/20010605-2.c
@@ -66,7 +59,6 @@ execute/20010924-1.c
 execute/20011008-3.c
 execute/20011019-1.c
 execute/20011024-1.c
-execute/20011109-1.c
 execute/20011113-1.c
 execute/20011115-1.c
 execute/20011121-1.c
@@ -84,7 +76,6 @@ execute/20020225-2.c
 execute/20020227-1.c
 execute/20020314-1.c
 execute/20020320-1.c
-execute/20020402-1.c
 execute/20020402-2.c
 execute/20020402-3.c
 execute/20020404-1.c
@@ -146,7 +137,6 @@ execute/20030914-2.c
 execute/20030920-1.c
 execute/20031003-1.c
 execute/20031010-1.c
-execute/20031011-1.c
 execute/20031012-1.c
 execute/20031020-1.c
 execute/20031201-1.c
@@ -199,7 +189,6 @@ execute/20050104-1.c
 execute/20050106-1.c
 execute/20050121-1.c
 execute/20050125-1.c
-execute/20050131-1.c
 execute/20050203-1.c
 execute/20050215-1.c
 execute/20050218-1.c
@@ -211,19 +200,16 @@ execute/20050502-1.c
 execute/20050502-2.c
 execute/20050604-1.c
 execute/20050613-1.c
-execute/20050713-1.c
 execute/20050826-1.c
 execute/20050826-2.c
 execute/20050929-1.c
 execute/20051012-1.c
 execute/20060420-1.c
 execute/20060905-1.c
-execute/20060929-1.c
 execute/20060930-1.c
 execute/20060930-2.c
 execute/20061031-1.c
 execute/20061220-1.c
-execute/20070212-3.c
 execute/20070614-1.c
 execute/20070623-1.c
 execute/20070724-1.c
@@ -246,7 +232,6 @@ execute/20080117-1.c
 execute/20080122-1.c
 execute/20080424-1.c
 execute/20080502-1.c
-execute/20080506-1.c
 execute/20080506-2.c
 execute/20080519-1.c
 execute/20080522-1.c
@@ -264,7 +249,6 @@ execute/20090711-1.c
 execute/20090814-1.c
 execute/20100316-1.c
 execute/20100430-1.c
-execute/20100708-1.c
 execute/20100827-1.c
 execute/20101011-1.c
 execute/20101013-1.c
@@ -274,7 +258,6 @@ execute/20111208-1.c
 execute/20111212-1.c
 execute/20111227-1.c
 execute/20120105-1.c
-execute/20120111-1.c
 execute/20120207-1.c
 execute/20120427-1.c
 execute/20120427-2.c
@@ -332,7 +315,6 @@ execute/920501-6.c
 execute/920501-7.c
 execute/920501-8.c
 execute/920501-9.c
-execute/920506-1.c
 execute/920520-1.c
 execute/920603-1.c
 execute/920604-1.c
@@ -348,7 +330,6 @@ execute/920726-1.c
 execute/920728-1.c
 execute/920730-1.c
 execute/920731-1.c
-execute/920810-1.c
 execute/920812-1.c
 execute/920908-1.c
 execute/920908-2.c
@@ -430,7 +411,6 @@ execute/931228-1.c
 execute/940115-1.c
 execute/940122-1.c
 execute/941014-1.c
-execute/941014-2.c
 execute/941015-1.c
 execute/941021-1.c
 execute/941025-1.c
@@ -480,7 +460,6 @@ execute/961122-1.c
 execute/970217-1.c
 execute/970923-1.c
 execute/980205.c
-execute/980223.c
 execute/980424-1.c
 execute/980505-2.c
 execute/980506-1.c
@@ -490,7 +469,6 @@ execute/980526-1.c
 execute/980526-2.c
 execute/980526-3.c
 execute/980604-1.c
-execute/980605-1.c
 execute/980608-1.c
 execute/980707-1.c
 execute/980709-1.c
@@ -505,7 +483,6 @@ execute/990130-1.c
 execute/990208-1.c
 execute/990326-1.c
 execute/990413-2.c
-execute/990513-1.c
 execute/990524-1.c
 execute/990525-1.c
 execute/990525-2.c
@@ -521,7 +498,6 @@ execute/991118-1.c
 execute/991201-1.c
 execute/991202-1.c
 execute/991216-2.c
-execute/991221-1.c
 execute/991228-1.c
 execute/alias-1.c
 execute/alias-2.c
@@ -657,7 +633,6 @@ execute/cmpdi-1.c
 execute/cmpsf-1.c
 execute/cmpsi-1.c
 execute/cmpsi-2.c
-execute/comp-goto-1.c
 execute/comp-goto-2.c
 execute/compare-1.c
 execute/complex-1.c
@@ -769,7 +744,6 @@ execute/ipa-sra-1.c
 execute/ipa-sra-2.c
 execute/longlong.c
 execute/loop-12.c
-execute/loop-15.c
 execute/loop-2.c
 execute/loop-2b.c
 execute/loop-2c.c
@@ -789,15 +763,11 @@ execute/mayalias-3.c
 execute/medce-1.c
 execute/memchr-1.c
 execute/memclr.c
-execute/memcpy-1.c
 execute/memcpy-2.c
 execute/memcpy-a1.c
 execute/memcpy-a2.c
 execute/memcpy-a4.c
 execute/memcpy-a8.c
-execute/memcpy-bi.c
-execute/memset-1.c
-execute/memset-2.c
 execute/memset-3.c
 execute/memset-4.c
 execute/minmaxcmp-1.c
@@ -918,7 +888,6 @@ execute/pr17377.c
 execute/pr19005.c
 execute/pr19449.c
 execute/pr20100-1.c
-execute/pr20466-1.c
 execute/pr20601-1.c
 execute/pr20621-1.c
 execute/pr22061-1.c
@@ -956,7 +925,6 @@ execute/pr30314.c
 execute/pr30778.c
 execute/pr31072.c
 execute/pr31136.c
-execute/pr31169.c
 execute/pr31448-2.c
 execute/pr31448.c
 execute/pr32244-1.c
@@ -979,7 +947,6 @@ execute/pr34982.c
 execute/pr35231.c
 execute/pr35456.c
 execute/pr35472.c
-execute/pr35800.c
 execute/pr36034-1.c
 execute/pr36034-2.c
 execute/pr36038.c
@@ -1018,7 +985,6 @@ execute/pr41395-1.c
 execute/pr41395-2.c
 execute/pr41463.c
 execute/pr41750.c
-execute/pr41917.c
 execute/pr41935.c
 execute/pr42142.c
 execute/pr42154.c
@@ -1044,7 +1010,6 @@ execute/pr44942.c
 execute/pr45034.c
 execute/pr45070.c
 execute/pr45695.c
-execute/pr46019.c
 execute/pr46309.c
 execute/pr46316.c
 execute/pr46909-1.c
@@ -1058,7 +1023,6 @@ execute/pr47925.c
 execute/pr48197.c
 execute/pr48571-1.c
 execute/pr48717.c
-execute/pr48809.c
 execute/pr48814-1.c
 execute/pr48973-1.c
 execute/pr48973-2.c
@@ -1388,7 +1352,6 @@ execute/simd-2.c
 execute/simd-4.c
 execute/simd-5.c
 execute/simd-6.c
-execute/split-path-1.c
 execute/stdarg-1.c
 execute/stdarg-2.c
 execute/stdarg-3.c
@@ -1402,7 +1365,6 @@ execute/strct-stdarg-1.c
 execute/strct-varg-1.c
 execute/string-opt-17.c
 execute/string-opt-5.c
-execute/strlen-1.c
 execute/strlen-2.c
 execute/strlen-3.c
 execute/strlen-4.c
@@ -1457,5 +1419,4 @@ execute/widechar-2.c
 execute/widechar-3.c
 execute/zero-struct-1.c
 execute/zero-struct-2.c
-execute/zerolen-1.c
 execute/zerolen-2.c
