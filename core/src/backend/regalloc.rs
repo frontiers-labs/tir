@@ -507,13 +507,6 @@ pub trait TargetRegAlloc: Send + Sync {
         unimplemented!("this target has tied operands but no copy emitter")
     }
 
-    /// Extra bytes the stable function frame needs whenever it contains a call.
-    /// Targets use this for call-site alignment that is not part of the outgoing
-    /// argument area.
-    fn call_frame_alignment_pad(&self) -> u32 {
-        0
-    }
-
     /// Prologue instructions reserving a frame of `size` bytes (e.g. `addi sp, sp,
     /// -size`) and saving the callee-saved registers the allocation used, each at
     /// its reserved `[frame + offset]` slot. Inserted at the top of the entry block
@@ -538,34 +531,6 @@ pub trait TargetRegAlloc: Send + Sync {
         _saves: &[(PhysReg, i64)],
     ) -> Vec<Box<dyn Operation>> {
         Vec::new()
-    }
-
-    /// Stack offset, relative to the post-prologue frame register, where
-    /// incoming stack argument `stack_index` lives.
-    fn incoming_stack_arg_offset(
-        &self,
-        abi: &crate::backend::abi::AbiInfo,
-        frame_size: u32,
-        _saves: &[(PhysReg, i64)],
-        stack_index: usize,
-    ) -> i64 {
-        frame_size as i64 + (stack_index as i64 * abi.stack.slot_size as i64)
-    }
-
-    /// Build a load from an incoming stack argument into an already allocated
-    /// physical register. Only called for symbols whose argument list exceeds
-    /// the ABI register bank.
-    fn emit_incoming_stack_arg_load(
-        &self,
-        _context: &Context,
-        dst: &PhysReg,
-        _frame: &PhysReg,
-        _offset: i64,
-    ) -> Result<Box<dyn Operation>, PassError> {
-        Err(PassError::InvalidRuleSet(format!(
-            "stack-passed arguments are not supported for register class {}",
-            dst.0.name()
-        )))
     }
 
     /// Build instruction(s) that materialize `[frame + offset]` into the virtual
@@ -649,8 +614,8 @@ impl Pass for RegisterAllocationPass {
         let affinities: Vec<_> = abi.copies.iter().map(|copy| (copy.src, copy.dst)).collect();
 
         let (outgoing_size, has_calls) = outgoing_stack_layout(context, &blocks)?;
-        let mut frame = FrameState::new(self.abi.stack.slot_size);
-        frame.reserve(outgoing_size);
+        let mut frame = FramePlan::new(self.abi);
+        frame.reserve_outgoing(outgoing_size);
         let stack_allocas = collect_stack_allocas(context, &blocks, &mut frame);
         self.rematerialize_stack_allocas(context, rewriter, &blocks, &stack_allocas, &mut frame)?;
         let assignment = loop {
@@ -710,24 +675,12 @@ impl Pass for RegisterAllocationPass {
                 rewriter.erase_op(&op_ref_in(context, copy.block, copy.op))?;
             }
         }
-        rewrite_registers(context, &blocks, &assignment);
-
         // Preserve the callee-saved registers the allocation used for this
-        // function's caller. Frame-based targets reserve a slot per register;
-        // push/pop targets handle framing themselves.
-        let saves = callee_saved_slots(
-            &assignment,
-            &mut frame,
-            self.abi.callee_saved,
-            self.abi.stack.save_style == crate::backend::abi::SaveStyle::FrameSlots,
-        );
+        // function's caller. Frame-slot targets reserve a normal frame slot;
+        // push/pop targets keep saves outside the stable frame area.
+        let saves = callee_saved_slots(&assignment, &mut frame, self.abi.callee_saved);
 
-        let call_alignment_pad = if has_calls {
-            self.target.call_frame_alignment_pad()
-        } else {
-            0
-        };
-        let frame_size = frame.size(self.abi.stack.align) + call_alignment_pad;
+        let frame_size = frame.prologue_adjustment(has_calls, saves.len());
         erase_stack_allocas(context, rewriter, &stack_allocas)?;
         self.insert_incoming_stack_arg_loads(
             context,
@@ -735,11 +688,11 @@ impl Pass for RegisterAllocationPass {
             &blocks,
             &assignment,
             &abi.stack_args,
-            FrameLayout {
-                size: frame_size,
-                saves: &saves,
-            },
+            &frame,
+            frame_size,
+            saves.len(),
         )?;
+        rewrite_registers(context, &blocks, &assignment);
         if frame_size > 0 || !saves.is_empty() {
             self.insert_frame(context, rewriter, &blocks, frame_size, &saves)?;
         }
@@ -765,7 +718,7 @@ impl RegisterAllocationPass {
         rewriter: &mut Rewriter,
         blocks: &[BlockId],
         allocas: &[StackAlloca],
-        frame: &mut FrameState,
+        frame: &mut FramePlan,
     ) -> Result<(), PassError> {
         if allocas.is_empty() {
             return Ok(());
@@ -1023,7 +976,7 @@ impl RegisterAllocationPass {
         liveness: &Liveness,
         blocks: &[BlockId],
         vregs: &[u32],
-        frame: &mut FrameState,
+        frame: &mut FramePlan,
     ) -> Result<(), PassError> {
         let info = self.target.register_info();
         let default_class = info.default_integer_class(self.abi);
@@ -1136,7 +1089,9 @@ impl RegisterAllocationPass {
         blocks: &[BlockId],
         assignment: &HashMap<u32, PhysReg>,
         args: &[IncomingStackArg],
-        layout: FrameLayout<'_>,
+        frame_plan: &FramePlan,
+        frame_size: u32,
+        pushed_saves: usize,
     ) -> Result<(), PassError> {
         if args.is_empty() {
             return Ok(());
@@ -1149,7 +1104,7 @@ impl RegisterAllocationPass {
             return Ok(());
         };
         let target = op_ref_in(context, entry, first);
-        let frame = self.frame_register();
+        let frame_register = self.frame_register();
         for arg in args {
             let Some(dst) = assignment.get(&arg.vreg) else {
                 continue;
@@ -1163,24 +1118,15 @@ impl RegisterAllocationPass {
                 )));
             }
             let dst = (arg.class, dst.1);
-            let offset = self.target.incoming_stack_arg_offset(
-                self.abi,
-                layout.size,
-                layout.saves,
-                arg.stack_index,
-            );
-            let load = self
-                .target
-                .emit_incoming_stack_arg_load(context, &dst, &frame, offset)?;
+            let offset =
+                frame_plan.incoming_stack_arg_offset(frame_size, pushed_saves, arg.stack_index);
+            let load =
+                self.target
+                    .emit_spill_reload(context, arg.vreg, dst.0, &frame_register, offset);
             rewriter.insert_op_before(&target, load.as_ref())?;
         }
         Ok(())
     }
-}
-
-struct FrameLayout<'a> {
-    size: u32,
-    saves: &'a [(PhysReg, i64)],
 }
 
 fn outgoing_stack_layout(context: &Context, blocks: &[BlockId]) -> Result<(u32, bool), PassError> {
@@ -1206,9 +1152,12 @@ fn outgoing_stack_layout(context: &Context, blocks: &[BlockId]) -> Result<(u32, 
     Ok((size, has_calls))
 }
 
-/// Tracks spill stack-slot assignment across spill rounds.
-struct FrameState {
+/// Tracks stack-slot assignment across spill rounds and owns the target-neutral
+/// ABI layout formulas for the stable frame area.
+struct FramePlan {
+    align: u32,
     slot_size: u32,
+    save_style: crate::backend::abi::SaveStyle,
     next_offset: i64,
     rounds: usize,
     /// Fresh registers introduced by reload/store range-splitting. They have tiny
@@ -1218,22 +1167,36 @@ struct FrameState {
     temps: HashSet<u32>,
 }
 
-impl FrameState {
-    fn new(slot_size: u32) -> Self {
+impl FramePlan {
+    fn new(abi: &crate::backend::abi::AbiInfo) -> Self {
         Self {
-            slot_size,
+            align: abi.stack.align,
+            slot_size: abi.stack.slot_size,
+            save_style: abi.stack.save_style,
             next_offset: 0,
             rounds: 0,
             temps: HashSet::new(),
         }
     }
 
+    fn reserve_outgoing(&mut self, size: u32) {
+        self.next_offset = self.next_offset.max(i64::from(size));
+    }
+
     fn alloc_slot(&mut self) -> i64 {
         self.alloc(self.slot_size, self.slot_size)
     }
 
-    fn reserve(&mut self, size: u32) {
-        self.next_offset = self.next_offset.max(i64::from(size));
+    fn alloc_stack_allocation(&mut self, size: u32, align: u32) -> i64 {
+        self.alloc(size, align)
+    }
+
+    fn alloc_callee_save(&mut self) -> i64 {
+        if self.save_style == crate::backend::abi::SaveStyle::FrameSlots {
+            self.alloc_slot()
+        } else {
+            0
+        }
     }
 
     fn alloc(&mut self, size: u32, align: u32) -> i64 {
@@ -1244,14 +1207,55 @@ impl FrameState {
         offset
     }
 
-    fn size(&self, align: u32) -> u32 {
-        let size = self.next_offset as u32;
-        if size == 0 {
-            return 0;
-        }
-        let align = align.max(1);
-        size.div_ceil(align) * align
+    fn stable_size(&self) -> u32 {
+        align_to(self.next_offset as u32, self.align)
     }
+
+    fn prologue_adjustment(&self, has_calls: bool, pushed_saves: usize) -> u32 {
+        let stable_size = self.stable_size();
+        if self.save_style != crate::backend::abi::SaveStyle::PushPop || !has_calls {
+            return stable_size;
+        }
+        stable_size
+            + align_delta(
+                pushed_saves as u32 * self.slot_size + stable_size,
+                self.align,
+                self.slot_size % self.align.max(1),
+            )
+    }
+
+    fn incoming_stack_arg_offset(
+        &self,
+        prologue_adjustment: u32,
+        pushed_saves: usize,
+        stack_index: usize,
+    ) -> i64 {
+        let slot = i64::from(self.slot_size);
+        match self.save_style {
+            crate::backend::abi::SaveStyle::FrameSlots => {
+                i64::from(prologue_adjustment) + stack_index as i64 * slot
+            }
+            crate::backend::abi::SaveStyle::PushPop => {
+                pushed_saves as i64 * slot
+                    + i64::from(prologue_adjustment)
+                    + slot
+                    + stack_index as i64 * slot
+            }
+        }
+    }
+}
+
+fn align_to(size: u32, align: u32) -> u32 {
+    if size == 0 {
+        return 0;
+    }
+    let align = align.max(1);
+    size.div_ceil(align) * align
+}
+
+fn align_delta(offset: u32, align: u32, desired_remainder: u32) -> u32 {
+    let align = align.max(1);
+    (desired_remainder + align - offset % align) % align
 }
 
 struct StackAlloca {
@@ -1264,7 +1268,7 @@ struct StackAlloca {
 fn collect_stack_allocas(
     context: &Context,
     blocks: &[BlockId],
-    frame: &mut FrameState,
+    frame: &mut FramePlan,
 ) -> Vec<StackAlloca> {
     let mut allocas = Vec::new();
     for &block in blocks {
@@ -1280,7 +1284,8 @@ fn collect_stack_allocas(
                 op_id,
                 block,
                 vreg: result.number(),
-                offset: frame.alloc(allocation.size() as u32, allocation.align() as u32),
+                offset: frame
+                    .alloc_stack_allocation(allocation.size() as u32, allocation.align() as u32),
             });
         }
     }
@@ -1382,9 +1387,8 @@ fn insert_after(
 /// stable.
 fn callee_saved_slots(
     assignment: &HashMap<u32, PhysReg>,
-    frame: &mut FrameState,
+    frame: &mut FramePlan,
     abi_callee_saved: &[PhysReg],
-    on_frame: bool,
 ) -> Vec<(PhysReg, i64)> {
     let mut regs: Vec<PhysReg> = assignment
         .values()
@@ -1398,7 +1402,7 @@ fn callee_saved_slots(
     regs.sort();
     regs.dedup();
     regs.into_iter()
-        .map(|p| (p, if on_frame { frame.alloc_slot() } else { 0 }))
+        .map(|p| (p, frame.alloc_callee_save()))
         .collect()
 }
 
@@ -1875,12 +1879,14 @@ mod tests {
 
     #[test]
     fn frame_allocations_respect_size_and_alignment() {
-        let mut frame = FrameState::new(8);
+        let info = three_reg_info();
+        let abi = test_abi(&info, &[0, 1, 2]);
+        let mut frame = FramePlan::new(abi);
 
         assert_eq!(frame.alloc(1, 1), 0);
         assert_eq!(frame.alloc(8, 8), 8);
         assert_eq!(frame.alloc(4, 4), 16);
-        assert_eq!(frame.size(16), 32);
+        assert_eq!(frame.stable_size(), 24);
     }
     use std::collections::BTreeSet;
     use std::sync::Arc;
@@ -1962,6 +1968,28 @@ mod tests {
             reserved: &[],
             classifier: ClassifierKind::Sysv,
         }))
+    }
+
+    #[test]
+    fn push_pop_frame_alignment_accounts_for_pushed_saves() {
+        let info = three_reg_info();
+        let mut abi = *test_abi(&info, &[0, 1, 2]);
+        abi.stack.align = 16;
+        abi.stack.save_style = crate::backend::abi::SaveStyle::PushPop;
+
+        let no_saves = FramePlan::new(&abi);
+        assert_eq!(no_saves.prologue_adjustment(true, 0), 8);
+
+        let one_save = FramePlan::new(&abi);
+        assert_eq!(one_save.prologue_adjustment(true, 1), 0);
+
+        let two_saves = FramePlan::new(&abi);
+        assert_eq!(two_saves.prologue_adjustment(true, 2), 8);
+
+        let mut outgoing = FramePlan::new(&abi);
+        outgoing.reserve_outgoing(16);
+        assert_eq!(outgoing.prologue_adjustment(true, 1), 16);
+        assert_eq!(outgoing.incoming_stack_arg_offset(16, 1, 0), 32);
     }
 
     #[test]

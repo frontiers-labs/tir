@@ -1,8 +1,8 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 // SysV passes the seventh integer argument at rsp before the call. The stable
-// frame reserves its 16-byte outgoing area once; the saved register and
-// call-site alignment make the prologue reservation 32 bytes.
+// frame reserves its 16-byte outgoing area once; the saved register is pushed
+// outside that area and already contributes to call-site alignment.
 
 module {
   declare @g(!i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
@@ -13,7 +13,7 @@ module {
   module_end
 }
 
-// CHECK: x86_64.add_imm {dst = rsp, imm = -32}
+// CHECK: x86_64.add_imm {dst = rsp, imm = -16}
 // CHECK: x86_64.mov_store_disp {base = rsp, imm = 0, src = {{.*}}}
 // CHECK: asm.vcall {callee = "g"
-// CHECK: x86_64.add_imm {dst = rsp, imm = 32}
+// CHECK: x86_64.add_imm {dst = rsp, imm = 16}

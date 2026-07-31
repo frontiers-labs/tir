@@ -1,0 +1,21 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+// One pushed callee-saved register already realigns SysV's entry stack for
+// calls. The frame planner must not add an empty local adjustment around it.
+
+module {
+  declare @g(!i64) -> !i64
+  func @f(%0: !i64) -> !i64 {
+    %r = call @g(%0 : !i64) -> !i64
+    %res = muli %0, %r : !i64
+    return %res
+  }
+  module_end
+}
+
+// CHECK: x86_64.push
+// CHECK-NOT: x86_64.add_imm {dst = rsp
+// CHECK: asm.vcall {callee = "g"
+// CHECK-NOT: x86_64.add_imm {dst = rsp
+// CHECK: x86_64.pop
+// CHECK: asm.vret

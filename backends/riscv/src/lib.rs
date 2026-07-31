@@ -914,28 +914,6 @@ impl tir::backend::regalloc::TargetRegAlloc for RiscvRegAlloc {
         ops
     }
 
-    fn emit_incoming_stack_arg_load(
-        &self,
-        context: &tir::Context,
-        dst: &tir::backend::liveness::PhysReg,
-        frame: &tir::backend::liveness::PhysReg,
-        offset: i64,
-    ) -> Result<Box<dyn Operation>, tir::PassError> {
-        if dst.0.name() != "GPR" {
-            return Err(tir::PassError::InvalidRuleSet(format!(
-                "riscv stack arguments for register class {} are not supported",
-                dst.0.name()
-            )));
-        }
-        Ok(Box::new(
-            LoadDoubleWordOpBuilder::new(context)
-                .attr("rd", phys(dst))
-                .attr("rs1", phys(frame))
-                .attr("imm", tir::attributes::AttributeValue::Int(offset))
-                .build(),
-        ))
-    }
-
     fn emit_frame_address(
         &self,
         context: &tir::Context,

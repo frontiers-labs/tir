@@ -337,6 +337,15 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
         frame: &tir::backend::liveness::PhysReg,
         offset: i64,
     ) -> Box<dyn Operation> {
+        if class == RegClass::FPR64.id() {
+            return Box::new(
+                StoreFloatDoubleOpBuilder::new(context)
+                    .attr("ft", virt(value, class))
+                    .attr("rn", phys(frame))
+                    .attr("imm", tir::attributes::AttributeValue::Int(offset))
+                    .build(),
+            );
+        }
         Box::new(
             StoreDoublewordOpBuilder::new(context)
                 .attr("rt", virt(value, class))
@@ -354,6 +363,15 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
         frame: &tir::backend::liveness::PhysReg,
         offset: i64,
     ) -> Box<dyn Operation> {
+        if class == RegClass::FPR64.id() {
+            return Box::new(
+                LoadFloatDoubleOpBuilder::new(context)
+                    .attr("ft", virt(value, class))
+                    .attr("rn", phys(frame))
+                    .attr("imm", tir::attributes::AttributeValue::Int(offset))
+                    .build(),
+            );
+        }
         Box::new(
             LoadDoublewordOpBuilder::new(context)
                 .attr("rt", virt(value, class))
@@ -439,37 +457,6 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
                 .build(),
         ));
         ops
-    }
-
-    fn emit_incoming_stack_arg_load(
-        &self,
-        context: &tir::Context,
-        dst: &tir::backend::liveness::PhysReg,
-        frame: &tir::backend::liveness::PhysReg,
-        offset: i64,
-    ) -> Result<Box<dyn Operation>, tir::PassError> {
-        if dst.0 == RegClass::FPR64.id() {
-            return Ok(Box::new(
-                LoadFloatDoubleOpBuilder::new(context)
-                    .attr("ft", phys(dst))
-                    .attr("rn", phys(frame))
-                    .attr("imm", tir::attributes::AttributeValue::Int(offset))
-                    .build(),
-            ));
-        }
-        if dst.0 != RegClass::GPR.id() {
-            return Err(tir::PassError::InvalidRuleSet(format!(
-                "arm64 stack arguments for register class {} are not supported",
-                dst.0.name()
-            )));
-        }
-        Ok(Box::new(
-            LoadDoublewordOpBuilder::new(context)
-                .attr("rt", phys(dst))
-                .attr("rn", phys(frame))
-                .attr("imm", tir::attributes::AttributeValue::Int(offset))
-                .build(),
-        ))
     }
 
     fn emit_frame_address(
