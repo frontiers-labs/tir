@@ -98,27 +98,39 @@ template FpArithNorex for [X86_64] {
 // No-REX SSE forms. Behavior-free: canonicalize target for the low-xmm ALU and
 // movsd copies, and the assembler's preferred candidate for xmm0..xmm7.
 macro fp_norex {
-    ( $( ( $name:ident, $op:literal, $mn:literal, $opc:literal ) ),* ) => {
+    ( $class:ident, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal ) ),* ) => {
         $( instruction $name for [X86_64] : FpArithNorex {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
+               schedule { units = [$class]; }
                behavior { }
            } )*
     };
 }
 
-fp_norex!(
+fp_norex!(WriteFPAdd,
     (AddsdNorex, "addsd_norex", "addsd", 0x58),
-    (SubsdNorex, "subsd_norex", "subsd", 0x5C),
-    (MulsdNorex, "mulsd_norex", "mulsd", 0x59),
-    (DivsdNorex, "divsd_norex", "divsd", 0x5E),
+    (SubsdNorex, "subsd_norex", "subsd", 0x5C)
+)
+
+fp_norex!(WriteFPMul,
+    (MulsdNorex, "mulsd_norex", "mulsd", 0x59)
+)
+
+fp_norex!(WriteFPDiv,
+    (DivsdNorex, "divsd_norex", "divsd", 0x5E)
+)
+
+fp_norex!(WriteFPMove,
     (MovsdNorex, "movsd_norex", "movsd", 0x10)
 )
 
 instruction Addsd for [X86_64] : FpArith {
     param MNEMONIC: String = "addsd";
     param OPCODE: bits<8> = 0x58;
+
+    schedule { units = [WriteFPAdd]; }
 
     behavior {
         dst = fadd(dst, src);
@@ -129,6 +141,8 @@ instruction Subsd for [X86_64] : FpArith {
     param MNEMONIC: String = "subsd";
     param OPCODE: bits<8> = 0x5C;
 
+    schedule { units = [WriteFPAdd]; }
+
     behavior {
         dst = fsub(dst, src);
     }
@@ -137,6 +151,8 @@ instruction Subsd for [X86_64] : FpArith {
 instruction Mulsd for [X86_64] : FpArith {
     param MNEMONIC: String = "mulsd";
     param OPCODE: bits<8> = 0x59;
+
+    schedule { units = [WriteFPMul]; }
 
     behavior {
         dst = fmul(dst, src);
@@ -147,6 +163,8 @@ instruction Divsd for [X86_64] : FpArith {
     param MNEMONIC: String = "divsd";
     param OPCODE: bits<8> = 0x5E;
 
+    schedule { units = [WriteFPDiv]; }
+
     behavior {
         dst = fdiv(dst, src);
     }
@@ -154,6 +172,8 @@ instruction Divsd for [X86_64] : FpArith {
 
 instruction Ucomisd for [X86_64] {
     param MNEMONIC: String = "ucomisd";
+
+    schedule { units = [WriteFPCompare]; }
 
     operands {
         lhs: XMM,
@@ -209,6 +229,8 @@ instruction Ucomisd for [X86_64] {
 instruction Movsd for [X86_64] {
     param MNEMONIC: String = "movsd";
 
+    schedule { units = [WriteFPMove]; }
+
     operands {
         dst: XMM,
         src: XMM,
@@ -241,6 +263,8 @@ instruction Movsd for [X86_64] {
 instruction MovqXmmGpr for [X86_64] {
     param OPNAME: String = "movq_xmm_gpr";
     param MNEMONIC: String = "movq";
+
+    schedule { units = [WriteFPMove]; }
 
     operands {
         dst: XMM,
@@ -275,6 +299,8 @@ instruction MovqGprXmm for [X86_64] {
     param OPNAME: String = "movq_gpr_xmm";
     param MNEMONIC: String = "movq";
 
+    schedule { units = [WriteFPMove]; }
+
     operands {
         dst: GPR,
         src: XMM,
@@ -307,6 +333,8 @@ instruction MovqGprXmm for [X86_64] {
 instruction Cvtsi2sd32 for [X86_64] {
     param OPNAME: String = "cvtsi2sd32";
     param MNEMONIC: String = "cvtsi2sd";
+
+    schedule { units = [WriteSIToFP]; }
 
     operands {
         dst: XMM,
@@ -341,6 +369,8 @@ instruction Cvtsi2sd64 for [X86_64] {
     param OPNAME: String = "cvtsi2sd64";
     param MNEMONIC: String = "cvtsi2sd";
 
+    schedule { units = [WriteSIToFP]; }
+
     operands {
         dst: XMM,
         src: GPR,
@@ -374,6 +404,8 @@ instruction Cvttsd2si32 for [X86_64] {
     param OPNAME: String = "cvttsd2si32";
     param MNEMONIC: String = "cvttsd2si";
 
+    schedule { units = [WriteFPToSI]; }
+
     operands {
         dst: GPR32,
         src: XMM,
@@ -406,6 +438,8 @@ instruction Cvttsd2si32 for [X86_64] {
 instruction Cvttsd2si64 for [X86_64] {
     param OPNAME: String = "cvttsd2si64";
     param MNEMONIC: String = "cvttsd2si";
+
+    schedule { units = [WriteFPToSI]; }
 
     operands {
         dst: GPR,

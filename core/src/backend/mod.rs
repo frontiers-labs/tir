@@ -230,6 +230,9 @@ pub trait MachineInstruction {
         Ok(())
     }
     fn mnemonic(&self) -> &'static str;
+    fn scheduling_key(&self) -> &'static str {
+        self.mnemonic()
+    }
     fn width_bytes(&self) -> u8;
     fn execute(&self, machine: &mut dyn MachineContext) -> Result<(), SimTrap>;
     fn control_flow(&self) -> ControlFlow {

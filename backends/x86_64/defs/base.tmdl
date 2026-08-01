@@ -3,12 +3,15 @@
 // Reg/reg and reg/imm forms share a mnemonic; the assembler tries forms in
 // declaration order, so register forms precede the matching immediate forms.
 
-alu_rr!(RegReg,
+alu_rr!(RegReg, WriteIALU,
     (Add, "add", 0x01, { dst = dst + src; }),
     (Sub, "sub", 0x29, { dst = dst - src; }),
     (And, "and", 0x21, { dst = dst & src; }),
     (Or,  "or",  0x09, { dst = dst | src; }),
-    (Xor, "xor", 0x31, { dst = dst ^ src; }),
+    (Xor, "xor", 0x31, { dst = dst ^ src; })
+)
+
+alu_rr!(RegReg, WriteIMoveWide,
     (Mov, "mov", 0x89, { dst = src; })
 )
 
@@ -18,6 +21,8 @@ alu_rr!(RegReg,
 instruction Cmp for [X86_64] : RegReg {
     param MNEMONIC: String = "cmp";
     param OPCODE: bits<8> = 0x39;
+
+    schedule { units = [WriteIALU]; }
 
     behavior {
         // Signed overflow of dst - src: operands differ in sign and the
@@ -31,6 +36,8 @@ instruction Test for [X86_64] : RegReg {
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0x85;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         test_flags!({ src }, { self.XLEN }, { self.XLEN - 1 })
     }
@@ -43,6 +50,8 @@ instruction Imul for [X86_64] : RegRegExt {
     param MNEMONIC: String = "imul";
     param OPCODE: bits<8> = 0xAF;
 
+    schedule { units = [WriteIMul]; }
+
     behavior {
         dst = dst * src;
     }
@@ -52,6 +61,8 @@ instruction Imul32 for [X86_64] : RegRegExt32 {
     param OPNAME: String = "imul32";
     param MNEMONIC: String = "imul";
     param OPCODE: bits<8> = 0xAF;
+
+    schedule { units = [WriteIMul]; }
 
     behavior {
         dst = dst * src;
@@ -66,6 +77,8 @@ instruction ImulImm for [X86_64] : RegRegImm {
     param MNEMONIC: String = "imul";
     param OPCODE: bits<8> = 0x69;
 
+    schedule { units = [WriteIMul]; }
+
     behavior {
         dst = src * sext(imm, self.XLEN);
     }
@@ -76,6 +89,8 @@ instruction ImulImm32 for [X86_64] : RegRegImm32 {
     param MNEMONIC: String = "imul";
     param OPCODE: bits<8> = 0x69;
 
+    schedule { units = [WriteIMul]; }
+
     behavior {
         dst = src * sext(imm, 32);
     }
@@ -84,11 +99,14 @@ instruction ImulImm32 for [X86_64] : RegRegImm32 {
 // Group-1 ops share opcode 0x81 and select via the ModR/M EXT (/digit); mov
 // uses 0xC7.
 
-alu_ri!(RegImm,
+alu_ri!(RegImm, WriteIALU,
     (AddImm, "add_imm", "add", 0x81, 0b000, { dst = dst + sext(imm, self.XLEN); }),
     (OrImm,  "or_imm",  "or",  0x81, 0b001, { dst = dst | sext(imm, self.XLEN); }),
     (AndImm, "and_imm", "and", 0x81, 0b100, { dst = dst & sext(imm, self.XLEN); }),
-    (XorImm, "xor_imm", "xor", 0x81, 0b110, { dst = dst ^ sext(imm, self.XLEN); }),
+    (XorImm, "xor_imm", "xor", 0x81, 0b110, { dst = dst ^ sext(imm, self.XLEN); })
+)
+
+alu_ri!(RegImm, WriteIMoveImmediate,
     (MovImm, "mov_imm", "mov", 0xC7, 0b000, { dst = sext(imm, self.XLEN); })
 )
 
@@ -443,20 +461,26 @@ instruction CallIndirectNorex for [X86_64] {
     behavior { }
 }
 
-alu_rr!("32", "32", RegReg32,
+alu_rr!("32", "32", RegReg32, WriteIALU,
     (Add, "add", 0x01, { dst = dst + src; }),
     (Sub, "sub", 0x29, { dst = dst - src; }),
     (And, "and", 0x21, { dst = dst & src; }),
     (Or,  "or",  0x09, { dst = dst | src; }),
-    (Xor, "xor", 0x31, { dst = dst ^ src; }),
+    (Xor, "xor", 0x31, { dst = dst ^ src; })
+)
+
+alu_rr!("32", "32", RegReg32, WriteIMoveWide,
     (Mov, "mov", 0x89, { dst = src; })
 )
 
-alu_ri!("32", "32", RegImm32,
+alu_ri!("32", "32", RegImm32, WriteIALU,
     (AddImm, "add_imm", "add", 0x81, 0b000, { dst = dst + sext(imm, 32); }),
     (OrImm,  "or_imm",  "or",  0x81, 0b001, { dst = dst | sext(imm, 32); }),
     (AndImm, "and_imm", "and", 0x81, 0b100, { dst = dst & sext(imm, 32); }),
-    (XorImm, "xor_imm", "xor", 0x81, 0b110, { dst = dst ^ sext(imm, 32); }),
+    (XorImm, "xor_imm", "xor", 0x81, 0b110, { dst = dst ^ sext(imm, 32); })
+)
+
+alu_ri!("32", "32", RegImm32, WriteIMoveImmediate,
     (MovImm, "mov_imm", "mov", 0xC7, 0b000, { dst = sext(imm, 32); })
 )
 
@@ -472,20 +496,26 @@ shift_imm!("32", "32", RegShift32,
     (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
 )
 
-alu_rr!("16", "16", RegReg16,
+alu_rr!("16", "16", RegReg16, WriteIALU,
     (Add, "add", 0x01, { dst = dst + src; }),
     (Sub, "sub", 0x29, { dst = dst - src; }),
     (And, "and", 0x21, { dst = dst & src; }),
     (Or,  "or",  0x09, { dst = dst | src; }),
-    (Xor, "xor", 0x31, { dst = dst ^ src; }),
+    (Xor, "xor", 0x31, { dst = dst ^ src; })
+)
+
+alu_rr!("16", "16", RegReg16, WriteIMoveWide,
     (Mov, "mov", 0x89, { dst = src; })
 )
 
-alu_ri!("16", "16", RegImm16,
+alu_ri!("16", "16", RegImm16, WriteIALU,
     (AddImm, "add_imm", "add", 0x81, 0b000, { dst = dst + sext(imm, 16); }),
     (OrImm,  "or_imm",  "or",  0x81, 0b001, { dst = dst | sext(imm, 16); }),
     (AndImm, "and_imm", "and", 0x81, 0b100, { dst = dst & sext(imm, 16); }),
-    (XorImm, "xor_imm", "xor", 0x81, 0b110, { dst = dst ^ sext(imm, 16); }),
+    (XorImm, "xor_imm", "xor", 0x81, 0b110, { dst = dst ^ sext(imm, 16); })
+)
+
+alu_ri!("16", "16", RegImm16, WriteIMoveImmediate,
     (MovImm, "mov_imm", "mov", 0xC7, 0b000, { dst = sext(imm, 16); })
 )
 
@@ -495,20 +525,26 @@ shift_imm!("16", "16", RegShift16,
     (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
 )
 
-alu_rr!("8", "8", RegReg8,
+alu_rr!("8", "8", RegReg8, WriteIALU,
     (Add, "add", 0x00, { dst = dst + src; }),
     (Sub, "sub", 0x28, { dst = dst - src; }),
     (And, "and", 0x20, { dst = dst & src; }),
     (Or,  "or",  0x08, { dst = dst | src; }),
-    (Xor, "xor", 0x30, { dst = dst ^ src; }),
+    (Xor, "xor", 0x30, { dst = dst ^ src; })
+)
+
+alu_rr!("8", "8", RegReg8, WriteIMoveByte,
     (Mov, "mov", 0x88, { dst = src; })
 )
 
-alu_ri!("8", "8", RegImm8,
+alu_ri!("8", "8", RegImm8, WriteIALU,
     (AddImm, "add_imm", "add", 0x80, 0b000, { dst = dst + sext(imm, 8); }),
     (OrImm,  "or_imm",  "or",  0x80, 0b001, { dst = dst | sext(imm, 8); }),
     (AndImm, "and_imm", "and", 0x80, 0b100, { dst = dst & sext(imm, 8); }),
-    (XorImm, "xor_imm", "xor", 0x80, 0b110, { dst = dst ^ sext(imm, 8); }),
+    (XorImm, "xor_imm", "xor", 0x80, 0b110, { dst = dst ^ sext(imm, 8); })
+)
+
+alu_ri!("8", "8", RegImm8, WriteIMoveImmediate,
     (MovImm, "mov_imm", "mov", 0xC6, 0b000, { dst = sext(imm, 8); })
 )
 
@@ -518,61 +554,85 @@ shift_imm!("8", "8", RegShift8,
     (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
 )
 
-alu_rr!("8H", "8h", RegReg8H,
+alu_rr!("8H", "8h", RegReg8H, WriteIALU,
     (Add, "add", 0x00, { dst = dst + src; }),
     (Sub, "sub", 0x28, { dst = dst - src; }),
     (And, "and", 0x20, { dst = dst & src; }),
     (Or,  "or",  0x08, { dst = dst | src; }),
-    (Xor, "xor", 0x30, { dst = dst ^ src; }),
+    (Xor, "xor", 0x30, { dst = dst ^ src; })
+)
+
+alu_rr!("8H", "8h", RegReg8H, WriteIMoveByte,
     (Mov, "mov", 0x88, { dst = src; })
 )
 
 // No-REX register/register forms (low subclasses); opcodes match the width
 // above. cmp (0x39/0x38) and test (0x85/0x84) join the ALU rows: the 32-bit
 // forms canonicalize Cmp32/Test32, the 16/8-bit forms are assembler-only.
-alu_rr_norex!("32", RegReg32Norex,
+alu_rr_norex!("32", RegReg32Norex, WriteIALU,
     (Add, "add", 0x01), (Sub, "sub", 0x29), (And, "and", 0x21),
-    (Or, "or", 0x09), (Xor, "xor", 0x31), (Mov, "mov", 0x89),
+    (Or, "or", 0x09), (Xor, "xor", 0x31),
     (Cmp, "cmp", 0x39), (Test, "test", 0x85)
 )
 
-alu_rr_norex!("16", RegReg16Norex,
+alu_rr_norex!("32", RegReg32Norex, WriteIMoveWide,
+    (Mov, "mov", 0x89)
+)
+
+alu_rr_norex!("16", RegReg16Norex, WriteIALU,
     (Add, "add", 0x01), (Sub, "sub", 0x29), (And, "and", 0x21),
-    (Or, "or", 0x09), (Xor, "xor", 0x31), (Mov, "mov", 0x89),
+    (Or, "or", 0x09), (Xor, "xor", 0x31),
     (Cmp, "cmp", 0x39), (Test, "test", 0x85)
 )
 
-alu_rr_norex!("8", RegReg8Norex,
+alu_rr_norex!("16", RegReg16Norex, WriteIMoveWide,
+    (Mov, "mov", 0x89)
+)
+
+alu_rr_norex!("8", RegReg8Norex, WriteIALU,
     (Add, "add", 0x00), (Sub, "sub", 0x28), (And, "and", 0x20),
-    (Or, "or", 0x08), (Xor, "xor", 0x30), (Mov, "mov", 0x88),
+    (Or, "or", 0x08), (Xor, "xor", 0x30),
     (Cmp, "cmp", 0x38), (Test, "test", 0x84)
 )
 
+alu_rr_norex!("8", RegReg8Norex, WriteIMoveByte,
+    (Mov, "mov", 0x88)
+)
+
 // No-REX register/immediate imm32 forms (low subclasses).
-alu_ri_norex!(RegImm32Norex,
+alu_ri_norex!(RegImm32Norex, WriteIALU,
     (AddImm32Norex,  "add_imm32_norex",  "add",  0x81, 0b000),
     (OrImm32Norex,   "or_imm32_norex",   "or",   0x81, 0b001),
     (AndImm32Norex,  "and_imm32_norex",  "and",  0x81, 0b100),
     (XorImm32Norex,  "xor_imm32_norex",  "xor",  0x81, 0b110),
     (SubImm32Norex,  "sub_imm32_norex",  "sub",  0x81, 0b101),
     (CmpImm32Norex,  "cmp_imm32_norex",  "cmp",  0x81, 0b111),
-    (TestImm32Norex, "test_imm32_norex", "test", 0xF7, 0b000),
+    (TestImm32Norex, "test_imm32_norex", "test", 0xF7, 0b000)
+)
+
+alu_ri_norex!(RegImm32Norex, WriteIMoveImmediate,
     (MovImm32Norex,  "mov_imm32_norex",  "mov",  0xC7, 0b000)
 )
 
-alu_ri_norex!(RegImm16Norex,
+alu_ri_norex!(RegImm16Norex, WriteIALU,
     (AddImm16Norex, "add_imm16_norex", "add", 0x81, 0b000),
     (OrImm16Norex,  "or_imm16_norex",  "or",  0x81, 0b001),
     (AndImm16Norex, "and_imm16_norex", "and", 0x81, 0b100),
-    (XorImm16Norex, "xor_imm16_norex", "xor", 0x81, 0b110),
+    (XorImm16Norex, "xor_imm16_norex", "xor", 0x81, 0b110)
+)
+
+alu_ri_norex!(RegImm16Norex, WriteIMoveImmediate,
     (MovImm16Norex, "mov_imm16_norex", "mov", 0xC7, 0b000)
 )
 
-alu_ri_norex!(RegImm8Norex,
+alu_ri_norex!(RegImm8Norex, WriteIALU,
     (AddImm8Norex, "add_imm8_norex", "add", 0x80, 0b000),
     (OrImm8Norex,  "or_imm8_norex",  "or",  0x80, 0b001),
     (AndImm8Norex, "and_imm8_norex", "and", 0x80, 0b100),
-    (XorImm8Norex, "xor_imm8_norex", "xor", 0x80, 0b110),
+    (XorImm8Norex, "xor_imm8_norex", "xor", 0x80, 0b110)
+)
+
+alu_ri_norex!(RegImm8Norex, WriteIMoveImmediate,
     (MovImm8Norex, "mov_imm8_norex", "mov", 0xC6, 0b000)
 )
 
@@ -633,29 +693,32 @@ shift_imm_norex!("8", RegShift8Norex,
 
 // No-REX by-cl shift forms (low subclasses). The 32-bit forms canonicalize
 // ShlCl32/ShrCl32/SarCl32; the 16/8-bit forms are assembler-only.
-reg_ext_norex!(RegShiftCl32Norex,
+reg_ext_norex!(RegShiftCl32Norex, WriteIShift,
     (ShlCl32Norex, "shl_cl32_norex", "shl", 0b100),
     (ShrCl32Norex, "shr_cl32_norex", "shr", 0b101),
     (SarCl32Norex, "sar_cl32_norex", "sar", 0b111)
 )
 
-reg_ext_norex!(RegShiftCl16Norex,
+reg_ext_norex!(RegShiftCl16Norex, WriteIShift,
     (ShlCl16Norex, "shl_cl16_norex", "shl", 0b100),
     (ShrCl16Norex, "shr_cl16_norex", "shr", 0b101),
     (SarCl16Norex, "sar_cl16_norex", "sar", 0b111)
 )
 
-reg_ext_norex!(RegShiftCl8Norex,
+reg_ext_norex!(RegShiftCl8Norex, WriteIShift,
     (ShlCl8Norex, "shl_cl8_norex", "shl", 0b100),
     (ShrCl8Norex, "shr_cl8_norex", "shr", 0b101),
     (SarCl8Norex, "sar_cl8_norex", "sar", 0b111)
 )
 
-alu_ri!("8H", "8h", RegImm8H,
+alu_ri!("8H", "8h", RegImm8H, WriteIALU,
     (AddImm, "add_imm", "add", 0x80, 0b000, { dst = dst + sext(imm, 8); }),
     (OrImm,  "or_imm",  "or",  0x80, 0b001, { dst = dst | sext(imm, 8); }),
     (AndImm, "and_imm", "and", 0x80, 0b100, { dst = dst & sext(imm, 8); }),
-    (XorImm, "xor_imm", "xor", 0x80, 0b110, { dst = dst ^ sext(imm, 8); }),
+    (XorImm, "xor_imm", "xor", 0x80, 0b110, { dst = dst ^ sext(imm, 8); })
+)
+
+alu_ri!("8H", "8h", RegImm8H, WriteIMoveImmediate,
     (MovImm, "mov_imm", "mov", 0xC6, 0b000, { dst = sext(imm, 8); })
 )
 

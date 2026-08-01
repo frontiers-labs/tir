@@ -1276,6 +1276,10 @@ fn emit_instructions<'a>(
                     #mnemonic_lit
                 }
 
+                fn scheduling_key(&self) -> &'static str {
+                    #op_name_lit
+                }
+
                 fn width_bytes(&self) -> u8 {
                     #width_bytes_lit
                 }

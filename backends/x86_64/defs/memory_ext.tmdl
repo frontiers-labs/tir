@@ -980,6 +980,8 @@ instruction LeaRip for [X86_64] {
     param OPNAME: String = "lea";
     param MNEMONIC: String = "lea";
 
+    schedule { units = [WriteILea]; }
+
     operands {
         dst: GPR,
         imm: bits<32>,

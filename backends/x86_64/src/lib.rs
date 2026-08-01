@@ -7,6 +7,7 @@ const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
     ("conditional.tmdl", include_str!("../defs/conditional.tmdl")),
     ("memory_ext.tmdl", include_str!("../defs/memory_ext.tmdl")),
     ("float.tmdl", include_str!("../defs/float.tmdl")),
+    ("perf.tmdl", include_str!("../defs/perf.tmdl")),
 ];
 
 pub use isa::{Feature, get_isel_rules, register_info, register_views, register_widths};
@@ -1513,6 +1514,11 @@ mod isa {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tiger_lake_uses_fitted_scheduling_window() {
+        assert_eq!(crate::isa::tiger_lake_model().buffer("rob"), Some(8));
+    }
+
     #[test]
     fn x86_64_target_enables_its_x86_prerequisite() {
         let config = crate::TargetConfig::parse("x86_64", None, None).unwrap();

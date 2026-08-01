@@ -412,18 +412,20 @@ template JccRel32 for [X86_64] {
 // Opcodes differ per width (e.g. Add 0x01 vs Add8 0x00), so they stay per row.
 
 macro alu_rr {
-    ( $nsuf:literal, $osuf:literal, $tmpl:ident, $( ( $name:ident, $mn:literal, $opc:literal, { $($b:tt)* } ) ),* ) => {
+    ( $nsuf:literal, $osuf:literal, $tmpl:ident, $class:ident, $( ( $name:ident, $mn:literal, $opc:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction ${concat($name, $nsuf)} for [X86_64] : $tmpl {
                param OPNAME: String = ${concat($mn, $osuf)};
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
+               schedule { units = [$class]; }
                behavior { $($b)* }
            } )*
     };
-    ( $tmpl:ident, $( ( $name:ident, $mn:literal, $opc:literal, { $($b:tt)* } ) ),* ) => {
+    ( $tmpl:ident, $class:ident, $( ( $name:ident, $mn:literal, $opc:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction $name for [X86_64] : $tmpl {
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
+               schedule { units = [$class]; }
                behavior { $($b)* }
            } )*
     };
@@ -433,32 +435,35 @@ macro alu_rr {
 // no isel rule and are produced only by `canonicalize_encodings`, so the REX
 // forms keep sole ownership of selection.
 macro alu_rr_norex {
-    ( $suf:literal, $tmpl:ident, $( ( $name:ident, $mn:literal, $opc:literal ) ),* ) => {
+    ( $suf:literal, $tmpl:ident, $class:ident, $( ( $name:ident, $mn:literal, $opc:literal ) ),* ) => {
         $( instruction ${concat($name, $suf, "Norex")} for [X86_64] : $tmpl {
                param OPNAME: String = ${concat($mn, $suf, "_norex")};
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
+               schedule { units = [$class]; }
                behavior { }
            } )*
     };
 }
 
 macro alu_ri {
-    ( $nsuf:literal, $osuf:literal, $tmpl:ident, $( ( $name:ident, $ostem:literal, $mn:literal, $opc:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
+    ( $nsuf:literal, $osuf:literal, $tmpl:ident, $class:ident, $( ( $name:ident, $ostem:literal, $mn:literal, $opc:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction ${concat($name, $nsuf)} for [X86_64] : $tmpl {
                param OPNAME: String = ${concat($ostem, $osuf)};
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
                param EXT: bits<3> = $ext;
+               schedule { units = [$class]; }
                behavior { $($b)* }
            } )*
     };
-    ( $tmpl:ident, $( ( $name:ident, $opname:literal, $mn:literal, $opc:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
+    ( $tmpl:ident, $class:ident, $( ( $name:ident, $opname:literal, $mn:literal, $opc:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction $name for [X86_64] : $tmpl {
                param OPNAME: String = $opname;
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
                param EXT: bits<3> = $ext;
+               schedule { units = [$class]; }
                behavior { $($b)* }
            } )*
     };
@@ -467,12 +472,13 @@ macro alu_ri {
 // No-REX register/immediate forms (imm32/imm16/imm8, low subclasses). Behavior-
 // free, so they root no isel rule; produced only by `canonicalize_encodings`.
 macro alu_ri_norex {
-    ( $tmpl:ident, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal, $ext:literal ) ),* ) => {
+    ( $tmpl:ident, $class:ident, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal, $ext:literal ) ),* ) => {
         $( instruction $name for [X86_64] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
                param EXT: bits<3> = $ext;
+               schedule { units = [$class]; }
                behavior { }
            } )*
     };
@@ -485,6 +491,7 @@ macro alu_ri8 {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
+               schedule { units = [WriteIALU]; }
                behavior { }
            } )*
     };
@@ -496,6 +503,7 @@ macro alu_ri8_sem {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
+               schedule { units = [WriteIALU]; }
                behavior { $($b)* }
            } )*
     };
@@ -507,6 +515,7 @@ macro shift_cl {
                param OPNAME: String = ${concat($ostem, $osuf)};
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
+               schedule { units = [WriteIShift]; }
                behavior { $($b)* }
            } )*
     };
@@ -515,6 +524,7 @@ macro shift_cl {
                param OPNAME: String = $opname;
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
+               schedule { units = [WriteIShift]; }
                behavior { $($b)* }
            } )*
     };
@@ -526,6 +536,7 @@ macro shift_imm {
                param OPNAME: String = ${concat($mn, $osuf)};
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
+               schedule { units = [WriteIShift]; }
                behavior { $($b)* }
            } )*
     };
@@ -533,6 +544,7 @@ macro shift_imm {
         $( instruction $name for [X86_64] : $tmpl {
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
+               schedule { units = [WriteIShift]; }
                behavior { $($b)* }
            } )*
     };
@@ -542,11 +554,12 @@ macro shift_imm {
 // low subclasses. The opcode is fixed by the template; only EXT and mnemonic
 // vary. Behavior-free, so they root no isel rule (canonicalize/assembler only).
 macro reg_ext_norex {
-    ( $tmpl:ident, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
+    ( $tmpl:ident, $class:ident, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
         $( instruction $name for [X86_64] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
+               schedule { units = [$class]; }
                behavior { }
            } )*
     };
@@ -559,6 +572,7 @@ macro shift_imm_norex {
                param OPNAME: String = ${concat($mn, $suf, "_norex")};
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
+               schedule { units = [WriteIShift]; }
                behavior { }
            } )*
     };
@@ -1122,6 +1136,7 @@ macro setcc_ops {
         $( instruction $name for [X86_64] : SetccReg {
                param MNEMONIC: String = $mn;
                param CC: bits<8> = $cc;
+               schedule { units = [WriteIConditional]; }
                behavior {
                    dst = if $($cond)* {
                        zext(0b1, 8)
@@ -1140,6 +1155,7 @@ macro setcc_norex {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param CC: bits<8> = $cc;
+               schedule { units = [WriteIConditional]; }
                behavior { }
            } )*
     };
@@ -1150,6 +1166,7 @@ macro cmovcc_ops {
         $( instruction $name for [X86_64] : RegRegExt {
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
+               schedule { units = [WriteIConditional]; }
                behavior {
                    dst = if $($cond)* {
                        src
@@ -1311,6 +1328,7 @@ macro extend_ops {
                param OPNAME: String = $opname;
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
+               schedule { units = [WriteIExtend]; }
                behavior { $($b)* }
            } )*
     };

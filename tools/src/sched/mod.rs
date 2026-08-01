@@ -108,14 +108,14 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() else {
             continue;
         };
-        let mnemonic = mi.mnemonic();
+        let scheduling_key = mi.scheduling_key();
         let regs = op_regs(&op);
         let text = asm_printer
             .print_instruction(&context, &op)?
             .ok_or_else(|| format!("no assembly printer registered for '{}'", op.name()))?;
         base.push(ScoreboardInstr {
             text,
-            class: model.sched_class(mnemonic),
+            class: model.sched_class(scheduling_key),
             defs: phys_regs(&regs.defs, Some(&prf)),
             uses: phys_regs(&regs.uses, Some(&prf)),
             branch: None,

@@ -34,6 +34,8 @@ instruction CmpImm for [X86_64] : RegImm {
     param OPCODE: bits<8> = 0x81;
     param EXT: bits<3> = 0b111;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         sub_flags!({ sext(imm, self.XLEN) }, { self.XLEN - 1 })
     }
@@ -44,6 +46,8 @@ instruction TestImm for [X86_64] : RegImm {
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0xF7;
     param EXT: bits<3> = 0b000;
+
+    schedule { units = [WriteIALU]; }
 
     behavior {
         test_flags!({ sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 })
@@ -56,6 +60,8 @@ instruction SubImm for [X86_64] : RegImm {
     param OPCODE: bits<8> = 0x81;
     param EXT: bits<3> = 0b101;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         dst = dst - sext(imm, self.XLEN);
     }
@@ -65,6 +71,8 @@ instruction Neg for [X86_64] : RegUnary {
     param MNEMONIC: String = "neg";
     param EXT: bits<3> = 0b011;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         dst = zext(0b0, self.XLEN) - dst;
     }
@@ -73,6 +81,8 @@ instruction Neg for [X86_64] : RegUnary {
 instruction Not for [X86_64] : RegUnary {
     param MNEMONIC: String = "not";
     param EXT: bits<3> = 0b010;
+
+    schedule { units = [WriteIALU]; }
 
     behavior {
         dst = ~dst;
@@ -86,6 +96,8 @@ instruction ImulWide for [X86_64] : RegUnary {
     param OPNAME: String = "imul_wide";
     param MNEMONIC: String = "imul";
     param EXT: bits<3> = 0b101;
+
+    schedule { units = [WriteIMul]; }
 
     behavior {
         GPR::rdx = extract(GPR::rax * dst, (2 * self.XLEN) - 1, self.XLEN);
@@ -103,6 +115,7 @@ instruction ImulWide for [X86_64] : RegUnary {
 instruction SignExtendDividend for [X86_64] {
     param OPNAME: String = "sign_extend_dividend";
     param MNEMONIC: String = "cqo";
+    schedule { units = [WriteIExtend]; }
     encoding { 0..7 => 0x48, 8..15 => 0x99, }
     asm { "{self.MNEMONIC}" }
     behavior {
@@ -137,6 +150,7 @@ instruction SignedDivide for [X86_64] : RegUnary {
 instruction ZeroExtendDividend for [X86_64] {
     param OPNAME: String = "zero_extend_dividend";
     param MNEMONIC: String = "xor";
+    schedule { units = [WriteIALU]; }
     encoding { 0..7 => 0x31, 8..15 => 0xD2, }
     asm { "{self.MNEMONIC} edx, edx" }
     behavior {
@@ -174,6 +188,7 @@ instruction UnsignedDivide for [X86_64] : RegUnary {
 instruction SignExtendDividend32 for [X86_64] {
     param OPNAME: String = "sign_extend_dividend32";
     param MNEMONIC: String = "cdq";
+    schedule { units = [WriteIExtend]; }
     encoding { 0..7 => 0x99, }
     asm { "{self.MNEMONIC}" }
     behavior {
@@ -207,6 +222,7 @@ instruction SignedDivide32 for [X86_64] : RegUnary32 {
 instruction ZeroExtendDividend32 for [X86_64] {
     param OPNAME: String = "zero_extend_dividend32";
     param MNEMONIC: String = "xor";
+    schedule { units = [WriteIALU]; }
     encoding { 0..7 => 0x31, 8..15 => 0xD2, }
     asm { "{self.MNEMONIC} edx, edx" }
     behavior {
@@ -267,6 +283,8 @@ extend_ops!(
 instruction Movsxd for [X86_64] {
     param MNEMONIC: String = "movsxd";
 
+    schedule { units = [WriteIExtend]; }
+
     operands {
         dst: GPR,
         src: GPR32,
@@ -298,6 +316,8 @@ instruction Movsxd for [X86_64] {
 instruction Movzxd for [X86_64] {
     param OPNAME: String = "movzxd";
     param MNEMONIC: String = "mov";
+
+    schedule { units = [WriteIExtend]; }
 
     operands {
         dst: GPR,
@@ -331,6 +351,8 @@ instruction Movzxd for [X86_64] {
 instruction MovAbs for [X86_64] {
     param MNEMONIC: String = "movabs";
 
+    schedule { units = [WriteIMoveAbsolute]; }
+
     operands {
         dst: GPR,
         imm: bits<64>,
@@ -363,6 +385,8 @@ instruction Cmp32 for [X86_64] : RegReg32 {
     param MNEMONIC: String = "cmp";
     param OPCODE: bits<8> = 0x39;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         sub_flags!({ src }, { 31 })
     }
@@ -373,6 +397,8 @@ instruction Test32 for [X86_64] : RegReg32 {
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0x85;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         test_flags!({ src }, { 32 }, { 31 })
     }
@@ -382,6 +408,7 @@ instruction Test8 for [X86_64] : RegReg8 {
     param OPNAME: String = "test8";
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0x84;
+    schedule { units = [WriteIALU]; }
     behavior { }
 }
 
@@ -390,6 +417,8 @@ instruction CmpImm32 for [X86_64] : RegImm32 {
     param MNEMONIC: String = "cmp";
     param OPCODE: bits<8> = 0x81;
     param EXT: bits<3> = 0b111;
+
+    schedule { units = [WriteIALU]; }
 
     behavior {
         sub_flags!({ sext(imm, 32) }, { 31 })
@@ -402,6 +431,8 @@ instruction TestImm32 for [X86_64] : RegImm32 {
     param OPCODE: bits<8> = 0xF7;
     param EXT: bits<3> = 0b000;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         test_flags!({ sext(imm, 32) }, { 32 }, { 31 })
     }
@@ -413,6 +444,8 @@ instruction SubImm32 for [X86_64] : RegImm32 {
     param OPCODE: bits<8> = 0x81;
     param EXT: bits<3> = 0b101;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         dst = dst - sext(imm, 32);
     }
@@ -422,6 +455,8 @@ instruction Neg32 for [X86_64] : RegUnary32 {
     param OPNAME: String = "neg32";
     param MNEMONIC: String = "neg";
     param EXT: bits<3> = 0b011;
+
+    schedule { units = [WriteIALU]; }
 
     behavior {
         dst = zext(0b0, 32) - dst;
@@ -433,6 +468,8 @@ instruction Not32 for [X86_64] : RegUnary32 {
     param MNEMONIC: String = "not";
     param EXT: bits<3> = 0b010;
 
+    schedule { units = [WriteIALU]; }
+
     behavior {
         dst = ~dst;
     }
@@ -441,17 +478,17 @@ instruction Not32 for [X86_64] : RegUnary32 {
 // No-REX neg/not (0xF7 /3, /2; byte 0xF6) over the low subclasses. neg = /3,
 // not = /2. Behavior-free; the 32-bit forms are the canonicalize target for
 // Neg32/Not32, the 16/8-bit forms are assembler-only (no narrow generic).
-reg_ext_norex!(RegUnary32Norex,
+reg_ext_norex!(RegUnary32Norex, WriteIALU,
     (Neg32Norex, "neg32_norex", "neg", 0b011),
     (Not32Norex, "not32_norex", "not", 0b010)
 )
 
-reg_ext_norex!(RegUnary16Norex,
+reg_ext_norex!(RegUnary16Norex, WriteIALU,
     (Neg16Norex, "neg16_norex", "neg", 0b011),
     (Not16Norex, "not16_norex", "not", 0b010)
 )
 
-reg_ext_norex!(RegUnary8Norex,
+reg_ext_norex!(RegUnary8Norex, WriteIALU,
     (Neg8Norex, "neg8_norex", "neg", 0b011),
     (Not8Norex, "not8_norex", "not", 0b010)
 )

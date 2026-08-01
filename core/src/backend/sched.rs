@@ -121,16 +121,19 @@ pub struct MachineModel {
     /// Physical register-file sizes for renaming, keyed by physical-file name. A
     /// file absent here defaults to its architectural register count.
     pub reg_files: &'static [RegFile],
-    /// Per-instruction scheduling classes keyed by operation mnemonic, sorted by
-    /// mnemonic for binary search. Resolved at TMDL-compile time.
+    /// Per-instruction scheduling classes keyed by stable operation identity,
+    /// sorted for binary search. Resolved at TMDL-compile time.
     pub sched: &'static [(&'static str, InstrSchedClass)],
 }
 
 impl MachineModel {
-    /// The scheduling class for an operation mnemonic, or [`InstrSchedClass::DEFAULT`]
-    /// if this machine has no specific entry for it.
-    pub fn sched_class(&self, mnemonic: &str) -> InstrSchedClass {
-        match self.sched.binary_search_by_key(&mnemonic, |(m, _)| m) {
+    /// The scheduling class for an operation identity, or
+    /// [`InstrSchedClass::DEFAULT`] if this machine has no specific entry for it.
+    pub fn sched_class(&self, operation: &str) -> InstrSchedClass {
+        match self
+            .sched
+            .binary_search_by_key(&operation, |(name, _)| name)
+        {
             Ok(i) => self.sched[i].1,
             Err(_) => InstrSchedClass::DEFAULT,
         }

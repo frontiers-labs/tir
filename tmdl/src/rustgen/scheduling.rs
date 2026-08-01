@@ -1,6 +1,6 @@
 /// Emit one `fn <machine>_model() -> tir::backend::sched::MachineModel` per TMDL
 /// `machine` block. Each instruction's `unit` membership is resolved against the
-/// machine's `bind`s at compile time into a concrete per-mnemonic scheduling class,
+/// machine's `bind`s at compile time into a concrete per-operation scheduling class,
 /// so the runtime lookup is a binary search. This is the static half of the
 /// performance model: the same table feeds the compiler cost model and the
 /// cycle-approximate simulator, so they cannot disagree.
@@ -27,7 +27,7 @@ fn emit_machine_models<'a>(
         // per-instruction `override` supersedes the `unit`-based resolution.
         let mut entries: Vec<(String, ResolvedClass)> = scheduled
             .iter()
-            .map(|(name, mnemonic, units)| {
+            .map(|(name, operation, _mnemonic, units)| {
                 let resolved = match overrides.get(name.as_str()) {
                     Some(ov) => resolve_spec(
                         ov.reads.as_deref(),
@@ -39,10 +39,10 @@ fn emit_machine_models<'a>(
                     ),
                     None => resolve_sched_class(units, &binds, &unit_defaults, &machine.pipeline),
                 };
-                (mnemonic.clone(), resolved)
+                (operation.clone(), resolved)
             })
             .collect();
-        // Sorted + deduplicated by mnemonic for the runtime binary search.
+        // Sorted + deduplicated by stable operation identity for runtime lookup.
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         entries.dedup_by(|a, b| a.0 == b.0);
 
@@ -184,13 +184,14 @@ fn collect_unit_defaults(files: &[ast::File]) -> HashMap<&str, &ast::SchedClassD
         .collect()
 }
 
-/// `(instruction name, mnemonic, units)` for every instruction carrying a
-/// `schedule` block. The name keys per-instruction machine `override`s; the
-/// mnemonic keys the runtime scheduling table.
+/// `(instruction name, operation identity, mnemonic, units)` for every
+/// instruction carrying a `schedule` block. The declaration name keys
+/// per-instruction machine `override`s; operation identity keys the runtime
+/// scheduling table; mnemonic remains the machine-independent cost key.
 fn collect_scheduled<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
-) -> Vec<(String, String, Vec<String>)> {
+) -> Vec<(String, String, String, Vec<String>)> {
     let mut scheduled = Vec::new();
     for inst in files.iter().flat_map(|f| f.instructions()) {
         let Some(schedule) =
@@ -199,20 +200,30 @@ fn collect_scheduled<'a>(
             continue;
         };
         let resolved_params = resolve_params_for_instruction(inst, item_cache);
-        let mnemonic = resolved_params
-            .get("MNEMONIC")
+        let operation = resolved_params
+            .get("OPNAME")
             .and_then(|(_, v)| v.as_ref())
             .and_then(resolve_string)
             .or_else(|| {
                 resolved_params
-                    .get("OPNAME")
+                    .get("MNEMONIC")
                     .and_then(|(_, v)| v.as_ref())
                     .and_then(resolve_string)
             });
-        let Some(mnemonic) = mnemonic else {
+        let Some(operation) = operation else {
             continue;
         };
-        scheduled.push((inst.name.clone(), mnemonic, schedule.classes.clone()));
+        let mnemonic = resolved_params
+            .get("MNEMONIC")
+            .and_then(|(_, v)| v.as_ref())
+            .and_then(resolve_string)
+            .unwrap_or_else(|| operation.clone());
+        scheduled.push((
+            inst.name.clone(),
+            operation,
+            mnemonic,
+            schedule.classes.clone(),
+        ));
     }
     scheduled
 }
@@ -232,7 +243,7 @@ fn emit_instruction_cost<'a>(
 
     let mut arms = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for (_name, mnemonic, units) in &scheduled {
+    for (_name, _operation, mnemonic, units) in &scheduled {
         if !seen.insert(mnemonic.clone()) {
             continue;
         }
@@ -405,4 +416,3 @@ fn to_snake_case(s: &str) -> String {
     }
     out
 }
-
