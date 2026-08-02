@@ -16,10 +16,27 @@ sched_class WriteFPMove { latency = 1; }
 sched_class WriteSIToFP { latency = 4; }
 sched_class WriteFPToSI { latency = 1; }
 sched_class WriteFPCompare { latency = 1; }
-sched_class WriteILea { latency = 1; }
+sched_class WriteILeaSimple { latency = 1; }
+sched_class WriteILeaComplex { latency = 1; }
+sched_class WriteILeaRip { latency = 1; }
 
 machine TigerLake ("tiger-lake") for [X86_64] {
     issue_width = 6;
+
+    frontend {
+        fetch {
+            bytes_per_cycle = 16;
+            window_bytes = 16;
+            alignment = 16;
+            queue_bytes = 64;
+        }
+        decode {
+            slots = [simple, simple, simple, simple];
+            uops_per_cycle = 4;
+            queue_uops = 64;
+            decoder simple { max_uops_per_instruction = 1; }
+        }
+    }
 
     buffers {
         rob = 8;
@@ -38,7 +55,9 @@ machine TigerLake ("tiger-lake") for [X86_64] {
     unit IConditional { count = 1; }
     unit FPConvert { count = 1; }
     unit FPCompare { count = 1; }
-    unit ILea { count = 1; }
+    unit ILeaAny { count = 4; }
+    unit ILeaComplex { count = 2; }
+    unit ILeaRip { count = 1; }
 
     bind WriteIALU { latency = 1; uses = [IALU]; }
     bind WriteIShift { latency = 1; uses = [IALU]; }
@@ -56,5 +75,7 @@ machine TigerLake ("tiger-lake") for [X86_64] {
     bind WriteSIToFP { latency = 4; uses = [FPConvert]; }
     bind WriteFPToSI { latency = 1; uses = [FPConvert]; }
     bind WriteFPCompare { latency = 1; uses = [FPCompare]; }
-    bind WriteILea { latency = 1; uses = [ILea]; }
+    bind WriteILeaSimple { latency = 1; uses = [ILeaAny]; }
+    bind WriteILeaComplex { latency = 1; uses = [ILeaAny, ILeaComplex]; }
+    bind WriteILeaRip { latency = 1; uses = [ILeaAny, ILeaRip]; }
 }

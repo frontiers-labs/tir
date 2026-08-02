@@ -975,7 +975,6 @@ instruction Mov8StoreDisp for [X86_64] {
 // `lea r64, [base + index]` using a SIB byte with scale 1 and no displacement.
 template LeaBaseIndexTemplate for [X86_64] {
     param SCALE_BITS: bits<2>;
-    schedule { units = [WriteILea]; }
     operands {
         dst: GPR,
         base: GPRaddrBase,
@@ -1001,6 +1000,7 @@ instruction LeaBaseIndex for [X86_64] : LeaBaseIndexTemplate {
     param OPNAME: String = "lea_base_index";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b00;
+    schedule { units = [WriteILeaSimple]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + {index}]"
@@ -1015,6 +1015,7 @@ instruction LeaBaseIndex2 for [X86_64] : LeaBaseIndexTemplate {
     param OPNAME: String = "lea_base_index2";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b01;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 2*{index}]"
@@ -1030,6 +1031,7 @@ instruction LeaBaseIndex4 for [X86_64] : LeaBaseIndexTemplate {
     param OPNAME: String = "lea_base_index4";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b10;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 4*{index}]"
@@ -1044,6 +1046,7 @@ instruction LeaBaseIndex8 for [X86_64] : LeaBaseIndexTemplate {
     param OPNAME: String = "lea_base_index8";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b11;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 8*{index}]"
@@ -1056,8 +1059,6 @@ instruction LeaBaseIndex8 for [X86_64] : LeaBaseIndexTemplate {
 
 template LeaRbpIndexTemplate for [X86_64] {
     param SCALE_BITS: bits<2>;
-
-    schedule { units = [WriteILea]; }
 
     operands {
         dst: GPR,
@@ -1086,6 +1087,7 @@ instruction LeaRbpIndex for [X86_64] : LeaRbpIndexTemplate {
     param OPNAME: String = "lea_rbp_index";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b00;
+    schedule { units = [WriteILeaSimple]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + {index}]"
@@ -1100,6 +1102,7 @@ instruction LeaRbpIndex2 for [X86_64] : LeaRbpIndexTemplate {
     param OPNAME: String = "lea_rbp_index2";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b01;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 2*{index}]"
@@ -1114,6 +1117,7 @@ instruction LeaRbpIndex4 for [X86_64] : LeaRbpIndexTemplate {
     param OPNAME: String = "lea_rbp_index4";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b10;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 4*{index}]"
@@ -1128,6 +1132,7 @@ instruction LeaRbpIndex8 for [X86_64] : LeaRbpIndexTemplate {
     param OPNAME: String = "lea_rbp_index8";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b11;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 8*{index}]"
@@ -1141,7 +1146,7 @@ instruction LeaRbpIndex8 for [X86_64] : LeaRbpIndexTemplate {
 template LeaScaledIndex for [X86_64] {
     param SCALE_BITS: bits<2>;
 
-    schedule { units = [WriteILea]; }
+    schedule { units = [WriteILeaComplex]; }
 
     operands {
         dst: GPR,
@@ -1196,8 +1201,6 @@ instruction LeaIndex8 for [X86_64] : LeaScaledIndex {
 template LeaBaseIndexDisp8Template for [X86_64] {
     param SCALE_BITS: bits<2>;
 
-    schedule { units = [WriteILea]; }
-
     operands {
         dst: GPR,
         base: GPR,
@@ -1226,6 +1229,7 @@ instruction LeaBaseIndexDisp8 for [X86_64] : LeaBaseIndexDisp8Template {
     param OPNAME: String = "lea_base_index_disp8";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b00;
+    schedule { units = [WriteILeaSimple]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + {index} + {imm}]"
@@ -1240,6 +1244,7 @@ instruction LeaBaseIndex2Disp8 for [X86_64] : LeaBaseIndexDisp8Template {
     param OPNAME: String = "lea_base_index2_disp8";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b01;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 2*{index} + {imm}]"
@@ -1254,6 +1259,7 @@ instruction LeaBaseIndex4Disp8 for [X86_64] : LeaBaseIndexDisp8Template {
     param OPNAME: String = "lea_base_index4_disp8";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b10;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 4*{index} + {imm}]"
@@ -1268,6 +1274,7 @@ instruction LeaBaseIndex8Disp8 for [X86_64] : LeaBaseIndexDisp8Template {
     param OPNAME: String = "lea_base_index8_disp8";
     param MNEMONIC: String = "lea";
     param SCALE_BITS: bits<2> = 0b11;
+    schedule { units = [WriteILeaComplex]; }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base} + 8*{index} + {imm}]"
@@ -1281,7 +1288,7 @@ instruction LeaBaseIndex8Disp8 for [X86_64] : LeaBaseIndexDisp8Template {
 template LeaIndexDisp32 for [X86_64] {
     param SCALE_BITS: bits<2>;
 
-    schedule { units = [WriteILea]; }
+    schedule { units = [WriteILeaComplex]; }
 
     operands {
         dst: GPR,
@@ -1339,7 +1346,7 @@ instruction LeaBaseDisp8 for [X86_64] {
     param OPNAME: String = "lea_base_disp8";
     param MNEMONIC: String = "lea";
 
-    schedule { units = [WriteILea]; }
+    schedule { units = [WriteILeaSimple]; }
 
     operands {
         dst: GPR,
@@ -1373,7 +1380,7 @@ instruction LeaBaseDisp8Sib for [X86_64] {
     param OPNAME: String = "lea_base_disp8_sib";
     param MNEMONIC: String = "lea";
 
-    schedule { units = [WriteILea]; }
+    schedule { units = [WriteILeaSimple]; }
 
     operands {
         dst: GPR,
@@ -1408,7 +1415,7 @@ instruction LeaBaseDisp32 for [X86_64] {
     param OPNAME: String = "lea_base_disp32";
     param MNEMONIC: String = "lea";
 
-    schedule { units = [WriteILea]; }
+    schedule { units = [WriteILeaSimple]; }
 
     operands {
         dst: GPR,
@@ -1442,7 +1449,7 @@ instruction LeaBaseDisp32Sib for [X86_64] {
     param OPNAME: String = "lea_base_disp32_sib";
     param MNEMONIC: String = "lea";
 
-    schedule { units = [WriteILea]; }
+    schedule { units = [WriteILeaSimple]; }
 
     operands {
         dst: GPR,
@@ -1481,7 +1488,7 @@ instruction LeaRip for [X86_64] {
     param OPNAME: String = "lea";
     param MNEMONIC: String = "lea";
 
-    schedule { units = [WriteILea]; }
+    schedule { units = [WriteILeaRip]; }
 
     operands {
         dst: GPR,
