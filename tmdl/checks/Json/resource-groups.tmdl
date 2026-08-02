@@ -1,0 +1,35 @@
+// RUN: tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s
+
+// CHECK:              "kind": "machine",
+// CHECK:              "resources": [
+// CHECK:                  "name": "P0",
+// CHECK:                  "name": "P1",
+// CHECK:              "resource_groups": [
+// CHECK:                  "name": "Int",
+// CHECK:                  "kind": "any",
+// CHECK:                  "name": "P0"
+// CHECK:                  "name": "P1"
+// CHECK:              "bindings": [
+// CHECK:                  "unit": "WriteIMul",
+// CHECK:                  "uops": [
+// CHECK:                      "count": 1,
+// CHECK:                      "kind": "all",
+// CHECK:                          "name": "Int"
+// CHECK:                          "kind": "occupied",
+// CHECK:                          "name": "Multiply"
+// CHECK:                          "cycles": 3
+
+isa TestIsa {}
+
+sched_class WriteIMul;
+
+machine TestCore for [TestIsa] {
+    unit P0 { count = 1; }
+    unit P1 { count = 1; }
+    unit Multiply { count = 1; }
+    group Int = P0 | P1;
+    bind WriteIMul {
+        latency = 3;
+        uop(Int & Multiply<3>);
+    }
+}

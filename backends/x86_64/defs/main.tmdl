@@ -280,6 +280,52 @@ register_class GPRrbp for [X86_64] {
     }
 }
 
+// SIB address components for forms without a displacement. rbp/r13 cannot be
+// encoded as a mod=00 base, and rsp cannot occupy the SIB index field.
+register_class GPRaddrBase for [X86_64] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rax => { index = 0 }, rcx => { index = 1 }, rdx => { index = 2 },
+        rbx => { index = 3 }, rsp => { index = 4 }, rsi => { index = 6 },
+        rdi => { index = 7 }, r8 => { index = 8 }, r9 => { index = 9 },
+        r10 => { index = 10 }, r11 => { index = 11 }, r12 => { index = 12 },
+        r14 => { index = 14 }, r15 => { index = 15 },
+    }
+}
+
+register_class GPRaddrIndex for [X86_64] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rax => { index = 0 }, rcx => { index = 1 }, rdx => { index = 2 },
+        rbx => { index = 3 }, rbp => { index = 5 }, rsi => { index = 6 },
+        rdi => { index = 7 }, r8 => { index = 8 }, r9 => { index = 9 },
+        r10 => { index = 10 }, r11 => { index = 11 }, r12 => { index = 12 },
+        r13 => { index = 13 },
+        r14 => { index = 14 }, r15 => { index = 15 },
+    }
+}
+
+// Bases whose low encoding bits can be used directly in a ModR/M r/m field.
+register_class GPRaddrModRmBase for [X86_64] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rax => { index = 0 }, rcx => { index = 1 }, rdx => { index = 2 },
+        rbx => { index = 3 }, rbp => { index = 5 }, rsi => { index = 6 },
+        rdi => { index = 7 }, r8 => { index = 8 }, r9 => { index = 9 },
+        r10 => { index = 10 }, r11 => { index = 11 }, r13 => { index = 13 },
+        r14 => { index = 14 }, r15 => { index = 15 },
+    }
+}
+
 // `op dst, src`: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst). The REX byte
 // is 0100 WRXB: REX.B carries dst's 4th bit, REX.R carries src's.
 tmpl_rr!(RegReg, X86_64, GPR, rexw = 0b1)
@@ -308,6 +354,55 @@ tmpl_rscl!(RegShiftCl32, X86_64, GPR32, rexw = 0b0)
 // No-REX by-cl shift templates over the low subclasses (0xD3 / 0x66+0xD3 /
 // 0xD2). The cl operand is fixed; only the dst register gates the REX drop.
 tmpl_rscl!(RegShiftCl32Norex, GPR32low, norex)
+
+template RegShiftOne for [X86_64] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+    operands { dst: GPR, }
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b1,
+        4..7 => 0b0100,
+        8..15 => 0xD1,
+        16..18 => dst[0..2],
+        19..21 => EXT,
+        22..23 => 0b11,
+    }
+    asm { "{self.MNEMONIC} {dst}" }
+}
+
+template RegShiftOne32 for [X86_64] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+    operands { dst: GPR32, }
+    encoding {
+        0 => dst[3],
+        1 => 0b0,
+        2 => 0b0,
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0xD1,
+        16..18 => dst[0..2],
+        19..21 => EXT,
+        22..23 => 0b11,
+    }
+    asm { "{self.MNEMONIC} {dst}" }
+}
+
+template RegShiftOne32Norex for [X86_64] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+    operands { dst: GPR32low, }
+    encoding {
+        0..7 => 0xD1,
+        8..10 => dst[0..2],
+        11..13 => EXT,
+        14..15 => 0b11,
+    }
+    asm { "{self.MNEMONIC} {dst}" }
+}
 
 tmpl_rscl!(RegShiftCl16Norex, GPR16low, prefix66norex)
 

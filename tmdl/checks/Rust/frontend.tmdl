@@ -1,0 +1,60 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+// CHECK: frontend: Some(tir::backend::sched::Frontend {
+// CHECK: bytes_per_cycle: 16,
+// CHECK: window_bytes: 32,
+// CHECK: alignment: 16,
+// CHECK: queue_bytes: 64,
+// CHECK: slots: &["complex", "simple"],
+// CHECK: uops_per_cycle: 6,
+// CHECK: queue_uops: 64,
+// CHECK: name: "complex",
+// CHECK: max_uops_per_instruction: 4,
+// CHECK: decoded_cache: Some(tir::backend::sched::DecodedCache {
+// CHECK: sets: 32,
+// CHECK: ways: 8,
+// CHECK: line_bytes: 32,
+// CHECK: line_uops: 6,
+// CHECK: deliver_uops_per_cycle: 6,
+// CHECK: "complex-op",
+// CHECK: decode_uops: 3,
+// CHECK: decoder: Some("complex"),
+// CHECK: decode_cycles: 3,
+
+isa TestIsa {}
+
+sched_class WriteComplex;
+
+instruction ComplexOp for [TestIsa] {
+    param OPNAME: String = "complex-op";
+    param MNEMONIC: String = "complex";
+    asm { "complex" }
+    behavior { todo(); }
+    schedule { units = [WriteComplex]; }
+}
+
+machine TestCore for [TestIsa] {
+    frontend {
+        fetch {
+            bytes_per_cycle = 16;
+            window_bytes = 32;
+            alignment = 16;
+            queue_bytes = 64;
+        }
+        decode {
+            slots = [complex, simple];
+            uops_per_cycle = 6;
+            queue_uops = 64;
+            decoder simple { max_uops_per_instruction = 1; }
+            decoder complex { max_uops_per_instruction = 4; }
+        }
+        decoded_cache {
+            sets = 32;
+            ways = 8;
+            line_bytes = 32;
+            line_uops = 6;
+            deliver_uops_per_cycle = 6;
+        }
+    }
+    bind WriteComplex { decode_uops = 3; decoder = complex; decode_cycles = 3; }
+}

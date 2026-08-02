@@ -142,6 +142,81 @@ buffers {
 }
 ```
 
+### Resource groups and micro-ops
+
+`group` declares a reusable expression over existing units. It never creates
+capacity. `|` selects one available route and `&` reserves every operand of the
+route. A postfix `<N>` keeps that resource occupied for `N` cycles.
+
+```
+unit P0 { count = 1; }
+unit P1 { count = 1; }
+unit Multiply { count = 1; }
+
+group Int = P0 | P1;
+
+bind WriteIALU {
+  latency = 1;
+  uop(Int);
+}
+
+bind WriteIMul {
+  latency = 3;
+  uop(Int & Multiply<3>);
+}
+```
+
+Multiple `uop(...)` statements emit multiple micro-ops. The equivalent repeated
+form is `uop(Int, count = 2)`. Groups may overlap freely; contention always occurs
+on their underlying `unit` declarations. The older `uses = [ALU, ...]` form remains
+available and means one legacy reservation that requires every listed resource.
+
+## Fetch and decode frontend
+
+An out-of-order machine may describe the byte fetch path, decoder topology, and
+decoded-instruction cache directly:
+
+```
+frontend {
+  fetch {
+    bytes_per_cycle = 16;
+    window_bytes = 32;
+    alignment = 16;
+    queue_bytes = 64;
+  }
+  decode {
+    slots = [complex, simple, simple, simple];
+    uops_per_cycle = 6;
+    queue_uops = 64;
+    decoder simple { max_uops_per_instruction = 1; }
+    decoder complex { max_uops_per_instruction = 4; }
+  }
+  decoded_cache {
+    sets = 32;
+    ways = 8;
+    line_bytes = 32;
+    line_uops = 6;
+    deliver_uops_per_cycle = 6;
+  }
+}
+```
+
+The instruction encoder supplies exact PCs and byte lengths to `tir sched`.
+Bindings normally derive their decoded micro-op count from their `uop` statements.
+Exceptional classes may override it and require a particular decoder kind:
+
+```
+bind WriteComplex {
+  decode_uops = 3;
+  decoder = complex;
+  uop(P0);
+}
+```
+
+The semantic checker rejects missing or non-positive capacities, unknown decoder
+slots, decoder requirements with no capable slot, unknown resources, cyclic groups,
+and non-positive micro-op counts or occupancies.
+
 ## Scheduling classes and binding
 
 An ISA declares machine-independent **scheduling classes** — groups of operations

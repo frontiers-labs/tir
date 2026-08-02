@@ -40,6 +40,8 @@ pub struct ScoreboardInstr {
     /// Program counter, for the front-end instruction-cache query. `0` in static
     /// mode, which never passes a memory system, so it is never consulted.
     pub pc: u64,
+    /// Encoded instruction length consumed by the fetch frontend.
+    pub width_bytes: u16,
     /// Data-memory accesses this instruction performs (trace mode only; empty in
     /// static mode). Drives the memory hierarchy when one is present.
     pub mem: Vec<MemAccess>,
@@ -89,6 +91,229 @@ pub struct TimingConfig {
     /// Front-end refetch penalty, in cycles, charged on a branch
     /// misprediction.
     pub mispredict_penalty: u64,
+    /// Byte distance between successive static copies of the analyzed block.
+    /// Zero keeps every iteration at the same addresses, as trace replay does.
+    pub unroll_stride: u64,
+}
+
+#[derive(Default)]
+struct FrontendState {
+    fetch_cycles: HashMap<u64, FetchCycle>,
+    decode_cycles: HashMap<u64, DecodeCycle>,
+    decoded_lines: HashMap<usize, Vec<DecodedLine>>,
+    decoded_delivery: HashMap<u64, u16>,
+    cache_clock: u64,
+}
+
+struct FetchCycle {
+    window_start: u64,
+    bytes: u16,
+}
+
+struct DecodeCycle {
+    slots: Vec<bool>,
+    uops: u16,
+}
+
+struct DecodedLine {
+    tag: u64,
+    instructions: HashSet<u64>,
+    uops: u16,
+    last_used: u64,
+}
+
+impl FrontendState {
+    fn reserve_decoded_cache(
+        &mut self,
+        cache: &tir::backend::sched::DecodedCache,
+        class: &InstrSchedClass,
+        pc: u64,
+        width_bytes: u16,
+        earliest: u64,
+    ) -> Option<u64> {
+        let (set, tag) = decoded_cache_location(cache, pc, width_bytes)?;
+        let line = self
+            .decoded_lines
+            .get_mut(&set)?
+            .iter_mut()
+            .find(|line| line.tag == tag && line.instructions.contains(&pc))?;
+        self.cache_clock += 1;
+        line.last_used = self.cache_clock;
+
+        let mut cycle = earliest;
+        loop {
+            let delivered = self.decoded_delivery.entry(cycle).or_default();
+            if delivered.saturating_add(class.decode_uops) <= cache.deliver_uops_per_cycle {
+                *delivered = delivered.saturating_add(class.decode_uops);
+                return Some(cycle);
+            }
+            cycle += 1;
+        }
+    }
+
+    fn fill_decoded_cache(
+        &mut self,
+        cache: &tir::backend::sched::DecodedCache,
+        class: &InstrSchedClass,
+        pc: u64,
+        width_bytes: u16,
+    ) {
+        if class.decode_uops > cache.line_uops {
+            return;
+        }
+        let Some((set, tag)) = decoded_cache_location(cache, pc, width_bytes) else {
+            return;
+        };
+        self.cache_clock += 1;
+        let lines = self.decoded_lines.entry(set).or_default();
+        if let Some(line) = lines.iter_mut().find(|line| line.tag == tag) {
+            if line.instructions.contains(&pc)
+                || line.uops.saturating_add(class.decode_uops) <= cache.line_uops
+            {
+                if line.instructions.insert(pc) {
+                    line.uops = line.uops.saturating_add(class.decode_uops);
+                }
+                line.last_used = self.cache_clock;
+            }
+            return;
+        }
+
+        if lines.len() >= usize::from(cache.ways.max(1)) {
+            let victim = lines
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, line)| line.last_used)
+                .map(|(index, _)| index)
+                .unwrap();
+            lines.swap_remove(victim);
+        }
+        lines.push(DecodedLine {
+            tag,
+            instructions: HashSet::from([pc]),
+            uops: class.decode_uops,
+            last_used: self.cache_clock,
+        });
+    }
+
+    fn reserve_fetch(
+        &mut self,
+        frontend: &tir::backend::sched::Frontend,
+        pc: u64,
+        width_bytes: u16,
+        earliest: u64,
+    ) -> u64 {
+        let alignment = u64::from(frontend.fetch.alignment.max(1));
+        let window_bytes = u64::from(frontend.fetch.window_bytes.max(1));
+        let bytes_per_cycle = frontend.fetch.bytes_per_cycle.max(1);
+        let mut cursor = pc;
+        let mut remaining = width_bytes.max(1);
+        let mut cycle = earliest;
+
+        while remaining > 0 {
+            let default_window = cursor / alignment * alignment;
+            let state = self.fetch_cycles.entry(cycle).or_insert(FetchCycle {
+                window_start: default_window,
+                bytes: 0,
+            });
+            let window_end = state.window_start.saturating_add(window_bytes);
+            if cursor < state.window_start || cursor >= window_end || state.bytes >= bytes_per_cycle
+            {
+                cycle += 1;
+                continue;
+            }
+            let in_window = window_end.saturating_sub(cursor).min(u64::from(u16::MAX)) as u16;
+            let available = bytes_per_cycle.saturating_sub(state.bytes).min(in_window);
+            let consumed = remaining.min(available);
+            state.bytes = state.bytes.saturating_add(consumed);
+            cursor = cursor.saturating_add(u64::from(consumed));
+            remaining -= consumed;
+            if remaining > 0 {
+                cycle += 1;
+            }
+        }
+        cycle
+    }
+
+    fn reserve_decode(
+        &mut self,
+        frontend: &tir::backend::sched::Frontend,
+        class: &InstrSchedClass,
+        earliest: u64,
+    ) -> u64 {
+        let eligible_slots: Vec<_> = frontend
+            .decode
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let decoder = frontend
+                    .decode
+                    .decoders
+                    .iter()
+                    .find(|decoder| decoder.name == *slot)?;
+                (class.decoder.is_none_or(|required| required == *slot)
+                    && decoder.max_uops_per_instruction >= class.decode_uops)
+                    .then_some(index)
+            })
+            .collect();
+        if eligible_slots.is_empty() {
+            return earliest;
+        }
+
+        let mut cycle = earliest;
+        loop {
+            let uops = self
+                .decode_cycles
+                .get(&cycle)
+                .map(|state| state.uops)
+                .unwrap_or(0);
+            let occupancy = u64::from(class.decode_cycles.max(1));
+            let selected = (uops.saturating_add(class.decode_uops)
+                <= frontend.decode.uops_per_cycle)
+                .then(|| {
+                    eligible_slots.iter().copied().find(|index| {
+                        (cycle..cycle + occupancy).all(|occupied_cycle| {
+                            self.decode_cycles
+                                .get(&occupied_cycle)
+                                .is_none_or(|state| !state.slots[*index])
+                        })
+                    })
+                })
+                .flatten();
+            if let Some(index) = selected {
+                for occupied_cycle in cycle..cycle + occupancy {
+                    let state =
+                        self.decode_cycles
+                            .entry(occupied_cycle)
+                            .or_insert_with(|| DecodeCycle {
+                                slots: vec![false; frontend.decode.slots.len()],
+                                uops: 0,
+                            });
+                    state.slots[index] = true;
+                    if occupied_cycle == cycle {
+                        state.uops = state.uops.saturating_add(class.decode_uops);
+                    }
+                }
+                return cycle;
+            }
+            cycle += 1;
+        }
+    }
+}
+
+fn decoded_cache_location(
+    cache: &tir::backend::sched::DecodedCache,
+    pc: u64,
+    width_bytes: u16,
+) -> Option<(usize, u64)> {
+    let line_bytes = u64::from(cache.line_bytes.max(1));
+    let offset = pc % line_bytes;
+    if offset + u64::from(width_bytes.max(1)) > line_bytes {
+        return None;
+    }
+    let line = pc / line_bytes;
+    let sets = u64::from(cache.sets.max(1));
+    Some(((line % sets) as usize, line / sets))
 }
 
 impl TimingConfig {
@@ -108,13 +333,21 @@ impl TimingConfig {
                 in_order: false,
                 window: rob as usize,
                 mispredict_penalty: penalty,
+                unroll_stride: 0,
             },
             None => Self {
                 in_order: true,
                 window: 0,
                 mispredict_penalty: penalty,
+                unroll_stride: 0,
             },
         }
+    }
+
+    /// Analyze iterations as contiguous static copies instead of one hot loop.
+    pub fn with_unroll_stride(mut self, bytes: u64) -> Self {
+        self.unroll_stride = bytes;
+        self
     }
 }
 
@@ -343,6 +576,16 @@ pub fn run(
     mut mem: Option<&mut MemorySystem>,
     mut handler: Option<&mut dyn EventHandler>,
 ) -> TimingResult {
+    if !config.in_order
+        && predictor.is_none()
+        && mem.is_none()
+        && base
+            .iter()
+            .all(|instruction| instruction.branch.is_none() && instruction.mem.is_empty())
+    {
+        return run_ooo_compute(model, base, iterations, config, prf, handler);
+    }
+
     if let Some(h) = handler.as_mut() {
         h.start(&SimContext {
             model,
@@ -386,9 +629,11 @@ pub fn run(
     // The simulated clock. Advanced monotonically; between dispatches it skips
     // forward to the next cycle a gate can release rather than spinning.
     let mut cycle: u64 = 0;
+    let mut frontend_state = FrontendState::default();
 
     for i in 0..n {
         let slot = &base[i % base.len()];
+        let pc = unrolled_pc(slot.pc, i, base.len(), config.unroll_stride);
 
         // Front end: advance the clock to instruction `i`'s dispatch cycle. It
         // dispatches in program order, at most `width` per cycle, and no earlier
@@ -417,7 +662,21 @@ pub fn run(
         // Front-end instruction fetch: only an L1I miss (a new line that missed)
         // stalls dispatch; a hit is folded into the pipeline depth.
         if let Some(mem) = mem.as_deref_mut() {
-            d += mem.fetch_stall(slot.pc, d);
+            d += mem.fetch_stall(pc, d);
+        }
+        if let Some(frontend) = &model.frontend {
+            let decoded = frontend.decoded_cache.as_ref().and_then(|cache| {
+                frontend_state.reserve_decoded_cache(cache, &slot.class, pc, slot.width_bytes, d)
+            });
+            if let Some(decoded) = decoded {
+                d = decoded;
+            } else {
+                d = frontend_state.reserve_fetch(frontend, pc, slot.width_bytes, d);
+                d = frontend_state.reserve_decode(frontend, &slot.class, d);
+                if let Some(cache) = &frontend.decoded_cache {
+                    frontend_state.fill_decoded_cache(cache, &slot.class, pc, slot.width_bytes);
+                }
+            }
         }
         cycle = d;
         dispatch[i] = cycle;
@@ -441,27 +700,10 @@ pub fn run(
             t = t.max(issue[i - 1]);
         }
 
-        // Functional-unit contention: an instruction can't issue until a lane
-        // in each resource it needs is free.
-        for r in slot.class.resources {
-            if let Some(lane_set) = lanes.get(*r) {
-                t = t.max(lane_set.iter().copied().min().unwrap_or(0));
-            }
-        }
+        t = reserve_class_resources(&slot.class, &mut lanes, t);
         issue[i] = t;
         if let Some(h) = handler.as_mut() {
             h.issued(t, i);
-        }
-
-        // Reserve the earliest-free lane in each used resource for `rthroughput`.
-        let busy_until = t + u64::from(slot.class.rthroughput.max(1));
-        for r in slot.class.resources {
-            if let Some(lane) = lanes
-                .get_mut(*r)
-                .and_then(|s| s.iter_mut().min_by_key(|c| **c))
-            {
-                *lane = busy_until;
-            }
         }
 
         for def in &slot.defs {
@@ -522,11 +764,302 @@ pub fn run(
     }
 }
 
+fn run_ooo_compute(
+    model: &MachineModel,
+    base: &[ScoreboardInstr],
+    iterations: usize,
+    config: &TimingConfig,
+    prf: Option<&Prf>,
+    mut handler: Option<&mut dyn EventHandler>,
+) -> TimingResult {
+    if let Some(h) = handler.as_mut() {
+        h.start(&SimContext {
+            model,
+            iterations,
+            base,
+        });
+    }
+    let n = base.len().saturating_mul(iterations);
+    if n == 0 {
+        if let Some(h) = handler.as_mut() {
+            h.finish(0);
+        }
+        return TimingResult {
+            cycles: 0,
+            instructions: 0,
+            mispredicts: 0,
+        };
+    }
+
+    let width = usize::from(model.issue_width.max(1));
+    let window = if config.window == 0 {
+        usize::MAX
+    } else {
+        config.window
+    };
+    let mut dependencies = vec![Vec::new(); n];
+    let mut writers = HashMap::new();
+    for i in 0..n {
+        let slot = &base[i % base.len()];
+        for register in &slot.uses {
+            if let Some(&producer) = writers.get(register) {
+                dependencies[i].push(producer);
+            }
+        }
+        for register in &slot.defs {
+            writers.insert(register.clone(), i);
+        }
+    }
+
+    let mut lanes: HashMap<&'static str, Vec<u64>> = model
+        .resources
+        .iter()
+        .map(|resource| (resource.name, vec![0; usize::from(resource.units.max(1))]))
+        .collect();
+    let mut frontend = FrontendState::default();
+    let mut frontend_ready: Vec<Option<u64>> = vec![None; n];
+    let mut issued: Vec<Option<u64>> = vec![None; n];
+    let mut completed: Vec<Option<u64>> = vec![None; n];
+    let mut active: VecDeque<usize> = VecDeque::new();
+    let mut prf_used: HashMap<String, u16> = HashMap::new();
+    let mut next_dispatch = 0usize;
+    let mut retired = 0usize;
+    let mut cycle = 0u64;
+
+    while retired < n {
+        while let Some(&index) = active.front() {
+            if !completed[index].is_some_and(|complete| complete <= cycle) {
+                break;
+            }
+            active.pop_front();
+            retired += 1;
+            if let Some(prf) = prf {
+                for (file, count) in register_file_counts(&base[index % base.len()].defs, prf) {
+                    let used = prf_used.entry(file).or_default();
+                    *used = used.saturating_sub(count);
+                }
+            }
+            if let Some(h) = handler.as_mut() {
+                h.retired(cycle, index);
+            }
+        }
+
+        let mut dispatched_this_cycle = 0usize;
+        while next_dispatch < n
+            && active.len() < window
+            && dispatched_this_cycle < width
+            && prf_can_allocate(&base[next_dispatch % base.len()].defs, prf, &prf_used)
+        {
+            let slot = &base[next_dispatch % base.len()];
+            let pc = unrolled_pc(slot.pc, next_dispatch, base.len(), config.unroll_stride);
+            let ready = *frontend_ready[next_dispatch].get_or_insert_with(|| {
+                frontend_delivery_cycle(model, &mut frontend, slot, pc, cycle)
+            });
+            if ready > cycle {
+                break;
+            }
+            active.push_back(next_dispatch);
+            if let Some(prf) = prf {
+                for (file, count) in register_file_counts(&slot.defs, prf) {
+                    *prf_used.entry(file).or_default() += count;
+                }
+            }
+            if let Some(h) = handler.as_mut() {
+                h.dispatched(cycle, next_dispatch);
+            }
+            next_dispatch += 1;
+            dispatched_this_cycle += 1;
+        }
+
+        let mut issued_this_cycle = 0usize;
+        for &index in &active {
+            if issued_this_cycle >= width || issued[index].is_some() {
+                continue;
+            }
+            let slot = &base[index % base.len()];
+            let operands_ready = dependencies[index].iter().all(|&producer| {
+                issued[producer].is_some_and(|producer_issue| {
+                    let producer_slot = &base[producer % base.len()];
+                    producer_issue + edge_latency(model, &producer_slot.class, &slot.class) <= cycle
+                })
+            });
+            if !operands_ready {
+                continue;
+            }
+            let mut candidate_lanes = lanes.clone();
+            if reserve_class_resources(&slot.class, &mut candidate_lanes, cycle) != cycle {
+                continue;
+            }
+            lanes = candidate_lanes;
+            issued[index] = Some(cycle);
+            completed[index] = Some(cycle + u64::from(slot.class.latency));
+            issued_this_cycle += 1;
+            if let Some(h) = handler.as_mut() {
+                h.issued(cycle, index);
+            }
+        }
+
+        cycle += 1;
+    }
+
+    let cycles = cycle;
+    if let Some(h) = handler.as_mut() {
+        h.finish(cycles);
+    }
+    TimingResult {
+        cycles,
+        instructions: n as u64,
+        mispredicts: 0,
+    }
+}
+
+fn frontend_delivery_cycle(
+    model: &MachineModel,
+    state: &mut FrontendState,
+    slot: &ScoreboardInstr,
+    pc: u64,
+    earliest: u64,
+) -> u64 {
+    let Some(frontend) = &model.frontend else {
+        return earliest;
+    };
+    if let Some(decoded) = frontend.decoded_cache.as_ref().and_then(|cache| {
+        state.reserve_decoded_cache(cache, &slot.class, pc, slot.width_bytes, earliest)
+    }) {
+        return decoded;
+    }
+    let fetched = state.reserve_fetch(frontend, pc, slot.width_bytes, earliest);
+    let decoded = state.reserve_decode(frontend, &slot.class, fetched);
+    if let Some(cache) = &frontend.decoded_cache {
+        state.fill_decoded_cache(cache, &slot.class, pc, slot.width_bytes);
+    }
+    decoded
+}
+
+fn unrolled_pc(base_pc: u64, index: usize, block_len: usize, stride: u64) -> u64 {
+    let iteration = (index / block_len.max(1)) as u64;
+    base_pc.saturating_add(iteration.saturating_mul(stride))
+}
+
+fn register_file_counts(registers: &[(String, u16)], prf: &Prf) -> HashMap<String, u16> {
+    let mut counts = HashMap::new();
+    for (class, _) in registers {
+        *counts.entry(prf.file_of(class).to_string()).or_default() += 1;
+    }
+    counts
+}
+
+fn prf_can_allocate(
+    registers: &[(String, u16)],
+    prf: Option<&Prf>,
+    used: &HashMap<String, u16>,
+) -> bool {
+    let Some(prf) = prf else {
+        return true;
+    };
+    register_file_counts(registers, prf)
+        .into_iter()
+        .all(|(file, needed)| {
+            used.get(&file).copied().unwrap_or(0).saturating_add(needed)
+                <= prf.capacity.get(&file).copied().unwrap_or(u16::MAX)
+        })
+}
+
+fn reserve_class_resources(
+    class: &InstrSchedClass,
+    lanes: &mut HashMap<&'static str, Vec<u64>>,
+    earliest: u64,
+) -> u64 {
+    if !class.uops.is_empty() {
+        return reserve_micro_ops(class.uops, lanes, earliest);
+    }
+
+    let mut issue = earliest;
+    for resource in class.resources {
+        if let Some(resource_lanes) = lanes.get(*resource) {
+            issue = issue.max(resource_lanes.iter().copied().min().unwrap_or(0));
+        }
+    }
+    let busy_until = issue + u64::from(class.rthroughput.max(1));
+    for resource in class.resources {
+        if let Some(lane) = lanes
+            .get_mut(*resource)
+            .and_then(|resource_lanes| resource_lanes.iter_mut().min_by_key(|cycle| **cycle))
+        {
+            *lane = busy_until;
+        }
+    }
+    issue
+}
+
+fn reserve_micro_ops(
+    uops: &[tir::backend::sched::MicroOp],
+    lanes: &mut HashMap<&'static str, Vec<u64>>,
+    earliest: u64,
+) -> u64 {
+    let (issue, reserved) = schedule_micro_ops(uops, lanes.clone(), earliest);
+    *lanes = reserved;
+    issue
+}
+
+fn schedule_micro_ops(
+    uops: &[tir::backend::sched::MicroOp],
+    lanes: HashMap<&'static str, Vec<u64>>,
+    earliest: u64,
+) -> (u64, HashMap<&'static str, Vec<u64>>) {
+    let Some((uop, remaining)) = uops.split_first() else {
+        return (earliest, lanes);
+    };
+
+    uop.routes
+        .iter()
+        .map(|route| {
+            let (start, reserved) = reserve_route(route, lanes.clone(), earliest);
+            let (rest_issue, reserved) = schedule_micro_ops(remaining, reserved, earliest);
+            (start.max(rest_issue), reserved)
+        })
+        .min_by_key(|(issue, reserved)| {
+            let total_busy: u64 = reserved.values().flatten().sum();
+            (*issue, total_busy)
+        })
+        .unwrap_or((earliest, lanes))
+}
+
+fn reserve_route(
+    route: &tir::backend::sched::ResourceRoute,
+    lanes: HashMap<&'static str, Vec<u64>>,
+    earliest: u64,
+) -> (u64, HashMap<&'static str, Vec<u64>>) {
+    let mut start = earliest;
+    loop {
+        let mut candidate = lanes.clone();
+        let reservable = route.resources.iter().all(|use_| {
+            candidate
+                .get_mut(use_.resource)
+                .and_then(|resource_lanes| {
+                    resource_lanes
+                        .iter_mut()
+                        .filter(|cycle| **cycle <= start)
+                        .min_by_key(|cycle| **cycle)
+                })
+                .map(|lane| *lane = start + u64::from(use_.cycles.max(1)))
+                .is_some()
+        });
+        if reservable {
+            return (start, candidate);
+        }
+        start += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::predictor::AlwaysNotTaken;
-    use tir::backend::sched::{Forward, ProcUnit};
+    use tir::backend::sched::{
+        DecodedCache, Decoder, Forward, Frontend, FrontendDecode, FrontendFetch, MicroOp, ProcUnit,
+        ResourceRoute, ResourceUse,
+    };
 
     /// The pre-refactor closed-form engine, kept verbatim as the oracle for the
     /// differential test below: the cycle-stepped [`run`] must reproduce it
@@ -710,6 +1243,7 @@ mod tests {
         MachineModel {
             name: "diff-test",
             issue_width,
+            frontend: None,
             resources,
             buffers: &[],
             pipeline: &[],
@@ -730,18 +1264,30 @@ mod tests {
             read_cycle: 0,
             rthroughput: 1,
             resources: &["ALU"],
+            uops: &[],
+            decode_uops: 1,
+            decoder: None,
+            decode_cycles: 1,
         },
         InstrSchedClass {
             latency: 3,
             read_cycle: 0,
             rthroughput: 2,
             resources: &["MUL"],
+            uops: &[],
+            decode_uops: 1,
+            decoder: None,
+            decode_cycles: 1,
         },
         InstrSchedClass {
             latency: 4,
             read_cycle: 0,
             rthroughput: 1,
             resources: &["LSU"],
+            uops: &[],
+            decode_uops: 1,
+            decoder: None,
+            decode_cycles: 1,
         },
     ];
 
@@ -785,6 +1331,7 @@ mod tests {
                     uses,
                     branch,
                     pc: 0,
+                    width_bytes: 1,
                     mem: Vec::new(),
                 }
             })
@@ -821,6 +1368,7 @@ mod tests {
                                 in_order,
                                 window: win,
                                 mispredict_penalty: 5,
+                                unroll_stride: 0,
                             };
                             let prf_arg = if use_prf { Some(&prf) } else { None };
 
@@ -863,5 +1411,422 @@ mod tests {
                 }
             }
         }
+    }
+
+    const TEST_P0: ResourceUse = ResourceUse {
+        resource: "P0",
+        cycles: 1,
+    };
+    const TEST_P1: ResourceUse = ResourceUse {
+        resource: "P1",
+        cycles: 1,
+    };
+
+    fn resource_test_model(resources: &'static [ProcUnit]) -> MachineModel {
+        MachineModel {
+            name: "resource-test",
+            issue_width: 2,
+            frontend: None,
+            resources,
+            buffers: &[],
+            pipeline: &[],
+            forwards: &[],
+            reg_files: &[],
+            sched: &[],
+        }
+    }
+
+    fn resource_test_instr(class: InstrSchedClass) -> ScoreboardInstr {
+        ScoreboardInstr {
+            text: String::new(),
+            class,
+            defs: vec![],
+            uses: vec![],
+            branch: None,
+            pc: 0,
+            width_bytes: 1,
+            mem: vec![],
+        }
+    }
+
+    fn issue_cycles(model: &MachineModel, program: &[ScoreboardInstr]) -> Vec<u64> {
+        let mut events = Recorder::default();
+        run(
+            model,
+            program,
+            1,
+            &TimingConfig {
+                in_order: false,
+                window: 0,
+                mispredict_penalty: 0,
+                unroll_stride: 0,
+            },
+            None,
+            None,
+            None,
+            Some(&mut events),
+        );
+        events
+            .0
+            .iter()
+            .filter_map(|(event, cycle, _)| (*event == 'I').then_some(*cycle))
+            .collect()
+    }
+
+    const TEST_DECODERS: &[Decoder] = &[
+        Decoder {
+            name: "simple",
+            max_uops_per_instruction: 1,
+        },
+        Decoder {
+            name: "complex",
+            max_uops_per_instruction: 4,
+        },
+    ];
+
+    fn frontend_test_model(slots: &'static [&'static str], uops_per_cycle: u16) -> MachineModel {
+        let mut model = resource_test_model(&[]);
+        model.issue_width = 4;
+        model.frontend = Some(Frontend {
+            fetch: FrontendFetch {
+                bytes_per_cycle: 16,
+                window_bytes: 16,
+                alignment: 16,
+                queue_bytes: 64,
+            },
+            decode: FrontendDecode {
+                slots,
+                uops_per_cycle,
+                queue_uops: 32,
+                decoders: TEST_DECODERS,
+            },
+            decoded_cache: None,
+        });
+        model
+    }
+
+    #[test]
+    fn micro_op_chooses_an_available_alternative_resource() {
+        const ROUTE_P0: ResourceRoute = ResourceRoute {
+            resources: &[TEST_P0],
+        };
+        const ROUTE_P1: ResourceRoute = ResourceRoute {
+            resources: &[TEST_P1],
+        };
+        const ALTERNATIVE: MicroOp = MicroOp {
+            routes: &[ROUTE_P0, ROUTE_P1],
+        };
+
+        let model = resource_test_model(&[
+            ProcUnit {
+                name: "P0",
+                units: 1,
+            },
+            ProcUnit {
+                name: "P1",
+                units: 1,
+            },
+        ]);
+        let program = [
+            resource_test_instr(InstrSchedClass {
+                latency: 1,
+                read_cycle: 0,
+                rthroughput: 1,
+                resources: &["P0"],
+                uops: &[],
+                decode_uops: 1,
+                decoder: None,
+                decode_cycles: 1,
+            }),
+            resource_test_instr(InstrSchedClass {
+                latency: 1,
+                read_cycle: 0,
+                rthroughput: 1,
+                resources: &[],
+                uops: &[ALTERNATIVE],
+                decode_uops: 1,
+                decoder: None,
+                decode_cycles: 1,
+            }),
+        ];
+
+        assert_eq!(issue_cycles(&model, &program), vec![0, 0]);
+    }
+
+    #[test]
+    fn resource_occupancy_delays_the_next_micro_op() {
+        const P0_THREE_CYCLES: ResourceUse = ResourceUse {
+            resource: "P0",
+            cycles: 3,
+        };
+        const ROUTE: ResourceRoute = ResourceRoute {
+            resources: &[P0_THREE_CYCLES],
+        };
+        const UOP: MicroOp = MicroOp { routes: &[ROUTE] };
+
+        let model = resource_test_model(&[ProcUnit {
+            name: "P0",
+            units: 1,
+        }]);
+        let program = [
+            resource_test_instr(InstrSchedClass {
+                latency: 1,
+                read_cycle: 0,
+                rthroughput: 1,
+                resources: &[],
+                uops: &[UOP],
+                decode_uops: 1,
+                decoder: None,
+                decode_cycles: 1,
+            }),
+            resource_test_instr(InstrSchedClass {
+                latency: 1,
+                read_cycle: 0,
+                rthroughput: 1,
+                resources: &[],
+                uops: &[UOP],
+                decode_uops: 1,
+                decoder: None,
+                decode_cycles: 1,
+            }),
+        ];
+
+        assert_eq!(issue_cycles(&model, &program), vec![0, 3]);
+    }
+
+    #[test]
+    fn conjunctive_route_waits_for_every_resource() {
+        const BOTH: ResourceRoute = ResourceRoute {
+            resources: &[TEST_P0, TEST_P1],
+        };
+        const UOP: MicroOp = MicroOp { routes: &[BOTH] };
+
+        let model = resource_test_model(&[
+            ProcUnit {
+                name: "P0",
+                units: 1,
+            },
+            ProcUnit {
+                name: "P1",
+                units: 1,
+            },
+        ]);
+        let program = [
+            resource_test_instr(InstrSchedClass {
+                latency: 1,
+                read_cycle: 0,
+                rthroughput: 1,
+                resources: &["P1"],
+                uops: &[],
+                decode_uops: 1,
+                decoder: None,
+                decode_cycles: 1,
+            }),
+            resource_test_instr(InstrSchedClass {
+                latency: 1,
+                read_cycle: 0,
+                rthroughput: 1,
+                resources: &[],
+                uops: &[UOP],
+                decode_uops: 1,
+                decoder: None,
+                decode_cycles: 1,
+            }),
+        ];
+
+        assert_eq!(issue_cycles(&model, &program), vec![0, 1]);
+    }
+
+    #[test]
+    fn complex_decoder_slot_accepts_one_instruction_per_cycle() {
+        let model = frontend_test_model(&["complex", "simple"], 4);
+        let complex = InstrSchedClass {
+            latency: 1,
+            read_cycle: 0,
+            rthroughput: 1,
+            resources: &[],
+            uops: &[],
+            decode_uops: 3,
+            decoder: Some("complex"),
+            decode_cycles: 1,
+        };
+        let program = [resource_test_instr(complex), resource_test_instr(complex)];
+
+        assert_eq!(issue_cycles(&model, &program), vec![0, 1]);
+    }
+
+    #[test]
+    fn decoder_occupancy_reserves_its_slot_for_multiple_cycles() {
+        let model = frontend_test_model(&["complex"], 4);
+        let complex = InstrSchedClass {
+            latency: 1,
+            read_cycle: 0,
+            rthroughput: 1,
+            resources: &[],
+            uops: &[],
+            decode_uops: 1,
+            decoder: Some("complex"),
+            decode_cycles: 3,
+        };
+        let program = [resource_test_instr(complex), resource_test_instr(complex)];
+
+        assert_eq!(issue_cycles(&model, &program), vec![0, 3]);
+    }
+
+    #[test]
+    fn decode_uop_bandwidth_is_shared_by_all_slots() {
+        let model = frontend_test_model(&["complex", "complex"], 4);
+        let class = InstrSchedClass {
+            latency: 1,
+            read_cycle: 0,
+            rthroughput: 1,
+            resources: &[],
+            uops: &[],
+            decode_uops: 3,
+            decoder: None,
+            decode_cycles: 1,
+        };
+        let program = [resource_test_instr(class), resource_test_instr(class)];
+
+        assert_eq!(issue_cycles(&model, &program), vec![0, 1]);
+    }
+
+    #[test]
+    fn fetch_bandwidth_limits_instruction_delivery() {
+        let mut model = frontend_test_model(&["complex", "simple"], 4);
+        model.frontend.as_mut().unwrap().fetch.bytes_per_cycle = 4;
+        let mut first = resource_test_instr(InstrSchedClass::DEFAULT);
+        first.width_bytes = 4;
+        let mut second = resource_test_instr(InstrSchedClass::DEFAULT);
+        second.pc = 4;
+        second.width_bytes = 4;
+
+        assert_eq!(issue_cycles(&model, &[first, second]), vec![0, 1]);
+    }
+
+    #[test]
+    fn fetch_window_boundary_splits_an_instruction() {
+        let mut model = frontend_test_model(&["complex", "simple"], 4);
+        let fetch = &mut model.frontend.as_mut().unwrap().fetch;
+        fetch.bytes_per_cycle = 16;
+        fetch.window_bytes = 8;
+        fetch.alignment = 8;
+        let mut instruction = resource_test_instr(InstrSchedClass::DEFAULT);
+        instruction.pc = 4;
+        instruction.width_bytes = 12;
+
+        assert_eq!(issue_cycles(&model, &[instruction]), vec![1]);
+    }
+
+    #[test]
+    fn decoded_cache_bypasses_fetch_and_decode_after_warmup() {
+        let mut model = frontend_test_model(&["simple"], 1);
+        model.issue_width = 1;
+        let frontend = model.frontend.as_mut().unwrap();
+        frontend.fetch.bytes_per_cycle = 1;
+        frontend.decoded_cache = Some(DecodedCache {
+            sets: 1,
+            ways: 1,
+            line_bytes: 16,
+            line_uops: 8,
+            deliver_uops_per_cycle: 4,
+        });
+        let mut first = resource_test_instr(InstrSchedClass::DEFAULT);
+        first.width_bytes = 4;
+        let mut repeated = resource_test_instr(InstrSchedClass::DEFAULT);
+        repeated.width_bytes = 4;
+
+        assert_eq!(issue_cycles(&model, &[first, repeated]), vec![3, 4]);
+    }
+
+    #[test]
+    fn static_unroll_uses_distinct_frontend_addresses() {
+        let mut model = frontend_test_model(&["simple"], 1);
+        model.frontend.as_mut().unwrap().decoded_cache = Some(DecodedCache {
+            sets: 1,
+            ways: 1,
+            line_bytes: 16,
+            line_uops: 8,
+            deliver_uops_per_cycle: 4,
+        });
+        let instruction = resource_test_instr(InstrSchedClass::DEFAULT);
+        let mut events = Recorder::default();
+
+        run(
+            &model,
+            &[instruction],
+            2,
+            &TimingConfig::for_model(&model).with_unroll_stride(1),
+            None,
+            None,
+            None,
+            Some(&mut events),
+        );
+
+        let issue_cycles: Vec<_> = events
+            .0
+            .into_iter()
+            .filter_map(|(event, cycle, _)| (event == 'I').then_some(cycle))
+            .collect();
+        assert_eq!(issue_cycles, vec![0, 1]);
+    }
+
+    #[test]
+    fn out_of_order_issue_does_not_reserve_for_an_unready_older_instruction() {
+        let mut model = resource_test_model(&[ProcUnit {
+            name: "MUL",
+            units: 1,
+        }]);
+        model.issue_width = 4;
+        let producer = resource_test_instr(InstrSchedClass {
+            latency: 5,
+            read_cycle: 0,
+            rthroughput: 1,
+            resources: &[],
+            uops: &[],
+            decode_uops: 1,
+            decoder: None,
+            decode_cycles: 1,
+        });
+        let mul = InstrSchedClass {
+            latency: 1,
+            read_cycle: 0,
+            rthroughput: 1,
+            resources: &["MUL"],
+            uops: &[],
+            decode_uops: 1,
+            decoder: None,
+            decode_cycles: 1,
+        };
+        let mut producer = producer;
+        producer.defs = vec![("GPR".to_string(), 0)];
+        let mut dependent = resource_test_instr(mul);
+        dependent.uses = vec![("GPR".to_string(), 0)];
+        let independent = resource_test_instr(mul);
+        let program = [producer, dependent, independent];
+        let mut events = Recorder::default();
+        run(
+            &model,
+            &program,
+            1,
+            &TimingConfig {
+                in_order: false,
+                window: 0,
+                mispredict_penalty: 0,
+                unroll_stride: 0,
+            },
+            None,
+            None,
+            None,
+            Some(&mut events),
+        );
+        let mut issued = vec![0; program.len()];
+        for (event, cycle, index) in events.0 {
+            if event == 'I' {
+                issued[index as usize] = cycle;
+            }
+        }
+
+        assert_eq!(issued, vec![0, 5, 0]);
     }
 }

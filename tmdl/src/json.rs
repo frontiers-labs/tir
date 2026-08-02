@@ -193,6 +193,10 @@ enum Item {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         resources: Vec<MachineUnit>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
+        resource_groups: Vec<MachineResourceGroup>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        frontend: Option<Frontend>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
         register_files: Vec<NamedCount>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         bindings: Vec<UnitBind>,
@@ -280,6 +284,12 @@ impl From<&ast::Item> for Item {
                 buffers: named_counts(&machine.buffers),
                 pipeline: machine.pipeline.iter().map(PipelinePhase::from).collect(),
                 resources: machine.resources.iter().map(MachineUnit::from).collect(),
+                resource_groups: machine
+                    .resource_groups
+                    .iter()
+                    .map(MachineResourceGroup::from)
+                    .collect(),
+                frontend: machine.frontend.as_ref().map(Frontend::from),
                 register_files: named_counts(&machine.reg_files),
                 bindings: machine.binds.iter().map(UnitBind::from).collect(),
                 overrides: machine
@@ -604,6 +614,175 @@ struct MachineUnit {
     units: i64,
 }
 
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+/// A reusable alias over machine execution resources.
+struct MachineResourceGroup {
+    name: String,
+    resources: ResourceExpr,
+}
+
+impl From<&ast::MachineResourceGroup> for MachineResourceGroup {
+    fn from(group: &ast::MachineResourceGroup) -> Self {
+        Self {
+            name: group.name.clone(),
+            resources: ResourceExpr::from(&group.resources),
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+/// Alternative and conjunctive execution-resource reservations.
+enum ResourceExpr {
+    Resource {
+        name: String,
+    },
+    Any {
+        resources: Vec<ResourceExpr>,
+    },
+    All {
+        resources: Vec<ResourceExpr>,
+    },
+    Occupied {
+        resource: Box<ResourceExpr>,
+        cycles: i64,
+    },
+}
+
+impl From<&ast::ResourceExpr> for ResourceExpr {
+    fn from(expr: &ast::ResourceExpr) -> Self {
+        match expr {
+            ast::ResourceExpr::Resource(name) => Self::Resource { name: name.clone() },
+            ast::ResourceExpr::Any(resources) => Self::Any {
+                resources: resources.iter().map(ResourceExpr::from).collect(),
+            },
+            ast::ResourceExpr::All(resources) => Self::All {
+                resources: resources.iter().map(ResourceExpr::from).collect(),
+            },
+            ast::ResourceExpr::Occupied { resource, cycles } => Self::Occupied {
+                resource: Box::new(ResourceExpr::from(resource.as_ref())),
+                cycles: *cycles,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+/// One emitted micro-op and its resource routes.
+struct MicroOp {
+    count: i64,
+    resources: ResourceExpr,
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct Frontend {
+    fetch: FrontendFetch,
+    decode: FrontendDecode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decoded_cache: Option<DecodedCache>,
+}
+
+impl From<&ast::Frontend> for Frontend {
+    fn from(frontend: &ast::Frontend) -> Self {
+        Self {
+            fetch: FrontendFetch::from(&frontend.fetch),
+            decode: FrontendDecode::from(&frontend.decode),
+            decoded_cache: frontend.decoded_cache.as_ref().map(DecodedCache::from),
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct FrontendFetch {
+    bytes_per_cycle: i64,
+    window_bytes: i64,
+    alignment: i64,
+    queue_bytes: i64,
+}
+
+impl From<&ast::FrontendFetch> for FrontendFetch {
+    fn from(fetch: &ast::FrontendFetch) -> Self {
+        Self {
+            bytes_per_cycle: fetch.bytes_per_cycle,
+            window_bytes: fetch.window_bytes,
+            alignment: fetch.alignment,
+            queue_bytes: fetch.queue_bytes,
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct FrontendDecode {
+    slots: Vec<String>,
+    uops_per_cycle: i64,
+    queue_uops: i64,
+    decoders: Vec<Decoder>,
+}
+
+impl From<&ast::FrontendDecode> for FrontendDecode {
+    fn from(decode: &ast::FrontendDecode) -> Self {
+        Self {
+            slots: decode.slots.clone(),
+            uops_per_cycle: decode.uops_per_cycle,
+            queue_uops: decode.queue_uops,
+            decoders: decode.decoders.iter().map(Decoder::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct Decoder {
+    name: String,
+    max_uops_per_instruction: i64,
+}
+
+impl From<&ast::Decoder> for Decoder {
+    fn from(decoder: &ast::Decoder) -> Self {
+        Self {
+            name: decoder.name.clone(),
+            max_uops_per_instruction: decoder.max_uops_per_instruction,
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct DecodedCache {
+    sets: i64,
+    ways: i64,
+    line_bytes: i64,
+    line_uops: i64,
+    deliver_uops_per_cycle: i64,
+}
+
+impl From<&ast::DecodedCache> for DecodedCache {
+    fn from(cache: &ast::DecodedCache) -> Self {
+        Self {
+            sets: cache.sets,
+            ways: cache.ways,
+            line_bytes: cache.line_bytes,
+            line_uops: cache.line_uops,
+            deliver_uops_per_cycle: cache.deliver_uops_per_cycle,
+        }
+    }
+}
+
+impl From<&ast::MicroOp> for MicroOp {
+    fn from(uop: &ast::MicroOp) -> Self {
+        Self {
+            count: uop.count,
+            resources: ResourceExpr::from(&uop.resources),
+        }
+    }
+}
+
 impl From<&ast::MachineUnit> for MachineUnit {
     fn from(unit: &ast::MachineUnit) -> Self {
         Self {
@@ -632,6 +811,17 @@ struct UnitBind {
     writes: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     uses: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    uops: Vec<MicroOp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i64")]
+    decode_uops: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    decoder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i64")]
+    decode_cycles: Option<i64>,
 }
 
 impl From<&ast::UnitBind> for UnitBind {
@@ -643,6 +833,10 @@ impl From<&ast::UnitBind> for UnitBind {
             reads: binding.reads.clone(),
             writes: binding.writes.clone(),
             uses: binding.uses.clone(),
+            uops: binding.uops.iter().map(MicroOp::from).collect(),
+            decode_uops: binding.decode_uops,
+            decoder: binding.decoder.clone(),
+            decode_cycles: binding.decode_cycles,
         }
     }
 }
@@ -666,6 +860,17 @@ struct MachineOverride {
     writes: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     uses: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    uops: Vec<MicroOp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i64")]
+    decode_uops: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    decoder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i64")]
+    decode_cycles: Option<i64>,
 }
 
 impl From<&ast::MachineOverride> for MachineOverride {
@@ -677,6 +882,10 @@ impl From<&ast::MachineOverride> for MachineOverride {
             reads: override_.reads.clone(),
             writes: override_.writes.clone(),
             uses: override_.uses.clone(),
+            uops: override_.uops.iter().map(MicroOp::from).collect(),
+            decode_uops: override_.decode_uops,
+            decoder: override_.decoder.clone(),
+            decode_cycles: override_.decode_cycles,
         }
     }
 }

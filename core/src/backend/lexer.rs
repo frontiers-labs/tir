@@ -21,6 +21,8 @@ pub enum Token<'src> {
     Star,
     #[token("+")]
     Plus,
+    #[token("-")]
+    Minus,
 
     #[token(".section")]
     Section,

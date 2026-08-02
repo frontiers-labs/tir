@@ -70,6 +70,63 @@ pub struct Forward {
     pub latency: u16,
 }
 
+/// One concrete execution-resource reservation within a micro-op route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceUse {
+    pub resource: &'static str,
+    pub cycles: u16,
+}
+
+/// Resources reserved together when this route is selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceRoute {
+    pub resources: &'static [ResourceUse],
+}
+
+/// One micro-op with one or more alternative execution routes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MicroOp {
+    pub routes: &'static [ResourceRoute],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrontendFetch {
+    pub bytes_per_cycle: u16,
+    pub window_bytes: u16,
+    pub alignment: u16,
+    pub queue_bytes: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Decoder {
+    pub name: &'static str,
+    pub max_uops_per_instruction: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrontendDecode {
+    pub slots: &'static [&'static str],
+    pub uops_per_cycle: u16,
+    pub queue_uops: u16,
+    pub decoders: &'static [Decoder],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodedCache {
+    pub sets: u16,
+    pub ways: u16,
+    pub line_bytes: u16,
+    pub line_uops: u16,
+    pub deliver_uops_per_cycle: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Frontend {
+    pub fetch: FrontendFetch,
+    pub decode: FrontendDecode,
+    pub decoded_cache: Option<DecodedCache>,
+}
+
 /// The concrete scheduling cost of an instruction on a particular machine: the
 /// resolution of its `unit` membership against that machine's `bind`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +143,14 @@ pub struct InstrSchedClass {
     pub rthroughput: u16,
     /// Resources (by [`ProcResource::name`]) this instruction occupies.
     pub resources: &'static [&'static str],
+    /// Micro-op resource routes. Empty for the legacy `uses = [...]` form.
+    pub uops: &'static [MicroOp],
+    /// Number of micro-ops entering the frontend queues for this instruction.
+    pub decode_uops: u16,
+    /// Required decoder kind, or `None` when any capable slot may decode it.
+    pub decoder: Option<&'static str>,
+    /// Consecutive cycles for which the selected decoder slot remains occupied.
+    pub decode_cycles: u16,
 }
 
 impl InstrSchedClass {
@@ -97,6 +162,10 @@ impl InstrSchedClass {
         read_cycle: 0,
         rthroughput: 1,
         resources: &[],
+        uops: &[],
+        decode_uops: 1,
+        decoder: None,
+        decode_cycles: 1,
     };
 
     /// The cycle, relative to issue, at which the result becomes available.
@@ -110,6 +179,7 @@ impl InstrSchedClass {
 pub struct MachineModel {
     pub name: &'static str,
     pub issue_width: u16,
+    pub frontend: Option<Frontend>,
     pub resources: &'static [ProcUnit],
     pub buffers: &'static [BufferSize],
     /// Ordered pipeline stages; each phase's index is its cycle offset from issue.

@@ -1,0 +1,38 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+// CHECK: "mul",
+// CHECK: tir::backend::sched::InstrSchedClass {
+// CHECK: resources: &[],
+// CHECK: uops: &[
+// CHECK-COUNT-2: tir::backend::sched::MicroOp {
+// CHECK: routes: &[
+// CHECK: tir::backend::sched::ResourceRoute {
+// CHECK: resource: "P0",
+// CHECK: cycles: 1,
+// CHECK: resource: "P1",
+// CHECK: cycles: 1,
+// CHECK: resource: "Multiply",
+// CHECK: cycles: 3,
+
+isa TestIsa {}
+
+sched_class WriteIMul;
+
+instruction Mul for [TestIsa] {
+    param OPNAME: String = "mul";
+    param MNEMONIC: String = "mul";
+    asm { "mul" }
+    behavior { todo(); }
+    schedule { units = [WriteIMul]; }
+}
+
+machine TestCore for [TestIsa] {
+    unit P0 { count = 1; }
+    unit P1 { count = 1; }
+    unit Multiply { count = 1; }
+    group Int = P0 | P1;
+    bind WriteIMul {
+        latency = 3;
+        uop(Int & Multiply<3>, count = 2);
+    }
+}

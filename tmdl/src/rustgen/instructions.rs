@@ -27,11 +27,11 @@ fn emit_instructions<'a>(
     };
     let mut instruction_defs = vec![];
     let mut instruction_parsers_impls: Vec<proc_macro2::TokenStream> = vec![];
-    // Each entry carries its specificity key (operand count, total immediate
-    // bit-width, sum of register-class sizes) so same-mnemonic candidates can be
-    // ordered most-constrained-first, independent of declaration order.
+    // Each entry carries its syntax and operand specificity so same-mnemonic
+    // candidates can be ordered most-constrained-first.
     let mut instruction_parser_candidates: Vec<(
         String,
+        usize,
         usize,
         u32,
         usize,
@@ -1298,6 +1298,15 @@ fn emit_instructions<'a>(
         // Emit parser implementations based on asm template (simple template support)
         if let Some(template) = resolve_asm_template_for_instruction(inst, item_cache) {
             let actions = compile_asm_template(&template);
+            let syntax_arity = actions
+                .iter()
+                .filter(|action| {
+                    matches!(
+                        action,
+                        AsmAction::Operand(_) | AsmAction::Keyword(_) | AsmAction::Number(_)
+                    )
+                })
+                .count();
             // Operand-less instructions (e.g. ecall) consume no tokens beyond
             // the mnemonic and set no attributes.
             let parses_operands = actions.iter().any(|a| {
@@ -1310,14 +1319,27 @@ fn emit_instructions<'a>(
                         | AsmAction::RBracket
                         | AsmAction::Star
                         | AsmAction::Plus
+                        | AsmAction::Number(_)
                         | AsmAction::Operand(_)
                         | AsmAction::Keyword(_)
                         | AsmAction::Number(_)
                 )
             });
 
+            let plus_before_immediate: Vec<bool> = actions
+                .iter()
+                .enumerate()
+                .map(|(index, action)| {
+                    matches!(action, AsmAction::Plus)
+                        && matches!(
+                            actions.get(index + 1),
+                            Some(AsmAction::Operand(name))
+                                if matches!(ops_map.get(name), Some(Type::Integer | Type::Bits(_)))
+                        )
+                })
+                .collect();
             let mut parse_steps: Vec<proc_macro2::TokenStream> = Vec::new();
-            for act in actions {
+            for (action_index, act) in actions.into_iter().enumerate() {
                 match act {
                     AsmAction::Comma => {
                         parse_steps.push(quote! {
@@ -1348,6 +1370,18 @@ fn emit_instructions<'a>(
                                     });
                                 }
                                 Type::Integer | Type::Bits(_) => {
+                                    let signed_by_separator = action_index > 0
+                                        && plus_before_immediate[action_index - 1];
+                                    let apply_separator_sign = signed_by_separator
+                                        .then(|| {
+                                            quote! {
+                                                let value = value
+                                                    .checked_mul(immediate_sign)
+                                                    .ok_or(())?;
+                                            }
+                                        });
+                                    let reject_signed_symbol = signed_by_separator
+                                        .then(|| quote! { if immediate_sign < 0 { return Err(()); } });
                                     // Reject integers that do not fit the operand's
                                     // `bits<N>` width so the per-mnemonic dispatch
                                     // backtracks to a wider form instead of failing
@@ -1371,6 +1405,7 @@ fn emit_instructions<'a>(
                                             match tok {
                                                 tir::backend::Token::DecNumber(n) => {
                                                     let value = (*n).parse::<i64>().map_err(|_| ())?;
+                                                    #apply_separator_sign
                                                     #imm_guard
                                                     let _ = parser.bump();
                                                     tir::attributes::AttributeValue::Int(value)
@@ -1383,6 +1418,7 @@ fn emit_instructions<'a>(
                                                     let v = i128::from_str_radix(s, 16).map_err(|_| ())?;
                                                     let v = if neg { -v } else { v };
                                                     let value: i64 = v.try_into().map_err(|_| ())?;
+                                                    #apply_separator_sign
                                                     #imm_guard
                                                     let _ = parser.bump();
                                                     tir::attributes::AttributeValue::Int(value)
@@ -1390,6 +1426,7 @@ fn emit_instructions<'a>(
                                                 // A bare identifier in an immediate position is a
                                                 // symbol reference, resolved at object emission.
                                                 tir::backend::Token::Ident(name) => {
+                                                    #reject_signed_symbol
                                                     let symbol = (*name).to_string();
                                                     let _ = parser.bump();
                                                     tir::attributes::AttributeValue::Str(symbol)
@@ -1455,9 +1492,39 @@ fn emit_instructions<'a>(
                         });
                     }
                     AsmAction::Plus => {
+                        if plus_before_immediate[action_index] {
+                            parse_steps.push(quote! {
+                                let immediate_sign = match parser.peek() {
+                                    Some(tir::backend::Token::Plus) => {
+                                        let _ = parser.bump();
+                                        1i64
+                                    }
+                                    Some(tir::backend::Token::Minus) => {
+                                        let _ = parser.bump();
+                                        -1i64
+                                    }
+                                    Some(tir::backend::Token::DecNumber(value))
+                                        if value.starts_with('-') => 1i64,
+                                    Some(tir::backend::Token::HexNumber(value))
+                                        if value.starts_with('-') => 1i64,
+                                    _ => return Err(()),
+                                };
+                            });
+                        } else {
+                            parse_steps.push(quote! {
+                                match parser.bump() {
+                                    Some(tir::backend::Token::Plus) => {}
+                                    _ => return Err(()),
+                                }
+                            });
+                        }
+                    }
+                    AsmAction::Number(number) => {
+                        let number_lit = proc_macro2::Literal::string(&number);
                         parse_steps.push(quote! {
                             match parser.bump() {
-                                Some(tir::backend::Token::Plus) => {}
+                                Some(tir::backend::Token::DecNumber(value))
+                                    if *value == #number_lit => {}
                                 _ => return Err(()),
                             }
                         });
@@ -1694,6 +1761,7 @@ fn emit_instructions<'a>(
                 if !custom_assembly {
                     instruction_parser_candidates.push((
                     mn.to_string(),
+                    syntax_arity,
                     arity,
                     imm_bits,
                     reg_specificity,
@@ -1794,19 +1862,32 @@ fn emit_instructions<'a>(
     // Order same-mnemonic asm parser candidates most-constrained-first so the
     // per-mnemonic dispatch tries a tighter form before a looser one, regardless
     // of declaration order. Keys, in order:
-    //   1. total immediate bit-width, ascending — an immediate operand is the loosest
+    //   1. syntax arity, descending — a longer form is tried before a shorter
+    //      form it shares a prefix with;
+    //   2. total immediate bit-width, ascending — an immediate operand is the loosest
     //      match (it accepts a bare register identifier or keyword as a symbol), so a
     //      form without an immediate precedes one with, and among immediate forms imm8
     //      precedes imm32. This keeps register/keyword forms ahead of the immediate
     //      form that would swallow them (arm64 `add x,x,x`; x86 `shl dst, cl`);
-    //   2. operand count, descending — with equal immediate width, a longer form is
-    //      tried before a shorter one it shares a prefix with, so `imul rax, rbx` is
-    //      not stolen by the 1-operand `imul rax`;
-    //   3. register-class-size sum, ascending — a smaller class (2-register `GPRsib`)
+    //   3. operand count, descending;
+    //   4. register-class-size sum, ascending — a smaller class (2-register `GPRsib`)
     //      precedes a larger one (16-register `GPR`).
     // The stable sort keeps declaration order among equally specific candidates.
     instruction_parser_candidates.sort_by(|a, b| {
-        (&a.0, a.2, std::cmp::Reverse(a.1), a.3).cmp(&(&b.0, b.2, std::cmp::Reverse(b.1), b.3))
+        (
+            &a.0,
+            std::cmp::Reverse(a.1),
+            a.3,
+            std::cmp::Reverse(a.2),
+            a.4,
+        )
+            .cmp(&(
+                &b.0,
+                std::cmp::Reverse(b.1),
+                b.3,
+                std::cmp::Reverse(b.2),
+                b.4,
+            ))
     });
     let instruction_parser_map_inits: Vec<proc_macro2::TokenStream> = instruction_parser_candidates
         .into_iter()

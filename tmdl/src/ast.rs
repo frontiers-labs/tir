@@ -262,6 +262,79 @@ pub struct MachineUnit {
     pub span: Span,
 }
 
+/// A resource reservation expression. `Any` chooses one available route while
+/// `All` reserves every child. `Occupied` changes the reservation duration of
+/// the wrapped resource without creating capacity of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceExpr {
+    Resource(String),
+    Any(Vec<ResourceExpr>),
+    All(Vec<ResourceExpr>),
+    Occupied {
+        resource: Box<ResourceExpr>,
+        cycles: i64,
+    },
+}
+
+/// A reusable alias over one or more machine resources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineResourceGroup {
+    pub name: String,
+    pub resources: ResourceExpr,
+    pub span: Span,
+}
+
+/// One micro-op emitted by a scheduling class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MicroOp {
+    pub resources: ResourceExpr,
+    pub count: i64,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontendFetch {
+    pub bytes_per_cycle: i64,
+    pub window_bytes: i64,
+    pub alignment: i64,
+    pub queue_bytes: i64,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoder {
+    pub name: String,
+    pub max_uops_per_instruction: i64,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontendDecode {
+    pub slots: Vec<String>,
+    pub uops_per_cycle: i64,
+    pub queue_uops: i64,
+    pub decoders: Vec<Decoder>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedCache {
+    pub sets: i64,
+    pub ways: i64,
+    pub line_bytes: i64,
+    pub line_uops: i64,
+    pub deliver_uops_per_cycle: i64,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Frontend {
+    pub fetch: FrontendFetch,
+    pub decode: FrontendDecode,
+    pub decoded_cache: Option<DecodedCache>,
+    pub span: Span,
+}
+
 /// How a pipeline stage handles data hazards. Mirrors
 /// [`tir::backend::sched::Protection`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,6 +370,11 @@ pub struct UnitBind {
     pub writes: Option<String>,
     /// Resources (by [`MachineUnit`] name) this unit occupies.
     pub uses: Vec<String>,
+    /// Micro-ops and their alternative/conjunctive resource routes.
+    pub uops: Vec<MicroOp>,
+    pub decode_uops: Option<i64>,
+    pub decoder: Option<String>,
+    pub decode_cycles: Option<i64>,
     pub span: Span,
 }
 
@@ -312,6 +390,10 @@ pub struct MachineOverride {
     pub reads: Option<String>,
     pub writes: Option<String>,
     pub uses: Vec<String>,
+    pub uops: Vec<MicroOp>,
+    pub decode_uops: Option<i64>,
+    pub decoder: Option<String>,
+    pub decode_cycles: Option<i64>,
     pub span: Span,
 }
 
@@ -343,6 +425,9 @@ pub struct Machine {
     /// Ordered pipeline stages; empty when no `pipeline` block is declared.
     pub pipeline: Vec<PipelinePhase>,
     pub resources: Vec<MachineUnit>,
+    /// Aliases over `resources`; groups do not add execution capacity.
+    pub resource_groups: Vec<MachineResourceGroup>,
+    pub frontend: Option<Frontend>,
     /// Physical register-file sizes for renaming, keyed by physical-file name (the
     /// root of a register class's inheritance chain; see
     /// [`RegisterClass::register_file`]). A file absent here defaults to the

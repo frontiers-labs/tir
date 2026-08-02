@@ -216,6 +216,56 @@
         "todo"
       ]
     },
+    "DecodedCache": {
+      "type": "object",
+      "properties": {
+        "deliver_uops_per_cycle": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "line_bytes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "line_uops": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "sets": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "ways": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sets",
+        "ways",
+        "line_bytes",
+        "line_uops",
+        "deliver_uops_per_cycle"
+      ]
+    },
+    "Decoder": {
+      "type": "object",
+      "properties": {
+        "max_uops_per_instruction": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "max_uops_per_instruction"
+      ]
+    },
     "EncodingArm": {
       "description": "One inclusive bit range in an instruction encoding.",
       "type": "object",
@@ -693,6 +743,92 @@
         "latency"
       ]
     },
+    "Frontend": {
+      "type": "object",
+      "properties": {
+        "decode": {
+          "$ref": "#/$defs/FrontendDecode"
+        },
+        "decoded_cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecodedCache"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fetch": {
+          "$ref": "#/$defs/FrontendFetch"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fetch",
+        "decode"
+      ]
+    },
+    "FrontendDecode": {
+      "type": "object",
+      "properties": {
+        "decoders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Decoder"
+          }
+        },
+        "queue_uops": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "uops_per_cycle": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slots",
+        "uops_per_cycle",
+        "queue_uops",
+        "decoders"
+      ]
+    },
+    "FrontendFetch": {
+      "type": "object",
+      "properties": {
+        "alignment": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "bytes_per_cycle": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "queue_bytes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "window_bytes": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "bytes_per_cycle",
+        "window_bytes",
+        "alignment",
+        "queue_bytes"
+      ]
+    },
     "IsaRequirement": {
       "description": "Boolean composition of ISA requirements.",
       "oneOf": [
@@ -1065,6 +1201,16 @@
                 "$ref": "#/$defs/Forward"
               }
             },
+            "frontend": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Frontend"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "isas": {
               "type": "array",
               "items": {
@@ -1100,6 +1246,12 @@
                 "$ref": "#/$defs/NamedCount"
               }
             },
+            "resource_groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MachineResourceGroup"
+              }
+            },
             "resources": {
               "type": "array",
               "items": {
@@ -1119,6 +1271,17 @@
       "description": "Machine-specific timing override for one instruction.",
       "type": "object",
       "properties": {
+        "decode_cycles": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "decode_uops": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "decoder": {
+          "type": "string"
+        },
         "instruction": {
           "type": "string"
         },
@@ -1133,6 +1296,12 @@
           "type": "integer",
           "format": "int64"
         },
+        "uops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MicroOp"
+          }
+        },
         "uses": {
           "type": "array",
           "items": {
@@ -1146,6 +1315,23 @@
       "additionalProperties": false,
       "required": [
         "instruction"
+      ]
+    },
+    "MachineResourceGroup": {
+      "description": "A reusable alias over machine execution resources.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceExpr"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "resources"
       ]
     },
     "MachineUnit": {
@@ -1164,6 +1350,24 @@
       "required": [
         "name",
         "units"
+      ]
+    },
+    "MicroOp": {
+      "description": "One emitted micro-op and its resource routes.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceExpr"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "resources"
       ]
     },
     "NamedCount": {
@@ -1365,6 +1569,90 @@
         "polymorphic"
       ]
     },
+    "ResourceExpr": {
+      "description": "Alternative and conjunctive execution-resource reservations.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "resource"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "any"
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ResourceExpr"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "resources"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "all"
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ResourceExpr"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "resources"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cycles": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "const": "occupied"
+            },
+            "resource": {
+              "$ref": "#/$defs/ResourceExpr"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "resource",
+            "cycles"
+          ]
+        }
+      ]
+    },
     "TrapHandler": {
       "description": "Architectural synchronous trap handler.",
       "type": "object",
@@ -1484,6 +1772,17 @@
       "description": "Machine-specific timing and resource use for a scheduling class.",
       "type": "object",
       "properties": {
+        "decode_cycles": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "decode_uops": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "decoder": {
+          "type": "string"
+        },
         "latency": {
           "type": "integer",
           "format": "int64"
@@ -1497,6 +1796,12 @@
         },
         "unit": {
           "type": "string"
+        },
+        "uops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MicroOp"
+          }
         },
         "uses": {
           "type": "array",

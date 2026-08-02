@@ -611,6 +611,171 @@ fn check_performance_model(
                 }
             }
 
+            let mut modeled_resource_names = resource_names.clone();
+            let mut group_names: HashSet<&str> = HashSet::new();
+            for group in &machine.resource_groups {
+                if !group_names.insert(group.name.as_str())
+                    || !modeled_resource_names.insert(group.name.as_str())
+                {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(
+                            group.span,
+                            format!(
+                                "duplicate resource group '{}' in machine '{}'",
+                                group.name, machine.name
+                            ),
+                        ),
+                    ));
+                }
+            }
+            let resource_groups: HashMap<&str, &ast::ResourceExpr> = machine
+                .resource_groups
+                .iter()
+                .map(|group| (group.name.as_str(), &group.resources))
+                .collect();
+            for group in &machine.resource_groups {
+                if resource_group_is_cyclic(
+                    group.name.as_str(),
+                    &resource_groups,
+                    &mut HashSet::new(),
+                ) {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(
+                            group.span,
+                            format!("cyclic resource group '{}'", group.name),
+                        ),
+                    ));
+                }
+            }
+            for group in &machine.resource_groups {
+                if has_non_positive_occupancy(&group.resources) {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(group.span, "resource occupancy must be positive"),
+                    ));
+                }
+                for referenced in resource_references(&group.resources) {
+                    if !modeled_resource_names.contains(referenced) {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                group.span,
+                                format!(
+                                    "group '{}' references unknown resource '{}' in machine '{}'",
+                                    group.name, referenced, machine.name
+                                ),
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            let frontend_decoder_names: HashSet<&str> = machine
+                .frontend
+                .iter()
+                .flat_map(|frontend| frontend.decode.decoders.iter())
+                .map(|decoder| decoder.name.as_str())
+                .collect();
+            if let Some(frontend) = &machine.frontend {
+                for (name, value) in [
+                    ("bytes_per_cycle", frontend.fetch.bytes_per_cycle),
+                    ("window_bytes", frontend.fetch.window_bytes),
+                    ("alignment", frontend.fetch.alignment),
+                    ("queue_bytes", frontend.fetch.queue_bytes),
+                ] {
+                    if value <= 0 {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                frontend.fetch.span,
+                                format!("frontend fetch {name} must be positive"),
+                            ),
+                        ));
+                    }
+                }
+                for (name, value) in [
+                    ("uops_per_cycle", frontend.decode.uops_per_cycle),
+                    ("queue_uops", frontend.decode.queue_uops),
+                ] {
+                    if value <= 0 {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                frontend.decode.span,
+                                format!("frontend decode {name} must be positive"),
+                            ),
+                        ));
+                    }
+                }
+                for decoder in &frontend.decode.decoders {
+                    if decoder.max_uops_per_instruction <= 0 {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                decoder.span,
+                                format!(
+                                    "frontend decoder '{}' max_uops_per_instruction must be positive",
+                                    decoder.name
+                                ),
+                            ),
+                        ));
+                    }
+                }
+                let mut decoder_names = HashSet::new();
+                for decoder in &frontend.decode.decoders {
+                    if !decoder_names.insert(decoder.name.as_str()) {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                decoder.span,
+                                format!("duplicate frontend decoder '{}'", decoder.name),
+                            ),
+                        ));
+                    }
+                }
+                if frontend.decode.slots.is_empty() {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(
+                            frontend.decode.span,
+                            "frontend decode must declare at least one slot",
+                        ),
+                    ));
+                }
+                for slot in &frontend.decode.slots {
+                    if !decoder_names.contains(slot.as_str()) {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                frontend.decode.span,
+                                format!("frontend decode slot references unknown decoder '{slot}'"),
+                            ),
+                        ));
+                    }
+                }
+                if let Some(cache) = &frontend.decoded_cache {
+                    for (name, value) in [
+                        ("sets", cache.sets),
+                        ("ways", cache.ways),
+                        ("line_bytes", cache.line_bytes),
+                        ("line_uops", cache.line_uops),
+                        ("deliver_uops_per_cycle", cache.deliver_uops_per_cycle),
+                    ] {
+                        if value <= 0 {
+                            diags.push((
+                                file.file_name.clone(),
+                                Rich::custom(
+                                    cache.span,
+                                    format!("frontend decoded_cache {name} must be positive"),
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+
             // `reg_file` names must be unique and resolve to a physical register
             // file (the root of a register class's inheritance chain) of a class
             // available to one of this machine's ISAs.
@@ -662,6 +827,67 @@ fn check_performance_model(
 
             let mut bound_units: HashSet<&str> = HashSet::new();
             for bind in &machine.binds {
+                if bind.decode_uops.is_some_and(|count| count <= 0) {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(bind.span, "decode_uops must be positive"),
+                    ));
+                }
+                if bind.decode_cycles.is_some_and(|cycles| cycles <= 0) {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(bind.span, "decode_cycles must be positive"),
+                    ));
+                }
+                if let Some(decoder) = &bind.decoder {
+                    if !frontend_decoder_names.contains(decoder.as_str()) {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                bind.span,
+                                format!(
+                                    "bind for unit '{}' references unknown frontend decoder '{}'",
+                                    bind.unit, decoder
+                                ),
+                            ),
+                        ));
+                    } else if machine.frontend.as_ref().is_some_and(|frontend| {
+                        !frontend_has_capable_decoder(
+                            frontend,
+                            Some(decoder),
+                            effective_decode_uops(bind.decode_uops, &bind.uops),
+                        )
+                    }) {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(
+                                bind.span,
+                                format!(
+                                    "bind for unit '{}' frontend has no capable '{}' decoder slot",
+                                    bind.unit, decoder
+                                ),
+                            ),
+                        ));
+                    }
+                } else if machine.frontend.as_ref().is_some_and(|frontend| {
+                    !frontend_has_capable_decoder(
+                        frontend,
+                        None,
+                        effective_decode_uops(bind.decode_uops, &bind.uops),
+                    )
+                }) {
+                    let uops = effective_decode_uops(bind.decode_uops, &bind.uops);
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(
+                            bind.span,
+                            format!(
+                                "bind for unit '{}' frontend has no decoder slot capable of {uops} micro-ops",
+                                bind.unit
+                            ),
+                        ),
+                    ));
+                }
                 // Phase-based `reads`/`writes` must name a stage in this machine's
                 // pipeline (and so require a `pipeline` block to exist at all).
                 for phase in bind.reads.iter().chain(bind.writes.iter()) {
@@ -730,12 +956,66 @@ fn check_performance_model(
                         ));
                     }
                 }
+                for uop in &bind.uops {
+                    if uop.count <= 0 {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(uop.span, "micro-op count must be positive"),
+                        ));
+                    }
+                    if has_non_positive_occupancy(&uop.resources) {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(uop.span, "resource occupancy must be positive"),
+                        ));
+                    }
+                    for referenced in resource_references(&uop.resources) {
+                        if !modeled_resource_names.contains(referenced) {
+                            diags.push((
+                                file.file_name.clone(),
+                                Rich::custom(
+                                    uop.span,
+                                    format!(
+                                        "bind for unit '{}' micro-op references unknown resource '{}' in machine '{}'",
+                                        bind.unit, referenced, machine.name
+                                    ),
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
 
             // Overrides target a real instruction (at most once), use this
             // machine's resources, and reference real pipeline phases.
             let mut overridden: HashSet<&str> = HashSet::new();
             for ov in &machine.overrides {
+                if ov.decode_uops.is_some_and(|count| count <= 0) {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(ov.span, "decode_uops must be positive"),
+                    ));
+                }
+                if ov.decode_cycles.is_some_and(|cycles| cycles <= 0) {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(ov.span, "decode_cycles must be positive"),
+                    ));
+                }
+                if let Some(decoder) = &ov.decoder
+                    && !frontend_decoder_names.contains(decoder.as_str())
+                {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(
+                            ov.span,
+                            format!(
+                                "override for '{}' references unknown frontend decoder '{}'",
+                                ov.instruction, decoder
+                            ),
+                        ),
+                    ));
+                }
                 match item_cache.get(ov.instruction.as_str()) {
                     Some(ast::Item::Instruction(_)) => {}
                     Some(_) => diags.push((
@@ -783,6 +1063,34 @@ fn check_performance_model(
                                 ),
                             ),
                         ));
+                    }
+                }
+                for uop in &ov.uops {
+                    if uop.count <= 0 {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(uop.span, "micro-op count must be positive"),
+                        ));
+                    }
+                    if has_non_positive_occupancy(&uop.resources) {
+                        diags.push((
+                            file.file_name.clone(),
+                            Rich::custom(uop.span, "resource occupancy must be positive"),
+                        ));
+                    }
+                    for referenced in resource_references(&uop.resources) {
+                        if !modeled_resource_names.contains(referenced) {
+                            diags.push((
+                                file.file_name.clone(),
+                                Rich::custom(
+                                    uop.span,
+                                    format!(
+                                        "override for '{}' micro-op references unknown resource '{}' in machine '{}'",
+                                        ov.instruction, referenced, machine.name
+                                    ),
+                                ),
+                            ));
+                        }
                     }
                 }
                 for phase in ov.reads.iter().chain(ov.writes.iter()) {
@@ -835,6 +1143,65 @@ fn check_performance_model(
     }
 
     diags
+}
+
+fn resource_references(expr: &ast::ResourceExpr) -> Vec<&str> {
+    match expr {
+        ast::ResourceExpr::Resource(name) => vec![name],
+        ast::ResourceExpr::Any(resources) | ast::ResourceExpr::All(resources) => {
+            resources.iter().flat_map(resource_references).collect()
+        }
+        ast::ResourceExpr::Occupied { resource, .. } => resource_references(resource),
+    }
+}
+
+fn has_non_positive_occupancy(expr: &ast::ResourceExpr) -> bool {
+    match expr {
+        ast::ResourceExpr::Resource(_) => false,
+        ast::ResourceExpr::Any(resources) | ast::ResourceExpr::All(resources) => {
+            resources.iter().any(has_non_positive_occupancy)
+        }
+        ast::ResourceExpr::Occupied { resource, cycles } => {
+            *cycles <= 0 || has_non_positive_occupancy(resource)
+        }
+    }
+}
+
+fn resource_group_is_cyclic<'a>(
+    name: &'a str,
+    groups: &HashMap<&'a str, &'a ast::ResourceExpr>,
+    visiting: &mut HashSet<&'a str>,
+) -> bool {
+    if !visiting.insert(name) {
+        return true;
+    }
+    let cyclic = groups.get(name).is_some_and(|expr| {
+        resource_references(expr)
+            .into_iter()
+            .filter(|referenced| groups.contains_key(referenced))
+            .any(|referenced| resource_group_is_cyclic(referenced, groups, visiting))
+    });
+    visiting.remove(name);
+    cyclic
+}
+
+fn effective_decode_uops(explicit: Option<i64>, uops: &[ast::MicroOp]) -> i64 {
+    explicit.unwrap_or_else(|| uops.iter().map(|uop| uop.count).sum::<i64>().max(1))
+}
+
+fn frontend_has_capable_decoder(
+    frontend: &ast::Frontend,
+    required: Option<&String>,
+    uops: i64,
+) -> bool {
+    frontend.decode.slots.iter().any(|slot| {
+        required.is_none_or(|required| required == slot)
+            && frontend
+                .decode
+                .decoders
+                .iter()
+                .any(|decoder| decoder.name == *slot && decoder.max_uops_per_instruction >= uops)
+    })
 }
 
 fn build_item_cache(files: &[ast::File]) -> HashMap<&str, &ast::Item> {
@@ -1870,6 +2237,248 @@ mod perf_model_tests {
             diags
                 .iter()
                 .any(|d| d.contains("uses unknown resource 'FPU'")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_resource_in_group_is_reported() {
+        let src = "
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                group Int = P0 | P9;
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("group 'Int' references unknown resource 'P9'")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_resource_in_uop_is_reported() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { uop(P9); }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("micro-op references unknown resource 'P9'")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn non_positive_uop_count_is_reported() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { uop(P0, count = 0); }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("micro-op count must be positive")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn non_positive_resource_occupancy_is_reported() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { uop(P0<0>); }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("resource occupancy must be positive")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn cyclic_resource_groups_are_reported() {
+        let src = "
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                group A = B | P0;
+                group B = A;
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("cyclic resource group 'A'")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn frontend_capacities_must_be_positive() {
+        let src = "
+            machine M for [RV64I] {
+                frontend {
+                    fetch {
+                        bytes_per_cycle = 0;
+                        window_bytes = 32;
+                        alignment = 16;
+                        queue_bytes = 64;
+                    }
+                    decode {
+                        slots = [simple];
+                        uops_per_cycle = 4;
+                        queue_uops = 32;
+                        decoder simple { max_uops_per_instruction = 1; }
+                    }
+                }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("frontend fetch bytes_per_cycle must be positive")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn frontend_slot_must_reference_a_decoder() {
+        let src = "
+            machine M for [RV64I] {
+                frontend {
+                    fetch {
+                        bytes_per_cycle = 16;
+                        window_bytes = 32;
+                        alignment = 16;
+                        queue_bytes = 64;
+                    }
+                    decode {
+                        slots = [simple, complex];
+                        uops_per_cycle = 4;
+                        queue_uops = 32;
+                        decoder simple { max_uops_per_instruction = 1; }
+                    }
+                }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("decode slot references unknown decoder 'complex'")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn bind_must_reference_a_frontend_decoder() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                frontend {
+                    fetch {
+                        bytes_per_cycle = 16;
+                        window_bytes = 32;
+                        alignment = 16;
+                        queue_bytes = 64;
+                    }
+                    decode {
+                        slots = [simple];
+                        uops_per_cycle = 4;
+                        queue_uops = 32;
+                        decoder simple { max_uops_per_instruction = 1; }
+                    }
+                }
+                bind W { decode_uops = 2; decoder = complex; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("references unknown frontend decoder 'complex'")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn bind_decoder_must_have_a_capable_slot() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                frontend {
+                    fetch {
+                        bytes_per_cycle = 16;
+                        window_bytes = 32;
+                        alignment = 16;
+                        queue_bytes = 64;
+                    }
+                    decode {
+                        slots = [simple];
+                        uops_per_cycle = 4;
+                        queue_uops = 32;
+                        decoder simple { max_uops_per_instruction = 1; }
+                        decoder complex { max_uops_per_instruction = 4; }
+                    }
+                }
+                bind W { decode_uops = 3; decoder = complex; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("frontend has no capable 'complex' decoder slot")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn inferred_decode_uops_need_a_capable_slot() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                frontend {
+                    fetch {
+                        bytes_per_cycle = 16;
+                        window_bytes = 32;
+                        alignment = 16;
+                        queue_bytes = 64;
+                    }
+                    decode {
+                        slots = [complex];
+                        uops_per_cycle = 6;
+                        queue_uops = 32;
+                        decoder complex { max_uops_per_instruction = 4; }
+                    }
+                }
+                bind W { uop(P0, count = 5); }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("frontend has no decoder slot capable of 5 micro-ops")),
             "diags: {diags:?}"
         );
     }

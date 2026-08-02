@@ -125,6 +125,13 @@ shift_imm!(RegShift,
     (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 5, 0); })
 )
 
+shift_imm!("One", "_one", RegShiftOne,
+    (Shl, "shl", 0b100, { }),
+    (Shr, "shr", 0b101, { }),
+    (Sar, "sar", 0b111, { }),
+    (Ror, "ror", 0b001, { })
+)
+
 // Relative control transfers: rel32 is measured from the end of the
 // instruction (RIP points past it), and `PC::pc` in behaviors is the
 // instruction's own address — hence the explicit instruction-length addends.
@@ -496,6 +503,20 @@ shift_imm!("32", "32", RegShift32,
     (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
 )
 
+shift_imm!("One32", "_one32", RegShiftOne32,
+    (Shl, "shl", 0b100, { }),
+    (Shr, "shr", 0b101, { }),
+    (Sar, "sar", 0b111, { }),
+    (Ror, "ror", 0b001, { })
+)
+
+shift_imm!("One32Norex", "_one32_norex", RegShiftOne32Norex,
+    (Shl, "shl", 0b100, { }),
+    (Shr, "shr", 0b101, { }),
+    (Sar, "sar", 0b111, { }),
+    (Ror, "ror", 0b001, { })
+)
+
 alu_rr!("16", "16", RegReg16, WriteIALU,
     (Add, "add", 0x01, { dst = dst + src; }),
     (Sub, "sub", 0x29, { dst = dst - src; }),
@@ -541,7 +562,9 @@ alu_ri!("8", "8", RegImm8, WriteIALU,
     (AddImm, "add_imm", "add", 0x80, 0b000, { dst = dst + sext(imm, 8); }),
     (OrImm,  "or_imm",  "or",  0x80, 0b001, { dst = dst | sext(imm, 8); }),
     (AndImm, "and_imm", "and", 0x80, 0b100, { dst = dst & sext(imm, 8); }),
-    (XorImm, "xor_imm", "xor", 0x80, 0b110, { dst = dst ^ sext(imm, 8); })
+    (XorImm, "xor_imm", "xor", 0x80, 0b110, { dst = dst ^ sext(imm, 8); }),
+    (CmpImm, "cmp_imm", "cmp", 0x80, 0b111, { }),
+    (TestImm, "test_imm", "test", 0xF6, 0b000, { })
 )
 
 alu_ri!("8", "8", RegImm8, WriteIMoveImmediate,
@@ -629,7 +652,9 @@ alu_ri_norex!(RegImm8Norex, WriteIALU,
     (AddImm8Norex, "add_imm8_norex", "add", 0x80, 0b000),
     (OrImm8Norex,  "or_imm8_norex",  "or",  0x80, 0b001),
     (AndImm8Norex, "and_imm8_norex", "and", 0x80, 0b100),
-    (XorImm8Norex, "xor_imm8_norex", "xor", 0x80, 0b110)
+    (XorImm8Norex, "xor_imm8_norex", "xor", 0x80, 0b110),
+    (CmpImm8Norex, "cmp_imm8_norex", "cmp", 0x80, 0b111),
+    (TestImm8Norex, "test_imm8_norex", "test", 0xF6, 0b000)
 )
 
 alu_ri_norex!(RegImm8Norex, WriteIMoveImmediate,

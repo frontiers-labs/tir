@@ -78,6 +78,7 @@ pub fn simulate(
             uses: phys_regs(&regs.uses, prf),
             branch: None,
             pc: *pc,
+            width_bytes: width.min(u64::from(u16::MAX)) as u16,
             mem: mem_trace.map(|mt| mt[i].clone()).unwrap_or_default(),
         });
     }

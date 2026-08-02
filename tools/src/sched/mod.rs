@@ -12,8 +12,11 @@ use std::{error::Error, ffi::OsString};
 
 use clap::Args;
 use tir::Context;
+use tir::backend::TargetMachine;
+use tir::backend::binary::{ObjectFile, SectionKind};
 use tir::backend::liveness::op_regs;
 use tir::backend::{MachineInstruction, SectionOp, SymbolOp};
+use tir::builtin::ModuleOp;
 use tir_sim::scoreboard::{self, Prf, ScoreboardInstr, TimingConfig, phys_regs};
 
 use crate::common::{InputKind, parse_module};
@@ -27,6 +30,7 @@ mod event;
 const GENERIC_MODEL: tir::backend::sched::MachineModel = tir::backend::sched::MachineModel {
     name: "generic",
     issue_width: 1,
+    frontend: None,
     resources: &[],
     buffers: &[],
     pipeline: &[],
@@ -101,9 +105,10 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     let prf = Prf::for_target(&target.register_info(), &model, abi);
     let mut op_ids = Vec::new();
     collect_instructions(&context, module.body(), &mut op_ids);
+    let layout = encoded_instruction_layout(target.as_ref(), &context, &module, op_ids.len())?;
 
     let mut base = Vec::with_capacity(op_ids.len());
-    for op_id in op_ids {
+    for (index, op_id) in op_ids.into_iter().enumerate() {
         let op = context.get_op(op_id);
         let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() else {
             continue;
@@ -113,13 +118,18 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         let text = asm_printer
             .print_instruction(&context, &op)?
             .ok_or_else(|| format!("no assembly printer registered for '{}'", op.name()))?;
+        let (pc, width_bytes) = layout
+            .as_ref()
+            .and_then(|layout| layout.get(index).copied())
+            .unwrap_or((0, u16::from(mi.width_bytes().max(1))));
         base.push(ScoreboardInstr {
             text,
             class: model.sched_class(scheduling_key),
             defs: phys_regs(&regs.defs, Some(&prf)),
             uses: phys_regs(&regs.uses, Some(&prf)),
             branch: None,
-            pc: 0,
+            pc,
+            width_bytes,
             mem: Vec::new(),
         });
     }
@@ -127,13 +137,21 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     if base.is_empty() {
         return Err("no machine instructions found in input".into());
     }
+    let unroll_stride = layout
+        .as_deref()
+        .map(static_unroll_stride)
+        .unwrap_or_else(|| {
+            base.iter()
+                .map(|instruction| u64::from(instruction.width_bytes))
+                .sum()
+        });
 
     let mut handler = event::make(args.view);
     scoreboard::run(
         &model,
         &base,
         args.iterations.max(1),
-        &TimingConfig::for_model(&model),
+        &TimingConfig::for_model(&model).with_unroll_stride(unroll_stride),
         None,
         Some(&prf),
         None,
@@ -142,6 +160,55 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     print!("{}", handler.render());
 
     Ok(())
+}
+
+type InstructionLayout = Vec<(u64, u16)>;
+
+fn static_unroll_stride(layout: &[(u64, u16)]) -> u64 {
+    layout
+        .iter()
+        .map(|(pc, width)| pc.saturating_add(u64::from(*width)))
+        .max()
+        .unwrap_or(0)
+}
+
+fn encoded_instruction_layout(
+    target: &dyn TargetMachine,
+    context: &Context,
+    module: &ModuleOp,
+    expected: usize,
+) -> Result<Option<InstructionLayout>, Box<dyn Error>> {
+    let (Some(format), Some(writer)) = (target.object_format(), target.binary_writer(context))
+    else {
+        return Ok(None);
+    };
+    let object = writer
+        .write_module(context, module, &format)
+        .map_err(|error| format!("failed to encode scheduling input: {error}"))?;
+    text_instruction_layout(&object, expected)
+        .map(Some)
+        .ok_or_else(|| "encoded instruction layout does not match scheduling input".into())
+}
+
+fn text_instruction_layout(object: &ObjectFile, expected: usize) -> Option<InstructionLayout> {
+    let mut base = 0u64;
+    let mut layout = Vec::new();
+    for section in object
+        .sections
+        .iter()
+        .filter(|section| section.kind == SectionKind::Text)
+    {
+        let alignment = section.align.max(1);
+        base = base.div_ceil(alignment) * alignment;
+        layout.extend(
+            section
+                .insn_spans
+                .iter()
+                .map(|(offset, width)| (base + offset, u16::from(*width))),
+        );
+        base = base.saturating_add(section.data.len() as u64);
+    }
+    (layout.len() == expected).then_some(layout)
 }
 
 /// Recursively gather the ids of every machine instruction reachable from `block`,
@@ -160,5 +227,32 @@ fn collect_instructions(
         } else if op.as_interface::<dyn MachineInstruction>().is_some() {
             out.push(op_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{static_unroll_stride, text_instruction_layout};
+    use tir::backend::binary::{ObjSection, ObjectFile, SectionKind};
+
+    #[test]
+    fn encoded_text_spans_define_frontend_pcs_and_widths() {
+        let object = ObjectFile {
+            sections: vec![ObjSection {
+                name: ".text".to_string(),
+                kind: SectionKind::Text,
+                align: 16,
+                data: vec![0; 9],
+                relocs: vec![],
+                insn_spans: vec![(0, 2), (2, 3), (5, 4)],
+            }],
+            symbols: vec![],
+        };
+
+        assert_eq!(
+            text_instruction_layout(&object, 3),
+            Some(vec![(0, 2), (2, 3), (5, 4)])
+        );
+        assert_eq!(static_unroll_stride(&[(0, 2), (2, 3), (5, 4)]), 9);
     }
 }

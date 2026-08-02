@@ -11,13 +11,12 @@ enum AsmAction {
     RBracket,
     Star,
     Plus,
-    /// A literal identifier in the template (e.g. the condition in
+    Number(String),
     /// Literal identifier in the template (e.g. `eq` in `cset {rd}, eq` or
     /// `sp` in `c.addi4spn {rd}, sp, {imm}`); the parser requires it verbatim.
     Keyword(String),
     Number(String),
 }
-
 enum AsmPrintPart {
     Text(String),
     Operand(String),
@@ -75,6 +74,13 @@ fn compile_asm_template(template: &str) -> Vec<AsmAction> {
             '+' => {
                 actions.push(AsmAction::Plus);
                 i += 1;
+            }
+            c if c.is_ascii_digit() => {
+                let start = i;
+                while i < bytes.len() && (bytes[i] as char).is_ascii_digit() {
+                    i += 1;
+                }
+                actions.push(AsmAction::Number(template[start..i].to_string()));
             }
             c if c.is_ascii_alphabetic() || c == '_' => {
                 let start = i;
