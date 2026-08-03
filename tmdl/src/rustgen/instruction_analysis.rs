@@ -289,7 +289,9 @@ fn value_zero_form_operands(
 /// upper register bits reach the result, so a value of a different width must
 /// not bind (its bits above the value width are undefined). Comparison
 /// operands always qualify — the comparison node's own type is its i1 result
-/// and says nothing about operand widths. Right-shift values and
+/// and says nothing about operand widths. Extension operands always qualify —
+/// `sext`/`zext` read the operand up to its *own* width (the sign bit moves
+/// with it), so the result type never pins the operand. Right-shift values and
 /// division/remainder operands qualify only under an *untyped* node: a typed
 /// node (a word form like `sraw`) already pins its operands through width
 /// inference.
@@ -297,7 +299,10 @@ fn value_zero_form_operands(
 /// Sensitivity reaches *through* low-bits-preserving operators rather than
 /// stopping at them: `and`'s own result keeps a narrow operand's garbage out of
 /// its low bits, but `(dst & src) == 0` (x86 `test` + `jcc`) still compares
-/// every bit of that garbage, so both operands are sensitive.
+/// every bit of that garbage, so both operands are sensitive. It stops at
+/// operators that cap which operand bits the consumer can see: an `extract`
+/// reads a fixed bit range regardless of the bound value's width, and a
+/// memory read yields fresh bits unrelated to its address operands.
 fn width_sensitive_symbols(
     dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
     node_widths: &[Option<u32>],
@@ -314,6 +319,7 @@ fn width_sensitive_symbols(
             }
             K::Div | K::UDiv | K::SRem | K::URem if untyped => &[0, 1],
             K::ShiftRightLogic | K::ShiftRightArithmetic if untyped => &[0],
+            K::SExt | K::ZExt => &[0],
             _ => &[],
         };
         let children: Vec<tir::graph::NodeId> = dag.children(node).collect();
@@ -326,14 +332,25 @@ fn width_sensitive_symbols(
     out
 }
 
-/// Every operand symbol appearing in `node`'s subtree.
+/// Every operand symbol whose upper bits reach `node`'s value. Stops at
+/// operators that cap the visible bit range (`extract`) or yield fresh bits
+/// (memory reads) — symbols below them are not width-sensitive through this
+/// path (see [`width_sensitive_symbols`]).
 fn collect_symbols(
     dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
     node: tir::graph::NodeId,
     out: &mut HashSet<u32>,
 ) {
+    use tir::sem::SymKind as K;
+
     if let Some(tir::sem::SymPayload::SymbolId(symbol)) = dag.get_leaf_data(node) {
         out.insert(*symbol);
+        return;
+    }
+    if matches!(
+        dag.get_node(node),
+        K::Extract | K::LoadMemory | K::LoadReserved | K::AtomicRmw
+    ) {
         return;
     }
     for child in dag.children(node) {

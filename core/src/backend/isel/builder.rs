@@ -14,8 +14,8 @@ use tir_adt::APInt;
 use tir_symbolic::egraph::Id;
 
 use super::node::{
-    SemEGraph, SemNode, SemPayload, ir_type, minimal_unsigned_apint, semantic_type, template_node,
-    type_width,
+    SemEGraph, SemNode, SemPayload, class_is_pure, ir_type, minimal_unsigned_apint, semantic_type,
+    template_node, type_width,
 };
 
 /// Builds a block's semantic expressions straight into the e-graph: every lowered
@@ -79,10 +79,19 @@ impl<'a> SemDagBuilder<'a> {
     /// Add the `addr + 0` form used by base+offset addressing patterns and record
     /// its exact equality with the bare address used by direct-base patterns. The
     /// node stays unique to this memory operation; only its value class is shared.
+    ///
+    /// The equality is recorded only for pure addresses: an effectful address
+    /// (e.g. a loaded pointer) must keep its effect node as the class's sole
+    /// materialization — unioning in an arithmetic view would let the cover pick
+    /// that view and leave the effect with no rule to materialize it.
     fn zero_offset_address(&mut self, address: Id) -> Id {
         let zero = self.add_u64_const(0);
         let with_zero = self.add_op_unique(SymKind::Add, vec![address, zero], None);
-        self.egraph.union(with_zero, address)
+        if class_is_pure(self.egraph, address) {
+            self.egraph.union(with_zero, address)
+        } else {
+            with_zero
+        }
     }
 
     fn add_input_value(&mut self, value: ValueId, ty: Option<TypeId>) -> Id {

@@ -281,25 +281,28 @@ impl RegisterCapability {
 }
 
 impl ImmRange {
-    /// Whether `value` is representable in the field: its 64-bit register
-    /// pattern must survive the encode/decode roundtrip (truncate to the
-    /// field, extend back per the field's signedness). So `4096` is rejected
-    /// by a signed 12-bit field (it would decode as `-2048`), while the
-    /// all-ones register constant fits any signed field as `-1`.
+    /// Whether `value` is representable in the field: its register pattern
+    /// must survive the encode/decode roundtrip (truncate to the field, extend
+    /// back per the field's signedness). A signed field compares the
+    /// sign-extended pattern, so `4096` is rejected by a signed 12-bit field
+    /// (it would decode as `-2048`) while the all-ones register constant fits
+    /// any signed field as `-1`. An unsigned field compares the value's raw
+    /// bits at its own width: i16 `-32640` is the pattern `0x8080`, which a
+    /// 16-bit unsigned field encodes exactly.
     pub fn contains(&self, value: &APInt) -> bool {
-        let bits = if value.is_signed() {
-            value.to_i64() as u64
-        } else {
-            value.to_u64()
-        };
         if self.width >= 64 {
             return true;
         }
         if self.signed {
+            let bits = if value.is_signed() {
+                value.to_i64() as u64
+            } else {
+                value.to_u64()
+            };
             let shift = 64 - self.width;
             (((bits << shift) as i64) >> shift) as u64 == bits
         } else {
-            bits >> self.width == 0
+            value.to_u64() >> self.width == 0
         }
     }
 }

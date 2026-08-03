@@ -5,8 +5,16 @@ module {
     %value = constant {value = 4} : !i64
     return %value
   }
+
+  func @negative_i16() -> !i16 {
+    %value = constant {value = -32640} : !i16
+    return %value
+  }
   module_end
 }
 
+// CHECK: asm.symbol {name = "constant"
+// CHECK: arm64.movz
+// CHECK: asm.symbol {name = "negative_i16"
 // CHECK: arm64.movz
 // CHECK-NOT: constant

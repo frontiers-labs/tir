@@ -28,6 +28,28 @@ module {
     %1 = fptoui %0 : !i32
     return %1
   }
+  func @convert_to_signed_i64(%0: !f64) -> !i64 {
+    %1 = fptosi %0 : !i64
+    return %1
+  }
+  func @convert_to_unsigned_i64(%0: !f64) -> !i64 {
+    %1 = fptoui %0 : !i64
+    return %1
+  }
+  func @convert_to_signed_i64_trunc_store(%0: !ptr.p<!f64>, %1: !ptr.p<!i32>) {
+    %2 = ptr.load %0 : !f64
+    %3 = fptosi %2 : !i64
+    %4 = trunci %3 : !i32
+    ptr.store %4, %1
+    %5 = constant {value = 0} : !i32
+    %6 = ptr.load %1 : !i32
+    %7 = cmpi %6, %5 {predicate = "eq"} : !i1
+    cond_br %7, ^bb1, ^bb2
+  ^bb1:
+    return
+  ^bb2:
+    return
+  }
   func @bits_to_double(%0: !i64) -> !f64 {
     %1 = bitcast %0 : !f64
     return %1
@@ -81,6 +103,17 @@ module {
 // CHECK: asm.symbol {name = "convert_to_unsigned"
 // CHECK: arm64.fcvtzu_w_d {rd = %virt{{[0-9]+}}:GPR, fa = %virt{{[0-9]+}}:FPR64}
 // CHECK: asm.vret
+// CHECK: asm.symbol {name = "convert_to_signed_i64"
+// CHECK: arm64.fcvtzs_x_d {rd = %virt{{[0-9]+}}:GPR, fa = %virt{{[0-9]+}}:FPR64}
+// CHECK: asm.vret
+// CHECK: asm.symbol {name = "convert_to_unsigned_i64"
+// CHECK: arm64.fcvtzu_x_d {rd = %virt{{[0-9]+}}:GPR, fa = %virt{{[0-9]+}}:FPR64}
+// CHECK: asm.vret
+// CHECK: asm.symbol {name = "convert_to_signed_i64_trunc_store"
+// CHECK: arm64.load_float_double
+// CHECK: arm64.fcvtzs_x_d
+// CHECK: arm64.store_word
+// CHECK: arm64.load_word_unsigned
 // CHECK: asm.symbol {name = "bits_to_double"
 // CHECK: arm64.fmov_d_x {fd = %virt{{[0-9]+}}:FPR64, rn = %virt{{[0-9]+}}:GPR}
 // CHECK: asm.vret

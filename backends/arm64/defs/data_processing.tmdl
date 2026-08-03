@@ -76,6 +76,16 @@ instruction LogicalShiftLeftVariable for [ARMv8A64] : ShiftReg {
     }
 }
 
+instruction LogicalShiftLeftVariableWord for [ARMv8A64] : ShiftRegWord {
+    param MNEMONIC: String = "lslv";
+    param OPNAME: String = "lslv_w";
+    param OPCODE: bits<6> = 0b001000;
+
+    behavior {
+        rd = rn << extract(rm, 4, 0);
+    }
+}
+
 instruction LogicalShiftRightVariable for [ARMv8A64] : ShiftReg {
     param MNEMONIC: String = "lsrv";
     param OPCODE: bits<6> = 0b001001;
@@ -85,12 +95,32 @@ instruction LogicalShiftRightVariable for [ARMv8A64] : ShiftReg {
     }
 }
 
+instruction LogicalShiftRightVariableWord for [ARMv8A64] : ShiftRegWord {
+    param MNEMONIC: String = "lsrv";
+    param OPNAME: String = "lsrv_w";
+    param OPCODE: bits<6> = 0b001001;
+
+    behavior {
+        rd = rn >> extract(rm, 4, 0);
+    }
+}
+
 instruction ArithmeticShiftRightVariable for [ARMv8A64] : ShiftReg {
     param MNEMONIC: String = "asrv";
     param OPCODE: bits<6> = 0b001010;
 
     behavior {
         rd = rn >>> extract(rm, log2Ceil(self.XLEN) - 1, 0);
+    }
+}
+
+instruction ArithmeticShiftRightVariableWord for [ARMv8A64] : ShiftRegWord {
+    param MNEMONIC: String = "asrv";
+    param OPNAME: String = "asrv_w";
+    param OPCODE: bits<6> = 0b001010;
+
+    behavior {
+        rd = rn >>> extract(rm, 4, 0);
     }
 }
 
@@ -112,6 +142,28 @@ instruction Compare for [ARMv8A64] : CmpRegTemplate {
         // Signed overflow of rn - rm: operands differ in sign and the result's
         // sign differs from rn's.
         PSTATE::v = extract((rn ^ rm) & (rn ^ (rn - rm)), self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction CompareWord for [ARMv8A64] : CmpRegTemplateWord {
+    param MNEMONIC: String = "cmp";
+    param OPNAME: String = "cmp_w";
+
+    behavior {
+        PSTATE::n = extract(rn - rm, 31, 31);
+        PSTATE::z = if rn == rm {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= rm {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        // Signed overflow of rn - rm: operands differ in sign and the result's
+        // sign differs from rn's.
+        PSTATE::v = extract((rn ^ rm) & (rn ^ (rn - rm)), 31, 31);
     }
 }
 
@@ -657,7 +709,113 @@ instruction ArithmeticShiftRightImm for [ARMv8A64] : ShiftRightImmTemplate {
     }
 }
 
+instruction LogicalShiftRightImmWord for [ARMv8A64] : ShiftRightImmWordTemplate {
+    param MNEMONIC: String = "lsr";
+    param OPNAME: String = "lsr_w";
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rd = rn >> imm;
+    }
+}
+
+instruction LogicalShiftRightImmHalfword for [ARMv8A64] {
+    param MNEMONIC: String = "ubfm";
+    param OPNAME: String = "lsr_h";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR32,
+        rn: GPR32,
+        imm: bits<4>,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => rn,
+        10..15 => 0b001111,
+        16..19 => imm,
+        20..21 => 0b00,
+        22 => 0b0,
+        23..28 => 0b100110,
+        29..30 => 0b10,
+        31 => 0b0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {imm}, 15"
+    }
+
+    behavior {
+        rd = zext(extract(rn, 15, 0) >> imm, 32);
+    }
+}
+
+instruction LogicalShiftRightImmByte for [ARMv8A64] {
+    param MNEMONIC: String = "ubfm";
+    param OPNAME: String = "lsr_b";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR32,
+        rn: GPR32,
+        imm: bits<3>,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => rn,
+        10..15 => 0b000111,
+        16..18 => imm,
+        19..21 => 0b000,
+        22 => 0b0,
+        23..28 => 0b100110,
+        29..30 => 0b10,
+        31 => 0b0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {rn}, {imm}, 7"
+    }
+
+    behavior {
+        rd = zext(extract(rn, 7, 0) >> imm, 32);
+    }
+}
+
+instruction ArithmeticShiftRightImmWord for [ARMv8A64] : ShiftRightImmWordTemplate {
+    param MNEMONIC: String = "asr";
+    param OPNAME: String = "asr_w";
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        rd = rn >>> imm;
+    }
+}
+
 // Sign-extend aliases of SBFM (immr = 0, imms = width - 1).
+instruction SignExtendByteWord for [ARMv8A64] : SignExtendFixedWord {
+    param MNEMONIC: String = "sxtb";
+    param OPNAME: String = "sxtb_w";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b000111;
+
+    behavior {
+        rd = sext(extract(rn, 7, 0), 32);
+    }
+}
+
+instruction SignExtendHalfwordWord for [ARMv8A64] : SignExtendFixedWord {
+    param MNEMONIC: String = "sxth";
+    param OPNAME: String = "sxth_w";
+    param OPC: bits<2> = 0b00;
+    param IMMS: bits<6> = 0b001111;
+
+    behavior {
+        rd = sext(extract(rn, 15, 0), 32);
+    }
+}
+
 instruction SignExtendByte for [ARMv8A64] : SignExtendFixed {
     param MNEMONIC: String = "sxtb";
     param OPC: bits<2> = 0b00;
@@ -1056,6 +1214,69 @@ instruction FCvtzuWordDouble for [ARMv8A64] {
 
     behavior {
         rd = zext(fptoui(fa, 32), self.XLEN);
+    }
+}
+
+// Convert binary64 to a signed 64-bit integer, truncating toward zero.
+instruction FCvtzsDouble for [ARMv8A64] {
+    param MNEMONIC: String = "fcvtzs";
+    param OPNAME: String = "fcvtzs_x_d";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR,
+        fa: FPR64,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => fa,
+        10..18 => 0b000000000,
+        19..20 => 0b11,
+        21..23 => 0b011,
+        24..28 => 0b11110,
+        29..30 => 0b00,
+        31 => 0b1,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = fptosi(fa, self.XLEN);
+    }
+}
+
+// Convert binary64 to an unsigned 64-bit integer, truncating toward zero.
+instruction FCvtzuDouble for [ARMv8A64] {
+    param MNEMONIC: String = "fcvtzu";
+    param OPNAME: String = "fcvtzu_x_d";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR,
+        fa: FPR64,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => fa,
+        10..15 => 0b000000,
+        16..18 => 0b001,
+        19..20 => 0b11,
+        21..23 => 0b011,
+        24..28 => 0b11110,
+        29..30 => 0b00,
+        31 => 0b1,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = fptoui(fa, self.XLEN);
     }
 }
 

@@ -1,0 +1,36 @@
+// RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
+
+module {
+  declare @ext(!i64) -> !i64
+  func @f(%0: !i64) -> !i64 {
+    %1 = addi %0, %0 : !i64
+    %2 = addi %1, %0 : !i64
+    %3 = addi %2, %0 : !i64
+    %4 = addi %3, %0 : !i64
+    %5 = addi %4, %0 : !i64
+    %6 = addi %5, %0 : !i64
+    %7 = addi %6, %0 : !i64
+    %8 = addi %7, %0 : !i64
+    %9 = addi %8, %0 : !i64
+    %10 = addi %9, %0 : !i64
+    %11 = addi %10, %0 : !i64
+    %12 = call @ext(%0 : !i64) -> !i64
+    %13 = addi %12, %1 : !i64
+    %14 = addi %13, %2 : !i64
+    %15 = addi %14, %3 : !i64
+    %16 = addi %15, %4 : !i64
+    %17 = addi %16, %5 : !i64
+    %18 = addi %17, %6 : !i64
+    %19 = addi %18, %7 : !i64
+    %20 = addi %19, %8 : !i64
+    %21 = addi %20, %9 : !i64
+    %22 = addi %21, %10 : !i64
+    %23 = addi %22, %11 : !i64
+    return %23
+  }
+  module_end
+}
+
+// CHECK: arm64.orr {rd = [[SAVE:x[0-9]+]], rn = x31, rm = x30}
+// CHECK: arm64.orr {rd = x0
+// CHECK: asm.vcall {callee = "ext"

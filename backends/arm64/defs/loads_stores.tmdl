@@ -15,6 +15,17 @@ instruction LoadByteUnsigned for [ARMv8A64] : LoadStoreImmUnsigned {
     }
 }
 
+instruction LoadByteUnsignedWord for [ARMv8A64] : LoadStoreImmUnsignedWord {
+    param MNEMONIC: String = "ldrb";
+    param OPNAME: String = "load_byte_unsigned_w";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = zext(load(rn + zext(imm, self.XLEN), 1, 0b0), 32);
+    }
+}
+
 instruction LoadHalfwordUnsigned for [ARMv8A64] : LoadStoreImmUnsignedH {
     param MNEMONIC: String = "ldrh";
     param SIZE: bits<2> = 0b01;
@@ -78,6 +89,17 @@ instruction LoadHalfwordSigned for [ARMv8A64] : LoadStoreImmUnsignedH {
 
     behavior {
         rt = sext(load(rn + zext(imm, self.XLEN), 2, 0b1), self.XLEN);
+    }
+}
+
+instruction LoadHalfwordSignedWord for [ARMv8A64] : LoadStoreImmUnsignedWordH {
+    param MNEMONIC: String = "ldrsh";
+    param OPNAME: String = "load_halfword_signed_w";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b11;
+
+    behavior {
+        rt = sext(load(rn + zext(imm, self.XLEN), 2, 0b1), 32);
     }
 }
 
@@ -343,6 +365,164 @@ instruction StoreDoublewordRegOffsetScaled for [ARMv8A64] : LoadStoreRegOffset {
 
     behavior {
         store(rn + (rm << 3), 8, rt);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction LoadByteUnsignedRegOffset for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "ldrb";
+    param OPNAME: String = "load_byte_unsigned_reg";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b01;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        rt = zext(load(rn + rm, 1, 0b0), self.XLEN);
+    }
+}
+
+instruction StoreByteRegOffset for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "strb";
+    param OPNAME: String = "store_byte_reg";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b00;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        store(rn + rm, 1, extract(rt, 7, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction LoadHalfwordUnsignedRegOffset for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "ldrh";
+    param OPNAME: String = "load_halfword_unsigned_reg";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b01;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        rt = zext(load(rn + rm, 2, 0b0), self.XLEN);
+    }
+}
+
+instruction LoadHalfwordSignedRegOffset for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "ldrsh";
+    param OPNAME: String = "load_halfword_signed_reg";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b10;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        rt = sext(load(rn + rm, 2, 0b1), self.XLEN);
+    }
+}
+
+instruction StoreHalfwordRegOffset for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "strh";
+    param OPNAME: String = "store_halfword_reg";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b00;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        store(rn + rm, 2, extract(rt, 15, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction LoadWordUnsignedRegOffset for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "ldr";
+    param OPNAME: String = "load_word_unsigned_reg";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b01;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        rt = zext(load(rn + rm, 4, 0b0), self.XLEN);
+    }
+}
+
+instruction StoreWordRegOffset for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "str";
+    param OPNAME: String = "store_word_reg";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b00;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        store(rn + rm, 4, extract(rt, 31, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction LoadHalfwordUnsignedRegOffsetScaled for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "ldrh";
+    param OPNAME: String = "load_halfword_unsigned_reg_scaled";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b01;
+    param S: bits<1> = 0b1;
+
+    asm {
+        "{self.MNEMONIC} {rt}, [{rn}, {rm}, lsl #1]"
+    }
+
+    behavior {
+        rt = zext(load(rn + (rm << 1), 2, 0b0), self.XLEN);
+    }
+}
+
+instruction StoreHalfwordRegOffsetScaled for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "strh";
+    param OPNAME: String = "store_halfword_reg_scaled";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b00;
+    param S: bits<1> = 0b1;
+
+    asm {
+        "{self.MNEMONIC} {rt}, [{rn}, {rm}, lsl #1]"
+    }
+
+    behavior {
+        store(rn + (rm << 1), 2, extract(rt, 15, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction LoadWordUnsignedRegOffsetScaled for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "ldr";
+    param OPNAME: String = "load_word_unsigned_reg_scaled";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b01;
+    param S: bits<1> = 0b1;
+
+    asm {
+        "{self.MNEMONIC} {rt}, [{rn}, {rm}, lsl #2]"
+    }
+
+    behavior {
+        rt = zext(load(rn + (rm << 2), 4, 0b0), self.XLEN);
+    }
+}
+
+instruction StoreWordRegOffsetScaled for [ARMv8A64] : LoadStoreRegOffset {
+    param MNEMONIC: String = "str";
+    param OPNAME: String = "store_word_reg_scaled";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b00;
+    param S: bits<1> = 0b1;
+
+    asm {
+        "{self.MNEMONIC} {rt}, [{rn}, {rm}, lsl #2]"
+    }
+
+    behavior {
+        store(rn + (rm << 2), 4, extract(rt, 31, 0));
     }
 
     schedule { units = [WriteStore]; }

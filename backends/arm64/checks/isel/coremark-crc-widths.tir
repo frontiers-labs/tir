@@ -1,0 +1,54 @@
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
+
+module {
+  func @crc_bit_branch(%0: !ptr.p<!i16>) -> !i64 {
+    %1 = ptr.alloca {size = 1, align = 1} : !ptr.p<!i8>
+    %2 = ptr.load %0 : !i16
+    %3 = extsi %2 : !i32
+    %4 = constant {value = 7} : !i32
+    %5 = shrsi %3, %4 : !i32
+    %6 = constant {value = 1} : !i32
+    %7 = andi %5, %6 : !i32
+    %8 = trunci %7 : !i8
+    ptr.store %8, %1
+    %9 = ptr.load %1 : !i8
+    %10 = extui %9 : !i32
+    %11 = constant {value = 0} : !i32
+    %12 = cmpi %10, %11 {predicate = "ne"} : !i1
+    cond_br %12, ^bb1, ^bb2
+  ^bb1:
+    %13 = constant {value = 1} : !i64
+    return %13
+  ^bb2:
+    %14 = constant {value = 0} : !i64
+    return %14
+  }
+
+  func @crc_shift_u16(%0: !i16) -> !i16 {
+    %1 = constant {value = 1} : !i16
+    %2 = shrui %0, %1 : !i16
+    return %2
+  }
+
+  func @crc_shift_u8(%0: !i8) -> !i8 {
+    %1 = constant {value = 1} : !i8
+    %2 = shrui %0, %1 : !i8
+    return %2
+  }
+
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "crc_bit_branch"
+// CHECK: arm64.ldrh
+// CHECK: arm64.lslv_w
+// CHECK: arm64.asr_w {rd = %virt{{[0-9]+}}:GPR32, rn = %virt{{[0-9]+}}:GPR32, imm = 16}
+// CHECK: arm64.asr_w
+// CHECK: arm64.strb
+// CHECK: arm64.ldrb
+// CHECK: arm64.cmp_w
+// CHECK: arm64.cbnz {rt = %virt{{[0-9]+}}:GPR, imm = ^bb1}
+// CHECK-LABEL: asm.symbol {name = "crc_shift_u16"
+// CHECK: arm64.lsr_h
+// CHECK-LABEL: asm.symbol {name = "crc_shift_u8"
+// CHECK: arm64.lsr_b

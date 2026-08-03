@@ -359,6 +359,19 @@ impl CallLowering {
         {
             rewriter.insert_op_before(op, prefix.as_ref())?;
         }
+
+        let saved_ra = if let Some(ra) = self.abi.ra {
+            let ty = tir::builtin::IntegerType::new(context, self.abi.stack.slot_size * 8);
+            let saved = context.create_value(ty, None).id().number();
+            let copy = self
+                .emitter
+                .copy(context, virtual_reg(saved, ra.0), physical_reg(ra));
+            rewriter.insert_op_before(op, copy.as_ref())?;
+            Some((saved, ra))
+        } else {
+            None
+        };
+
         for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
             match *location {
                 ArgumentLocation::Register(register) => {
@@ -388,18 +401,6 @@ impl CallLowering {
             );
             rewriter.insert_op_before(op, copy.as_ref())?;
         }
-
-        let saved_ra = if let Some(ra) = self.abi.ra {
-            let ty = tir::builtin::IntegerType::new(context, self.abi.stack.slot_size * 8);
-            let saved = context.create_value(ty, None).id().number();
-            let copy = self
-                .emitter
-                .copy(context, virtual_reg(saved, ra.0), physical_reg(ra));
-            rewriter.insert_op_before(op, copy.as_ref())?;
-            Some((saved, ra))
-        } else {
-            None
-        };
 
         let clobbers = AttributeValue::Array(
             self.abi

@@ -135,7 +135,11 @@ for:
 Ops implementing `MemoryRead` / `MemoryWrite` are lowered by
 `build_memory_effect` into `LoadMemory` / `StoreMemory` nodes whose address is
 wrapped as `addr + 0` so the targets' base+offset addressing patterns
-match a bare pointer. The interfaces are the only trigger; there is no op-name
+match a bare pointer. The wrapper is unioned with the bare address class only
+when that class is pure: an effectful address (a loaded pointer) must keep its
+effect node as the sole materialization of its class, or the cover could pick
+the arithmetic view and leave the effect with no rule to materialize it. The
+interfaces are the only trigger; there is no op-name
 matching. Pointer-valued memory effects use the address width the `data_layout`
 in scope declares, falling back to the target's own description (see
 [target_description.md](target_description.md)), so their byte width remains
@@ -433,6 +437,16 @@ the architectural registers (x86 `add32`/`add16`/`add8` on
 pattern root at the class width, so each narrow form matches only values of
 its width and wins the specificity tie-break below against the untyped
 full-width form (which keeps matching every other width).
+
+Operands can be **width-sensitive** independently of the root type: when an
+operand's upper register bits reach the result — comparison operands;
+`sext`/`zext` operands, which are read up to the bound value's *own* width (the
+sign bit moves with it); right-shift values and division/remainder operands
+under untyped nodes — the generated matcher refuses to bind a value of a
+different width, whose bits above that width are undefined. Sensitivity reaches
+through low-bits-preserving operators (`and` under a compare, as in x86
+`test`), but stops at `extract` and memory reads, which cap the operand bits
+the consumer can see (`width_sensitive_symbols` in the TMDL generator).
 
 ### Dominance pruning (specificity)
 

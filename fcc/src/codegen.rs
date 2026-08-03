@@ -3448,16 +3448,23 @@ impl FnCodegen<'_> {
                             "non-addressable compound assignment".to_string(),
                         ));
                     };
-                    let rhs = self.materialize(self.values[&children.next().unwrap()]);
+                    let rhs_node = children.next().unwrap();
+                    let rhs = self.materialize(self.values[&rhs_node]);
                     let lhs = self
                         .builder
                         .insert(p::load(self.context, ptr, elem).build())
                         .result();
                     let source_ty = node_type(self.typed, lhs_node);
-                    let value = if matches!(self.typed.types().kind(source_ty), TypeKind::Double) {
-                        self.lower_double_binary(kind, lhs, rhs)
-                    } else {
-                        self.lower_integer_binary(kind, lhs, rhs, source_ty)
+                    let value = match self.typed.types().kind(source_ty) {
+                        TypeKind::Pointer(_) => self.lower_pointer_offset(
+                            lhs,
+                            rhs,
+                            node_type(self.typed, rhs_node),
+                            source_ty,
+                            kind == AstKind::SubAssign,
+                        ),
+                        TypeKind::Double => self.lower_double_binary(kind, lhs, rhs),
+                        _ => self.lower_integer_binary(kind, lhs, rhs, source_ty),
                     };
                     self.builder
                         .insert(p::store(self.context, value, ptr).build());

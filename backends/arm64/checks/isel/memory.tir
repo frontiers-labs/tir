@@ -15,6 +15,41 @@ module {
     %6 = addi %4, %5 : !i32
     return %6
   }
+
+  func @word_reg_offset(%0: !ptr.p<!i32>, %1: !i64, %2: !i32) -> !i32 {
+    %3 = ptr.ptradd %0, %1 : !ptr.p<!i32>
+    %4 = ptr.load %3 : !i32
+    ptr.store %2, %3
+    return %4
+  }
+
+  func @byte_reg_offset(%0: !ptr.p<!i8>, %1: !i64, %2: !i8) -> !i8 {
+    %3 = ptr.ptradd %0, %1 : !ptr.p<!i8>
+    %4 = ptr.load %3 : !i8
+    ptr.store %2, %3
+    return %4
+  }
+
+  func @byte_through_loaded_pointer(%0: !ptr.p<!i8>, %1: !i8) {
+    %2 = ptr.alloca {size = 8, align = 8} : !ptr.p<!ptr.p<!i8>>
+    ptr.store %0, %2
+    %3 = ptr.load %2 : !ptr.p<!i8>
+    %4 = ptr.load %3 : !i8
+    %5 = xori %4, %1 : !i8
+    ptr.store %5, %3
+    return
+  }
+
+  func @signed_i16_load_to_i32(%0: !ptr.p<!i16>) -> !i32 {
+    %1 = ptr.load %0 : !i16
+    %2 = extsi %1 : !i32
+    return %2
+  }
+
+  func @signed_i8_arg_to_i32(%0: !i8) -> !i32 {
+    %1 = extsi %0 : !i32
+    return %1
+  }
   module_end
 }
 
@@ -25,3 +60,21 @@ module {
 // CHECK: arm64.load_word_unsigned {rt = %virt5:GPR, rn = %virt3:GPRsp, imm = 0}
 // CHECK: arm64.add {rd = %virt6:GPR, rn = %virt4:GPR, rm = %virt5:GPR}
 // CHECK: asm.vret
+
+// CHECK: asm.symbol {name = "word_reg_offset"
+// CHECK: arm64.load_word_unsigned_reg
+// CHECK: arm64.store_word_reg
+// CHECK: asm.symbol {name = "byte_reg_offset"
+// CHECK: arm64.load_byte_unsigned_reg
+// CHECK: arm64.store_byte_reg
+// CHECK: asm.symbol {name = "byte_through_loaded_pointer"
+// CHECK: arm64.load_doubleword
+// CHECK: arm64.ldrb
+// CHECK: arm64.strb
+
+// CHECK: asm.symbol {name = "signed_i16_load_to_i32"
+// CHECK: arm64.lslv_w
+// CHECK: arm64.asr_w {rd = %virt{{[0-9]+}}:GPR32, rn = %virt{{[0-9]+}}:GPR32, imm = 16}
+// CHECK: asm.symbol {name = "signed_i8_arg_to_i32"
+// CHECK: arm64.lslv_w
+// CHECK: arm64.asr_w {rd = %virt{{[0-9]+}}:GPR32, rn = %virt{{[0-9]+}}:GPR32, imm = 24}
