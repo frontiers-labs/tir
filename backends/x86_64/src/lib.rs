@@ -1518,8 +1518,8 @@ mod isa {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn tiger_lake_uses_fitted_scheduling_window() {
-        assert_eq!(crate::isa::tiger_lake_model().buffer("rob"), Some(20));
+    fn tiger_lake_uses_measured_ooo_window() {
+        assert_eq!(crate::isa::tiger_lake_model().buffer("rob"), Some(230));
     }
 
     #[test]

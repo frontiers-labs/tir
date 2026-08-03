@@ -292,11 +292,10 @@ fn emit_instructions<'a>(
         // a `<name>_tied` register attribute naming the value the read binds to,
         // which register allocation lowers to a copy (see `lower_tied_operands`).
         let read_register_operands = infer_read_register_operands(&inst.behavior, &ops);
-        let roles_schema = {
+        let attribute_roles: Vec<(String, proc_macro2::TokenStream)> = {
             let mut items = vec![];
             for (name, ty) in &ops {
                 if let Type::Struct(_) = ty {
-                    let field_ident = format_ident!("{}", name);
                     let role = if defined_register_operands.contains(name) {
                         if read_register_operands.contains(name) {
                             quote! { ReadWrite }
@@ -306,18 +305,16 @@ fn emit_instructions<'a>(
                     } else {
                         quote! { Use }
                     };
-                    items.push(quote! { #field_ident: #role });
+                    items.push((name.clone(), role));
                     if defined_register_operands.contains(name)
                         && read_register_operands.contains(name)
                     {
-                        let tied_ident = format_ident!("{}_tied", name);
-                        items.push(quote! { #tied_ident: Use });
+                        items.push((format!("{name}_tied"), quote! { Use }));
                     }
                 }
             }
             for (name, _) in &implicit_reads {
-                let field_ident = format_ident!("{}", name);
-                items.push(quote! { #field_ident: Use });
+                items.push((name.clone(), quote! { Use }));
             }
             items.extend(fixed_register_role_items(
                 inst,
@@ -327,7 +324,7 @@ fn emit_instructions<'a>(
                 &flag_classes,
                 &pc_classes,
             ));
-            quote! { #(#items,)* }
+            items
         };
 
         // An instruction that writes `PC::pc` transfers control, so it is a
@@ -339,7 +336,7 @@ fn emit_instructions<'a>(
         let is_terminator = uncond_pc || cond_pc;
         let (interfaces_list, terminator_impl) = if is_terminator {
             (
-                quote! { [tir::backend::MachineInstruction, tir::Terminator] },
+                quote! { [tir::backend::MachineInstruction, tir::attributes::RegisterSemantics, tir::Terminator] },
                 quote! {
                     impl tir::Terminator for #name_ident {
                         fn successors(&self) -> Vec<tir::BlockId> {
@@ -349,16 +346,33 @@ fn emit_instructions<'a>(
                 },
             )
         } else {
-            (quote! { [tir::backend::MachineInstruction] }, quote! {})
+            (
+                quote! { [tir::backend::MachineInstruction, tir::attributes::RegisterSemantics] },
+                quote! {},
+            )
         };
 
-        // Fixed registers the behavior names by path (`EFLAGS::zf`, `GPR::rax`),
-        // which no operand records.
+        // The op's register semantics: the def/use role of each register
+        // attribute, plus the fixed registers the behavior names by path
+        // (`EFLAGS::zf`, `GPR::rax`) which no operand records.
         let implicit_items = implicit_register_items(inst, &register_index_map, &pc_classes);
-        let implicit_schema = if implicit_items.is_empty() {
-            quote! {}
-        } else {
-            quote! { implicit: [ #(#implicit_items),* ], }
+        let role_entries = attribute_roles.iter().map(|(name, role)| {
+            let name_lit = proc_macro2::Literal::string(name);
+            quote! { (#name_lit, tir::attributes::AttributeRole::#role) }
+        });
+        let register_semantics_impl = quote! {
+            impl tir::attributes::RegisterSemantics for #name_ident {
+                fn attribute_roles(
+                    &self,
+                ) -> &'static [(&'static str, tir::attributes::AttributeRole)] {
+                    &[ #(#role_entries),* ]
+                }
+
+                fn implicit_regs(&self) -> &'static [tir::attributes::ImplicitReg] {
+                    static IMPLICIT: &[tir::attributes::ImplicitReg] = &[ #(#implicit_items),* ];
+                    IMPLICIT
+                }
+            }
         };
 
         instruction_defs.push(quote! {
@@ -367,12 +381,12 @@ fn emit_instructions<'a>(
                     name: #op_name_lit,
                     dialect: #dialect,
                     attributes: A { #attrs_schema },
-                    roles: R { #roles_schema },
-                    #implicit_schema
                     interfaces: #interfaces_list,
                     format: custom,
                 }
             }
+
+            #register_semantics_impl
 
             #terminator_impl
         });

@@ -1046,6 +1046,7 @@ enum MachineBody {
     Frontend(Frontend),
     Bind(UnitBind),
     RegFiles(Vec<(String, i64)>),
+    Fusion(FusionDecl),
 }
 
 #[derive(Clone)]
@@ -1369,6 +1370,33 @@ where
             })
         });
 
+    // `fusion { first = [cmp, test]; second = [je, jne]; }` — mnemonic lists.
+    let mnemonic_list = |field: &'static str| {
+        let mnemonic = select! { Token::Identifier(i) => i.to_string() };
+        just(Token::Identifier(field))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(
+                mnemonic
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<String>>()
+                    .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+            )
+            .then_ignore(just(Token::Semicolon))
+    };
+    let fusion = just(Token::Identifier("fusion"))
+        .ignore_then(
+            mnemonic_list("first")
+                .then(mnemonic_list("second"))
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|(first, second), e| {
+            MachineBody::Fusion(FusionDecl {
+                first,
+                second,
+                span: e.span(),
+            })
+        });
+
     let machine_alias = just(Token::LParen)
         .ignore_then(select! { Token::StringLit(s) => s.to_string() })
         .then_ignore(just(Token::RParen))
@@ -1390,6 +1418,7 @@ where
                 frontend,
                 reg_file,
                 bind,
+                fusion,
             ))
             .repeated()
             .collect::<Vec<_>>()
@@ -1406,6 +1435,7 @@ where
             let mut binds = Vec::new();
             let mut overrides = Vec::new();
             let mut forwards = Vec::new();
+            let mut fusions = Vec::new();
             for b in body {
                 match b {
                     MachineBody::IssueWidth(v) => issue_width = Some(v),
@@ -1418,6 +1448,7 @@ where
                     MachineBody::Bind(bd) => binds.push(bd),
                     MachineBody::Override(ov) => overrides.push(ov),
                     MachineBody::Forward(fw) => forwards.push(fw),
+                    MachineBody::Fusion(fu) => fusions.push(fu),
                 }
             }
             Machine {
@@ -1434,6 +1465,7 @@ where
                 reg_files,
                 binds,
                 overrides,
+                fusions,
                 forwards,
                 span: e.span(),
             }

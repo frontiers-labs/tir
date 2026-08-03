@@ -250,6 +250,35 @@ the engine drops its input dependencies and treats the instance as eliminated.
 Every other instance of the same class executes normally with the bound latency
 and micro-ops.
 
+## Fusion
+
+Cores fuse certain adjacent operations into a single micro-op. Both kinds are
+expressible:
+
+**Macro-fusion** merges two adjacent instructions (x86: a flag-writing ALU op
+followed by a conditional branch). A machine declares fusable pairs over
+*mnemonics*; every instruction carrying the mnemonic participates:
+
+```
+fusion {
+    first = [test, and];
+    second = [je, jne, jl, jge];
+}
+```
+
+A `first` instruction immediately followed by a `second` instruction decodes,
+issues, and retires as one micro-op executing on the second instruction's
+resources, with the pair's register accesses unioned and both encodings counted
+against fetch. Multiple `fusion` blocks may be declared (x86 pairs differ by
+condition group). The checker rejects mnemonics that match no instruction.
+
+**Micro-fusion** (one instruction whose front-end cost is smaller than its
+execution micro-op count, e.g. an x86 load+ALU form) needs no dedicated
+syntax: declare the execution micro-ops with `uop(...)` and the fused
+front-end cost with `decode_uops`. A bind with two `uop`s and
+`decode_uops = 1` is a micro-fused instruction — it consumes one decode slot
+and one window entry but both execution units.
+
 ## Scheduling classes and binding
 
 An ISA declares machine-independent **scheduling classes** — groups of operations

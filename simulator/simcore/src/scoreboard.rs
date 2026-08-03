@@ -27,9 +27,14 @@ use crate::predictor::BranchPredictor;
 
 /// One instruction as the engine sees it: its scheduling class, the physical
 /// registers it reads/writes, and (in trace mode) its resolved branch outcome.
+#[derive(Clone)]
 pub struct ScoreboardInstr {
     /// Rendered text for report views; empty when no report is produced.
     pub text: String,
+    /// Scheduling key (TMDL operation name), for macro-fusion matching. Empty
+    /// when the producer has no key (synthetic instructions); such instructions
+    /// never fuse.
+    pub key: String,
     pub class: InstrSchedClass,
     pub defs: Vec<(String, u16)>,
     pub uses: Vec<(String, u16)>,
@@ -492,6 +497,68 @@ fn instr_latency(slot: &ScoreboardInstr) -> u64 {
     }
 }
 
+/// Merge every adjacent macro-fused pair into one instruction: it decodes
+/// once, occupies one window slot, executes on the second instruction's units,
+/// unions the pair's register accesses, spans both encodings for fetch, and
+/// keeps the second's branch outcome.
+fn fuse_macro_ops(model: &MachineModel, base: &[ScoreboardInstr]) -> Vec<ScoreboardInstr> {
+    let fusable = |first: &ScoreboardInstr, second: &ScoreboardInstr| {
+        !first.key.is_empty()
+            && model.fusions.iter().any(|group| {
+                group.first.contains(&first.key.as_str())
+                    && group.second.contains(&second.key.as_str())
+            })
+    };
+    let mut fused = Vec::with_capacity(base.len());
+    let mut i = 0;
+    while i < base.len() {
+        if i + 1 < base.len() && fusable(&base[i], &base[i + 1]) {
+            fused.push(fuse_pair(&base[i], &base[i + 1]));
+            i += 2;
+        } else {
+            fused.push(base[i].clone());
+            i += 1;
+        }
+    }
+    fused
+}
+
+fn fuse_pair(first: &ScoreboardInstr, second: &ScoreboardInstr) -> ScoreboardInstr {
+    let mut defs = first.defs.clone();
+    defs.extend(second.defs.iter().cloned());
+    let mut uses = first.uses.clone();
+    uses.extend(second.uses.iter().cloned());
+    let mut mem = first.mem.clone();
+    mem.extend(second.mem.iter().cloned());
+    // A length-changing-prefix stall on either side still applies to the pair.
+    let class = InstrSchedClass {
+        latency: first.class.latency.max(second.class.latency),
+        read_cycle: second.class.read_cycle,
+        rthroughput: second.class.rthroughput,
+        resources: second.class.resources,
+        uops: second.class.uops,
+        decode_uops: 1,
+        decoder: first.class.decoder.or(second.class.decoder),
+        decode_cycles: first.class.decode_cycles.max(second.class.decode_cycles),
+        eliminated: false,
+        zero_idiom: false,
+    };
+    ScoreboardInstr {
+        text: match (first.text.is_empty(), second.text.is_empty()) {
+            (true, true) => String::new(),
+            _ => format!("{}; {}", first.text, second.text),
+        },
+        key: second.key.clone(),
+        class,
+        defs,
+        uses,
+        branch: second.branch,
+        pc: first.pc,
+        width_bytes: first.width_bytes.saturating_add(second.width_bytes),
+        mem,
+    }
+}
+
 /// The producer→consumer latency between two dependent instructions, honoring
 /// the machine's forwarding network and falling back to the producer's latency.
 fn edge_latency(
@@ -608,6 +675,14 @@ pub fn run(
     mut mem: Option<&mut MemorySystem>,
     mut handler: Option<&mut dyn EventHandler>,
 ) -> TimingResult {
+    let fused_base;
+    let base = if model.fusions.is_empty() {
+        base
+    } else {
+        fused_base = fuse_macro_ops(model, base);
+        &fused_base
+    };
+
     if !config.in_order
         && predictor.is_none()
         && mem.is_none()
@@ -655,6 +730,8 @@ pub fn run(
     // (FIFO: retire times are monotonic, so the oldest allocation frees first).
     let mut prf_inflight: HashMap<String, VecDeque<u64>> = HashMap::new();
     let mut rob: Rob = VecDeque::new();
+    // Cumulative cycles reserved per resource, for route load balancing.
+    let mut usage: HashMap<&'static str, u64> = HashMap::new();
     // Earliest cycle the front end may resume after a misprediction redirect.
     let mut redirect: u64 = 0;
     let mut mispredicts: u64 = 0;
@@ -737,7 +814,10 @@ pub fn run(
 
         let mut chosen = Vec::new();
         if !renamed(slot) {
-            t = reserve_class_resources(&slot.class, &mut lanes, t, &mut chosen);
+            t = reserve_class_resources(&slot.class, &mut lanes, t, &mut chosen, &usage);
+            for (resource, cycles) in &chosen {
+                *usage.entry(resource).or_default() += u64::from(*cycles);
+            }
         }
         issue[i] = t;
         if let Some(h) = handler.as_mut() {
@@ -859,6 +939,8 @@ fn run_ooo_compute(
         .iter()
         .map(|resource| (resource.name, vec![0; usize::from(resource.units.max(1))]))
         .collect();
+    // Cumulative cycles reserved per resource, for route load balancing.
+    let mut usage: HashMap<&'static str, u64> = HashMap::new();
     let mut frontend = FrontendState::default();
     let mut frontend_ready: Vec<Option<u64>> = vec![None; n];
     let mut issued: Vec<Option<u64>> = vec![None; n];
@@ -932,12 +1014,20 @@ fn run_ooo_compute(
             let mut chosen = Vec::new();
             if !renamed(slot) {
                 let mut candidate_lanes = lanes.clone();
-                if reserve_class_resources(&slot.class, &mut candidate_lanes, cycle, &mut chosen)
-                    != cycle
+                if reserve_class_resources(
+                    &slot.class,
+                    &mut candidate_lanes,
+                    cycle,
+                    &mut chosen,
+                    &usage,
+                ) != cycle
                 {
                     continue;
                 }
                 lanes = candidate_lanes;
+                for (resource, cycles) in &chosen {
+                    *usage.entry(resource).or_default() += u64::from(*cycles);
+                }
             }
             issued[index] = Some(cycle);
             completed[index] = Some(cycle + instr_latency(slot));
@@ -1021,9 +1111,10 @@ fn reserve_class_resources(
     lanes: &mut HashMap<&'static str, Vec<u64>>,
     earliest: u64,
     chosen: &mut Vec<(&'static str, u16)>,
+    usage: &HashMap<&'static str, u64>,
 ) -> u64 {
     if !class.uops.is_empty() {
-        return reserve_micro_ops(class.uops, lanes, earliest, chosen);
+        return reserve_micro_ops(class.uops, lanes, earliest, chosen, usage);
     }
 
     let mut issue = earliest;
@@ -1050,8 +1141,9 @@ fn reserve_micro_ops(
     lanes: &mut HashMap<&'static str, Vec<u64>>,
     earliest: u64,
     chosen: &mut Vec<(&'static str, u16)>,
+    usage: &HashMap<&'static str, u64>,
 ) -> u64 {
-    let (issue, reserved, mut routes) = schedule_micro_ops(uops, lanes.clone(), earliest);
+    let (issue, reserved, mut routes, _) = schedule_micro_ops(uops, lanes.clone(), earliest, usage);
     *lanes = reserved;
     chosen.append(&mut routes);
     issue
@@ -1061,36 +1153,47 @@ type ScheduledMicroOps = (
     u64,
     HashMap<&'static str, Vec<u64>>,
     Vec<(&'static str, u16)>,
+    u64,
 );
 
 fn schedule_micro_ops(
     uops: &[tir::backend::sched::MicroOp],
     lanes: HashMap<&'static str, Vec<u64>>,
     earliest: u64,
+    usage: &HashMap<&'static str, u64>,
 ) -> ScheduledMicroOps {
     let Some((uop, remaining)) = uops.split_first() else {
-        return (earliest, lanes, Vec::new());
+        return (earliest, lanes, Vec::new(), 0);
     };
 
     uop.routes
         .iter()
         .map(|route| {
             let (start, reserved) = reserve_route(route, lanes.clone(), earliest);
-            let (rest_issue, reserved, mut rest_routes) =
-                schedule_micro_ops(remaining, reserved, earliest);
+            let (rest_issue, reserved, mut rest_routes, rest_usage) =
+                schedule_micro_ops(remaining, reserved, earliest, usage);
             let mut routes: Vec<(&'static str, u16)> = route
                 .resources
                 .iter()
                 .map(|use_| (use_.resource, use_.cycles.max(1)))
                 .collect();
+            let route_usage: u64 = routes
+                .iter()
+                .map(|(r, _)| usage.get(r).copied().unwrap_or(0))
+                .sum();
             routes.append(&mut rest_routes);
-            (start.max(rest_issue), reserved, routes)
+            (
+                start.max(rest_issue),
+                reserved,
+                routes,
+                route_usage + rest_usage,
+            )
         })
-        .min_by_key(|(issue, reserved, _)| {
-            let total_busy: u64 = reserved.values().flatten().sum();
-            (*issue, total_busy)
-        })
-        .unwrap_or((earliest, lanes, Vec::new()))
+        // Ties on issue cycle go to the least-used resources so far: stacking
+        // onto the unit a steady producer occupies every cycle starves that
+        // producer while an equivalent unit idles.
+        .min_by_key(|(issue, _, _, route_usage)| (*issue, *route_usage))
+        .unwrap_or((earliest, lanes, Vec::new(), 0))
 }
 
 fn reserve_route(
@@ -1322,6 +1425,7 @@ mod tests {
             }],
             reg_files: &[],
             sched: &[],
+            fusions: &[],
         }
     }
 
@@ -1400,6 +1504,7 @@ mod tests {
                 };
                 ScoreboardInstr {
                     text: String::new(),
+                    key: String::new(),
                     class,
                     defs,
                     uses,
@@ -1507,12 +1612,14 @@ mod tests {
             forwards: &[],
             reg_files: &[],
             sched: &[],
+            fusions: &[],
         }
     }
 
     fn resource_test_instr(class: InstrSchedClass) -> ScoreboardInstr {
         ScoreboardInstr {
             text: String::new(),
+            key: String::new(),
             class,
             defs: vec![],
             uses: vec![],
@@ -1577,6 +1684,124 @@ mod tests {
             decoded_cache: None,
         });
         model
+    }
+
+    /// A fused pair (`cmp` + `jne` by scheduling key) decodes and executes as
+    /// one micro-op: on a single-unit, single-issue core the pair sustains one
+    /// iteration per cycle where the unfused pair needs two.
+    #[test]
+    fn macro_fused_pair_costs_one_micro_op() {
+        const ROUTE_P0: ResourceRoute = ResourceRoute {
+            resources: &[TEST_P0],
+        };
+        const UOP_P0: MicroOp = MicroOp {
+            routes: &[ROUTE_P0],
+        };
+
+        let mut model = resource_test_model(&[ProcUnit {
+            name: "P0",
+            units: 1,
+        }]);
+        model.issue_width = 1;
+        model.fusions = &[tir::backend::sched::FusionGroup {
+            first: &["cmp"],
+            second: &["jne"],
+        }];
+
+        let class = InstrSchedClass {
+            uops: &[UOP_P0],
+            resources: &[],
+            ..InstrSchedClass::DEFAULT
+        };
+        let mut cmp = resource_test_instr(class);
+        cmp.key = "cmp".to_string();
+        let mut jne = resource_test_instr(class);
+        jne.key = "jne".to_string();
+
+        let result = run(
+            &model,
+            &[cmp, jne],
+            64,
+            &TimingConfig {
+                in_order: false,
+                window: 0,
+                mispredict_penalty: 0,
+                unroll_stride: 0,
+            },
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            result.cycles <= 66,
+            "one fused micro-op per iteration expected, got {} cycles for 64 iterations",
+            result.cycles
+        );
+    }
+
+    /// A producer that owns P0 every cycle feeds a consumer that may use P0 or
+    /// P1. The consumer must settle on the idle P1, sustaining one iteration
+    /// per cycle; packing it onto P0 (which route tie-breaking once preferred)
+    /// halves throughput.
+    #[test]
+    fn micro_op_avoids_a_saturated_resource_when_an_idle_one_exists() {
+        const ROUTE_P0: ResourceRoute = ResourceRoute {
+            resources: &[TEST_P0],
+        };
+        const ROUTE_P1: ResourceRoute = ResourceRoute {
+            resources: &[TEST_P1],
+        };
+        const FIXED: MicroOp = MicroOp {
+            routes: &[ROUTE_P0],
+        };
+        const FLEXIBLE: MicroOp = MicroOp {
+            routes: &[ROUTE_P0, ROUTE_P1],
+        };
+
+        let model = resource_test_model(&[
+            ProcUnit {
+                name: "P0",
+                units: 1,
+            },
+            ProcUnit {
+                name: "P1",
+                units: 1,
+            },
+        ]);
+        let mut producer = resource_test_instr(InstrSchedClass {
+            uops: &[FIXED],
+            resources: &[],
+            ..InstrSchedClass::DEFAULT
+        });
+        producer.defs = vec![("R".to_string(), 0)];
+        let mut consumer = resource_test_instr(InstrSchedClass {
+            uops: &[FLEXIBLE],
+            resources: &[],
+            ..InstrSchedClass::DEFAULT
+        });
+        consumer.uses = vec![("R".to_string(), 0)];
+
+        let result = run(
+            &model,
+            &[producer, consumer],
+            64,
+            &TimingConfig {
+                in_order: false,
+                window: 0,
+                mispredict_penalty: 0,
+                unroll_stride: 0,
+            },
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            result.cycles <= 66,
+            "one iteration per cycle expected, got {} cycles for 64 iterations",
+            result.cycles
+        );
     }
 
     #[test]
@@ -2205,6 +2430,7 @@ mod tests {
     fn idiom_clone(instruction: &ScoreboardInstr) -> ScoreboardInstr {
         ScoreboardInstr {
             text: instruction.text.clone(),
+            key: instruction.key.clone(),
             class: instruction.class,
             defs: instruction.defs.clone(),
             uses: instruction.uses.clone(),

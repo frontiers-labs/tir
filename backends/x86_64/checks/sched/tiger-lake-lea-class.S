@@ -69,34 +69,34 @@ f:
 # CHECK-NEXT: 1      1      lea rsi, [4*r12]
 # CHECK: Resource pressure by instruction:
 # CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
-# CHECK-NEXT: -     -     -     1.00  lea rax, [rip + 16]
-# CHECK-NEXT: 0.67  0.33  -     -     lea r9, [r8 + r8]
-# CHECK-NEXT: -     -     1.00  -     lea r10, [rsi + 4*r10]
-# CHECK-NEXT: 0.01  0.66  0.33  -     lea r14, [rcx + 8]
-# CHECK-NEXT: 0.33  0.66  0.01  -     lea rdi, [rbp + -60]
-# CHECK-NEXT: 0.66  0.34  -     -     lea rax, [rax + 2*rax]
-# CHECK-NEXT: 0.34  -     0.66  -     lea rdi, [rsi + 8*rdi]
-# CHECK-NEXT: -     -     0.01  0.99  lea rbx, [4*r9]
-# CHECK-NEXT: 0.66  0.34  -     -     lea rdi, [8*rax]
-# CHECK-NEXT: 0.01  0.33  0.66  -     lea rax, [r12 + -2]
-# CHECK-NEXT: -     0.34  -     0.66  lea rdi, [rbp + -192]
-# CHECK-NEXT: 0.33  0.33  0.34  -     lea rsi, [rsp + 128]
-# CHECK-NEXT: 1.00  -     -     -     lea r11, [rsi + rcx + 2]
-# CHECK-NEXT: -     1.00  -     -     lea rdi, [rdi + 2*rdx + 2]
-# CHECK-NEXT: 0.67  0.33  -     -     lea rcx, [r15 + 4*rdx + 12]
-# CHECK-NEXT: 1.00  -     -     -     lea rax, [rcx + 8*rax + -16]
-# CHECK-NEXT: 1.00  -     -     -     lea rdx, [4*rax + 4]
-# CHECK-NEXT: -     1.00  -     -     lea rsi, [8*rax + 16]
-# CHECK-NEXT: -     1.00  -     -     cmp r9b, 5
-# CHECK-NEXT: -     0.33  0.67  -     test dil, 4
-# CHECK-NEXT: -     -     1.00  -     cmp al, 35
-# CHECK-NEXT: 1.00  -     -     -     test al, 3
-# CHECK-NEXT: 1.00  -     -     -     sar r11
-# CHECK-NEXT: -     -     1.00  -     sar eax
-# CHECK-NEXT: -     1.00  -     -     shr rax
-# CHECK-NEXT: -     -     -     1.00  shl rax
-# CHECK-NEXT: -     0.67  -     0.33  ror eax
-# CHECK-NEXT: -     0.33  0.67  -     ror rax
-# CHECK-NEXT: -     -     0.33  0.67  lea rcx, [r13 + rdx]
-# CHECK-NEXT: 0.67  -     -     0.33  lea r8, [r13 + 4*r8]
-# CHECK-NEXT: 0.33  -     0.67  -     lea rsi, [4*r12]
+# CHECK-NEXT: -     1.00  -     -     lea rax, [rip + 16]
+# CHECK-NEXT: 1.00  -     -     -     lea r9, [r8 + r8]
+# CHECK-NEXT: -     -     -     1.00  lea r10, [rsi + 4*r10]
+# CHECK-NEXT: 0.66  -     0.01  0.33  lea r14, [rcx + 8]
+# CHECK-NEXT: 0.67  -     0.33  -     lea rdi, [rbp + -60]
+# CHECK-NEXT: -     1.00  -     -     lea rax, [rax + 2*rax]
+# CHECK-NEXT: -     0.33  -     0.67  lea rdi, [rsi + 8*rdi]
+# CHECK-NEXT: -     0.67  -     0.33  lea rbx, [4*r9]
+# CHECK-NEXT: -     -     -     1.00  lea rdi, [8*rax]
+# CHECK-NEXT: 0.66  -     0.34  -     lea rax, [r12 + -2]
+# CHECK-NEXT: 0.34  -     0.66  -     lea rdi, [rbp + -192]
+# CHECK-NEXT: 0.66  0.01  0.33  -     lea rsi, [rsp + 128]
+# CHECK-NEXT: 0.33  -     0.67  -     lea r11, [rsi + rcx + 2]
+# CHECK-NEXT: -     0.99  -     0.01  lea rdi, [rdi + 2*rdx + 2]
+# CHECK-NEXT: -     0.34  -     0.66  lea rcx, [r15 + 4*rdx + 12]
+# CHECK-NEXT: -     0.83  -     0.17  lea rax, [rcx + 8*rax + -16]
+# CHECK-NEXT: -     0.66  -     0.34  lea rdx, [4*rax + 4]
+# CHECK-NEXT: -     0.34  -     0.66  lea rsi, [8*rax + 16]
+# CHECK-NEXT: 0.67  -     0.33  -     cmp r9b, 5
+# CHECK-NEXT: 0.33  -     0.67  -     test dil, 4
+# CHECK-NEXT: 0.67  -     0.33  -     cmp al, 35
+# CHECK-NEXT: 0.33  -     0.67  -     test al, 3
+# CHECK-NEXT: -     -     0.33  0.67  sar r11
+# CHECK-NEXT: -     -     0.67  0.33  sar eax
+# CHECK-NEXT: -     -     0.33  0.67  shr rax
+# CHECK-NEXT: -     -     0.67  0.33  shl rax
+# CHECK-NEXT: -     -     0.33  0.67  ror eax
+# CHECK-NEXT: -     -     0.67  0.33  ror rax
+# CHECK-NEXT: 1.00  -     -     -     lea rcx, [r13 + rdx]
+# CHECK-NEXT: -     1.00  -     -     lea r8, [r13 + 4*r8]
+# CHECK-NEXT: -     1.00  -     -     lea rsi, [4*r12]

@@ -1,0 +1,50 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+// The fusion declaration names mnemonics; the generated model carries every
+// scheduling key with that mnemonic (both cmp forms), so the engine can match
+// adjacent pairs.
+
+// CHECK: FusionGroup {
+// CHECK: first: &["cmp_a", "cmp_b"],
+// CHECK: second: &["jne_a"],
+
+isa TestIsa {}
+
+sched_class WriteALU;
+sched_class WriteBranch;
+
+instruction CmpA for [TestIsa] {
+    param OPNAME: String = "cmp_a";
+    param MNEMONIC: String = "cmp";
+    asm { "cmp" }
+    behavior { todo(); }
+    schedule { units = [WriteALU]; }
+}
+
+instruction CmpB for [TestIsa] {
+    param OPNAME: String = "cmp_b";
+    param MNEMONIC: String = "cmp";
+    asm { "cmp" }
+    behavior { todo(); }
+    schedule { units = [WriteALU]; }
+}
+
+instruction JneA for [TestIsa] {
+    param OPNAME: String = "jne_a";
+    param MNEMONIC: String = "jne";
+    asm { "jne" }
+    behavior { todo(); }
+    schedule { units = [WriteBranch]; }
+}
+
+machine Fused ("fused") for [TestIsa] {
+    unit P0 { count = 1; }
+
+    bind WriteALU { latency = 1; uop(P0); }
+    bind WriteBranch { latency = 1; uop(P0); }
+
+    fusion {
+        first = [cmp];
+        second = [jne];
+    }
+}

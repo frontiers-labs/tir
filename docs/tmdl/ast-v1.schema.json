@@ -829,6 +829,29 @@
         "queue_bytes"
       ]
     },
+    "FusionDecl": {
+      "description": "A macro-fusion rule: adjacent `first`-then-`second` mnemonics decode and\nexecute as one micro-op.",
+      "type": "object",
+      "properties": {
+        "first": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "second": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "first",
+        "second"
+      ]
+    },
     "IsaRequirement": {
       "description": "Boolean composition of ISA requirements.",
       "oneOf": [
@@ -1210,6 +1233,12 @@
                   "type": "null"
                 }
               ]
+            },
+            "fusions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FusionDecl"
+              }
             },
             "isas": {
               "type": "array",

@@ -1125,6 +1125,37 @@ fn check_performance_model(
                 }
             }
 
+            // Fusion rules name instruction mnemonics on both sides.
+            if !machine.fusions.is_empty() {
+                let known_mnemonics: HashSet<String> = files
+                    .iter()
+                    .flat_map(|f| f.instructions())
+                    .filter_map(|inst| {
+                        let params = resolve_params_for_instruction(inst, item_cache);
+                        params
+                            .get("MNEMONIC")
+                            .and_then(|(_, value)| value.as_ref())
+                            .and_then(as_string_literal)
+                    })
+                    .collect();
+                for fusion in &machine.fusions {
+                    for mnemonic in fusion.first.iter().chain(fusion.second.iter()) {
+                        if !known_mnemonics.contains(mnemonic) {
+                            diags.push((
+                                file.file_name.clone(),
+                                Rich::custom(
+                                    fusion.span,
+                                    format!(
+                                        "fusion mnemonic '{}' matches no instruction",
+                                        mnemonic
+                                    ),
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+
             // Forwards run between this machine's resources, each pair at most once.
             let mut fwd_pairs: HashSet<(&str, &str)> = HashSet::new();
             for fw in &machine.forwards {
@@ -2638,6 +2669,57 @@ mod perf_model_tests {
             diags
                 .iter()
                 .any(|d| d.contains("references phase 'ID' not in machine 'M' pipeline")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn fusion_with_unknown_mnemonic_is_reported() {
+        let src = "
+            sched_class W;
+            instruction Cmp {
+                param MNEMONIC: String = \"cmp\";
+                behavior { rd = rs1; }
+                schedule { units = [W]; }
+            }
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { latency = 1; uop(P0); }
+                fusion { first = [cmp]; second = [jne]; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("fusion mnemonic 'jne' matches no instruction")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn fusion_between_known_mnemonics_is_accepted() {
+        let src = "
+            sched_class W;
+            instruction Cmp {
+                param MNEMONIC: String = \"cmp\";
+                behavior { rd = rs1; }
+                schedule { units = [W]; }
+            }
+            instruction JumpNotEq {
+                param MNEMONIC: String = \"jne\";
+                behavior { rd = rs1; }
+                schedule { units = [W]; }
+            }
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { latency = 1; uop(P0); }
+                fusion { first = [cmp]; second = [jne]; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            !diags.iter().any(|d| d.contains("fusion")),
             "diags: {diags:?}"
         );
     }

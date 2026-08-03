@@ -165,6 +165,30 @@ fn emit_machine_models<'a>(
         let fn_ident = format_ident!("{}_model", to_snake_case(&machine.name));
         let frontend = frontend_ts(machine.frontend.as_ref());
 
+        // Fusion rules are declared over mnemonics; the engine matches
+        // scheduling keys, so expand each mnemonic to every key that carries it.
+        let keys_with_mnemonics = |mnemonics: &[String]| -> Vec<proc_macro2::Literal> {
+            scheduled
+                .iter()
+                .filter(|(_, _, mnemonic, _)| mnemonics.iter().any(|m| m == mnemonic))
+                .map(|(_, operation, _, _)| proc_macro2::Literal::string(operation))
+                .collect()
+        };
+        let fusion_lits: Vec<_> = machine
+            .fusions
+            .iter()
+            .map(|fusion| {
+                let first = keys_with_mnemonics(&fusion.first);
+                let second = keys_with_mnemonics(&fusion.second);
+                quote! {
+                    tir::backend::sched::FusionGroup {
+                        first: &[#(#first),*],
+                        second: &[#(#second),*],
+                    }
+                }
+            })
+            .collect();
+
         model_fns.push(quote! {
             pub fn #fn_ident() -> tir::backend::sched::MachineModel {
                 tir::backend::sched::MachineModel {
@@ -177,6 +201,7 @@ fn emit_machine_models<'a>(
                     forwards: &[#(#forward_lits),*],
                     reg_files: &[#(#reg_file_lits),*],
                     sched: &[#(#sched_lits),*],
+                    fusions: &[#(#fusion_lits),*],
                 }
             }
         });

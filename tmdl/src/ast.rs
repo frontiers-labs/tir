@@ -417,6 +417,18 @@ pub struct Forward {
     pub span: Span,
 }
 
+/// A macro-fusion rule: an instruction whose mnemonic is in `first`, immediately
+/// followed by one whose mnemonic is in `second`, decodes and executes as a
+/// single micro-op on this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FusionDecl {
+    /// Mnemonics of the producing side (x86: the flag-writing ALU op).
+    pub first: Vec<String>,
+    /// Mnemonics of the consuming side (x86: the conditional branch).
+    pub second: Vec<String>,
+    pub span: Span,
+}
+
 /// A `machine` block: one device implementation. Holds the resource menu, buffer
 /// sizes (defaults; the Rust simulator may override), and per-unit cost
 /// bindings for a set of ISAs.
@@ -446,6 +458,8 @@ pub struct Machine {
     pub binds: Vec<UnitBind>,
     /// Per-instruction cost overrides (take precedence over `binds`).
     pub overrides: Vec<MachineOverride>,
+    /// Macro-fusion rules over adjacent instruction pairs.
+    pub fusions: Vec<FusionDecl>,
     /// Forwarding/bypass paths between resources.
     pub forwards: Vec<Forward>,
     pub span: Span,

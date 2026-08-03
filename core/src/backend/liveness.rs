@@ -317,9 +317,13 @@ mod tests {
             attributes: A {
                 r: "Register",
             },
-            roles: R {
-                r: Def,
-            },
+            interfaces: [tir::attributes::RegisterSemantics],
+        }
+    }
+
+    impl tir::attributes::RegisterSemantics for PhysDefOp {
+        fn attribute_roles(&self) -> &'static [(&'static str, tir::attributes::AttributeRole)] {
+            &[("r", tir::attributes::AttributeRole::Def)]
         }
     }
 
@@ -330,9 +334,13 @@ mod tests {
             attributes: A {
                 r: "Register",
             },
-            roles: R {
-                r: Use,
-            },
+            interfaces: [tir::attributes::RegisterSemantics],
+        }
+    }
+
+    impl tir::attributes::RegisterSemantics for PhysUseOp {
+        fn attribute_roles(&self) -> &'static [(&'static str, tir::attributes::AttributeRole)] {
+            &[("r", tir::attributes::AttributeRole::Use)]
         }
     }
 
@@ -452,6 +460,10 @@ mod tests {
     fn phys_op(context: &Context, block: &Arc<Block>, class: RegClassId, index: u16, is_def: bool) {
         use tir::attributes::{AttributeValue, RegisterAttr};
 
+        // The test dialect is never registered, so hook the role interfaces in
+        // directly.
+        PhysDefOp::register_interfaces(context);
+        PhysUseOp::register_interfaces(context);
         let register = AttributeValue::Register(RegisterAttr::Physical { class, index });
         let id = if is_def {
             PhysDefOpBuilder::new(context)

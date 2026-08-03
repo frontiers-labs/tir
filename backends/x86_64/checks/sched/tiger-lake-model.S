@@ -9,4 +9,4 @@ f:
 # CHECK-NEXT: 1      1      add rax, rbx
 # CHECK: Resource pressure by instruction:
 # CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
-# CHECK-NEXT: -     -     1.00  -     add rax, rbx
+# CHECK-NEXT: 0.34  0.33  0.33  -     add rax, rbx

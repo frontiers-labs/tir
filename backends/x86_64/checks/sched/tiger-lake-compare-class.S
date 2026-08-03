@@ -11,5 +11,5 @@ f:
 # CHECK-NEXT: 1      1      test r10, r11
 # CHECK: Resource pressure by instruction:
 # CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
-# CHECK-NEXT: 0.67  -     0.33  -     cmp r8, r9
-# CHECK-NEXT: -     0.67  0.33  -     test r10, r11
+# CHECK-NEXT: 0.34  0.33  0.33  -     cmp r8, r9
+# CHECK-NEXT: 0.33  0.34  0.33  -     test r10, r11

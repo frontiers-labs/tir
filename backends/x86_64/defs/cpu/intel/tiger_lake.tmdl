@@ -18,77 +18,105 @@ machine TigerLake ("tiger-lake") for [X86_64] {
     }
 
     buffers {
-        rob = 20;
+        // Effective out-of-order window measured on hardware with independent
+        // long-latency chains; the reorder buffer itself is larger, but this is
+        // where dispatch stalls in practice.
+        rob = 230;
     }
 
+    // Abstract execution units. Per-class capacities are the measured
+    // dependency-free throughput floors (inference split): imul, rip-relative
+    // lea 1/cycle; scaled lea 2; shifts and conditionals 2; 3-byte forms 3
+    // (a predecode effect the front-end model cannot yet express); everything
+    // else sustains the full 4.
     unit Res0 { count = 1; }
     unit Res1 { count = 1; }
     unit Res2 { count = 1; }
     unit Res3 { count = 1; }
 
-    group Any2_0 = Res0 | Res1;
-    group Any3_1 = Res0 | Res1 | Res2;
-    group Any4_2 = Res0 | Res1 | Res2 | Res3;
-    group Any3_3 = Res0 | Res1 | Res3;
-    group Any2_4 = Res0 | Res2;
-    group Any3_5 = Res0 | Res2 | Res3;
-    group Any2_6 = Res0 | Res3;
-    group Any2_7 = Res1 | Res2;
-    group Any3_8 = Res1 | Res2 | Res3;
-    group Any2_9 = Res1 | Res3;
-    group Any2_10 = Res2 | Res3;
+    group Any4 = Res0 | Res1 | Res2 | Res3;
+    group Any3 = Res0 | Res1 | Res2;
+    group Pair03 = Res1 | Res3;
+    group Pair23 = Res2 | Res3;
+    group Pair01 = Res0 | Res1;
 
     bind WriteIALU {
         latency = 1;
-        uop(Any4_2);
+        uop(Any4);
+    }
+    bind WriteIALU3B {
+        latency = 1;
+        uop(Any3);
+    }
+    bind WriteIMove3B {
+        latency = 1;
+        uop(Any3);
+    }
+    bind WriteIALUImm16 {
+        latency = 1;
+        uop(Any4);
+        decoder = lcp;
+        decode_cycles = 3;
+    }
+    // High-byte accesses pay the partial-register merge; the forms are 3-byte
+    // encodings, so the 3-byte predecode ceiling applies to them too.
+    bind WriteIHighByte {
+        latency = 3;
+        uop(Any3);
     }
     bind WriteIShift {
         latency = 1;
-        uop(Any4_2);
-    }
-    bind WriteIMoveWide {
-        latency = 1;
-        uop(Any3_1);
-    }
-    bind WriteIMoveByte {
-        latency = 1;
-        uop(Any4_2);
-    }
-    bind WriteIMoveImmediate {
-        latency = 1;
-        uop(Any4_2);
-    }
-    bind WriteIMoveAbsolute {
-        latency = 1;
-        uop(Any3_1);
+        uop(Pair23);
     }
     bind WriteIConditional {
         latency = 1;
-        uop(Any4_2);
+        uop(Pair23);
     }
     bind WriteIExtend {
         latency = 1;
-        uop(Any4_2);
+        uop(Any4);
+    }
+    bind WriteIMoveWide {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIMoveByte {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIMoveImmediate {
+        latency = 1;
+        uop(Any4);
+    }
+    bind WriteIMoveImmediate16 {
+        latency = 1;
+        uop(Any4);
+        decoder = lcp;
+        decode_cycles = 3;
+    }
+    bind WriteIMoveAbsolute {
+        latency = 1;
+        uop(Any4);
     }
     bind WriteIMul {
         latency = 3;
-        uop(Res3);
+        uop(Res1);
     }
     bind WriteFPAdd {
         latency = 4;
-        uop(Any4_2);
+        uop(Pair01);
     }
     bind WriteFPMul {
         latency = 4;
-        uop(Any4_2);
+        uop(Pair01);
     }
     bind WriteFPDiv {
         latency = 13;
-        uop(Any4_2);
+        uop(Res0);
     }
     bind WriteFPMove {
         latency = 1;
-        uop(Res0);
+        uop(Any4);
     }
     bind WriteSIToFP {
         latency = 4;
@@ -102,566 +130,74 @@ machine TigerLake ("tiger-lake") for [X86_64] {
         latency = 1;
         uop(Res0);
     }
+    // Measured floors per address form: unscaled 4/cycle, scaled 2/cycle,
+    // rip-relative 1/cycle.
     bind WriteILeaSimple {
         latency = 1;
-        uop(Any4_2);
+        uop(Any4);
     }
     bind WriteILeaComplex {
         latency = 1;
-        uop(Any4_2);
+        uop(Pair03);
     }
     bind WriteILeaRip {
+        latency = 1;
+        uop(Res1);
+    }
+    // Branch binds are structural (branch-capable pair, jump port); the
+    // measurement corpus is branchless, so they are unmeasured priors.
+    bind WriteJcc {
+        latency = 1;
+        uop(Pair23);
+    }
+    bind WriteJump {
         latency = 1;
         uop(Res3);
     }
 
-    // Per-instruction refinements: encoding-observable forms whose
-    // measured behavior differs from their class.
-    override Add {
-        latency = 1;
-        uop(Any2_10);
-    }
-    override Add32 {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override Add32Norex {
-        latency = 1;
-        uop(Any2_10);
-    }
-    override AddImm {
-        latency = 1;
-        uop(Any3_3);
-    }
-    override AddImm32 {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override AddImm32Norex {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override AddImm8 {
-        latency = 1;
-        uop(Any2_9);
-    }
-    override AddImm8Norex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override AddImm8s {
-        latency = 1;
-        uop(Any3_3);
-    }
-    override AddImm8s32 {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override AddImm8s32Norex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override And {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override And32 {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override And32Norex {
-        latency = 1;
-        uop(Res1);
-    }
-    override And8 {
-        latency = 1;
-        uop(Any2_10);
-    }
-    override And8Norex {
-        latency = 1;
-        uop(Any2_6);
-    }
-    override AndImm {
-        latency = 1;
-        uop(Any2_9);
-    }
-    override AndImm32 {
-        latency = 1;
-        uop(Any2_6);
-    }
-    override AndImm32Norex {
-        latency = 1;
-        uop(Any2_9);
-    }
-    override AndImm8 {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override AndImm8H {
-        latency = 3;
-        uop(Any4_2);
-    }
-    override AndImm8s {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override AndImm8s32 {
-        latency = 1;
-        uop(Any2_6);
-    }
-    override AndImm8s32Norex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override CmovAbove {
-        latency = 1;
-        uop(Res3);
-    }
-    override CmovAboveEq {
-        latency = 1;
-        uop(Res2);
-    }
-    override CmovBelow {
-        latency = 1;
-        uop(Res3);
-    }
-    override CmovEq {
-        latency = 1;
-        uop(Res2);
-    }
-    override CmovGreaterEq {
-        latency = 1;
-        uop(Res1);
-    }
-    override CmovLess {
-        latency = 1;
-        uop(Res1);
-    }
-    override CmovNotEq {
-        latency = 1;
-        uop(Res0);
-    }
-    override Cmp {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Cmp16Norex {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Cmp32 {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override Cmp32Norex {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override CmpImm {
-        latency = 1;
-        uop(Any3_5);
-    }
-    override CmpImm32 {
-        latency = 1;
-        uop(Any3_8);
-    }
-    override CmpImm32Norex {
-        latency = 1;
-        uop(Any3_8);
-    }
-    override CmpImm8 {
-        latency = 1;
-        uop(Any3_8);
-    }
-    override CmpImm8Norex {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override CmpImm8s32 {
-        latency = 1;
-        uop(Any3_3);
-    }
-    override CmpImm8s32Norex {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Imul32 {
-        latency = 3;
-        uop(Any2_0);
-    }
-    override ImulImm {
-        latency = 3;
-        uop(Any2_7);
-    }
-    override ImulImm32 {
-        latency = 3;
-        uop(Any2_6);
-    }
-    override ImulWide {
-        latency = 3;
-        uop(Res3);
-    }
-    override LeaBaseIndex2 {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override LeaBaseIndex4 {
-        latency = 1;
-        uop(Any2_10);
-    }
-    override LeaBaseIndex4Disp8 {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override LeaBaseIndex8 {
-        latency = 1;
-        uop(Any3_5);
-    }
-    override LeaBaseIndexDisp8 {
-        latency = 1;
-        uop(Any3_5);
-    }
-    override LeaIndex4 {
-        latency = 1;
-        uop(Any3_5);
-    }
-    override LeaIndex4Disp32 {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Mov16 {
-        latency = 1;
-        uop(Any4_2);
-    }
-    override Mov16Norex {
-        latency = 1;
-        uop(Any4_2);
-    }
-    override Mov32Norex {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Mov8 {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override MovImm {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override MovImm16 {
-        latency = 1;
-        uop(Any4_2);
-        decoder = lcp;
-        decode_cycles = 3;
-    }
-    override MovImm16Norex {
-        latency = 1;
-        uop(Res3);
-        decoder = lcp;
-        decode_cycles = 3;
-    }
-    override MovImm8 {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override MovImm8Norex {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override MovqGprXmm {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override Movsd {
-        latency = 1;
-        uop(Any4_2);
-    }
-    override Movsxd {
-        latency = 1;
-        uop(Any3_8);
-    }
-    override Neg {
-        latency = 1;
-        uop(Any3_5);
-    }
-    override Neg32 {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override Neg32Norex {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override Not {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override Not32 {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override Not32Norex {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override Not8Norex {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Or {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override Or32 {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Or32Norex {
-        latency = 1;
-        uop(Any2_6);
-    }
-    override Or8 {
-        latency = 1;
-        uop(Any3_3);
-    }
-    override Or8Norex {
-        latency = 1;
-        uop(Any2_9);
-    }
-    override OrImm {
-        latency = 1;
-        uop(Any2_6);
-    }
-    override OrImm32 {
-        latency = 1;
-        uop(Res3);
-    }
-    override OrImm8s32Norex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override SarImm {
-        latency = 1;
-        uop(Any2_9);
-    }
-    override SarImm32Norex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override SarOne {
-        latency = 1;
-        uop(Res0);
-    }
-    override SarOne32 {
-        latency = 1;
-        uop(Res2);
-    }
-    override SarOne32Norex {
-        latency = 1;
-        uop(Res2);
-    }
-    override SetAbove {
-        latency = 1;
-        uop(Res2);
-    }
-    override SetAboveNorex {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override SetAboveEq {
-        latency = 1;
-        uop(Res0);
-    }
-    override SetAboveEqNorex {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override SetBelow {
-        latency = 1;
-        uop(Res0);
-    }
-    override SetBelowNorex {
-        latency = 1;
-        uop(Res0);
-    }
-    override SetBelowEqNorex {
-        latency = 1;
-        uop(Any2_10);
-    }
-    override SetEq {
-        latency = 1;
-        uop(Res3);
-    }
-    override SetEqNorex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override SetGreater {
-        latency = 1;
-        uop(Res0);
-    }
-    override SetGreaterEqNorex {
-        latency = 1;
-        uop(Res3);
-    }
-    override SetLess {
-        latency = 1;
-        uop(Res0);
-    }
-    override SetLessNorex {
-        latency = 1;
-        uop(Any2_9);
-    }
-    override SetNotEq {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override SetNotEqNorex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override ShlImm {
-        latency = 1;
-        uop(Any2_6);
-    }
-    override ShlImm32 {
-        latency = 1;
-        uop(Any3_8);
-    }
-    override ShlImm32Norex {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override ShlImm8Norex {
-        latency = 1;
-        uop(Res2);
-    }
-    override ShlCl {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override ShlCl32Norex {
-        latency = 1;
-        uop(Res2);
-    }
-    override ShrImm {
-        latency = 1;
-        uop(Any2_10);
-    }
-    override ShrImm32 {
-        latency = 1;
-        uop(Any2_9);
-    }
-    override ShrImm32Norex {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override ShrCl {
-        latency = 1;
-        uop(Res2);
-    }
-    override ShrCl32Norex {
-        latency = 1;
-        uop(Res3);
-    }
-    override ShrOne {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override ShrOne32 {
-        latency = 1;
-        uop(Res0);
-    }
-    override ShrOne32Norex {
-        latency = 1;
-        uop(Any3_8);
-    }
-    override SignExtendDividend32 {
-        latency = 1;
-        uop(Res3);
-    }
-    override Sub {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Sub32 {
-        latency = 1;
-        uop(Any3_8);
-    }
-    override Sub32Norex {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override SubImm8s {
-        latency = 1;
-        uop(Any2_9);
-    }
-    override SubImm8s32Norex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override Test {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override Test16Norex {
-        latency = 1;
-        uop(Any2_0);
-    }
-    override Test32 {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Test32Norex {
-        latency = 1;
-        uop(Any2_7);
-    }
-    override Test8 {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override Test8Norex {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override TestImm {
-        latency = 1;
-        uop(Any2_4);
-    }
-    override TestImm32 {
-        latency = 1;
-        uop(Any3_1);
-    }
-    override TestImm8Norex {
-        latency = 1;
-        uop(Any2_0);
-    }
+    // Macro-fusion: a flag-writing ALU op immediately followed by a
+    // conditional branch decodes and executes as one micro-op. test/and pair
+    // with every jcc; cmp/add/sub with all but the sign/overflow conditions.
+    fusion {
+        first = [test, and];
+        second = [je, jne, jl, jge, jb, jae, jle, jg, jbe, ja, js, jns, jo, jno];
+    }
+    fusion {
+        first = [cmp, add, sub];
+        second = [je, jne, jl, jge, jb, jae, jle, jg, jbe, ja];
+    }
+
+    // Dependency-breaking idioms the renamer recognizes: xor/sub of a register
+    // with itself (64/32-bit forms only; narrower writes merge and stay
+    // dependent).
     override Xor {
         latency = 1;
-        uop(Any2_4);
+        uop(Any3);
         zero_idiom = true;
     }
     override Xor32 {
         latency = 1;
-        uop(Any2_7);
+        uop(Any3);
         zero_idiom = true;
     }
     override Xor32Norex {
         latency = 1;
-        uop(Any2_7);
+        uop(Any4);
         zero_idiom = true;
     }
-    override XorImm8 {
+    override Sub {
         latency = 1;
-        uop(Any2_6);
+        uop(Any3);
+        zero_idiom = true;
     }
-    override XorImm8Norex {
+    override Sub32 {
         latency = 1;
-        uop(Any2_7);
+        uop(Any3);
+        zero_idiom = true;
     }
-    override XorImm8s32Norex {
+    override Sub32Norex {
         latency = 1;
-        uop(Any3_5);
+        uop(Any4);
+        zero_idiom = true;
     }
 }

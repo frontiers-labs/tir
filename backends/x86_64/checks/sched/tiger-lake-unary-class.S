@@ -11,5 +11,5 @@ f:
 # CHECK-NEXT: 1      1      not r9
 # CHECK: Resource pressure by instruction:
 # CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
-# CHECK-NEXT: 1.00  -     -     -     neg r8
-# CHECK-NEXT: -     -     1.00  -     not r9
+# CHECK-NEXT: 0.34  0.33  0.33  -     neg r8
+# CHECK-NEXT: 0.33  0.34  0.33  -     not r9

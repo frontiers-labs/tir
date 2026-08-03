@@ -57,13 +57,14 @@ pub fn simulate(
     for (i, (id, pc)) in trace.iter().enumerate() {
         let op = context.get_op(*id);
         let mi = op.clone().as_interface::<dyn MachineInstruction>();
-        let (class, width, is_branch) = match &mi {
+        let (key, class, width, is_branch) = match &mi {
             Some(mi) => (
+                mi.scheduling_key(),
                 model.sched_class(mi.mnemonic()),
                 u64::from(mi.width_bytes()),
                 mi.control_flow() == ControlFlow::Conditional,
             ),
-            None => (InstrSchedClass::DEFAULT, 4, false),
+            None => ("", InstrSchedClass::DEFAULT, 4, false),
         };
         let regs = execution_regs(&op);
         pre.push(Pre {
@@ -73,6 +74,7 @@ pub fn simulate(
         });
         slots.push(ScoreboardInstr {
             text: String::new(),
+            key: key.to_string(),
             class,
             defs: phys_regs(&regs.defs, prf),
             uses: phys_regs(&regs.uses, prf),

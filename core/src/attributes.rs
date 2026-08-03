@@ -31,14 +31,38 @@ pub enum AttributeRole {
 
 /// A fixed register an operation reads or writes without naming it in an
 /// operand — the register paths its TMDL behavior mentions (x86 `EFLAGS::zf`,
-/// `GPR::rax`). Which registers those are is a property of the opcode rather
-/// than of one instance, so the set is a `'static` table threaded onto every
-/// [`crate::OpInstance`] alongside `attribute_roles`.
+/// `GPR::rax`). Which registers those are is a property of the opcode, declared
+/// through [`RegisterSemantics`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImplicitReg {
     pub class: RegClassId,
     pub index: u16,
     pub role: AttributeRole,
+}
+
+/// Per-opcode register semantics the generic IR cannot see from an instance
+/// alone: the def/use role of each register-valued attribute, and the fixed
+/// registers the behavior touches without naming them in an operand.
+///
+/// An ordinary op interface: ops that have register semantics (machine
+/// instructions; TMDL rustgen derives the tables from the instruction
+/// definition) implement it and list it in their `interfaces:`, and analyses
+/// resolve it through the interface registry like any other interface. The
+/// generic core carries no knowledge of it beyond this definition.
+pub trait RegisterSemantics {
+    fn verify_interface(
+        &self,
+        _this: &dyn crate::Operation,
+        _context: &Context,
+    ) -> Result<(), crate::Error> {
+        Ok(())
+    }
+    fn attribute_roles(&self) -> &'static [(&'static str, AttributeRole)] {
+        &[]
+    }
+    fn implicit_regs(&self) -> &'static [ImplicitReg] {
+        &[]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

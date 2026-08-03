@@ -150,9 +150,13 @@ operation! {
             callee: "Str",
             outgoing_stack_size: "UInt",
         },
-        roles: R {
-            clobbers: Clobber,
-        },
+        interfaces: [tir::attributes::RegisterSemantics],
+    }
+}
+
+impl tir::attributes::RegisterSemantics for VirtualCallOp {
+    fn attribute_roles(&self) -> &'static [(&'static str, tir::attributes::AttributeRole)] {
+        &[("clobbers", tir::attributes::AttributeRole::Clobber)]
     }
 }
 
@@ -164,10 +168,16 @@ operation! {
             callee_reg: "Register",
             outgoing_stack_size: "UInt",
         },
-        roles: R {
-            callee_reg: Use,
-            clobbers: Clobber,
-        },
+        interfaces: [tir::attributes::RegisterSemantics],
+    }
+}
+
+impl tir::attributes::RegisterSemantics for VirtualIndirectCallOp {
+    fn attribute_roles(&self) -> &'static [(&'static str, tir::attributes::AttributeRole)] {
+        &[
+            ("callee_reg", tir::attributes::AttributeRole::Use),
+            ("clobbers", tir::attributes::AttributeRole::Clobber),
+        ]
     }
 }
 

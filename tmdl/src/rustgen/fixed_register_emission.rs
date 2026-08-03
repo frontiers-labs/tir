@@ -220,7 +220,7 @@ fn fixed_register_role_items(
     register_name_map: &HashMap<(String, u32), String>,
     flag_classes: &HashSet<String>,
     pc_classes: &HashSet<String>,
-) -> Vec<proc_macro2::TokenStream> {
+) -> Vec<(String, proc_macro2::TokenStream)> {
     if !is_fixed_register_shape(inst, ops) {
         return Vec::new();
     }
@@ -255,8 +255,7 @@ fn fixed_register_role_items(
         };
         let slot = fixed_read_slot_name(&name);
         if seen.insert(slot.clone()) {
-            let ident = format_ident!("{}", slot);
-            items.push(quote! { #ident: Use });
+            items.push((slot, quote! { Use }));
         }
     }
     for (class, regname) in &writes {
@@ -265,8 +264,7 @@ fn fixed_register_role_items(
         };
         let slot = fixed_write_slot_name(&name);
         if seen.insert(slot.clone()) {
-            let ident = format_ident!("{}", slot);
-            items.push(quote! { #ident: Def });
+            items.push((slot, quote! { Def }));
         }
     }
     items

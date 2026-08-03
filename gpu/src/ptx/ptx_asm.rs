@@ -567,8 +567,6 @@ fn build_op(context: &Context, name: &'static str, attributes: Vec<NamedAttribut
         vec![],
         vec![],
         attributes,
-        &[],
-        &[],
     );
     context.add_operation(inst).id
 }

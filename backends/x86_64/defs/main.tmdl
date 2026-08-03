@@ -586,12 +586,12 @@ macro alu_ri_norex {
 // Group-1 `op r/m, imm8` (0x83) short forms. Values unmodeled
 // (canonicalize-only).
 macro alu_ri8 {
-    ( $tmpl:ident, $dia:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
+    ( $tmpl:ident, $dia:ident, $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
         $( instruction $name for [$dia] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
-               schedule { units = [WriteIALU]; }
+               schedule { units = [$class]; }
                behavior $b
            } )*
     };
@@ -1226,6 +1226,7 @@ macro jcc_ops {
         $( instruction $name for [X86_64] : JccRel32 {
                param MNEMONIC: String = $mn;
                param CC: bits<8> = $cc;
+               schedule { units = [WriteJcc]; }
                behavior {
                    if $($cond)* {
                        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);

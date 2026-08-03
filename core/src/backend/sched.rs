@@ -206,6 +206,17 @@ pub struct MachineModel {
     /// Per-instruction scheduling classes keyed by stable operation identity,
     /// sorted for binary search. Resolved at TMDL-compile time.
     pub sched: &'static [(&'static str, InstrSchedClass)],
+    /// Macro-fusion rules: an instruction whose key is in a group's `first`,
+    /// immediately followed by one whose key is in its `second`, decodes and
+    /// executes as a single micro-op.
+    pub fusions: &'static [FusionGroup],
+}
+
+/// One macro-fusion rule, over scheduling keys (see [`MachineModel::fusions`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FusionGroup {
+    pub first: &'static [&'static str],
+    pub second: &'static [&'static str],
 }
 
 impl MachineModel {

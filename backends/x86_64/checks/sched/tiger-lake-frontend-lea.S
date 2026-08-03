@@ -18,7 +18,7 @@ f:
 # CHECK-NEXT: 1      1      lea r15, [rsi + rdi]
 # CHECK: Resource pressure by instruction:
 # CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
-# CHECK-NEXT: 0.25  0.27  0.30  0.18  lea rax, [r8 + r9]
-# CHECK-NEXT: 0.24  0.25  0.27  0.24  lea rbx, [r10 + r11]
-# CHECK-NEXT: 0.30  0.24  0.25  0.21  lea r12, [r13 + r14]
-# CHECK-NEXT: 0.28  0.30  0.24  0.18  lea r15, [rsi + rdi]
+# CHECK-NEXT: 1.00  -     -     -     lea rax, [r8 + r9]
+# CHECK-NEXT: -     1.00  -     -     lea rbx, [r10 + r11]
+# CHECK-NEXT: -     -     1.00  -     lea r12, [r13 + r14]
+# CHECK-NEXT: -     -     -     1.00  lea r15, [rsi + rdi]

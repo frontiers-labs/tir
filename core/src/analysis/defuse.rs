@@ -11,8 +11,9 @@
 //! and register allocation share [`op_regs`] for their own ordered scans.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::attributes::{AttributeRole, AttributeValue, RegisterAttr};
+use crate::attributes::{AttributeRole, AttributeValue, RegisterAttr, RegisterSemantics};
 use crate::backend::regalloc::RegClassId;
 use crate::{
     Context, OpId, OpInstance,
@@ -46,8 +47,14 @@ fn role_reads(role: AttributeRole) -> bool {
 }
 
 /// Resolve the register operands of one op from its SSA operands/results and its
-/// register-valued attributes (consulting the op's `attribute_roles`).
-pub fn op_regs(op: &OpInstance) -> OpRegs {
+/// register-valued attributes (consulting the opcode's
+/// [`RegisterSemantics`] interface).
+pub fn op_regs(op: &Arc<OpInstance>) -> OpRegs {
+    let attribute_roles = op
+        .clone()
+        .as_interface::<dyn RegisterSemantics>()
+        .map(|semantics| semantics.attribute_roles())
+        .unwrap_or_default();
     let mut regs = OpRegs::default();
 
     // Builtin SSA ops (e.g. the block terminator) name registers positionally.
@@ -79,8 +86,7 @@ pub fn op_regs(op: &OpInstance) -> OpRegs {
                 .collect(),
             _ => continue,
         };
-        let role = op
-            .attribute_roles
+        let role = attribute_roles
             .iter()
             .find(|(name, _)| *name == attr.name)
             .map(|(_, role)| *role)
@@ -127,10 +133,15 @@ pub fn op_regs(op: &OpInstance) -> OpRegs {
 /// fixed-register protocol reaches it through the fixed-register operands
 /// selection emits — the same accesses in the notation the allocator can act
 /// on.
-pub fn execution_regs(op: &OpInstance) -> OpRegs {
+pub fn execution_regs(op: &Arc<OpInstance>) -> OpRegs {
     let mut regs = op_regs(op);
 
-    for implicit in op.implicit_regs {
+    let implicit_regs = op
+        .clone()
+        .as_interface::<dyn RegisterSemantics>()
+        .map(|semantics| semantics.implicit_regs())
+        .unwrap_or_default();
+    for implicit in implicit_regs {
         let reg_ref = RegRef::Physical {
             class: implicit.class,
             index: implicit.index,

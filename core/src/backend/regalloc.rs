@@ -4,7 +4,7 @@
 //! every register operand is carried in an op attribute as
 //! [`RegisterAttr::Virtual`] (its `id` is the SSA value number),
 //! [`RegisterAttr::FixedUse`], or [`RegisterAttr::Physical`]. It reads the def/use
-//! role of each register operand from the op's generated `attribute_roles` table,
+//! role of each register operand from the opcode's registered register semantics,
 //! computes liveness, builds an interference graph, and solves an optimal coloring
 //! with the shared PBQP solver ([`tir::pbqp`]). The chosen physical registers are
 //! written back by rewriting every `Virtual` attribute to `Physical`.
@@ -13,6 +13,7 @@
 //! convention policy come from the selected [`crate::backend::abi::AbiInfo`].
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use tir::attributes::{AttributeRole, AttributeValue, RegisterAttr};
 use tir::pbqp::{self, INF_COST, PbqpMatrix, PbqpNodeId, PbqpProblem};
@@ -1868,8 +1869,11 @@ fn rewrite_registers(context: &Context, blocks: &[BlockId], assignment: &HashMap
     }
 }
 
-fn role_of(op: &tir::OpInstance, name: &str) -> AttributeRole {
-    op.attribute_roles
+fn role_of(op: &Arc<tir::OpInstance>, name: &str) -> AttributeRole {
+    op.clone()
+        .as_interface::<dyn tir::attributes::RegisterSemantics>()
+        .map(|semantics| semantics.attribute_roles())
+        .unwrap_or_default()
         .iter()
         .find(|(n, _)| *n == name)
         .map(|(_, r)| *r)

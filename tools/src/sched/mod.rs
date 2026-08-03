@@ -37,6 +37,7 @@ const GENERIC_MODEL: tir::backend::sched::MachineModel = tir::backend::sched::Ma
     forwards: &[],
     reg_files: &[],
     sched: &[],
+    fusions: &[],
 };
 
 #[derive(Args)]
@@ -124,6 +125,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             .unwrap_or((0, u16::from(mi.width_bytes().max(1))));
         base.push(ScoreboardInstr {
             text,
+            key: scheduling_key.to_string(),
             class: model.sched_class(scheduling_key),
             defs: phys_regs(&regs.defs, Some(&prf)),
             uses: phys_regs(&regs.uses, Some(&prf)),

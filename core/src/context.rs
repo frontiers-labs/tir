@@ -221,7 +221,18 @@ impl Context {
             })
     }
 
-    pub fn add_operation(&self, mut instance: OpInstance) -> Arc<OpInstance> {
+    pub fn add_operation(&self, instance: OpInstance) -> Arc<OpInstance> {
+        // Machine ops carry their register operands in role-tagged attributes;
+        // resolve the opcode's roles through its RegisterSemantics interface
+        // before taking the write lock (the tables are `'static`, so they
+        // outlive the probe).
+        let probe = Arc::new(instance);
+        let attribute_roles = self
+            .get_op_interface::<dyn crate::attributes::RegisterSemantics>(probe.clone())
+            .map(|semantics| semantics.attribute_roles())
+            .unwrap_or_default();
+        let mut instance = Arc::try_unwrap(probe).expect("probe interface dropped");
+
         let mut inner = self.0.write();
 
         let op_id = OpId::new(
@@ -247,12 +258,12 @@ impl Context {
             }
         }
 
-        // Machine ops carry their register operands in role-tagged attributes rather
-        // than `operands`/`results`, so mirror the above over those: a `Use` register
-        // is a use of its virtual value; a `Def` register is that value's def-site.
-        // Virtual register ids are value numbers; physical registers have none and are
-        // skipped — they are not SSA. ReadWrite counts as both.
-        for (attr_name, role) in instance.attribute_roles {
+        // Mirror the SSA def-use wiring over role-tagged register attributes: a
+        // `Use` register is a use of its virtual value; a `Def` register is that
+        // value's def-site. Virtual register ids are value numbers; physical
+        // registers have none and are skipped — they are not SSA. ReadWrite
+        // counts as both.
+        for (attr_name, role) in attribute_roles {
             use crate::attributes::{AttributeRole, AttributeValue, RegisterAttr};
             let Some(attr) = instance.attributes.iter().find(|a| a.name == *attr_name) else {
                 continue;

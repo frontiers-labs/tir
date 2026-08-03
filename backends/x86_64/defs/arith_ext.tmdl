@@ -72,7 +72,7 @@ instruction Neg for [X86_64] : RegUnary {
     param MNEMONIC: String = "neg";
     param EXT: bits<3> = 0b011;
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteIALU3B]; }
 
     behavior {
         dst = zext(0b0, self.XLEN) - dst;
@@ -83,7 +83,7 @@ instruction Not for [X86_64] : RegUnary {
     param MNEMONIC: String = "not";
     param EXT: bits<3> = 0b010;
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteIALU3B]; }
 
     behavior {
         dst = ~dst;
@@ -284,7 +284,7 @@ extend_ops!(
 instruction Movsxd for [X86_64] {
     param MNEMONIC: String = "movsxd";
 
-    schedule { units = [WriteIExtend]; }
+    schedule { units = [WriteIALU3B]; }
 
     operands {
         dst: GPR,
@@ -386,7 +386,7 @@ instruction Cmp32 for [X86_64] : RegReg32 {
     param MNEMONIC: String = "cmp";
     param OPCODE: bits<8> = 0x39;
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteIALU3B]; }
 
     behavior {
         sub_flags!({ src }, { 31 })
@@ -398,7 +398,7 @@ instruction Test32 for [X86_64] : RegReg32 {
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0x85;
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteIALU3B]; }
 
     behavior {
         test_flags!({ src }, { 32 }, { 31 })
@@ -409,7 +409,7 @@ instruction Test8 for [X86_64] : RegReg8 {
     param OPNAME: String = "test8";
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0x84;
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteIALU3B]; }
     behavior { }
 }
 
@@ -458,7 +458,7 @@ instruction Neg32 for [X86_64] : RegUnary32 {
     param MNEMONIC: String = "neg";
     param EXT: bits<3> = 0b011;
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteIALU3B]; }
 
     behavior {
         dst = zext(0b0, 32) - dst;
@@ -470,7 +470,7 @@ instruction Not32 for [X86_64] : RegUnary32 {
     param MNEMONIC: String = "not";
     param EXT: bits<3> = 0b010;
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteIALU3B]; }
 
     behavior {
         dst = ~dst;
@@ -485,7 +485,7 @@ reg_ext_norex!(RegUnary32Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
     (Not32Norex, "not32_norex", "not", 0b010)
 )
 
-reg_ext_norex!(RegUnary16Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
+reg_ext_norex!(RegUnary16Norex, WriteIALU3B, { dst = todo(dst); todo_flags!() },
     (Neg16Norex, "neg16_norex", "neg", 0b011),
     (Not16Norex, "not16_norex", "not", 0b010)
 )

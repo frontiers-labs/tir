@@ -1,9 +1,23 @@
 // Resources are abstract: no vendor port names or tables.
 sched_class WriteIALU { latency = 1; }
+// 3-byte encodings (REX rr forms, 66-prefixed no-REX rr, short immediate
+// forms): their predecode throughput differs from other widths on some cores.
+// Machines without that effect bind these like their parent class.
+sched_class WriteIALU3B { latency = 1; }
+sched_class WriteIMove3B { latency = 1; }
+// ALU forms with a 66-prefixed 16-bit immediate: a length-changing prefix,
+// which some decoders stall on. Machines without that stall bind it like
+// WriteIALU.
+sched_class WriteIALUImm16 { latency = 1; }
+// High-byte (ah..bh) forms: reading/writing bits 15:8 costs a merge on
+// register-renaming cores.
+sched_class WriteIHighByte { latency = 1; }
 sched_class WriteIShift { latency = 1; }
 sched_class WriteIMoveWide { latency = 1; }
 sched_class WriteIMoveByte { latency = 1; }
 sched_class WriteIMoveImmediate { latency = 1; }
+// mov with a 66-prefixed 16-bit immediate (see WriteIALUImm16).
+sched_class WriteIMoveImmediate16 { latency = 1; }
 sched_class WriteIMoveAbsolute { latency = 1; }
 sched_class WriteIConditional { latency = 1; }
 sched_class WriteIExtend { latency = 1; }
@@ -18,3 +32,5 @@ sched_class WriteFPCompare { latency = 1; }
 sched_class WriteILeaSimple { latency = 1; }
 sched_class WriteILeaComplex { latency = 1; }
 sched_class WriteILeaRip { latency = 1; }
+sched_class WriteJcc { latency = 1; }
+sched_class WriteJump { latency = 1; }

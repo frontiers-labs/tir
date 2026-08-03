@@ -203,6 +203,8 @@ enum Item {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         overrides: Vec<MachineOverride>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
+        fusions: Vec<FusionDecl>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
         forwards: Vec<Forward>,
     },
 }
@@ -297,6 +299,7 @@ impl From<&ast::Item> for Item {
                     .iter()
                     .map(MachineOverride::from)
                     .collect(),
+                fusions: machine.fusions.iter().map(FusionDecl::from).collect(),
                 forwards: machine.forwards.iter().map(Forward::from).collect(),
             },
         }
@@ -845,6 +848,24 @@ impl From<&ast::UnitBind> for UnitBind {
             decode_cycles: binding.decode_cycles,
             eliminated: binding.eliminated,
             zero_idiom: binding.zero_idiom,
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+/// A macro-fusion rule: adjacent `first`-then-`second` mnemonics decode and
+/// execute as one micro-op.
+struct FusionDecl {
+    first: Vec<String>,
+    second: Vec<String>,
+}
+
+impl From<&ast::FusionDecl> for FusionDecl {
+    fn from(fusion: &ast::FusionDecl) -> Self {
+        Self {
+            first: fusion.first.clone(),
+            second: fusion.second.clone(),
         }
     }
 }

@@ -11,5 +11,5 @@ f:
 # CHECK-NEXT: 1      1      movabs rcx, 4294967296
 # CHECK: Resource pressure by instruction:
 # CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
-# CHECK-NEXT: 0.43  0.57  -     -     mov rbx, 7
-# CHECK-NEXT: 0.64  0.36  -     -     movabs rcx, 4294967296
+# CHECK-NEXT: 0.50  -     0.50  -     mov rbx, 7
+# CHECK-NEXT: -     0.50  -     0.50  movabs rcx, 4294967296
