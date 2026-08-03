@@ -8,9 +8,9 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    get_encoding_arms, parse_literal_value, resolve_effective_asm_for_instruction,
-    resolve_isa_param_values, resolve_operand_widths, resolve_operands_for_instruction,
-    resolve_params_for_instruction,
+    behavior_uses_todo, get_encoding_arms, parse_literal_value,
+    resolve_effective_asm_for_instruction, resolve_isa_param_values, resolve_operand_widths,
+    resolve_operands_for_instruction, resolve_params_for_instruction,
 };
 
 pub struct GeneratedRust {
@@ -299,6 +299,7 @@ include!("register_traits.rs");
 include!("flag_analysis.rs");
 include!("flag_emission.rs");
 include!("fixed_register_emission.rs");
+include!("implicit_registers.rs");
 include!("instruction_analysis.rs");
 include!("assembly.rs");
 include!("behavior.rs");

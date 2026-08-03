@@ -29,6 +29,18 @@ pub enum AttributeRole {
     ReadWrite,
 }
 
+/// A fixed register an operation reads or writes without naming it in an
+/// operand — the register paths its TMDL behavior mentions (x86 `EFLAGS::zf`,
+/// `GPR::rax`). Which registers those are is a property of the opcode rather
+/// than of one instance, so the set is a `'static` table threaded onto every
+/// [`crate::OpInstance`] alongside `attribute_roles`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImplicitReg {
+    pub class: RegClassId,
+    pub index: u16,
+    pub role: AttributeRole,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RegisterAttr {
     Physical {

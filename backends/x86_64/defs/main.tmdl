@@ -178,8 +178,9 @@ register_class GPR8H for [X86_64] {
 // REX-free encodings GNU as emits when no register-number 4th bit and no
 // REX.W/8-bit-spl are needed. Like the memory views below they share the GPR
 // file, carry no `argument` traits (so `default_integer_class` is unaffected),
-// and are never allocation classes: no instruction over them has a behavior, so
-// they root no isel rule and are reachable only through canonicalization.
+// and are never allocation classes: every instruction over them leaves its value
+// unmodeled, so they root no isel rule and are reachable only through
+// canonicalization.
 //   GPR32low/GPR16low: eax..edi / ax..di (indices 0-7) — a REX-free 32/16-bit op.
 //   GPR8low: al/cl/dl/bl (indices 0-3) — the only 8-bit registers with no REX;
 //   spl/bpl/sil/dil (4-7) still require an empty REX and stay on the GPR8 form.
@@ -526,17 +527,19 @@ macro alu_rr {
     };
 }
 
-// No-REX register/register ALU forms (low subclasses). Behavior-free: they root
-// no isel rule and are produced only by `canonicalize_encodings`, so the REX
-// forms keep sole ownership of selection.
+// No-REX register/register ALU forms (low subclasses). Their values stay
+// unmodeled (`todo()`) so they root no isel rule and remain produced only by
+// `canonicalize_encodings`, but the destination's direction is an operand
+// declaration rather than a modeled value: without it the scheduler saw no
+// loop-carried dependency through eax..edi, al..bl or xmm0..xmm7.
 macro alu_rr_norex {
-    ( $suf:literal, $tmpl:ident, $class:ident, $( ( $name:ident, $mn:literal, $opc:literal ) ),* ) => {
+    ( $suf:literal, $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $mn:literal, $opc:literal ) ),* ) => {
         $( instruction ${concat($name, $suf, "Norex")} for [X86_64] : $tmpl {
                param OPNAME: String = ${concat($mn, $suf, "_norex")};
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
                schedule { units = [$class]; }
-               behavior { }
+               behavior $b
            } )*
     };
 }
@@ -564,30 +567,32 @@ macro alu_ri {
     };
 }
 
-// No-REX register/immediate forms (imm32/imm16/imm8, low subclasses). Behavior-
-// free, so they root no isel rule; produced only by `canonicalize_encodings`.
+// No-REX register/immediate forms (imm32/imm16/imm8, low subclasses). Values
+// unmodeled, so they root no isel rule; produced only by
+// `canonicalize_encodings`.
 macro alu_ri_norex {
-    ( $tmpl:ident, $class:ident, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal, $ext:literal ) ),* ) => {
+    ( $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal, $ext:literal ) ),* ) => {
         $( instruction $name for [X86_64] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
                param EXT: bits<3> = $ext;
                schedule { units = [$class]; }
-               behavior { }
+               behavior $b
            } )*
     };
 }
 
-// Group-1 `op r/m, imm8` (0x83) short forms. Behavior-free (canonicalize-only).
+// Group-1 `op r/m, imm8` (0x83) short forms. Values unmodeled
+// (canonicalize-only).
 macro alu_ri8 {
-    ( $tmpl:ident, $dia:ident, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
+    ( $tmpl:ident, $dia:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
         $( instruction $name for [$dia] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
                schedule { units = [WriteIALU]; }
-               behavior { }
+               behavior $b
            } )*
     };
 }
@@ -647,28 +652,32 @@ macro shift_imm {
 
 // No-REX single-dst /digit forms (group-3 unary neg/not, by-cl shifts) over the
 // low subclasses. The opcode is fixed by the template; only EXT and mnemonic
-// vary. Behavior-free, so they root no isel rule (canonicalize/assembler only).
+// vary. All are two-address; the value is unmodeled, so they root no isel rule
+// (canonicalize/assembler only). The behavior block still declares the
+// registers the form touches — the destination it reads back, the by-cl count
+// in rcx, and the flags it writes.
 macro reg_ext_norex {
-    ( $tmpl:ident, $class:ident, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
+    ( $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
         $( instruction $name for [X86_64] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
                schedule { units = [$class]; }
-               behavior { }
+               behavior $b
            } )*
     };
 }
 
-// No-REX shift/rotate-by-immediate forms (low subclasses). Behavior-free.
+// No-REX shift/rotate-by-immediate forms (low subclasses). Two-address, value
+// unmodeled; the shifts and the rotates differ in which flags they write.
 macro shift_imm_norex {
-    ( $suf:literal, $tmpl:ident, $( ( $name:ident, $mn:literal, $ext:literal ) ),* ) => {
+    ( $suf:literal, $tmpl:ident, $b:tt, $( ( $name:ident, $mn:literal, $ext:literal ) ),* ) => {
         $( instruction ${concat($name, $suf, "Norex")} for [X86_64] : $tmpl {
                param OPNAME: String = ${concat($mn, $suf, "_norex")};
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
                schedule { units = [WriteIShift]; }
-               behavior { }
+               behavior $b
            } )*
     };
 }
@@ -1243,15 +1252,18 @@ macro setcc_ops {
     };
 }
 
-// No-REX setcc forms (al/cl/dl/bl). Behavior-free (canonicalize-only).
+// No-REX setcc forms (al/cl/dl/bl). The materialized value stays unmodeled
+// (canonicalize-only), but the guard is passed to `todo()` so the flags the
+// condition tests are declared as reads: without them a `cmp`/`setcc` pair
+// carried no dependency at all.
 macro setcc_norex {
-    ( $( ( $name:ident, $op:literal, $mn:literal, $cc:literal ) ),* ) => {
+    ( $( ( $name:ident, $op:literal, $mn:literal, $cc:literal, { $($cond:tt)* } ) ),* ) => {
         $( instruction $name for [X86_64] : SetccRegNorex {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param CC: bits<8> = $cc;
                schedule { units = [WriteIConditional]; }
-               behavior { }
+               behavior { dst = todo($($cond)*); }
            } )*
     };
 }
@@ -1292,6 +1304,62 @@ macro sub_flags {
         };
         EFLAGS::sf = extract(dst - $($rhs)*, $($msb)*, $($msb)*);
         EFLAGS::of = extract((dst ^ $($rhs)*) & (dst ^ (dst - $($rhs)*)), $($msb)*, $($msb)*);
+    };
+}
+
+// Addition: cf is the unsigned carry out, of the signed overflow (operands
+// agree in sign, result differs).
+macro add_flags {
+    ( { $($rhs:tt)* }, { $($w:tt)* }, { $($msb:tt)* } ) => {
+        EFLAGS::cf = if (dst + $($rhs)*) ~< dst {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if (dst + $($rhs)*) == zext(0b0, $($w)*) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(dst + $($rhs)*, $($msb)*, $($msb)*);
+        EFLAGS::of = extract(~(dst ^ $($rhs)*) & (dst ^ (dst + $($rhs)*)), $($msb)*, $($msb)*);
+    };
+}
+
+// Logical ops clear carry and overflow and set zf/sf from the result.
+macro logic_flags {
+    ( { $($res:tt)* }, { $($w:tt)* }, { $($msb:tt)* } ) => {
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = if ($($res)*) == zext(0b0, $($w)*) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract($($res)*, $($msb)*, $($msb)*);
+        EFLAGS::of = zext(0b0, 1);
+    };
+}
+
+// The flag effects of a canonicalize-only form, whose value stays unmodeled.
+// *Which* flags an encoding writes is an architectural fact independent of the
+// values it writes, and the scheduler needs it: without these the REX-free
+// compare/ALU encodings looked flag-free, so compare/setcc chains scheduled as
+// if they were independent.
+macro todo_flags {
+    ( ) => {
+        EFLAGS::cf = todo();
+        EFLAGS::pf = todo();
+        EFLAGS::zf = todo();
+        EFLAGS::sf = todo();
+        EFLAGS::of = todo();
+    };
+}
+
+// Rotates leave the arithmetic flags alone and write only carry and overflow.
+macro todo_rotate_flags {
+    ( ) => {
+        EFLAGS::cf = todo();
+        EFLAGS::of = todo();
     };
 }
 

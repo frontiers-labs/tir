@@ -45,6 +45,8 @@ fn emit_machine_models<'a>(
                             decode_uops: ov.decode_uops,
                             decoder: ov.decoder.as_deref(),
                             decode_cycles: ov.decode_cycles,
+                            eliminated: ov.eliminated,
+                            zero_idiom: ov.zero_idiom,
                         },
                         &resource_groups,
                         &machine.pipeline,
@@ -103,6 +105,8 @@ fn emit_machine_models<'a>(
                 None => quote! { None },
             };
             let decode_cycles = proc_macro2::Literal::u16_unsuffixed(c.decode_cycles);
+            let eliminated = c.eliminated;
+            let zero_idiom = c.zero_idiom;
             quote! {
                 (#mnem_lit, tir::backend::sched::InstrSchedClass {
                     latency: #lat_lit,
@@ -113,6 +117,8 @@ fn emit_machine_models<'a>(
                     decode_uops: #decode_uops,
                     decoder: #decoder,
                     decode_cycles: #decode_cycles,
+                    eliminated: #eliminated,
+                    zero_idiom: #zero_idiom,
                 })
             }
         });
@@ -354,6 +360,8 @@ struct ResolvedClass {
     decode_uops: u16,
     decoder: Option<String>,
     decode_cycles: u16,
+    eliminated: bool,
+    zero_idiom: bool,
 }
 
 #[derive(Clone)]
@@ -377,6 +385,8 @@ struct ExplicitTimingSpec<'a> {
     decode_uops: Option<i64>,
     decoder: Option<&'a str>,
     decode_cycles: Option<i64>,
+    eliminated: Option<bool>,
+    zero_idiom: Option<bool>,
 }
 
 /// Resolve one explicit timing spec (a `bind` or an `override`) to a class. Timing
@@ -421,6 +431,8 @@ fn resolve_spec(
         .max(1),
         decoder: spec.decoder.map(str::to_string),
         decode_cycles: clamp_u16(spec.decode_cycles.unwrap_or(1)).max(1),
+        eliminated: spec.eliminated.unwrap_or(false),
+        zero_idiom: spec.zero_idiom.unwrap_or(false),
         uops: resolved_uops,
     }
 }
@@ -445,6 +457,8 @@ fn resolve_sched_class(
     let mut decode_uops = 0u16;
     let mut decoder = None;
     let mut decode_cycles = 0u16;
+    let mut eliminated = false;
+    let mut zero_idiom = false;
     let mut chosen = false;
 
     for unit in units {
@@ -460,6 +474,8 @@ fn resolve_sched_class(
                     decode_uops: b.decode_uops,
                     decoder: b.decoder.as_deref(),
                     decode_cycles: b.decode_cycles,
+                    eliminated: b.eliminated,
+                    zero_idiom: b.zero_idiom,
                 },
                 resource_groups,
                 pipeline,
@@ -474,6 +490,8 @@ fn resolve_sched_class(
                 decode_uops: 1,
                 decoder: None,
                 decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
             }
         } else {
             ResolvedClass {
@@ -485,6 +503,8 @@ fn resolve_sched_class(
                 decode_uops: 1,
                 decoder: None,
                 decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
             }
         };
 
@@ -499,6 +519,8 @@ fn resolve_sched_class(
             decoder = class.decoder;
         }
         decode_cycles = decode_cycles.max(class.decode_cycles);
+        eliminated |= class.eliminated;
+        zero_idiom |= class.zero_idiom;
         if !chosen || class.latency > latency {
             latency = class.latency;
             read_cycle = class.read_cycle;
@@ -516,6 +538,8 @@ fn resolve_sched_class(
         decode_uops: decode_uops.max(1),
         decoder,
         decode_cycles: decode_cycles.max(1),
+        eliminated,
+        zero_idiom,
     }
 }
 

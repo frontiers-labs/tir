@@ -1,0 +1,25 @@
+// RUN: tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s
+
+// CHECK:              "bindings": [
+// CHECK:                  "unit": "WriteIMove",
+// CHECK:                  "eliminated": true
+// CHECK:                  "unit": "WriteIXor",
+// CHECK:                  "zero_idiom": true
+
+isa TestIsa {}
+
+sched_class WriteIMove;
+sched_class WriteIXor;
+
+machine TestCore for [TestIsa] {
+    unit P0 { count = 1; }
+    bind WriteIMove {
+        latency = 0;
+        eliminated = true;
+    }
+    bind WriteIXor {
+        latency = 1;
+        uop(P0);
+        zero_idiom = true;
+    }
+}

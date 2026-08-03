@@ -1,13 +1,41 @@
 //! SSE2 scalar double-precision floating-point instructions.
 
-// SSE2 scalar double-precision floating point. The sixteen XMM registers are
-// modeled at their low 64 bits only (the scalar-double view); the semantic
-// engine reads a float-typed register's bits as a binary64 APFloat, so
-// `fadd`/`fmul` on XMM operands compute real double results. Upper lanes are
-// never read by a scalar op, so tracking them is unnecessary (as with the
-// AArch64 `FPR64` view of its 128-bit `v` registers).
+// SSE2 scalar double-precision floating point. The sixteen XMM registers form
+// a 128-bit file; scalar instructions operate through the 64-bit `XMM` view
+// (the semantic engine reads a float-typed register's bits as a binary64
+// APFloat, so `fadd`/`fmul` on XMM operands compute real double results), as
+// with the AArch64 `FPR64` view of its 128-bit `VPR` file. The file class
+// itself roots no operands and carries no traits.
 
-register_class XMM for [X86_64] {
+register_class XMM128 for [X86_64] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 128;
+
+    registers {
+        xmm0..xmm15 => { },
+    }
+}
+
+// Scalar writes through this view merge into the untouched upper lane, so a
+// physical destination is also a read — `cvtsi2sd xmm0, rax` chains on xmm0
+// (measured: 4.01 cyc/iteration for that block against a ~0.3 throughput
+// floor). Two-address scalar arithmetic reads its destination anyway; the
+// merge matters for the one-source writers (cvtsi2sd, reg-reg movsd).
+
+register_class XMM for [X86_64] : XMM128 {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 64;
+    param WRITE_POLICY: String = "merge";
+
+    registers {
+        xmm0..xmm15 => { traits = [float] },
+    }
+}
+
+// `movq xmm, r64` zero-extends through bit 127: same width, no merge, so its
+// destination write breaks dependencies instead of chaining on them.
+
+register_class XMMzx for [X86_64] : XMM128 {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;
 
@@ -18,12 +46,13 @@ register_class XMM for [X86_64] {
 
 // Low-XMM subclass (xmm0..xmm7) selected post-RA for the REX-free SSE encodings
 // GNU as emits when no register-number 4th bit is needed. Shares the XMM file,
-// carries no traits, and is never an allocation class (its ops are behavior-free
-// and root no isel rule).
+// carries no traits, and is never an allocation class (its ops leave their
+// values unmodeled, so they root no isel rule).
 register_class XMMlow for [X86_64] {
-    file = XMM;
+    file = XMM128;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;
+    param WRITE_POLICY: String = "merge";
 
     registers {
         xmm0 => { index = 0 },
@@ -95,34 +124,39 @@ template FpArithNorex for [X86_64] {
     }
 }
 
-// No-REX SSE forms. Behavior-free: canonicalize target for the low-xmm ALU and
-// movsd copies, and the assembler's preferred candidate for xmm0..xmm7.
+// No-REX SSE forms: canonicalize target for the low-xmm ALU and movsd copies,
+// and the assembler's preferred candidate for xmm0..xmm7. The value semantics
+// stay unmodeled (`todo()`) so these root no selection rule, but the
+// destination's direction is part of the operand declaration, not of the
+// modeled value: the arithmetic forms are two-address (dst is read and
+// written), movsd only writes. Dropping that made every low-xmm chain look
+// dependency-free to the scheduler.
 macro fp_norex {
-    ( $class:ident, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal ) ),* ) => {
+    ( $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal ) ),* ) => {
         $( instruction $name for [X86_64] : FpArithNorex {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
                schedule { units = [$class]; }
-               behavior { }
+               behavior $b
            } )*
     };
 }
 
-fp_norex!(WriteFPAdd,
+fp_norex!(WriteFPAdd, { dst = todo(dst); },
     (AddsdNorex, "addsd_norex", "addsd", 0x58),
     (SubsdNorex, "subsd_norex", "subsd", 0x5C)
 )
 
-fp_norex!(WriteFPMul,
+fp_norex!(WriteFPMul, { dst = todo(dst); },
     (MulsdNorex, "mulsd_norex", "mulsd", 0x59)
 )
 
-fp_norex!(WriteFPDiv,
+fp_norex!(WriteFPDiv, { dst = todo(dst); },
     (DivsdNorex, "divsd_norex", "divsd", 0x5E)
 )
 
-fp_norex!(WriteFPMove,
+fp_norex!(WriteFPMove, { dst = todo(); },
     (MovsdNorex, "movsd_norex", "movsd", 0x10)
 )
 
@@ -267,7 +301,7 @@ instruction MovqXmmGpr for [X86_64] {
     schedule { units = [WriteFPMove]; }
 
     operands {
-        dst: XMM,
+        dst: XMMzx,
         src: GPR,
     }
 
@@ -567,7 +601,7 @@ instruction MovsdLoadDispSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base} + {imm}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction MovsdStoreDispSib for [X86_64] {

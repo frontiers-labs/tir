@@ -84,18 +84,18 @@ setcc_ops!(
 )
 
 setcc_norex!(
-    (SetParityNorex,    "setp_norex",  "setp",  0x9A),
-    (SetNoParityNorex,  "setnp_norex", "setnp", 0x9B),
-    (SetEqNorex,        "sete_norex",  "sete",  0x94),
-    (SetNotEqNorex,     "setne_norex", "setne", 0x95),
-    (SetLessNorex,      "setl_norex",  "setl",  0x9C),
-    (SetGreaterEqNorex, "setge_norex", "setge", 0x9D),
-    (SetLessEqNorex,    "setle_norex", "setle", 0x9E),
-    (SetGreaterNorex,   "setg_norex",  "setg",  0x9F),
-    (SetBelowNorex,     "setb_norex",  "setb",  0x92),
-    (SetAboveEqNorex,   "setae_norex", "setae", 0x93),
-    (SetBelowEqNorex,   "setbe_norex", "setbe", 0x96),
-    (SetAboveNorex,     "seta_norex",  "seta",  0x97)
+    (SetParityNorex,    "setp_norex",  "setp",  0x9A, { EFLAGS::pf == zext(0b1, 1) }),
+    (SetNoParityNorex,  "setnp_norex", "setnp", 0x9B, { EFLAGS::pf == zext(0b0, 1) }),
+    (SetEqNorex,        "sete_norex",  "sete",  0x94, { EFLAGS::zf == zext(0b1, 1) }),
+    (SetNotEqNorex,     "setne_norex", "setne", 0x95, { EFLAGS::zf == zext(0b0, 1) }),
+    (SetLessNorex,      "setl_norex",  "setl",  0x9C, { EFLAGS::sf != EFLAGS::of }),
+    (SetGreaterEqNorex, "setge_norex", "setge", 0x9D, { EFLAGS::sf == EFLAGS::of }),
+    (SetLessEqNorex,    "setle_norex", "setle", 0x9E, { (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b1, 1) }),
+    (SetGreaterNorex,   "setg_norex",  "setg",  0x9F, { (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b0, 1) }),
+    (SetBelowNorex,     "setb_norex",  "setb",  0x92, { EFLAGS::cf == zext(0b1, 1) }),
+    (SetAboveEqNorex,   "setae_norex", "setae", 0x93, { EFLAGS::cf == zext(0b0, 1) }),
+    (SetBelowEqNorex,   "setbe_norex", "setbe", 0x96, { (EFLAGS::cf | EFLAGS::zf) == zext(0b1, 1) }),
+    (SetAboveNorex,     "seta_norex",  "seta",  0x97, { (EFLAGS::cf | EFLAGS::zf) == zext(0b0, 1) })
 )
 
 // cmovcc family: `cmovcc r64, r/m64` (0x0F 0x40|cc), the `RegRegExt` layout.

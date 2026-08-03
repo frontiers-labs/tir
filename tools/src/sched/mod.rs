@@ -14,7 +14,7 @@ use clap::Args;
 use tir::Context;
 use tir::backend::TargetMachine;
 use tir::backend::binary::{ObjectFile, SectionKind};
-use tir::backend::liveness::op_regs;
+use tir::backend::liveness::execution_regs;
 use tir::backend::{MachineInstruction, SectionOp, SymbolOp};
 use tir::builtin::ModuleOp;
 use tir_sim::scoreboard::{self, Prf, ScoreboardInstr, TimingConfig, phys_regs};
@@ -114,7 +114,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             continue;
         };
         let scheduling_key = mi.scheduling_key();
-        let regs = op_regs(&op);
+        let regs = execution_regs(&op);
         let text = asm_printer
             .print_instruction(&context, &op)?
             .ok_or_else(|| format!("no assembly printer registered for '{}'", op.name()))?;

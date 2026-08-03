@@ -847,6 +847,8 @@ enum BindField {
     DecodeUops(i64),
     Decoder(String),
     DecodeCycles(i64),
+    Eliminated(bool),
+    ZeroIdiom(bool),
 }
 
 /// The timing fields common to a `bind` and an `override` body.
@@ -861,6 +863,8 @@ struct BindFields {
     decode_uops: Option<i64>,
     decoder: Option<String>,
     decode_cycles: Option<i64>,
+    eliminated: Option<bool>,
+    zero_idiom: Option<bool>,
 }
 
 fn aggregate_bind_fields(fields: Vec<BindField>) -> BindFields {
@@ -876,6 +880,8 @@ fn aggregate_bind_fields(fields: Vec<BindField>) -> BindFields {
             BindField::DecodeUops(value) => out.decode_uops = Some(value),
             BindField::Decoder(value) => out.decoder = Some(value),
             BindField::DecodeCycles(value) => out.decode_cycles = Some(value),
+            BindField::Eliminated(value) => out.eliminated = Some(value),
+            BindField::ZeroIdiom(value) => out.zero_idiom = Some(value),
         }
     }
     out
@@ -889,6 +895,10 @@ where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     let ident = select! { Token::Identifier(i) => i.to_string() };
+    let bool_lit = select! {
+        Token::Identifier("true") => true,
+        Token::Identifier("false") => false,
+    };
     let uop = just(Token::Identifier("uop"))
         .ignore_then(
             resource_expr()
@@ -951,6 +961,16 @@ where
             .ignore_then(int_lit())
             .then_ignore(just(Token::Semicolon))
             .map(BindField::DecodeCycles),
+        just(Token::Identifier("eliminated"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(bool_lit)
+            .then_ignore(just(Token::Semicolon))
+            .map(BindField::Eliminated),
+        just(Token::Identifier("zero_idiom"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(bool_lit)
+            .then_ignore(just(Token::Semicolon))
+            .map(BindField::ZeroIdiom),
     ))
 }
 
@@ -1300,6 +1320,8 @@ where
                 decode_uops: f.decode_uops,
                 decoder: f.decoder,
                 decode_cycles: f.decode_cycles,
+                eliminated: f.eliminated,
+                zero_idiom: f.zero_idiom,
                 span: e.span(),
             })
         });
@@ -1320,6 +1342,8 @@ where
                 decode_uops: f.decode_uops,
                 decoder: f.decoder,
                 decode_cycles: f.decode_cycles,
+                eliminated: f.eliminated,
+                zero_idiom: f.zero_idiom,
                 span: e.span(),
             })
         });

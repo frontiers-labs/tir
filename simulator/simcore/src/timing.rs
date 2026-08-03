@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use tir::backend::liveness::op_regs;
+use tir::backend::liveness::execution_regs;
 use tir::backend::sched::{InstrSchedClass, MachineModel};
 use tir::backend::{ControlFlow, MachineInstruction};
 use tir::{Context, OpId};
@@ -65,7 +65,7 @@ pub fn simulate(
             ),
             None => (InstrSchedClass::DEFAULT, 4, false),
         };
-        let regs = op_regs(&op);
+        let regs = execution_regs(&op);
         pre.push(Pre {
             pc: *pc,
             width,

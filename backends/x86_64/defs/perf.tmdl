@@ -1,5 +1,4 @@
-// Black-box compute model: dependency recurrences set latency, independent
-// blocks set class capacity, and held-out mixed blocks select the window.
+// Resources are abstract: no vendor port names or tables.
 sched_class WriteIALU { latency = 1; }
 sched_class WriteIShift { latency = 1; }
 sched_class WriteIMoveWide { latency = 1; }
@@ -19,63 +18,3 @@ sched_class WriteFPCompare { latency = 1; }
 sched_class WriteILeaSimple { latency = 1; }
 sched_class WriteILeaComplex { latency = 1; }
 sched_class WriteILeaRip { latency = 1; }
-
-machine TigerLake ("tiger-lake") for [X86_64] {
-    issue_width = 6;
-
-    frontend {
-        fetch {
-            bytes_per_cycle = 16;
-            window_bytes = 16;
-            alignment = 16;
-            queue_bytes = 64;
-        }
-        decode {
-            slots = [simple, simple, simple, simple];
-            uops_per_cycle = 4;
-            queue_uops = 64;
-            decoder simple { max_uops_per_instruction = 1; }
-        }
-    }
-
-    buffers {
-        rob = 8;
-    }
-
-    unit IALU { count = 3; }
-    unit IMoveWide { count = 3; }
-    unit IMoveByte { count = 1; }
-    unit IMul { count = 1; }
-    unit FPAdd { count = 1; }
-    unit FPMul { count = 1; }
-    unit FPDiv { count = 1; }
-    unit FPMove { count = 1; }
-    unit IMoveImmediate { count = 2; }
-    unit IMoveAbsolute { count = 1; }
-    unit IConditional { count = 1; }
-    unit FPConvert { count = 1; }
-    unit FPCompare { count = 1; }
-    unit ILeaAny { count = 4; }
-    unit ILeaComplex { count = 2; }
-    unit ILeaRip { count = 1; }
-
-    bind WriteIALU { latency = 1; uses = [IALU]; }
-    bind WriteIShift { latency = 1; uses = [IALU]; }
-    bind WriteIMoveWide { latency = 1; uses = [IMoveWide]; }
-    bind WriteIMoveByte { latency = 1; uses = [IMoveByte]; }
-    bind WriteIMul { latency = 3; uses = [IMul]; }
-    bind WriteFPAdd { latency = 4; uses = [FPAdd]; }
-    bind WriteFPMul { latency = 4; uses = [FPMul]; }
-    bind WriteFPDiv { latency = 13; uses = [FPDiv]; }
-    bind WriteFPMove { latency = 1; uses = [FPMove]; }
-    bind WriteIMoveImmediate { latency = 1; uses = [IMoveImmediate]; }
-    bind WriteIMoveAbsolute { latency = 1; uses = [IMoveAbsolute]; }
-    bind WriteIConditional { latency = 1; uses = [IConditional]; }
-    bind WriteIExtend { latency = 1; uses = [IALU]; }
-    bind WriteSIToFP { latency = 4; uses = [FPConvert]; }
-    bind WriteFPToSI { latency = 1; uses = [FPConvert]; }
-    bind WriteFPCompare { latency = 1; uses = [FPCompare]; }
-    bind WriteILeaSimple { latency = 1; uses = [ILeaAny]; }
-    bind WriteILeaComplex { latency = 1; uses = [ILeaAny, ILeaComplex]; }
-    bind WriteILeaRip { latency = 1; uses = [ILeaAny, ILeaRip]; }
-}

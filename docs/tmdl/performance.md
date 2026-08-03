@@ -217,6 +217,39 @@ The semantic checker rejects missing or non-positive capacities, unknown decoder
 slots, decoder requirements with no capable slot, unknown resources, cyclic groups,
 and non-positive micro-op counts or occupancies.
 
+## Rename-stage behavior
+
+Cores that rename registers resolve some instructions before execution, so their
+measured cost is bounded by rename/issue width rather than by any execution unit.
+Two optional bind fields model this:
+
+```
+bind WriteIMove {
+  latency = 0;
+  eliminated = true;
+}
+
+bind WriteIXor {
+  latency = 1;
+  uop(Int);
+  zero_idiom = true;
+}
+```
+
+`eliminated = true` marks a class the rename stage completes: the instruction
+reserves no execution resource and its result is available the cycle it issues,
+while still consuming front-end bandwidth, issue width and a reorder-buffer slot.
+It still waits for its sources — renaming a not-yet-written register cannot make
+the value arrive earlier. Because such a class has no execution cost, the checker
+rejects combining it with `uses`, `uop(...)` or a non-zero `latency`.
+
+`zero_idiom = true` marks a class *eligible* to break dependencies. The decision
+is per instruction instance: when the registers it reads are all among the
+registers it writes, the instruction's value does not depend on its inputs, so
+the engine drops its input dependencies and treats the instance as eliminated.
+Every other instance of the same class executes normally with the bound latency
+and micro-ops.
+
 ## Scheduling classes and binding
 
 An ISA declares machine-independent **scheduling classes** — groups of operations

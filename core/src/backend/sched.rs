@@ -151,6 +151,16 @@ pub struct InstrSchedClass {
     pub decoder: Option<&'static str>,
     /// Consecutive cycles for which the selected decoder slot remains occupied.
     pub decode_cycles: u16,
+    /// The instruction completes in the rename stage: it reserves no execution
+    /// resource and its result is available the cycle it issues (move
+    /// elimination). It still costs front-end bandwidth, issue width and a ROB
+    /// slot, and still waits for its sources.
+    pub eliminated: bool,
+    /// The instruction is a dependency-breaking idiom when its sources are a
+    /// subset of its destinations (`xor eax, eax`). Such an instance drops its
+    /// input dependencies and is handled like `eliminated`; other instances
+    /// execute normally.
+    pub zero_idiom: bool,
 }
 
 impl InstrSchedClass {
@@ -166,6 +176,8 @@ impl InstrSchedClass {
         decode_uops: 1,
         decoder: None,
         decode_cycles: 1,
+        eliminated: false,
+        zero_idiom: false,
     };
 
     /// The cycle, relative to issue, at which the result becomes available.

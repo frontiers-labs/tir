@@ -352,6 +352,15 @@ fn emit_instructions<'a>(
             (quote! { [tir::backend::MachineInstruction] }, quote! {})
         };
 
+        // Fixed registers the behavior names by path (`EFLAGS::zf`, `GPR::rax`),
+        // which no operand records.
+        let implicit_items = implicit_register_items(inst, &register_index_map, &pc_classes);
+        let implicit_schema = if implicit_items.is_empty() {
+            quote! {}
+        } else {
+            quote! { implicit: [ #(#implicit_items),* ], }
+        };
+
         instruction_defs.push(quote! {
             operation! {
                 #name_ident {
@@ -359,6 +368,7 @@ fn emit_instructions<'a>(
                     dialect: #dialect,
                     attributes: A { #attrs_schema },
                     roles: R { #roles_schema },
+                    #implicit_schema
                     interfaces: #interfaces_list,
                     format: custom,
                 }
@@ -1171,6 +1181,7 @@ fn emit_instructions<'a>(
         let codegen_rhs: Option<&ast::Expr> = branch_value.as_ref().or(resolved_rhs);
 
         if let Some(rhs) = codegen_rhs
+            && !uses_todo
             && !behavior_has_atomic_ops(&inst.behavior)
             && let Some(impl_ts) = emit_as_sem_expr_impl(rhs, &name_ident, &numeric_params)
         {

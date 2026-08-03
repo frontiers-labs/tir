@@ -63,6 +63,7 @@ instruction SubImm for [X86_64] : RegImm {
     schedule { units = [WriteIALU]; }
 
     behavior {
+        sub_flags!({ sext(imm, self.XLEN) }, { self.XLEN - 1 })
         dst = dst - sext(imm, self.XLEN);
     }
 }
@@ -447,6 +448,7 @@ instruction SubImm32 for [X86_64] : RegImm32 {
     schedule { units = [WriteIALU]; }
 
     behavior {
+        sub_flags!({ sext(imm, 32) }, { 31 })
         dst = dst - sext(imm, 32);
     }
 }
@@ -478,17 +480,17 @@ instruction Not32 for [X86_64] : RegUnary32 {
 // No-REX neg/not (0xF7 /3, /2; byte 0xF6) over the low subclasses. neg = /3,
 // not = /2. Behavior-free; the 32-bit forms are the canonicalize target for
 // Neg32/Not32, the 16/8-bit forms are assembler-only (no narrow generic).
-reg_ext_norex!(RegUnary32Norex, WriteIALU,
+reg_ext_norex!(RegUnary32Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
     (Neg32Norex, "neg32_norex", "neg", 0b011),
     (Not32Norex, "not32_norex", "not", 0b010)
 )
 
-reg_ext_norex!(RegUnary16Norex, WriteIALU,
+reg_ext_norex!(RegUnary16Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
     (Neg16Norex, "neg16_norex", "neg", 0b011),
     (Not16Norex, "not16_norex", "not", 0b010)
 )
 
-reg_ext_norex!(RegUnary8Norex, WriteIALU,
+reg_ext_norex!(RegUnary8Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
     (Neg8Norex, "neg8_norex", "neg", 0b011),
     (Not8Norex, "not8_norex", "not", 0b010)
 )
@@ -506,6 +508,6 @@ shift_imm!("32", "32", RegShift32,
 
 // No-REX 32-bit rotate-by-immediate (0xC1 /0, /1). Behavior-free; the
 // canonicalize target for RolImm32/RorImm32 on a low register.
-shift_imm_norex!("32", RegShift32Norex,
+shift_imm_norex!("32", RegShift32Norex, { dst = todo(dst); todo_rotate_flags!() },
     (RolImm, "rol", 0b000), (RorImm, "ror", 0b001)
 )

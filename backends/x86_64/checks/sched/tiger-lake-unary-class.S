@@ -5,6 +5,11 @@ f:
     neg r8
     not r9
 
+# CHECK: Total Cycles:      101
+# CHECK: [1]    [2]    Instructions:
+# CHECK-NEXT: 1      1      neg r8
+# CHECK-NEXT: 1      1      not r9
 # CHECK: Resource pressure by instruction:
-# CHECK: 1.00{{.*}}neg r8
-# CHECK: 1.00{{.*}}not r9
+# CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
+# CHECK-NEXT: 1.00  -     -     -     neg r8
+# CHECK-NEXT: -     -     1.00  -     not r9

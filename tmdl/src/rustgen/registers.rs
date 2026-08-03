@@ -134,6 +134,25 @@ fn reg_class_id(class_name: &str) -> proc_macro2::TokenStream {
     quote! { RegClass::#variant.id() }
 }
 
+/// The storage-element view of a register class: where the architectural view
+/// starts (`BIT_OFFSET`, x86 `ah` at bit 8) and whether a write preserves the
+/// element's untouched bits (`WRITE_POLICY = "merge"`, x86 8/16-bit writes)
+/// instead of zero-extending across it.
+fn register_view(rc: &ast::RegisterClass) -> proc_macro2::TokenStream {
+    let bit_offset = match rc.parameters.get("BIT_OFFSET") {
+        Some((_ty, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => parse_literal_value(li) as u32,
+        _ => 0,
+    };
+    let merge = matches!(
+        rc.parameters.get("WRITE_POLICY"),
+        Some((_ty, Some(ast::Expr::Lit(ast::Lit::Str(s))))) if s.value() == "merge"
+    );
+    let off_lit = proc_macro2::Literal::u32_unsuffixed(bit_offset);
+    quote! {
+        tir::backend::regalloc::RegisterView { bit_offset: #off_lit, merge: #merge }
+    }
+}
+
 fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLError> {
     let classes: HashMap<String, &ast::RegisterClass> = files
         .iter()
@@ -146,6 +165,7 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
         class_variants.push(format_ident!("{}", rc.name));
         let name_lit = proc_macro2::Literal::string(&rc.name);
         let file_lit = proc_macro2::Literal::string(rc.register_file(&classes));
+        let view = register_view(rc);
         // A `GROUP_SIZE` class param declares how many consecutive file indices
         // one register covers (RVV LMUL>1 group classes); default 1.
         let group_width = match rc.parameters.get("GROUP_SIZE") {
@@ -159,6 +179,7 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
                 name: #name_lit,
                 file: #file_lit,
                 group_width: #group_width,
+                view: #view,
             }
         });
     }
@@ -202,29 +223,6 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
         width_entries.push(quote! { (#name_lit, #width_ts) });
     }
 
-    // Sub-register view of each class: bit offset into its storage element and
-    // whether narrow writes merge (preserve untouched bits) or zero-extend. Only
-    // classes departing from the default (offset 0, zero-extend) get an entry.
-    let mut view_entries = Vec::new();
-    for rc in files.iter().flat_map(|f| f.register_classes()) {
-        let bit_offset = match rc.parameters.get("BIT_OFFSET") {
-            Some((_ty, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => parse_literal_value(li) as u32,
-            _ => 0,
-        };
-        let merge = matches!(
-            rc.parameters.get("WRITE_POLICY"),
-            Some((_ty, Some(ast::Expr::Lit(ast::Lit::Str(s))))) if s.value() == "merge"
-        );
-        if bit_offset == 0 && !merge {
-            continue;
-        }
-        let name_lit = proc_macro2::Literal::string(&rc.name);
-        let off_lit = proc_macro2::Literal::u32_unsuffixed(bit_offset);
-        view_entries.push(quote! {
-            (#name_lit, tir::backend::regalloc::RegisterView { bit_offset: #off_lit, merge: #merge })
-        });
-    }
-
     let class_count = class_entries.len();
 
     Ok(quote! {
@@ -262,11 +260,10 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
             vec![#(#width_entries),*]
         }
 
-        /// Sub-register views (bit offset + write policy) of classes that depart
-        /// from the default of offset 0 and zero-extending writes.
+        /// Sub-register view (bit offset + write policy) of each register class.
         pub fn register_views(features: &[Feature]) -> Vec<(&'static str, tir::backend::regalloc::RegisterView)> {
             let _ = features;
-            vec![#(#view_entries),*]
+            REG_CLASSES.iter().map(|class| (class.name, class.view)).collect()
         }
     })
 }

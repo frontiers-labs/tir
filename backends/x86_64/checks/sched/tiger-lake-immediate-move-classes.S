@@ -5,8 +5,11 @@ f:
     mov rbx, 7
     movabs rcx, 4294967296
 
-# CHECK: [8]: IMoveImmediate
-# CHECK: [9]: IMoveAbsolute
+# CHECK: Total Cycles:      108
+# CHECK: [1]    [2]    Instructions:
+# CHECK-NEXT: 1      1      mov rbx, 7
+# CHECK-NEXT: 1      1      movabs rcx, 4294967296
 # CHECK: Resource pressure by instruction:
-# CHECK: 1.00{{.*}}mov rbx, 7
-# CHECK: 1.00{{.*}}movabs rcx, 4294967296
+# CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
+# CHECK-NEXT: 0.43  0.57  -     -     mov rbx, 7
+# CHECK-NEXT: 0.64  0.36  -     -     movabs rcx, 4294967296

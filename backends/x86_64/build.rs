@@ -12,6 +12,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "./defs/memory_ext.tmdl",
         "./defs/float.tmdl",
         "./defs/perf.tmdl",
+        "./defs/cpu/intel/tiger_lake.tmdl",
     ];
     for input in &inputs {
         println!("cargo:rerun-if-changed={input}");

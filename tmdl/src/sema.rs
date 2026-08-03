@@ -833,6 +833,14 @@ fn check_performance_model(
                         Rich::custom(bind.span, "decode_uops must be positive"),
                     ));
                 }
+                if let Some(message) =
+                    eliminated_conflict(bind.eliminated, bind.latency, &bind.uses, &bind.uops)
+                {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(bind.span, message.to_string()),
+                    ));
+                }
                 if bind.decode_cycles.is_some_and(|cycles| cycles <= 0) {
                     diags.push((
                         file.file_name.clone(),
@@ -994,6 +1002,14 @@ fn check_performance_model(
                     diags.push((
                         file.file_name.clone(),
                         Rich::custom(ov.span, "decode_uops must be positive"),
+                    ));
+                }
+                if let Some(message) =
+                    eliminated_conflict(ov.eliminated, ov.latency, &ov.uses, &ov.uops)
+                {
+                    diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(ov.span, message.to_string()),
                     ));
                 }
                 if ov.decode_cycles.is_some_and(|cycles| cycles <= 0) {
@@ -1183,6 +1199,26 @@ fn resource_group_is_cyclic<'a>(
     });
     visiting.remove(name);
     cyclic
+}
+
+/// An `eliminated` instruction completes in the rename stage, so it can neither
+/// occupy an execution resource nor carry latency.
+fn eliminated_conflict(
+    eliminated: Option<bool>,
+    latency: Option<i64>,
+    uses: &[String],
+    uops: &[ast::MicroOp],
+) -> Option<&'static str> {
+    if eliminated != Some(true) {
+        return None;
+    }
+    if !uses.is_empty() || !uops.is_empty() {
+        return Some("eliminated instruction cannot reserve resources");
+    }
+    if latency.is_some_and(|latency| latency != 0) {
+        return Some("eliminated instruction must have latency = 0");
+    }
+    None
 }
 
 fn effective_decode_uops(explicit: Option<i64>, uops: &[ast::MicroOp]) -> i64 {
@@ -2481,6 +2517,92 @@ mod perf_model_tests {
                 .any(|d| d.contains("frontend has no decoder slot capable of 5 micro-ops")),
             "diags: {diags:?}"
         );
+    }
+
+    #[test]
+    fn eliminated_bind_cannot_declare_micro_ops() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { latency = 0; eliminated = true; uop(P0); }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("eliminated instruction cannot reserve resources")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn eliminated_bind_cannot_declare_used_resources() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { latency = 0; eliminated = true; uses = [P0]; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("eliminated instruction cannot reserve resources")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn eliminated_bind_cannot_have_non_zero_latency() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                bind W { latency = 1; eliminated = true; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("eliminated instruction must have latency = 0")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn eliminated_override_is_validated_too() {
+        let src = "
+            sched_class W;
+            instruction I { behavior { rd = rs1; } schedule { units = [W]; } }
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { latency = 1; uses = [P0]; }
+                override I { eliminated = true; uses = [P0]; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("eliminated instruction cannot reserve resources")),
+            "diags: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn zero_idiom_bind_is_accepted() {
+        let src = "
+            sched_class W;
+            machine M for [RV64I] {
+                unit P0 { count = 1; }
+                bind W { latency = 1; uop(P0); zero_idiom = true; }
+            }
+        ";
+        let diags = diagnose(src);
+        assert!(diags.is_empty(), "diags: {diags:?}");
     }
 
     #[test]

@@ -1282,6 +1282,9 @@
         "decoder": {
           "type": "string"
         },
+        "eliminated": {
+          "type": "boolean"
+        },
         "instruction": {
           "type": "string"
         },
@@ -1310,6 +1313,9 @@
         },
         "writes": {
           "type": "string"
+        },
+        "zero_idiom": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,
@@ -1783,6 +1789,9 @@
         "decoder": {
           "type": "string"
         },
+        "eliminated": {
+          "type": "boolean"
+        },
         "latency": {
           "type": "integer",
           "format": "int64"
@@ -1811,6 +1820,9 @@
         },
         "writes": {
           "type": "string"
+        },
+        "zero_idiom": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,

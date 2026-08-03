@@ -375,6 +375,11 @@ pub struct UnitBind {
     pub decode_uops: Option<i64>,
     pub decoder: Option<String>,
     pub decode_cycles: Option<i64>,
+    /// The instruction is handled at rename: no execution resource, zero latency.
+    pub eliminated: Option<bool>,
+    /// The instruction breaks its input dependencies when its sources are a
+    /// subset of its destinations.
+    pub zero_idiom: Option<bool>,
     pub span: Span,
 }
 
@@ -394,6 +399,11 @@ pub struct MachineOverride {
     pub decode_uops: Option<i64>,
     pub decoder: Option<String>,
     pub decode_cycles: Option<i64>,
+    /// The instruction is handled at rename: no execution resource, zero latency.
+    pub eliminated: Option<bool>,
+    /// The instruction breaks its input dependencies when its sources are a
+    /// subset of its destinations.
+    pub zero_idiom: Option<bool>,
     pub span: Span,
 }
 

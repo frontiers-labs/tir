@@ -87,7 +87,10 @@ mod isa {
             .attr("imm", AttributeValue::Int(bits))
             .build();
         let move_bits = MovqXmmGprOpBuilder::new(context)
-            .attr("dst", virt(constant.result().number(), RegClass::XMM.id()))
+            .attr(
+                "dst",
+                virt(constant.result().number(), RegClass::XMMzx.id()),
+            )
             .attr("src", virt(temp.number(), RegClass::GPR.id()))
             .build();
         rewriter.insert_op_before(op, &materialize)?;
@@ -860,7 +863,7 @@ mod isa {
                         .attr("src", virt(value, class))
                         .build(),
                 ),
-                "XMM" => Box::new(
+                "XMM" | "XMMzx" => Box::new(
                     MovsdStoreDispOpBuilder::new(context)
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
@@ -901,7 +904,7 @@ mod isa {
                         .attr("imm", AttributeValue::Int(offset))
                         .build(),
                 ),
-                "XMM" => Box::new(
+                "XMM" | "XMMzx" => Box::new(
                     MovsdLoadDispOpBuilder::new(context)
                         .attr("dst", virt(value, class))
                         .attr("base", phys(frame.0, frame.1))
@@ -956,7 +959,7 @@ mod isa {
                         .attr("src", virt(src))
                         .build(),
                 ),
-                "XMM" => Box::new(
+                "XMM" | "XMMzx" => Box::new(
                     MovsdOpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
@@ -1516,7 +1519,7 @@ mod isa {
 mod tests {
     #[test]
     fn tiger_lake_uses_fitted_scheduling_window() {
-        assert_eq!(crate::isa::tiger_lake_model().buffer("rob"), Some(8));
+        assert_eq!(crate::isa::tiger_lake_model().buffer("rob"), Some(20));
     }
 
     #[test]

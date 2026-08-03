@@ -70,7 +70,7 @@ instruction Movzx8LoadSib for [X86_64] : ExtendLoadSib {
         "{self.MNEMONIC} {dst}, byte ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Movzx8LoadRbp for [X86_64] : ExtendLoadRbp {
@@ -82,7 +82,7 @@ instruction Movzx8LoadRbp for [X86_64] : ExtendLoadRbp {
         "{self.MNEMONIC} {dst}, byte ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Movzx16LoadSib for [X86_64] : ExtendLoadSib {
@@ -94,7 +94,7 @@ instruction Movzx16LoadSib for [X86_64] : ExtendLoadSib {
         "{self.MNEMONIC} {dst}, word ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Movzx16LoadRbp for [X86_64] : ExtendLoadRbp {
@@ -106,7 +106,7 @@ instruction Movzx16LoadRbp for [X86_64] : ExtendLoadRbp {
         "{self.MNEMONIC} {dst}, word ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Movsx8LoadSib for [X86_64] : ExtendLoadSib {
@@ -118,7 +118,7 @@ instruction Movsx8LoadSib for [X86_64] : ExtendLoadSib {
         "{self.MNEMONIC} {dst}, byte ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Movsx8LoadRbp for [X86_64] : ExtendLoadRbp {
@@ -130,7 +130,7 @@ instruction Movsx8LoadRbp for [X86_64] : ExtendLoadRbp {
         "{self.MNEMONIC} {dst}, byte ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Movsx16LoadSib for [X86_64] : ExtendLoadSib {
@@ -142,7 +142,7 @@ instruction Movsx16LoadSib for [X86_64] : ExtendLoadSib {
         "{self.MNEMONIC} {dst}, word ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Movsx16LoadRbp for [X86_64] : ExtendLoadRbp {
@@ -154,7 +154,7 @@ instruction Movsx16LoadRbp for [X86_64] : ExtendLoadRbp {
         "{self.MNEMONIC} {dst}, word ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction MovsxdLoadSib for [X86_64] {
@@ -179,7 +179,7 @@ instruction MovsxdLoadSib for [X86_64] {
         "{self.MNEMONIC} {dst}, dword ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction MovsxdLoadRbp for [X86_64] {
@@ -204,7 +204,7 @@ instruction MovsxdLoadRbp for [X86_64] {
         "{self.MNEMONIC} {dst}, dword ptr [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Mov32LoadSib for [X86_64] {
@@ -229,7 +229,7 @@ instruction Mov32LoadSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Mov32LoadRbp for [X86_64] {
@@ -254,7 +254,7 @@ instruction Mov32LoadRbp for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Mov32StoreSib for [X86_64] {
@@ -442,7 +442,7 @@ instruction MovLoadDispSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base} + {imm}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction MovStoreDispSib for [X86_64] {
@@ -496,7 +496,7 @@ instruction Mov32LoadDispSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base} + {imm}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Mov32StoreDispSib for [X86_64] {
@@ -550,7 +550,7 @@ instruction Mov8LoadDispSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base} + {imm}]"
     }
 
-    behavior { }
+    behavior { dst = todo(); }
 }
 
 instruction Mov8StoreDispSib for [X86_64] {
@@ -1587,5 +1587,5 @@ instruction PopNorex for [X86_64] : PushPopNorex {
     param MNEMONIC: String = "pop";
     param OPCODE: bits<5> = 0b01011;
 
-    behavior { }
+    behavior { reg = todo(); }
 }

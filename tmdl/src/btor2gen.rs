@@ -24,9 +24,9 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    get_encoding_arms, isa_param_values, item_supports_isa, parse_literal_value,
-    resolve_isa_param_values, resolve_operand_widths, resolve_operands_for_instruction,
-    resolve_params_for_instruction,
+    behavior_uses_todo, get_encoding_arms, isa_param_values, item_supports_isa,
+    parse_literal_value, resolve_isa_param_values, resolve_operand_widths,
+    resolve_operands_for_instruction, resolve_params_for_instruction,
 };
 use tir::graph::{Dag, NodeId};
 use tir::sem::{SymKind as ExprKind, SymPayload as ExprPayload};
@@ -450,6 +450,18 @@ impl sem_expr_state::BehaviorEmitter for Checker<'_> {
         value: NodeId,
         state: &PostState,
     ) -> Option<PostState> {
+        // Writes to non-retirement fixed registers (status flags) are outside
+        // the checked post-state: the property observes only the destination
+        // operand and next_pc, so they pass through instead of failing the
+        // instruction. Retirement-file fixed writes (e.g. rdx:rax) still fail:
+        // the single-write post-state cannot express them.
+        if let sem_expr_state::Destination::FixedRegister { class, .. } = destination
+            && !self.ctx.pc_classes.contains(&class.to_lowercase())
+            && !self.ctx.is_retirement_class(class)
+        {
+            return Some(*state);
+        }
+
         let value = self.emit_val(value)?;
         let xlen = self.ctx.xlen as u32;
         let mut b = self.b.borrow_mut();
@@ -800,7 +812,12 @@ pub fn generate_btor2<'a>(
         if !item_enabled(&instruction.for_isas, ctx.isa, enabled_isas, item_cache) {
             continue;
         }
-        if matches!(&instruction.behavior, ast::Expr::Block(block) if block.stmts.is_empty()) {
+        // An empty or `todo()` behavior declares no semantics to check: there is
+        // nothing to lower, and the checker's property only covers modeled
+        // instructions.
+        if matches!(&instruction.behavior, ast::Expr::Block(block) if block.stmts.is_empty())
+            || behavior_uses_todo(&instruction.behavior)
+        {
             continue;
         }
         let Some(width) = instruction_width(instruction, item_cache) else {

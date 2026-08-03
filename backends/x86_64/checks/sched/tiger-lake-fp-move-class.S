@@ -5,6 +5,11 @@ f:
     movq xmm0, rax
     movq rbx, xmm1
 
+# CHECK: Total Cycles:      101
+# CHECK: [1]    [2]    Instructions:
+# CHECK-NEXT: 1      1      movq xmm0, rax
+# CHECK-NEXT: 1      1      movq rbx, xmm1
 # CHECK: Resource pressure by instruction:
-# CHECK: 1.00{{.*}}movq xmm0, rax
-# CHECK: 1.00{{.*}}movq rbx, xmm1
+# CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
+# CHECK-NEXT: 1.00  -     -     -     movq xmm0, rax
+# CHECK-NEXT: -     1.00  -     -     movq rbx, xmm1

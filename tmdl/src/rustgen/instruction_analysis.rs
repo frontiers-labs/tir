@@ -686,35 +686,6 @@ fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>
     }
 }
 
-/// Whether a behavior invokes the `todo()` builtin anywhere: its semantics are
-/// unmodeled, so it generates no selection rules and its `execute()` traps.
-fn behavior_uses_todo(expr: &ast::Expr) -> bool {
-    match expr {
-        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Todo) => true,
-        ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
-        ast::Expr::Path(_) | ast::Expr::Invalid => false,
-        ast::Expr::Assign(a) => behavior_uses_todo(&a.dest) || behavior_uses_todo(&a.value),
-        ast::Expr::Binary(b) => behavior_uses_todo(&b.lhs) || behavior_uses_todo(&b.rhs),
-        ast::Expr::Unary(u) => behavior_uses_todo(&u.x),
-        ast::Expr::Block(b) => b.stmts.iter().any(behavior_uses_todo),
-        ast::Expr::Call(c) => {
-            behavior_uses_todo(&c.callee) || c.arguments.iter().any(behavior_uses_todo)
-        }
-        ast::Expr::Field(f) => behavior_uses_todo(&f.base),
-        ast::Expr::If(i) => {
-            behavior_uses_todo(&i.cond)
-                || behavior_uses_todo(&i.then)
-                || i.else_.as_ref().is_some_and(|e| behavior_uses_todo(e))
-        }
-        ast::Expr::IndexAccess(i) => behavior_uses_todo(&i.base),
-        ast::Expr::Slice(s) => behavior_uses_todo(&s.base),
-        ast::Expr::Try(t) => {
-            behavior_uses_todo(&t.body) || t.handlers.iter().any(|h| behavior_uses_todo(&h.body))
-        }
-        ast::Expr::Lambda(l) => behavior_uses_todo(&l.body),
-    }
-}
-
 fn collect_behavior_assignments<'a>(expr: &'a ast::Expr, out: &mut Vec<(String, &'a ast::Expr)>) {
     match expr {
         ast::Expr::Assign(a) => {

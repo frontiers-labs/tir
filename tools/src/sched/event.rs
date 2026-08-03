@@ -30,7 +30,6 @@ struct InstrRow {
     text: String,
     latency: u16,
     rthroughput: u16,
-    resources: Vec<&'static str>,
 }
 
 /// Resource-utilization report: the default `llvm-mca`-style summary.
@@ -60,19 +59,19 @@ impl EventHandler for ResourceView {
                 text: b.text.clone(),
                 latency: b.class.latency,
                 rthroughput: b.class.rthroughput,
-                resources: b.class.resources.to_vec(),
             })
             .collect();
         self.usage = vec![vec![0.0; self.resource_names.len()]; self.base_len];
     }
 
-    fn issued(&mut self, _cycle: u64, i: usize) {
+    fn reserved(&mut self, _cycle: u64, i: usize, resource: &'static str, cycles: u16) {
         let base = i % self.base_len;
-        let rthr = f64::from(self.instrs[base].rthroughput.max(1));
-        for (r, name) in self.resource_names.iter().enumerate() {
-            if self.instrs[base].resources.contains(name) {
-                self.usage[base][r] += rthr;
-            }
+        if let Some(r) = self
+            .resource_names
+            .iter()
+            .position(|name| *name == resource)
+        {
+            self.usage[base][r] += f64::from(cycles);
         }
     }
 

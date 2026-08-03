@@ -5,7 +5,11 @@ f:
     sete al
     cmove rax, rbx
 
-# CHECK: [10]: IConditional
+# CHECK: Total Cycles:      201
+# CHECK: [1]    [2]    Instructions:
+# CHECK-NEXT: 1      1      sete al
+# CHECK-NEXT: 1      1      cmove rax, rbx
 # CHECK: Resource pressure by instruction:
-# CHECK: 1.00{{.*}}sete al
-# CHECK: 1.00{{.*}}cmove rax, rbx
+# CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
+# CHECK-NEXT: 1.00  -     -     -     sete al
+# CHECK-NEXT: -     -     1.00  -     cmove rax, rbx

@@ -86,11 +86,11 @@ module {
 // re-view, so no truncating mov follows.
 // CHECK:      x86_64.cvttsd2si64 {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM}
 // CHECK-NEXT: asm.vret
-// CHECK:      x86_64.movq_xmm_gpr {dst = %virt{{[0-9]+}}:XMM, src = %virt{{[0-9]+}}:GPR}
+// CHECK:      x86_64.movq_xmm_gpr {dst = %virt{{[0-9]+}}:XMMzx, src = %virt{{[0-9]+}}:GPR}
 // CHECK:      x86_64.movq_gpr_xmm {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM}
 // CHECK-LABEL: asm.symbol {name = "shared_zero"
 // CHECK:      x86_64.mov_imm {dst = %virt[[ZERO:[0-9]+]]:GPR, imm = 0}
-// CHECK-NEXT: x86_64.movq_xmm_gpr {dst = %virt{{[0-9]+}}:XMM, src = %virt[[ZERO]]:GPR}
+// CHECK-NEXT: x86_64.movq_xmm_gpr {dst = %virt{{[0-9]+}}:XMMzx, src = %virt[[ZERO]]:GPR}
 // CHECK:      x86_64.movsd_store_disp
 // CHECK:      x86_64.mov_load
 // CHECK:      x86_64.ucomisd {lhs = %virt{{[0-9]+}}:XMM, rhs = %virt{{[0-9]+}}:XMM}

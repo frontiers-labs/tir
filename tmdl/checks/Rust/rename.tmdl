@@ -1,0 +1,42 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+// CHECK: "a-move"
+// CHECK: eliminated: true,
+// CHECK: zero_idiom: false,
+// CHECK: "b-xor"
+// CHECK: eliminated: false,
+// CHECK: zero_idiom: true,
+
+isa TestIsa {}
+
+sched_class WriteIMove;
+sched_class WriteIXor;
+
+instruction MoveOp for [TestIsa] {
+    param OPNAME: String = "a-move";
+    param MNEMONIC: String = "mov";
+    asm { "mov" }
+    behavior { todo(); }
+    schedule { units = [WriteIMove]; }
+}
+
+instruction XorOp for [TestIsa] {
+    param OPNAME: String = "b-xor";
+    param MNEMONIC: String = "xor";
+    asm { "xor" }
+    behavior { todo(); }
+    schedule { units = [WriteIXor]; }
+}
+
+machine TestCore for [TestIsa] {
+    unit P0 { count = 1; }
+    bind WriteIMove {
+        latency = 0;
+        eliminated = true;
+    }
+    bind WriteIXor {
+        latency = 1;
+        uop(P0);
+        zero_idiom = true;
+    }
+}

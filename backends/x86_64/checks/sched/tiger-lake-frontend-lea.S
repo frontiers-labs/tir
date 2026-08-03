@@ -9,5 +9,16 @@ f:
 
 # Four independent four-byte simple LEAs saturate both the measured four-wide
 # decoder and sixteen-byte fetch path.
-# CHECK: Total Cycles:      101
-# CHECK: [{{[0-9]+}}]: ILeaAny
+
+# CHECK: Total Cycles:      108
+# CHECK: [1]    [2]    Instructions:
+# CHECK-NEXT: 1      1      lea rax, [r8 + r9]
+# CHECK-NEXT: 1      1      lea rbx, [r10 + r11]
+# CHECK-NEXT: 1      1      lea r12, [r13 + r14]
+# CHECK-NEXT: 1      1      lea r15, [rsi + rdi]
+# CHECK: Resource pressure by instruction:
+# CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
+# CHECK-NEXT: 0.25  0.27  0.30  0.18  lea rax, [r8 + r9]
+# CHECK-NEXT: 0.24  0.25  0.27  0.24  lea rbx, [r10 + r11]
+# CHECK-NEXT: 0.30  0.24  0.25  0.21  lea r12, [r13 + r14]
+# CHECK-NEXT: 0.28  0.30  0.24  0.18  lea r15, [rsi + rdi]

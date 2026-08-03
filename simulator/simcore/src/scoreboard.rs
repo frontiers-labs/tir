@@ -434,6 +434,10 @@ pub trait EventHandler {
     fn start(&mut self, _ctx: &SimContext) {}
     fn dispatched(&mut self, _cycle: u64, _i: usize) {}
     fn issued(&mut self, _cycle: u64, _i: usize) {}
+    /// Instruction `i` reserved `resource` for `cycles` at `cycle`. Emitted per
+    /// reserved unit, after route selection, so views report the routes the
+    /// engine actually took rather than re-deriving them from class metadata.
+    fn reserved(&mut self, _cycle: u64, _i: usize, _resource: &'static str, _cycles: u16) {}
     fn retired(&mut self, _cycle: u64, _i: usize) {}
     /// Branch `i` was mispredicted: it resolved its true direction at `resolved`,
     /// and the front end cannot deliver the correct-path successor until
@@ -463,19 +467,47 @@ impl TimingResult {
     }
 }
 
+/// Whether this instance is a dependency-breaking idiom: its class marks it
+/// eligible and its data sources are all among its destinations (`xor eax,
+/// eax`). Such an instance produces a constant, so the rename stage can satisfy
+/// it without reading its sources.
+fn is_zero_idiom(slot: &ScoreboardInstr) -> bool {
+    slot.class.zero_idiom
+        && !slot.uses.is_empty()
+        && slot.uses.iter().all(|use_| slot.defs.contains(use_))
+}
+
+/// Whether this instance completes in the rename stage: it reserves no
+/// execution resource and its result is available the cycle it issues.
+fn renamed(slot: &ScoreboardInstr) -> bool {
+    slot.class.eliminated || is_zero_idiom(slot)
+}
+
+/// The latency of this instance: zero when the rename stage completes it.
+fn instr_latency(slot: &ScoreboardInstr) -> u64 {
+    if renamed(slot) {
+        0
+    } else {
+        u64::from(slot.class.latency)
+    }
+}
+
 /// The producer→consumer latency between two dependent instructions, honoring
 /// the machine's forwarding network and falling back to the producer's latency.
 fn edge_latency(
     model: &MachineModel,
-    producer: &InstrSchedClass,
+    producer: &ScoreboardInstr,
     consumer: &InstrSchedClass,
 ) -> u64 {
-    if let (Some(p), Some(c)) = (producer.resources.first(), consumer.resources.first())
+    if renamed(producer) {
+        return 0;
+    }
+    if let (Some(p), Some(c)) = (producer.class.resources.first(), consumer.resources.first())
         && let Some(f) = model.forward_latency(p, c)
     {
         return u64::from(f);
     }
-    u64::from(producer.latency)
+    u64::from(producer.class.latency)
 }
 
 /// The cycle an instruction's result becomes available, given the cycle it
@@ -491,7 +523,7 @@ fn completion_cycle(
     issue_cycle: u64,
     mem: Option<&mut MemorySystem>,
 ) -> u64 {
-    let base = issue_cycle + u64::from(slot.class.latency);
+    let base = issue_cycle + instr_latency(slot);
     let Some(mem) = mem else {
         return base;
     };
@@ -684,14 +716,17 @@ pub fn run(
             h.dispatched(cycle, i);
         }
 
-        // Operands ready: the latest forwarding-aware producer result.
+        // Operands ready: the latest forwarding-aware producer result. A
+        // dependency-breaking idiom reads none of its sources.
         let mut operands_ready = 0u64;
-        for u in &slot.uses {
-            if let Some(&j) = reg_writer.get(u) {
-                let producer = &base[j % base.len()];
-                operands_ready = operands_ready
-                    .max(issue[j] + edge_latency(model, &producer.class, &slot.class))
-                    .max(result_extra[j]);
+        if !is_zero_idiom(slot) {
+            for u in &slot.uses {
+                if let Some(&j) = reg_writer.get(u) {
+                    let producer = &base[j % base.len()];
+                    operands_ready = operands_ready
+                        .max(issue[j] + edge_latency(model, producer, &slot.class))
+                        .max(result_extra[j]);
+                }
             }
         }
 
@@ -700,9 +735,15 @@ pub fn run(
             t = t.max(issue[i - 1]);
         }
 
-        t = reserve_class_resources(&slot.class, &mut lanes, t);
+        let mut chosen = Vec::new();
+        if !renamed(slot) {
+            t = reserve_class_resources(&slot.class, &mut lanes, t, &mut chosen);
+        }
         issue[i] = t;
         if let Some(h) = handler.as_mut() {
+            for (resource, cycles) in &chosen {
+                h.reserved(t, i, resource, *cycles);
+            }
             h.issued(t, i);
         }
 
@@ -717,7 +758,7 @@ pub fn run(
             let predicted = p.predict(br.pc, br.target);
             if predicted != br.taken {
                 mispredicts += 1;
-                let resolved = issue[i] + u64::from(slot.class.latency);
+                let resolved = issue[i] + instr_latency(slot);
                 redirect = redirect.max(resolved + config.mispredict_penalty);
                 if let Some(h) = handler.as_mut() {
                     h.mispredicted(i, resolved, redirect);
@@ -731,7 +772,7 @@ pub fn run(
         let complete = completion_cycle(slot, issue[i], mem.as_deref_mut());
         // Only a completion that overran the static latency (a cache miss) holds
         // back dependents beyond forwarding; a hit leaves the fast path intact.
-        if complete > issue[i] + u64::from(slot.class.latency) {
+        if complete > issue[i] + instr_latency(slot) {
             result_extra[i] = complete;
         }
         retire[i] = complete.max(if i > 0 { retire[i - 1] } else { 0 });
@@ -801,9 +842,11 @@ fn run_ooo_compute(
     let mut writers = HashMap::new();
     for i in 0..n {
         let slot = &base[i % base.len()];
-        for register in &slot.uses {
-            if let Some(&producer) = writers.get(register) {
-                dependencies[i].push(producer);
+        if !is_zero_idiom(slot) {
+            for register in &slot.uses {
+                if let Some(&producer) = writers.get(register) {
+                    dependencies[i].push(producer);
+                }
             }
         }
         for register in &slot.defs {
@@ -880,21 +923,29 @@ fn run_ooo_compute(
             let operands_ready = dependencies[index].iter().all(|&producer| {
                 issued[producer].is_some_and(|producer_issue| {
                     let producer_slot = &base[producer % base.len()];
-                    producer_issue + edge_latency(model, &producer_slot.class, &slot.class) <= cycle
+                    producer_issue + edge_latency(model, producer_slot, &slot.class) <= cycle
                 })
             });
             if !operands_ready {
                 continue;
             }
-            let mut candidate_lanes = lanes.clone();
-            if reserve_class_resources(&slot.class, &mut candidate_lanes, cycle) != cycle {
-                continue;
+            let mut chosen = Vec::new();
+            if !renamed(slot) {
+                let mut candidate_lanes = lanes.clone();
+                if reserve_class_resources(&slot.class, &mut candidate_lanes, cycle, &mut chosen)
+                    != cycle
+                {
+                    continue;
+                }
+                lanes = candidate_lanes;
             }
-            lanes = candidate_lanes;
             issued[index] = Some(cycle);
-            completed[index] = Some(cycle + u64::from(slot.class.latency));
+            completed[index] = Some(cycle + instr_latency(slot));
             issued_this_cycle += 1;
             if let Some(h) = handler.as_mut() {
+                for (resource, cycles) in &chosen {
+                    h.reserved(cycle, index, resource, *cycles);
+                }
                 h.issued(cycle, index);
             }
         }
@@ -969,9 +1020,10 @@ fn reserve_class_resources(
     class: &InstrSchedClass,
     lanes: &mut HashMap<&'static str, Vec<u64>>,
     earliest: u64,
+    chosen: &mut Vec<(&'static str, u16)>,
 ) -> u64 {
     if !class.uops.is_empty() {
-        return reserve_micro_ops(class.uops, lanes, earliest);
+        return reserve_micro_ops(class.uops, lanes, earliest, chosen);
     }
 
     let mut issue = earliest;
@@ -987,6 +1039,7 @@ fn reserve_class_resources(
             .and_then(|resource_lanes| resource_lanes.iter_mut().min_by_key(|cycle| **cycle))
         {
             *lane = busy_until;
+            chosen.push((resource, class.rthroughput.max(1)));
         }
     }
     issue
@@ -996,33 +1049,48 @@ fn reserve_micro_ops(
     uops: &[tir::backend::sched::MicroOp],
     lanes: &mut HashMap<&'static str, Vec<u64>>,
     earliest: u64,
+    chosen: &mut Vec<(&'static str, u16)>,
 ) -> u64 {
-    let (issue, reserved) = schedule_micro_ops(uops, lanes.clone(), earliest);
+    let (issue, reserved, mut routes) = schedule_micro_ops(uops, lanes.clone(), earliest);
     *lanes = reserved;
+    chosen.append(&mut routes);
     issue
 }
+
+type ScheduledMicroOps = (
+    u64,
+    HashMap<&'static str, Vec<u64>>,
+    Vec<(&'static str, u16)>,
+);
 
 fn schedule_micro_ops(
     uops: &[tir::backend::sched::MicroOp],
     lanes: HashMap<&'static str, Vec<u64>>,
     earliest: u64,
-) -> (u64, HashMap<&'static str, Vec<u64>>) {
+) -> ScheduledMicroOps {
     let Some((uop, remaining)) = uops.split_first() else {
-        return (earliest, lanes);
+        return (earliest, lanes, Vec::new());
     };
 
     uop.routes
         .iter()
         .map(|route| {
             let (start, reserved) = reserve_route(route, lanes.clone(), earliest);
-            let (rest_issue, reserved) = schedule_micro_ops(remaining, reserved, earliest);
-            (start.max(rest_issue), reserved)
+            let (rest_issue, reserved, mut rest_routes) =
+                schedule_micro_ops(remaining, reserved, earliest);
+            let mut routes: Vec<(&'static str, u16)> = route
+                .resources
+                .iter()
+                .map(|use_| (use_.resource, use_.cycles.max(1)))
+                .collect();
+            routes.append(&mut rest_routes);
+            (start.max(rest_issue), reserved, routes)
         })
-        .min_by_key(|(issue, reserved)| {
+        .min_by_key(|(issue, reserved, _)| {
             let total_busy: u64 = reserved.values().flatten().sum();
             (*issue, total_busy)
         })
-        .unwrap_or((earliest, lanes))
+        .unwrap_or((earliest, lanes, Vec::new()))
 }
 
 fn reserve_route(
@@ -1124,8 +1192,8 @@ mod tests {
             for u in &slot.uses {
                 if let Some(&j) = reg_writer.get(u) {
                     let producer = &base[j % base.len()];
-                    operands_ready = operands_ready
-                        .max(issue[j] + edge_latency(model, &producer.class, &slot.class));
+                    operands_ready =
+                        operands_ready.max(issue[j] + edge_latency(model, producer, &slot.class));
                 }
             }
             let mut t = d.max(operands_ready);
@@ -1268,6 +1336,8 @@ mod tests {
             decode_uops: 1,
             decoder: None,
             decode_cycles: 1,
+            eliminated: false,
+            zero_idiom: false,
         },
         InstrSchedClass {
             latency: 3,
@@ -1278,6 +1348,8 @@ mod tests {
             decode_uops: 1,
             decoder: None,
             decode_cycles: 1,
+            eliminated: false,
+            zero_idiom: false,
         },
         InstrSchedClass {
             latency: 4,
@@ -1288,6 +1360,8 @@ mod tests {
             decode_uops: 1,
             decoder: None,
             decode_cycles: 1,
+            eliminated: false,
+            zero_idiom: false,
         },
     ];
 
@@ -1537,6 +1611,8 @@ mod tests {
                 decode_uops: 1,
                 decoder: None,
                 decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
             }),
             resource_test_instr(InstrSchedClass {
                 latency: 1,
@@ -1547,10 +1623,94 @@ mod tests {
                 decode_uops: 1,
                 decoder: None,
                 decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
             }),
         ];
 
         assert_eq!(issue_cycles(&model, &program), vec![0, 0]);
+    }
+
+    #[derive(Default)]
+    struct ReservationRecorder(Vec<(usize, &'static str, u16)>);
+
+    impl EventHandler for ReservationRecorder {
+        fn reserved(&mut self, _cycle: u64, i: usize, resource: &'static str, cycles: u16) {
+            self.0.push((i, resource, cycles));
+        }
+        fn render(&self) -> String {
+            String::new()
+        }
+    }
+
+    #[test]
+    fn reserved_events_report_the_chosen_route() {
+        const ROUTE_P0: ResourceRoute = ResourceRoute {
+            resources: &[TEST_P0],
+        };
+        const ROUTE_P1: ResourceRoute = ResourceRoute {
+            resources: &[TEST_P1],
+        };
+        const ALTERNATIVE: MicroOp = MicroOp {
+            routes: &[ROUTE_P0, ROUTE_P1],
+        };
+
+        let model = resource_test_model(&[
+            ProcUnit {
+                name: "P0",
+                units: 1,
+            },
+            ProcUnit {
+                name: "P1",
+                units: 1,
+            },
+        ]);
+        let program = [
+            resource_test_instr(InstrSchedClass {
+                latency: 1,
+                read_cycle: 0,
+                rthroughput: 1,
+                resources: &["P0"],
+                uops: &[],
+                decode_uops: 1,
+                decoder: None,
+                decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
+            }),
+            resource_test_instr(InstrSchedClass {
+                latency: 1,
+                read_cycle: 0,
+                rthroughput: 1,
+                resources: &[],
+                uops: &[ALTERNATIVE],
+                decode_uops: 1,
+                decoder: None,
+                decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
+            }),
+        ];
+
+        let mut events = ReservationRecorder::default();
+        run(
+            &model,
+            &program,
+            1,
+            &TimingConfig {
+                in_order: false,
+                window: 0,
+                mispredict_penalty: 0,
+                unroll_stride: 0,
+            },
+            None,
+            None,
+            None,
+            Some(&mut events),
+        );
+        // The legacy instruction holds P0, so the alternative-routed micro-op
+        // must report the P1 route it actually took.
+        assert_eq!(events.0, vec![(0, "P0", 1), (1, "P1", 1)]);
     }
 
     #[test]
@@ -1578,6 +1738,8 @@ mod tests {
                 decode_uops: 1,
                 decoder: None,
                 decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
             }),
             resource_test_instr(InstrSchedClass {
                 latency: 1,
@@ -1588,6 +1750,8 @@ mod tests {
                 decode_uops: 1,
                 decoder: None,
                 decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
             }),
         ];
 
@@ -1621,6 +1785,8 @@ mod tests {
                 decode_uops: 1,
                 decoder: None,
                 decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
             }),
             resource_test_instr(InstrSchedClass {
                 latency: 1,
@@ -1631,6 +1797,8 @@ mod tests {
                 decode_uops: 1,
                 decoder: None,
                 decode_cycles: 1,
+                eliminated: false,
+                zero_idiom: false,
             }),
         ];
 
@@ -1649,6 +1817,8 @@ mod tests {
             decode_uops: 3,
             decoder: Some("complex"),
             decode_cycles: 1,
+            eliminated: false,
+            zero_idiom: false,
         };
         let program = [resource_test_instr(complex), resource_test_instr(complex)];
 
@@ -1667,6 +1837,8 @@ mod tests {
             decode_uops: 1,
             decoder: Some("complex"),
             decode_cycles: 3,
+            eliminated: false,
+            zero_idiom: false,
         };
         let program = [resource_test_instr(complex), resource_test_instr(complex)];
 
@@ -1685,6 +1857,8 @@ mod tests {
             decode_uops: 3,
             decoder: None,
             decode_cycles: 1,
+            eliminated: false,
+            zero_idiom: false,
         };
         let program = [resource_test_instr(class), resource_test_instr(class)];
 
@@ -1787,6 +1961,8 @@ mod tests {
             decode_uops: 1,
             decoder: None,
             decode_cycles: 1,
+            eliminated: false,
+            zero_idiom: false,
         });
         let mul = InstrSchedClass {
             latency: 1,
@@ -1797,6 +1973,8 @@ mod tests {
             decode_uops: 1,
             decoder: None,
             decode_cycles: 1,
+            eliminated: false,
+            zero_idiom: false,
         };
         let mut producer = producer;
         producer.defs = vec![("GPR".to_string(), 0)];
@@ -1828,5 +2006,212 @@ mod tests {
         }
 
         assert_eq!(issued, vec![0, 5, 0]);
+    }
+
+    const RENAME_ALU: InstrSchedClass = InstrSchedClass {
+        latency: 1,
+        read_cycle: 0,
+        rthroughput: 1,
+        resources: &["ALU"],
+        uops: &[],
+        decode_uops: 1,
+        decoder: None,
+        decode_cycles: 1,
+        eliminated: false,
+        zero_idiom: false,
+    };
+
+    fn rename_test_model() -> MachineModel {
+        let mut model = resource_test_model(&[ProcUnit {
+            name: "ALU",
+            units: 1,
+        }]);
+        model.issue_width = 4;
+        model
+    }
+
+    /// A recurrent chain `r1 <- r0, r2 <- r1, r3 <- r2, r0 <- r3`.
+    fn move_chain(class: InstrSchedClass) -> Vec<ScoreboardInstr> {
+        (0..4)
+            .map(|i| {
+                let mut instruction = resource_test_instr(class);
+                instruction.uses = vec![("GPR".to_string(), i)];
+                instruction.defs = vec![("GPR".to_string(), (i + 1) % 4)];
+                instruction
+            })
+            .collect()
+    }
+
+    fn timing(model: &MachineModel, program: &[ScoreboardInstr], in_order: bool) -> TimingResult {
+        run(
+            model,
+            program,
+            64,
+            &TimingConfig {
+                in_order,
+                window: 0,
+                mispredict_penalty: 0,
+                unroll_stride: 0,
+            },
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn eliminated_moves_are_issue_width_bound_out_of_order() {
+        let model = rename_test_model();
+        let baseline = timing(&model, &move_chain(RENAME_ALU), false);
+        let eliminated = timing(
+            &model,
+            &move_chain(InstrSchedClass {
+                eliminated: true,
+                latency: 0,
+                resources: &[],
+                ..RENAME_ALU
+            }),
+            false,
+        );
+
+        assert!(baseline.ipc() <= 1.0, "baseline ipc {}", baseline.ipc());
+        assert!(
+            eliminated.ipc() > 3.0,
+            "eliminated ipc {}",
+            eliminated.ipc()
+        );
+    }
+
+    #[test]
+    fn eliminated_moves_are_issue_width_bound_in_order() {
+        let model = rename_test_model();
+        let baseline = timing(&model, &move_chain(RENAME_ALU), true);
+        let eliminated = timing(
+            &model,
+            &move_chain(InstrSchedClass {
+                eliminated: true,
+                latency: 0,
+                resources: &[],
+                ..RENAME_ALU
+            }),
+            true,
+        );
+
+        assert!(baseline.ipc() <= 1.0, "baseline ipc {}", baseline.ipc());
+        assert!(
+            eliminated.ipc() > 3.0,
+            "eliminated ipc {}",
+            eliminated.ipc()
+        );
+    }
+
+    #[test]
+    fn an_eliminated_move_still_waits_for_its_source() {
+        let mut model = rename_test_model();
+        model.issue_width = 4;
+        let mut producer = resource_test_instr(InstrSchedClass {
+            latency: 5,
+            resources: &[],
+            ..RENAME_ALU
+        });
+        producer.defs = vec![("GPR".to_string(), 0)];
+        let mut mov = resource_test_instr(InstrSchedClass {
+            eliminated: true,
+            latency: 0,
+            resources: &[],
+            ..RENAME_ALU
+        });
+        mov.uses = vec![("GPR".to_string(), 0)];
+        mov.defs = vec![("GPR".to_string(), 1)];
+        let mut consumer = resource_test_instr(RENAME_ALU);
+        consumer.uses = vec![("GPR".to_string(), 1)];
+        consumer.defs = vec![("GPR".to_string(), 2)];
+        let program = [producer, mov, consumer];
+
+        assert_eq!(issue_cycles(&model, &program), vec![0, 5, 5]);
+    }
+
+    #[test]
+    fn a_same_register_zero_idiom_breaks_its_dependency() {
+        let model = rename_test_model();
+        let class = InstrSchedClass {
+            zero_idiom: true,
+            ..RENAME_ALU
+        };
+        let mut idiom = resource_test_instr(class);
+        idiom.uses = vec![("GPR".to_string(), 0)];
+        idiom.defs = vec![("GPR".to_string(), 0)];
+        let program: Vec<_> = (0..4).map(|_| idiom_clone(&idiom)).collect();
+
+        let result = timing(&model, &program, false);
+        assert!(result.ipc() > 3.0, "zero idiom ipc {}", result.ipc());
+    }
+
+    #[test]
+    fn a_different_register_zero_idiom_executes_normally() {
+        let model = rename_test_model();
+        let class = InstrSchedClass {
+            zero_idiom: true,
+            ..RENAME_ALU
+        };
+        let result = timing(&model, &move_chain(class), false);
+
+        assert!(result.ipc() <= 1.0, "xor chain ipc {}", result.ipc());
+    }
+
+    #[test]
+    fn probe_stream_throughput() {
+        for (width, wb, al) in [
+            (5u16, 16u16, 16u16),
+            (5, 32, 16),
+            (5, 32, 32),
+            (3, 16, 16),
+            (3, 32, 16),
+            (2, 16, 16),
+            (2, 32, 16),
+            (4, 32, 16),
+            (6, 32, 16),
+            (7, 32, 16),
+            (10, 32, 16),
+        ] {
+            let mut model = frontend_test_model(&["simple", "simple", "simple", "simple"], 4);
+            model.issue_width = 6;
+            {
+                let f = &mut model.frontend.as_mut().unwrap().fetch;
+                f.window_bytes = wb;
+                f.alignment = al;
+            }
+            print!("wb {wb} al {al} ");
+            let n = 400usize;
+            let program: Vec<_> = (0..n)
+                .map(|i| {
+                    let mut instr = resource_test_instr(InstrSchedClass::DEFAULT);
+                    instr.pc = (i as u64) * u64::from(width);
+                    instr.width_bytes = width;
+                    instr
+                })
+                .collect();
+            let cycles = issue_cycles(&model, &program);
+            let last = *cycles.last().unwrap() as f64;
+            println!(
+                "width {width}: cyc/instr {:.4} ideal {:.4}",
+                last / n as f64,
+                f64::from(width) / 16.0
+            );
+        }
+    }
+
+    fn idiom_clone(instruction: &ScoreboardInstr) -> ScoreboardInstr {
+        ScoreboardInstr {
+            text: instruction.text.clone(),
+            class: instruction.class,
+            defs: instruction.defs.clone(),
+            uses: instruction.uses.clone(),
+            branch: None,
+            pc: instruction.pc,
+            width_bytes: instruction.width_bytes,
+            mem: vec![],
+        }
     }
 }

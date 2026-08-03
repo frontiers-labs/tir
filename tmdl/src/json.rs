@@ -822,6 +822,12 @@ struct UnitBind {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "i64")]
     decode_cycles: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    eliminated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    zero_idiom: Option<bool>,
 }
 
 impl From<&ast::UnitBind> for UnitBind {
@@ -837,6 +843,8 @@ impl From<&ast::UnitBind> for UnitBind {
             decode_uops: binding.decode_uops,
             decoder: binding.decoder.clone(),
             decode_cycles: binding.decode_cycles,
+            eliminated: binding.eliminated,
+            zero_idiom: binding.zero_idiom,
         }
     }
 }
@@ -871,6 +879,12 @@ struct MachineOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "i64")]
     decode_cycles: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    eliminated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    zero_idiom: Option<bool>,
 }
 
 impl From<&ast::MachineOverride> for MachineOverride {
@@ -886,6 +900,8 @@ impl From<&ast::MachineOverride> for MachineOverride {
             decode_uops: override_.decode_uops,
             decoder: override_.decoder.clone(),
             decode_cycles: override_.decode_cycles,
+            eliminated: override_.eliminated,
+            zero_idiom: override_.zero_idiom,
         }
     }
 }

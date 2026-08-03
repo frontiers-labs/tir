@@ -12,6 +12,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         regions,
         attributes,
         roles,
+        implicit,
         operands,
         results,
         interfaces,
@@ -99,6 +100,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
 
     let attribute_verifier = make_attribute_verifier(&attributes);
     let roles_table = make_roles_table(&struct_name, &roles);
+    let implicit_table = make_implicit_table(implicit.as_ref());
 
     // Operand support in builder
     let mut operand_fields = vec![];
@@ -886,6 +888,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         impl #struct_name {
             #region_accessors
             #roles_table
+            #implicit_table
             #result_accessor
         }
 
@@ -994,6 +997,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
                     regions,
                     attributes,
                     #struct_name::attribute_roles(),
+                    #struct_name::implicit_regs(),
                 );
 
                 let instance = self.context.add_operation(instance);
@@ -1041,6 +1045,9 @@ struct Operation {
     regions: Vec<Region>,
     attributes: Vec<AttrSpec>,
     roles: Vec<RoleSpec>,
+    /// The verbatim `implicit: [...]` array of `tir::attributes::ImplicitReg`
+    /// literals, if the op declares one.
+    implicit: Option<Expr>,
     operands: Vec<ValueSpec>,
     results: Vec<ValueSpec>,
     interfaces: Vec<Path>,
@@ -1153,6 +1160,11 @@ impl Parse for Operation {
             })
             .unwrap_or_default();
 
+        let implicit = struct_.fields.iter().find_map(|f| match &f.member {
+            Member::Named(ident) if ident == "implicit" => Some(f.expr.clone()),
+            _ => None,
+        });
+
         let operands = struct_
             .fields
             .iter()
@@ -1240,6 +1252,7 @@ impl Parse for Operation {
             regions,
             attributes,
             roles,
+            implicit,
             operands,
             results,
             interfaces,
@@ -1416,6 +1429,21 @@ fn make_roles_table(_op_ident: &Ident, roles: &[RoleSpec]) -> proc_macro2::Token
         pub fn attribute_roles() -> &'static [(&'static str, tir::attributes::AttributeRole)] {
             const ROLES: [(&str, tir::attributes::AttributeRole); #len] = [ #(#pairs),* ];
             &ROLES
+        }
+    }
+}
+
+/// Always emit `implicit_regs()` (empty when the op declares none) so `build()`
+/// threads the table onto every `OpInstance` uniformly.
+fn make_implicit_table(implicit: Option<&Expr>) -> proc_macro2::TokenStream {
+    let body = match implicit {
+        Some(expr) => quote! { &#expr },
+        None => quote! { &[] },
+    };
+    quote! {
+        pub fn implicit_regs() -> &'static [tir::attributes::ImplicitReg] {
+            static IMPLICIT: &[tir::attributes::ImplicitReg] = #body;
+            IMPLICIT
         }
     }
 }

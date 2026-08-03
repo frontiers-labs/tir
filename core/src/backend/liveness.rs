@@ -15,7 +15,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use tir::backend::regalloc::RegClassId;
 use tir::{BlockId, Context};
 
-pub use crate::analysis::defuse::{OpRegs, RegRef, op_regs};
+pub use crate::analysis::defuse::{OpRegs, RegRef, execution_regs, op_regs};
 
 /// A physical register: its class handle and encoding index.
 pub type PhysReg = (RegClassId, u16);
@@ -340,6 +340,10 @@ mod tests {
         name: "R",
         file: "R",
         group_width: 1,
+        view: crate::backend::regalloc::RegisterView {
+            bit_offset: 0,
+            merge: false,
+        },
     };
 
     fn r() -> RegClassId {

@@ -4,5 +4,9 @@
 f:
     shl rax, 1
 
+# CHECK: Total Cycles:      101
+# CHECK: [1]    [2]    Instructions:
+# CHECK-NEXT: 1      1      shl rax, 1
 # CHECK: Resource pressure by instruction:
-# CHECK: 1.00{{.*}}shl rax, 1
+# CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
+# CHECK-NEXT: 1.00  -     -     -     shl rax, 1

@@ -44,6 +44,9 @@ pub struct RegClassInfo {
     /// 1 for ordinary classes; an RVV LMUL>1 group class covers 2/4/8 (e.g.
     /// `VRM2` index 8 is the architectural pair v8..v9).
     pub group_width: u16,
+    /// Where this class's architectural view sits in its storage element and
+    /// whether a write merges into it (see [`RegisterView`]).
+    pub view: RegisterView,
 }
 
 /// A handle to a register class: a pointer to its `'static` [`RegClassInfo`].
@@ -1899,6 +1902,10 @@ mod tests {
                 name: "R",
                 file: "R",
                 group_width: 1,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
             }],
         }
     }
@@ -2292,11 +2299,19 @@ mod tests {
             name: "GPR",
             file: "GPR",
             group_width: 1,
+            view: RegisterView {
+                bit_offset: 0,
+                merge: false,
+            },
         },
         RegClassInfo {
             name: "GPRsp",
             file: "GPR",
             group_width: 1,
+            view: RegisterView {
+                bit_offset: 0,
+                merge: false,
+            },
         },
     ];
 
@@ -2345,11 +2360,19 @@ mod tests {
                 name: "A",
                 file: "A",
                 group_width: 1,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
             },
             RegClassInfo {
                 name: "B",
                 file: "B",
                 group_width: 1,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
             },
         ];
         let info = RegisterInfo { classes: CLASSES };
@@ -2380,11 +2403,19 @@ mod tests {
                 name: "VR",
                 file: "VR",
                 group_width: 1,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
             },
             RegClassInfo {
                 name: "VRM2",
                 file: "VR",
                 group_width: 2,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
             },
         ];
         let info = RegisterInfo { classes: CLASSES };
@@ -2421,11 +2452,19 @@ mod tests {
                 name: "GPR",
                 file: "GPR",
                 group_width: 1,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
             },
             RegClassInfo {
                 name: "GPRsp",
                 file: "GPR",
                 group_width: 1,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
             },
         ];
         let info = RegisterInfo { classes: CLASSES };

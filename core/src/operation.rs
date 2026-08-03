@@ -316,6 +316,10 @@ pub struct OpInstance {
     /// chain over machine-IR register operands (which live in attributes, not
     /// `operands`). Empty for ops without roles (e.g. builtin SSA ops).
     pub attribute_roles: &'static [(&'static str, crate::attributes::AttributeRole)],
+    /// Fixed registers this opcode reads or writes outside its operands,
+    /// threaded from the op's generated `implicit_regs()` table. Empty for ops
+    /// whose behavior names no register path.
+    pub implicit_regs: &'static [crate::attributes::ImplicitReg],
 }
 
 impl OpInstance {
@@ -326,6 +330,7 @@ impl OpInstance {
         regions: Vec<RegionId>,
         attributes: Vec<crate::attributes::NamedAttribute>,
         attribute_roles: &'static [(&'static str, crate::attributes::AttributeRole)],
+        implicit_regs: &'static [crate::attributes::ImplicitReg],
     ) -> Self {
         Self {
             id: OpId::invalid(),
@@ -337,10 +342,12 @@ impl OpInstance {
             regions,
             attributes,
             attribute_roles,
+            implicit_regs,
         }
     }
 
     /// Constructs an operation selected from textual input at a parser boundary.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_dynamic(
         identity: (&'static str, &'static str),
         context: ContextRef,
@@ -349,6 +356,7 @@ impl OpInstance {
         regions: Vec<RegionId>,
         attributes: Vec<crate::attributes::NamedAttribute>,
         attribute_roles: &'static [(&'static str, crate::attributes::AttributeRole)],
+        implicit_regs: &'static [crate::attributes::ImplicitReg],
     ) -> Self {
         let (dialect, name) = identity;
         Self {
@@ -361,6 +369,7 @@ impl OpInstance {
             regions,
             attributes,
             attribute_roles,
+            implicit_regs,
         }
     }
 
