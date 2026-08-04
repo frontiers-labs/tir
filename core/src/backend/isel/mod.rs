@@ -456,6 +456,7 @@ pub struct BranchEmitters {
 /// assumption scope (the dominating-edge facts).
 struct FunctionSelection {
     egraph: SemEGraph,
+    pointer_width: Option<u32>,
     /// Every op whose (canonical) root is the class, across all blocks.
     ops_by_root: HashMap<Id, Vec<OpId>>,
     /// The canonical e-class of every lowered op's root (total over all ops).
@@ -1563,6 +1564,7 @@ impl InstructionSelectPass {
             .collect();
         FunctionSelection {
             egraph,
+            pointer_width,
             ops_by_root,
             op_root,
             class_values,
@@ -2209,7 +2211,12 @@ impl InstructionSelectPass {
             ) {
                 continue;
             }
-            for m in compiled.search_roots(&fs.egraph, context, guard_classes.iter().copied()) {
+            for m in compiled.search_roots(
+                &fs.egraph,
+                context,
+                guard_classes.iter().copied(),
+                fs.pointer_width,
+            ) {
                 hits.entry(fs.egraph.find(m.root))
                     .or_default()
                     .push((pattern_index, m));
@@ -2634,7 +2641,7 @@ fn value_match_allowed(
     pattern_node: Id,
     class: Id,
 ) -> bool {
-    if !compiled.boundary_ok(&fs.egraph, context, pattern_node, class) {
+    if !compiled.boundary_ok(&fs.egraph, context, pattern_node, class, fs.pointer_width) {
         return false;
     }
     if pattern_node == pattern_root || compiled.node_meta[pattern_node.index()].duplicable {

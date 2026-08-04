@@ -10,8 +10,8 @@ use tir::{
 use tir_symbolic::egraph::{EMatch, Id, Pattern, PatternNode, Substitution, Var};
 
 use super::node::{
-    SemEGraph, SemNode, class_int_binding, class_semantic_type, low_extract_source,
-    low_extract_width,
+    SemEGraph, SemNode, class_int_binding, class_register_type, class_semantic_type,
+    low_extract_source, low_extract_width,
 };
 use super::{ImmRange, RegisterRequirement};
 
@@ -128,10 +128,11 @@ impl CompiledIselPattern {
         ctx: &Context,
         pattern_node: Id,
         class: Id,
+        pointer_width: Option<u32>,
     ) -> bool {
         let meta = &self.node_meta[pattern_node.index()];
         if let Some(required) = meta.register
-            && let Some(actual) = class_semantic_type(ctx, egraph, class)
+            && let Some(actual) = class_register_type(ctx, egraph, class, pointer_width)
             && !required.accepts(&actual)
         {
             return false;
@@ -162,7 +163,7 @@ impl CompiledIselPattern {
         ctx: &Context,
     ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
         self.search_with_legality(egraph, ctx, &|node, class| {
-            self.boundary_ok(egraph, ctx, node, class)
+            self.boundary_ok(egraph, ctx, node, class, None)
         })
     }
 
@@ -204,9 +205,10 @@ impl CompiledIselPattern {
         egraph: &SemEGraph,
         ctx: &Context,
         roots: impl IntoIterator<Item = Id>,
+        pointer_width: Option<u32>,
     ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
         self.search_roots_with_legality(egraph, ctx, roots, &|node, class| {
-            self.boundary_ok(egraph, ctx, node, class)
+            self.boundary_ok(egraph, ctx, node, class, pointer_width)
         })
     }
 

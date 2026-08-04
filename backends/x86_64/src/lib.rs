@@ -1019,7 +1019,7 @@ mod isa {
             frame: &tir::backend::liveness::PhysReg,
             offset: i64,
         ) -> Result<Vec<Box<dyn Operation>>, tir::PassError> {
-            if class.name() != "GPR" {
+            if !matches!(class.name(), "GPR" | "GPRaddrIndex") {
                 return Err(tir::PassError::InvalidRuleSet(format!(
                     "x86-64 stack allocation addresses for register class {} are not supported",
                     class.name()

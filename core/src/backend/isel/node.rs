@@ -328,3 +328,29 @@ pub(crate) fn class_semantic_type(ctx: &Context, egraph: &SemEGraph, class: Id) 
         .iter()
         .find_map(|node| node.ty.and_then(|ty| semantic_type(ctx, ty)))
 }
+
+/// The semantic type a register must hold for an e-class. Pointers preserve
+/// their IR type in the graph, but use the target data layout's pointer width at
+/// an instruction's register boundary.
+pub(crate) fn class_register_type(
+    ctx: &Context,
+    egraph: &SemEGraph,
+    class: Id,
+    pointer_width: Option<u32>,
+) -> Option<SemType> {
+    class_semantic_type(ctx, egraph, class).or_else(|| {
+        let width = pointer_width?;
+        egraph
+            .nodes(class)
+            .iter()
+            .any(|node| {
+                node.ty.is_some_and(|ty| {
+                    let data = ctx.get_type_data(ty);
+                    (data.as_ref() as &dyn std::any::Any)
+                        .downcast_ref::<tir::ptr::PtrType>()
+                        .is_some()
+                })
+            })
+            .then(|| SemType::bits(width))
+    })
+}
