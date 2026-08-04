@@ -59,7 +59,24 @@ impl<'a> SemDagBuilder<'a> {
         payload: Option<SymPayload<ValueId>>,
         ty: Option<TypeId>,
     ) -> Id {
+        let ty = self.selection_type(ty);
         self.egraph.add(template_node(kind, payload, ty))
+    }
+
+    fn selection_type(&self, ty: Option<TypeId>) -> Option<TypeId> {
+        ty.map(|ty| {
+            let data = self.context.get_type_data(ty);
+            if (data.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<tir::ptr::PtrType>()
+                .is_some()
+            {
+                self.pointer_width
+                    .map(|width| IntegerType::new(self.context, width))
+                    .unwrap_or(ty)
+            } else {
+                ty
+            }
+        })
     }
 
     fn next_opaque_serial(&mut self) -> u32 {
@@ -127,6 +144,7 @@ impl<'a> SemDagBuilder<'a> {
         if kind.is_commutative() {
             children.sort();
         }
+        let ty = self.selection_type(ty);
         self.egraph.add(SemNode {
             kind,
             payload,
