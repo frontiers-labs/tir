@@ -120,8 +120,11 @@ fn build_isa_reference(root: &std::path::Path) -> anyhow::Result<()> {
             false,
             &[
                 "backends/arm64/defs/main.tmdl",
+                "backends/arm64/defs/versions.tmdl",
+                "backends/arm64/defs/float.tmdl",
                 "backends/arm64/defs/data_processing.tmdl",
                 "backends/arm64/defs/loads_stores.tmdl",
+                "backends/arm64/defs/atomics.tmdl",
                 "backends/arm64/defs/branches.tmdl",
                 "backends/arm64/defs/perf.tmdl",
             ],

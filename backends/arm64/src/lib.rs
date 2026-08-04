@@ -446,10 +446,10 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
         src: u32,
     ) -> Box<dyn Operation> {
         match class.name() {
-            // GPR32 aliases GPR's physical file (same register numbering), and any
-            // value only ever written through its 32-bit view already has zeroed
-            // upper bits, so a plain 64-bit copy carries it correctly.
-            "GPR" | "GPRsp" | "GPR32" => mv(
+            // The 32-bit classes alias GPR's physical file (same register numbering),
+            // and any value only ever written through its 32-bit view already has
+            // zeroed upper bits, so a plain 64-bit copy carries it correctly.
+            "GPR" | "GPRsp" | "GPR32" | "GPR32sp" => mv(
                 context,
                 virt(dst, RegClass::GPR.id()),
                 virt(src, RegClass::GPR.id()),
