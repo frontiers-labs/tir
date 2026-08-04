@@ -1347,7 +1347,6 @@ fn emit_instructions<'a>(
                         | AsmAction::Number(_)
                         | AsmAction::Operand(_)
                         | AsmAction::Keyword(_)
-                        | AsmAction::Number(_)
                 )
             });
 
@@ -1559,15 +1558,6 @@ fn emit_instructions<'a>(
                         parse_steps.push(quote! {
                             match parser.bump() {
                                 Some(tir::backend::Token::Ident(s)) if *s == #kw_lit => {}
-                                _ => return Err(()),
-                            }
-                        });
-                    }
-                    AsmAction::Number(number) => {
-                        let number_lit = proc_macro2::Literal::string(&number);
-                        parse_steps.push(quote! {
-                            match parser.bump() {
-                                Some(tir::backend::Token::DecNumber(n)) if *n == #number_lit => {}
                                 _ => return Err(()),
                             }
                         });

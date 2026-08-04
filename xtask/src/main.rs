@@ -140,6 +140,8 @@ fn build_isa_reference(root: &std::path::Path) -> anyhow::Result<()> {
                 "backends/x86_64/defs/conditional.tmdl",
                 "backends/x86_64/defs/memory_ext.tmdl",
                 "backends/x86_64/defs/float.tmdl",
+                "backends/x86_64/defs/perf.tmdl",
+                "backends/x86_64/defs/cpu/intel/tiger_lake.tmdl",
             ],
         ),
         (

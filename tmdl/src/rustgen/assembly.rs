@@ -15,7 +15,6 @@ enum AsmAction {
     /// Literal identifier in the template (e.g. `eq` in `cset {rd}, eq` or
     /// `sp` in `c.addi4spn {rd}, sp, {imm}`); the parser requires it verbatim.
     Keyword(String),
-    Number(String),
 }
 enum AsmPrintPart {
     Text(String),
