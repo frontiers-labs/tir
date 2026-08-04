@@ -1,0 +1,19 @@
+//! AArch64 application-profile architecture revisions.
+
+isa ARMv8_1A64 requires ARMv8A64 {}
+isa ARMv8_2A64 requires ARMv8_1A64 {}
+isa ARMv8_3A64 requires ARMv8_2A64 {}
+isa ARMv8_4A64 requires ARMv8_3A64 {}
+isa ARMv8_5A64 requires ARMv8_4A64 {}
+isa ARMv8_6A64 requires ARMv8_5A64 {}
+isa ARMv8_7A64 requires ARMv8_6A64 {}
+isa ARMv8_8A64 requires ARMv8_7A64 {}
+isa ARMv8_9A64 requires ARMv8_8A64 {}
+
+isa ARMv9A64 requires ARMv8_5A64 {}
+isa ARMv9_1A64 requires [ARMv9A64, ARMv8_6A64] {}
+isa ARMv9_2A64 requires [ARMv9_1A64, ARMv8_7A64] {}
+isa ARMv9_3A64 requires [ARMv9_2A64, ARMv8_8A64] {}
+isa ARMv9_4A64 requires [ARMv9_3A64, ARMv8_9A64] {}
+isa ARMv9_5A64 requires ARMv9_4A64 {}
+isa ARMv9_6A64 requires ARMv9_5A64 {}

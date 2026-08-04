@@ -58,7 +58,7 @@ module {
 // CHECK: arm64.store_word {rt = %virt1:GPR, rn = %virt3:GPRsp, imm = 0}
 // CHECK: arm64.load_word_unsigned {rt = %virt4:GPR, rn = %virt2:GPRsp, imm = 0}
 // CHECK: arm64.load_word_unsigned {rt = %virt5:GPR, rn = %virt3:GPRsp, imm = 0}
-// CHECK: arm64.add {rd = %virt6:GPR, rn = %virt4:GPR, rm = %virt5:GPR}
+// CHECK: arm64.add_w {rd = %virt6:GPR32, rn = %virt4:GPR32, rm = %virt5:GPR32}
 // CHECK: asm.vret
 
 // CHECK: asm.symbol {name = "word_reg_offset"

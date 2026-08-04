@@ -52,6 +52,14 @@ register_class GPRsp for [ARMv8A64] : GPR {
     }
 }
 
+register_class GPR32sp for [ARMv8A64] : GPR32 {
+    file = GPR;
+
+    registers {
+        wsp => { index = 31 },
+    }
+}
+
 register_class PSTATE for [ARMv8A64] {
     param ENCODING_LEN: Integer = 2;
     param WIDTH: Integer = self.FLAG_WIDTH;
@@ -115,70 +123,82 @@ abi AAPCS64("aapcs64") for [ARMv8A64] {
 
 // FP data-processing (2 source), double precision. OPCODE selects the operation
 // (fmul 0000, fadd 0010, fsub 0011, fdiv 0001); ptype = 01 (binary64).
-template FPArith64 for [ARMv8A64] {
-    // No dedicated FP pipe in the model yet; account it on the ALU (timing of FP
-    // is not yet calibrated — functional support first).
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param OPCODE: bits<4>;
+macro tmpl_fp_arith {
+    ( $name:ident, $cls:ident, ptype = $ptype:literal ) => {
+        template $name for [FP] {
+            schedule { units = [WriteIALU]; }
+            param MNEMONIC: String;
+            param OPCODE: bits<4>;
 
-    operands {
-        fd: FPR64,
-        fa: FPR64,
-        fb: FPR64,
-    }
+            operands {
+                fd: $cls,
+                fa: $cls,
+                fb: $cls,
+            }
 
-    encoding {
-        0..4 => fd,
-        5..9 => fa,
-        10..11 => 0b10,
-        12..15 => OPCODE,
-        16..20 => fb,
-        21 => 0b1,
-        22..23 => 0b01,
-        24..28 => 0b11110,
-        29 => 0b0,
-        30 => 0b0,
-        31 => 0b0,
-    }
+            encoding {
+                0..4 => fd,
+                5..9 => fa,
+                10..11 => 0b10,
+                12..15 => OPCODE,
+                16..20 => fb,
+                21 => 0b1,
+                22..23 => $ptype,
+                24..28 => 0b11110,
+                29 => 0b0,
+                30 => 0b0,
+                31 => 0b0,
+            }
 
-    asm {
-        "{self.MNEMONIC} {fd}, {fa}, {fb}"
-    }
+            asm {
+                "{self.MNEMONIC} {fd}, {fa}, {fb}"
+            }
+        }
+    };
 }
+
+tmpl_fp_arith!(FPArith64, FPR64, ptype = 0b01)
+tmpl_fp_arith!(FPArith32, FPR32, ptype = 0b00)
 
 // Data Processing -- Register (add/sub, shifted register)
-template AddSubReg for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param OP: bits<1>;
-    param SETFLAGS: bits<1> = 0b0;
-    param SHIFT: bits<2> = 0b00;
+macro tmpl_addsub_reg {
+    ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIALU]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param OP: bits<1>;
+            param SETFLAGS: bits<1> = 0b0;
+            param SHIFT: bits<2> = 0b00;
 
-    operands {
-        rd: GPR,
-        rn: GPR,
-        rm: GPR,
-    }
+            operands {
+                rd: $cls,
+                rn: $cls,
+                rm: $cls,
+            }
 
-    encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..15 => 0b000000,
-        16..20 => rm,
-        21 => 0b0,
-        22..23 => SHIFT,
-        24..28 => 0b01011,
-        29 => SETFLAGS,
-        30 => OP,
-        31 => SF,
-    }
+            encoding {
+                0..4 => rd,
+                5..9 => rn,
+                10..15 => 0b000000,
+                16..20 => rm,
+                21 => 0b0,
+                22..23 => SHIFT,
+                24..28 => 0b01011,
+                29 => SETFLAGS,
+                30 => OP,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rd}, {rn}, {rm}"
-    }
+            asm {
+                "{self.MNEMONIC} {rd}, {rn}, {rm}"
+            }
+        }
+    };
 }
+
+tmpl_addsub_reg!(AddSubReg, GPR, sf = 0b1)
+tmpl_addsub_reg!(AddSubRegWord, GPR32, sf = 0b0)
 
 macro tmpl_cmp_reg {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
@@ -219,159 +239,193 @@ tmpl_cmp_reg!(CmpRegTemplateWord, GPR32, sf = 0b0)
 
 // Flag-setting compare with immediate: `subs`/`adds` with rd = xzr. The base
 // register can be the stack pointer, as in add/sub (immediate).
-template CmpImmTemplate for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param OP: bits<1>;
-    param SH: bits<1> = 0b0;
+macro tmpl_cmp_imm {
+    ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIALU]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param OP: bits<1>;
+            param SH: bits<1> = 0b0;
 
-    operands {
-        rn: GPRsp,
-        imm: bits<12>,
-    }
+            operands {
+                rn: $cls,
+                imm: bits<12>,
+            }
 
-    encoding {
-        0..4 => 0b11111,
-        5..9 => rn,
-        10..21 => imm,
-        22 => SH,
-        23..28 => 0b100010,
-        29 => 0b1,
-        30 => OP,
-        31 => SF,
-    }
+            encoding {
+                0..4 => 0b11111,
+                5..9 => rn,
+                10..21 => imm,
+                22 => SH,
+                23..28 => 0b100010,
+                29 => 0b1,
+                30 => OP,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rn}, {imm}"
-    }
+            asm {
+                "{self.MNEMONIC} {rn}, {imm}"
+            }
+        }
+    };
 }
+
+tmpl_cmp_imm!(CmpImmTemplate, GPRsp, sf = 0b1)
+tmpl_cmp_imm!(CmpImmTemplateWord, GPR32sp, sf = 0b0)
 
 // Flag-setting logical compare: `ands` with rd = xzr.
-template TstRegTemplate for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param SHIFT: bits<2> = 0b00;
+macro tmpl_tst_reg {
+    ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIALU]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param SHIFT: bits<2> = 0b00;
 
-    operands {
-        rn: GPR,
-        rm: GPR,
-    }
+            operands {
+                rn: $cls,
+                rm: $cls,
+            }
 
-    encoding {
-        0..4 => 0b11111,
-        5..9 => rn,
-        10..15 => 0b000000,
-        16..20 => rm,
-        21 => 0b0,
-        22..23 => SHIFT,
-        24..28 => 0b01010,
-        29..30 => 0b11,
-        31 => SF,
-    }
+            encoding {
+                0..4 => 0b11111,
+                5..9 => rn,
+                10..15 => 0b000000,
+                16..20 => rm,
+                21 => 0b0,
+                22..23 => SHIFT,
+                24..28 => 0b01010,
+                29..30 => 0b11,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rn}, {rm}"
-    }
+            asm {
+                "{self.MNEMONIC} {rn}, {rm}"
+            }
+        }
+    };
 }
+
+tmpl_tst_reg!(TstRegTemplate, GPR, sf = 0b1)
+tmpl_tst_reg!(TstRegTemplateWord, GPR32, sf = 0b0)
 
 // Data Processing -- Immediate (add/sub immediate)
-template AddSubImm for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param OP: bits<1>;
-    param SETFLAGS: bits<1> = 0b0;
-    param SH: bits<1> = 0b0;
+macro tmpl_addsub_imm {
+    ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIALU]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param OP: bits<1>;
+            param SETFLAGS: bits<1> = 0b0;
+            param SH: bits<1> = 0b0;
 
-    // add/sub (immediate) can read and write the stack pointer.
-    operands {
-        rd: GPRsp,
-        rn: GPRsp,
-        imm: bits<12>,
-    }
+            operands {
+                rd: $cls,
+                rn: $cls,
+                imm: bits<12>,
+            }
 
-    encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..21 => imm,
-        22 => SH,
-        23..28 => 0b100010,
-        29 => SETFLAGS,
-        30 => OP,
-        31 => SF,
-    }
+            encoding {
+                0..4 => rd,
+                5..9 => rn,
+                10..21 => imm,
+                22 => SH,
+                23..28 => 0b100010,
+                29 => SETFLAGS,
+                30 => OP,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rd}, {rn}, {imm}"
-    }
+            asm {
+                "{self.MNEMONIC} {rd}, {rn}, {imm}"
+            }
+        }
+    };
 }
+
+tmpl_addsub_imm!(AddSubImm, GPRsp, sf = 0b1)
+tmpl_addsub_imm!(AddSubImmWord, GPR32sp, sf = 0b0)
 
 // Flag-setting add/sub immediate keeps SP as a valid source, but encoding 31
 // in the destination names XZR rather than SP.
-template AddSubImmFlags for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param OP: bits<1>;
-    param SETFLAGS: bits<1> = 0b1;
-    param SH: bits<1> = 0b0;
+macro tmpl_addsub_imm_flags {
+    ( $name:ident, $rd_cls:ident, $rn_cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIALU]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param OP: bits<1>;
+            param SETFLAGS: bits<1> = 0b1;
+            param SH: bits<1> = 0b0;
 
-    operands {
-        rd: GPR,
-        rn: GPRsp,
-        imm: bits<12>,
-    }
+            operands {
+                rd: $rd_cls,
+                rn: $rn_cls,
+                imm: bits<12>,
+            }
 
-    encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..21 => imm,
-        22 => SH,
-        23..28 => 0b100010,
-        29 => SETFLAGS,
-        30 => OP,
-        31 => SF,
-    }
+            encoding {
+                0..4 => rd,
+                5..9 => rn,
+                10..21 => imm,
+                22 => SH,
+                23..28 => 0b100010,
+                29 => SETFLAGS,
+                30 => OP,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rd}, {rn}, {imm}"
-    }
+            asm {
+                "{self.MNEMONIC} {rd}, {rn}, {imm}"
+            }
+        }
+    };
 }
+
+tmpl_addsub_imm_flags!(AddSubImmFlags, GPR, GPRsp, sf = 0b1)
+tmpl_addsub_imm_flags!(AddSubImmFlagsWord, GPR32, GPR32sp, sf = 0b0)
 
 // Data Processing -- Register (logical shifted register). N inverts the
 // shifted operand (`bic`/`orn`/`eon`).
-template LogicalReg for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param OPC: bits<2>;
-    param N: bits<1> = 0b0;
-    param SHIFT: bits<2> = 0b00;
+macro tmpl_logical_reg {
+    ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIALU]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param OPC: bits<2>;
+            param N: bits<1> = 0b0;
+            param SHIFT: bits<2> = 0b00;
 
-    operands {
-        rd: GPR,
-        rn: GPR,
-        rm: GPR,
-    }
+            operands {
+                rd: $cls,
+                rn: $cls,
+                rm: $cls,
+            }
 
-    encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..15 => 0b000000,
-        16..20 => rm,
-        21 => N,
-        22..23 => SHIFT,
-        24..28 => 0b01010,
-        29..30 => OPC,
-        31 => SF,
-    }
+            encoding {
+                0..4 => rd,
+                5..9 => rn,
+                10..15 => 0b000000,
+                16..20 => rm,
+                21 => N,
+                22..23 => SHIFT,
+                24..28 => 0b01010,
+                29..30 => OPC,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rd}, {rn}, {rm}"
-    }
+            asm {
+                "{self.MNEMONIC} {rd}, {rn}, {rm}"
+            }
+        }
+    };
 }
+
+tmpl_logical_reg!(LogicalReg, GPR, sf = 0b1)
+tmpl_logical_reg!(LogicalRegWord, GPR32, sf = 0b0)
 
 // Data Processing -- 2 source (register shifts)
 macro tmpl_shift_reg {
@@ -489,34 +543,41 @@ tmpl_loadstore_immh!(LoadStoreImmUnsignedWordH, GPR32)
 
 // As LoadStoreImmUnsigned, but the byte-offset operand is stored scaled down
 // by the access size: the field holds imm[13:2], the low bits must be zero.
-template LoadStoreImmUnsignedW for [ARMv8A64] {
-    schedule { units = [WriteLoad]; }
-    param MNEMONIC: String;
-    param SIZE: bits<2>;
-    param OPC: bits<2>;
-    param V: bits<1> = 0b0;
+macro tmpl_loadstore_scaled_word {
+    ( $name:ident, $cls:ident ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteLoad]; }
+            param MNEMONIC: String;
+            param SIZE: bits<2>;
+            param OPC: bits<2>;
+            param V: bits<1> = 0b0;
 
-    operands {
-        rt: GPR,
-        rn: GPRsp,
-        imm: bits<14>,
-    }
+            operands {
+                rt: $cls,
+                rn: GPRsp,
+                imm: bits<14>,
+            }
 
-    encoding {
-        0..4 => rt,
-        5..9 => rn,
-        10..21 => imm[2..13],
-        22..23 => OPC,
-        24..25 => 0b01,
-        26 => V,
-        27..29 => 0b111,
-        30..31 => SIZE,
-    }
+            encoding {
+                0..4 => rt,
+                5..9 => rn,
+                10..21 => imm[2..13],
+                22..23 => OPC,
+                24..25 => 0b01,
+                26 => V,
+                27..29 => 0b111,
+                30..31 => SIZE,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rt}, [{rn}, {imm}]"
-    }
+            asm {
+                "{self.MNEMONIC} {rt}, [{rn}, {imm}]"
+            }
+        }
+    };
 }
+
+tmpl_loadstore_scaled_word!(LoadStoreImmUnsignedW, GPR)
+tmpl_loadstore_scaled_word!(LoadStoreImmUnsignedWord32, GPR32)
 
 // As LoadStoreImmUnsigned, but the byte-offset operand is stored scaled down
 // by the access size: the field holds imm[14:3], the low bits must be zero.
@@ -549,32 +610,39 @@ template LoadStoreImmUnsignedD for [ARMv8A64] {
     }
 }
 
-template LoadStoreFloatImmUnsignedD for [ARMv8A64] {
-    schedule { units = [WriteLoad]; }
-    param MNEMONIC: String;
-    param OPC: bits<2>;
+macro tmpl_loadstore_float_scaled {
+    ( $name:ident, $cls:ident, $imm_width:literal, $lo:literal, $hi:literal, size = $size:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteLoad]; }
+            param MNEMONIC: String;
+            param OPC: bits<2>;
 
-    operands {
-        ft: FPR64,
-        rn: GPRsp,
-        imm: bits<15>,
-    }
+            operands {
+                ft: $cls,
+                rn: GPRsp,
+                imm: bits<$imm_width>,
+            }
 
-    encoding {
-        0..4 => ft,
-        5..9 => rn,
-        10..21 => imm[3..14],
-        22..23 => OPC,
-        24..25 => 0b01,
-        26 => 0b1,
-        27..29 => 0b111,
-        30..31 => 0b11,
-    }
+            encoding {
+                0..4 => ft,
+                5..9 => rn,
+                10..21 => imm[$lo..$hi],
+                22..23 => OPC,
+                24..25 => 0b01,
+                26 => 0b1,
+                27..29 => 0b111,
+                30..31 => $size,
+            }
 
-    asm {
-        "{self.MNEMONIC} {ft}, [{rn}, {imm}]"
-    }
+            asm {
+                "{self.MNEMONIC} {ft}, [{rn}, {imm}]"
+            }
+        }
+    };
 }
+
+tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedD, FPR64, 15, 3, 14, size = 0b11)
+tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedS, FPR32, 14, 2, 13, size = 0b10)
 
 template BranchImm for [ARMv8A64] {
     schedule { units = [WriteIALU]; }
@@ -658,68 +726,82 @@ template CondBranchImm for [ARMv8A64] {
 }
 
 // Data Processing -- 3 source (multiply-add family)
-template DataProc3Src for [ARMv8A64] {
-    schedule { units = [WriteIMul]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param OP31: bits<3> = 0b000;
-    param O0: bits<1>;
+macro tmpl_data_proc_3src {
+    ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIMul]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param OP31: bits<3> = 0b000;
+            param O0: bits<1>;
 
-    operands {
-        rd: GPR,
-        rn: GPR,
-        rm: GPR,
-        ra: GPR,
-    }
+            operands {
+                rd: $cls,
+                rn: $cls,
+                rm: $cls,
+                ra: $cls,
+            }
 
-    encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..14 => ra,
-        15 => O0,
-        16..20 => rm,
-        21..23 => OP31,
-        24..28 => 0b11011,
-        29..30 => 0b00,
-        31 => SF,
-    }
+            encoding {
+                0..4 => rd,
+                5..9 => rn,
+                10..14 => ra,
+                15 => O0,
+                16..20 => rm,
+                21..23 => OP31,
+                24..28 => 0b11011,
+                29..30 => 0b00,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rd}, {rn}, {rm}, {ra}"
-    }
+            asm {
+                "{self.MNEMONIC} {rd}, {rn}, {rm}, {ra}"
+            }
+        }
+    };
 }
+
+tmpl_data_proc_3src!(DataProc3Src, GPR, sf = 0b1)
+tmpl_data_proc_3src!(DataProc3SrcWord, GPR32, sf = 0b0)
 
 // As DataProc3Src, but the addend register is hardwired to xzr (the `mul`,
 // `mneg`, `smulh` forms).
-template DataProc3SrcZr for [ARMv8A64] {
-    schedule { units = [WriteIMul]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param OP31: bits<3> = 0b000;
-    param O0: bits<1>;
+macro tmpl_data_proc_3src_zr {
+    ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIMul]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param OP31: bits<3> = 0b000;
+            param O0: bits<1>;
 
-    operands {
-        rd: GPR,
-        rn: GPR,
-        rm: GPR,
-    }
+            operands {
+                rd: $cls,
+                rn: $cls,
+                rm: $cls,
+            }
 
-    encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..14 => 0b11111,
-        15 => O0,
-        16..20 => rm,
-        21..23 => OP31,
-        24..28 => 0b11011,
-        29..30 => 0b00,
-        31 => SF,
-    }
+            encoding {
+                0..4 => rd,
+                5..9 => rn,
+                10..14 => 0b11111,
+                15 => O0,
+                16..20 => rm,
+                21..23 => OP31,
+                24..28 => 0b11011,
+                29..30 => 0b00,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rd}, {rn}, {rm}"
-    }
+            asm {
+                "{self.MNEMONIC} {rd}, {rn}, {rm}"
+            }
+        }
+    };
 }
+
+tmpl_data_proc_3src_zr!(DataProc3SrcZr, GPR, sf = 0b1)
+tmpl_data_proc_3src_zr!(DataProc3SrcZrWord, GPR32, sf = 0b0)
 
 // Bitfield instructions with fixed immr/imms (`lsr`/`asr` immediate and the
 // sign-extend aliases of SBFM/UBFM). The x-form has N = 1.
@@ -938,29 +1020,36 @@ template CondSet for [ARMv8A64] {
 
 // Compare-and-branch on zero (`cbz`/`cbnz`). As with the other branches, the
 // immediate holds the pc-relative word offset (byte delta >> 2).
-template CompareBranch for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
-    param MNEMONIC: String;
-    param SF: bits<1> = 0b1;
-    param OP: bits<1>;
+macro tmpl_compare_branch {
+    ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteIALU]; }
+            param MNEMONIC: String;
+            param SF: bits<1> = $sf;
+            param OP: bits<1>;
 
-    operands {
-        rt: GPR,
-        imm: bits<19>,
-    }
+            operands {
+                rt: $cls,
+                imm: bits<19>,
+            }
 
-    encoding {
-        0..4 => rt,
-        5..23 => imm,
-        24 => OP,
-        25..30 => 0b011010,
-        31 => SF,
-    }
+            encoding {
+                0..4 => rt,
+                5..23 => imm,
+                24 => OP,
+                25..30 => 0b011010,
+                31 => SF,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rt}, {imm}"
-    }
+            asm {
+                "{self.MNEMONIC} {rt}, {imm}"
+            }
+        }
+    };
 }
+
+tmpl_compare_branch!(CompareBranch, GPR, sf = 0b1)
+tmpl_compare_branch!(CompareBranchWord, GPR32, sf = 0b0)
 
 // Test-bit-and-branch (`tbz`/`tbnz`). The 6-bit bit number is stored split as
 // b5:b40; the immediate holds the pc-relative word offset.
@@ -989,37 +1078,69 @@ template TestBitBranch for [ARMv8A64] {
     }
 }
 
-// Loads/Stores -- unscaled 9-bit signed byte offset (`ldur`/`stur` family).
-template LoadStoreUnscaled for [ARMv8A64] {
-    schedule { units = [WriteLoad]; }
+template TestBitBranchWord for [ARMv8A64] {
+    schedule { units = [WriteIALU]; }
     param MNEMONIC: String;
-    param SIZE: bits<2>;
-    param OPC: bits<2>;
-    param V: bits<1> = 0b0;
+    param OP: bits<1>;
 
     operands {
-        rt: GPR,
-        rn: GPRsp,
-        imm: bits<9>,
+        rt: GPR32,
+        bit: bits<5>,
+        imm: bits<14>,
     }
 
     encoding {
         0..4 => rt,
-        5..9 => rn,
-        10..11 => 0b00,
-        12..20 => imm,
-        21 => 0b0,
-        22..23 => OPC,
-        24..25 => 0b00,
-        26 => V,
-        27..29 => 0b111,
-        30..31 => SIZE,
+        5..18 => imm,
+        19..23 => bit,
+        24 => OP,
+        25..30 => 0b011011,
+        31 => 0b0,
     }
 
     asm {
-        "{self.MNEMONIC} {rt}, [{rn}, {imm}]"
+        "{self.MNEMONIC} {rt}, {bit}, {imm}"
     }
 }
+
+// Loads/Stores -- unscaled 9-bit signed byte offset (`ldur`/`stur` family).
+macro tmpl_loadstore_unscaled {
+    ( $name:ident, $cls:ident ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteLoad]; }
+            param MNEMONIC: String;
+            param SIZE: bits<2>;
+            param OPC: bits<2>;
+            param V: bits<1> = 0b0;
+
+            operands {
+                rt: $cls,
+                rn: GPRsp,
+                imm: bits<9>,
+            }
+
+            encoding {
+                0..4 => rt,
+                5..9 => rn,
+                10..11 => 0b00,
+                12..20 => imm,
+                21 => 0b0,
+                22..23 => OPC,
+                24..25 => 0b00,
+                26 => V,
+                27..29 => 0b111,
+                30..31 => SIZE,
+            }
+
+            asm {
+                "{self.MNEMONIC} {rt}, [{rn}, {imm}]"
+            }
+        }
+    };
+}
+
+tmpl_loadstore_unscaled!(LoadStoreUnscaled, GPR)
+tmpl_loadstore_unscaled!(LoadStoreUnscaledWord, GPR32)
 
 // Loads/Stores -- register offset (`ldr`/`str Xt, [Xn, Xm{, lsl #s}]`). OPTION
 // is fixed to LSL/UXTX (0b011): the index `rm` is a full 64-bit register used
@@ -1027,40 +1148,47 @@ template LoadStoreUnscaled for [ARMv8A64] {
 // (S = 1). The effective address is formed in each instruction's behavior, so
 // this class covers the array-indexed and pointer-chase addressing that
 // compiled loops emit but the immediate-offset forms cannot express.
-template LoadStoreRegOffset for [ARMv8A64] {
-    schedule { units = [WriteLoad]; }
-    param MNEMONIC: String;
-    param SIZE: bits<2>;
-    param OPC: bits<2>;
-    param OPTION: bits<3> = 0b011;
-    param S: bits<1>;
-    param V: bits<1> = 0b0;
+macro tmpl_loadstore_reg_offset {
+    ( $name:ident, $cls:ident ) => {
+        template $name for [ARMv8A64] {
+            schedule { units = [WriteLoad]; }
+            param MNEMONIC: String;
+            param SIZE: bits<2>;
+            param OPC: bits<2>;
+            param OPTION: bits<3> = 0b011;
+            param S: bits<1>;
+            param V: bits<1> = 0b0;
 
-    operands {
-        rt: GPR,
-        rn: GPRsp,
-        rm: GPR,
-    }
+            operands {
+                rt: $cls,
+                rn: GPRsp,
+                rm: GPR,
+            }
 
-    encoding {
-        0..4 => rt,
-        5..9 => rn,
-        10..11 => 0b10,
-        12 => S,
-        13..15 => OPTION,
-        16..20 => rm,
-        21 => 0b1,
-        22..23 => OPC,
-        24..25 => 0b00,
-        26 => V,
-        27..29 => 0b111,
-        30..31 => SIZE,
-    }
+            encoding {
+                0..4 => rt,
+                5..9 => rn,
+                10..11 => 0b10,
+                12 => S,
+                13..15 => OPTION,
+                16..20 => rm,
+                21 => 0b1,
+                22..23 => OPC,
+                24..25 => 0b00,
+                26 => V,
+                27..29 => 0b111,
+                30..31 => SIZE,
+            }
 
-    asm {
-        "{self.MNEMONIC} {rt}, [{rn}, {rm}]"
-    }
+            asm {
+                "{self.MNEMONIC} {rt}, [{rn}, {rm}]"
+            }
+        }
+    };
 }
+
+tmpl_loadstore_reg_offset!(LoadStoreRegOffset, GPR)
+tmpl_loadstore_reg_offset!(LoadStoreRegOffsetWord, GPR32)
 
 // Loads/Stores -- register pair, signed 7-bit scaled offset (`ldp`/`stp`,
 // 64-bit, no writeback). The operand is the byte offset; the field stores it

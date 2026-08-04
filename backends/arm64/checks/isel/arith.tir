@@ -12,8 +12,8 @@ module {
 }
 
 // CHECK: asm.symbol {name = "chain", arg_regs = [%virt0:GPR, %virt1:GPR]}
-// CHECK: arm64.add {rd = %virt2:GPR, rn = %virt0:GPR, rm = %virt1:GPR}
-// CHECK: arm64.sub {rd = %virt3:GPR, rn = %virt2:GPR, rm = %virt1:GPR}
-// CHECK: arm64.and {rd = %virt4:GPR, rn = %virt0:GPR, rm = %virt3:GPR}
-// CHECK: arm64.orr {rd = %virt5:GPR, rn = %virt1:GPR, rm = %virt4:GPR}
+// CHECK: arm64.add_w {rd = %virt2:GPR32, rn = %virt0:GPR32, rm = %virt1:GPR32}
+// CHECK: arm64.sub_w {rd = %virt3:GPR32, rn = %virt2:GPR32, rm = %virt1:GPR32}
+// CHECK: arm64.and_w {rd = %virt4:GPR32, rn = %virt0:GPR32, rm = %virt3:GPR32}
+// CHECK: arm64.orr_w {rd = %virt5:GPR32, rn = %virt1:GPR32, rm = %virt4:GPR32}
 // CHECK: asm.vret

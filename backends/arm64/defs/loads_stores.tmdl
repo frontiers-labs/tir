@@ -36,6 +36,17 @@ instruction LoadHalfwordUnsigned for [ARMv8A64] : LoadStoreImmUnsignedH {
     }
 }
 
+instruction LoadHalfwordUnsignedWord for [ARMv8A64] : LoadStoreImmUnsignedWordH {
+    param MNEMONIC: String = "ldrh";
+    param OPNAME: String = "load_halfword_unsigned_w";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = zext(load(rn + zext(imm, self.XLEN), 2, 0b0), 32);
+    }
+}
+
 // The doubleword form is declared before the word form: they share the `ldr`
 // mnemonic and register names carry no width (all registers print as `xN`),
 // so the parser resolves the ambiguity by declaration order and `ldr xN` must
@@ -51,13 +62,23 @@ instruction LoadDoubleword for [ARMv8A64] : LoadStoreImmUnsignedD {
     }
 }
 
-instruction LoadFloatDouble for [ARMv8A64] : LoadStoreFloatImmUnsignedD {
+instruction LoadFloatDouble for [FP] : LoadStoreFloatImmUnsignedD {
     param MNEMONIC: String = "ldr";
     param OPNAME: String = "load_float_double";
     param OPC: bits<2> = 0b01;
 
     behavior {
         ft = load(rn + zext(imm, self.XLEN), 8, 0b0);
+    }
+}
+
+instruction LoadFloatSingle for [FP] : LoadStoreFloatImmUnsignedS {
+    param MNEMONIC: String = "ldr";
+    param OPNAME: String = "load_float_single";
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        ft = load(rn + zext(imm, self.XLEN), 4, 0b0);
     }
 }
 
@@ -72,6 +93,17 @@ instruction LoadWordUnsigned for [ARMv8A64] : LoadStoreImmUnsignedW {
     }
 }
 
+instruction LoadWordUnsigned32 for [ARMv8A64] : LoadStoreImmUnsignedWord32 {
+    param MNEMONIC: String = "ldr";
+    param OPNAME: String = "load_word_unsigned_w";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = load(rn + zext(imm, self.XLEN), 4, 0b0);
+    }
+}
+
 instruction LoadByteSigned for [ARMv8A64] : LoadStoreImmUnsigned {
     param MNEMONIC: String = "ldrsb";
     param SIZE: bits<2> = 0b00;
@@ -79,6 +111,17 @@ instruction LoadByteSigned for [ARMv8A64] : LoadStoreImmUnsigned {
 
     behavior {
         rt = sext(load(rn + zext(imm, self.XLEN), 1, 0b1), self.XLEN);
+    }
+}
+
+instruction LoadByteSignedWord for [ARMv8A64] : LoadStoreImmUnsignedWord {
+    param MNEMONIC: String = "ldrsb";
+    param OPNAME: String = "load_byte_signed_w";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b11;
+
+    behavior {
+        rt = sext(load(rn + zext(imm, self.XLEN), 1, 0b1), 32);
     }
 }
 
@@ -125,8 +168,34 @@ instruction StoreByte for [ARMv8A64] : LoadStoreImmUnsigned {
     schedule { units = [WriteStore]; }
 }
 
+instruction StoreByteWord for [ARMv8A64] : LoadStoreImmUnsignedWord {
+    param MNEMONIC: String = "strb";
+    param OPNAME: String = "store_byte_w";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + zext(imm, self.XLEN), 1, extract(rt, 7, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
 instruction StoreHalfword for [ARMv8A64] : LoadStoreImmUnsignedH {
     param MNEMONIC: String = "strh";
+    param SIZE: bits<2> = 0b01;
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + zext(imm, self.XLEN), 2, extract(rt, 15, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreHalfwordWord for [ARMv8A64] : LoadStoreImmUnsignedWordH {
+    param MNEMONIC: String = "strh";
+    param OPNAME: String = "store_halfword_w";
     param SIZE: bits<2> = 0b01;
     param OPC: bits<2> = 0b00;
 
@@ -152,13 +221,25 @@ instruction StoreDoubleword for [ARMv8A64] : LoadStoreImmUnsignedD {
     schedule { units = [WriteStore]; }
 }
 
-instruction StoreFloatDouble for [ARMv8A64] : LoadStoreFloatImmUnsignedD {
+instruction StoreFloatDouble for [FP] : LoadStoreFloatImmUnsignedD {
     param MNEMONIC: String = "str";
     param OPNAME: String = "store_float_double";
     param OPC: bits<2> = 0b00;
 
     behavior {
         store(rn + zext(imm, self.XLEN), 8, ft);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreFloatSingle for [FP] : LoadStoreFloatImmUnsignedS {
+    param MNEMONIC: String = "str";
+    param OPNAME: String = "store_float_single";
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + zext(imm, self.XLEN), 4, ft);
     }
 
     schedule { units = [WriteStore]; }
@@ -172,6 +253,19 @@ instruction StoreWord for [ARMv8A64] : LoadStoreImmUnsignedW {
 
     behavior {
         store(rn + zext(imm, self.XLEN), 4, extract(rt, 31, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreWord32 for [ARMv8A64] : LoadStoreImmUnsignedWord32 {
+    param MNEMONIC: String = "str";
+    param OPNAME: String = "store_word_w";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + zext(imm, self.XLEN), 4, rt);
     }
 
     schedule { units = [WriteStore]; }
@@ -221,6 +315,17 @@ instruction LoadWordUnsignedUnscaled for [ARMv8A64] : LoadStoreUnscaled {
 
     behavior {
         rt = zext(load(rn + sext(imm, self.XLEN), 4, 0b0), self.XLEN);
+    }
+}
+
+instruction LoadWordUnsignedUnscaled32 for [ARMv8A64] : LoadStoreUnscaledWord {
+    param MNEMONIC: String = "ldur";
+    param OPNAME: String = "load_word_unsigned_unscaled_w";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rt = load(rn + sext(imm, self.XLEN), 4, 0b0);
     }
 }
 
@@ -299,6 +404,19 @@ instruction StoreWordUnscaled for [ARMv8A64] : LoadStoreUnscaled {
 
     behavior {
         store(rn + sext(imm, self.XLEN), 4, extract(rt, 31, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreWordUnscaled32 for [ARMv8A64] : LoadStoreUnscaledWord {
+    param MNEMONIC: String = "stur";
+    param OPNAME: String = "store_word_unscaled_w";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        store(rn + sext(imm, self.XLEN), 4, rt);
     }
 
     schedule { units = [WriteStore]; }
@@ -446,6 +564,18 @@ instruction LoadWordUnsignedRegOffset for [ARMv8A64] : LoadStoreRegOffset {
     }
 }
 
+instruction LoadWordUnsignedRegOffset32 for [ARMv8A64] : LoadStoreRegOffsetWord {
+    param MNEMONIC: String = "ldr";
+    param OPNAME: String = "load_word_unsigned_reg_w";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b01;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        rt = load(rn + rm, 4, 0b0);
+    }
+}
+
 instruction StoreWordRegOffset for [ARMv8A64] : LoadStoreRegOffset {
     param MNEMONIC: String = "str";
     param OPNAME: String = "store_word_reg";
@@ -455,6 +585,20 @@ instruction StoreWordRegOffset for [ARMv8A64] : LoadStoreRegOffset {
 
     behavior {
         store(rn + rm, 4, extract(rt, 31, 0));
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreWordRegOffset32 for [ARMv8A64] : LoadStoreRegOffsetWord {
+    param MNEMONIC: String = "str";
+    param OPNAME: String = "store_word_reg_w";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b00;
+    param S: bits<1> = 0b0;
+
+    behavior {
+        store(rn + rm, 4, rt);
     }
 
     schedule { units = [WriteStore]; }
@@ -510,6 +654,22 @@ instruction LoadWordUnsignedRegOffsetScaled for [ARMv8A64] : LoadStoreRegOffset 
     }
 }
 
+instruction LoadWordUnsignedRegOffsetScaled32 for [ARMv8A64] : LoadStoreRegOffsetWord {
+    param MNEMONIC: String = "ldr";
+    param OPNAME: String = "load_word_unsigned_reg_scaled_w";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b01;
+    param S: bits<1> = 0b1;
+
+    asm {
+        "{self.MNEMONIC} {rt}, [{rn}, {rm}, lsl 2]"
+    }
+
+    behavior {
+        rt = load(rn + (rm << 2), 4, 0b0);
+    }
+}
+
 instruction StoreWordRegOffsetScaled for [ARMv8A64] : LoadStoreRegOffset {
     param MNEMONIC: String = "str";
     param OPNAME: String = "store_word_reg_scaled";
@@ -528,12 +688,30 @@ instruction StoreWordRegOffsetScaled for [ARMv8A64] : LoadStoreRegOffset {
     schedule { units = [WriteStore]; }
 }
 
+instruction StoreWordRegOffsetScaled32 for [ARMv8A64] : LoadStoreRegOffsetWord {
+    param MNEMONIC: String = "str";
+    param OPNAME: String = "store_word_reg_scaled_w";
+    param SIZE: bits<2> = 0b10;
+    param OPC: bits<2> = 0b00;
+    param S: bits<1> = 0b1;
+
+    asm {
+        "{self.MNEMONIC} {rt}, [{rn}, {rm}, lsl 2]"
+    }
+
+    behavior {
+        store(rn + (rm << 2), 4, rt);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
 // 128-bit SIMD load/store, unsigned scaled offset (`ldr/str Qt, [Xn{, #imm}]`).
 // The whole vector moves as raw byte lanes (the `load`/`store` size is 16), so
 // it never passes through a scalar. The field holds the byte offset scaled by
 // 16 (imm[15:4]), as in hardware.
 
-instruction LoadVector128 for [ARMv8A64] {
+instruction LoadVector128 for [AdvSIMD] {
     param MNEMONIC: String = "ldr";
     param OPNAME: String = "load_vector_128";
     schedule { units = [WriteLoad]; }
@@ -564,7 +742,7 @@ instruction LoadVector128 for [ARMv8A64] {
     }
 }
 
-instruction StoreVector128 for [ARMv8A64] {
+instruction StoreVector128 for [AdvSIMD] {
     param MNEMONIC: String = "str";
     param OPNAME: String = "store_vector_128";
     schedule { units = [WriteStore]; }

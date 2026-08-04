@@ -1,0 +1,394 @@
+//! Exclusive atomic memory operations.
+
+isa LSE requires ARMv8A64 {}
+
+macro exclusive_load_template {
+    ( $name:ident, $cls:ident, $size:literal ) => {
+        template $name for [ARMv8A64] {
+            param MNEMONIC: String;
+            param SIZE: bits<2> = $size;
+            param O0: bits<1>;
+
+            operands {
+                rt: $cls,
+                rn: GPRsp,
+            }
+
+            encoding {
+                0..4 => rt,
+                5..9 => rn,
+                10..14 => 0b11111,
+                15 => O0,
+                16..20 => 0b11111,
+                21 => 0b0,
+                22 => 0b1,
+                23..29 => 0b0010000,
+                30..31 => SIZE,
+            }
+
+            asm {
+                "{self.MNEMONIC} {rt}, [{rn}]"
+            }
+
+            schedule { units = [WriteLoad]; }
+        }
+    };
+}
+
+macro exclusive_store_template {
+    ( $name:ident, $cls:ident, $size:literal ) => {
+        template $name for [ARMv8A64] {
+            param MNEMONIC: String;
+            param SIZE: bits<2> = $size;
+            param O0: bits<1>;
+
+            operands {
+                rs: GPR32,
+                rt: $cls,
+                rn: GPRsp,
+            }
+
+            encoding {
+                0..4 => rt,
+                5..9 => rn,
+                10..14 => 0b11111,
+                15 => O0,
+                16..20 => rs,
+                21..22 => 0b00,
+                23..29 => 0b0010000,
+                30..31 => SIZE,
+            }
+
+            asm {
+                "{self.MNEMONIC} {rs}, {rt}, [{rn}]"
+            }
+
+            schedule { units = [WriteStore]; }
+        }
+    };
+}
+
+exclusive_load_template!(ExclusiveLoad64, GPR, 0b11)
+exclusive_load_template!(ExclusiveLoad32, GPR32, 0b10)
+exclusive_store_template!(ExclusiveStore64, GPR, 0b11)
+exclusive_store_template!(ExclusiveStore32, GPR32, 0b10)
+
+instruction LoadExclusive for [ARMv8A64] : ExclusiveLoad64 {
+    param MNEMONIC: String = "ldxr";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rt = load_reserved(rn, 8, Ordering::relaxed);
+    }
+}
+
+instruction LoadExclusiveWord for [ARMv8A64] : ExclusiveLoad32 {
+    param MNEMONIC: String = "ldxr";
+    param OPNAME: String = "ldxr_w";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rt = load_reserved(rn, 4, Ordering::relaxed);
+    }
+}
+
+instruction LoadAcquireExclusive for [ARMv8A64] : ExclusiveLoad64 {
+    param MNEMONIC: String = "ldaxr";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rt = load_reserved(rn, 8, Ordering::acquire);
+    }
+}
+
+instruction LoadAcquireExclusiveWord for [ARMv8A64] : ExclusiveLoad32 {
+    param MNEMONIC: String = "ldaxr";
+    param OPNAME: String = "ldaxr_w";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rt = load_reserved(rn, 4, Ordering::acquire);
+    }
+}
+
+instruction StoreExclusive for [ARMv8A64] : ExclusiveStore64 {
+    param MNEMONIC: String = "stxr";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rs = if store_conditional(rn, 8, rt, Ordering::relaxed) == zext(0b1, 1) {
+            zext(0b0, 32)
+        } else {
+            zext(0b1, 32)
+        };
+    }
+}
+
+instruction StoreExclusiveWord for [ARMv8A64] : ExclusiveStore32 {
+    param MNEMONIC: String = "stxr";
+    param OPNAME: String = "stxr_w";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rs = if store_conditional(rn, 4, rt, Ordering::relaxed) == zext(0b1, 1) {
+            zext(0b0, 32)
+        } else {
+            zext(0b1, 32)
+        };
+    }
+}
+
+instruction StoreReleaseExclusive for [ARMv8A64] : ExclusiveStore64 {
+    param MNEMONIC: String = "stlxr";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rs = if store_conditional(rn, 8, rt, Ordering::release) == zext(0b1, 1) {
+            zext(0b0, 32)
+        } else {
+            zext(0b1, 32)
+        };
+    }
+}
+
+instruction StoreReleaseExclusiveWord for [ARMv8A64] : ExclusiveStore32 {
+    param MNEMONIC: String = "stlxr";
+    param OPNAME: String = "stlxr_w";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rs = if store_conditional(rn, 4, rt, Ordering::release) == zext(0b1, 1) {
+            zext(0b0, 32)
+        } else {
+            zext(0b1, 32)
+        };
+    }
+}
+
+macro ordered_memory_template {
+    ( $name:ident, $cls:ident, $size:literal ) => {
+        template $name for [ARMv8A64] {
+            param MNEMONIC: String;
+            param SIZE: bits<2> = $size;
+            param L: bits<1>;
+
+            operands {
+                rt: $cls,
+                rn: GPRsp,
+            }
+
+            encoding {
+                0..4 => rt,
+                5..9 => rn,
+                10..14 => 0b11111,
+                15 => 0b1,
+                16..20 => 0b11111,
+                21 => 0b0,
+                22 => L,
+                23..29 => 0b0010001,
+                30..31 => SIZE,
+            }
+
+            asm {
+                "{self.MNEMONIC} {rt}, [{rn}]"
+            }
+
+            schedule { units = [WriteLoad]; }
+        }
+    };
+}
+
+ordered_memory_template!(OrderedMemory64, GPR, 0b11)
+ordered_memory_template!(OrderedMemory32, GPR32, 0b10)
+
+instruction LoadAcquire for [ARMv8A64] : OrderedMemory64 {
+    param MNEMONIC: String = "ldar";
+    param L: bits<1> = 0b1;
+
+    behavior {
+        rt = load(rn, 8, 0b0, Ordering::acquire);
+    }
+}
+
+instruction LoadAcquireWord for [ARMv8A64] : OrderedMemory32 {
+    param MNEMONIC: String = "ldar";
+    param OPNAME: String = "ldar_w";
+    param L: bits<1> = 0b1;
+
+    behavior {
+        rt = load(rn, 4, 0b0, Ordering::acquire);
+    }
+}
+
+instruction StoreRelease for [ARMv8A64] : OrderedMemory64 {
+    param MNEMONIC: String = "stlr";
+    param L: bits<1> = 0b0;
+
+    behavior {
+        store(rn, 8, rt, Ordering::release);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+instruction StoreReleaseWord for [ARMv8A64] : OrderedMemory32 {
+    param MNEMONIC: String = "stlr";
+    param OPNAME: String = "stlr_w";
+    param L: bits<1> = 0b0;
+
+    behavior {
+        store(rn, 4, rt, Ordering::release);
+    }
+
+    schedule { units = [WriteStore]; }
+}
+
+macro lse_atomic_template {
+    ( $name:ident, $cls:ident, $size:literal ) => {
+        template $name for [LSE] {
+            param MNEMONIC: String;
+            param SIZE: bits<2> = $size;
+            param A: bits<1>;
+            param R: bits<1>;
+            param O3: bits<1>;
+            param OPC: bits<3>;
+
+            operands {
+                rs: $cls,
+                rt: $cls,
+                rn: GPRsp,
+            }
+
+            encoding {
+                0..4 => rt,
+                5..9 => rn,
+                10..11 => 0b00,
+                12..14 => OPC,
+                15 => O3,
+                16..20 => rs,
+                21 => 0b1,
+                22 => R,
+                23 => A,
+                24..26 => 0b000,
+                27..29 => 0b111,
+                30..31 => SIZE,
+            }
+
+            asm {
+                "{self.MNEMONIC} {rs}, {rt}, [{rn}]"
+            }
+
+            schedule { units = [WriteStore]; }
+        }
+    };
+}
+
+lse_atomic_template!(LSEAtomic64, GPR, 0b11)
+lse_atomic_template!(LSEAtomic32, GPR32, 0b10)
+
+macro lse_atomic {
+    ( $( ( $name64:ident, $name32:ident, $mnemonic:literal, $opname32:literal,
+            $op:ident, $o3:literal, $opc:literal, $a:literal, $r:literal,
+            $ordering:ident ) ),* ) => {
+        $(
+            instruction $name64 for [LSE] : LSEAtomic64 {
+                param MNEMONIC: String = $mnemonic;
+                param A: bits<1> = $a;
+                param R: bits<1> = $r;
+                param O3: bits<1> = $o3;
+                param OPC: bits<3> = $opc;
+
+                behavior {
+                    rt = atomic_rmw($op, rn, 8, rs, Ordering::$ordering);
+                }
+            }
+
+            instruction $name32 for [LSE] : LSEAtomic32 {
+                param MNEMONIC: String = $mnemonic;
+                param OPNAME: String = $opname32;
+                param A: bits<1> = $a;
+                param R: bits<1> = $r;
+                param O3: bits<1> = $o3;
+                param OPC: bits<3> = $opc;
+
+                behavior {
+                    rt = atomic_rmw($op, rn, 4, rs, Ordering::$ordering);
+                }
+            }
+        )*
+    };
+}
+
+lse_atomic!(
+    (Swap,            SwapWord,            "swp",     "swp_w",     swap, 0b1, 0b000, 0b0, 0b0, relaxed),
+    (SwapAcquire,     SwapAcquireWord,     "swpa",    "swpa_w",    swap, 0b1, 0b000, 0b1, 0b0, acquire),
+    (SwapRelease,     SwapReleaseWord,     "swpl",    "swpl_w",    swap, 0b1, 0b000, 0b0, 0b1, release),
+    (SwapAcquireRel,  SwapAcquireRelWord,  "swpal",   "swpal_w",   swap, 0b1, 0b000, 0b1, 0b1, acq_rel),
+    (LoadAdd,         LoadAddWord,         "ldadd",   "ldadd_w",   add,  0b0, 0b000, 0b0, 0b0, relaxed),
+    (LoadAddAcquire,  LoadAddAcquireWord,  "ldadda",  "ldadda_w",  add,  0b0, 0b000, 0b1, 0b0, acquire),
+    (LoadAddRelease,  LoadAddReleaseWord,  "ldaddl",  "ldaddl_w",  add,  0b0, 0b000, 0b0, 0b1, release),
+    (LoadAddAcqRel,   LoadAddAcqRelWord,   "ldaddal", "ldaddal_w", add,  0b0, 0b000, 0b1, 0b1, acq_rel),
+    (LoadXor,         LoadXorWord,         "ldeor",   "ldeor_w",   xor,  0b0, 0b010, 0b0, 0b0, relaxed),
+    (LoadXorAcquire,  LoadXorAcquireWord,  "ldeora",  "ldeora_w",  xor,  0b0, 0b010, 0b1, 0b0, acquire),
+    (LoadXorRelease,  LoadXorReleaseWord,  "ldeorl",  "ldeorl_w",  xor,  0b0, 0b010, 0b0, 0b1, release),
+    (LoadXorAcqRel,   LoadXorAcqRelWord,   "ldeoral", "ldeoral_w", xor,  0b0, 0b010, 0b1, 0b1, acq_rel),
+    (LoadSet,         LoadSetWord,         "ldset",   "ldset_w",   or,   0b0, 0b011, 0b0, 0b0, relaxed),
+    (LoadSetAcquire,  LoadSetAcquireWord,  "ldseta",  "ldseta_w",  or,   0b0, 0b011, 0b1, 0b0, acquire),
+    (LoadSetRelease,  LoadSetReleaseWord,  "ldsetl",  "ldsetl_w",  or,   0b0, 0b011, 0b0, 0b1, release),
+    (LoadSetAcqRel,   LoadSetAcqRelWord,   "ldsetal", "ldsetal_w", or,   0b0, 0b011, 0b1, 0b1, acq_rel),
+    (LoadSMax,        LoadSMaxWord,        "ldsmax",   "ldsmax_w",   max,  0b0, 0b100, 0b0, 0b0, relaxed),
+    (LoadSMaxAcquire, LoadSMaxAcquireWord, "ldsmaxa",  "ldsmaxa_w",  max,  0b0, 0b100, 0b1, 0b0, acquire),
+    (LoadSMaxRelease, LoadSMaxReleaseWord, "ldsmaxl",  "ldsmaxl_w",  max,  0b0, 0b100, 0b0, 0b1, release),
+    (LoadSMaxAcqRel,  LoadSMaxAcqRelWord,  "ldsmaxal", "ldsmaxal_w", max,  0b0, 0b100, 0b1, 0b1, acq_rel),
+    (LoadSMin,        LoadSMinWord,        "ldsmin",   "ldsmin_w",   min,  0b0, 0b101, 0b0, 0b0, relaxed),
+    (LoadSMinAcquire, LoadSMinAcquireWord, "ldsmina",  "ldsmina_w",  min,  0b0, 0b101, 0b1, 0b0, acquire),
+    (LoadSMinRelease, LoadSMinReleaseWord, "ldsminl",  "ldsminl_w",  min,  0b0, 0b101, 0b0, 0b1, release),
+    (LoadSMinAcqRel,  LoadSMinAcqRelWord,  "ldsminal", "ldsminal_w", min,  0b0, 0b101, 0b1, 0b1, acq_rel),
+    (LoadUMax,        LoadUMaxWord,        "ldumax",   "ldumax_w",   maxu, 0b0, 0b110, 0b0, 0b0, relaxed),
+    (LoadUMaxAcquire, LoadUMaxAcquireWord, "ldumaxa",  "ldumaxa_w",  maxu, 0b0, 0b110, 0b1, 0b0, acquire),
+    (LoadUMaxRelease, LoadUMaxReleaseWord, "ldumaxl",  "ldumaxl_w",  maxu, 0b0, 0b110, 0b0, 0b1, release),
+    (LoadUMaxAcqRel,  LoadUMaxAcqRelWord,  "ldumaxal", "ldumaxal_w", maxu, 0b0, 0b110, 0b1, 0b1, acq_rel),
+    (LoadUMin,        LoadUMinWord,        "ldumin",   "ldumin_w",   minu, 0b0, 0b111, 0b0, 0b0, relaxed),
+    (LoadUMinAcquire, LoadUMinAcquireWord, "ldumina",  "ldumina_w",  minu, 0b0, 0b111, 0b1, 0b0, acquire),
+    (LoadUMinRelease, LoadUMinReleaseWord, "lduminl",  "lduminl_w",  minu, 0b0, 0b111, 0b0, 0b1, release),
+    (LoadUMinAcqRel,  LoadUMinAcqRelWord,  "lduminal", "lduminal_w", minu, 0b0, 0b111, 0b1, 0b1, acq_rel)
+)
+
+macro lse_clear {
+    ( $( ( $name64:ident, $name32:ident, $mnemonic:literal, $opname32:literal,
+            $a:literal, $r:literal, $ordering:ident ) ),* ) => {
+        $(
+            instruction $name64 for [LSE] : LSEAtomic64 {
+                param MNEMONIC: String = $mnemonic;
+                param A: bits<1> = $a;
+                param R: bits<1> = $r;
+                param O3: bits<1> = 0b0;
+                param OPC: bits<3> = 0b001;
+
+                behavior {
+                    rt = atomic_rmw(and, rn, 8, ~rs, Ordering::$ordering);
+                }
+            }
+
+            instruction $name32 for [LSE] : LSEAtomic32 {
+                param MNEMONIC: String = $mnemonic;
+                param OPNAME: String = $opname32;
+                param A: bits<1> = $a;
+                param R: bits<1> = $r;
+                param O3: bits<1> = 0b0;
+                param OPC: bits<3> = 0b001;
+
+                behavior {
+                    rt = atomic_rmw(and, rn, 4, ~rs, Ordering::$ordering);
+                }
+            }
+        )*
+    };
+}
+
+lse_clear!(
+    (LoadClear,        LoadClearWord,        "ldclr",   "ldclr_w",   0b0, 0b0, relaxed),
+    (LoadClearAcquire, LoadClearAcquireWord, "ldclra",  "ldclra_w",  0b1, 0b0, acquire),
+    (LoadClearRelease, LoadClearReleaseWord, "ldclrl",  "ldclrl_w",  0b0, 0b1, release),
+    (LoadClearAcqRel,  LoadClearAcqRelWord,  "ldclral", "ldclral_w", 0b1, 0b1, acq_rel)
+)

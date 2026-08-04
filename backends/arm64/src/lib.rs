@@ -3,6 +3,8 @@ use tir::helpers::{dialect, operation};
 
 const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
     ("main.tmdl", include_str!("../defs/main.tmdl")),
+    ("versions.tmdl", include_str!("../defs/versions.tmdl")),
+    ("float.tmdl", include_str!("../defs/float.tmdl")),
     (
         "data_processing.tmdl",
         include_str!("../defs/data_processing.tmdl"),
@@ -11,6 +13,7 @@ const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
         "loads_stores.tmdl",
         include_str!("../defs/loads_stores.tmdl"),
     ),
+    ("atomics.tmdl", include_str!("../defs/atomics.tmdl")),
     ("branches.tmdl", include_str!("../defs/branches.tmdl")),
     ("perf.tmdl", include_str!("../defs/perf.tmdl")),
 ];
@@ -30,9 +33,8 @@ pub struct TargetConfig {
 impl TargetConfig {
     /// Parse an AArch64 `--march`/`--mcpu`/`--mattr` triple.
     pub fn parse(march: &str, mcpu: Option<&str>, mattr: Option<&str>) -> Result<Self, String> {
-        parse_march(march)?;
         let mut config = TargetConfig {
-            features: vec![Feature::ARMv8A64],
+            features: parse_march(march)?,
             machine: None,
         };
         if let Some(mattr) = mattr {
@@ -59,11 +61,66 @@ impl TargetConfig {
     }
 }
 
-fn parse_march(march: &str) -> Result<(), String> {
-    match normalize(march).as_str() {
-        "arm64" | "aarch64" | "armv8" | "armv8a" | "armv8-a" => Ok(()),
-        other => Err(format!("unknown AArch64 architecture '{other}'")),
+fn parse_march(march: &str) -> Result<Vec<Feature>, String> {
+    let march = normalize(march);
+    let (major, minor) = match march.as_str() {
+        "arm64" | "aarch64" | "armv8" | "armv8a" | "armv8-a" => (8, 0),
+        "armv9" | "armv9a" | "armv9-a" => (9, 0),
+        _ => parse_arch_version(&march)
+            .ok_or_else(|| format!("unknown AArch64 architecture '{march}'"))?,
+    };
+
+    match (major, minor) {
+        (8, 0..=9) => Ok(armv8_features(minor)),
+        (9, 0..=6) => Ok(armv9_features(minor)),
+        _ => Err(format!("unknown AArch64 architecture '{march}'")),
     }
+}
+
+fn parse_arch_version(march: &str) -> Option<(u8, usize)> {
+    let version = march.strip_prefix("armv")?;
+    let version = version
+        .strip_suffix("-a")
+        .or_else(|| version.strip_suffix('a'))
+        .unwrap_or(version);
+    let (major, minor) = version.split_once('.')?;
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
+fn armv8_features(revision: usize) -> Vec<Feature> {
+    const REVISIONS: &[Feature] = &[
+        Feature::ARMv8A64,
+        Feature::ARMv8_1A64,
+        Feature::ARMv8_2A64,
+        Feature::ARMv8_3A64,
+        Feature::ARMv8_4A64,
+        Feature::ARMv8_5A64,
+        Feature::ARMv8_6A64,
+        Feature::ARMv8_7A64,
+        Feature::ARMv8_8A64,
+        Feature::ARMv8_9A64,
+    ];
+    let mut features = REVISIONS[..=revision].to_vec();
+    features.extend([Feature::FP, Feature::AdvSIMD]);
+    if revision >= 1 {
+        features.push(Feature::LSE);
+    }
+    features
+}
+
+fn armv9_features(revision: usize) -> Vec<Feature> {
+    const REVISIONS: &[Feature] = &[
+        Feature::ARMv9A64,
+        Feature::ARMv9_1A64,
+        Feature::ARMv9_2A64,
+        Feature::ARMv9_3A64,
+        Feature::ARMv9_4A64,
+        Feature::ARMv9_5A64,
+        Feature::ARMv9_6A64,
+    ];
+    let mut features = armv8_features((5 + revision).min(9));
+    features.extend_from_slice(&REVISIONS[..=revision]);
+    features
 }
 
 /// Resolve `--mcpu` to an optional default machine model. Generic CPU names map
@@ -496,7 +553,7 @@ fn create_regalloc_pass_for(
     tir::backend::regalloc::RegisterAllocationPass::with_abi(Box::new(Arm64RegAlloc), abi)
 }
 
-/// The AArch64 (ARMv8-A) target, selected via `--march`/`--mcpu`.
+/// The AArch64 application-profile target, selected via `--march`/`--mcpu`.
 pub struct Arm64Target {
     config: TargetConfig,
     selected_abi: &'static tir::backend::abi::AbiInfo,
@@ -2015,6 +2072,12 @@ mod tests {
 mod target_parser_tests {
     use super::{Feature, TargetConfig};
 
+    fn features(march: &str) -> Vec<Feature> {
+        TargetConfig::parse(march, None, None)
+            .expect("march should parse")
+            .features
+    }
+
     #[test]
     fn accepts_arm64_aliases_and_generic_cpus() {
         assert_eq!(
@@ -2034,10 +2097,70 @@ mod target_parser_tests {
     }
 
     #[test]
-    fn march_enables_the_base_isa() {
+    fn march_enables_the_base_profile() {
         let config = TargetConfig::parse("arm64", None, None).unwrap();
-        assert_eq!(config.features(), &[Feature::ARMv8A64]);
+        assert_eq!(
+            config.features(),
+            &[Feature::ARMv8A64, Feature::FP, Feature::AdvSIMD]
+        );
         assert!(TargetConfig::parse("arm64", None, Some("-armv8a64")).is_err());
+    }
+
+    #[test]
+    fn march_selects_cumulative_architecture_revisions() {
+        assert_eq!(
+            features("armv8.0-a"),
+            vec![Feature::ARMv8A64, Feature::FP, Feature::AdvSIMD]
+        );
+        assert_eq!(
+            features("armv8.2-a"),
+            vec![
+                Feature::ARMv8A64,
+                Feature::ARMv8_1A64,
+                Feature::ARMv8_2A64,
+                Feature::FP,
+                Feature::AdvSIMD,
+                Feature::LSE,
+            ]
+        );
+        assert_eq!(
+            features("armv9-a"),
+            vec![
+                Feature::ARMv8A64,
+                Feature::ARMv8_1A64,
+                Feature::ARMv8_2A64,
+                Feature::ARMv8_3A64,
+                Feature::ARMv8_4A64,
+                Feature::ARMv8_5A64,
+                Feature::FP,
+                Feature::AdvSIMD,
+                Feature::LSE,
+                Feature::ARMv9A64,
+            ]
+        );
+        assert_eq!(
+            features("armv9.4-a"),
+            vec![
+                Feature::ARMv8A64,
+                Feature::ARMv8_1A64,
+                Feature::ARMv8_2A64,
+                Feature::ARMv8_3A64,
+                Feature::ARMv8_4A64,
+                Feature::ARMv8_5A64,
+                Feature::ARMv8_6A64,
+                Feature::ARMv8_7A64,
+                Feature::ARMv8_8A64,
+                Feature::ARMv8_9A64,
+                Feature::FP,
+                Feature::AdvSIMD,
+                Feature::LSE,
+                Feature::ARMv9A64,
+                Feature::ARMv9_1A64,
+                Feature::ARMv9_2A64,
+                Feature::ARMv9_3A64,
+                Feature::ARMv9_4A64,
+            ]
+        );
     }
 
     #[test]

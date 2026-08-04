@@ -1,0 +1,4 @@
+//! Floating-point and Advanced SIMD extensions.
+
+isa FP requires ARMv8A64 {}
+isa AdvSIMD requires [ARMv8A64, FP] {}

@@ -11,8 +11,8 @@ module {
   module_end
 }
 
-// CHECK: arm64.add {rd = {{x[0-9]+}}, rn = x0, rm = x1}
-// CHECK: arm64.sub
-// CHECK: arm64.and
-// CHECK: arm64.orr {rd = x0,
+// CHECK: arm64.add_w {rd = {{w[0-9]+}}, rn = w0, rm = w1}
+// CHECK: arm64.sub_w
+// CHECK: arm64.and_w
+// CHECK: arm64.orr_w {rd = w0,
 // CHECK: asm.vret

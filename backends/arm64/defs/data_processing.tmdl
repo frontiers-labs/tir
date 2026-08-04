@@ -20,6 +20,26 @@ instruction Sub for [ARMv8A64] : AddSubReg {
     }
 }
 
+instruction AddWord for [ARMv8A64] : AddSubRegWord {
+    param MNEMONIC: String = "add";
+    param OPNAME: String = "add_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        rd = rn + rm;
+    }
+}
+
+instruction SubWord for [ARMv8A64] : AddSubRegWord {
+    param MNEMONIC: String = "sub";
+    param OPNAME: String = "sub_w";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        rd = rn - rm;
+    }
+}
+
 instruction AddImmediate for [ARMv8A64] : AddSubImm {
     param MNEMONIC: String = "add";
     param OPNAME: String = "add_imm";
@@ -37,6 +57,26 @@ instruction SubImmediate for [ARMv8A64] : AddSubImm {
 
     behavior {
         rd = rn - zext(imm, self.XLEN);
+    }
+}
+
+instruction AddImmediateWord for [ARMv8A64] : AddSubImmWord {
+    param MNEMONIC: String = "add";
+    param OPNAME: String = "add_imm_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        rd = rn + zext(imm, 32);
+    }
+}
+
+instruction SubImmediateWord for [ARMv8A64] : AddSubImmWord {
+    param MNEMONIC: String = "sub";
+    param OPNAME: String = "sub_imm_w";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        rd = rn - zext(imm, 32);
     }
 }
 
@@ -60,6 +100,36 @@ instruction Or for [ARMv8A64] : LogicalReg {
 
 instruction Xor for [ARMv8A64] : LogicalReg {
     param MNEMONIC: String = "eor";
+    param OPC: bits<2> = 0b10;
+
+    behavior {
+        rd = rn ^ rm;
+    }
+}
+
+instruction AndWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "and";
+    param OPNAME: String = "and_w";
+    param OPC: bits<2> = 0b00;
+
+    behavior {
+        rd = rn & rm;
+    }
+}
+
+instruction OrWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "orr";
+    param OPNAME: String = "orr_w";
+    param OPC: bits<2> = 0b01;
+
+    behavior {
+        rd = rn | rm;
+    }
+}
+
+instruction XorWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "eor";
+    param OPNAME: String = "eor_w";
     param OPC: bits<2> = 0b10;
 
     behavior {
@@ -225,6 +295,39 @@ instruction Eon for [ARMv8A64] : LogicalReg {
     }
 }
 
+instruction BicWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "bic";
+    param OPNAME: String = "bic_w";
+    param OPC: bits<2> = 0b00;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn & ~rm;
+    }
+}
+
+instruction OrnWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "orn";
+    param OPNAME: String = "orn_w";
+    param OPC: bits<2> = 0b01;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn | ~rm;
+    }
+}
+
+instruction EonWord for [ARMv8A64] : LogicalRegWord {
+    param MNEMONIC: String = "eon";
+    param OPNAME: String = "eon_w";
+    param OPC: bits<2> = 0b10;
+    param N: bits<1> = 0b1;
+
+    behavior {
+        rd = rn ^ ~rm;
+    }
+}
+
 instruction RotateRightVariable for [ARMv8A64] : ShiftReg {
     param MNEMONIC: String = "rorv";
     param OPCODE: bits<6> = 0b001011;
@@ -260,6 +363,27 @@ instruction CompareNegative for [ARMv8A64] : CmpRegTemplate {
     }
 }
 
+instruction CompareNegativeWord for [ARMv8A64] : CmpRegTemplateWord {
+    param MNEMONIC: String = "cmn";
+    param OPNAME: String = "cmn_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        PSTATE::n = extract(rn + rm, 31, 31);
+        PSTATE::z = if rn + rm == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + rm ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(~(rn ^ rm) & (rn ^ (rn + rm)), 31, 31);
+    }
+}
+
 // Flag-setting logical compare: the flags of rn & rm (`ands xzr`); C and V
 // are cleared.
 instruction Test for [ARMv8A64] : TstRegTemplate {
@@ -268,6 +392,22 @@ instruction Test for [ARMv8A64] : TstRegTemplate {
     behavior {
         PSTATE::n = extract(rn & rm, self.XLEN - 1, self.XLEN - 1);
         PSTATE::z = if (rn & rm) == zext(0b0, self.XLEN) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = zext(0b0, 1);
+        PSTATE::v = zext(0b0, 1);
+    }
+}
+
+instruction TestWord for [ARMv8A64] : TstRegTemplateWord {
+    param MNEMONIC: String = "tst";
+    param OPNAME: String = "tst_w";
+
+    behavior {
+        PSTATE::n = extract(rn & rm, 31, 31);
+        PSTATE::z = if (rn & rm) == zext(0b0, 32) {
             zext(0b1, 1)
         } else {
             zext(0b0, 1)
@@ -300,6 +440,29 @@ instruction CompareImmediate for [ARMv8A64] : CmpImmTemplate {
     }
 }
 
+instruction CompareImmediateWord for [ARMv8A64] : CmpImmTemplateWord {
+    param MNEMONIC: String = "cmp";
+    param OPNAME: String = "cmp_imm_w";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn - zext(imm, 32), 31, 31);
+        PSTATE::z = if rn == zext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= zext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            (rn ^ zext(imm, 32)) & (rn ^ (rn - zext(imm, 32))),
+            31, 31);
+    }
+}
+
 instruction CompareNegImmediate for [ARMv8A64] : CmpImmTemplate {
     param MNEMONIC: String = "cmn";
     param OPNAME: String = "cmn_imm";
@@ -320,6 +483,29 @@ instruction CompareNegImmediate for [ARMv8A64] : CmpImmTemplate {
         PSTATE::v = extract(
             ~(rn ^ zext(imm, self.XLEN)) & (rn ^ (rn + zext(imm, self.XLEN))),
             self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction CompareNegImmediateWord for [ARMv8A64] : CmpImmTemplateWord {
+    param MNEMONIC: String = "cmn";
+    param OPNAME: String = "cmn_imm_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        PSTATE::n = extract(rn + zext(imm, 32), 31, 31);
+        PSTATE::z = if rn + zext(imm, 32) == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + zext(imm, 32) ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            ~(rn ^ zext(imm, 32)) & (rn ^ (rn + zext(imm, 32))),
+            31, 31);
     }
 }
 
@@ -352,6 +538,31 @@ instruction SubsImmediate for [ARMv8A64] : AddSubImmFlags {
     }
 }
 
+instruction SubsImmediateWord for [ARMv8A64] : AddSubImmFlagsWord {
+    param MNEMONIC: String = "subs";
+    param OPNAME: String = "subs_imm_w";
+    param OP: bits<1> = 0b1;
+    param SETFLAGS: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn - zext(imm, 32), 31, 31);
+        PSTATE::z = if rn == zext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn ~>= zext(imm, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            (rn ^ zext(imm, 32)) & (rn ^ (rn - zext(imm, 32))),
+            31, 31);
+        rd = rn - zext(imm, 32);
+    }
+}
+
 // Flag-setting add immediate (`adds Xd, Xn, #imm`): writes the sum AND the NZCV
 // flags of `rn + imm` (the same flag logic as `cmn`, but with a real
 // destination). Declared after CompareNegImmediate so `cmn` (rd = xzr) is
@@ -378,6 +589,31 @@ instruction AddsImmediate for [ARMv8A64] : AddSubImmFlags {
             ~(rn ^ zext(imm, self.XLEN)) & (rn ^ (rn + zext(imm, self.XLEN))),
             self.XLEN - 1, self.XLEN - 1);
         rd = rn + zext(imm, self.XLEN);
+    }
+}
+
+instruction AddsImmediateWord for [ARMv8A64] : AddSubImmFlagsWord {
+    param MNEMONIC: String = "adds";
+    param OPNAME: String = "adds_imm_w";
+    param OP: bits<1> = 0b0;
+    param SETFLAGS: bits<1> = 0b1;
+
+    behavior {
+        PSTATE::n = extract(rn + zext(imm, 32), 31, 31);
+        PSTATE::z = if rn + zext(imm, 32) == zext(0b0, 32) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::c = if rn + zext(imm, 32) ~< rn {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        PSTATE::v = extract(
+            ~(rn ^ zext(imm, 32)) & (rn ^ (rn + zext(imm, 32))),
+            31, 31);
+        rd = rn + zext(imm, 32);
     }
 }
 
@@ -577,6 +813,16 @@ instruction MultiplyAdd for [ARMv8A64] : DataProc3Src {
     }
 }
 
+instruction MultiplyAddWord for [ARMv8A64] : DataProc3SrcWord {
+    param MNEMONIC: String = "madd";
+    param OPNAME: String = "madd_word";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = ra + extract(rn * rm, 31, 0);
+    }
+}
+
 instruction MultiplySub for [ARMv8A64] : DataProc3Src {
     param MNEMONIC: String = "msub";
     param O0: bits<1> = 0b1;
@@ -586,14 +832,13 @@ instruction MultiplySub for [ARMv8A64] : DataProc3Src {
     }
 }
 
-instruction MultiplySubWord for [ARMv8A64] : DataProc3Src {
+instruction MultiplySubWord for [ARMv8A64] : DataProc3SrcWord {
     param OPNAME: String = "msub_word";
     param MNEMONIC: String = "msub";
-    param SF: bits<1> = 0b0;
     param O0: bits<1> = 0b1;
 
     behavior {
-        rd = zext(extract(ra, 31, 0) - extract(rn * rm, 31, 0), self.XLEN);
+        rd = ra - extract(rn * rm, 31, 0);
     }
 }
 
@@ -607,6 +852,16 @@ instruction Multiply for [ARMv8A64] : DataProc3SrcZr {
     }
 }
 
+instruction MultiplyWord for [ARMv8A64] : DataProc3SrcZrWord {
+    param MNEMONIC: String = "mul";
+    param OPNAME: String = "mul_word";
+    param O0: bits<1> = 0b0;
+
+    behavior {
+        rd = extract(rn * rm, 31, 0);
+    }
+}
+
 // MNEG is MSUB with ra = xzr.
 instruction MultiplyNeg for [ARMv8A64] : DataProc3SrcZr {
     param MNEMONIC: String = "mneg";
@@ -614,6 +869,16 @@ instruction MultiplyNeg for [ARMv8A64] : DataProc3SrcZr {
 
     behavior {
         rd = zext(0b0, self.XLEN) - extract(rn * rm, self.XLEN - 1, 0);
+    }
+}
+
+instruction MultiplyNegWord for [ARMv8A64] : DataProc3SrcZrWord {
+    param MNEMONIC: String = "mneg";
+    param OPNAME: String = "mneg_word";
+    param O0: bits<1> = 0b1;
+
+    behavior {
+        rd = zext(0b0, 32) - extract(rn * rm, 31, 0);
     }
 }
 
@@ -644,18 +909,17 @@ instruction SignedDivide for [ARMv8A64] : ShiftReg {
     }
 }
 
-instruction SignedDivideWord for [ARMv8A64] : ShiftReg {
+instruction SignedDivideWord for [ARMv8A64] : ShiftRegWord {
     param OPNAME: String = "sdiv_word";
     param MNEMONIC: String = "sdiv";
-    param SF: bits<1> = 0b0;
     param OPCODE: bits<6> = 0b000011;
     schedule { units = [WriteIDiv]; }
 
     behavior {
-        if extract(rm, 31, 0) == zext(0b0, 32) {
-            rd = zext(0b0, self.XLEN);
+        if rm == zext(0b0, 32) {
+            rd = zext(0b0, 32);
         } else {
-            rd = zext(extract(rn, 31, 0) / extract(rm, 31, 0), self.XLEN);
+            rd = rn / rm;
         }
     }
 }
@@ -674,18 +938,17 @@ instruction UnsignedDivide for [ARMv8A64] : ShiftReg {
     }
 }
 
-instruction UnsignedDivideWord for [ARMv8A64] : ShiftReg {
+instruction UnsignedDivideWord for [ARMv8A64] : ShiftRegWord {
     param OPNAME: String = "udiv_word";
     param MNEMONIC: String = "udiv";
-    param SF: bits<1> = 0b0;
     param OPCODE: bits<6> = 0b000010;
     schedule { units = [WriteIDiv]; }
 
     behavior {
-        if extract(rm, 31, 0) == zext(0b0, 32) {
-            rd = zext(0b0, self.XLEN);
+        if rm == zext(0b0, 32) {
+            rd = zext(0b0, 32);
         } else {
-            rd = zext(extract(rn, 31, 0) ~/ extract(rm, 31, 0), self.XLEN);
+            rd = rn ~/ rm;
         }
     }
 }
@@ -1009,7 +1272,7 @@ instruction AndImmediate32 for [ARMv8A64] {
 // float-typed register's bits as an APFloat (exp/mant from the class width), so
 // `fadd`/`fmul` on FPR64 operands compute real binary64 results.
 
-instruction FAddDouble for [ARMv8A64] : FPArith64 {
+instruction FAddDouble for [FP] : FPArith64 {
     param MNEMONIC: String = "fadd";
     param OPCODE: bits<4> = 0b0010;
 
@@ -1018,7 +1281,7 @@ instruction FAddDouble for [ARMv8A64] : FPArith64 {
     }
 }
 
-instruction FSubDouble for [ARMv8A64] : FPArith64 {
+instruction FSubDouble for [FP] : FPArith64 {
     param MNEMONIC: String = "fsub";
     param OPCODE: bits<4> = 0b0011;
 
@@ -1027,7 +1290,7 @@ instruction FSubDouble for [ARMv8A64] : FPArith64 {
     }
 }
 
-instruction FMulDouble for [ARMv8A64] : FPArith64 {
+instruction FMulDouble for [FP] : FPArith64 {
     param MNEMONIC: String = "fmul";
     param OPCODE: bits<4> = 0b0000;
 
@@ -1036,7 +1299,7 @@ instruction FMulDouble for [ARMv8A64] : FPArith64 {
     }
 }
 
-instruction FDivDouble for [ARMv8A64] : FPArith64 {
+instruction FDivDouble for [FP] : FPArith64 {
     param MNEMONIC: String = "fdiv";
     param OPCODE: bits<4> = 0b0001;
 
@@ -1045,55 +1308,105 @@ instruction FDivDouble for [ARMv8A64] : FPArith64 {
     }
 }
 
-instruction FCmpDouble for [ARMv8A64] {
-    param MNEMONIC: String = "fcmp";
-    param OPNAME: String = "fcmp_d";
-
-    operands {
-        fa: FPR64,
-        fb: FPR64,
-    }
-
-    encoding {
-        0..4 => 0b00000,
-        5..9 => fa,
-        10..15 => 0b001000,
-        16..20 => fb,
-        21..31 => 0b00011110011,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fa}, {fb}"
-    }
+instruction FAddSingle for [FP] : FPArith32 {
+    param MNEMONIC: String = "fadd";
+    param OPNAME: String = "fadd_s";
+    param OPCODE: bits<4> = 0b0010;
 
     behavior {
-        PSTATE::n = if fa < fb {
-            zext(0b1, 1)
-        } else {
-            zext(0b0, 1)
-        };
-        PSTATE::z = if fa == fb {
-            zext(0b1, 1)
-        } else {
-            zext(0b0, 1)
-        };
-        PSTATE::c = if (fa != fa) | (fb != fb) {
-            zext(0b1, 1)
-        } else if fa < fb {
-            zext(0b0, 1)
-        } else {
-            zext(0b1, 1)
-        };
-        PSTATE::v = if (fa != fa) | (fb != fb) {
-            zext(0b1, 1)
-        } else {
-            zext(0b0, 1)
-        };
+        fd = fadd(fa, fb);
     }
 }
 
+instruction FSubSingle for [FP] : FPArith32 {
+    param MNEMONIC: String = "fsub";
+    param OPNAME: String = "fsub_s";
+    param OPCODE: bits<4> = 0b0011;
+
+    behavior {
+        fd = fsub(fa, fb);
+    }
+}
+
+instruction FMulSingle for [FP] : FPArith32 {
+    param MNEMONIC: String = "fmul";
+    param OPNAME: String = "fmul_s";
+    param OPCODE: bits<4> = 0b0000;
+
+    behavior {
+        fd = fmul(fa, fb);
+    }
+}
+
+instruction FDivSingle for [FP] : FPArith32 {
+    param MNEMONIC: String = "fdiv";
+    param OPNAME: String = "fdiv_s";
+    param OPCODE: bits<4> = 0b0001;
+
+    behavior {
+        fd = fdiv(fa, fb);
+    }
+}
+
+macro instr_fcmp {
+    ( $name:ident, $cls:ident, $opname:literal, ptype = $ptype:literal ) => {
+        instruction $name for [FP] {
+            param MNEMONIC: String = "fcmp";
+            param OPNAME: String = $opname;
+
+            operands {
+                fa: $cls,
+                fb: $cls,
+            }
+
+            encoding {
+                0..4 => 0b00000,
+                5..9 => fa,
+                10..15 => 0b001000,
+                16..20 => fb,
+                21 => 0b1,
+                22..23 => $ptype,
+                24..28 => 0b11110,
+                29..31 => 0b000,
+            }
+
+            asm {
+                "{self.MNEMONIC} {fa}, {fb}"
+            }
+
+            behavior {
+                PSTATE::n = if fa < fb {
+                    zext(0b1, 1)
+                } else {
+                    zext(0b0, 1)
+                };
+                PSTATE::z = if fa == fb {
+                    zext(0b1, 1)
+                } else {
+                    zext(0b0, 1)
+                };
+                PSTATE::c = if (fa != fa) | (fb != fb) {
+                    zext(0b1, 1)
+                } else if fa < fb {
+                    zext(0b0, 1)
+                } else {
+                    zext(0b1, 1)
+                };
+                PSTATE::v = if (fa != fa) | (fb != fb) {
+                    zext(0b1, 1)
+                } else {
+                    zext(0b0, 1)
+                };
+            }
+        }
+    };
+}
+
+instr_fcmp!(FCmpDouble, FPR64, "fcmp_d", ptype = 0b01)
+instr_fcmp!(FCmpSingle, FPR32, "fcmp_s", ptype = 0b00)
+
 // Convert the low signed 32-bit integer in a general register to binary64.
-instruction SCvtfDoubleWord for [ARMv8A64] {
+instruction SCvtfDoubleWord for [FP] {
     param MNEMONIC: String = "scvtf";
     param OPNAME: String = "scvtf_d_w";
     schedule { units = [WriteIALU]; }
@@ -1125,7 +1438,7 @@ instruction SCvtfDoubleWord for [ARMv8A64] {
 }
 
 // Convert the low unsigned 32-bit integer in a general register to binary64.
-instruction UCvtfDoubleWord for [ARMv8A64] {
+instruction UCvtfDoubleWord for [FP] {
     param MNEMONIC: String = "ucvtf";
     param OPNAME: String = "ucvtf_d_w";
     schedule { units = [WriteIALU]; }
@@ -1156,8 +1469,70 @@ instruction UCvtfDoubleWord for [ARMv8A64] {
     }
 }
 
+instruction SCvtfSingleWord for [FP] {
+    param MNEMONIC: String = "scvtf";
+    param OPNAME: String = "scvtf_s_w";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        fd: FPR32,
+        rn: GPR32,
+    }
+
+    encoding {
+        0..4 => fd,
+        5..9 => rn,
+        10..15 => 0b000000,
+        16..18 => 0b010,
+        19..20 => 0b00,
+        21 => 0b1,
+        22..23 => 0b00,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rn}"
+    }
+
+    behavior {
+        fd = sitofp(rn, 8, 23);
+    }
+}
+
+instruction UCvtfSingleWord for [FP] {
+    param MNEMONIC: String = "ucvtf";
+    param OPNAME: String = "ucvtf_s_w";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        fd: FPR32,
+        rn: GPR32,
+    }
+
+    encoding {
+        0..4 => fd,
+        5..9 => rn,
+        10..15 => 0b000000,
+        16..18 => 0b011,
+        19..20 => 0b00,
+        21 => 0b1,
+        22..23 => 0b00,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rn}"
+    }
+
+    behavior {
+        fd = uitofp(rn, 8, 23);
+    }
+}
+
 // Convert binary64 to a signed 32-bit integer, truncating toward zero.
-instruction FCvtzsWordDouble for [ARMv8A64] {
+instruction FCvtzsWordDouble for [FP] {
     param MNEMONIC: String = "fcvtzs";
     param OPNAME: String = "fcvtzs_w_d";
     schedule { units = [WriteIALU]; }
@@ -1187,7 +1562,7 @@ instruction FCvtzsWordDouble for [ARMv8A64] {
 }
 
 // Convert binary64 to an unsigned 32-bit integer, truncating toward zero.
-instruction FCvtzuWordDouble for [ARMv8A64] {
+instruction FCvtzuWordDouble for [FP] {
     param MNEMONIC: String = "fcvtzu";
     param OPNAME: String = "fcvtzu_w_d";
     schedule { units = [WriteIALU]; }
@@ -1217,8 +1592,69 @@ instruction FCvtzuWordDouble for [ARMv8A64] {
     }
 }
 
+instruction FCvtzsWordSingle for [FP] {
+    param MNEMONIC: String = "fcvtzs";
+    param OPNAME: String = "fcvtzs_w_s";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR32,
+        fa: FPR32,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => fa,
+        10..18 => 0b000000000,
+        19..20 => 0b11,
+        21 => 0b1,
+        22..23 => 0b00,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = fptosi(fa, 32);
+    }
+}
+
+instruction FCvtzuWordSingle for [FP] {
+    param MNEMONIC: String = "fcvtzu";
+    param OPNAME: String = "fcvtzu_w_s";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR32,
+        fa: FPR32,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => fa,
+        10..15 => 0b000000,
+        16..18 => 0b001,
+        19..20 => 0b11,
+        21 => 0b1,
+        22..23 => 0b00,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = fptoui(fa, 32);
+    }
+}
+
 // Convert binary64 to a signed 64-bit integer, truncating toward zero.
-instruction FCvtzsDouble for [ARMv8A64] {
+instruction FCvtzsDouble for [FP] {
     param MNEMONIC: String = "fcvtzs";
     param OPNAME: String = "fcvtzs_x_d";
     schedule { units = [WriteIALU]; }
@@ -1249,7 +1685,7 @@ instruction FCvtzsDouble for [ARMv8A64] {
 }
 
 // Convert binary64 to an unsigned 64-bit integer, truncating toward zero.
-instruction FCvtzuDouble for [ARMv8A64] {
+instruction FCvtzuDouble for [FP] {
     param MNEMONIC: String = "fcvtzu";
     param OPNAME: String = "fcvtzu_x_d";
     schedule { units = [WriteIALU]; }
@@ -1280,7 +1716,7 @@ instruction FCvtzuDouble for [ARMv8A64] {
     }
 }
 
-instruction FMoveRegisterDouble for [ARMv8A64] {
+instruction FMoveRegisterDouble for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_reg64";
     schedule { units = [WriteIALU]; }
@@ -1310,11 +1746,41 @@ instruction FMoveRegisterDouble for [ARMv8A64] {
     }
 }
 
+instruction FMoveRegisterSingle for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_reg32";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        fd: FPR32,
+        fa: FPR32,
+    }
+
+    encoding {
+        0..4 => fd,
+        5..9 => fa,
+        10..14 => 0b10000,
+        15..20 => 0b000000,
+        21 => 0b1,
+        22..23 => 0b00,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {fa}"
+    }
+
+    behavior {
+        fd = fa;
+    }
+}
+
 // FMOV (scalar, immediate), double. The 8-bit imm expands to a binary64 value
 // (VFPExpandImm): sign=imm<7>, exp = NOT(imm<6>):Replicate(imm<6>,8):imm<5:4>,
 // frac = imm<3:0>:Zeros(48). We build that 64-bit pattern and move it into the
 // (float) destination as raw bits, as the hardware does.
-instruction FMovImmediateDouble for [ARMv8A64] {
+instruction FMovImmediateDouble for [FP] {
     param MNEMONIC: String = "fmov";
     schedule { units = [WriteIALU]; }
 
@@ -1351,7 +1817,7 @@ instruction FMovImmediateDouble for [ARMv8A64] {
 
 // FMOV Xd, Dn — copy the raw 64-bit pattern of a double register into a GPR
 // (used here to read an FP result back for verification / integer handoff).
-instruction FMovDoubleToGeneral for [ARMv8A64] {
+instruction FMovDoubleToGeneral for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_x_d";
     schedule { units = [WriteIALU]; }
@@ -1384,7 +1850,7 @@ instruction FMovDoubleToGeneral for [ARMv8A64] {
     }
 }
 
-instruction FMovGeneralToDouble for [ARMv8A64] {
+instruction FMovGeneralToDouble for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_d_x";
     schedule { units = [WriteIALU]; }
@@ -1417,6 +1883,68 @@ instruction FMovGeneralToDouble for [ARMv8A64] {
     }
 }
 
+instruction FMovSingleToGeneral for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_w_s";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        rd: GPR32,
+        fa: FPR32,
+    }
+
+    encoding {
+        0..4 => rd,
+        5..9 => fa,
+        10..15 => 0b000000,
+        16..18 => 0b110,
+        19..20 => 0b00,
+        21 => 0b1,
+        22..23 => 0b00,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {fa}"
+    }
+
+    behavior {
+        rd = bitcast(fa);
+    }
+}
+
+instruction FMovGeneralToSingle for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_s_w";
+    schedule { units = [WriteIALU]; }
+
+    operands {
+        fd: FPR32,
+        rn: GPR32,
+    }
+
+    encoding {
+        0..4 => fd,
+        5..9 => rn,
+        10..15 => 0b000000,
+        16..18 => 0b111,
+        19..20 => 0b00,
+        21 => 0b1,
+        22..23 => 0b00,
+        24..28 => 0b11110,
+        29..31 => 0b000,
+    }
+
+    asm {
+        "{self.MNEMONIC} {fd}, {rn}"
+    }
+
+    behavior {
+        fd = bitcast(rn);
+    }
+}
+
 // --- Advanced SIMD (NEON), 128-bit register-to-register ------------------
 // V registers are read as raw byte lanes; each instruction splits them into
 // lanes, acts lane-wise (map/zip), and reassembles (concat), so no carry or
@@ -1424,7 +1952,7 @@ instruction FMovGeneralToDouble for [ARMv8A64] {
 
 // DUP Vd.2D, Xn — broadcast a 64-bit GPR into both doubleword lanes. The
 // `split(rn, 2, 32)` just yields a two-element iterator; each lane is `rn`.
-instruction DupGeneral2D for [ARMv8A64] {
+instruction DupGeneral2D for [AdvSIMD] {
     param MNEMONIC: String = "dup";
     param OPNAME: String = "dup_2d";
     schedule { units = [WriteIALU]; }
@@ -1454,7 +1982,7 @@ instruction DupGeneral2D for [ARMv8A64] {
     }
 }
 
-instruction AddVector2D for [ARMv8A64] {
+instruction AddVector2D for [AdvSIMD] {
     param MNEMONIC: String = "add";
     param OPNAME: String = "add_v2d";
     schedule { units = [WriteIALU]; }
@@ -1488,7 +2016,7 @@ instruction AddVector2D for [ARMv8A64] {
     }
 }
 
-instruction AddVector4S for [ARMv8A64] {
+instruction AddVector4S for [AdvSIMD] {
     param MNEMONIC: String = "add";
     param OPNAME: String = "add_v4s";
     schedule { units = [WriteIALU]; }
@@ -1522,7 +2050,7 @@ instruction AddVector4S for [ARMv8A64] {
     }
 }
 
-instruction FAddVector2D for [ARMv8A64] {
+instruction FAddVector2D for [AdvSIMD] {
     param MNEMONIC: String = "fadd";
     param OPNAME: String = "fadd_v2d";
     schedule { units = [WriteIALU]; }
@@ -1556,7 +2084,7 @@ instruction FAddVector2D for [ARMv8A64] {
     }
 }
 
-instruction FMulVector2D for [ARMv8A64] {
+instruction FMulVector2D for [AdvSIMD] {
     param MNEMONIC: String = "fmul";
     param OPNAME: String = "fmul_v2d";
     schedule { units = [WriteIALU]; }
@@ -1592,7 +2120,7 @@ instruction FMulVector2D for [ARMv8A64] {
 
 // MOVI Vd.4S, #imm8 (cmode = 0000): broadcast a zero-extended 8-bit immediate
 // into four 32-bit lanes. `split(vd, 4, 32)` just supplies the four-lane shape.
-instruction MoveImmediateVector4S for [ARMv8A64] {
+instruction MoveImmediateVector4S for [AdvSIMD] {
     param MNEMONIC: String = "movi";
     param OPNAME: String = "movi_v4s";
     schedule { units = [WriteIALU]; }
@@ -1626,7 +2154,7 @@ instruction MoveImmediateVector4S for [ARMv8A64] {
 
 // FMOV Vd.2D, #imm8 (cmode = 1111): broadcast the VFPExpandImm binary64 value
 // into both doubleword lanes (the same 8-bit float immediate as scalar `fmov`).
-instruction FMoveImmediateVector2D for [ARMv8A64] {
+instruction FMoveImmediateVector2D for [AdvSIMD] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_v2d";
     schedule { units = [WriteIALU]; }

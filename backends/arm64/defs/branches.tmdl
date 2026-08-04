@@ -223,6 +223,30 @@ instruction CompareBranchNonZero for [ARMv8A64] : CompareBranch {
     }
 }
 
+instruction CompareBranchZeroWord for [ARMv8A64] : CompareBranchWord {
+    param MNEMONIC: String = "cbz";
+    param OPNAME: String = "cbz_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        if rt == zext(0b0, 32) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction CompareBranchNonZeroWord for [ARMv8A64] : CompareBranchWord {
+    param MNEMONIC: String = "cbnz";
+    param OPNAME: String = "cbnz_w";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        if rt != zext(0b0, 32) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
 instruction TestBitBranchZero for [ARMv8A64] : TestBitBranch {
     param MNEMONIC: String = "tbz";
     param OP: bits<1> = 0b0;
@@ -240,6 +264,30 @@ instruction TestBitBranchNonZero for [ARMv8A64] : TestBitBranch {
 
     behavior {
         if ((rt >> zext(bit, self.XLEN)) & zext(0b1, self.XLEN)) == zext(0b1, self.XLEN) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction TestBitBranchZeroWord for [ARMv8A64] : TestBitBranchWord {
+    param MNEMONIC: String = "tbz";
+    param OPNAME: String = "tbz_w";
+    param OP: bits<1> = 0b0;
+
+    behavior {
+        if ((rt >> zext(bit, 32)) & zext(0b1, 32)) == zext(0b0, 32) {
+            PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
+        }
+    }
+}
+
+instruction TestBitBranchNonZeroWord for [ARMv8A64] : TestBitBranchWord {
+    param MNEMONIC: String = "tbnz";
+    param OPNAME: String = "tbnz_w";
+    param OP: bits<1> = 0b1;
+
+    behavior {
+        if ((rt >> zext(bit, 32)) & zext(0b1, 32)) == zext(0b1, 32) {
             PC::pc = PC::pc + (sext(imm, self.XLEN) << 2);
         }
     }

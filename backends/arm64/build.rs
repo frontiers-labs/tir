@@ -6,8 +6,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let out_dir = std::env::var("OUT_DIR")?;
     let inputs = [
         "./defs/main.tmdl",
+        "./defs/versions.tmdl",
+        "./defs/float.tmdl",
         "./defs/data_processing.tmdl",
         "./defs/loads_stores.tmdl",
+        "./defs/atomics.tmdl",
         "./defs/branches.tmdl",
         "./defs/perf.tmdl",
     ];

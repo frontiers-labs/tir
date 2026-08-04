@@ -46,8 +46,7 @@ module {
 // CHECK: arm64.asr_w
 // CHECK: arm64.strb
 // CHECK: arm64.ldrb
-// CHECK: arm64.cmp_w
-// CHECK: arm64.cbnz {rt = %virt{{[0-9]+}}:GPR, imm = ^bb1}
+// CHECK: arm64.cbnz_w {rt = %virt{{[0-9]+}}:GPR32, imm = ^bb1}
 // CHECK-LABEL: asm.symbol {name = "crc_shift_u16"
 // CHECK: arm64.lsr_h
 // CHECK-LABEL: asm.symbol {name = "crc_shift_u8"

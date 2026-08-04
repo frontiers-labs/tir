@@ -1,8 +1,4 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
-// XFAIL: *
-
-// ISEL GAP: only f64 scalar FP is selectable. f32 arithmetic aborts with
-//   "invalid rule set: missing atomic materializer rule for semantic kind FAdd".
 
 module {
   func @f(%0: !f32, %1: !f32) -> !f32 {
@@ -12,4 +8,4 @@ module {
   module_end
 }
 
-// CHECK: arm64.fadd
+// CHECK: arm64.fadd_s {fd = %virt2:FPR32, fa = %virt0:FPR32, fb = %virt1:FPR32}

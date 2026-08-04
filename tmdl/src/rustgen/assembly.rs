@@ -15,6 +15,7 @@ enum AsmAction {
     /// Literal identifier in the template (e.g. `eq` in `cset {rd}, eq` or
     /// `sp` in `c.addi4spn {rd}, sp, {imm}`); the parser requires it verbatim.
     Keyword(String),
+    Number(String),
 }
 
 enum AsmPrintPart {
@@ -83,6 +84,13 @@ fn compile_asm_template(template: &str) -> Vec<AsmAction> {
                     i += 1;
                 }
                 actions.push(AsmAction::Keyword(template[start..i].to_string()));
+            }
+            c if c.is_ascii_digit() => {
+                let start = i;
+                while i < bytes.len() && (bytes[i] as char).is_ascii_digit() {
+                    i += 1;
+                }
+                actions.push(AsmAction::Number(template[start..i].to_string()));
             }
             _ => {
                 i += 1;
@@ -230,4 +238,3 @@ fn pc_writes(e: &ast::Expr) -> (bool, bool) {
         _ => (false, false),
     }
 }
-
