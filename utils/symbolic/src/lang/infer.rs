@@ -190,16 +190,16 @@ pub fn infer_types<V>(
                 let mut components = Vec::with_capacity(children.len());
                 for slot in 0..children.len() {
                     let component = inference.fresh_type();
-                    inference
-                        .unify(&child(slot), &SemType::Iterator(Box::new(component.clone())))?;
+                    inference.unify(
+                        &child(slot),
+                        &SemType::Iterator(Box::new(component.clone())),
+                    )?;
                     components.push(component);
                 }
                 let element = components
                     .into_iter()
                     .rev()
-                    .reduce(|rest, component| {
-                        SemType::Pair(Box::new(component), Box::new(rest))
-                    })
+                    .reduce(|rest, component| SemType::Pair(Box::new(component), Box::new(rest)))
                     .expect("zip requires at least 2 operands");
                 SemType::Iterator(Box::new(element))
             }

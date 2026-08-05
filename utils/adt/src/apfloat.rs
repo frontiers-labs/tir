@@ -482,7 +482,7 @@ impl APFloat {
         self.assert_same_format(other);
         match (self.is_nan(), other.is_nan()) {
             (true, true) => {
-                return APFloat::nan(self.exp_width, self.mant_width, self.explicit_leading_bit)
+                return APFloat::nan(self.exp_width, self.mant_width, self.explicit_leading_bit);
             }
             (true, false) => return other.clone(),
             (false, true) => return self.clone(),

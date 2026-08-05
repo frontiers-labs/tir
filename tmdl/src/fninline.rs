@@ -70,7 +70,9 @@ fn inline_expr(
     file_name: &str,
 ) -> ast::Expr {
     // Inline nested calls everywhere first, then expand this call.
-    let expr = map_children(expr, &mut |child| inline_expr(child, fns, stack, diags, file_name));
+    let expr = map_children(expr, &mut |child| {
+        inline_expr(child, fns, stack, diags, file_name)
+    });
     let ast::Expr::Call(call) = &expr else {
         return expr;
     };
@@ -163,13 +165,13 @@ fn map_children(expr: &ast::Expr, f: &mut dyn FnMut(&ast::Expr) -> ast::Expr) ->
             span: u.span,
         }),
         ast::Expr::Block(b) => ast::Expr::Block(ast::Block {
-            stmts: b.stmts.iter().map(|s| f(s)).collect(),
+            stmts: b.stmts.iter().map(&mut *f).collect(),
             last_expr_return: b.last_expr_return,
             span: b.span,
         }),
         ast::Expr::Call(c) => ast::Expr::Call(ast::Call {
             callee: Box::new(f(&c.callee)),
-            arguments: c.arguments.iter().map(|a| f(a)).collect(),
+            arguments: c.arguments.iter().map(&mut *f).collect(),
             span: c.span,
         }),
         ast::Expr::Field(field) => ast::Expr::Field(ast::Field {

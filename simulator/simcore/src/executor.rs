@@ -332,6 +332,20 @@ impl Executor {
         (self.class_bit_width(class).div_ceil(8) * 8) as usize
     }
 
+    /// The physical slot width of a register file in bits: the widest view any
+    /// class takes of it. The file-defining class can be the narrow view (the
+    /// RISC-V f file is FPR64-wide although its file class FPR32 is 32 bits),
+    /// so sizing the slot by the file class alone would truncate wide writes.
+    fn file_slot_bits(&self, file: &str) -> usize {
+        self.register_files
+            .iter()
+            .filter(|(_, target)| target.as_str() == file)
+            .map(|(class, _)| self.class_byte_bits(class))
+            .chain([self.class_byte_bits(file)])
+            .max()
+            .unwrap_or(64)
+    }
+
     /// The class-width byte lanes of a register, honoring the special reads
     /// (PC, hardwired-zero, performance counters). Absent registers read zero.
     fn read_register_raw(&self, class: &str, index: u16) -> Result<tir::utils::RawBits, SimTrap> {
@@ -353,7 +367,7 @@ impl Executor {
             );
         }
         let file = self.register_file(class);
-        let file_byte_bits = self.class_byte_bits(file);
+        let file_byte_bits = self.file_slot_bits(file);
         let key = (file.to_string(), index);
         let slot = self
             .registers
@@ -376,7 +390,7 @@ impl Executor {
     /// zero-extended across the whole element.
     fn store_register_raw(&mut self, class: &str, index: u16, bytes: tir::utils::RawBits) {
         let file = self.register_file(class).to_string();
-        let file_byte_bits = self.class_byte_bits(&file);
+        let file_byte_bits = self.file_slot_bits(&file);
         let key = (file.clone(), index);
         let view = self.register_views.get(class).copied().unwrap_or_default();
         let stored = if view.merge || view.bit_offset != 0 {

@@ -1213,6 +1213,7 @@ fn emit_instructions<'a>(
                     Ok(())
                 },
                 None => quote! {
+                    let _ = machine;
                     Err(tir::backend::SimTrap::InvalidInstruction {
                         op: #mnemonic_lit,
                         reason: "failed to convert behavior to executable expression".to_string(),
@@ -1239,6 +1240,7 @@ fn emit_instructions<'a>(
                     Ok(())
                 },
                 None => quote! {
+                    let _ = machine;
                     Err(tir::backend::SimTrap::InvalidInstruction {
                         op: #mnemonic_lit,
                         reason: "failed to convert behavior to executable expression".to_string(),
@@ -1950,6 +1952,34 @@ fn emit_instructions<'a>(
         }
     };
 
+    // The rule initializers run in batches of helper functions: unoptimized
+    // builds give every inline `Rule` constructor its own stack slots, and
+    // thousands of them in one body overflow the default thread stack.
+    let isel_rule_chunk_fns: Vec<proc_macro2::TokenStream> = isel_rule_inits
+        .chunks(64)
+        .enumerate()
+        .map(|(index, chunk)| {
+            let ident = quote::format_ident!("isel_rules_chunk_{index}");
+            quote! {
+                fn #ident(
+                    context: &tir::Context,
+                    features: &[Feature],
+                    __register_widths: &[(&'static str, u32)],
+                    rules: &mut Vec<tir::backend::isel::Rule>,
+                ) {
+                    let _ = (&context, &features, &__register_widths, &rules);
+                    #(#chunk)*
+                }
+            }
+        })
+        .collect();
+    let isel_rule_chunk_calls: Vec<proc_macro2::TokenStream> = (0..isel_rule_chunk_fns.len())
+        .map(|index| {
+            let ident = quote::format_ident!("isel_rules_chunk_{index}");
+            quote! { #ident(context, features, &__register_widths, &mut rules); }
+        })
+        .collect();
+
     Ok(quote! {
         #(#instruction_defs)*
         #text_only_format_helpers
@@ -1978,6 +2008,8 @@ fn emit_instructions<'a>(
 
         #(#isel_rule_emitters)*
 
+        #(#isel_rule_chunk_fns)*
+
         /// Instruction-selection rules for the instructions available under `features`.
         #public_visibility fn get_isel_rules(context: &tir::Context, features: &[Feature]) -> Vec<tir::backend::isel::Rule> {
             let _ = (&context, &features);
@@ -1987,7 +2019,7 @@ fn emit_instructions<'a>(
             let _ = &__register_widths;
             #[allow(unused_mut)]
             let mut rules = Vec::new();
-            #(#isel_rule_inits)*
+            #(#isel_rule_chunk_calls)*
             rules
         }
     })

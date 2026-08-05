@@ -1658,7 +1658,10 @@ impl Call {
                 ctx.add_node(tir::sem::SymKind::IterConcat, &[iter])
             }
             BuiltinFunction::Zip => {
-                assert!(self.arguments.len() >= 2, "zip requires at least 2 arguments");
+                assert!(
+                    self.arguments.len() >= 2,
+                    "zip requires at least 2 arguments"
+                );
                 let children: Vec<_> = self
                     .arguments
                     .iter()

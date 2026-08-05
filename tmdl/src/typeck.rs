@@ -305,15 +305,8 @@ fn infer<'a>(
                     && let ast::Expr::Ident(id) = &*asgn.dest
                     && block_env.get(&id.name).is_none()
                 {
-                    let val_ty = infer(
-                        &asgn.value,
-                        &block_env,
-                        tvg,
-                        subst,
-                        cache,
-                        diags,
-                        file_name,
-                    );
+                    let val_ty =
+                        infer(&asgn.value, &block_env, tvg, subst, cache, diags, file_name);
                     block_env.bind(id.name.clone(), TypeScheme::mono(val_ty.clone()));
                     cache.insert(stmt, val_ty.clone());
                     ty = val_ty;
@@ -1037,7 +1030,9 @@ mod tests {
         );
         let diagnostics = type_check_source(&src);
         assert!(
-            diagnostics.iter().any(|(_, d)| d.contains("takes 1 arguments")),
+            diagnostics
+                .iter()
+                .any(|(_, d)| d.contains("takes 1 arguments")),
             "expected an arity diagnostic, got: {diagnostics:?}"
         );
     }

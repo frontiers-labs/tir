@@ -15,22 +15,10 @@ const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
     ("zicsr.tmdl", include_str!("../defs/zicsr.tmdl")),
     ("perf.tmdl", include_str!("../defs/perf.tmdl")),
     ("vector.tmdl", include_str!("../defs/vector.tmdl")),
-    (
-        "vector_int.tmdl",
-        include_str!("../defs/vector_int.tmdl"),
-    ),
-    (
-        "vector_mask.tmdl",
-        include_str!("../defs/vector_mask.tmdl"),
-    ),
-    (
-        "vector_red.tmdl",
-        include_str!("../defs/vector_red.tmdl"),
-    ),
-    (
-        "vector_perm.tmdl",
-        include_str!("../defs/vector_perm.tmdl"),
-    ),
+    ("vector_int.tmdl", include_str!("../defs/vector_int.tmdl")),
+    ("vector_mask.tmdl", include_str!("../defs/vector_mask.tmdl")),
+    ("vector_red.tmdl", include_str!("../defs/vector_red.tmdl")),
+    ("vector_perm.tmdl", include_str!("../defs/vector_perm.tmdl")),
     (
         "vector_widen.tmdl",
         include_str!("../defs/vector_widen.tmdl"),
@@ -39,9 +27,10 @@ const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
         "vector_fixed.tmdl",
         include_str!("../defs/vector_fixed.tmdl"),
     ),
+    ("vector_mem.tmdl", include_str!("../defs/vector_mem.tmdl")),
     (
-        "vector_mem.tmdl",
-        include_str!("../defs/vector_mem.tmdl"),
+        "vector_float.tmdl",
+        include_str!("../defs/vector_float.tmdl"),
     ),
 ];
 
@@ -74,6 +63,14 @@ impl TargetConfig {
             && !config.features.contains(&Feature::D64)
         {
             config.features.push(Feature::D64);
+        }
+        // VF is the internal V∧D conjunction gating the vector floating-point
+        // instructions, which need both the vector unit and the f register file.
+        if config.features.contains(&Feature::RVV)
+            && config.features.contains(&Feature::D)
+            && !config.features.contains(&Feature::VF)
+        {
+            config.features.push(Feature::VF);
         }
         // The M *W forms follow the same pattern: Zmmul64/RVM64 gate the
         // rv64-only word multiply/divide instructions; A64 gates the rv64-only
@@ -2940,7 +2937,8 @@ mod target_parser_tests {
                 Feature::A64,
                 Feature::Zifencei,
                 Feature::Zicsr,
-                Feature::RVV
+                Feature::RVV,
+                Feature::VF
             ]
         );
         assert!(!features("riscv32", None).contains(&Feature::RV64I));

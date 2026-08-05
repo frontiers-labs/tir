@@ -440,7 +440,10 @@ fn concat_lanes(value: Value) -> Value {
         .into_iter()
         .map(|lane| match lane {
             Value::Int(i) => (i.width() as usize, i.to_u64().to_le_bytes().to_vec()),
-            Value::Float(f) => (f.bit_width() as usize, RawBits::from_apfloat(&f).bytes().to_vec()),
+            Value::Float(f) => (
+                f.bit_width() as usize,
+                RawBits::from_apfloat(&f).bytes().to_vec(),
+            ),
             Value::RawBits(b) => (b.width(), b.bytes().to_vec()),
             Value::Iterator(_) => panic!("concat lanes must be scalar"),
         })
@@ -635,7 +638,10 @@ fn eval_node<V, M: Memory>(
             let mantissa = as_int!(c(2), "fcvt").to_u64() as u32;
             let converted =
                 APFloat::from_bits(exp, mant, false, value).convert(exponent, mantissa, false);
-            Value::Int(APInt::new(converted.bit_width(), converted.to_bits() as u64))
+            Value::Int(APInt::new(
+                converted.bit_width(),
+                converted.to_bits() as u64,
+            ))
         }
         SymKind::SIToFP => {
             let value = as_int!(c(0), "sitofp").to_i64();
@@ -1318,7 +1324,10 @@ mod tests {
         inner(&mut g, SymKind::Lt, &[fa, fb]);
         let one = APInt::new(32, 0x3f80_0000);
         let two = APInt::new(32, 0x4000_0000);
-        assert_eq!(as_i64(execute(&g, &[Value::Int(one.clone()), Value::Int(two)])), 1);
+        assert_eq!(
+            as_i64(execute(&g, &[Value::Int(one.clone()), Value::Int(two)])),
+            1
+        );
 
         let mut g = Graph::new();
         let a = sym(&mut g, 0);
@@ -1335,7 +1344,10 @@ mod tests {
         inner(&mut g, SymKind::Eq, &[fa, fb]);
         let pos_zero = APInt::new(32, 0);
         let neg_zero = APInt::new(32, 0x8000_0000);
-        assert_eq!(as_i64(execute(&g, &[Value::Int(pos_zero), Value::Int(neg_zero)])), 1);
+        assert_eq!(
+            as_i64(execute(&g, &[Value::Int(pos_zero), Value::Int(neg_zero)])),
+            1
+        );
     }
 
     #[test]
@@ -1488,7 +1500,10 @@ mod tests {
         let map = inner(&mut g, SymKind::Map, &[zip, body]);
         inner(&mut g, SymKind::IterConcat, &[map]);
 
-        let out = execute(&g, &[rb(&[0x01, 0x02]), rb(&[0x03, 0x04]), rb(&[0x05, 0x06])]);
+        let out = execute(
+            &g,
+            &[rb(&[0x01, 0x02]), rb(&[0x03, 0x04]), rb(&[0x05, 0x06])],
+        );
         assert_eq!(raw_bytes(out), vec![9, 12]);
     }
 

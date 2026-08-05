@@ -514,6 +514,12 @@ fn emit_graph_destination_write(
         });
     }
 
+    // A local binding: sequencing substituted the bound value into every later
+    // read, so the assignment statement itself carries no state effect.
+    if matches!(dest, Destination::Ident(_)) {
+        return Some(quote! { let _ = value; });
+    }
+
     None
 }
 
