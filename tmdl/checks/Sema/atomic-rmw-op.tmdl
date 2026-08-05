@@ -1,7 +1,7 @@
 // The `atomic_rmw` op selector must be a bare identifier from the closed set;
 // an unknown name is a type-check error.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa AIsa {
     param XLEN: Integer = 64;

@@ -1,0 +1,409 @@
+//! Atomic exchange and fetch-add instructions.
+
+macro xchg_rex_template {
+    ( $name:ident, $base:ident, $reg:ident, $w:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            operands { base: $base, imm: bits<32>, reg: $reg, }
+            encoding {
+                0 => base[3],
+                1 => 0b0,
+                2 => reg[3],
+                3 => $w,
+                4..7 => 0b0100,
+                8..15 => 0x87,
+                16..18 => 0b100,
+                19..21 => reg[0..2],
+                22..23 => 0b10,
+                24..31 => 0x24,
+                32..63 => imm,
+            }
+            asm { "{self.MNEMONIC} [{base} + {imm}], {reg}" }
+            schedule { units = [WriteIALU]; }
+        }
+    };
+}
+
+macro xchg_rex_direct_template {
+    ( $name:ident, $reg:ident, $w:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            operands { base: GPR, imm: bits<32>, reg: $reg, }
+            encoding {
+                0 => base[3],
+                1 => 0b0,
+                2 => reg[3],
+                3 => $w,
+                4..7 => 0b0100,
+                8..15 => 0x87,
+                16..18 => base[0..2],
+                19..21 => reg[0..2],
+                22..23 => 0b10,
+                24..55 => imm,
+            }
+            asm { "{self.MNEMONIC} [{base} + {imm}], {reg}" }
+            schedule { units = [WriteIALU]; }
+        }
+    };
+}
+
+macro xadd_rex_template {
+    ( $name:ident, $base:ident, $reg:ident, $w:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            operands { base: $base, imm: bits<32>, reg: $reg, }
+            encoding {
+                0..7 => 0xF0,
+                8 => base[3],
+                9 => 0b0,
+                10 => reg[3],
+                11 => $w,
+                12..15 => 0b0100,
+                16..23 => 0x0F,
+                24..31 => 0xC1,
+                32..34 => 0b100,
+                35..37 => reg[0..2],
+                38..39 => 0b10,
+                40..47 => 0x24,
+                48..79 => imm,
+            }
+            asm { "{self.MNEMONIC} xadd [{base} + {imm}], {reg}" }
+            schedule { units = [WriteIALU]; }
+        }
+    };
+}
+
+macro xadd_rex_direct_template {
+    ( $name:ident, $reg:ident, $w:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            operands { base: GPR, imm: bits<32>, reg: $reg, }
+            encoding {
+                0..7 => 0xF0,
+                8 => base[3],
+                9 => 0b0,
+                10 => reg[3],
+                11 => $w,
+                12..15 => 0b0100,
+                16..23 => 0x0F,
+                24..31 => 0xC1,
+                32..34 => base[0..2],
+                35..37 => reg[0..2],
+                38..39 => 0b10,
+                40..71 => imm,
+            }
+            asm { "{self.MNEMONIC} xadd [{base} + {imm}], {reg}" }
+            schedule { units = [WriteIALU]; }
+        }
+    };
+}
+
+xchg_rex_direct_template!(XchgMem32Template, GPR32, 0b0)
+xchg_rex_template!(XchgMem32SibTemplate, GPRsib, GPR32, 0b0)
+xchg_rex_direct_template!(XchgMem64Template, GPR, 0b1)
+xchg_rex_template!(XchgMem64SibTemplate, GPRsib, GPR, 0b1)
+xadd_rex_direct_template!(LockXaddMem32Template, GPR32, 0b0)
+xadd_rex_template!(LockXaddMem32SibTemplate, GPRsib, GPR32, 0b0)
+xadd_rex_direct_template!(LockXaddMem64Template, GPR, 0b1)
+xadd_rex_template!(LockXaddMem64SibTemplate, GPRsib, GPR, 0b1)
+
+template XchgMem32NorexTemplate for [X86] {
+    param MNEMONIC: String;
+    operands { base: GPRaddrDispLow, imm: bits<32>, reg: GPR32low, }
+    encoding {
+        0..7 => 0x87,
+        8..10 => base[0..2],
+        11..13 => reg[0..2],
+        14..15 => 0b10,
+        16..47 => imm,
+    }
+    asm { "{self.MNEMONIC} [{base} + {imm}], {reg}" }
+    schedule { units = [WriteIALU]; }
+}
+
+template XchgMem32SibNorexTemplate for [X86] {
+    param MNEMONIC: String;
+    operands { base: GPRsibLow, imm: bits<32>, reg: GPR32low, }
+    encoding {
+        0..7 => 0x87,
+        8..10 => 0b100,
+        11..13 => reg[0..2],
+        14..15 => 0b10,
+        16..23 => 0x24,
+        24..55 => imm,
+    }
+    asm { "{self.MNEMONIC} [{base} + {imm}], {reg}" }
+    schedule { units = [WriteIALU]; }
+}
+
+template LockXaddMem32NorexTemplate for [X86] {
+    param MNEMONIC: String;
+    operands { base: GPRaddrDispLow, imm: bits<32>, reg: GPR32low, }
+    encoding {
+        0..7 => 0xF0,
+        8..15 => 0x0F,
+        16..23 => 0xC1,
+        24..26 => base[0..2],
+        27..29 => reg[0..2],
+        30..31 => 0b10,
+        32..63 => imm,
+    }
+    asm { "{self.MNEMONIC} xadd [{base} + {imm}], {reg}" }
+    schedule { units = [WriteIALU]; }
+}
+
+template LockXaddMem32SibNorexTemplate for [X86] {
+    param MNEMONIC: String;
+    operands { base: GPRsibLow, imm: bits<32>, reg: GPR32low, }
+    encoding {
+        0..7 => 0xF0,
+        8..15 => 0x0F,
+        16..23 => 0xC1,
+        24..26 => 0b100,
+        27..29 => reg[0..2],
+        30..31 => 0b10,
+        32..39 => 0x24,
+        40..71 => imm,
+    }
+    asm { "{self.MNEMONIC} xadd [{base} + {imm}], {reg}" }
+    schedule { units = [WriteIALU]; }
+}
+
+macro atomic_xchg_norex {
+    ( $( ( $name:ident, $tmpl:ident, $opname:literal ) ),* ) => {
+        $( instruction $name for [X86] : $tmpl {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = "xchg";
+               behavior {
+                   reg = atomic_rmw(swap, base + sext(imm, self.XLEN), 4, reg, Ordering::acq_rel);
+               }
+           } )*
+    };
+}
+
+atomic_xchg_norex!(
+    (XchgMem32Norex, XchgMem32NorexTemplate, "xchg_mem32_norex"),
+    (XchgMem32SibNorex, XchgMem32SibNorexTemplate, "xchg_mem32_sib_norex")
+)
+
+macro atomic_xadd_norex {
+    ( $( ( $name:ident, $tmpl:ident, $opname:literal ) ),* ) => {
+        $( instruction $name for [X86] : $tmpl {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = "lock";
+               behavior {
+                   reg = atomic_rmw(add, base + sext(imm, self.XLEN), 4, reg, Ordering::acq_rel);
+                   todo_flags!()
+               }
+           } )*
+    };
+}
+
+atomic_xadd_norex!(
+    (LockXaddMem32Norex, LockXaddMem32NorexTemplate, "lock_xadd_mem32_norex"),
+    (LockXaddMem32SibNorex, LockXaddMem32SibNorexTemplate, "lock_xadd_mem32_sib_norex")
+)
+
+macro atomic_xchg {
+    ( $( ( $name:ident, $tmpl:ident, $opname:literal, $bytes:literal ) ),* ) => {
+        $( instruction $name for [X86_64] : $tmpl {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = "xchg";
+               behavior {
+                   reg = atomic_rmw(swap, base + sext(imm, self.XLEN), $bytes, reg, Ordering::acq_rel);
+               }
+           } )*
+    };
+}
+
+atomic_xchg!(
+    (XchgMem32, XchgMem32Template, "xchg_mem32", 4),
+    (XchgMem32Sib, XchgMem32SibTemplate, "xchg_mem32_sib", 4),
+    (XchgMem64, XchgMem64Template, "xchg_mem64", 8),
+    (XchgMem64Sib, XchgMem64SibTemplate, "xchg_mem64_sib", 8)
+)
+
+macro atomic_xadd {
+    ( $( ( $name:ident, $tmpl:ident, $opname:literal, $bytes:literal ) ),* ) => {
+        $( instruction $name for [X86_64] : $tmpl {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = "lock";
+               behavior {
+                   reg = atomic_rmw(add, base + sext(imm, self.XLEN), $bytes, reg, Ordering::acq_rel);
+                   todo_flags!()
+               }
+           } )*
+    };
+}
+
+atomic_xadd!(
+    (LockXaddMem32, LockXaddMem32Template, "lock_xadd_mem32", 4),
+    (LockXaddMem32Sib, LockXaddMem32SibTemplate, "lock_xadd_mem32_sib", 4),
+    (LockXaddMem64, LockXaddMem64Template, "lock_xadd_mem64", 8),
+    (LockXaddMem64Sib, LockXaddMem64SibTemplate, "lock_xadd_mem64_sib", 8)
+)
+
+macro lock_logic_rex_direct_template {
+    ( $name:ident, $reg:ident, $w:literal, $op:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            operands { base: GPR, imm: bits<32>, reg: $reg, }
+            encoding {
+                0..7 => 0xF0,
+                8 => base[3],
+                9 => 0b0,
+                10 => reg[3],
+                11 => $w,
+                12..15 => 0b0100,
+                16..23 => OPCODE,
+                24..26 => base[0..2],
+                27..29 => reg[0..2],
+                30..31 => 0b10,
+                32..63 => imm,
+            }
+            asm { ${concat("{self.MNEMONIC} ", $op, " [{base} + {imm}], {reg}")} }
+            schedule { units = [WriteIALU]; }
+        }
+    };
+}
+
+macro lock_logic_rex_sib_template {
+    ( $name:ident, $reg:ident, $w:literal, $op:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            operands { base: GPRsib, imm: bits<32>, reg: $reg, }
+            encoding {
+                0..7 => 0xF0,
+                8 => base[3],
+                9 => 0b0,
+                10 => reg[3],
+                11 => $w,
+                12..15 => 0b0100,
+                16..23 => OPCODE,
+                24..26 => 0b100,
+                27..29 => reg[0..2],
+                30..31 => 0b10,
+                32..39 => 0x24,
+                40..71 => imm,
+            }
+            asm { ${concat("{self.MNEMONIC} ", $op, " [{base} + {imm}], {reg}")} }
+            schedule { units = [WriteIALU]; }
+        }
+    };
+}
+
+lock_logic_rex_direct_template!(LockXorMem32Template, GPR32, 0b0, "xor")
+lock_logic_rex_sib_template!(LockXorMem32SibTemplate, GPR32, 0b0, "xor")
+lock_logic_rex_direct_template!(LockXorMem64Template, GPR, 0b1, "xor")
+lock_logic_rex_sib_template!(LockXorMem64SibTemplate, GPR, 0b1, "xor")
+lock_logic_rex_direct_template!(LockAndMem32Template, GPR32, 0b0, "and")
+lock_logic_rex_sib_template!(LockAndMem32SibTemplate, GPR32, 0b0, "and")
+lock_logic_rex_direct_template!(LockAndMem64Template, GPR, 0b1, "and")
+lock_logic_rex_sib_template!(LockAndMem64SibTemplate, GPR, 0b1, "and")
+lock_logic_rex_direct_template!(LockOrMem32Template, GPR32, 0b0, "or")
+lock_logic_rex_sib_template!(LockOrMem32SibTemplate, GPR32, 0b0, "or")
+lock_logic_rex_direct_template!(LockOrMem64Template, GPR, 0b1, "or")
+lock_logic_rex_sib_template!(LockOrMem64SibTemplate, GPR, 0b1, "or")
+
+macro lock_logic_norex_template {
+    ( $name:ident, $op:literal ) => {
+        template $name for [X86] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            operands { base: GPRsibLow, imm: bits<32>, reg: GPR32low, }
+            encoding {
+                0..7 => 0xF0,
+                8..15 => OPCODE,
+                16..18 => 0b100,
+                19..21 => reg[0..2],
+                22..23 => 0b10,
+                24..31 => 0x24,
+                32..63 => imm,
+            }
+            asm { ${concat("{self.MNEMONIC} ", $op, " [{base} + {imm}], {reg}")} }
+            schedule { units = [WriteIALU]; }
+        }
+    };
+}
+
+macro lock_logic_norex_direct_template {
+    ( $name:ident, $op:literal ) => {
+        template $name for [X86] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            operands { base: GPRaddrDispLow, imm: bits<32>, reg: GPR32low, }
+            encoding {
+                0..7 => 0xF0,
+                8..15 => OPCODE,
+                16..18 => base[0..2],
+                19..21 => reg[0..2],
+                22..23 => 0b10,
+                24..55 => imm,
+            }
+            asm { ${concat("{self.MNEMONIC} ", $op, " [{base} + {imm}], {reg}")} }
+            schedule { units = [WriteIALU]; }
+        }
+    };
+}
+
+lock_logic_norex_direct_template!(LockXorMem32NorexTemplate, "xor")
+lock_logic_norex_template!(LockXorMem32SibNorexTemplate, "xor")
+lock_logic_norex_direct_template!(LockAndMem32NorexTemplate, "and")
+lock_logic_norex_template!(LockAndMem32SibNorexTemplate, "and")
+lock_logic_norex_direct_template!(LockOrMem32NorexTemplate, "or")
+lock_logic_norex_template!(LockOrMem32SibNorexTemplate, "or")
+
+macro lock_logic_norex {
+    ( $( ( $name:ident, $tmpl:ident, $opname:literal, $op:literal, $opcode:literal, $rmw:ident ) ),* ) => {
+        $( instruction $name for [X86] : $tmpl {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = "lock";
+               param OPCODE: bits<8> = $opcode;
+               behavior {
+                   atomic_rmw($rmw, base + sext(imm, self.XLEN), 4, reg, Ordering::acq_rel);
+                   todo_flags!()
+               }
+           } )*
+    };
+}
+
+lock_logic_norex!(
+    (LockXorMem32Norex, LockXorMem32NorexTemplate, "lock_xor_mem32_norex", "xor", 0x31, xor),
+    (LockXorMem32SibNorex, LockXorMem32SibNorexTemplate, "lock_xor_mem32_sib_norex", "xor", 0x31, xor),
+    (LockAndMem32Norex, LockAndMem32NorexTemplate, "lock_and_mem32_norex", "and", 0x21, and),
+    (LockAndMem32SibNorex, LockAndMem32SibNorexTemplate, "lock_and_mem32_sib_norex", "and", 0x21, and),
+    (LockOrMem32Norex, LockOrMem32NorexTemplate, "lock_or_mem32_norex", "or", 0x09, or),
+    (LockOrMem32SibNorex, LockOrMem32SibNorexTemplate, "lock_or_mem32_sib_norex", "or", 0x09, or)
+)
+
+macro lock_logic {
+    ( $( ( $name:ident, $tmpl:ident, $opname:literal, $op:literal, $opcode:literal,
+            $rmw:ident, $bytes:literal ) ),* ) => {
+        $( instruction $name for [X86_64] : $tmpl {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = "lock";
+               param OPCODE: bits<8> = $opcode;
+               behavior {
+                   atomic_rmw($rmw, base + sext(imm, self.XLEN), $bytes, reg, Ordering::acq_rel);
+                   todo_flags!()
+               }
+           } )*
+    };
+}
+
+lock_logic!(
+    (LockXorMem32, LockXorMem32Template, "lock_xor_mem32", "xor", 0x31, xor, 4),
+    (LockXorMem32Sib, LockXorMem32SibTemplate, "lock_xor_mem32_sib", "xor", 0x31, xor, 4),
+    (LockXorMem64, LockXorMem64Template, "lock_xor_mem64", "xor", 0x31, xor, 8),
+    (LockXorMem64Sib, LockXorMem64SibTemplate, "lock_xor_mem64_sib", "xor", 0x31, xor, 8),
+    (LockAndMem32, LockAndMem32Template, "lock_and_mem32", "and", 0x21, and, 4),
+    (LockAndMem32Sib, LockAndMem32SibTemplate, "lock_and_mem32_sib", "and", 0x21, and, 4),
+    (LockAndMem64, LockAndMem64Template, "lock_and_mem64", "and", 0x21, and, 8),
+    (LockAndMem64Sib, LockAndMem64SibTemplate, "lock_and_mem64_sib", "and", 0x21, and, 8),
+    (LockOrMem32, LockOrMem32Template, "lock_or_mem32", "or", 0x09, or, 4),
+    (LockOrMem32Sib, LockOrMem32SibTemplate, "lock_or_mem32_sib", "or", 0x09, or, 4),
+    (LockOrMem64, LockOrMem64Template, "lock_or_mem64", "or", 0x09, or, 8),
+    (LockOrMem64Sib, LockOrMem64SibTemplate, "lock_or_mem64_sib", "or", 0x09, or, 8)
+)

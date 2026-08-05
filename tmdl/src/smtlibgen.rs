@@ -1926,6 +1926,12 @@ impl sem_expr_state::BehaviorEmitter for BehaviorEmitter<'_> {
             let (values, root) = self.behavior.value_graph(value)?;
             return self.atomic_effect(&atomic_of_node(&values, root)?, st_name);
         }
+        if kind == tir::sem::SymKind::StateStore {
+            let (values, root) = self.behavior.value_graph(value)?;
+            if *values.get_node(root) == tir::sem::SymKind::AtomicRmw {
+                return self.atomic_effect(&atomic_of_node(&values, root)?, st_name);
+            }
+        }
         let children = self.behavior.graph.children(value).collect::<Vec<_>>();
         let (byte_values, byte_root) = self.behavior.value_graph(*children.get(1)?)?;
         let bytes = eval_const_subtree(&byte_values, byte_root)?.0 as u16;

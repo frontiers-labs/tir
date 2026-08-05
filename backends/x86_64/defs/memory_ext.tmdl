@@ -1,5 +1,96 @@
 //! Narrow and displacement-based memory operations plus stack push/pop instructions.
 
+macro mov32_memory_norex {
+    ( $name:ident, $opname:literal, load ) => {
+        instruction $name for [X86] {
+            param OPNAME: String = $opname;
+            param MNEMONIC: String = "mov";
+            operands { dst: GPR32low, base: GPRaddrDirectLow, }
+            encoding {
+                0..7 => 0x8B,
+                8..10 => base[0..2],
+                11..13 => dst[0..2],
+                14..15 => 0b00,
+            }
+            asm { "{self.MNEMONIC} {dst}, [{base}]" }
+            behavior { dst = todo(base); }
+        }
+    };
+    ( $name:ident, $opname:literal, store ) => {
+        instruction $name for [X86] {
+            param OPNAME: String = $opname;
+            param MNEMONIC: String = "mov";
+            operands { base: GPRaddrDirectLow, src: GPR32low, }
+            encoding {
+                0..7 => 0x89,
+                8..10 => base[0..2],
+                11..13 => src[0..2],
+                14..15 => 0b00,
+            }
+            asm { "{self.MNEMONIC} [{base}], {src}" }
+            behavior { }
+        }
+    };
+}
+
+mov32_memory_norex!(Mov32LoadNorex, "mov_load32_norex", load)
+mov32_memory_norex!(Mov32StoreNorex, "mov_store32_norex", store)
+
+instruction Mov16StoreNorex for [X86] {
+    param OPNAME: String = "mov_store16_norex";
+    param MNEMONIC: String = "mov";
+    operands { base: GPRaddrDirectLow, src: GPR16low, }
+    encoding {
+        0..7 => 0x66,
+        8..15 => 0x89,
+        16..18 => base[0..2],
+        19..21 => src[0..2],
+        22..23 => 0b00,
+    }
+    asm { "{self.MNEMONIC} [{base}], {src}" }
+    behavior { }
+}
+
+instruction Mov8StoreNorex for [X86] {
+    param OPNAME: String = "mov_store8_norex";
+    param MNEMONIC: String = "mov";
+    operands { base: GPRaddrDirectLow, src: GPR8low, }
+    encoding {
+        0..7 => 0x88,
+        8..10 => base[0..2],
+        11..13 => src[0..2],
+        14..15 => 0b00,
+    }
+    asm { "{self.MNEMONIC} [{base}], {src}" }
+    behavior { }
+}
+
+macro extend_load32_norex {
+    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $size:literal, $opcode:literal ) ),* ) => {
+        $( instruction $name for [X86] {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = $mnemonic;
+               operands { dst: GPR32low, base: GPRaddrDirectLow, }
+               encoding {
+                   0..7 => 0x0F,
+                   8..15 => $opcode,
+                   16..18 => base[0..2],
+                   19..21 => dst[0..2],
+                   22..23 => 0b00,
+               }
+               asm { ${concat("{self.MNEMONIC} {dst}, ", $size, " ptr [{base}]")} }
+               behavior { dst = todo(base); }
+           } )*
+    };
+}
+
+extend_load32_norex!(
+    (Movzx8Load32Norex, "movzx8_load32_norex", "movzx", "byte", 0xB6),
+    (Movzx16Load32Norex, "movzx16_load32_norex", "movzx", "word", 0xB7),
+    (Movsx8Load32Norex, "movsx8_load32_norex", "movsx", "byte", 0xBE),
+    (Movsx16Load32Norex, "movsx16_load32_norex", "movsx", "word", 0xBF)
+)
+
 // Memory-access extensions: sub-64-bit loads/stores (lb/lh/lw parity through
 // movzx/movsx and narrow mov), a disp32 addressing form for the 64-bit mov,
 // and the stack push/pop pair. Like the base mov load/store, addressing is
@@ -1556,7 +1647,7 @@ instruction Pop for [X86_64] : PushPop {
 
 // No-REX push/pop (rax..rdi): the register number lives entirely in the opcode
 // byte. Behavior-free (canonicalize-only).
-template PushPopNorex for [X86_64] {
+template PushPopNorex for [X86] {
     param MNEMONIC: String;
     param OPCODE: bits<5>;
 
@@ -1574,7 +1665,7 @@ template PushPopNorex for [X86_64] {
     }
 }
 
-instruction PushNorex for [X86_64] : PushPopNorex {
+instruction PushNorex for [X86] : PushPopNorex {
     param OPNAME: String = "push_norex";
     param MNEMONIC: String = "push";
     param OPCODE: bits<5> = 0b01010;
@@ -1582,7 +1673,7 @@ instruction PushNorex for [X86_64] : PushPopNorex {
     behavior { }
 }
 
-instruction PopNorex for [X86_64] : PushPopNorex {
+instruction PopNorex for [X86] : PushPopNorex {
     param OPNAME: String = "pop_norex";
     param MNEMONIC: String = "pop";
     param OPCODE: bits<5> = 0b01011;

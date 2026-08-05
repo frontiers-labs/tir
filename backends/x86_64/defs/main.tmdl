@@ -6,9 +6,15 @@
 // stay in ModR/M. Register operands are spliced across both fields via slices,
 // e.g. `dst[0..2]` and `dst[3]`.
 
-isa X86 {}
+isa X86 {
+    param XLEN: Integer = 32;
+}
 
-isa X86_64 requires [X86] {
+isa SSE requires X86 {}
+
+isa SSE2 requires SSE {}
+
+isa X86_64 requires [X86, SSE2] {
     param XLEN: Integer = 64;
 }
 
@@ -23,7 +29,7 @@ register_class PC for [X86_64] {
 
 // Status flags written by compare-style instructions and read by conditional
 // jumps. The registers carry no encoding slots, so the class is never allocated.
-register_class EFLAGS for [X86_64] {
+register_class EFLAGS for [X86] {
     param ENCODING_LEN: Integer = 0;
     param WIDTH: Integer = 1;
 
@@ -159,7 +165,7 @@ register_class GPR8 for [X86_64] : GPR {
 // ah/ch/dh/bh overlap bits 8..15 of rax..rbx, so they alias the GPR file at
 // indices 0..3 (`file = GPR` shares the file without importing its registers).
 // Their ModR/M numbers 4..7 are encodable only without a REX prefix.
-register_class GPR8H for [X86_64] {
+register_class GPR8H for [X86] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 8;
@@ -184,7 +190,7 @@ register_class GPR8H for [X86_64] {
 //   GPR32low/GPR16low: eax..edi / ax..di (indices 0-7) — a REX-free 32/16-bit op.
 //   GPR8low: al/cl/dl/bl (indices 0-3) — the only 8-bit registers with no REX;
 //   spl/bpl/sil/dil (4-7) still require an empty REX and stay on the GPR8 form.
-register_class GPRlow for [X86_64] {
+register_class GPRlow for [X86] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = self.XLEN;
@@ -201,7 +207,48 @@ register_class GPRlow for [X86_64] {
     }
 }
 
-register_class GPR32low for [X86_64] {
+register_class GPRaddrDispLow for [X86] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rax => { index = 0 },
+        rcx => { index = 1 },
+        rdx => { index = 2 },
+        rbx => { index = 3 },
+        rbp => { index = 5 },
+        rsi => { index = 6 },
+        rdi => { index = 7 },
+    }
+}
+
+register_class GPRaddrDirectLow for [X86] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rax => { index = 0 },
+        rcx => { index = 1 },
+        rdx => { index = 2 },
+        rbx => { index = 3 },
+        rsi => { index = 6 },
+        rdi => { index = 7 },
+    }
+}
+
+register_class GPRsibLow for [X86] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rsp => { index = 4 },
+    }
+}
+
+register_class GPR32low for [X86] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 32;
@@ -218,7 +265,7 @@ register_class GPR32low for [X86_64] {
     }
 }
 
-register_class GPR16low for [X86_64] {
+register_class GPR16low for [X86] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 16;
@@ -236,7 +283,7 @@ register_class GPR16low for [X86_64] {
     }
 }
 
-register_class GPR8low for [X86_64] {
+register_class GPR8low for [X86] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 8;
@@ -392,7 +439,7 @@ template RegShiftOne32 for [X86_64] {
     asm { "{self.MNEMONIC} {dst}" }
 }
 
-template RegShiftOne32Norex for [X86_64] {
+template RegShiftOne32Norex for [X86] {
     param MNEMONIC: String;
     param EXT: bits<3>;
     operands { dst: GPR32low, }
@@ -416,12 +463,39 @@ tmpl_rrext!(RegRegExt, X86_64, GPR, rexw = 0b1)
 
 tmpl_rrext!(RegRegExt32, X86_64, GPR32, rexw = 0b0)
 
+template RegRegExt32Norex for [X86] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+    operands { dst: GPR32low, src: GPR32low, }
+    encoding {
+        0..7 => 0x0F,
+        8..15 => OPCODE,
+        16..18 => src[0..2],
+        19..21 => dst[0..2],
+        22..23 => 0b11,
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+}
+
 tmpl_rr!(RegReg32, X86_64, GPR32, rexw = 0b0)
 
 tmpl_ri!(RegImm32, X86_64, GPR32, rexw = 0b0)
 
 // 32-bit `imul r32, r/m32, imm32` (0x69 /r id, no REX.W).
 tmpl_rrimm!(RegRegImm32, X86_64, GPR32, rexw = 0b0)
+
+template RegRegImm32Norex for [X86] {
+    param MNEMONIC: String;
+    operands { dst: GPR32low, src: GPR32low, imm: bits<32>, }
+    encoding {
+        0..7 => 0x69,
+        8..10 => src[0..2],
+        11..13 => dst[0..2],
+        14..15 => 0b11,
+        16..47 => imm,
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}, {imm}" }
+}
 
 tmpl_rs!(RegShift32, X86_64, GPR32, rexw = 0b0, opcode = 0xC1)
 
@@ -501,6 +575,18 @@ template JccRel32 for [X86_64] {
     }
 }
 
+template JccRel32Legacy for [X86] {
+    param MNEMONIC: String;
+    param CC: bits<8>;
+    operands { imm: bits<32>, }
+    encoding {
+        0..7 => 0x0F,
+        8..15 => CC,
+        16..47 => imm,
+    }
+    asm { "{self.MNEMONIC} {imm}" }
+}
+
 // Width-family macros for the group-1 ALU / immediate / shift instructions.
 // Each family has a width-suffixed arm (for [X86_64], carries an OPNAME derived by
 // ${concat}) and a 64-bit arm (for [X86_64], no width suffix). One invocation
@@ -508,6 +594,15 @@ template JccRel32 for [X86_64] {
 // Opcodes differ per width (e.g. Add 0x01 vs Add8 0x00), so they stay per row.
 
 macro alu_rr {
+    ( $feature:ident, $nsuf:literal, $osuf:literal, $tmpl:ident, $class:ident, $( ( $name:ident, $mn:literal, $opc:literal, { $($b:tt)* } ) ),* ) => {
+        $( instruction ${concat($name, $nsuf)} for [$feature] : $tmpl {
+               param OPNAME: String = ${concat($mn, $osuf)};
+               param MNEMONIC: String = $mn;
+               param OPCODE: bits<8> = $opc;
+               schedule { units = [$class]; }
+               behavior { $($b)* }
+           } )*
+    };
     ( $nsuf:literal, $osuf:literal, $tmpl:ident, $class:ident, $( ( $name:ident, $mn:literal, $opc:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction ${concat($name, $nsuf)} for [X86_64] : $tmpl {
                param OPNAME: String = ${concat($mn, $osuf)};
@@ -534,7 +629,7 @@ macro alu_rr {
 // loop-carried dependency through eax..edi, al..bl or xmm0..xmm7.
 macro alu_rr_norex {
     ( $suf:literal, $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $mn:literal, $opc:literal ) ),* ) => {
-        $( instruction ${concat($name, $suf, "Norex")} for [X86_64] : $tmpl {
+        $( instruction ${concat($name, $suf, "Norex")} for [X86] : $tmpl {
                param OPNAME: String = ${concat($mn, $suf, "_norex")};
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
@@ -545,6 +640,16 @@ macro alu_rr_norex {
 }
 
 macro alu_ri {
+    ( $feature:ident, $nsuf:literal, $osuf:literal, $tmpl:ident, $class:ident, $( ( $name:ident, $ostem:literal, $mn:literal, $opc:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
+        $( instruction ${concat($name, $nsuf)} for [$feature] : $tmpl {
+               param OPNAME: String = ${concat($ostem, $osuf)};
+               param MNEMONIC: String = $mn;
+               param OPCODE: bits<8> = $opc;
+               param EXT: bits<3> = $ext;
+               schedule { units = [$class]; }
+               behavior { $($b)* }
+           } )*
+    };
     ( $nsuf:literal, $osuf:literal, $tmpl:ident, $class:ident, $( ( $name:ident, $ostem:literal, $mn:literal, $opc:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction ${concat($name, $nsuf)} for [X86_64] : $tmpl {
                param OPNAME: String = ${concat($ostem, $osuf)};
@@ -572,7 +677,7 @@ macro alu_ri {
 // `canonicalize_encodings`.
 macro alu_ri_norex {
     ( $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal, $ext:literal ) ),* ) => {
-        $( instruction $name for [X86_64] : $tmpl {
+        $( instruction $name for [X86] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
@@ -631,6 +736,15 @@ macro shift_cl {
 }
 
 macro shift_imm {
+    ( $feature:ident, $nsuf:literal, $osuf:literal, $tmpl:ident, $( ( $name:ident, $mn:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
+        $( instruction ${concat($name, $nsuf)} for [$feature] : $tmpl {
+               param OPNAME: String = ${concat($mn, $osuf)};
+               param MNEMONIC: String = $mn;
+               param EXT: bits<3> = $ext;
+               schedule { units = [WriteIShift]; }
+               behavior { $($b)* }
+           } )*
+    };
     ( $nsuf:literal, $osuf:literal, $tmpl:ident, $( ( $name:ident, $mn:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction ${concat($name, $nsuf)} for [X86_64] : $tmpl {
                param OPNAME: String = ${concat($mn, $osuf)};
@@ -658,7 +772,7 @@ macro shift_imm {
 // in rcx, and the flags it writes.
 macro reg_ext_norex {
     ( $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $ext:literal ) ),* ) => {
-        $( instruction $name for [X86_64] : $tmpl {
+        $( instruction $name for [X86] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
@@ -672,7 +786,7 @@ macro reg_ext_norex {
 // unmodeled; the shifts and the rotates differ in which flags they write.
 macro shift_imm_norex {
     ( $suf:literal, $tmpl:ident, $b:tt, $( ( $name:ident, $mn:literal, $ext:literal ) ),* ) => {
-        $( instruction ${concat($name, $suf, "Norex")} for [X86_64] : $tmpl {
+        $( instruction ${concat($name, $suf, "Norex")} for [X86] : $tmpl {
                param OPNAME: String = ${concat($mn, $suf, "_norex")};
                param MNEMONIC: String = $mn;
                param EXT: bits<3> = $ext;
@@ -732,7 +846,7 @@ macro tmpl_rr {
         }
     };
     ( $name:ident, $cls:ident, high8 ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
@@ -749,7 +863,7 @@ macro tmpl_rr {
     };
     // No REX prefix: opcode + ModR/M only (32/8-bit low registers).
     ( $name:ident, $cls:ident, norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
@@ -764,7 +878,7 @@ macro tmpl_rr {
     };
     // 0x66 operand-size prefix, no REX (16-bit low registers).
     ( $name:ident, $cls:ident, prefix66norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
@@ -846,7 +960,7 @@ macro tmpl_ri {
         }
     };
     ( $name:ident, $cls:ident, high8 ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param OPCODE: bits<8>;
             param EXT: bits<3>;
@@ -864,7 +978,7 @@ macro tmpl_ri {
     };
     // No REX: opcode + ModR/M + imm32 (32-bit low registers).
     ( $name:ident, $cls:ident, norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param OPCODE: bits<8>;
             param EXT: bits<3>;
@@ -881,7 +995,7 @@ macro tmpl_ri {
     };
     // 0x66 prefix, no REX + imm16 (16-bit low registers).
     ( $name:ident, $cls:ident, prefix66norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param OPCODE: bits<8>;
             param EXT: bits<3>;
@@ -899,7 +1013,7 @@ macro tmpl_ri {
     };
     // No REX + imm8 (8-bit low registers al/cl/dl/bl, opcode 0x80/0xC6).
     ( $name:ident, $cls:ident, bytenorex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param OPCODE: bits<8>;
             param EXT: bits<3>;
@@ -961,7 +1075,7 @@ macro tmpl_ri8 {
         }
     };
     ( $name:ident, $cls:ident, norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
@@ -976,7 +1090,7 @@ macro tmpl_ri8 {
         }
     };
     ( $name:ident, $cls:ident, prefix66norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
@@ -1036,7 +1150,7 @@ macro tmpl_rs {
         }
     };
     ( $name:ident, $cls:ident, high8 ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
@@ -1053,7 +1167,7 @@ macro tmpl_rs {
     };
     // No REX: 0xC1 + ModR/M + imm8 (32-bit low registers).
     ( $name:ident, $cls:ident, norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
@@ -1069,7 +1183,7 @@ macro tmpl_rs {
     };
     // 0x66 prefix, no REX (16-bit low registers).
     ( $name:ident, $cls:ident, prefix66norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
@@ -1086,7 +1200,7 @@ macro tmpl_rs {
     };
     // No REX: 0xC0 + ModR/M + imm8 (8-bit low registers al/cl/dl/bl).
     ( $name:ident, $cls:ident, bytenorex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
@@ -1125,7 +1239,7 @@ macro tmpl_rscl {
     };
     // No REX: 0xD3 + ModR/M (32-bit low registers).
     ( $name:ident, $cls:ident, norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, }
@@ -1140,7 +1254,7 @@ macro tmpl_rscl {
     };
     // 0x66 prefix, no REX (16-bit low registers).
     ( $name:ident, $cls:ident, prefix66norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, }
@@ -1156,7 +1270,7 @@ macro tmpl_rscl {
     };
     // No REX: 0xD2 + ModR/M (8-bit low registers al/cl/dl/bl).
     ( $name:ident, $cls:ident, bytenorex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, }
@@ -1232,6 +1346,17 @@ macro jcc_ops {
                        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
                    }
                }
+           }
+           instruction ${concat($name, "Legacy")} for [X86] : JccRel32Legacy {
+               param OPNAME: String = ${concat($mn, "_legacy")};
+               param MNEMONIC: String = $mn;
+               param CC: bits<8> = $cc;
+               schedule { units = [WriteJcc]; }
+               behavior {
+                   if $($cond)* {
+                       PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b110, self.XLEN);
+                   }
+               }
            } )*
     };
 }
@@ -1259,7 +1384,7 @@ macro setcc_ops {
 // carried no dependency at all.
 macro setcc_norex {
     ( $( ( $name:ident, $op:literal, $mn:literal, $cc:literal, { $($cond:tt)* } ) ),* ) => {
-        $( instruction $name for [X86_64] : SetccRegNorex {
+        $( instruction $name for [X86] : SetccRegNorex {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param CC: bits<8> = $cc;
@@ -1401,7 +1526,7 @@ macro tmpl_runary {
     };
     // No REX: 0xF7 + ModR/M (32-bit low registers).
     ( $name:ident, $cls:ident, norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, }
@@ -1416,7 +1541,7 @@ macro tmpl_runary {
     };
     // 0x66 prefix, no REX (16-bit low registers).
     ( $name:ident, $cls:ident, prefix66norex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, }
@@ -1432,7 +1557,7 @@ macro tmpl_runary {
     };
     // No REX: 0xF6 + ModR/M (8-bit low registers al/cl/dl/bl).
     ( $name:ident, $cls:ident, bytenorex ) => {
-        template $name for [X86_64] {
+        template $name for [X86] {
             param MNEMONIC: String;
             param EXT: bits<3>;
             operands { dst: $cls, }

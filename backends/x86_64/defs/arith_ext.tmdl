@@ -2,8 +2,7 @@
 
 // Scalar integer extensions beyond the base ALU set: immediate compare/test,
 // group-3 unary ops, CL-count and rotate shifts, widening multiply, and the
-// movzx/movsx register extensions. Division is not modeled: idiv's 128-bit
-// rdx:rax dividend has no faithful representation in the semantic language.
+// movzx/movsx register extensions and fixed-register signed/unsigned division.
 
 // Group-3 unary `op r/m64`: REX.W + 0xF7 + ModR/M(mod=11, reg=EXT, rm=dst).
 tmpl_runary!(RegUnary, X86_64, GPR, rexw = 0b1)
@@ -254,6 +253,31 @@ instruction UnsignedDivide32 for [X86_64] : RegUnary32 {
     }
 }
 
+macro divide32_norex {
+    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $ext:literal ) ),* ) => {
+        $( instruction $name for [X86] : RegUnary32Norex {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = $mnemonic;
+               param EXT: bits<3> = $ext;
+               behavior { }
+           } )*
+    };
+}
+
+divide32_norex!(
+    (SignedDivide32Norex, "signed_divide32_norex", "idiv", 0b111),
+    (UnsignedDivide32Norex, "unsigned_divide32_norex", "div", 0b110)
+)
+
+instruction SignExtendDividend32Norex for [X86] {
+    param OPNAME: String = "sign_extend_dividend32_norex";
+    param MNEMONIC: String = "cdq";
+    schedule { units = [WriteIExtend]; }
+    encoding { 0..7 => 0x99, }
+    asm { "{self.MNEMONIC}" }
+    behavior { }
+}
+
 // Rotates share the 0xC1 shift-immediate layout. Both shifts of the rotate pair
 // are computed with the count masked to the operand width, so a zero count
 // degenerates to `dst | dst`.
@@ -278,6 +302,36 @@ extend_ops!(
     (Movzx16, "movzx16", "movzx", ExtendReg16, 0xB7, { dst = zext(src, self.XLEN); }),
     (Movsx8,  "movsx8",  "movsx", ExtendReg8,  0xBE, { dst = sext(src, self.XLEN); }),
     (Movsx16, "movsx16", "movsx", ExtendReg16, 0xBF, { dst = sext(src, self.XLEN); })
+)
+
+macro extend32_norex {
+    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $src:ident, $opcode:literal ) ),* ) => {
+        $( instruction $name for [X86] {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = $mnemonic;
+
+               operands { dst: GPR32low, src: $src, }
+
+               encoding {
+                   0..7 => 0x0F,
+                   8..15 => $opcode,
+                   16..18 => src[0..2],
+                   19..21 => dst[0..2],
+                   22..23 => 0b11,
+               }
+
+               asm { "{self.MNEMONIC} {dst}, {src}" }
+               schedule { units = [WriteIExtend]; }
+               behavior { dst = todo(src); }
+           } )*
+    };
+}
+
+extend32_norex!(
+    (Movzx8To32Norex, "movzx8_to32_norex", "movzx", GPR8low, 0xB6),
+    (Movzx16To32Norex, "movzx16_to32_norex", "movzx", GPR16low, 0xB7),
+    (Movsx8To32Norex, "movsx8_to32_norex", "movsx", GPR8low, 0xBE),
+    (Movsx16To32Norex, "movsx16_to32_norex", "movsx", GPR16low, 0xBF)
 )
 
 // `movsxd r64, r/m32` (0x63): no 0x0F escape.
@@ -322,7 +376,7 @@ instruction Movzxd for [X86_64] {
 
     operands {
         dst: GPR,
-        src: GPR,
+        src: GPR32,
     }
 
     encoding {
@@ -342,7 +396,7 @@ instruction Movzxd for [X86_64] {
     }
 
     behavior {
-        dst = src & zext(0xFFFFFFFF, self.XLEN);
+        dst = zext(src, self.XLEN);
     }
 }
 

@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-ast-json --output=- %s | filecheck %s
+// RUN: not tmdlc --action=emit-ast-json --output=- %s | filecheck %s
 
 isa TestIsa {}
 

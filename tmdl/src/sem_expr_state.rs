@@ -514,6 +514,7 @@ fn collect_values<'a>(
             }
             ast::BuiltinFunction::Store
             | ast::BuiltinFunction::StoreConditional
+            | ast::BuiltinFunction::AtomicRmw
             | ast::BuiltinFunction::Fence
             | ast::BuiltinFunction::FenceI => out.push(expr),
             _ => return None,
@@ -600,6 +601,11 @@ impl EffectLowerer<'_> {
                         ))
                     }
                     ast::BuiltinFunction::Store => Some(self.add(
+                        SymKind::StateStore,
+                        EffectPayload::None,
+                        &[self.value(expr)?],
+                    )),
+                    ast::BuiltinFunction::AtomicRmw => Some(self.add(
                         SymKind::StateStore,
                         EffectPayload::None,
                         &[self.value(expr)?],

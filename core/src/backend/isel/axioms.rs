@@ -953,11 +953,18 @@ impl Axiom {
                     .map(|c| self.instantiate(ctx, c, eg, m, holes, widths))
                     .collect::<Option<Vec<_>>>()?;
                 fold_constant_op(*kind, &children, eg).unwrap_or_else(|| {
-                    // Float conversions carry the IEEE result type named by their
-                    // exponent/mantissa operands; every other node is register-wide
-                    // integer (comparisons a single bit).
+                    // Conversions carry the result type named by their format or
+                    // width operands; every other node is register-wide integer
+                    // (comparisons a single bit).
                     let ty = if matches!(*kind, SymKind::SIToFP | SymKind::UIToFP) {
                         conversion_float_type(ctx, eg, &children)
+                    } else if matches!(
+                        *kind,
+                        SymKind::FPToSI | SymKind::FPToUI | SymKind::ZExt | SymKind::SExt
+                    ) {
+                        conversion_integer_type(ctx, eg, &children)
+                    } else if *kind == SymKind::Extract {
+                        extract_integer_type(ctx, eg, &children, self.register_width(widths))
                     } else {
                         let width = if is_comparison(*kind) {
                             1
@@ -1014,6 +1021,34 @@ fn conversion_float_type(ctx: &Context, eg: &SemEGraph, children: &[Id]) -> tir:
     let exp = format(1).unwrap_or(11);
     let mant = format(2).unwrap_or(52);
     tir::builtin::FloatType::new(ctx, exp, mant)
+}
+
+fn conversion_integer_type(ctx: &Context, eg: &SemEGraph, children: &[Id]) -> tir::TypeId {
+    let width = children
+        .get(1)
+        .and_then(|&c| class_int_binding(eg, c))
+        .map(|v| v.to_u64() as u32)
+        .unwrap_or(64);
+    tir::builtin::IntegerType::new(ctx, width)
+}
+
+fn extract_integer_type(
+    ctx: &Context,
+    eg: &SemEGraph,
+    children: &[Id],
+    fallback: u32,
+) -> tir::TypeId {
+    let bound = |slot: usize| {
+        children
+            .get(slot)
+            .and_then(|&c| class_int_binding(eg, c))
+            .map(|v| v.to_u64() as u32)
+    };
+    let width = match (bound(1), bound(2)) {
+        (Some(hi), Some(lo)) if hi >= lo => hi - lo + 1,
+        _ => fallback,
+    };
+    tir::builtin::IntegerType::new(ctx, width)
 }
 
 /// Execute a pure op over `(value, width)` constant operands via a throwaway

@@ -1,4 +1,4 @@
-// RUN: tmdlc --action=emit-expanded-tokens --output=- %s | filecheck %s
+// RUN: not tmdlc --action=emit-expanded-tokens --output=- %s | filecheck %s
 
 macro one {
     ($x:ident) => { $x };

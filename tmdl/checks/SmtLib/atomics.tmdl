@@ -139,6 +139,22 @@ instruction AmoAddW for [AtomIsa] {
 // CHECK: (distinct (bvand exc_addr0 (_ bv3 64)) (_ bv0 64))
 // CHECK: (write_mem_4 (write_gpr st rd ((_ sign_extend 32) (read_mem_4 st (read_gpr st rs1)))) (read_gpr st rs1) (bvadd (read_mem_4 st (read_gpr st rs1)) ((_ extract 31 0) (read_gpr st rs2))))
 
+// A discarded atomic RMW still performs its memory transition.
+instruction AmoXorWBare for [AtomIsa] {
+    param MNEMONIC: String = "amoxor.w.bare";
+    param OPCODE: bits<7> = 0b0101111;
+    param FUNCT3: bits<3> = 0b110;
+    operands { rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 12..14 => FUNCT3, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rs2}, ({rs1})" }
+    behavior {
+        atomic_rmw(xor, rs1, 4, extract(rs2, 31, 0), Ordering::acq_rel);
+    }
+}
+// CHECK: ; INSTRUCTION: amoxorwbare writes-pc=false
+// CHECK: (define-fun execute_amoxorwbare
+// CHECK-NEXT: (write_mem_4 st (read_gpr st rs1) (bvxor (read_mem_4 st (read_gpr st rs1)) ((_ extract 31 0) (read_gpr st rs2))))
+
 // Signed-minimum atomic: the combined value is `(ite (bvslt old val) old val)`.
 instruction AmoMinW for [AtomIsa] {
     param MNEMONIC: String = "amomin.w";

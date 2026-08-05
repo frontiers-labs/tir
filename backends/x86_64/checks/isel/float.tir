@@ -79,7 +79,7 @@ module {
 // CHECK-NEXT: x86_64.divsd {dst = %virt5:XMM, dst_tied = %virt4:XMM, src = %virt1:XMM}
 // CHECK-NEXT: asm.vret
 // CHECK:      x86_64.cvtsi2sd32 {dst = %virt7:XMM, src = %virt6:GPR32}
-// CHECK:      x86_64.movzxd {dst = %virt[[ZEXT:[0-9]+]]:GPR, src = %virt8:GPR}
+// CHECK:      x86_64.movzxd {dst = %virt[[ZEXT:[0-9]+]]:GPR, src = %virt8:GPR32}
 // CHECK-NEXT: x86_64.cvtsi2sd64 {dst = %virt9:XMM, src = %virt[[ZEXT]]:GPR}
 // CHECK:      x86_64.cvttsd2si32 {dst = %virt11:GPR32, src = %virt10:XMM}
 // The i32 result is the low half of the 64-bit conversion: a zero-instruction

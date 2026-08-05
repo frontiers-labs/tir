@@ -16,3 +16,19 @@ fn compiles_an_in_memory_source() {
     assert!(tokens.contains("Isa"), "{tokens}");
     std::fs::remove_file(output).unwrap();
 }
+
+#[test]
+fn invalid_source_fails_compilation() {
+    let output =
+        std::env::temp_dir().join(format!("tmdl-invalid-source-{}.rs", std::process::id()));
+    let result = Compiler::builder()
+        .action(Action::EmitRust)
+        .dialect(Some("test".to_string()))
+        .add_source("invalid.tmdl", "isa Test { found")
+        .output(OutputKind::File(output.to_string_lossy().into_owned()))
+        .build()
+        .compile();
+
+    assert!(result.is_err());
+    let _ = std::fs::remove_file(output);
+}

@@ -1,21 +1,30 @@
 ; x86-64-specific instruction-selection axioms.
 ;
-; x86 has no direct unsigned-integer-to-double conversion. A binary64 unsigned
-; conversion of a 32-bit integer equals the signed conversion of its 64-bit
-; zero-extension, since masking to 32 bits clears the sign bit:
+; x86 has no direct unsigned-integer-to-floating-point conversion. A binary32
+; or binary64 unsigned conversion of a 32-bit integer equals the corresponding
+; signed conversion of its 64-bit zero-extension, since masking to 32 bits
+; clears the sign bit:
 ;
-;   uitofp(x, f64) == sitofp(x & 0xFFFFFFFF, f64)
+;   uitofp(x, fp) == sitofp(zext(x, i64), fp)
 ;
-; The mask is shaped as the `mov r32, r32` zeroing move (`movzxd`) so selection
-; covers it with that instruction feeding `cvtsi2sd r64`. The identity is proved
-; by bit-blasting both conversions through the IEEE round-to-nearest circuit.
+; The extension is the `mov r32, r32` zeroing move (`movzxd`) feeding the
+; signed 64-bit SSE conversion. The identities are proved by bit-blasting both
+; conversions through the IEEE round-to-nearest circuit.
+(axiom uitofp32-via-sitofp (vars (x n)) (root 32) (where (= n 32))
+  (lhs (uitofp x 8 23))
+  (rhs (sitofp (zext x 64) (const 8 4) (const 23 5))))
+
 (axiom uitofp-via-sitofp (vars (x n)) (root 64) (where (= n 32))
   (lhs (uitofp x 11 52))
-  (rhs (sitofp (and x (zext (const 4294967295 32) 64)) (const 11 4) (const 52 6))))
+  (rhs (sitofp (zext (extract x (const 31 6) (const 0 1)) 64) (const 11 4) (const 52 6))))
 
 ; FPToUI is defined only where truncation fits the unsigned destination. In
 ; that domain, every u32 value fits an i64, so x86 can convert to i64 and keep
 ; the low 32 bits.
+(axiom fptoui32-via-fptosi (vars (x 32)) (root 32)
+  (lhs (fptoui x 32))
+  (rhs (extract (fptosi x (const 64 7)) (const 31 6) (const 0 1))))
+
 (axiom fptoui-via-fptosi (vars (x 64)) (root 32)
   (lhs (fptoui x 32))
   (rhs (extract (fptosi x (const 64 7)) (const 31 6) (const 0 1))))

@@ -5,14 +5,16 @@ use tmdl::{Action, Compiler, OutputKind};
 fn main() -> Result<(), Box<dyn Error>> {
     let out_dir = std::env::var("OUT_DIR")?;
     let inputs = [
-        "./defs/main.tmdl",
-        "./defs/base.tmdl",
-        "./defs/arith_ext.tmdl",
-        "./defs/conditional.tmdl",
-        "./defs/memory_ext.tmdl",
-        "./defs/float.tmdl",
-        "./defs/perf.tmdl",
-        "./defs/cpu/intel/tiger_lake.tmdl",
+        "defs/main.tmdl",
+        "defs/base.tmdl",
+        "defs/arith_ext.tmdl",
+        "defs/conditional.tmdl",
+        "defs/memory_ext.tmdl",
+        "defs/atomics.tmdl",
+        "defs/ordering.tmdl",
+        "defs/float.tmdl",
+        "defs/perf.tmdl",
+        "defs/cpu/intel/tiger_lake.tmdl",
     ];
     for input in &inputs {
         println!("cargo:rerun-if-changed={input}");

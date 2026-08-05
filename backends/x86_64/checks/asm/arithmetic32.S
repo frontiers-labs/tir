@@ -40,5 +40,5 @@ alu32:
 # CHECK-NEXT: x86_64.add32 {dst = r8d, src = r9d}
 # CHECK-NEXT: x86_64.mov32 {dst = r15d, src = r10d}
 # CHECK-NEXT: x86_64.add_imm8s32 {dst = r12d, imm = 42}
-# CHECK-NEXT: x86_64.imul32 {dst = eax, src = ebx}
+# CHECK-NEXT: x86_64.imul32_norex {dst = eax, src = ebx}
 # CHECK-NEXT: x86_64.imul32 {dst = r8d, src = r9d}

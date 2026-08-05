@@ -18,6 +18,10 @@
 
 // CHECK: SymKind::StoreConditional
 // CHECK: SymKind::AtomicRmw
+
+// A discarded atomic RMW remains an executed stateful memory operation.
+// CHECK: impl tir::backend::MachineInstruction for AmoXorWDiscardOp
+// CHECK: self.0.atomic_rmw(op, address, size, value, ord)
 // CHECK: SymKind::Fence
 
 // A plain store with an explicit ordering packs the ordering code into the

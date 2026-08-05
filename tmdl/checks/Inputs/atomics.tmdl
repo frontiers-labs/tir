@@ -72,6 +72,19 @@ instruction AmoAddW for [AIsa] {
     }
 }
 
+instruction AmoXorWDiscard for [AIsa] {
+    param MNEMONIC: String = "amoxor.w.discard";
+    param OPCODE: bits<7> = 0b0101111;
+
+    operands { rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rs2}, ({rs1})" }
+
+    behavior {
+        atomic_rmw(xor, rs1, 4, extract(rs2, 31, 0), Ordering::acq_rel);
+    }
+}
+
 instruction FenceInst for [AIsa] {
     param MNEMONIC: String = "fence";
     param OPCODE: bits<7> = 0b0001111;

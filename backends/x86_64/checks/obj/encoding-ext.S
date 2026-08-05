@@ -86,11 +86,11 @@ enc_ext:
 # CHECK-NEXT: [0x48, 0x0F, 0xB6, 0x03]
 # CHECK-NEXT: [0x48, 0x0F, 0xBF, 0x0A]
 # CHECK-NEXT: [0x48, 0x63, 0x03]
-# narrow mov loads/stores (REX always, as for all GPR32/GPR16/GPR8 forms).
-# CHECK-NEXT: [0x40, 0x8B, 0x03]
-# CHECK-NEXT: [0x40, 0x89, 0x03]
-# CHECK-NEXT: [0x66, 0x40, 0x89, 0x0B]
-# CHECK-NEXT: [0x40, 0x88, 0x13]
+# narrow mov loads/stores use their legacy encodings when all registers are low.
+# CHECK-NEXT: [0x8B, 0x03]
+# CHECK-NEXT: [0x89, 0x03]
+# CHECK-NEXT: [0x66, 0x89, 0x0B]
+# CHECK-NEXT: [0x88, 0x13]
 # disp32 forms: mod=10 + disp32. Divergence: TIR always uses disp32 for a
 # non-zero displacement; GNU as would pick the shorter disp8 (mod=01) form
 # (48 8b 43 08 / 48 89 51 10). Both valid; TIR's is 3 bytes longer.

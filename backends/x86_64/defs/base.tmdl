@@ -69,6 +69,14 @@ instruction Imul32 for [X86_64] : RegRegExt32 {
     }
 }
 
+instruction Imul32Norex for [X86] : RegRegExt32Norex {
+    param OPNAME: String = "imul32_norex";
+    param MNEMONIC: String = "imul";
+    param OPCODE: bits<8> = 0xAF;
+    schedule { units = [WriteIMul]; }
+    behavior { dst = todo(dst, src); }
+}
+
 // Immediate multiply: `imul dst, src, imm` folds a constant factor. Unlike the
 // group-1 immediate ops it is non-destructive (dst = src * imm), so it selects
 // `muli` against a constant without first materializing the constant.
@@ -94,6 +102,13 @@ instruction ImulImm32 for [X86_64] : RegRegImm32 {
     behavior {
         dst = src * sext(imm, 32);
     }
+}
+
+instruction ImulImm32Norex for [X86] : RegRegImm32Norex {
+    param OPNAME: String = "imul_imm32_norex";
+    param MNEMONIC: String = "imul";
+    schedule { units = [WriteIMul]; }
+    behavior { dst = todo(src, imm); }
 }
 
 // Group-1 ops share opcode 0x81 and select via the ModR/M EXT (/digit); mov
@@ -159,6 +174,18 @@ instruction Jmp for [X86_64] {
     }
 }
 
+instruction JmpLegacy for [X86] {
+    param OPNAME: String = "jmp_legacy";
+    param MNEMONIC: String = "jmp";
+    schedule { units = [WriteJump]; }
+    operands { imm: bits<32>, }
+    encoding { 0..7 => 0xE9, 8..39 => imm, }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior {
+        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
+    }
+}
+
 // Conditional jumps: EFLAGS-guarded PC writes. Selection derives cmp/test +
 // jcc branch rules from these guards composed with the flag definers above.
 
@@ -194,6 +221,19 @@ instruction Call for [X86_64] {
     }
 }
 
+instruction CallLegacy for [X86] {
+    param OPNAME: String = "call_legacy";
+    param MNEMONIC: String = "call";
+    operands { imm: bits<32>, }
+    encoding { 0..7 => 0xE8, 8..39 => imm, }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior {
+        GPR::rsp = GPR::rsp - zext(0b100, self.XLEN);
+        store(GPR::rsp, 4, PC::pc + zext(0b101, self.XLEN));
+        PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
+    }
+}
+
 instruction Ret for [X86_64] {
     param MNEMONIC: String = "ret";
 
@@ -208,6 +248,17 @@ instruction Ret for [X86_64] {
     behavior {
         PC::pc = load(GPR::rsp, 8, 0b0);
         GPR::rsp = GPR::rsp + zext(0b1000, self.XLEN);
+    }
+}
+
+instruction RetLegacy for [X86] {
+    param OPNAME: String = "ret_legacy";
+    param MNEMONIC: String = "ret";
+    encoding { 0..7 => 0xC3, }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        PC::pc = load(GPR::rsp, 4, 0b0);
+        GPR::rsp = GPR::rsp + zext(0b100, self.XLEN);
     }
 }
 
@@ -428,7 +479,7 @@ instruction CallIndirect for [X86_64] {
 
 // No-REX indirect jmp/call (target in rax..rdi): 0xFF + ModR/M, no REX prefix.
 // Behavior-free (canonicalize-only), so they root no isel/terminator handling.
-instruction JmpIndirectNorex for [X86_64] {
+instruction JmpIndirectNorex for [X86] {
     param OPNAME: String = "jmp_indirect_norex";
     param MNEMONIC: String = "jmp";
 
@@ -450,7 +501,7 @@ instruction JmpIndirectNorex for [X86_64] {
     behavior { }
 }
 
-instruction CallIndirectNorex for [X86_64] {
+instruction CallIndirectNorex for [X86] {
     param OPNAME: String = "call_indirect_norex";
     param MNEMONIC: String = "call";
 
@@ -545,7 +596,7 @@ shift_imm!("One32", "_one32", RegShiftOne32,
     (Ror, "ror", 0b001, { })
 )
 
-shift_imm!("One32Norex", "_one32_norex", RegShiftOne32Norex,
+shift_imm!(X86, "One32Norex", "_one32_norex", RegShiftOne32Norex,
     (Shl, "shl", 0b100, { }),
     (Shr, "shr", 0b101, { }),
     (Sar, "sar", 0b111, { }),
@@ -612,7 +663,7 @@ shift_imm!("8", "8", RegShift8,
     (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
 )
 
-alu_rr!("8H", "8h", RegReg8H, WriteIHighByte,
+alu_rr!(X86, "8H", "8h", RegReg8H, WriteIHighByte,
     (Add, "add", 0x00, { add_flags!({ src }, { 8 }, { 7 }) dst = dst + src; }),
     (Sub, "sub", 0x28, { sub_flags!({ src }, { 7 }) dst = dst - src; }),
     (And, "and", 0x20, { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }),
@@ -620,7 +671,7 @@ alu_rr!("8H", "8h", RegReg8H, WriteIHighByte,
     (Xor, "xor", 0x30, { logic_flags!({ dst ^ src }, { 8 }, { 7 }) dst = dst ^ src; })
 )
 
-alu_rr!("8H", "8h", RegReg8H, WriteIHighByte,
+alu_rr!(X86, "8H", "8h", RegReg8H, WriteIHighByte,
     (Mov, "mov", 0x88, { dst = src; })
 )
 
@@ -682,7 +733,7 @@ alu_ri_norex!(RegImm32Norex, WriteIALU, { todo_flags!() },
 )
 
 // The REX-free `mov r32, imm32` (0xB8+rd id): five bytes for eax..edi.
-instruction MovImm32Norex for [X86_64] {
+instruction MovImm32Norex for [X86] {
     param MNEMONIC: String = "mov";
     param OPNAME: String = "mov_imm32_norex";
 
@@ -754,7 +805,7 @@ alu_ri8_sem!(RegImm8s32, X86_64,
     (CmpImm8s32, "cmp_imm8s32", "cmp", 0b111, { })
 )
 
-alu_ri8!(RegImm8s32Norex, X86_64, WriteIALU3B, { dst = todo(dst); todo_flags!() },
+alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B, { dst = todo(dst); todo_flags!() },
     (AddImm8s32Norex, "add_imm8s32_norex", "add", 0b000),
     (OrImm8s32Norex,  "or_imm8s32_norex",  "or",  0b001),
     (AndImm8s32Norex, "and_imm8s32_norex", "and", 0b100),
@@ -762,7 +813,7 @@ alu_ri8!(RegImm8s32Norex, X86_64, WriteIALU3B, { dst = todo(dst); todo_flags!() 
     (SubImm8s32Norex, "sub_imm8s32_norex", "sub", 0b101)
 )
 
-alu_ri8!(RegImm8s32Norex, X86_64, WriteIALU3B, { todo_flags!() },
+alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B, { todo_flags!() },
     (CmpImm8s32Norex, "cmp_imm8s32_norex", "cmp", 0b111)
 )
 
@@ -773,7 +824,7 @@ alu_ri8_sem!(RegImm8s16, X86_64,
     (XorImm8s16, "xor_imm8s16", "xor", 0b110, { logic_flags!({ dst ^ sext(imm, 16) }, { 16 }, { 15 }) dst = dst ^ sext(imm, 16); })
 )
 
-alu_ri8!(RegImm8s16Norex, X86_64, WriteIALU, { dst = todo(dst); todo_flags!() },
+alu_ri8!(RegImm8s16Norex, X86, WriteIALU, { dst = todo(dst); todo_flags!() },
     (AddImm8s16Norex, "add_imm8s16_norex", "add", 0b000),
     (OrImm8s16Norex,  "or_imm8s16_norex",  "or",  0b001),
     (AndImm8s16Norex, "and_imm8s16_norex", "and", 0b100),
@@ -813,18 +864,18 @@ reg_ext_norex!(RegShiftCl8Norex, WriteIShift, { dst = todo(dst, GPR::rcx); todo_
     (SarCl8Norex, "sar_cl8_norex", "sar", 0b111)
 )
 
-alu_ri!("8H", "8h", RegImm8H, WriteIHighByte,
+alu_ri!(X86, "8H", "8h", RegImm8H, WriteIHighByte,
     (AddImm, "add_imm", "add", 0x80, 0b000, { add_flags!({ sext(imm, 8) }, { 8 }, { 7 }) dst = dst + sext(imm, 8); }),
     (OrImm,  "or_imm",  "or",  0x80, 0b001, { logic_flags!({ dst | sext(imm, 8) }, { 8 }, { 7 }) dst = dst | sext(imm, 8); }),
     (AndImm, "and_imm", "and", 0x80, 0b100, { logic_flags!({ dst & sext(imm, 8) }, { 8 }, { 7 }) dst = dst & sext(imm, 8); }),
     (XorImm, "xor_imm", "xor", 0x80, 0b110, { logic_flags!({ dst ^ sext(imm, 8) }, { 8 }, { 7 }) dst = dst ^ sext(imm, 8); })
 )
 
-alu_ri!("8H", "8h", RegImm8H, WriteIHighByte,
+alu_ri!(X86, "8H", "8h", RegImm8H, WriteIHighByte,
     (MovImm, "mov_imm", "mov", 0xC6, 0b000, { dst = sext(imm, 8); })
 )
 
-shift_imm!("8H", "8h", RegShift8H,
+shift_imm!(X86, "8H", "8h", RegShift8H,
     (ShlImm, "shl", 0b100, { dst = dst << extract(imm, 4, 0); }),
     (ShrImm, "shr", 0b101, { dst = dst >> extract(imm, 4, 0); }),
     (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })

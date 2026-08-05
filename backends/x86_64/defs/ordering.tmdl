@@ -1,0 +1,37 @@
+//! Scalar memory-ordering and spin-wait instructions.
+
+macro fence_instruction {
+    ( $name:ident, $feature:ident, $mnemonic:literal, $modrm:literal, $pred:literal, $succ:literal ) => {
+        instruction $name for [$feature] {
+            param MNEMONIC: String = $mnemonic;
+
+            encoding {
+                0..7 => 0x0F,
+                8..15 => 0xAE,
+                16..23 => $modrm,
+            }
+
+            asm { "{self.MNEMONIC}" }
+
+            behavior {
+                fence($pred, $succ);
+            }
+        }
+    };
+}
+
+fence_instruction!(StoreFence, SSE, "sfence", 0xF8, 0b0001, 0b0001)
+fence_instruction!(LoadFence, SSE2, "lfence", 0xE8, 0b0010, 0b0010)
+fence_instruction!(MemoryFence, SSE2, "mfence", 0xF0, 0b0011, 0b0011)
+
+instruction Pause for [SSE2] {
+    param MNEMONIC: String = "pause";
+
+    encoding {
+        0..7 => 0xF3,
+        8..15 => 0x90,
+    }
+
+    asm { "{self.MNEMONIC}" }
+    behavior { }
+}

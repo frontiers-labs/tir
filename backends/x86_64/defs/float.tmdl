@@ -1,4 +1,4 @@
-//! SSE2 scalar double-precision floating-point instructions.
+//! SSE and SSE2 scalar floating-point instructions.
 
 // SSE2 scalar double-precision floating point. The sixteen XMM registers form
 // a 128-bit file; scalar instructions operate through the 64-bit `XMM` view
@@ -7,12 +7,31 @@
 // with the AArch64 `FPR64` view of its 128-bit `VPR` file. The file class
 // itself roots no operands and carries no traits.
 
-register_class XMM128 for [X86_64] {
+register_class XMM128 for [SSE] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 128;
 
     registers {
         xmm0..xmm15 => { },
+    }
+}
+
+register_class XMM32 for [SSE] : XMM128 {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 32;
+    param WRITE_POLICY: String = "merge";
+
+    registers {
+        xmm0..xmm15 => { traits = [float] },
+    }
+}
+
+register_class XMM32zx for [SSE2] : XMM128 {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 32;
+
+    registers {
+        xmm0..xmm15 => { traits = [float] },
     }
 }
 
@@ -22,7 +41,7 @@ register_class XMM128 for [X86_64] {
 // floor). Two-address scalar arithmetic reads its destination anyway; the
 // merge matters for the one-source writers (cvtsi2sd, reg-reg movsd).
 
-register_class XMM for [X86_64] : XMM128 {
+register_class XMM for [SSE2] : XMM128 {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;
     param WRITE_POLICY: String = "merge";
@@ -35,7 +54,7 @@ register_class XMM for [X86_64] : XMM128 {
 // `movq xmm, r64` zero-extends through bit 127: same width, no merge, so its
 // destination write breaks dependencies instead of chaining on them.
 
-register_class XMMzx for [X86_64] : XMM128 {
+register_class XMMzx for [SSE2] : XMM128 {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;
 
@@ -48,7 +67,7 @@ register_class XMMzx for [X86_64] : XMM128 {
 // GNU as emits when no register-number 4th bit is needed. Shares the XMM file,
 // carries no traits, and is never an allocation class (its ops leave their
 // values unmodeled, so they root no isel rule).
-register_class XMMlow for [X86_64] {
+register_class XMMlow for [SSE2] {
     file = XMM128;
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;
@@ -63,6 +82,75 @@ register_class XMMlow for [X86_64] {
         xmm5 => { index = 5 },
         xmm6 => { index = 6 },
         xmm7 => { index = 7 },
+    }
+}
+
+register_class XMM32low for [SSE] {
+    file = XMM128;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 32;
+    param WRITE_POLICY: String = "merge";
+
+    registers {
+        xmm0 => { index = 0 },
+        xmm1 => { index = 1 },
+        xmm2 => { index = 2 },
+        xmm3 => { index = 3 },
+        xmm4 => { index = 4 },
+        xmm5 => { index = 5 },
+        xmm6 => { index = 6 },
+        xmm7 => { index = 7 },
+    }
+}
+
+template FpArith32 for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: XMM32,
+        src: XMM32,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => OPCODE,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+}
+
+template FpArith32Norex for [SSE] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: XMM32low,
+        src: XMM32low,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8..15 => 0x0F,
+        16..23 => OPCODE,
+        24..26 => src[0..2],
+        27..29 => dst[0..2],
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
     }
 }
 
@@ -101,7 +189,7 @@ template FpArith for [X86_64] {
 // No-REX scalar-double form (xmm0..xmm7): F2 prefix, 0x0F escape, opcode, then
 // ModR/M(mod=11, reg=dst, rm=src). Dropping the REX byte shifts the tail up 8
 // bits, exactly as the 16-bit 0x66 forms do.
-template FpArithNorex for [X86_64] {
+template FpArithNorex for [SSE2] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
 
@@ -124,6 +212,83 @@ template FpArithNorex for [X86_64] {
     }
 }
 
+template UcomissNorexTemplate for [SSE] {
+    param MNEMONIC: String;
+
+    operands {
+        lhs: XMM32low,
+        rhs: XMM32low,
+    }
+
+    encoding {
+        0..7 => 0x0F,
+        8..15 => 0x2E,
+        16..18 => rhs[0..2],
+        19..21 => lhs[0..2],
+        22..23 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {lhs}, {rhs}"
+    }
+}
+
+template UcomisdNorexTemplate for [SSE2] {
+    param MNEMONIC: String;
+
+    operands {
+        lhs: XMMlow,
+        rhs: XMMlow,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8..15 => 0x0F,
+        16..23 => 0x2E,
+        24..26 => rhs[0..2],
+        27..29 => lhs[0..2],
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {lhs}, {rhs}"
+    }
+}
+
+macro fp_convert_norex_template {
+    ( $name:ident, $feature:ident, $dst:ident, $src:ident ) => {
+        template $name for [$feature] {
+            param MNEMONIC: String;
+            param PREFIX: bits<8>;
+            param OPCODE: bits<8>;
+
+            operands {
+                dst: $dst,
+                src: $src,
+            }
+
+            encoding {
+                0..7 => PREFIX,
+                8..15 => 0x0F,
+                16..23 => OPCODE,
+                24..26 => src[0..2],
+                27..29 => dst[0..2],
+                30..31 => 0b11,
+            }
+
+            asm {
+                "{self.MNEMONIC} {dst}, {src}"
+            }
+        }
+    };
+}
+
+fp_convert_norex_template!(Cvtsi2ss32NorexTemplate, SSE, XMM32low, GPR32low)
+fp_convert_norex_template!(Cvttss2si32NorexTemplate, SSE, GPR32low, XMM32low)
+fp_convert_norex_template!(Cvtsi2sd32NorexTemplate, SSE2, XMMlow, GPR32low)
+fp_convert_norex_template!(Cvttsd2si32NorexTemplate, SSE2, GPR32low, XMMlow)
+fp_convert_norex_template!(MovdXmmGpr32NorexTemplate, SSE2, XMM32low, GPR32low)
+
 // No-REX SSE forms: canonicalize target for the low-xmm ALU and movsd copies,
 // and the assembler's preferred candidate for xmm0..xmm7. The value semantics
 // stay unmodeled (`todo()`) so these root no selection rule, but the
@@ -132,8 +297,8 @@ template FpArithNorex for [X86_64] {
 // written), movsd only writes. Dropping that made every low-xmm chain look
 // dependency-free to the scheduler.
 macro fp_norex {
-    ( $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal ) ),* ) => {
-        $( instruction $name for [X86_64] : FpArithNorex {
+    ( $feature:ident, $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal ) ),* ) => {
+        $( instruction $name for [$feature] : $tmpl {
                param OPNAME: String = $op;
                param MNEMONIC: String = $mn;
                param OPCODE: bits<8> = $opc;
@@ -143,22 +308,94 @@ macro fp_norex {
     };
 }
 
-fp_norex!(WriteFPAdd, { dst = todo(dst); },
+fp_norex!(SSE, FpArith32Norex, WriteFPAdd, { dst = todo(dst); },
+    (AddssNorex, "addss_norex", "addss", 0x58),
+    (SubssNorex, "subss_norex", "subss", 0x5C)
+)
+
+fp_norex!(SSE, FpArith32Norex, WriteFPMul, { dst = todo(dst); },
+    (MulssNorex, "mulss_norex", "mulss", 0x59)
+)
+
+fp_norex!(SSE, FpArith32Norex, WriteFPDiv, { dst = todo(dst); },
+    (DivssNorex, "divss_norex", "divss", 0x5E)
+)
+
+fp_norex!(SSE, FpArith32Norex, WriteFPMove, { dst = todo(); },
+    (MovssNorex, "movss_norex", "movss", 0x10)
+)
+
+fp_norex!(SSE2, FpArithNorex, WriteFPAdd, { dst = todo(dst); },
     (AddsdNorex, "addsd_norex", "addsd", 0x58),
     (SubsdNorex, "subsd_norex", "subsd", 0x5C)
 )
 
-fp_norex!(WriteFPMul, { dst = todo(dst); },
+fp_norex!(SSE2, FpArithNorex, WriteFPMul, { dst = todo(dst); },
     (MulsdNorex, "mulsd_norex", "mulsd", 0x59)
 )
 
-fp_norex!(WriteFPDiv, { dst = todo(dst); },
+fp_norex!(SSE2, FpArithNorex, WriteFPDiv, { dst = todo(dst); },
     (DivsdNorex, "divsd_norex", "divsd", 0x5E)
 )
 
-fp_norex!(WriteFPMove, { dst = todo(); },
+fp_norex!(SSE2, FpArithNorex, WriteFPMove, { dst = todo(); },
     (MovsdNorex, "movsd_norex", "movsd", 0x10)
 )
+
+instruction Addss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "addss";
+    param OPCODE: bits<8> = 0x58;
+
+    schedule { units = [WriteFPAdd]; }
+
+    behavior {
+        dst = fadd(dst, src);
+    }
+}
+
+instruction Subss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "subss";
+    param OPCODE: bits<8> = 0x5C;
+
+    schedule { units = [WriteFPAdd]; }
+
+    behavior {
+        dst = fsub(dst, src);
+    }
+}
+
+instruction Mulss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "mulss";
+    param OPCODE: bits<8> = 0x59;
+
+    schedule { units = [WriteFPMul]; }
+
+    behavior {
+        dst = fmul(dst, src);
+    }
+}
+
+instruction Divss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "divss";
+    param OPCODE: bits<8> = 0x5E;
+
+    schedule { units = [WriteFPDiv]; }
+
+    behavior {
+        dst = fdiv(dst, src);
+    }
+}
+
+instruction Movss for [X86_64] : FpArith32 {
+    param MNEMONIC: String = "movss";
+    param OPCODE: bits<8> = 0x10;
+
+    schedule { units = [WriteFPMove]; }
+
+    behavior {
+        dst = src;
+    }
+}
 
 instruction Addsd for [X86_64] : FpArith {
     param MNEMONIC: String = "addsd";
@@ -201,6 +438,88 @@ instruction Divsd for [X86_64] : FpArith {
 
     behavior {
         dst = fdiv(dst, src);
+    }
+}
+
+instruction UcomissNorex for [SSE] : UcomissNorexTemplate {
+    param OPNAME: String = "ucomiss_norex";
+    param MNEMONIC: String = "ucomiss";
+
+    schedule { units = [WriteFPCompare]; }
+
+    behavior {
+        EFLAGS::cf = todo(lhs, rhs);
+        EFLAGS::pf = todo(lhs, rhs);
+        EFLAGS::zf = todo(lhs, rhs);
+        EFLAGS::sf = todo(lhs, rhs);
+        EFLAGS::of = todo(lhs, rhs);
+    }
+}
+
+instruction UcomisdNorex for [SSE2] : UcomisdNorexTemplate {
+    param OPNAME: String = "ucomisd_norex";
+    param MNEMONIC: String = "ucomisd";
+
+    schedule { units = [WriteFPCompare]; }
+
+    behavior {
+        EFLAGS::cf = todo(lhs, rhs);
+        EFLAGS::pf = todo(lhs, rhs);
+        EFLAGS::zf = todo(lhs, rhs);
+        EFLAGS::sf = todo(lhs, rhs);
+        EFLAGS::of = todo(lhs, rhs);
+    }
+}
+
+instruction Ucomiss for [X86_64] {
+    param MNEMONIC: String = "ucomiss";
+
+    schedule { units = [WriteFPCompare]; }
+
+    operands {
+        lhs: XMM32,
+        rhs: XMM32,
+    }
+
+    encoding {
+        0 => rhs[3],
+        1 => 0b0,
+        2 => lhs[3],
+        3 => 0b0,
+        4..7 => 0b0100,
+        8..15 => 0x0F,
+        16..23 => 0x2E,
+        24..26 => rhs[0..2],
+        27..29 => lhs[0..2],
+        30..31 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {lhs}, {rhs}"
+    }
+
+    behavior {
+        EFLAGS::cf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else if lhs < rhs {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::pf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else if lhs == rhs {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = zext(0b0, 1);
+        EFLAGS::of = zext(0b0, 1);
     }
 }
 
@@ -363,6 +682,264 @@ instruction MovqGprXmm for [X86_64] {
     }
 }
 
+instruction MovdXmmGpr32 for [X86_64] {
+    param OPNAME: String = "movd_xmm_gpr32";
+    param MNEMONIC: String = "movd";
+
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        dst: XMM32zx,
+        src: GPR32,
+    }
+
+    encoding {
+        0..7 => 0x66,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x6E,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = bitcast(src);
+    }
+}
+
+instruction MovdXmmGpr32Norex for [SSE2] : MovdXmmGpr32NorexTemplate {
+    param OPNAME: String = "movd_xmm_gpr32_norex";
+    param MNEMONIC: String = "movd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x6E;
+    schedule { units = [WriteFPMove]; }
+    behavior { dst = todo(src); }
+}
+
+template MovdGpr32XmmNorexTemplate for [SSE2] {
+    param MNEMONIC: String;
+    operands { dst: GPR32low, src: XMM32low, }
+    encoding {
+        0..7 => 0x66,
+        8..15 => 0x0F,
+        16..23 => 0x7E,
+        24..26 => dst[0..2],
+        27..29 => src[0..2],
+        30..31 => 0b11,
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+}
+
+instruction MovdGpr32XmmNorex for [SSE2] : MovdGpr32XmmNorexTemplate {
+    param OPNAME: String = "movd_gpr32_xmm_norex";
+    param MNEMONIC: String = "movd";
+    schedule { units = [WriteFPMove]; }
+    behavior { dst = todo(src); }
+}
+
+instruction MovdGpr32Xmm for [X86_64] {
+    param OPNAME: String = "movd_gpr32_xmm";
+    param MNEMONIC: String = "movd";
+    schedule { units = [WriteFPMove]; }
+    operands { dst: GPR32, src: XMM32, }
+    encoding {
+        0..7 => 0x66,
+        8 => dst[3],
+        9 => 0b0,
+        10 => src[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x7E,
+        32..34 => dst[0..2],
+        35..37 => src[0..2],
+        38..39 => 0b11,
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = bitcast(src); }
+}
+
+instruction Cvtsi2ss32Norex for [SSE] : Cvtsi2ss32NorexTemplate {
+    param OPNAME: String = "cvtsi2ss32_norex";
+    param MNEMONIC: String = "cvtsi2ss";
+    param PREFIX: bits<8> = 0xF3;
+    param OPCODE: bits<8> = 0x2A;
+    schedule { units = [WriteSIToFP]; }
+    behavior { dst = todo(src); }
+}
+
+instruction Cvttss2si32Norex for [SSE] : Cvttss2si32NorexTemplate {
+    param OPNAME: String = "cvttss2si32_norex";
+    param MNEMONIC: String = "cvttss2si";
+    param PREFIX: bits<8> = 0xF3;
+    param OPCODE: bits<8> = 0x2C;
+    schedule { units = [WriteFPToSI]; }
+    behavior { dst = todo(src); }
+}
+
+instruction Cvtsi2sd32Norex for [SSE2] : Cvtsi2sd32NorexTemplate {
+    param OPNAME: String = "cvtsi2sd32_norex";
+    param MNEMONIC: String = "cvtsi2sd";
+    param PREFIX: bits<8> = 0xF2;
+    param OPCODE: bits<8> = 0x2A;
+    schedule { units = [WriteSIToFP]; }
+    behavior { dst = todo(src); }
+}
+
+instruction Cvttsd2si32Norex for [SSE2] : Cvttsd2si32NorexTemplate {
+    param OPNAME: String = "cvttsd2si32_norex";
+    param MNEMONIC: String = "cvttsd2si";
+    param PREFIX: bits<8> = 0xF2;
+    param OPCODE: bits<8> = 0x2C;
+    schedule { units = [WriteFPToSI]; }
+    behavior { dst = todo(src); }
+}
+
+instruction Cvtsi2ss32 for [X86_64] {
+    param OPNAME: String = "cvtsi2ss32";
+    param MNEMONIC: String = "cvtsi2ss";
+
+    schedule { units = [WriteSIToFP]; }
+
+    operands {
+        dst: XMM32,
+        src: GPR32,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x2A,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = sitofp(src, 8, 23);
+    }
+}
+
+instruction Cvtsi2ss64 for [X86_64] {
+    param OPNAME: String = "cvtsi2ss64";
+    param MNEMONIC: String = "cvtsi2ss";
+
+    schedule { units = [WriteSIToFP]; }
+
+    operands {
+        dst: XMM32,
+        src: GPR,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b1,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x2A,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = sitofp(src, 8, 23);
+    }
+}
+
+instruction Cvttss2si32 for [X86_64] {
+    param OPNAME: String = "cvttss2si32";
+    param MNEMONIC: String = "cvttss2si";
+
+    schedule { units = [WriteFPToSI]; }
+
+    operands {
+        dst: GPR32,
+        src: XMM32,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x2C,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = fptosi(src, 32);
+    }
+}
+
+instruction Cvttss2si64 for [X86_64] {
+    param OPNAME: String = "cvttss2si64";
+    param MNEMONIC: String = "cvttss2si";
+
+    schedule { units = [WriteFPToSI]; }
+
+    operands {
+        dst: GPR,
+        src: XMM32,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => src[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b1,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x2C,
+        32..34 => src[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b11,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = fptosi(src, 64);
+    }
+}
+
 // Convert a signed 32-bit integer to scalar binary64 (`cvtsi2sd xmm, r32`).
 instruction Cvtsi2sd32 for [X86_64] {
     param OPNAME: String = "cvtsi2sd32";
@@ -501,6 +1078,238 @@ instruction Cvttsd2si64 for [X86_64] {
     behavior {
         dst = fptosi(src, 64);
     }
+}
+
+macro fp_mem_norex {
+    ( $feature:ident, $xmm:ident, $prefix:literal,
+      $load:ident, $load_op:literal, $store:ident, $store_op:literal,
+      $load_sib:ident, $load_sib_op:literal,
+      $store_sib:ident, $store_sib_op:literal,
+      $mnemonic:literal ) => {
+        instruction $load for [$feature] {
+            param OPNAME: String = $load_op;
+            param MNEMONIC: String = $mnemonic;
+            schedule { units = [WriteFPMove]; }
+            operands { dst: $xmm, base: GPRaddrDispLow, imm: bits<32>, }
+            encoding {
+                0..7 => $prefix,
+                8..15 => 0x0F,
+                16..23 => 0x10,
+                24..26 => base[0..2],
+                27..29 => dst[0..2],
+                30..31 => 0b10,
+                32..63 => imm,
+            }
+            asm { "{self.MNEMONIC} {dst}, [{base} + {imm}]" }
+            behavior { dst = todo(); }
+        }
+
+        instruction $store for [$feature] {
+            param OPNAME: String = $store_op;
+            param MNEMONIC: String = $mnemonic;
+            schedule { units = [WriteFPMove]; }
+            operands { base: GPRaddrDispLow, imm: bits<32>, src: $xmm, }
+            encoding {
+                0..7 => $prefix,
+                8..15 => 0x0F,
+                16..23 => 0x11,
+                24..26 => base[0..2],
+                27..29 => src[0..2],
+                30..31 => 0b10,
+                32..63 => imm,
+            }
+            asm { "{self.MNEMONIC} [{base} + {imm}], {src}" }
+            behavior { }
+        }
+
+        instruction $load_sib for [$feature] {
+            param OPNAME: String = $load_sib_op;
+            param MNEMONIC: String = $mnemonic;
+            schedule { units = [WriteFPMove]; }
+            operands { dst: $xmm, base: GPRsibLow, imm: bits<32>, }
+            encoding {
+                0..7 => $prefix,
+                8..15 => 0x0F,
+                16..23 => 0x10,
+                24..26 => 0b100,
+                27..29 => dst[0..2],
+                30..31 => 0b10,
+                32..39 => 0x24,
+                40..71 => imm,
+            }
+            asm { "{self.MNEMONIC} {dst}, [{base} + {imm}]" }
+            behavior { dst = todo(); }
+        }
+
+        instruction $store_sib for [$feature] {
+            param OPNAME: String = $store_sib_op;
+            param MNEMONIC: String = $mnemonic;
+            schedule { units = [WriteFPMove]; }
+            operands { base: GPRsibLow, imm: bits<32>, src: $xmm, }
+            encoding {
+                0..7 => $prefix,
+                8..15 => 0x0F,
+                16..23 => 0x11,
+                24..26 => 0b100,
+                27..29 => src[0..2],
+                30..31 => 0b10,
+                32..39 => 0x24,
+                40..71 => imm,
+            }
+            asm { "{self.MNEMONIC} [{base} + {imm}], {src}" }
+            behavior { }
+        }
+    };
+}
+
+fp_mem_norex!(SSE, XMM32low, 0xF3,
+    MovssLoadDispNorex, "movss_load_disp_norex",
+    MovssStoreDispNorex, "movss_store_disp_norex",
+    MovssLoadDispSibNorex, "movss_load_disp_sib_norex",
+    MovssStoreDispSibNorex, "movss_store_disp_sib_norex",
+    "movss"
+)
+
+fp_mem_norex!(SSE2, XMMlow, 0xF2,
+    MovsdLoadDispNorex, "movsd_load_disp_norex",
+    MovsdStoreDispNorex, "movsd_store_disp_norex",
+    MovsdLoadDispSibNorex, "movsd_load_disp_sib_norex",
+    MovsdStoreDispSibNorex, "movsd_store_disp_sib_norex",
+    "movsd"
+)
+
+instruction MovssLoadDisp for [X86_64] {
+    param OPNAME: String = "movss_load_disp";
+    param MNEMONIC: String = "movss";
+
+    operands {
+        dst: XMM32,
+        base: GPR,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => base[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x10,
+        32..34 => base[0..2],
+        35..37 => dst[0..2],
+        38..39 => 0b10,
+        40..71 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior {
+        dst = load(base + sext(imm, self.XLEN), 4, 0b0);
+    }
+}
+
+instruction MovssStoreDisp for [X86_64] {
+    param OPNAME: String = "movss_store_disp";
+    param MNEMONIC: String = "movss";
+
+    operands {
+        base: GPR,
+        imm: bits<32>,
+        src: XMM32,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => base[3],
+        9 => 0b0,
+        10 => src[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x11,
+        32..34 => base[0..2],
+        35..37 => src[0..2],
+        38..39 => 0b10,
+        40..71 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior {
+        store(base + sext(imm, self.XLEN), 4, src);
+    }
+}
+
+instruction MovssLoadDispSib for [X86_64] {
+    param OPNAME: String = "movss_load_disp_sib";
+    param MNEMONIC: String = "movss";
+
+    operands {
+        dst: XMM32,
+        base: GPRsib,
+        imm: bits<32>,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => base[3],
+        9 => 0b0,
+        10 => dst[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x10,
+        32..34 => 0b100,
+        35..37 => dst[0..2],
+        38..39 => 0b10,
+        40..47 => 0x24,
+        48..79 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior { dst = todo(); }
+}
+
+instruction MovssStoreDispSib for [X86_64] {
+    param OPNAME: String = "movss_store_disp_sib";
+    param MNEMONIC: String = "movss";
+
+    operands {
+        base: GPRsib,
+        imm: bits<32>,
+        src: XMM32,
+    }
+
+    encoding {
+        0..7 => 0xF3,
+        8 => base[3],
+        9 => 0b0,
+        10 => src[3],
+        11 => 0b0,
+        12..15 => 0b0100,
+        16..23 => 0x0F,
+        24..31 => 0x11,
+        32..34 => 0b100,
+        35..37 => src[0..2],
+        38..39 => 0b10,
+        40..47 => 0x24,
+        48..79 => imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior { }
 }
 
 instruction MovsdLoadDisp for [X86_64] {

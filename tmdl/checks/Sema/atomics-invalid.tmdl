@@ -2,7 +2,7 @@
 // atomic per statement, a known `Ordering::*` member, and `fence` only in
 // statement position.
 
-// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
 
 isa AIsa {
     param XLEN: Integer = 64;

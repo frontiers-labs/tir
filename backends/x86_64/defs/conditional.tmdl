@@ -32,7 +32,7 @@ template SetccReg for [X86_64] {
 }
 
 // No-REX `setcc r/m8` (al/cl/dl/bl): 0x0F + 0x90|cc + ModR/M, no REX prefix.
-template SetccRegNorex for [X86_64] {
+template SetccRegNorex for [X86] {
     param MNEMONIC: String;
     param CC: bits<8>;
 

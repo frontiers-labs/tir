@@ -1,0 +1,61 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+module {
+  func @from_signed(%0: !i32) -> !f32 {
+    %1 = sitofp %0 : !f32
+    return %1
+  }
+  func @from_signed64(%0: !i64) -> !f32 {
+    %1 = sitofp %0 : !f32
+    return %1
+  }
+  func @from_unsigned(%0: !i32) -> !f32 {
+    %1 = uitofp %0 : !f32
+    return %1
+  }
+  func @to_signed(%0: !f32) -> !i32 {
+    %1 = fptosi %0 : !i32
+    return %1
+  }
+  func @to_signed64(%0: !f32) -> !i64 {
+    %1 = fptosi %0 : !i64
+    return %1
+  }
+  func @to_unsigned(%0: !f32) -> !i32 {
+    %1 = fptoui %0 : !i32
+    return %1
+  }
+  func @less(%0: !f32, %1: !f32) -> !i1 {
+    %2 = cmpf %0, %1 {predicate = "olt"} : !i1
+    return %2
+  }
+  func @constant() -> !f32 {
+    %0 = constantf {value = 1.5} : !f32
+    return %0
+  }
+  func @bits_to_float(%0: !i32) -> !f32 {
+    %1 = bitcast %0 : !f32
+    return %1
+  }
+  func @float_to_bits(%0: !f32) -> !i32 {
+    %1 = bitcast %0 : !i32
+    return %1
+  }
+  module_end
+}
+
+// CHECK: x86_64.cvtsi2ss32 {dst = %virt{{[0-9]+}}:XMM32, src = %virt{{[0-9]+}}:GPR32}
+// CHECK: x86_64.cvtsi2ss64 {dst = %virt{{[0-9]+}}:XMM32, src = %virt{{[0-9]+}}:GPR}
+// CHECK: x86_64.movzxd
+// CHECK-NEXT: x86_64.cvtsi2ss64
+// CHECK: x86_64.cvttss2si32 {dst = %virt{{[0-9]+}}:GPR32, src = %virt{{[0-9]+}}:XMM32}
+// CHECK: x86_64.cvttss2si64 {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM32}
+// CHECK: x86_64.cvttss2si64
+// CHECK: x86_64.ucomiss {lhs = %virt{{[0-9]+}}:XMM32, rhs = %virt{{[0-9]+}}:XMM32}
+// CHECK-NEXT: x86_64.seta
+// CHECK: x86_64.mov_imm
+// CHECK-NEXT: x86_64.movd_xmm_gpr32
+// CHECK-LABEL: asm.symbol {name = "bits_to_float"
+// CHECK: x86_64.movd_xmm_gpr32
+// CHECK-LABEL: asm.symbol {name = "float_to_bits"
+// CHECK: x86_64.movd_gpr32_xmm

@@ -1907,11 +1907,13 @@ fn is_atomic_call(e: &ast::Expr) -> bool {
     ))
 }
 
-/// A bare `store_conditional` statement (discarded result) is legal.
-fn is_store_conditional_call(e: &ast::Expr) -> bool {
+/// An atomic operation whose result may be discarded in statement position.
+fn is_discardable_atomic_call(e: &ast::Expr) -> bool {
     matches!(e, ast::Expr::Call(c) if matches!(
         &*c.callee,
-        ast::Expr::BuiltinFunction(ast::BuiltinFunction::StoreConditional)
+        ast::Expr::BuiltinFunction(
+            ast::BuiltinFunction::StoreConditional | ast::BuiltinFunction::AtomicRmw
+        )
     ))
 }
 
@@ -2034,10 +2036,10 @@ fn check_atomic_structure(
                 check_atomic_structure(owner, &h.body, file_name, diags);
             }
         }
-        // A bare statement: only `store_conditional`/`fence`/`fence_i` calls may
-        // stand alone; any other atomic must be wrapped in an assignment RHS.
+        // A bare statement may discard the result of a store-conditional or
+        // atomic RMW. Loads must feed an assignment; fences are statement-only.
         _ => {
-            if is_store_conditional_call(stmt) || is_fence_call(stmt) {
+            if is_discardable_atomic_call(stmt) || is_fence_call(stmt) {
                 return;
             }
             if count_matching(stmt, is_atomic_call) > 0 {

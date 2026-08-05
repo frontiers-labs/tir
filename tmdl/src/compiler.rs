@@ -238,7 +238,7 @@ impl Compiler {
         let sources = self.read_sources()?;
         let arena = StringArena::new();
         let Some(expanded) = self.lex_collect_expand(&sources, &arena) else {
-            return Ok(());
+            return Err(TMDLError::Codegen("compilation failed".to_string()));
         };
         for tokens in expanded {
             writeln!(output, "{:#?}", tokens)?;
@@ -263,7 +263,7 @@ impl Compiler {
         // EmitAst still needs whole-program type checking when multiple files are given.
         if matches!(self.action, Action::EmitAst | Action::EmitAstJson) {
             let Some(parsed_files) = self.parse_and_check()? else {
-                return Ok(());
+                return Err(TMDLError::Codegen("compilation failed".to_string()));
             };
 
             match self.action {
@@ -326,7 +326,7 @@ impl Compiler {
         }
 
         let Some(parsed_files) = self.parse_and_check()? else {
-            return Ok(());
+            return Err(TMDLError::Codegen("compilation failed".to_string()));
         };
 
         let item_cache: HashMap<&str, _> = parsed_files

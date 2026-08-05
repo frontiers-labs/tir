@@ -25,7 +25,6 @@ division:
 # CHECK-NEXT: [0x31, 0xD2]
 # CHECK-NEXT: [0x48, 0xF7, 0xF1]
 # CHECK-NEXT: [0x99]
-# The 32-bit low-register forms keep the empty 0x40 REX, matching the
-# RegUnary32 template (as the reference div32 encodings did).
-# CHECK-NEXT: [0x40, 0xF7, 0xFB]
-# CHECK-NEXT: [0x40, 0xF7, 0xF1]
+# The 32-bit low-register forms use the legacy REX-free encodings.
+# CHECK-NEXT: [0xF7, 0xFB]
+# CHECK-NEXT: [0xF7, 0xF1]
