@@ -1391,6 +1391,30 @@ impl FnCodegen<'_> {
                     .result()
             };
         }
+        if let Some(source_width) = self.typed.integer_width(source)
+            && matches!(self.typed.types().kind(target), TypeKind::Pointer(_))
+        {
+            let target_width = self.typed.target().pointer_width();
+            let target_ty = IntegerType::new(self.context, target_width);
+            if source_width < target_width {
+                return if self.typed.integer_is_signed(source).unwrap() {
+                    self.builder
+                        .insert(b::extsi(self.context, value, target_ty).build())
+                        .result()
+                } else {
+                    self.builder
+                        .insert(b::extui(self.context, value, target_ty).build())
+                        .result()
+                };
+            }
+            if source_width > target_width {
+                return self
+                    .builder
+                    .insert(b::trunci(self.context, value, target_ty).build())
+                    .result();
+            }
+            return value;
+        }
         let (Some(source_width), Some(target_width)) = (
             self.typed.integer_width(source),
             self.typed.integer_width(target),

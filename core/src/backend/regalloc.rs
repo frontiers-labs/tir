@@ -1152,16 +1152,24 @@ impl RegisterAllocationPass {
         let Some(&entry) = blocks.first() else {
             return Ok(());
         };
-        let op_ids = context.get_block(entry).op_ids();
-        let Some(&first) = op_ids.first() else {
-            return Ok(());
-        };
-        let target = op_ref_in(context, entry, first);
         let frame_register = self.frame_register();
         for arg in args {
-            let Some(dst) = assignment.get(&arg.vreg) else {
-                continue;
+            let load_id = arg.load.ok_or_else(|| {
+                PassError::InvalidRuleSet(format!(
+                    "stack argument vreg {} has no incoming load",
+                    arg.vreg
+                ))
+            })?;
+            let op = context.get_op(load_id);
+            let Some(liveness::RegRef::Virtual { id, .. }) =
+                liveness::op_regs(&op).defs.into_iter().next()
+            else {
+                return Err(PassError::InvalidRuleSet(format!(
+                    "stack argument load for vreg {} has no virtual definition",
+                    arg.vreg
+                )));
             };
+            let dst = assignment[&id];
             if dst.0.file() != arg.class.file() || dst.0.group_width != arg.class.group_width {
                 return Err(PassError::InvalidRuleSet(format!(
                     "stack argument vreg {} assigned to {:?}, expected class {}",
@@ -1170,13 +1178,13 @@ impl RegisterAllocationPass {
                     arg.class.name()
                 )));
             }
-            let dst = (arg.class, dst.1);
             let offset =
                 frame_plan.incoming_stack_arg_offset(frame_size, pushed_saves, arg.stack_index);
-            let load =
-                self.target
-                    .emit_spill_reload(context, arg.vreg, dst.0, &frame_register, offset);
-            rewriter.insert_op_before(&target, load.as_ref())?;
+            let load = self
+                .target
+                .emit_spill_reload(context, id, dst.0, &frame_register, offset);
+            let target = op_ref_in(context, entry, load_id);
+            rewriter.replace_op(&target, load.as_ref())?;
         }
         Ok(())
     }
@@ -1516,6 +1524,7 @@ struct IncomingStackArg {
     vreg: u32,
     class: RegClassId,
     stack_index: usize,
+    load: Option<OpId>,
 }
 
 fn next_abi_register(
@@ -1734,6 +1743,7 @@ fn abi_precolor(
                             vreg: incoming,
                             class,
                             stack_index: next_stack_slot,
+                            load: None,
                         });
                         next_stack_slot += 1;
                     }
@@ -1756,9 +1766,27 @@ fn abi_precolor(
                     vreg: *id,
                     class,
                     stack_index: next_stack_slot,
+                    load: None,
                 });
                 next_stack_slot += 1;
             }
+        }
+        let _ = precolor_register;
+        // Give stack arguments real definitions before allocation so ordinary
+        // spilling can split them. Their final offsets are patched after the
+        // frame and callee-save layout are known.
+        for argument in &mut stack_args {
+            let load = target.emit_spill_reload(context, argument.vreg, argument.class, &abi.sp, 0);
+            let load_id = load.id();
+            rewriter.insert_op_before(
+                entry.as_ref().ok_or_else(|| {
+                    PassError::InvalidRuleSet(
+                        "function with stack arguments has no entry operation".to_string(),
+                    )
+                })?,
+                load.as_ref(),
+            )?;
+            argument.load = Some(load_id);
         }
     }
 

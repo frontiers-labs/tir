@@ -14,6 +14,10 @@ void *null_pointer(void) {
     return 0;
 }
 
+void *negative_pointer(void) {
+    return (void *)-1;
+}
+
 struct Node {
     struct Node *next;
 };

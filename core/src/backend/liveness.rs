@@ -332,6 +332,8 @@ fn record_class(result: &mut Liveness, id: u32, class: &Option<RegClassId>) {
     allowed.retain(|index| class.contains(*index));
     if allowed.is_empty() {
         result.class_conflicts.entry(id).or_insert((current, class));
+    } else if class.is_subclass_of(current) && !current.is_subclass_of(class) {
+        result.vreg_class.insert(id, class);
     }
 }
 
