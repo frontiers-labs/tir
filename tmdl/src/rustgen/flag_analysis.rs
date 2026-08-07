@@ -263,7 +263,10 @@ fn analyze_flag_definer_semantics(
     )?;
     // The flags must be functions of the encoded operands alone (no implicit
     // register reads), and every register operand must feed some flag, or the
-    // emitted definer could not bind it.
+    // emitted definer could not bind it. This is also what excludes a
+    // conditionally-preserving flag write (`cf = if count == 0 { cf } else …`):
+    // reading a flag back makes the write an incomplete definition, so the
+    // instruction cannot stand for a comparison in a fused pair.
     if !lowering.register_symbols.is_empty() {
         return None;
     }
@@ -897,6 +900,7 @@ struct FlagInst<'a> {
     inst: &'a ast::Instruction,
     ops: Vec<(String, Type)>,
     mnemonic: String,
+    encoding_bytes: u64,
     isa_param_values: HashMap<String, i64>,
 }
 

@@ -1,0 +1,59 @@
+// Scoping rules for `let` bindings rejected by semantic analysis: a binding is
+// visible only after its definition.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa LIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class GPR for [LIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => {                         },
+    }
+}
+
+instruction UseBeforeDef for [LIsa] {
+    param MNEMONIC: String = "usebeforedef";
+    param OPCODE: bits<7> = 0b0110011;
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior {
+        rd = sum;
+        let sum = rs1 + rs1;
+    }
+}
+
+instruction ShadowOperand for [LIsa] {
+    param MNEMONIC: String = "shadowoperand";
+    param OPCODE: bits<7> = 0b0110011;
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior {
+        let rs1 = rd + rd;
+        rd = rs1;
+    }
+}
+
+instruction ShadowBinding for [LIsa] {
+    param MNEMONIC: String = "shadowbinding";
+    param OPCODE: bits<7> = 0b0110011;
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior {
+        let tmp = rs1 + rs1;
+        let tmp = tmp + rs1;
+        rd = tmp;
+    }
+}
+
+// CHECK-DAG: binding 'sum' is used before its definition in 'UseBeforeDef'
+// CHECK-DAG: binding 'rs1' redefines an existing name in 'ShadowOperand'
+// CHECK-DAG: binding 'tmp' redefines an existing name in 'ShadowBinding'

@@ -2,9 +2,10 @@ fn emit_as_sem_expr_impl(
     rhs: &ast::Expr,
     name_ident: &proc_macro2::Ident,
     numeric_params: &HashMap<String, i64>,
+    isa_param_values: &HashMap<String, i64>,
 ) -> Option<proc_macro2::TokenStream> {
     let mut dag = tir::sem::SemGraph::new();
-    let lowering = rhs.lower_to_sema(&mut dag, numeric_params)?;
+    let lowering = rhs.lower_to_sema(&mut dag, numeric_params, isa_param_values)?;
     // The AsSemExpr impl carries no type annotations (the program-graph builder
     // infers them), so pass no widths.
     let (stmts, root_var) = emit_dag_as_code(&dag, lowering.root, &[]);
@@ -54,6 +55,7 @@ fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
         ast::Expr::Assign(a) => {
             behavior_has_atomic_ops(&a.dest) || behavior_has_atomic_ops(&a.value)
         }
+        ast::Expr::Let(l) => behavior_has_atomic_ops(&l.value),
         ast::Expr::Binary(b) => behavior_has_atomic_ops(&b.lhs) || behavior_has_atomic_ops(&b.rhs),
         ast::Expr::Unary(u) => behavior_has_atomic_ops(&u.x),
         ast::Expr::Block(b) => b.stmts.iter().any(behavior_has_atomic_ops),
@@ -79,51 +81,57 @@ fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
     }
 }
 
+/// The compile-time values a memory access size may be written over: the
+/// instruction's own parameters and the ISA parameters of the instantiation
+/// being generated.
+#[derive(Clone, Copy)]
+struct ConstSizeParams<'a> {
+    numeric: &'a HashMap<String, i64>,
+    isa: &'a HashMap<String, i64>,
+}
+
 /// Whether the behavior loads or stores with a non-constant size (e.g. RVV
 /// unit-stride forms sized by `vl`). A static selection pattern cannot
 /// express a dynamic access size, and leaving such rules in would let plain
 /// scalar loads/stores match them by binding the size, so they are excluded
-/// from instruction selection and op-sem pattern generation.
-fn behavior_has_dynamic_sized_memory_access(expr: &ast::Expr) -> bool {
+/// from instruction selection and op-sem pattern generation. A size that
+/// const-evaluates under the ISA parameters (`self.XLEN / 8`) is concrete for
+/// this ISA instantiation and stays in.
+fn behavior_has_dynamic_sized_memory_access(
+    expr: &ast::Expr,
+    params: &ConstSizeParams<'_>,
+) -> bool {
+    let recurse = |e: &ast::Expr| behavior_has_dynamic_sized_memory_access(e, params);
     let is_dynamic_sized = |e: &ast::Expr| {
         matches!(e, ast::Expr::Call(ast::Call { callee, arguments, .. }) if matches!(
             callee.as_ref(),
             ast::Expr::BuiltinFunction(ast::BuiltinFunction::Load | ast::BuiltinFunction::Store)
-        ) && !matches!(arguments.get(1), Some(ast::Expr::Lit(ast::Lit::Int(_)))))
+        ) && !arguments.get(1).is_some_and(|size| {
+            ast::const_eval_params(size, params.numeric, params.isa).is_some()
+        }))
     };
     if is_dynamic_sized(expr) {
         return true;
     }
     match expr {
-        ast::Expr::Assign(a) => {
-            behavior_has_dynamic_sized_memory_access(&a.dest)
-                || behavior_has_dynamic_sized_memory_access(&a.value)
-        }
-        ast::Expr::Binary(b) => {
-            behavior_has_dynamic_sized_memory_access(&b.lhs)
-                || behavior_has_dynamic_sized_memory_access(&b.rhs)
-        }
-        ast::Expr::Unary(u) => behavior_has_dynamic_sized_memory_access(&u.x),
-        ast::Expr::Block(b) => b.stmts.iter().any(behavior_has_dynamic_sized_memory_access),
-        ast::Expr::Call(c) => c.arguments.iter().any(behavior_has_dynamic_sized_memory_access),
-        ast::Expr::Field(f) => behavior_has_dynamic_sized_memory_access(&f.base),
+        ast::Expr::Assign(a) => recurse(&a.dest) || recurse(&a.value),
+        ast::Expr::Let(l) => recurse(&l.value),
+        ast::Expr::Binary(b) => recurse(&b.lhs) || recurse(&b.rhs),
+        ast::Expr::Unary(u) => recurse(&u.x),
+        ast::Expr::Block(b) => b.stmts.iter().any(recurse),
+        ast::Expr::Call(c) => c.arguments.iter().any(recurse),
+        ast::Expr::Field(f) => recurse(&f.base),
         ast::Expr::If(i) => {
-            behavior_has_dynamic_sized_memory_access(&i.cond)
-                || behavior_has_dynamic_sized_memory_access(&i.then)
-                || i.else_
-                    .as_ref()
-                    .is_some_and(|e| behavior_has_dynamic_sized_memory_access(e))
+            recurse(&i.cond)
+                || recurse(&i.then)
+                || i.else_.as_ref().is_some_and(|e| recurse(e))
         }
-        ast::Expr::IndexAccess(i) => behavior_has_dynamic_sized_memory_access(&i.base),
-        ast::Expr::Slice(s) => behavior_has_dynamic_sized_memory_access(&s.base),
+        ast::Expr::IndexAccess(i) => recurse(&i.base),
+        ast::Expr::Slice(s) => recurse(&s.base),
         ast::Expr::Try(t) => {
-            behavior_has_dynamic_sized_memory_access(&t.body)
-                || t
-                    .handlers
-                    .iter()
-                    .any(|h| behavior_has_dynamic_sized_memory_access(&h.body))
+            recurse(&t.body) || t.handlers.iter().any(|h| recurse(&h.body))
         }
-        ast::Expr::Lambda(l) => behavior_has_dynamic_sized_memory_access(&l.body),
+        ast::Expr::Lambda(l) => recurse(&l.body),
         ast::Expr::Ident(_)
         | ast::Expr::Lit(_)
         | ast::Expr::Path(_)
@@ -155,11 +163,24 @@ fn emit_behavior_exec(
         ctx.mnemonic,
         ctx.reg_kinds,
     );
+    let max_sym_id = behavior
+        .let_symbols
+        .values()
+        .copied()
+        .max()
+        .map_or(max_sym_id, |id| max_sym_id.max(id as usize));
     let sym_count_lit = proc_macro2::Literal::usize_unsuffixed(max_sym_id + 1);
+    // `let` statements write their value back into the symbol table, so the
+    // table is only mutable when the behavior binds something.
+    let mutability = if behavior.let_symbols.is_empty() {
+        quote! {}
+    } else {
+        quote! { mut }
+    };
     let body = emit_behavior_effect(&behavior, behavior.root, ctx)?;
     Some(quote! {
         {
-            let __tmdl_entry_syms: Vec<tir::sem::Value> = {
+            let #mutability __tmdl_entry_syms: Vec<tir::sem::Value> = {
                 let mut __syms: Vec<Option<tir::sem::Value>> = vec![None; #sym_count_lit];
                 #(#sym_inits)*
                 __syms.into_iter()
@@ -187,16 +208,27 @@ fn emit_behavior_effect(
 
     let children: Vec<_> = behavior.graph.children(effect).collect();
     match behavior.graph.get_node(effect) {
-        tir::sem::SymKind::StateAssign => {
-            let sem_expr_state::EffectPayload::Assign { destination } =
-                behavior.effect_payload(effect)?
-            else {
-                return None;
-            };
-            let eval = emit_behavior_value_eval(behavior, *children.first()?, ctx.mnemonic)?;
-            let write = emit_graph_destination_write(destination, ctx.ops, ctx.mnemonic)?;
-            Some(quote! {{ #eval #write }})
-        }
+        tir::sem::SymKind::StateAssign => match behavior.effect_payload(effect)? {
+            sem_expr_state::EffectPayload::Assign { destination } => {
+                let eval = emit_behavior_value_eval(behavior, *children.first()?, ctx.mnemonic)?;
+                let write = emit_graph_destination_write(destination, ctx.ops, ctx.mnemonic)?;
+                Some(quote! {{ #eval #write }})
+            }
+            // The bound term is evaluated here, once, and parked in the symbol
+            // table; later statements read the symbol instead of re-evaluating.
+            sem_expr_state::EffectPayload::Bind { symbol, .. } => {
+                let eval = emit_binding_value_eval(behavior, *children.first()?, ctx.mnemonic)?;
+                let sym_lit = proc_macro2::Literal::usize_unsuffixed(*symbol as usize);
+                Some(quote! {{
+                    #eval
+                    __tmdl_entry_syms[#sym_lit] = match value {
+                        tir::backend::RegisterValue::Int(i) => tir::sem::value_from_register(i),
+                        tir::backend::RegisterValue::Bits(b) => tir::sem::value_from_raw_bits(b),
+                    };
+                }})
+            }
+            _ => None,
+        },
         tir::sem::SymKind::StateStore
         | tir::sem::SymKind::StateStoreConditional
         | tir::sem::SymKind::StateFence => {
@@ -254,7 +286,16 @@ fn emit_behavior_value_eval(
     root: tir::graph::NodeId,
     mnemonic_lit: &proc_macro2::Literal,
 ) -> Option<proc_macro2::TokenStream> {
-    let (values, root) = behavior.value_graph(root)?;
+    let (values, root) = behavior.bound_value_graph(root)?;
+    emit_lowered_value_eval(&values, root, mnemonic_lit)
+}
+
+fn emit_binding_value_eval(
+    behavior: &sem_expr_state::BehaviorGraph,
+    root: tir::graph::NodeId,
+    mnemonic_lit: &proc_macro2::Literal,
+) -> Option<proc_macro2::TokenStream> {
+    let (values, root) = behavior.binding_value_graph(root)?;
     emit_lowered_value_eval(&values, root, mnemonic_lit)
 }
 
@@ -533,6 +574,7 @@ fn emit_cond_branch_rule(
     rule_name: &str,
     builder_ident: &proc_macro2::Ident,
     mnemonic_name: &str,
+    encoding_bytes: u64,
     inst_features: &proc_macro2::TokenStream,
     ops: &[(String, Type)],
     pattern: &tir::sem::SemGraph,
@@ -645,7 +687,7 @@ fn emit_cond_branch_rule(
     );
     let operand_imm_range_call =
         emit_operand_imm_range_call(&immediate_operand_ranges(pattern, ops, variable_symbols));
-    let mnemonic_cost_lit = proc_macro2::Literal::string(mnemonic_name);
+    let rule_cost = isel_rule_cost(mnemonic_name, encoding_bytes);
 
     let emitter = quote! {
         fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
@@ -673,7 +715,7 @@ fn emit_cond_branch_rule(
                 tir::backend::isel::Rule::new(
                     #rule_name_lit,
                     #pattern_fn_ident(context),
-                    instruction_cost(#mnemonic_cost_lit),
+                    #rule_cost,
                     #emit_fn_ident,
                 )
                 .with_kind(tir::backend::isel::RuleKind::CondBranch {

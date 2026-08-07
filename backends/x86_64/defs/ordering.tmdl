@@ -33,5 +33,7 @@ instruction Pause for [SSE2] {
     }
 
     asm { "{self.MNEMONIC}" }
+    // Architecturally a nop: a spin-wait hint with no state effect. The empty
+    // behavior is exact, not unmodeled.
     behavior { }
 }

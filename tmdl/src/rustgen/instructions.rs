@@ -187,6 +187,7 @@ fn emit_instructions<'a>(
         };
 
         let mnemonic_name = mnemonic.as_deref().unwrap_or(op_name);
+        let width_bytes = encoding_width_bytes(inst, item_cache);
         let op_name_lit = proc_macro2::Literal::string(op_name);
         // Width expressions resolve against the same cross-ISA parameter view
         // `execute()` uses (the per-ISA maximum, e.g. XLEN=64 for RV32+RV64).
@@ -225,6 +226,10 @@ fn emit_instructions<'a>(
 
         // `execute()` binds ISA parameters (e.g. `XLEN`) from here at runtime.
         let isa_param_values: HashMap<String, i64> = resolve_isa_param_values(inst, item_cache);
+        let const_size_params = ConstSizeParams {
+            numeric: &numeric_params,
+            isa: &isa_param_values,
+        };
         let trap_handler = inst
             .for_isas
             .iter()
@@ -234,6 +239,11 @@ fn emit_instructions<'a>(
         // produces no selection rule and its `execute()` traps. The op still
         // prints, parses, and encodes.
         let uses_todo = behavior_uses_todo(&inst.behavior);
+
+        // A selection rule matches the expression a `let` stands for, so the
+        // pattern is built from the behavior with its bindings substituted.
+        // `execute()` keeps them: that is where single evaluation matters.
+        let selection_behavior = inline_let_bindings(&inst.behavior);
 
         // Value-rule semantics, computed ahead of the op declaration so the
         // registers the behavior reads implicitly (e.g. `VCSR::vl`) can surface
@@ -248,11 +258,12 @@ fn emit_instructions<'a>(
             && defined_register_operands.len() <= 1
             && !behavior_references_pc(&inst.behavior, &pc_classes)
             && !behavior_has_atomic_ops(&inst.behavior)
-            && !behavior_has_dynamic_sized_memory_access(&inst.behavior)
-            && !behavior_reads_flag_register(&inst.behavior, &flag_classes)
+            && !behavior_has_dynamic_sized_memory_access(&inst.behavior, &const_size_params)
+            && !value_reads_flag_register(&selection_behavior, &flag_classes)
+            && !behavior_writes_fixed_register(&inst.behavior, &flag_classes)
         {
             analyze_instruction_semantics(
-                inst,
+                &selection_behavior,
                 &ops,
                 &defined_register_operands,
                 &numeric_params,
@@ -790,7 +801,7 @@ fn emit_instructions<'a>(
                 &ops,
                 &semantics.variable_symbols,
             ));
-            let mnemonic_cost_lit = proc_macro2::Literal::string(mnemonic_name);
+            let rule_cost = isel_rule_cost(mnemonic_name, width_bytes);
 
             // Registers read by path are dependencies outside the encoded operands.
             // Value-register reads carry a fixed-use constraint; configuration
@@ -865,7 +876,7 @@ fn emit_instructions<'a>(
                         tir::backend::isel::Rule::new(
                             #rule_name_lit,
                             #pattern_fn_ident(context),
-                            instruction_cost(#mnemonic_cost_lit),
+                            #rule_cost,
                             #emit_fn_ident,
                         )
                         .with_operand_constraints(vec![#(#operand_constraint_entries),*])
@@ -1028,7 +1039,7 @@ fn emit_instructions<'a>(
                             tir::backend::isel::Rule::new(
                                 #zero_rule_name_lit,
                                 #zero_pattern_fn_ident(context),
-                                instruction_cost(#mnemonic_cost_lit),
+                                #rule_cost,
                                 #zero_emit_fn_ident,
                             )
                             .with_operand_constraints(vec![(
@@ -1065,6 +1076,7 @@ fn emit_instructions<'a>(
                 &inst.name.to_lowercase(),
                 &builder_ident,
                 mnemonic_name,
+                width_bytes,
                 &inst_features,
                 &ops,
                 &branch.pattern,
@@ -1155,6 +1167,7 @@ fn emit_instructions<'a>(
                         &rule_name,
                         &builder_ident,
                         mnemonic_name,
+                        width_bytes,
                         &inst_features,
                         &ops,
                         &zero_pattern,
@@ -1173,23 +1186,15 @@ fn emit_instructions<'a>(
         }
 
         let encoding_arms = get_encoding_arms(inst, item_cache);
-        // With no encoding (a text-only pseudo-ISA) there is no binary width; report
-        // 0 bytes rather than the 32-bit default assumed for real ISAs.
-        let width_bytes = encoding_arms
-            .iter()
-            .map(|arm| arm.end.unwrap_or(arm.start))
-            .max()
-            .map(|max_end| ((max_end + 1) as u32).div_ceil(8) as u64)
-            .unwrap_or(0);
         let width_bytes_lit = proc_macro2::Literal::u8_unsuffixed(width_bytes as u8);
         let mnemonic_lit = proc_macro2::Literal::string(mnemonic_name);
 
         // The behavior RHS to compile. Normal instructions assign to a register
         // operand (`rd`); a conditional branch instead writes `PC::pc`, which we
         // synthesize into a single value-producing expression written to PC.
-        let resolved_rhs = resolve_behavior_rhs(inst, &ops, &defined_register_operands);
+        let resolved_rhs = resolve_behavior_rhs(&selection_behavior, &ops, &defined_register_operands);
         let branch_value = if resolved_rhs.is_none() {
-            synthesize_branch_value(inst, width_bytes)
+            synthesize_branch_value(&selection_behavior, width_bytes)
         } else {
             None
         };
@@ -1198,8 +1203,8 @@ fn emit_instructions<'a>(
         if let Some(rhs) = codegen_rhs
             && !uses_todo
             && !behavior_has_atomic_ops(&inst.behavior)
-            && !behavior_has_dynamic_sized_memory_access(&inst.behavior)
-            && let Some(impl_ts) = emit_as_sem_expr_impl(rhs, &name_ident, &numeric_params)
+            && !behavior_has_dynamic_sized_memory_access(&inst.behavior, &const_size_params)
+            && let Some(impl_ts) = emit_as_sem_expr_impl(rhs, &name_ident, &numeric_params, &isa_param_values)
         {
             as_sem_expr_impls.push(impl_ts);
         }

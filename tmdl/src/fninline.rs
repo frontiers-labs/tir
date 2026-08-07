@@ -70,7 +70,7 @@ fn inline_expr(
     file_name: &str,
 ) -> ast::Expr {
     // Inline nested calls everywhere first, then expand this call.
-    let expr = map_children(expr, &mut |child| {
+    let expr = crate::utils::map_child_exprs(expr, &mut |child| {
         inline_expr(child, fns, stack, diags, file_name)
     });
     let ast::Expr::Call(call) = &expr else {
@@ -128,7 +128,7 @@ fn substitute(expr: &ast::Expr, bindings: &HashMap<&str, &ast::Expr>) -> ast::Ex
     {
         return (*replacement).clone();
     }
-    map_children(expr, &mut |child| match child {
+    crate::utils::map_child_exprs(expr, &mut |child| match child {
         ast::Expr::Lambda(lambda) => {
             let mut inner = bindings.clone();
             for param in &lambda.params {
@@ -142,83 +142,4 @@ fn substitute(expr: &ast::Expr, bindings: &HashMap<&str, &ast::Expr>) -> ast::Ex
         }
         other => substitute(other, bindings),
     })
-}
-
-/// Rebuild `expr` with `f` applied to each immediate child. Leaves are
-/// returned unchanged.
-fn map_children(expr: &ast::Expr, f: &mut dyn FnMut(&ast::Expr) -> ast::Expr) -> ast::Expr {
-    match expr {
-        ast::Expr::Assign(a) => ast::Expr::Assign(ast::Assign {
-            dest: a.dest.clone(),
-            value: Box::new(f(&a.value)),
-            span: a.span,
-        }),
-        ast::Expr::Binary(b) => ast::Expr::Binary(ast::Binary {
-            lhs: Box::new(f(&b.lhs)),
-            rhs: Box::new(f(&b.rhs)),
-            op: b.op.clone(),
-            span: b.span,
-        }),
-        ast::Expr::Unary(u) => ast::Expr::Unary(ast::Unary {
-            x: Box::new(f(&u.x)),
-            op: u.op.clone(),
-            span: u.span,
-        }),
-        ast::Expr::Block(b) => ast::Expr::Block(ast::Block {
-            stmts: b.stmts.iter().map(&mut *f).collect(),
-            last_expr_return: b.last_expr_return,
-            span: b.span,
-        }),
-        ast::Expr::Call(c) => ast::Expr::Call(ast::Call {
-            callee: Box::new(f(&c.callee)),
-            arguments: c.arguments.iter().map(&mut *f).collect(),
-            span: c.span,
-        }),
-        ast::Expr::Field(field) => ast::Expr::Field(ast::Field {
-            base: Box::new(f(&field.base)),
-            member: field.member.clone(),
-            span: field.span,
-        }),
-        ast::Expr::If(i) => ast::Expr::If(ast::If {
-            cond: Box::new(f(&i.cond)),
-            then: Box::new(f(&i.then)),
-            else_: i.else_.as_ref().map(|e| Box::new(f(e))),
-            span: i.span,
-        }),
-        ast::Expr::IndexAccess(i) => ast::Expr::IndexAccess(ast::IndexAccess {
-            base: Box::new(f(&i.base)),
-            index: i.index,
-            span: i.span,
-        }),
-        ast::Expr::Slice(s) => ast::Expr::Slice(ast::Slice {
-            base: Box::new(f(&s.base)),
-            start: s.start,
-            end: s.end,
-            span: s.span,
-        }),
-        ast::Expr::Try(t) => ast::Expr::Try(ast::TryExcept {
-            body: Box::new(f(&t.body)),
-            handlers: t
-                .handlers
-                .iter()
-                .map(|h| ast::ExceptClause {
-                    kind: h.kind.clone(),
-                    binding: h.binding.clone(),
-                    body: f(&h.body),
-                    span: h.span,
-                })
-                .collect(),
-            span: t.span,
-        }),
-        ast::Expr::Lambda(l) => ast::Expr::Lambda(ast::Lambda {
-            params: l.params.clone(),
-            body: Box::new(f(&l.body)),
-            span: l.span,
-        }),
-        ast::Expr::Ident(_)
-        | ast::Expr::Path(_)
-        | ast::Expr::Lit(_)
-        | ast::Expr::BuiltinFunction(_)
-        | ast::Expr::Invalid => expr.clone(),
-    }
 }

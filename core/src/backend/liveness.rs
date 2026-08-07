@@ -52,8 +52,18 @@ pub struct Liveness {
     pub interference: HashSet<(u32, u32)>,
     /// Physical registers each virtual register is live across and so must avoid.
     pub forbidden: HashMap<u32, HashSet<PhysReg>>,
-    /// The register class discovered for each virtual register from its operands.
+    /// The architectural view each virtual register is allocated through: the
+    /// narrowest of every class it is referenced by (see
+    /// [`RegClassId::is_subclass_of`]). Governs the width of the copies and spill
+    /// code the allocator emits for it.
     pub vreg_class: HashMap<u32, RegClassId>,
+    /// The file indices a virtual register may be assigned: the intersection of
+    /// the register sets of every class it is referenced through. Absent means
+    /// unconstrained beyond [`Liveness::vreg_class`].
+    pub allowed_indices: HashMap<u32, BTreeSet<u16>>,
+    /// Virtual registers referenced through classes that cannot both be honored
+    /// (different files or views, or no register in common), with the pair.
+    pub class_conflicts: HashMap<u32, (RegClassId, RegClassId)>,
     /// Every virtual register referenced in the analyzed region.
     pub vregs: BTreeSet<u32>,
     /// Virtual registers live on entry to each block (keyed by block).
@@ -296,9 +306,32 @@ pub fn analyze(
     result
 }
 
+/// Constrain vreg `id` to `class`. A vreg referenced through several classes must
+/// satisfy all of them at once, so the constraints intersect: it may only be
+/// assigned a register every one of them encodes (an x86 value read by a REX-free
+/// operand form is confined to that form's low registers even where it is also
+/// copied through the full `GPR` class). Classes viewing different files or
+/// different offsets of one file, or sharing no register, cannot both hold and are
+/// reported instead of silently resolved to one of them.
 fn record_class(result: &mut Liveness, id: u32, class: &Option<RegClassId>) {
-    if let Some(class) = class {
-        result.vreg_class.entry(id).or_insert(*class);
+    let Some(class) = *class else {
+        return;
+    };
+    let Some(current) = result.vreg_class.get(&id).copied() else {
+        result.vreg_class.insert(id, class);
+        result
+            .allowed_indices
+            .insert(id, class.registers.iter().copied().collect());
+        return;
+    };
+    if !class.shares_view_with(current) {
+        result.class_conflicts.entry(id).or_insert((current, class));
+        return;
+    }
+    let allowed = result.allowed_indices.entry(id).or_default();
+    allowed.retain(|index| class.contains(*index));
+    if allowed.is_empty() {
+        result.class_conflicts.entry(id).or_insert((current, class));
     }
 }
 
@@ -347,6 +380,7 @@ mod tests {
     static R_CLASS: RegClassInfo = RegClassInfo {
         name: "R",
         file: "R",
+        registers: &[0, 1, 2, 3],
         group_width: 1,
         view: crate::backend::regalloc::RegisterView {
             bit_offset: 0,
@@ -356,6 +390,168 @@ mod tests {
 
     fn r() -> RegClassId {
         RegClassId::new(&R_CLASS)
+    }
+
+    // A subclass of `R` over the same file and view: fewer encodable registers.
+    static R_LOW_CLASS: RegClassInfo = RegClassInfo {
+        name: "Rlow",
+        file: "R",
+        registers: &[0, 1],
+        group_width: 1,
+        view: crate::backend::regalloc::RegisterView {
+            bit_offset: 0,
+            merge: false,
+        },
+    };
+
+    // Same file and index set as `Rlow`, but a different architectural view (an
+    // x86 high-byte class): no register satisfies both constraints.
+    static R_HIGH_CLASS: RegClassInfo = RegClassInfo {
+        name: "Rhigh",
+        file: "R",
+        registers: &[0, 1],
+        group_width: 1,
+        view: crate::backend::regalloc::RegisterView {
+            bit_offset: 8,
+            merge: true,
+        },
+    };
+
+    fn r_low() -> RegClassId {
+        RegClassId::new(&R_LOW_CLASS)
+    }
+
+    fn r_high() -> RegClassId {
+        RegClassId::new(&R_HIGH_CLASS)
+    }
+
+    // Append an op reading virtual register `id` through class `class`.
+    fn vreg_use(context: &Context, block: &Arc<Block>, id: u32, class: RegClassId) {
+        use tir::attributes::{AttributeValue, RegisterAttr};
+
+        PhysUseOp::register_interfaces(context);
+        let register = AttributeValue::Register(RegisterAttr::Virtual {
+            id,
+            class: Some(class),
+        });
+        let op = PhysUseOpBuilder::new(context)
+            .attr("r", register)
+            .build()
+            .id();
+        block.insert(block.len(), op);
+    }
+
+    // A vreg constrained by two classes over one file and view must end up in the
+    // narrower one — the wider constraint is satisfied by every register of the
+    // narrower, but not the other way round. Order of appearance is irrelevant.
+    #[test]
+    fn narrower_class_constraint_wins() {
+        for wide_first in [true, false] {
+            let context = Context::with_default_dialects();
+            let ty = IntegerType::new(&context, 64);
+            let a = context.create_value(ty, None);
+            let a_id = a.id().number();
+            let block = context.create_block(vec![a]);
+
+            if wide_first {
+                vreg_use(&context, &block, a_id, r());
+                vreg_use(&context, &block, a_id, r_low());
+            } else {
+                vreg_use(&context, &block, a_id, r_low());
+                vreg_use(&context, &block, a_id, r());
+            }
+
+            let liveness = analyze(&context, &[block.id()], |_| Vec::new());
+            assert_eq!(
+                liveness.vreg_class.get(&a_id),
+                Some(&r_low()),
+                "the narrower operand class must survive (wide first: {wide_first})",
+            );
+            assert_eq!(
+                liveness.allowed_indices.get(&a_id),
+                Some(&BTreeSet::from([0, 1])),
+            );
+            assert!(liveness.class_conflicts.is_empty());
+        }
+    }
+
+    // Two classes over one view where neither contains the other (x86 `GPR32low`,
+    // which includes esp, and `GPRaddrIndex`, which excludes rsp but reaches r8+):
+    // the vreg is allocatable from the indices both encode, and nothing else.
+    #[test]
+    fn overlapping_classes_intersect_their_indices() {
+        static R_MID_CLASS: RegClassInfo = RegClassInfo {
+            name: "Rmid",
+            file: "R",
+            registers: &[1, 2, 3],
+            group_width: 1,
+            view: crate::backend::regalloc::RegisterView {
+                bit_offset: 0,
+                merge: false,
+            },
+        };
+        let context = Context::with_default_dialects();
+        let ty = IntegerType::new(&context, 64);
+        let a = context.create_value(ty, None);
+        let a_id = a.id().number();
+        let block = context.create_block(vec![a]);
+
+        vreg_use(&context, &block, a_id, r_low()); // {0, 1}
+        vreg_use(&context, &block, a_id, RegClassId::new(&R_MID_CLASS)); // {1, 2, 3}
+
+        let liveness = analyze(&context, &[block.id()], |_| Vec::new());
+        assert!(liveness.class_conflicts.is_empty());
+        assert_eq!(
+            liveness.allowed_indices.get(&a_id),
+            Some(&BTreeSet::from([1])),
+        );
+    }
+
+    // Classes over one view with no register in common cannot both be honored.
+    #[test]
+    fn disjoint_classes_over_one_view_are_reported() {
+        static R_OTHER_CLASS: RegClassInfo = RegClassInfo {
+            name: "Rother",
+            file: "R",
+            registers: &[2, 3],
+            group_width: 1,
+            view: crate::backend::regalloc::RegisterView {
+                bit_offset: 0,
+                merge: false,
+            },
+        };
+        let context = Context::with_default_dialects();
+        let ty = IntegerType::new(&context, 64);
+        let a = context.create_value(ty, None);
+        let a_id = a.id().number();
+        let block = context.create_block(vec![a]);
+
+        vreg_use(&context, &block, a_id, r_low()); // {0, 1}
+        vreg_use(&context, &block, a_id, RegClassId::new(&R_OTHER_CLASS)); // {2, 3}
+
+        let liveness = analyze(&context, &[block.id()], |_| Vec::new());
+        assert!(liveness.class_conflicts.contains_key(&a_id));
+    }
+
+    // Two classes where neither is a subclass of the other (here: different views
+    // of the same file) cannot both be honored; the allocator must be told rather
+    // than silently keeping one.
+    #[test]
+    fn incompatible_class_constraints_are_reported() {
+        let context = Context::with_default_dialects();
+        let ty = IntegerType::new(&context, 64);
+        let a = context.create_value(ty, None);
+        let a_id = a.id().number();
+        let block = context.create_block(vec![a]);
+
+        vreg_use(&context, &block, a_id, r_low());
+        vreg_use(&context, &block, a_id, r_high());
+
+        let liveness = analyze(&context, &[block.id()], |_| Vec::new());
+        assert_eq!(
+            liveness.class_conflicts.get(&a_id),
+            Some(&(r_low(), r_high())),
+        );
     }
 
     // `addi %a, %b` whose fresh result names a new virtual register (a def), with

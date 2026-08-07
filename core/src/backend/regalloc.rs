@@ -41,6 +41,10 @@ pub struct RegClassInfo {
     /// same physical register at a given index, so the allocator treats their
     /// indices as aliases. A standalone class is its own file.
     pub file: &'static str,
+    /// The file indices this class can encode, ascending. A class that views only
+    /// part of its file (x86 `GPR32low`, whose REX-free encodings reach eax..edi)
+    /// lists just those indices, and the allocator hands out nothing else.
+    pub registers: &'static [u16],
     /// How many consecutive file indices one register of this class covers.
     /// 1 for ordinary classes; an RVV LMUL>1 group class covers 2/4/8 (e.g.
     /// `VRM2` index 8 is the architectural pair v8..v9).
@@ -77,6 +81,29 @@ impl RegClassId {
     /// The physical register file this class draws from (see [`RegClassInfo::file`]).
     pub fn file(self) -> &'static str {
         self.0.file
+    }
+
+    /// Whether this class can encode file index `index` (see
+    /// [`RegClassInfo::registers`]).
+    pub fn contains(self, index: u16) -> bool {
+        self.0.registers.contains(&index)
+    }
+
+    /// Whether both classes name the same physical registers at equal indices: one
+    /// file, one view offset (an x86 high-byte class views its file at bit 8 and
+    /// shares no register with an offset-0 class) and one group width. Only then
+    /// can a value be constrained by both at once.
+    pub fn shares_view_with(self, other: RegClassId) -> bool {
+        self.file() == other.file()
+            && self.view.bit_offset == other.view.bit_offset
+            && self.group_width == other.group_width
+    }
+
+    /// Whether every register this class can encode is also encodable by `other`
+    /// through the same architectural view — so a value constrained to both must
+    /// come from this, the narrower, class.
+    pub fn is_subclass_of(self, other: RegClassId) -> bool {
+        self.shares_view_with(other) && self.registers.iter().all(|index| other.contains(*index))
     }
 
     /// The span of file indices a register of this class at `index` covers: its
@@ -192,6 +219,9 @@ pub enum RegAllocError {
     /// A virtual register could not be colored or spilled (e.g. an over-constrained
     /// pre-coloring). Carries the offending vreg id.
     Infeasible(u32),
+    /// A virtual register is referenced through register classes that cannot both
+    /// be honored (see [`Liveness::class_conflicts`]). Carries the offending vreg.
+    ClassConflict(u32),
     /// The PBQP instance itself was malformed.
     Solver(String),
 }
@@ -254,8 +284,13 @@ fn allocate_with_affinities(
     let mut alternatives: Vec<Vec<Alternative>> = Vec::with_capacity(vregs.len());
     for &vreg in &vregs {
         let class = resolve_class(liveness, precolor, default_class, vreg)?;
+        // A vreg referenced through several classes over one view (an x86 value
+        // that is both a REX-free operand and a SIB index) is allocatable only
+        // from the indices all of them encode.
+        let allowed = liveness.allowed_indices.get(&vreg);
         let mut alts: Vec<Alternative> = allocation_order(abi, class)
             .into_iter()
+            .filter(|(_, index)| allowed.is_none_or(|allowed| allowed.contains(index)))
             .map(Alternative::Phys)
             .collect();
         alts.push(Alternative::Spill);
@@ -342,21 +377,32 @@ fn affinity_matrix(left: &[Alternative], right: &[Alternative]) -> PbqpMatrix {
     matrix
 }
 
-/// Determine the register class a virtual register must be allocated from: its
-/// pinned register's class, the class discovered from its operands, or the target's
-/// default integer class.
+/// Determine the register class a virtual register must be allocated from: the
+/// intersection of the class its operands constrain it to and its pinned
+/// register's class, falling back to the target's default integer class.
+///
+/// A pin says *which* register the value lives in; the operand class says which
+/// registers the instruction that reads it can encode. Both hold, so the narrower
+/// wins — widening to the pin's class would hand out an index the encoding drops,
+/// silently naming a different register. A pin that the narrow class cannot encode
+/// leaves no legal color and fails allocation loudly.
 fn resolve_class(
     liveness: &Liveness,
     precolor: &HashMap<u32, PhysReg>,
     default_class: Option<RegClassId>,
     vreg: u32,
 ) -> Result<RegClassId, RegAllocError> {
-    precolor
-        .get(&vreg)
-        .map(|(c, _)| *c)
-        .or_else(|| liveness.vreg_class.get(&vreg).copied())
-        .or(default_class)
-        .ok_or(RegAllocError::Infeasible(vreg))
+    if liveness.class_conflicts.contains_key(&vreg) {
+        return Err(RegAllocError::ClassConflict(vreg));
+    }
+    let constraint = liveness.vreg_class.get(&vreg).copied();
+    let pinned = precolor.get(&vreg).map(|(class, _)| *class);
+    match (constraint, pinned) {
+        (Some(constraint), Some(pinned)) if constraint.is_subclass_of(pinned) => Ok(constraint),
+        (_, Some(pinned)) => Ok(pinned),
+        (Some(constraint), None) => Ok(constraint),
+        (None, None) => default_class.ok_or(RegAllocError::Infeasible(vreg)),
+    }
 }
 
 /// Build the cost vector for one node's alternatives, honoring pre-coloring,
@@ -422,7 +468,10 @@ fn node_costs(
 fn allocation_order(abi: &crate::backend::abi::AbiInfo, class: RegClassId) -> Vec<PhysReg> {
     let mut result = Vec::new();
     for register in abi.caller_saved.iter().chain(abi.callee_saved) {
-        if register.0.file() == class.file() && register.1 % class.group_width.max(1) == 0 {
+        if register.0.file() == class.file()
+            && class.contains(register.1)
+            && register.1 % class.group_width.max(1) == 0
+        {
             let candidate = (class, register.1);
             let is_role = std::iter::once(&abi.sp)
                 .chain(abi.ra.iter())
@@ -1905,6 +1954,7 @@ mod tests {
             classes: &[RegClassInfo {
                 name: "R",
                 file: "R",
+                registers: &[0, 1, 2, 3],
                 group_width: 1,
                 view: RegisterView {
                     bit_offset: 0,
@@ -2014,6 +2064,40 @@ mod tests {
         abi.callee_saved = Box::leak(vec![(class, 0), (class, 2)].into_boxed_slice());
 
         assert_eq!(allocation_order(&abi, class), vec![(class, 1)]);
+    }
+
+    // A subclass over a shared file (x86 `GPR32low`: eax..edi only) must not be
+    // allocated a file index it cannot encode, even though the ABI lists that
+    // index as allocatable for the file.
+    #[test]
+    fn allocation_order_excludes_non_member_indices() {
+        static CLASSES: &[RegClassInfo] = &[
+            RegClassInfo {
+                name: "GPR",
+                file: "GPR",
+                registers: &[0, 1, 2],
+                group_width: 1,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
+            },
+            RegClassInfo {
+                name: "GPRlow",
+                file: "GPR",
+                registers: &[0, 1],
+                group_width: 1,
+                view: RegisterView {
+                    bit_offset: 0,
+                    merge: false,
+                },
+            },
+        ];
+        let info = RegisterInfo { classes: CLASSES };
+        let low = id_of(&info, "GPRlow");
+        let abi = test_abi(&info, &[0, 1, 2]);
+
+        assert_eq!(allocation_order(abi, low), vec![(low, 0), (low, 1)]);
     }
 
     /// The `RegClassId` for class `name` in `info`. Register-class tables are
@@ -2302,6 +2386,7 @@ mod tests {
         RegClassInfo {
             name: "GPR",
             file: "GPR",
+            registers: &[0, 1, 2, 3],
             group_width: 1,
             view: RegisterView {
                 bit_offset: 0,
@@ -2311,6 +2396,7 @@ mod tests {
         RegClassInfo {
             name: "GPRsp",
             file: "GPR",
+            registers: &[0, 1, 2, 3],
             group_width: 1,
             view: RegisterView {
                 bit_offset: 0,
@@ -2363,6 +2449,7 @@ mod tests {
             RegClassInfo {
                 name: "A",
                 file: "A",
+                registers: &[0, 1, 2, 3],
                 group_width: 1,
                 view: RegisterView {
                     bit_offset: 0,
@@ -2372,6 +2459,7 @@ mod tests {
             RegClassInfo {
                 name: "B",
                 file: "B",
+                registers: &[0, 1, 2, 3],
                 group_width: 1,
                 view: RegisterView {
                     bit_offset: 0,
@@ -2406,6 +2494,7 @@ mod tests {
             RegClassInfo {
                 name: "VR",
                 file: "VR",
+                registers: &[0, 1, 2, 3],
                 group_width: 1,
                 view: RegisterView {
                     bit_offset: 0,
@@ -2415,6 +2504,7 @@ mod tests {
             RegClassInfo {
                 name: "VRM2",
                 file: "VR",
+                registers: &[0, 1, 2, 3],
                 group_width: 2,
                 view: RegisterView {
                     bit_offset: 0,
@@ -2455,6 +2545,7 @@ mod tests {
             RegClassInfo {
                 name: "GPR",
                 file: "GPR",
+                registers: &[0, 1, 2, 3],
                 group_width: 1,
                 view: RegisterView {
                     bit_offset: 0,
@@ -2464,6 +2555,7 @@ mod tests {
             RegClassInfo {
                 name: "GPRsp",
                 file: "GPR",
+                registers: &[0, 1, 2, 3],
                 group_width: 1,
                 view: RegisterView {
                     bit_offset: 0,
@@ -2495,6 +2587,145 @@ mod tests {
             map[&1],
             (id_of(&info, "GPRsp"), 1),
             "a forbidden index aliases across the shared file"
+        );
+    }
+
+    // `GPR` (whole file) and its REX-free subclass `GPRlow` (indices 0..1).
+    static SUBCLASS_CLASSES: &[RegClassInfo] = &[
+        RegClassInfo {
+            name: "GPR",
+            file: "GPR",
+            registers: &[0, 1, 2, 3],
+            group_width: 1,
+            view: RegisterView {
+                bit_offset: 0,
+                merge: false,
+            },
+        },
+        RegClassInfo {
+            name: "GPRlow",
+            file: "GPR",
+            registers: &[0, 1],
+            group_width: 1,
+            view: RegisterView {
+                bit_offset: 0,
+                merge: false,
+            },
+        },
+    ];
+
+    // A vreg pinned through the wide class but read by an operand of a narrow
+    // subclass must be colored from the narrow class: the pin says *which*
+    // register, the operand says which registers the instruction can encode, and
+    // both hold. Taking the pin's class instead would hand out an index the
+    // encoding drops, silently naming a different register.
+    #[test]
+    fn precolor_does_not_widen_a_narrow_operand_class() {
+        let info = RegisterInfo {
+            classes: SUBCLASS_CLASSES,
+        };
+        let low = id_of(&info, "GPRlow");
+        let wide = id_of(&info, "GPR");
+        let mut liveness = Liveness::default();
+        liveness.vregs.insert(1);
+        liveness.vreg_class.insert(1, low);
+        let precolor = HashMap::from([(1u32, (wide, 1u16))]);
+
+        let map = assigned(
+            allocate(&AllocConfig {
+                info: &info,
+                abi: test_abi(&info, &[0, 1, 2, 3]),
+                liveness: &liveness,
+                precolor: &precolor,
+                spill_cost: &|_| 100,
+            })
+            .unwrap(),
+        );
+        assert_eq!(map[&1], (low, 1));
+    }
+
+    // The pin names a register the narrow operand class cannot encode. There is no
+    // legal color, so the allocator must fail loudly (the caller breaks the
+    // constraint with a copy) rather than widen the class.
+    #[test]
+    fn precolor_outside_narrow_class_is_infeasible() {
+        let info = RegisterInfo {
+            classes: SUBCLASS_CLASSES,
+        };
+        let low = id_of(&info, "GPRlow");
+        let wide = id_of(&info, "GPR");
+        let mut liveness = Liveness::default();
+        liveness.vregs.insert(1);
+        liveness.vreg_class.insert(1, low);
+        let precolor = HashMap::from([(1u32, (wide, 3u16))]);
+
+        assert_eq!(
+            allocate(&AllocConfig {
+                info: &info,
+                abi: test_abi(&info, &[0, 1, 2, 3]),
+                liveness: &liveness,
+                precolor: &precolor,
+                spill_cost: &|_| 100,
+            }),
+            Err(RegAllocError::Infeasible(1)),
+        );
+    }
+
+    // A vreg constrained by classes that overlap without containing each other
+    // (an x86 value read both by a REX-free operand and as a SIB index) may only
+    // be colored from the indices every class encodes.
+    #[test]
+    fn overlapping_class_constraints_restrict_the_allocation_order() {
+        let info = RegisterInfo {
+            classes: SUBCLASS_CLASSES,
+        };
+        let low = id_of(&info, "GPRlow");
+        let mut liveness = Liveness::default();
+        liveness.vregs.insert(1);
+        liveness.vreg_class.insert(1, low);
+        // `GPRlow` encodes {0, 1}; the other constraint drops index 0.
+        liveness
+            .allowed_indices
+            .insert(1, BTreeSet::from([1, 2, 3]));
+        let precolor = HashMap::new();
+
+        let map = assigned(
+            allocate(&AllocConfig {
+                info: &info,
+                abi: test_abi(&info, &[0, 1, 2, 3]),
+                liveness: &liveness,
+                precolor: &precolor,
+                spill_cost: &|_| 100,
+            })
+            .unwrap(),
+        );
+        assert_eq!(map[&1], (low, 1));
+    }
+
+    // A vreg with contradictory class constraints is an allocation error, not a
+    // silent choice of one of them.
+    #[test]
+    fn conflicting_class_constraints_fail_allocation() {
+        let info = RegisterInfo {
+            classes: SUBCLASS_CLASSES,
+        };
+        let low = id_of(&info, "GPRlow");
+        let wide = id_of(&info, "GPR");
+        let mut liveness = Liveness::default();
+        liveness.vregs.insert(1);
+        liveness.vreg_class.insert(1, wide);
+        liveness.class_conflicts.insert(1, (wide, low));
+        let precolor = HashMap::new();
+
+        assert_eq!(
+            allocate(&AllocConfig {
+                info: &info,
+                abi: test_abi(&info, &[0, 1, 2, 3]),
+                liveness: &liveness,
+                precolor: &precolor,
+                spill_cost: &|_| 100,
+            }),
+            Err(RegAllocError::ClassConflict(1)),
         );
     }
 }

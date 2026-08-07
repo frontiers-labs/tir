@@ -254,19 +254,49 @@ instruction UnsignedDivide32 for [X86_64] : RegUnary32 {
 }
 
 macro divide32_norex {
-    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $ext:literal ) ),* ) => {
+    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction $name for [X86] : RegUnary32Norex {
                param OPNAME: String = $opname;
                param MNEMONIC: String = $mnemonic;
                param EXT: bits<3> = $ext;
-               behavior { }
+               behavior { $($b)* }
            } )*
     };
 }
 
 divide32_norex!(
-    (SignedDivide32Norex, "signed_divide32_norex", "idiv", 0b111),
-    (UnsignedDivide32Norex, "unsigned_divide32_norex", "div", 0b110)
+    (SignedDivide32Norex, "signed_divide32_norex", "idiv", 0b111, {
+        if GPR32::edx == sext(extract(GPR32::eax, 31, 31), 32) {
+            GPR32::edx = GPR32::eax - (GPR32::eax / dst) * dst;
+            GPR32::eax = GPR32::eax / dst;
+        } else {
+            GPR32::edx = extract(
+                ((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64))
+                    - (((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64))
+                        / sext(dst, 64))
+                        * sext(dst, 64),
+                31, 0);
+            GPR32::eax = extract(
+                ((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64)) / sext(dst, 64),
+                31, 0);
+        }
+    }),
+    (UnsignedDivide32Norex, "unsigned_divide32_norex", "div", 0b110, {
+        if GPR32::edx == zext(0b0, 32) {
+            GPR32::edx = GPR32::eax - (GPR32::eax ~/ dst) * dst;
+            GPR32::eax = GPR32::eax ~/ dst;
+        } else {
+            GPR32::edx = extract(
+                ((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64))
+                    - (((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64))
+                        ~/ zext(dst, 64))
+                        * zext(dst, 64),
+                31, 0);
+            GPR32::eax = extract(
+                ((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64)) ~/ zext(dst, 64),
+                31, 0);
+        }
+    })
 )
 
 instruction SignExtendDividend32Norex for [X86] {
@@ -275,23 +305,50 @@ instruction SignExtendDividend32Norex for [X86] {
     schedule { units = [WriteIExtend]; }
     encoding { 0..7 => 0x99, }
     asm { "{self.MNEMONIC}" }
-    behavior { }
+    behavior {
+        GPR32::edx = sext(extract(GPR32::eax, 31, 31), 32);
+    }
 }
 
 // Rotates share the 0xC1 shift-immediate layout. Both shifts of the rotate pair
 // are computed with the count masked to the operand width, so a zero count
 // degenerates to `dst | dst`.
 
+// A zero count leaves carry and overflow untouched; a non-zero one sets carry
+// from the bit rotated around and overflow from the top two bits of the result.
+// Rotates never write zf/sf.
 shift_imm!(RegShift,
     (RolImm, "rol", 0b000, {
-        dst = (dst << extract(imm, 5, 0))
+        let res = (dst << extract(imm, 5, 0))
             | (dst >> ((zext(0b0, self.XLEN) - zext(extract(imm, 5, 0), self.XLEN))
                 & zext(0b111111, self.XLEN)));
+        EFLAGS::cf = if extract(imm, 5, 0) == zext(0b0, 6) {
+            EFLAGS::cf
+        } else {
+            extract(res, 0, 0)
+        };
+        EFLAGS::of = if extract(imm, 5, 0) == zext(0b0, 6) {
+            EFLAGS::of
+        } else {
+            extract(res, self.XLEN - 1, self.XLEN - 1) ^ extract(res, 0, 0)
+        };
+        dst = res;
     }),
     (RorImm, "ror", 0b001, {
-        dst = (dst >> extract(imm, 5, 0))
+        let res = (dst >> extract(imm, 5, 0))
             | (dst << ((zext(0b0, self.XLEN) - zext(extract(imm, 5, 0), self.XLEN))
                 & zext(0b111111, self.XLEN)));
+        EFLAGS::cf = if extract(imm, 5, 0) == zext(0b0, 6) {
+            EFLAGS::cf
+        } else {
+            extract(res, self.XLEN - 1, self.XLEN - 1)
+        };
+        EFLAGS::of = if extract(imm, 5, 0) == zext(0b0, 6) {
+            EFLAGS::of
+        } else {
+            extract(res, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 2, self.XLEN - 2)
+        };
+        dst = res;
     })
 )
 
@@ -305,7 +362,7 @@ extend_ops!(
 )
 
 macro extend32_norex {
-    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $src:ident, $opcode:literal ) ),* ) => {
+    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $src:ident, $opcode:literal, { $($b:tt)* } ) ),* ) => {
         $( instruction $name for [X86] {
                param OPNAME: String = $opname;
                param MNEMONIC: String = $mnemonic;
@@ -322,16 +379,20 @@ macro extend32_norex {
 
                asm { "{self.MNEMONIC} {dst}, {src}" }
                schedule { units = [WriteIExtend]; }
-               behavior { dst = todo(src); }
+               behavior { $($b)* }
            } )*
     };
 }
 
 extend32_norex!(
-    (Movzx8To32Norex, "movzx8_to32_norex", "movzx", GPR8low, 0xB6),
-    (Movzx16To32Norex, "movzx16_to32_norex", "movzx", GPR16low, 0xB7),
-    (Movsx8To32Norex, "movsx8_to32_norex", "movsx", GPR8low, 0xBE),
-    (Movsx16To32Norex, "movsx16_to32_norex", "movsx", GPR16low, 0xBF)
+    (Movzx8To32Norex, "movzx8_to32_norex", "movzx", GPR8low, 0xB6,
+        { dst = zext(src, 32); }),
+    (Movzx16To32Norex, "movzx16_to32_norex", "movzx", GPR16low, 0xB7,
+        { dst = zext(src, 32); }),
+    (Movsx8To32Norex, "movsx8_to32_norex", "movsx", GPR8low, 0xBE,
+        { dst = sext(src, 32); }),
+    (Movsx16To32Norex, "movsx16_to32_norex", "movsx", GPR16low, 0xBF,
+        { dst = sext(src, 32); })
 )
 
 // `movsxd r64, r/m32` (0x63): no 0x0F escape.
@@ -464,7 +525,10 @@ instruction Test8 for [X86_64] : RegReg8 {
     param MNEMONIC: String = "test";
     param OPCODE: bits<8> = 0x84;
     schedule { units = [WriteIALU3B]; }
-    behavior { }
+
+    behavior {
+        test_flags!({ src }, { 8 }, { 7 })
+    }
 }
 
 instruction CmpImm32 for [X86_64] : RegImm32 {
@@ -532,36 +596,98 @@ instruction Not32 for [X86_64] : RegUnary32 {
 }
 
 // No-REX neg/not (0xF7 /3, /2; byte 0xF6) over the low subclasses. neg = /3,
-// not = /2. Behavior-free; the 32-bit forms are the canonicalize target for
-// Neg32/Not32, the 16/8-bit forms are assembler-only (no narrow generic).
-reg_ext_norex!(RegUnary32Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
-    (Neg32Norex, "neg32_norex", "neg", 0b011),
+// not = /2. The 32-bit forms are the canonicalize target for Neg32/Not32, the
+// 16/8-bit forms are assembler-only (no narrow generic). Like their generic
+// twins these model the value only: `neg` writes flags on hardware, but adding
+// them here would make the norex form disagree with Neg32/Neg.
+reg_ext_norex!(RegUnary32Norex, WriteIALU, { dst = zext(0b0, 32) - dst; },
+    (Neg32Norex, "neg32_norex", "neg", 0b011)
+)
+
+reg_ext_norex!(RegUnary32Norex, WriteIALU, { dst = ~dst; },
     (Not32Norex, "not32_norex", "not", 0b010)
 )
 
-reg_ext_norex!(RegUnary16Norex, WriteIALU3B, { dst = todo(dst); todo_flags!() },
-    (Neg16Norex, "neg16_norex", "neg", 0b011),
+reg_ext_norex!(RegUnary16Norex, WriteIALU3B, { dst = zext(0b0, 16) - dst; },
+    (Neg16Norex, "neg16_norex", "neg", 0b011)
+)
+
+reg_ext_norex!(RegUnary16Norex, WriteIALU3B, { dst = ~dst; },
     (Not16Norex, "not16_norex", "not", 0b010)
 )
 
-reg_ext_norex!(RegUnary8Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
-    (Neg8Norex, "neg8_norex", "neg", 0b011),
+reg_ext_norex!(RegUnary8Norex, WriteIALU, { dst = zext(0b0, 8) - dst; },
+    (Neg8Norex, "neg8_norex", "neg", 0b011)
+)
+
+reg_ext_norex!(RegUnary8Norex, WriteIALU, { dst = ~dst; },
     (Not8Norex, "not8_norex", "not", 0b010)
 )
 
 shift_imm!("32", "32", RegShift32,
     (RolImm, "rol", 0b000, {
-        dst = (dst << extract(imm, 4, 0))
+        let res = (dst << extract(imm, 4, 0))
             | (dst >> ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
+        EFLAGS::cf = if extract(imm, 4, 0) == zext(0b0, 5) {
+            EFLAGS::cf
+        } else {
+            extract(res, 0, 0)
+        };
+        EFLAGS::of = if extract(imm, 4, 0) == zext(0b0, 5) {
+            EFLAGS::of
+        } else {
+            extract(res, 31, 31) ^ extract(res, 0, 0)
+        };
+        dst = res;
     }),
     (RorImm, "ror", 0b001, {
-        dst = (dst >> extract(imm, 4, 0))
+        let res = (dst >> extract(imm, 4, 0))
             | (dst << ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
+        EFLAGS::cf = if extract(imm, 4, 0) == zext(0b0, 5) {
+            EFLAGS::cf
+        } else {
+            extract(res, 31, 31)
+        };
+        EFLAGS::of = if extract(imm, 4, 0) == zext(0b0, 5) {
+            EFLAGS::of
+        } else {
+            extract(res, 31, 31) ^ extract(res, 30, 30)
+        };
+        dst = res;
     })
 )
 
-// No-REX 32-bit rotate-by-immediate (0xC1 /0, /1). Behavior-free; the
-// canonicalize target for RolImm32/RorImm32 on a low register.
-shift_imm_norex!("32", RegShift32Norex, { dst = todo(dst); todo_rotate_flags!() },
-    (RolImm, "rol", 0b000), (RorImm, "ror", 0b001)
+// No-REX 32-bit rotate-by-immediate (0xC1 /0, /1): the canonicalize target for
+// RolImm32/RorImm32 on a low register, same semantics.
+shift_imm!(X86, "32Norex", "32_norex", RegShift32Norex,
+    (RolImm, "rol", 0b000, {
+        let res = (dst << extract(imm, 4, 0))
+            | (dst >> ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
+        EFLAGS::cf = if extract(imm, 4, 0) == zext(0b0, 5) {
+            EFLAGS::cf
+        } else {
+            extract(res, 0, 0)
+        };
+        EFLAGS::of = if extract(imm, 4, 0) == zext(0b0, 5) {
+            EFLAGS::of
+        } else {
+            extract(res, 31, 31) ^ extract(res, 0, 0)
+        };
+        dst = res;
+    }),
+    (RorImm, "ror", 0b001, {
+        let res = (dst >> extract(imm, 4, 0))
+            | (dst << ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
+        EFLAGS::cf = if extract(imm, 4, 0) == zext(0b0, 5) {
+            EFLAGS::cf
+        } else {
+            extract(res, 31, 31)
+        };
+        EFLAGS::of = if extract(imm, 4, 0) == zext(0b0, 5) {
+            EFLAGS::of
+        } else {
+            extract(res, 31, 31) ^ extract(res, 30, 30)
+        };
+        dst = res;
+    })
 )

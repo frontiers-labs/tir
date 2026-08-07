@@ -4,7 +4,7 @@
 // declaration order, so register forms precede the matching immediate forms.
 
 alu_rr!(RegReg, WriteIALU3B,
-    (Add, "add", 0x01, { add_flags!({ src }, { self.XLEN }, { self.XLEN - 1 }) dst = dst + src; }),
+    (Add, "add", 0x01, { add_flags!({ dst }, { src }, { self.XLEN }, { self.XLEN - 1 }) dst = dst + src; }),
     (Sub, "sub", 0x29, { sub_flags!({ src }, { self.XLEN - 1 }) dst = dst - src; }),
     (And, "and", 0x21, { logic_flags!({ dst & src }, { self.XLEN }, { self.XLEN - 1 }) dst = dst & src; }),
     (Or,  "or",  0x09, { logic_flags!({ dst | src }, { self.XLEN }, { self.XLEN - 1 }) dst = dst | src; }),
@@ -74,7 +74,7 @@ instruction Imul32Norex for [X86] : RegRegExt32Norex {
     param MNEMONIC: String = "imul";
     param OPCODE: bits<8> = 0xAF;
     schedule { units = [WriteIMul]; }
-    behavior { dst = todo(dst, src); }
+    behavior { dst = dst * src; }
 }
 
 // Immediate multiply: `imul dst, src, imm` folds a constant factor. Unlike the
@@ -108,14 +108,14 @@ instruction ImulImm32Norex for [X86] : RegRegImm32Norex {
     param OPNAME: String = "imul_imm32_norex";
     param MNEMONIC: String = "imul";
     schedule { units = [WriteIMul]; }
-    behavior { dst = todo(src, imm); }
+    behavior { dst = src * sext(imm, 32); }
 }
 
 // Group-1 ops share opcode 0x81 and select via the ModR/M EXT (/digit); mov
 // uses 0xC7.
 
 alu_ri!(RegImm, WriteIALU,
-    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst + sext(imm, self.XLEN); }),
+    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ dst }, { sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst + sext(imm, self.XLEN); }),
     (OrImm,  "or_imm",  "or",  0x81, 0b001, { logic_flags!({ dst | sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst | sext(imm, self.XLEN); }),
     (AndImm, "and_imm", "and", 0x81, 0b100, { logic_flags!({ dst & sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst & sext(imm, self.XLEN); }),
     (XorImm, "xor_imm", "xor", 0x81, 0b110, { logic_flags!({ dst ^ sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst ^ sext(imm, self.XLEN); })
@@ -129,22 +129,107 @@ alu_ri!(RegImm, WriteIMoveImmediate,
 // first so the immediate forms don't parse `cl` as a symbol immediate.
 
 shift_cl!(RegShiftCl,
-    (ShlCl, "shl_cl", "shl", 0b100, { dst = dst << extract(GPR::rcx, 5, 0); }),
-    (ShrCl, "shr_cl", "shr", 0b101, { dst = dst >> extract(GPR::rcx, 5, 0); }),
-    (SarCl, "sar_cl", "sar", 0b111, { dst = dst >>> extract(GPR::rcx, 5, 0); })
+    (ShlCl, "shl_cl", "shl", 0b100, {
+        let c = extract(GPR::rcx, 5, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
+        dst = res;
+    }),
+    (ShrCl, "shr_cl", "shr", 0b101, {
+        let c = extract(GPR::rcx, 5, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 6)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(dst, self.XLEN - 1, self.XLEN - 1) };
+        dst = res;
+    }),
+    (SarCl, "sar_cl", "sar", 0b111, {
+        let c = extract(GPR::rcx, 5, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 6)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
 )
 
 shift_imm!(RegShift,
-    (ShlImm, "shl", 0b100, { dst = dst << extract(imm, 5, 0); }),
-    (ShrImm, "shr", 0b101, { dst = dst >> extract(imm, 5, 0); }),
-    (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 5, 0); })
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 5, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 5, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 6)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(dst, self.XLEN - 1, self.XLEN - 1) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 5, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 6)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
 )
 
+// The 0xD1 forms shift by exactly one, so their flags are fully defined: no
+// count==0 preservation branch, and the count==1 overflow rules apply.
 shift_imm!("One", "_one", RegShiftOne,
-    (Shl, "shl", 0b100, { }),
-    (Shr, "shr", 0b101, { }),
-    (Sar, "sar", 0b111, { }),
-    (Ror, "ror", 0b001, { })
+    (Shl, "shl", 0b100, {
+        let res = dst << zext(0b1, self.XLEN);
+        let carry = extract(dst, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::cf = carry;
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry;
+        dst = res;
+    }),
+    (Shr, "shr", 0b101, {
+        let res = dst >> zext(0b1, self.XLEN);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = extract(dst, self.XLEN - 1, self.XLEN - 1);
+        dst = res;
+    }),
+    (Sar, "sar", 0b111, {
+        let res = dst >>> zext(0b1, self.XLEN);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }),
+    (Ror, "ror", 0b001, {
+        let res = (dst >> zext(0b1, self.XLEN)) | (dst << zext(0b111111, self.XLEN));
+        EFLAGS::cf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = extract(res, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 2, self.XLEN - 2);
+        dst = res;
+    })
 )
 
 // Relative control transfers: rel32 is measured from the end of the
@@ -290,7 +375,9 @@ instruction MovLoadSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 
-    behavior { dst = todo(); }
+    behavior {
+        dst = load(base, 8, 0b0);
+    }
 }
 
 instruction MovLoadRbp for [X86_64] {
@@ -315,7 +402,9 @@ instruction MovLoadRbp for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 
-    behavior { dst = todo(); }
+    behavior {
+        dst = load(base, 8, 0b0);
+    }
 }
 
 instruction MovStoreSib for [X86_64] {
@@ -340,7 +429,9 @@ instruction MovStoreSib for [X86_64] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior { }
+    behavior {
+        store(base, 8, src);
+    }
 }
 
 instruction MovStoreRbp for [X86_64] {
@@ -365,7 +456,9 @@ instruction MovStoreRbp for [X86_64] {
         "{self.MNEMONIC} [{base}], {src}"
     }
 
-    behavior { }
+    behavior {
+        store(base, 8, src);
+    }
 }
 
 instruction MovLoad for [X86_64] {
@@ -478,7 +571,6 @@ instruction CallIndirect for [X86_64] {
 }
 
 // No-REX indirect jmp/call (target in rax..rdi): 0xFF + ModR/M, no REX prefix.
-// Behavior-free (canonicalize-only), so they root no isel/terminator handling.
 instruction JmpIndirectNorex for [X86] {
     param OPNAME: String = "jmp_indirect_norex";
     param MNEMONIC: String = "jmp";
@@ -498,7 +590,9 @@ instruction JmpIndirectNorex for [X86] {
         "{self.MNEMONIC} *{target}"
     }
 
-    behavior { }
+    behavior {
+        PC::pc = target;
+    }
 }
 
 instruction CallIndirectNorex for [X86] {
@@ -520,11 +614,19 @@ instruction CallIndirectNorex for [X86] {
         "{self.MNEMONIC} *{target}"
     }
 
-    behavior { }
+    behavior {
+        // Two encoded bytes (0xFF + ModR/M), so the return address is PC + 2.
+        // This is the REX-dropping canonicalization target of `CallIndirect`,
+        // so the slot is the long-mode 8 bytes — not `CallLegacy`'s 4: the
+        // rewrite must preserve semantics.
+        store(GPR::rsp - zext(0b1000, self.XLEN), 8, PC::pc + zext(0b10, self.XLEN));
+        GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
+        PC::pc = target;
+    }
 }
 
 alu_rr!("32", "32", RegReg32, WriteIALU3B,
-    (Add, "add", 0x01, { add_flags!({ src }, { 32 }, { 31 }) dst = dst + src; }),
+    (Add, "add", 0x01, { add_flags!({ dst }, { src }, { 32 }, { 31 }) dst = dst + src; }),
     (Sub, "sub", 0x29, { sub_flags!({ src }, { 31 }) dst = dst - src; }),
     (And, "and", 0x21, { logic_flags!({ dst & src }, { 32 }, { 31 }) dst = dst & src; }),
     (Or,  "or",  0x09, { logic_flags!({ dst | src }, { 32 }, { 31 }) dst = dst | src; }),
@@ -536,7 +638,7 @@ alu_rr!("32", "32", RegReg32, WriteIMove3B,
 )
 
 alu_ri!("32", "32", RegImm32, WriteIALU,
-    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ sext(imm, 32) }, { 32 }, { 31 }) dst = dst + sext(imm, 32); }),
+    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ dst }, { sext(imm, 32) }, { 32 }, { 31 }) dst = dst + sext(imm, 32); }),
     (OrImm,  "or_imm",  "or",  0x81, 0b001, { logic_flags!({ dst | sext(imm, 32) }, { 32 }, { 31 }) dst = dst | sext(imm, 32); }),
     (AndImm, "and_imm", "and", 0x81, 0b100, { logic_flags!({ dst & sext(imm, 32) }, { 32 }, { 31 }) dst = dst & sext(imm, 32); }),
     (XorImm, "xor_imm", "xor", 0x81, 0b110, { logic_flags!({ dst ^ sext(imm, 32) }, { 32 }, { 31 }) dst = dst ^ sext(imm, 32); })
@@ -578,33 +680,143 @@ instruction MovImm32 for [X86_64] {
 }
 
 shift_cl!("32", "32", RegShiftCl32,
-    (ShlCl, "shl_cl", "shl", 0b100, { dst = dst << extract(GPR::rcx, 4, 0); }),
-    (ShrCl, "shr_cl", "shr", 0b101, { dst = dst >> extract(GPR::rcx, 4, 0); }),
-    (SarCl, "sar_cl", "sar", 0b111, { dst = dst >>> extract(GPR::rcx, 4, 0); })
+    (ShlCl, "shl_cl", "shl", 0b100, {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 31, 31);
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 31, 31) ^ carry };
+        dst = res;
+    }),
+    (ShrCl, "shr_cl", "shr", 0b101, {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 31, 31) };
+        dst = res;
+    }),
+    (SarCl, "sar_cl", "sar", 0b111, {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
 )
 
 shift_imm!("32", "32", RegShift32,
-    (ShlImm, "shl", 0b100, { dst = dst << extract(imm, 4, 0); }),
-    (ShrImm, "shr", 0b101, { dst = dst >> extract(imm, 4, 0); }),
-    (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 31, 31);
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 31, 31) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 31, 31) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
 )
 
 shift_imm!("One32", "_one32", RegShiftOne32,
-    (Shl, "shl", 0b100, { }),
-    (Shr, "shr", 0b101, { }),
-    (Sar, "sar", 0b111, { }),
-    (Ror, "ror", 0b001, { })
+    (Shl, "shl", 0b100, {
+        let res = dst << zext(0b1, 32);
+        let carry = extract(dst, 31, 31);
+        EFLAGS::cf = carry;
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::of = extract(res, 31, 31) ^ carry;
+        dst = res;
+    }),
+    (Shr, "shr", 0b101, {
+        let res = dst >> zext(0b1, 32);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::of = extract(dst, 31, 31);
+        dst = res;
+    }),
+    (Sar, "sar", 0b111, {
+        let res = dst >>> zext(0b1, 32);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }),
+    (Ror, "ror", 0b001, {
+        let res = (dst >> zext(0b1, 32)) | (dst << zext(0b11111, 32));
+        EFLAGS::cf = extract(res, 31, 31);
+        EFLAGS::of = extract(res, 31, 31) ^ extract(res, 30, 30);
+        dst = res;
+    })
 )
 
 shift_imm!(X86, "One32Norex", "_one32_norex", RegShiftOne32Norex,
-    (Shl, "shl", 0b100, { }),
-    (Shr, "shr", 0b101, { }),
-    (Sar, "sar", 0b111, { }),
-    (Ror, "ror", 0b001, { })
+    (Shl, "shl", 0b100, {
+        let res = dst << zext(0b1, 32);
+        let carry = extract(dst, 31, 31);
+        EFLAGS::cf = carry;
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::of = extract(res, 31, 31) ^ carry;
+        dst = res;
+    }),
+    (Shr, "shr", 0b101, {
+        let res = dst >> zext(0b1, 32);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::of = extract(dst, 31, 31);
+        dst = res;
+    }),
+    (Sar, "sar", 0b111, {
+        let res = dst >>> zext(0b1, 32);
+        EFLAGS::cf = extract(dst, 0, 0);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }),
+    (Ror, "ror", 0b001, {
+        let res = (dst >> zext(0b1, 32)) | (dst << zext(0b11111, 32));
+        EFLAGS::cf = extract(res, 31, 31);
+        EFLAGS::of = extract(res, 31, 31) ^ extract(res, 30, 30);
+        dst = res;
+    })
 )
 
 alu_rr!("16", "16", RegReg16, WriteIALU,
-    (Add, "add", 0x01, { add_flags!({ src }, { 16 }, { 15 }) dst = dst + src; }),
+    (Add, "add", 0x01, { add_flags!({ dst }, { src }, { 16 }, { 15 }) dst = dst + src; }),
     (Sub, "sub", 0x29, { sub_flags!({ src }, { 15 }) dst = dst - src; }),
     (And, "and", 0x21, { logic_flags!({ dst & src }, { 16 }, { 15 }) dst = dst & src; }),
     (Or,  "or",  0x09, { logic_flags!({ dst | src }, { 16 }, { 15 }) dst = dst | src; }),
@@ -616,7 +828,7 @@ alu_rr!("16", "16", RegReg16, WriteIMoveWide,
 )
 
 alu_ri!("16", "16", RegImm16, WriteIALUImm16,
-    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ sext(imm, 16) }, { 16 }, { 15 }) dst = dst + sext(imm, 16); }),
+    (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ dst }, { sext(imm, 16) }, { 16 }, { 15 }) dst = dst + sext(imm, 16); }),
     (OrImm,  "or_imm",  "or",  0x81, 0b001, { logic_flags!({ dst | sext(imm, 16) }, { 16 }, { 15 }) dst = dst | sext(imm, 16); }),
     (AndImm, "and_imm", "and", 0x81, 0b100, { logic_flags!({ dst & sext(imm, 16) }, { 16 }, { 15 }) dst = dst & sext(imm, 16); }),
     (XorImm, "xor_imm", "xor", 0x81, 0b110, { logic_flags!({ dst ^ sext(imm, 16) }, { 16 }, { 15 }) dst = dst ^ sext(imm, 16); })
@@ -627,13 +839,41 @@ alu_ri!("16", "16", RegImm16, WriteIMoveImmediate16,
 )
 
 shift_imm!("16", "16", RegShift16,
-    (ShlImm, "shl", 0b100, { dst = dst << extract(imm, 4, 0); }),
-    (ShrImm, "shr", 0b101, { dst = dst >> extract(imm, 4, 0); }),
-    (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 15, 15);
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 15, 15) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 15, 15) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
 )
 
 alu_rr!("8", "8", RegReg8, WriteIALU3B,
-    (Add, "add", 0x00, { add_flags!({ src }, { 8 }, { 7 }) dst = dst + src; }),
+    (Add, "add", 0x00, { add_flags!({ dst }, { src }, { 8 }, { 7 }) dst = dst + src; }),
     (Sub, "sub", 0x28, { sub_flags!({ src }, { 7 }) dst = dst - src; }),
     (And, "and", 0x20, { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }),
     (Or,  "or",  0x08, { logic_flags!({ dst | src }, { 8 }, { 7 }) dst = dst | src; }),
@@ -645,7 +885,7 @@ alu_rr!("8", "8", RegReg8, WriteIMove3B,
 )
 
 alu_ri!("8", "8", RegImm8, WriteIALU,
-    (AddImm, "add_imm", "add", 0x80, 0b000, { add_flags!({ sext(imm, 8) }, { 8 }, { 7 }) dst = dst + sext(imm, 8); }),
+    (AddImm, "add_imm", "add", 0x80, 0b000, { add_flags!({ dst }, { sext(imm, 8) }, { 8 }, { 7 }) dst = dst + sext(imm, 8); }),
     (OrImm,  "or_imm",  "or",  0x80, 0b001, { logic_flags!({ dst | sext(imm, 8) }, { 8 }, { 7 }) dst = dst | sext(imm, 8); }),
     (AndImm, "and_imm", "and", 0x80, 0b100, { logic_flags!({ dst & sext(imm, 8) }, { 8 }, { 7 }) dst = dst & sext(imm, 8); }),
     (XorImm, "xor_imm", "xor", 0x80, 0b110, { logic_flags!({ dst ^ sext(imm, 8) }, { 8 }, { 7 }) dst = dst ^ sext(imm, 8); }),
@@ -658,13 +898,41 @@ alu_ri!("8", "8", RegImm8, WriteIMoveImmediate,
 )
 
 shift_imm!("8", "8", RegShift8,
-    (ShlImm, "shl", 0b100, { dst = dst << extract(imm, 4, 0); }),
-    (ShrImm, "shr", 0b101, { dst = dst >> extract(imm, 4, 0); }),
-    (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 7, 7);
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
 )
 
 alu_rr!(X86, "8H", "8h", RegReg8H, WriteIHighByte,
-    (Add, "add", 0x00, { add_flags!({ src }, { 8 }, { 7 }) dst = dst + src; }),
+    (Add, "add", 0x00, { add_flags!({ dst }, { src }, { 8 }, { 7 }) dst = dst + src; }),
     (Sub, "sub", 0x28, { sub_flags!({ src }, { 7 }) dst = dst - src; }),
     (And, "and", 0x20, { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }),
     (Or,  "or",  0x08, { logic_flags!({ dst | src }, { 8 }, { 7 }) dst = dst | src; }),
@@ -679,58 +947,87 @@ alu_rr!(X86, "8H", "8h", RegReg8H, WriteIHighByte,
 // above. cmp (0x39/0x38) and test (0x85/0x84) get their own rows: they read the
 // destination without writing it. The 32-bit forms canonicalize Cmp32/Test32,
 // the 16/8-bit forms are assembler-only.
-alu_rr_norex!("32", RegReg32Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
-    (Add, "add", 0x01), (Sub, "sub", 0x29), (And, "and", 0x21),
-    (Or, "or", 0x09), (Xor, "xor", 0x31)
-)
+alu_rr_norex!("32", RegReg32Norex, WriteIALU,
+    { add_flags!({ dst }, { src }, { 32 }, { 31 }) dst = dst + src; }, (Add, "add", 0x01))
+alu_rr_norex!("32", RegReg32Norex, WriteIALU,
+    { sub_flags!({ src }, { 31 }) dst = dst - src; }, (Sub, "sub", 0x29))
+alu_rr_norex!("32", RegReg32Norex, WriteIALU,
+    { logic_flags!({ dst & src }, { 32 }, { 31 }) dst = dst & src; }, (And, "and", 0x21))
+alu_rr_norex!("32", RegReg32Norex, WriteIALU,
+    { logic_flags!({ dst | src }, { 32 }, { 31 }) dst = dst | src; }, (Or, "or", 0x09))
+alu_rr_norex!("32", RegReg32Norex, WriteIALU,
+    { logic_flags!({ dst ^ src }, { 32 }, { 31 }) dst = dst ^ src; }, (Xor, "xor", 0x31))
 
-alu_rr_norex!("32", RegReg32Norex, WriteIALU, { todo_flags!() },
-    (Cmp, "cmp", 0x39), (Test, "test", 0x85)
-)
+alu_rr_norex!("32", RegReg32Norex, WriteIALU,
+    { sub_flags!({ src }, { 31 }) }, (Cmp, "cmp", 0x39))
+alu_rr_norex!("32", RegReg32Norex, WriteIALU,
+    { test_flags!({ src }, { 32 }, { 31 }) }, (Test, "test", 0x85))
 
-alu_rr_norex!("32", RegReg32Norex, WriteIMoveWide, { dst = todo(); },
+alu_rr_norex!("32", RegReg32Norex, WriteIMoveWide, { dst = src; },
     (Mov, "mov", 0x89)
 )
 
-alu_rr_norex!("16", RegReg16Norex, WriteIALU3B, { dst = todo(dst); todo_flags!() },
-    (Add, "add", 0x01), (Sub, "sub", 0x29), (And, "and", 0x21),
-    (Or, "or", 0x09), (Xor, "xor", 0x31)
-)
+alu_rr_norex!("16", RegReg16Norex, WriteIALU3B,
+    { add_flags!({ dst }, { src }, { 16 }, { 15 }) dst = dst + src; }, (Add, "add", 0x01))
+alu_rr_norex!("16", RegReg16Norex, WriteIALU3B,
+    { sub_flags!({ src }, { 15 }) dst = dst - src; }, (Sub, "sub", 0x29))
+alu_rr_norex!("16", RegReg16Norex, WriteIALU3B,
+    { logic_flags!({ dst & src }, { 16 }, { 15 }) dst = dst & src; }, (And, "and", 0x21))
+alu_rr_norex!("16", RegReg16Norex, WriteIALU3B,
+    { logic_flags!({ dst | src }, { 16 }, { 15 }) dst = dst | src; }, (Or, "or", 0x09))
+alu_rr_norex!("16", RegReg16Norex, WriteIALU3B,
+    { logic_flags!({ dst ^ src }, { 16 }, { 15 }) dst = dst ^ src; }, (Xor, "xor", 0x31))
 
-alu_rr_norex!("16", RegReg16Norex, WriteIALU3B, { todo_flags!() },
-    (Cmp, "cmp", 0x39), (Test, "test", 0x85)
-)
+alu_rr_norex!("16", RegReg16Norex, WriteIALU3B,
+    { sub_flags!({ src }, { 15 }) }, (Cmp, "cmp", 0x39))
+alu_rr_norex!("16", RegReg16Norex, WriteIALU3B,
+    { test_flags!({ src }, { 16 }, { 15 }) }, (Test, "test", 0x85))
 
-alu_rr_norex!("16", RegReg16Norex, WriteIMove3B, { dst = todo(); },
+alu_rr_norex!("16", RegReg16Norex, WriteIMove3B, { dst = src; },
     (Mov, "mov", 0x89)
 )
 
-alu_rr_norex!("8", RegReg8Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
-    (Add, "add", 0x00), (Sub, "sub", 0x28), (And, "and", 0x20),
-    (Or, "or", 0x08), (Xor, "xor", 0x30)
-)
+alu_rr_norex!("8", RegReg8Norex, WriteIALU,
+    { add_flags!({ dst }, { src }, { 8 }, { 7 }) dst = dst + src; }, (Add, "add", 0x00))
+alu_rr_norex!("8", RegReg8Norex, WriteIALU,
+    { sub_flags!({ src }, { 7 }) dst = dst - src; }, (Sub, "sub", 0x28))
+alu_rr_norex!("8", RegReg8Norex, WriteIALU,
+    { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }, (And, "and", 0x20))
+alu_rr_norex!("8", RegReg8Norex, WriteIALU,
+    { logic_flags!({ dst | src }, { 8 }, { 7 }) dst = dst | src; }, (Or, "or", 0x08))
+alu_rr_norex!("8", RegReg8Norex, WriteIALU,
+    { logic_flags!({ dst ^ src }, { 8 }, { 7 }) dst = dst ^ src; }, (Xor, "xor", 0x30))
 
-alu_rr_norex!("8", RegReg8Norex, WriteIALU, { todo_flags!() },
-    (Cmp, "cmp", 0x38), (Test, "test", 0x84)
-)
+alu_rr_norex!("8", RegReg8Norex, WriteIALU,
+    { sub_flags!({ src }, { 7 }) }, (Cmp, "cmp", 0x38))
+alu_rr_norex!("8", RegReg8Norex, WriteIALU,
+    { test_flags!({ src }, { 8 }, { 7 }) }, (Test, "test", 0x84))
 
-alu_rr_norex!("8", RegReg8Norex, WriteIMoveByte, { dst = todo(); },
+alu_rr_norex!("8", RegReg8Norex, WriteIMoveByte, { dst = src; },
     (Mov, "mov", 0x88)
 )
 
 // No-REX register/immediate imm32 forms (low subclasses).
-alu_ri_norex!(RegImm32Norex, WriteIALU, { dst = todo(dst); todo_flags!() },
-    (AddImm32Norex,  "add_imm32_norex",  "add",  0x81, 0b000),
-    (OrImm32Norex,   "or_imm32_norex",   "or",   0x81, 0b001),
-    (AndImm32Norex,  "and_imm32_norex",  "and",  0x81, 0b100),
-    (XorImm32Norex,  "xor_imm32_norex",  "xor",  0x81, 0b110),
-    (SubImm32Norex,  "sub_imm32_norex",  "sub",  0x81, 0b101)
-)
+alu_ri_norex!(RegImm32Norex, WriteIALU,
+    { add_flags!({ dst }, { sext(imm, 32) }, { 32 }, { 31 }) dst = dst + sext(imm, 32); },
+    (AddImm32Norex,  "add_imm32_norex",  "add",  0x81, 0b000))
+alu_ri_norex!(RegImm32Norex, WriteIALU,
+    { logic_flags!({ dst | sext(imm, 32) }, { 32 }, { 31 }) dst = dst | sext(imm, 32); },
+    (OrImm32Norex,   "or_imm32_norex",   "or",   0x81, 0b001))
+alu_ri_norex!(RegImm32Norex, WriteIALU,
+    { logic_flags!({ dst & sext(imm, 32) }, { 32 }, { 31 }) dst = dst & sext(imm, 32); },
+    (AndImm32Norex,  "and_imm32_norex",  "and",  0x81, 0b100))
+alu_ri_norex!(RegImm32Norex, WriteIALU,
+    { logic_flags!({ dst ^ sext(imm, 32) }, { 32 }, { 31 }) dst = dst ^ sext(imm, 32); },
+    (XorImm32Norex,  "xor_imm32_norex",  "xor",  0x81, 0b110))
+alu_ri_norex!(RegImm32Norex, WriteIALU,
+    { sub_flags!({ sext(imm, 32) }, { 31 }) dst = dst - sext(imm, 32); },
+    (SubImm32Norex,  "sub_imm32_norex",  "sub",  0x81, 0b101))
 
-alu_ri_norex!(RegImm32Norex, WriteIALU, { todo_flags!() },
-    (CmpImm32Norex,  "cmp_imm32_norex",  "cmp",  0x81, 0b111),
-    (TestImm32Norex, "test_imm32_norex", "test", 0xF7, 0b000)
-)
+alu_ri_norex!(RegImm32Norex, WriteIALU, { sub_flags!({ sext(imm, 32) }, { 31 }) },
+    (CmpImm32Norex,  "cmp_imm32_norex",  "cmp",  0x81, 0b111))
+alu_ri_norex!(RegImm32Norex, WriteIALU, { test_flags!({ sext(imm, 32) }, { 32 }, { 31 }) },
+    (TestImm32Norex, "test_imm32_norex", "test", 0xF7, 0b000))
 
 // The REX-free `mov r32, imm32` (0xB8+rd id): five bytes for eax..edi.
 instruction MovImm32Norex for [X86] {
@@ -755,117 +1052,343 @@ instruction MovImm32Norex for [X86] {
     }
 
     behavior {
-        dst = todo();
+        dst = sext(imm, 32);
     }
 }
 
-alu_ri_norex!(RegImm16Norex, WriteIALUImm16, { dst = todo(dst); todo_flags!() },
-    (AddImm16Norex, "add_imm16_norex", "add", 0x81, 0b000),
-    (OrImm16Norex,  "or_imm16_norex",  "or",  0x81, 0b001),
-    (AndImm16Norex, "and_imm16_norex", "and", 0x81, 0b100),
-    (XorImm16Norex, "xor_imm16_norex", "xor", 0x81, 0b110)
-)
+alu_ri_norex!(RegImm16Norex, WriteIALUImm16,
+    { add_flags!({ dst }, { sext(imm, 16) }, { 16 }, { 15 }) dst = dst + sext(imm, 16); },
+    (AddImm16Norex, "add_imm16_norex", "add", 0x81, 0b000))
+alu_ri_norex!(RegImm16Norex, WriteIALUImm16,
+    { logic_flags!({ dst | sext(imm, 16) }, { 16 }, { 15 }) dst = dst | sext(imm, 16); },
+    (OrImm16Norex,  "or_imm16_norex",  "or",  0x81, 0b001))
+alu_ri_norex!(RegImm16Norex, WriteIALUImm16,
+    { logic_flags!({ dst & sext(imm, 16) }, { 16 }, { 15 }) dst = dst & sext(imm, 16); },
+    (AndImm16Norex, "and_imm16_norex", "and", 0x81, 0b100))
+alu_ri_norex!(RegImm16Norex, WriteIALUImm16,
+    { logic_flags!({ dst ^ sext(imm, 16) }, { 16 }, { 15 }) dst = dst ^ sext(imm, 16); },
+    (XorImm16Norex, "xor_imm16_norex", "xor", 0x81, 0b110))
 
-alu_ri_norex!(RegImm16Norex, WriteIMoveImmediate16, { dst = todo(); },
+alu_ri_norex!(RegImm16Norex, WriteIMoveImmediate16, { dst = sext(imm, 16); },
     (MovImm16Norex, "mov_imm16_norex", "mov", 0xC7, 0b000)
 )
 
-alu_ri_norex!(RegImm8Norex, WriteIALU3B, { dst = todo(dst); todo_flags!() },
-    (AddImm8Norex, "add_imm8_norex", "add", 0x80, 0b000),
-    (OrImm8Norex,  "or_imm8_norex",  "or",  0x80, 0b001),
-    (AndImm8Norex, "and_imm8_norex", "and", 0x80, 0b100),
-    (XorImm8Norex, "xor_imm8_norex", "xor", 0x80, 0b110)
-)
+alu_ri_norex!(RegImm8Norex, WriteIALU3B,
+    { add_flags!({ dst }, { sext(imm, 8) }, { 8 }, { 7 }) dst = dst + sext(imm, 8); },
+    (AddImm8Norex, "add_imm8_norex", "add", 0x80, 0b000))
+alu_ri_norex!(RegImm8Norex, WriteIALU3B,
+    { logic_flags!({ dst | sext(imm, 8) }, { 8 }, { 7 }) dst = dst | sext(imm, 8); },
+    (OrImm8Norex,  "or_imm8_norex",  "or",  0x80, 0b001))
+alu_ri_norex!(RegImm8Norex, WriteIALU3B,
+    { logic_flags!({ dst & sext(imm, 8) }, { 8 }, { 7 }) dst = dst & sext(imm, 8); },
+    (AndImm8Norex, "and_imm8_norex", "and", 0x80, 0b100))
+alu_ri_norex!(RegImm8Norex, WriteIALU3B,
+    { logic_flags!({ dst ^ sext(imm, 8) }, { 8 }, { 7 }) dst = dst ^ sext(imm, 8); },
+    (XorImm8Norex, "xor_imm8_norex", "xor", 0x80, 0b110))
 
-alu_ri_norex!(RegImm8Norex, WriteIALU3B, { todo_flags!() },
-    (CmpImm8Norex, "cmp_imm8_norex", "cmp", 0x80, 0b111),
-    (TestImm8Norex, "test_imm8_norex", "test", 0xF6, 0b000)
-)
+alu_ri_norex!(RegImm8Norex, WriteIALU3B, { sub_flags!({ sext(imm, 8) }, { 7 }) },
+    (CmpImm8Norex, "cmp_imm8_norex", "cmp", 0x80, 0b111))
+alu_ri_norex!(RegImm8Norex, WriteIALU3B, { test_flags!({ sext(imm, 8) }, { 8 }, { 7 }) },
+    (TestImm8Norex, "test_imm8_norex", "test", 0xF6, 0b000))
 
-alu_ri_norex!(RegImm8Norex, WriteIMove3B, { dst = todo(); },
+alu_ri_norex!(RegImm8Norex, WriteIMove3B, { dst = sext(imm, 8); },
     (MovImm8Norex, "mov_imm8_norex", "mov", 0xC6, 0b000)
 )
 
 // Group-1 0x83 imm8 short forms. 64-bit REX.W and 32/16-bit REX + REX-free.
 alu_ri8_sem!(RegImm8s, X86_64,
-    (AddImm8s, "add_imm8s", "add", 0b000, { add_flags!({ sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst + sext(imm, self.XLEN); }),
+    (AddImm8s, "add_imm8s", "add", 0b000, { add_flags!({ dst }, { sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst + sext(imm, self.XLEN); }),
     (OrImm8s,  "or_imm8s",  "or",  0b001, { logic_flags!({ dst | sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst | sext(imm, self.XLEN); }),
     (AndImm8s, "and_imm8s", "and", 0b100, { logic_flags!({ dst & sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst & sext(imm, self.XLEN); }),
     (XorImm8s, "xor_imm8s", "xor", 0b110, { logic_flags!({ dst ^ sext(imm, self.XLEN) }, { self.XLEN }, { self.XLEN - 1 }) dst = dst ^ sext(imm, self.XLEN); }),
     (SubImm8s, "sub_imm8s", "sub", 0b101, { sub_flags!({ sext(imm, self.XLEN) }, { self.XLEN - 1 }) dst = dst - sext(imm, self.XLEN); }),
-    (CmpImm8s, "cmp_imm8s", "cmp", 0b111, { })
+    (CmpImm8s, "cmp_imm8s", "cmp", 0b111, { sub_flags!({ sext(imm, self.XLEN) }, { self.XLEN - 1 }) })
 )
 
 alu_ri8_sem!(RegImm8s32, X86_64,
-    (AddImm8s32, "add_imm8s32", "add", 0b000, { add_flags!({ sext(imm, 32) }, { 32 }, { 31 }) dst = dst + sext(imm, 32); }),
+    (AddImm8s32, "add_imm8s32", "add", 0b000, { add_flags!({ dst }, { sext(imm, 32) }, { 32 }, { 31 }) dst = dst + sext(imm, 32); }),
     (OrImm8s32,  "or_imm8s32",  "or",  0b001, { logic_flags!({ dst | sext(imm, 32) }, { 32 }, { 31 }) dst = dst | sext(imm, 32); }),
     (AndImm8s32, "and_imm8s32", "and", 0b100, { logic_flags!({ dst & sext(imm, 32) }, { 32 }, { 31 }) dst = dst & sext(imm, 32); }),
     (XorImm8s32, "xor_imm8s32", "xor", 0b110, { logic_flags!({ dst ^ sext(imm, 32) }, { 32 }, { 31 }) dst = dst ^ sext(imm, 32); }),
     (SubImm8s32, "sub_imm8s32", "sub", 0b101, { sub_flags!({ sext(imm, 32) }, { 31 }) dst = dst - sext(imm, 32); }),
-    (CmpImm8s32, "cmp_imm8s32", "cmp", 0b111, { })
+    (CmpImm8s32, "cmp_imm8s32", "cmp", 0b111, { sub_flags!({ sext(imm, 32) }, { 31 }) })
 )
 
-alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B, { dst = todo(dst); todo_flags!() },
-    (AddImm8s32Norex, "add_imm8s32_norex", "add", 0b000),
-    (OrImm8s32Norex,  "or_imm8s32_norex",  "or",  0b001),
-    (AndImm8s32Norex, "and_imm8s32_norex", "and", 0b100),
-    (XorImm8s32Norex, "xor_imm8s32_norex", "xor", 0b110),
-    (SubImm8s32Norex, "sub_imm8s32_norex", "sub", 0b101)
-)
+alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B,
+    { add_flags!({ dst }, { sext(imm, 32) }, { 32 }, { 31 }) dst = dst + sext(imm, 32); },
+    (AddImm8s32Norex, "add_imm8s32_norex", "add", 0b000))
+alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B,
+    { logic_flags!({ dst | sext(imm, 32) }, { 32 }, { 31 }) dst = dst | sext(imm, 32); },
+    (OrImm8s32Norex,  "or_imm8s32_norex",  "or",  0b001))
+alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B,
+    { logic_flags!({ dst & sext(imm, 32) }, { 32 }, { 31 }) dst = dst & sext(imm, 32); },
+    (AndImm8s32Norex, "and_imm8s32_norex", "and", 0b100))
+alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B,
+    { logic_flags!({ dst ^ sext(imm, 32) }, { 32 }, { 31 }) dst = dst ^ sext(imm, 32); },
+    (XorImm8s32Norex, "xor_imm8s32_norex", "xor", 0b110))
+alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B,
+    { sub_flags!({ sext(imm, 32) }, { 31 }) dst = dst - sext(imm, 32); },
+    (SubImm8s32Norex, "sub_imm8s32_norex", "sub", 0b101))
 
-alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B, { todo_flags!() },
-    (CmpImm8s32Norex, "cmp_imm8s32_norex", "cmp", 0b111)
-)
+alu_ri8!(RegImm8s32Norex, X86, WriteIALU3B, { sub_flags!({ sext(imm, 32) }, { 31 }) },
+    (CmpImm8s32Norex, "cmp_imm8s32_norex", "cmp", 0b111))
 
 alu_ri8_sem!(RegImm8s16, X86_64,
-    (AddImm8s16, "add_imm8s16", "add", 0b000, { add_flags!({ sext(imm, 16) }, { 16 }, { 15 }) dst = dst + sext(imm, 16); }),
+    (AddImm8s16, "add_imm8s16", "add", 0b000, { add_flags!({ dst }, { sext(imm, 16) }, { 16 }, { 15 }) dst = dst + sext(imm, 16); }),
     (OrImm8s16,  "or_imm8s16",  "or",  0b001, { logic_flags!({ dst | sext(imm, 16) }, { 16 }, { 15 }) dst = dst | sext(imm, 16); }),
     (AndImm8s16, "and_imm8s16", "and", 0b100, { logic_flags!({ dst & sext(imm, 16) }, { 16 }, { 15 }) dst = dst & sext(imm, 16); }),
     (XorImm8s16, "xor_imm8s16", "xor", 0b110, { logic_flags!({ dst ^ sext(imm, 16) }, { 16 }, { 15 }) dst = dst ^ sext(imm, 16); })
 )
 
-alu_ri8!(RegImm8s16Norex, X86, WriteIALU, { dst = todo(dst); todo_flags!() },
-    (AddImm8s16Norex, "add_imm8s16_norex", "add", 0b000),
-    (OrImm8s16Norex,  "or_imm8s16_norex",  "or",  0b001),
-    (AndImm8s16Norex, "and_imm8s16_norex", "and", 0b100),
-    (XorImm8s16Norex, "xor_imm8s16_norex", "xor", 0b110)
-)
+alu_ri8!(RegImm8s16Norex, X86, WriteIALU,
+    { add_flags!({ dst }, { sext(imm, 16) }, { 16 }, { 15 }) dst = dst + sext(imm, 16); },
+    (AddImm8s16Norex, "add_imm8s16_norex", "add", 0b000))
+alu_ri8!(RegImm8s16Norex, X86, WriteIALU,
+    { logic_flags!({ dst | sext(imm, 16) }, { 16 }, { 15 }) dst = dst | sext(imm, 16); },
+    (OrImm8s16Norex,  "or_imm8s16_norex",  "or",  0b001))
+alu_ri8!(RegImm8s16Norex, X86, WriteIALU,
+    { logic_flags!({ dst & sext(imm, 16) }, { 16 }, { 15 }) dst = dst & sext(imm, 16); },
+    (AndImm8s16Norex, "and_imm8s16_norex", "and", 0b100))
+alu_ri8!(RegImm8s16Norex, X86, WriteIALU,
+    { logic_flags!({ dst ^ sext(imm, 16) }, { 16 }, { 15 }) dst = dst ^ sext(imm, 16); },
+    (XorImm8s16Norex, "xor_imm8s16_norex", "xor", 0b110))
 
-// No-REX shift-by-immediate forms (low subclasses).
-shift_imm_norex!("32", RegShift32Norex, { dst = todo(dst); todo_flags!() },
-    (ShlImm, "shl", 0b100), (ShrImm, "shr", 0b101), (SarImm, "sar", 0b111)
-)
+// No-REX shift-by-immediate forms (low subclasses). A masked count of zero
+// leaves every flag untouched, so each flag reads its own old value on that
+// path; the carry is the last bit shifted out and overflow follows the
+// count==1 rule.
+shift_imm_norex!("32", RegShift32Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 31, 31);
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 31, 31) ^ carry };
+        dst = res;
+    },
+    (ShlImm, "shl", 0b100))
+shift_imm_norex!("32", RegShift32Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 31, 31) };
+        dst = res;
+    },
+    (ShrImm, "shr", 0b101))
+shift_imm_norex!("32", RegShift32Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    },
+    (SarImm, "sar", 0b111))
 
-shift_imm_norex!("16", RegShift16Norex, { dst = todo(dst); todo_flags!() },
-    (ShlImm, "shl", 0b100), (ShrImm, "shr", 0b101), (SarImm, "sar", 0b111)
-)
+shift_imm_norex!("16", RegShift16Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 15, 15);
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 15, 15) ^ carry };
+        dst = res;
+    },
+    (ShlImm, "shl", 0b100))
+shift_imm_norex!("16", RegShift16Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 15, 15) };
+        dst = res;
+    },
+    (ShrImm, "shr", 0b101))
+shift_imm_norex!("16", RegShift16Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    },
+    (SarImm, "sar", 0b111))
 
-shift_imm_norex!("8", RegShift8Norex, { dst = todo(dst); todo_flags!() },
-    (ShlImm, "shl", 0b100), (ShrImm, "shr", 0b101), (SarImm, "sar", 0b111)
-)
+shift_imm_norex!("8", RegShift8Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 7, 7);
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
+        dst = res;
+    },
+    (ShlImm, "shl", 0b100))
+shift_imm_norex!("8", RegShift8Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
+        dst = res;
+    },
+    (ShrImm, "shr", 0b101))
+shift_imm_norex!("8", RegShift8Norex,
+    {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    },
+    (SarImm, "sar", 0b111))
 
 // No-REX by-cl shift forms (low subclasses). The 32-bit forms canonicalize
 // ShlCl32/ShrCl32/SarCl32; the 16/8-bit forms are assembler-only.
-reg_ext_norex!(RegShiftCl32Norex, WriteIShift, { dst = todo(dst, GPR::rcx); todo_flags!() },
-    (ShlCl32Norex, "shl_cl32_norex", "shl", 0b100),
-    (ShrCl32Norex, "shr_cl32_norex", "shr", 0b101),
-    (SarCl32Norex, "sar_cl32_norex", "sar", 0b111)
-)
+reg_ext_norex!(RegShiftCl32Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 31, 31);
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 31, 31) ^ carry };
+        dst = res;
+    },
+    (ShlCl32Norex, "shl_cl32_norex", "shl", 0b100))
+reg_ext_norex!(RegShiftCl32Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 31, 31) };
+        dst = res;
+    },
+    (ShrCl32Norex, "shr_cl32_norex", "shr", 0b101))
+reg_ext_norex!(RegShiftCl32Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    },
+    (SarCl32Norex, "sar_cl32_norex", "sar", 0b111))
 
-reg_ext_norex!(RegShiftCl16Norex, WriteIShift, { dst = todo(dst, GPR::rcx); todo_flags!() },
-    (ShlCl16Norex, "shl_cl16_norex", "shl", 0b100),
-    (ShrCl16Norex, "shr_cl16_norex", "shr", 0b101),
-    (SarCl16Norex, "sar_cl16_norex", "sar", 0b111)
-)
+reg_ext_norex!(RegShiftCl16Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 15, 15);
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 15, 15) ^ carry };
+        dst = res;
+    },
+    (ShlCl16Norex, "shl_cl16_norex", "shl", 0b100))
+reg_ext_norex!(RegShiftCl16Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 15, 15) };
+        dst = res;
+    },
+    (ShrCl16Norex, "shr_cl16_norex", "shr", 0b101))
+reg_ext_norex!(RegShiftCl16Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    },
+    (SarCl16Norex, "sar_cl16_norex", "sar", 0b111))
 
-reg_ext_norex!(RegShiftCl8Norex, WriteIShift, { dst = todo(dst, GPR::rcx); todo_flags!() },
-    (ShlCl8Norex, "shl_cl8_norex", "shl", 0b100),
-    (ShrCl8Norex, "shr_cl8_norex", "shr", 0b101),
-    (SarCl8Norex, "sar_cl8_norex", "sar", 0b111)
-)
+reg_ext_norex!(RegShiftCl8Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 7, 7);
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
+        dst = res;
+    },
+    (ShlCl8Norex, "shl_cl8_norex", "shl", 0b100))
+reg_ext_norex!(RegShiftCl8Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
+        dst = res;
+    },
+    (ShrCl8Norex, "shr_cl8_norex", "shr", 0b101))
+reg_ext_norex!(RegShiftCl8Norex, WriteIShift,
+    {
+        let c = extract(GPR::rcx, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    },
+    (SarCl8Norex, "sar_cl8_norex", "sar", 0b111))
 
 alu_ri!(X86, "8H", "8h", RegImm8H, WriteIHighByte,
-    (AddImm, "add_imm", "add", 0x80, 0b000, { add_flags!({ sext(imm, 8) }, { 8 }, { 7 }) dst = dst + sext(imm, 8); }),
+    (AddImm, "add_imm", "add", 0x80, 0b000, { add_flags!({ dst }, { sext(imm, 8) }, { 8 }, { 7 }) dst = dst + sext(imm, 8); }),
     (OrImm,  "or_imm",  "or",  0x80, 0b001, { logic_flags!({ dst | sext(imm, 8) }, { 8 }, { 7 }) dst = dst | sext(imm, 8); }),
     (AndImm, "and_imm", "and", 0x80, 0b100, { logic_flags!({ dst & sext(imm, 8) }, { 8 }, { 7 }) dst = dst & sext(imm, 8); }),
     (XorImm, "xor_imm", "xor", 0x80, 0b110, { logic_flags!({ dst ^ sext(imm, 8) }, { 8 }, { 7 }) dst = dst ^ sext(imm, 8); })
@@ -876,7 +1399,35 @@ alu_ri!(X86, "8H", "8h", RegImm8H, WriteIHighByte,
 )
 
 shift_imm!(X86, "8H", "8h", RegShift8H,
-    (ShlImm, "shl", 0b100, { dst = dst << extract(imm, 4, 0); }),
-    (ShrImm, "shr", 0b101, { dst = dst >> extract(imm, 4, 0); }),
-    (SarImm, "sar", 0b111, { dst = dst >>> extract(imm, 4, 0); })
+    (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 4, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 5)), 7, 7);
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
+        dst = res;
+    }),
+    (ShrImm, "shr", 0b101, {
+        let c = extract(imm, 4, 0);
+        let res = dst >> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
+        dst = res;
+    }),
+    (SarImm, "sar", 0b111, {
+        let c = extract(imm, 4, 0);
+        let res = dst >>> c;
+        let zero = if res == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
+        EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
+        dst = res;
+    })
 )

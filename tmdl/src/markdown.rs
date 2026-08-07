@@ -550,6 +550,9 @@ fn format_expr_with_precedence(expr: &Expr, parent_precedence: u8) -> String {
                 format_expr(&assign.value)
             )
         }
+        Expr::Let(binding) => {
+            format!("let {} = {}", binding.name, format_expr(&binding.value))
+        }
         Expr::Binary(binary) => {
             let (operator, precedence) = format_binary_operator(&binary.op);
             let expression = format!(

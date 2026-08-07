@@ -367,6 +367,18 @@ fn emit_instruction_cost<'a>(
     })
 }
 
+/// The isel rule cost of one instruction: its latency scaled by
+/// `LATENCY_COST_SCALE` plus its encoding size in bytes, so that among equally
+/// fast instructions the shorter encoding wins (x86 REX-free forms against
+/// their REX twins).
+fn isel_rule_cost(mnemonic: &str, encoding_bytes: u64) -> proc_macro2::TokenStream {
+    let mnemonic_lit = proc_macro2::Literal::string(mnemonic);
+    let bytes_lit = proc_macro2::Literal::u32_suffixed(encoding_bytes as u32);
+    quote! {
+        instruction_cost(#mnemonic_lit) * tir::backend::isel::LATENCY_COST_SCALE + #bytes_lit
+    }
+}
+
 /// The cycle offset (index) of a named pipeline phase within a machine's pipeline.
 fn phase_cycle(pipeline: &[ast::PipelinePhase], name: &str) -> Option<u16> {
     pipeline

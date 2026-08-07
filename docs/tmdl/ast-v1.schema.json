@@ -347,6 +347,28 @@
           ]
         },
         {
+          "description": "Immutable behavior-local binding.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "let"
+            },
+            "name": {
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Expr"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name",
+            "value"
+          ]
+        },
+        {
           "description": "Binary operator application.",
           "type": "object",
           "properties": {

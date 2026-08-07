@@ -1,0 +1,8 @@
+// A conditionally-preserving flag write keeps its exact semantics on the
+// formal path: the preserved arm reads the flag back, independent of whether
+// the instruction roots a selection rule.
+
+// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=FlagIsa --output=- %S/../Inputs/flag-value-rules.tmdl | filecheck %s
+
+// CHECK: (define-fun execute_cmppreserve
+// CHECK-NEXT: (ite (= (read_gpr st rn) (read_gpr st rm)) (read_flags st (_ bv0 1))

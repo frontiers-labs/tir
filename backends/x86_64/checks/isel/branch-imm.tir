@@ -94,12 +94,11 @@ module {
     %4 = constant {value = 0} : !i64
     return %4
   }
-  // The derived `test c, c` zero-branch also proves `c == 0`, but its pattern is
-  // larger than the immediate compare's, so `cmp x, 0` wins on cost here (the
-  // `test` form is reserved for a bare i1 with no comparison to fuse).
+  // The derived `test c, c` zero-branch proves `c == 0` just as `cmp x, 0` does,
+  // at the same latency but one byte less encoding, so it wins the cost tie.
   // CHECK: asm.symbol {name = "eq_zero"
-  // CHECK-NOT: x86_64.test
-  // CHECK: x86_64.cmp_imm {dst = %virt{{[0-9]+}}:GPR, imm = 0}
+  // CHECK-NOT: x86_64.cmp_imm
+  // CHECK: x86_64.test {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:GPR}
   // CHECK-NEXT: x86_64.je {imm = ^bb1}
 
   module_end

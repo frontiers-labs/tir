@@ -1716,6 +1716,15 @@ fn atomic_of_node(
     }
 }
 
+fn is_atomic_kind(kind: tir::sem::SymKind) -> bool {
+    matches!(
+        kind,
+        tir::sem::SymKind::LoadReserved
+            | tir::sem::SymKind::StoreConditional
+            | tir::sem::SymKind::AtomicRmw
+    )
+}
+
 /// The atomic call within `e`, descending through pure wrappers
 /// (`sext`/`zext`/`extract`/`if`/...) as sema permits.
 fn find_atomic(
@@ -1786,6 +1795,22 @@ impl BehaviorEmitter<'_> {
             self.failed.set(true);
             None
         })
+    }
+
+    /// Whether `node`'s term holds an atomic whose memory/reservation effect no
+    /// statement has committed yet. A `let` commits the atomic it binds, so the
+    /// statements that use the binding must not thread the effect a second time.
+    fn has_uncommitted_atomic(&self, node: NodeId) -> bool {
+        if self.behavior.let_symbols.contains_key(&node) {
+            return false;
+        }
+        if is_atomic_kind(*self.behavior.graph.get_node(node)) {
+            return true;
+        }
+        self.behavior
+            .graph
+            .children(node)
+            .any(|child| self.has_uncommitted_atomic(child))
     }
 
     /// Wrap the register-write state `w` (or the bare entry state for a
@@ -1859,13 +1884,18 @@ impl sem_expr_state::BehaviorEmitter for BehaviorEmitter<'_> {
         };
         // An atomic RHS threads its memory/reservation effect around the
         // register write (`w`); a plain assignment is just `w`.
-        let wrap = |w: String| match self
-            .behavior
-            .value_graph(value)
-            .and_then(|(g, r)| find_atomic(&g, r))
-        {
-            Some(op) => self.atomic_effect(&op, &w),
-            None => Some(w),
+        let wrap = |w: String| {
+            if !self.has_uncommitted_atomic(value) {
+                return Some(w);
+            }
+            match self
+                .behavior
+                .value_graph(value)
+                .and_then(|(g, r)| find_atomic(&g, r))
+            {
+                Some(op) => self.atomic_effect(&op, &w),
+                None => Some(w),
+            }
         };
         let dest_name = match destination {
             sem_expr_state::Destination::Ident(name) => Some(name.as_str()),
@@ -1911,6 +1941,19 @@ impl sem_expr_state::BehaviorEmitter for BehaviorEmitter<'_> {
             ));
         }
         None
+    }
+
+    fn bind(&self, value: NodeId, st_name: &String) -> Option<String> {
+        // Value terms read entry state, so uses of the binding need no state
+        // threading; only an atomic right-hand side transitions memory here.
+        match self
+            .behavior
+            .value_graph(value)
+            .and_then(|(g, r)| find_atomic(&g, r))
+        {
+            Some(op) => self.atomic_effect(&op, st_name),
+            None => Some(st_name.clone()),
+        }
     }
 
     fn value_effect(
@@ -2145,6 +2188,21 @@ impl sem_expr_state::BehaviorEmitter for FlatBehaviorEmitter<'_> {
             ));
         }
         None
+    }
+
+    fn bind(&self, value: NodeId, state: &FlatState) -> Option<FlatState> {
+        // The flat model has no memory-ordering state, so an atomic binding is
+        // unsupported here, exactly as an atomic assignment is.
+        if self
+            .values
+            .behavior
+            .value_graph(value)
+            .and_then(|(g, r)| find_atomic(&g, r))
+            .is_some()
+        {
+            return None;
+        }
+        Some(state.clone())
     }
 
     fn value_effect(

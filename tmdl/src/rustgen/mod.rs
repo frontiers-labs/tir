@@ -8,9 +8,9 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    behavior_uses_todo, get_encoding_arms, parse_literal_value,
-    resolve_effective_asm_for_instruction, resolve_isa_param_values, resolve_operand_widths,
-    resolve_operands_for_instruction, resolve_params_for_instruction,
+    behavior_uses_todo, encoding_width_bytes, get_encoding_arms, inline_let_bindings,
+    parse_literal_value, resolve_effective_asm_for_instruction, resolve_isa_param_values,
+    resolve_operand_widths, resolve_operands_for_instruction, resolve_params_for_instruction,
 };
 
 pub struct GeneratedRust {

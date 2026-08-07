@@ -1,0 +1,200 @@
+// Instructions mixing flag outputs with value outputs. Consumed by
+// Rust/flag-value-rules.tmdl and Rust/flag-value-rules-suppressed.tmdl.
+
+isa FlagIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [FlagIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [FlagIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0..x3 => {                         },
+    }
+}
+
+register_class FLAGS for [FlagIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = 1;
+
+    registers {
+        zf => { traits = [status_flag] },
+        cf => { traits = [status_flag] },
+    }
+}
+
+// Value output is flag-free; the carry output preserves its old value for a
+// zero count (a rotate by immediate). The value rule must still root.
+instruction RotLike for [FlagIsa] {
+    param MNEMONIC: String = "rotlike";
+
+    operands {
+        dst: GPR,
+        imm: bits<6>,
+    }
+
+    encoding {
+        0..4 => dst,
+        5..10 => imm,
+        11..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {imm}"
+    }
+
+    behavior {
+        FLAGS::cf = if zext(imm, self.XLEN) == zext(0b0, self.XLEN) {
+            FLAGS::cf
+        } else {
+            extract(dst, self.XLEN - 1, self.XLEN - 1)
+        };
+        dst = dst << zext(imm, self.XLEN);
+    }
+}
+
+// A `let` read by both the value and the flag output: the value side reads
+// flags through the binding, so the rule stays suppressed.
+instruction AdcLike for [FlagIsa] {
+    param MNEMONIC: String = "adclike";
+
+    operands {
+        dst: GPR,
+        src: GPR,
+    }
+
+    encoding {
+        0..4 => dst,
+        5..9 => src,
+        10..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        let sum = dst + src + zext(FLAGS::cf, self.XLEN);
+        FLAGS::cf = extract(sum, self.XLEN - 1, self.XLEN - 1);
+        dst = sum;
+    }
+}
+
+// The value itself reads flags: a bare pattern would relax the flag read to a
+// free symbol and match any comparison, so no value rule may root.
+instruction SetccLike for [FlagIsa] {
+    param MNEMONIC: String = "setcclike";
+
+    operands {
+        dst: GPR,
+    }
+
+    encoding {
+        0..4 => dst,
+        5..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}"
+    }
+
+    behavior {
+        dst = if FLAGS::zf == zext(0b1, 1) {
+            zext(0b1, self.XLEN)
+        } else {
+            zext(0b0, self.XLEN)
+        };
+    }
+}
+
+// A complete flag definer: composes with the branch below.
+instruction Cmp for [FlagIsa] {
+    param MNEMONIC: String = "cmp";
+
+    operands {
+        rn: GPR,
+        rm: GPR,
+    }
+
+    encoding {
+        0..4 => rn,
+        5..9 => rm,
+        10..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rn}, {rm}"
+    }
+
+    behavior {
+        FLAGS::zf = if rn == rm {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        FLAGS::cf = zext(0b0, 1);
+    }
+}
+
+// Writes the same flags, but zf keeps its old value when the operands are
+// equal — an incomplete definition, so it must not fuse as a definer.
+instruction CmpPreserve for [FlagIsa] {
+    param MNEMONIC: String = "cmppreserve";
+
+    operands {
+        rn: GPR,
+        rm: GPR,
+    }
+
+    encoding {
+        0..4 => rn,
+        5..9 => rm,
+        10..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rn}, {rm}"
+    }
+
+    behavior {
+        FLAGS::zf = if rn == rm {
+            FLAGS::zf
+        } else {
+            zext(0b0, 1)
+        };
+        FLAGS::cf = zext(0b0, 1);
+    }
+}
+
+instruction BranchEq for [FlagIsa] {
+    param MNEMONIC: String = "beq";
+
+    operands {
+        imm: bits<12>,
+    }
+
+    encoding {
+        0..11 => imm,
+        12..31 => 0,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        if FLAGS::zf == zext(0b1, 1) {
+            PC::pc = PC::pc + sext(imm, self.XLEN);
+        }
+    }
+}

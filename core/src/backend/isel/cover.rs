@@ -18,8 +18,9 @@ use super::pattern::CompiledIselPattern;
 
 /// The cost charged for keeping a gate as control flow. A conservative fixed
 /// estimate of the edge assignments the existing terminators already perform,
-/// tuned so a cheaper `If`-rooted value rule wins where the target has one.
-const REIFY_COST: u64 = 3;
+/// tuned in latency units so a cheaper `If`-rooted value rule wins where the
+/// target has one.
+const REIFY_COST: u64 = 3 * super::LATENCY_COST_SCALE as u64;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CaptureBindings {
@@ -70,6 +71,9 @@ pub(crate) struct PatternNodeBinding {
     pub(crate) class: Id,
     pub(crate) is_boundary: bool,
     pub(crate) demand: BoundaryDemand,
+    /// Where this operand's register class views its storage element (see
+    /// [`super::RegisterRequirement::view_offset`]).
+    pub(crate) view_offset: u32,
 }
 
 /// What a boundary binding requires of its class. A register operand needs the
@@ -111,6 +115,10 @@ pub(crate) struct PbqpIselMatch {
     pub(crate) pattern_root: Id,
     pub(crate) bindings: FullMatchBindings,
     pub(crate) cost: u64,
+    /// Where the rule's destination class views its storage element. A value
+    /// crosses a boundary for free only between equal offsets: no instruction
+    /// moves bits across views implicitly.
+    pub(crate) result_view_offset: u32,
 }
 /// A solved cover: the chosen alternative for every PBQP node and the e-class
 /// each PBQP node stands for (same index).
@@ -317,25 +325,31 @@ pub(crate) fn prune_dominated_matches(
         let mut internals = Vec::new();
         for binding in &m.bindings.pattern_nodes {
             if binding.is_boundary {
-                boundaries.push((binding.class, binding.demand));
+                boundaries.push((binding.class, binding.view_offset, binding.demand));
             } else if binding.pattern_node != m.pattern_root {
                 internals.push(binding.class);
             }
         }
-        // Sorting by (class, demand) puts equal class multisets in the same
-        // class order, so within a group demands compare positionally over
-        // aligned classes.
+        // Sorting by (class, view offset, demand) puts equal class multisets in
+        // the same class order, so within a group demands compare positionally
+        // over aligned classes.
         boundaries.sort();
         internals.sort();
-        let (classes, demands): (Vec<Id>, Vec<BoundaryDemand>) = boundaries.into_iter().unzip();
-        (m.root, classes, demands, internals)
+        let (classes, demands): (Vec<(Id, u32)>, Vec<BoundaryDemand>) = boundaries
+            .into_iter()
+            .map(|(class, offset, demand)| ((class, offset), demand))
+            .unzip();
+        (m.root, m.result_view_offset, classes, demands, internals)
     };
     let footprints: Vec<_> = matches.iter().map(footprint).collect();
 
+    // Matches reading or writing a different register view are not
+    // interchangeable — a value at one bit offset is not the value at another —
+    // so the view offsets join the grouping key rather than the comparison.
     let mut groups: HashMap<_, Vec<usize>> = HashMap::new();
-    for (index, (root, classes, _, internals)) in footprints.iter().enumerate() {
+    for (index, (root, result_offset, classes, _, internals)) in footprints.iter().enumerate() {
         groups
-            .entry((*root, classes, internals))
+            .entry((*root, *result_offset, classes, internals))
             .or_default()
             .push(index);
     }
@@ -355,7 +369,7 @@ pub(crate) fn prune_dominated_matches(
                     matches[b].cost,
                     patterns[matches[b].pattern_index].specificity,
                 );
-                let (demands_a, demands_b) = (&footprints[a].2, &footprints[b].2);
+                let (demands_a, demands_b) = (&footprints[a].3, &footprints[b].3);
                 let demands_le = demands_a.iter().zip(demands_b).all(|(da, db)| da <= db);
                 if cost_a <= cost_b
                     && spec_a >= spec_b
@@ -418,6 +432,16 @@ pub(crate) fn completeness_error(
             .join("; "),
     )
 }
+/// Where the value an alternative produces sits in its storage element: a tile's
+/// destination class carries the rule's view offset, while an already-available
+/// value or a reified gate lives in an ordinary offset-0 register.
+fn produced_view_offset(alternative: &PbqpIselAlternative, matches: &[PbqpIselMatch]) -> u32 {
+    match alternative {
+        PbqpIselAlternative::Tile { match_id } => matches[*match_id].result_view_offset,
+        PbqpIselAlternative::Reify | PbqpIselAlternative::NotDemanded => 0,
+    }
+}
+
 pub(crate) fn alternatives_compatible(
     egraph: &SemEGraph,
     child: Id,
@@ -433,6 +457,7 @@ pub(crate) fn alternatives_compatible(
     let mut register = false;
     let mut immediate = false;
     let mut owned_effect = false;
+    let mut demanded_offsets: Vec<u32> = Vec::new();
     for binding in &matched.bindings.pattern_nodes {
         if binding.class != child
             || (binding.pattern_node == matched.pattern_root && binding.class == matched.root)
@@ -442,11 +467,19 @@ pub(crate) fn alternatives_compatible(
         if binding.is_boundary {
             register |= binding.demand == BoundaryDemand::Register;
             immediate |= binding.demand == BoundaryDemand::Immediate;
+            if binding.demand == BoundaryDemand::Register
+                && !demanded_offsets.contains(&binding.view_offset)
+            {
+                demanded_offsets.push(binding.view_offset);
+            }
         } else if binding.pattern_node != matched.pattern_root && !class_is_pure(egraph, child) {
             owned_effect = true;
         }
     }
     if register {
+        if demanded_offsets != [produced_view_offset(child_alt, matches)] {
+            return false;
+        }
         match child_alt {
             PbqpIselAlternative::Tile { .. } | PbqpIselAlternative::Reify => true,
             PbqpIselAlternative::NotDemanded => available(child),

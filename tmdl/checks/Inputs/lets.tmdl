@@ -1,0 +1,82 @@
+// Positive coverage for `let` bindings in instruction behaviors. Consumed by
+// Parser/lets.tmdl (emit-ast), Rust/lets.tmdl (emit-rust) and
+// SmtLib/lets.tmdl (emit-smtlib).
+
+isa LIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [LIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [LIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => {                         },
+    }
+}
+
+instruction AddDouble for [LIsa] {
+    param MNEMONIC: String = "adddouble";
+    param OPCODE: bits<7> = 0b0110011;
+
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+
+    behavior {
+        let sum = rs1 + rs2;
+        rd = sum + sum;
+    }
+}
+
+instruction AmoAddWLet for [LIsa] {
+    param MNEMONIC: String = "amoaddwlet";
+    param OPCODE: bits<7> = 0b0101111;
+
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
+
+    behavior {
+        let old = atomic_rmw(add, rs1, 4, extract(rs2, 31, 0), Ordering::acq_rel);
+        rd = sext(old, self.XLEN);
+    }
+}
+
+instruction LoadTwice for [LIsa] {
+    param MNEMONIC: String = "loadtwice";
+    param OPCODE: bits<7> = 0b0000011;
+
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}, ({rs1})" }
+
+    behavior {
+        let word = load(rs1, 4, 0b0);
+        rd = sext(word + word, self.XLEN);
+    }
+}
+
+instruction AmoAddDBare for [LIsa] {
+    param MNEMONIC: String = "amoadddbare";
+    param OPCODE: bits<7> = 0b0101111;
+
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
+
+    behavior {
+        let old = atomic_rmw(add, rs1, 8, rs2, Ordering::acq_rel);
+        rd = old;
+    }
+}

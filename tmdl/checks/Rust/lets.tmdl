@@ -1,0 +1,55 @@
+// A `let` binding is evaluated once, at its statement, and parked in the symbol
+// table; later statements read that symbol instead of rebuilding the term.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/lets.tmdl | filecheck %s
+
+// CHECK: impl tir::backend::MachineInstruction for AddDoubleOp
+
+// The bound sum is built once from the two operand symbols.
+// CHECK: SymPayload::SymbolId(0)
+// CHECK: SymPayload::SymbolId(1)
+// CHECK: SymKind::Add
+// CHECK: __tmdl_entry_syms[2] = match value
+
+// Both uses of the binding read the same symbol; the addition is not rebuilt
+// from the operands.
+// CHECK: SymPayload::SymbolId(2)
+// CHECK: SymKind::Add
+// CHECK-NOT: SymPayload::SymbolId(0)
+// CHECK: write_register_value
+
+// An atomic RMW bound by a `let` is one memory transition: the RMW node is
+// built once, and the destination write reads the binding's symbol.
+// CHECK: impl tir::backend::MachineInstruction for AmoAddWLetOp
+// CHECK: SymKind::AtomicRmw
+// CHECK: __tmdl_entry_syms[2] = match value
+// CHECK-NOT: SymKind::AtomicRmw
+// CHECK: SymKind::SExt
+// CHECK: write_register_value
+
+// A bound load is issued once even though the binding is used twice.
+// CHECK: impl tir::backend::MachineInstruction for LoadTwiceOp
+// CHECK: SymKind::LoadMemory
+// CHECK: __tmdl_entry_syms[1] = match value
+// CHECK-NOT: SymKind::LoadMemory
+// CHECK: SymKind::Add
+// CHECK: write_register_value
+
+// A binding used verbatim as a statement's value reads its symbol: the write
+// does not re-issue the bound RMW.
+// CHECK: impl tir::backend::MachineInstruction for AmoAddDBareOp
+// CHECK: SymKind::AtomicRmw
+// CHECK: __tmdl_entry_syms[2] = match value
+// CHECK-NOT: SymKind::AtomicRmw
+// CHECK: write_register_value
+
+// Selection patterns see through a binding: the op semantics is the underlying
+// expression over the operands, not an opaque binding symbol.
+// CHECK: impl tir::sem::AsSemExpr for AddDoubleOp
+// CHECK: SymPayload::SymbolId(0)
+// CHECK: SymPayload::SymbolId(1)
+// CHECK: SymKind::Add
+// CHECK: SymPayload::SymbolId(0)
+// CHECK: SymPayload::SymbolId(1)
+// CHECK: SymKind::Add
+// CHECK: SymKind::Add

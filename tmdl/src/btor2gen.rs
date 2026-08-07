@@ -517,6 +517,14 @@ impl sem_expr_state::BehaviorEmitter for Checker<'_> {
         }
     }
 
+    fn bind(&self, value: NodeId, state: &PostState) -> Option<PostState> {
+        // A binding writes no checked register, but the bound term is emitted
+        // here so a term this backend cannot model fails the instruction
+        // instead of silently disappearing from the check.
+        self.emit_val(value)?;
+        Some(*state)
+    }
+
     fn value_effect(
         &self,
         _kind: tir::sem::SymKind,

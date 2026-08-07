@@ -1,0 +1,66 @@
+// Memory-access sizes given as const expressions over ISA parameters. Consumed
+// by Parser/param-mem-size.tmdl, Rust/param-mem-size.tmdl and
+// SmtLib/param-mem-size.tmdl.
+
+isa PIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [PIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [PIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => {                         },
+    }
+}
+
+instruction LoadWord for [PIsa] {
+    param MNEMONIC: String = "loadword";
+    param OPCODE: bits<7> = 0b0000011;
+
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    asm { "{self.MNEMONIC} {rd}, ({rs1})" }
+
+    behavior {
+        rd = load(rs1, self.XLEN / 8, 0b0);
+    }
+}
+
+// A size that is not a compile-time constant stays a dynamically sized access.
+instruction LoadDyn for [PIsa] {
+    param MNEMONIC: String = "loaddyn";
+    param OPCODE: bits<7> = 0b0000111;
+
+    operands { rd: GPR, rs1: GPR, n: bits<5>, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => n, }
+    asm { "{self.MNEMONIC} {rd}, ({rs1}), {n}" }
+
+    behavior {
+        rd = load(rs1, n, 0b0);
+    }
+}
+
+instruction StoreWord for [PIsa] {
+    param MNEMONIC: String = "storeword";
+    param OPCODE: bits<7> = 0b0100011;
+
+    operands { rs1: GPR, rs2: GPR, }
+    encoding { 0..6 => OPCODE, 15..19 => rs1, 20..24 => rs2, }
+    asm { "{self.MNEMONIC} {rs2}, ({rs1})" }
+
+    behavior {
+        store(rs1, self.XLEN / 8, rs2, 0b0);
+    }
+}

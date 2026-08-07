@@ -149,8 +149,8 @@ fn compile_asm_printer_template(template: &str, mnemonic: &str) -> Vec<AsmPrintP
 /// else { PC::pc + width }`. The fall-through arm keeps PC advancing when the branch
 /// is not taken, so the result can be written unconditionally. Returns `None` for
 /// behaviors that are not a bare conditional PC write.
-fn synthesize_branch_value(inst: &ast::Instruction, width_bytes: u64) -> Option<ast::Expr> {
-    let ast::Expr::If(if_) = unwrap_single_stmt_block(&inst.behavior) else {
+fn synthesize_branch_value(behavior: &ast::Expr, width_bytes: u64) -> Option<ast::Expr> {
+    let ast::Expr::If(if_) = unwrap_single_stmt_block(behavior) else {
         return None;
     };
     if if_.else_.is_some() {

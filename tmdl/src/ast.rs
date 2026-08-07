@@ -599,6 +599,15 @@ pub struct Assign {
     pub span: Span,
 }
 
+/// `let name = value;`: an immutable behavior-local binding. The name stands for
+/// the bound term itself, so every use shares the single evaluation of `value`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Let {
+    pub name: String,
+    pub value: Box<Expr>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Path {
     pub base: String,
@@ -771,6 +780,7 @@ pub struct IndexAccess {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     Assign(Assign),
+    Let(Let),
     Binary(Binary),
     Unary(Unary),
     Block(Block),
@@ -797,6 +807,10 @@ pub struct SemaLowering {
     /// `variable_symbols` so the same operand can appear both by value and by
     /// index within one behavior.
     pub regnum_symbols: HashMap<String, u32>,
+    /// Node -> symbol id for each `let` binding. Targets that evaluate
+    /// statements independently read the binding through this symbol instead of
+    /// re-evaluating the bound term.
+    pub let_symbols: HashMap<tir::graph::NodeId, u32>,
 }
 
 struct SemaExprLoweringCtx<
@@ -819,6 +833,10 @@ struct SemaExprLoweringCtx<
     register_symbols: HashMap<(String, u32), u32>,
     variable_symbols: HashMap<String, u32>,
     regnum_symbols: HashMap<String, u32>,
+    /// `let` bindings in scope: the bound name maps to the node lowered for its
+    /// right-hand side, so every use shares that single term.
+    let_bindings: HashMap<String, tir::graph::NodeId>,
+    let_symbols: HashMap<tir::graph::NodeId, u32>,
     had_error: bool,
     /// Stack of `map`/`reduce` lambda parameter names, innermost last. An `Ident`
     /// matching a parameter of the innermost lambda lowers to an `Arg` node whose
@@ -839,6 +857,8 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPay
             register_symbols: HashMap::new(),
             variable_symbols: HashMap::new(),
             regnum_symbols: HashMap::new(),
+            let_bindings: HashMap::new(),
+            let_symbols: HashMap::new(),
             had_error: false,
             lambda_params: Vec::new(),
         }
@@ -858,6 +878,8 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPay
             register_symbols: HashMap::new(),
             variable_symbols: HashMap::new(),
             regnum_symbols: HashMap::new(),
+            let_bindings: HashMap::new(),
+            let_symbols: HashMap::new(),
             had_error: false,
             lambda_params: Vec::new(),
         }
@@ -890,6 +912,21 @@ impl<'a, G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPay
             tir::sem::SymKind::Constant,
             tir::sem::SymPayload::Int(value),
         )
+    }
+
+    /// Lower a memory access size. A size written over ISA parameters
+    /// (`self.XLEN / 8`) is folded to the concrete byte count of this ISA
+    /// instantiation instead of staying symbolic like other `self.PARAM` uses:
+    /// a selection pattern can only match a concrete access size.
+    fn lower_memory_size(&mut self, expr: &Expr) -> tir::graph::NodeId {
+        let folded = const_eval_params(expr, self.params, &self.isa_consts);
+        match folded {
+            Some(bytes) if bytes > 0 => {
+                let value = bytes as u64;
+                self.add_int_const(tir_adt::APInt::new(64 - value.leading_zeros(), value))
+            }
+            _ => expr.lower_with_ctx(self),
+        }
     }
 
     fn add_bool_const(&mut self, value: bool) -> tir::graph::NodeId {
@@ -1082,6 +1119,7 @@ impl Expr {
         }
         match self {
             Expr::Assign(x) => x.as_sema_expr(ctx),
+            Expr::Let(x) => x.as_sema_expr(ctx),
             Expr::Binary(x) => x.as_sema_expr(ctx),
             Expr::Unary(x) => x.as_sema_expr(ctx),
             Expr::Block(x) => x.as_sema_expr(ctx),
@@ -1136,8 +1174,10 @@ impl Expr {
             Leaf = tir::sem::SymPayload<tir::ValueId>,
         >,
         params: &HashMap<String, i64>,
+        isa_consts: &HashMap<String, i64>,
     ) -> Option<SemaLowering> {
         let mut ctx = SemaExprLoweringCtx::new(g, params);
+        ctx.isa_consts = isa_consts.clone();
         let root = self.lower_with_ctx(&mut ctx);
         if ctx.had_error {
             return None;
@@ -1147,6 +1187,7 @@ impl Expr {
             variable_symbols: ctx.variable_symbols,
             register_symbols: ctx.register_symbols,
             regnum_symbols: ctx.regnum_symbols,
+            let_symbols: ctx.let_symbols,
         })
     }
 
@@ -1174,6 +1215,7 @@ impl Expr {
             variable_symbols: ctx.variable_symbols,
             register_symbols: ctx.register_symbols,
             regnum_symbols: ctx.regnum_symbols,
+            let_symbols: ctx.let_symbols,
         })
     }
 
@@ -1208,6 +1250,7 @@ impl Expr {
                 variable_symbols: ctx.variable_symbols,
                 register_symbols: ctx.register_symbols,
                 regnum_symbols: ctx.regnum_symbols,
+                let_symbols: ctx.let_symbols,
             },
         ))
     }
@@ -1236,6 +1279,7 @@ impl Expr {
             variable_symbols: ctx.variable_symbols,
             register_symbols: ctx.register_symbols,
             regnum_symbols: ctx.regnum_symbols,
+            let_symbols: ctx.let_symbols,
         })
     }
 }
@@ -1248,6 +1292,21 @@ impl Assign {
         ctx: &mut SemaExprLoweringCtx<'_, G>,
     ) -> tir::graph::NodeId {
         self.value.lower_with_ctx(ctx)
+    }
+}
+
+impl Let {
+    fn as_sema_expr<
+        G: tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+    >(
+        &self,
+        ctx: &mut SemaExprLoweringCtx<'_, G>,
+    ) -> tir::graph::NodeId {
+        let node = self.value.lower_with_ctx(ctx);
+        let symbol = ctx.alloc_variable_symbol();
+        ctx.let_symbols.insert(node, symbol);
+        ctx.let_bindings.insert(self.name.clone(), node);
+        node
     }
 }
 
@@ -1282,6 +1341,9 @@ impl Ident {
         &self,
         ctx: &mut SemaExprLoweringCtx<'_, G>,
     ) -> tir::graph::NodeId {
+        if let Some(&node) = ctx.let_bindings.get(&self.name) {
+            return node;
+        }
         if let Some(&value) = ctx.params.get(&self.name) {
             let (width, abs_value) = if value < 0 {
                 let abs = value.unsigned_abs();
@@ -1536,6 +1598,38 @@ impl IndexAccess {
     }
 }
 
+/// Evaluate an expression built from integer literals, compile-time parameters
+/// (instruction/template params in `params`, ISA params in `isa_consts`) and
+/// arithmetic. `None` when the expression depends on a runtime value, such as a
+/// register read or an operand.
+pub(crate) fn const_eval_params(
+    expr: &Expr,
+    params: &HashMap<String, i64>,
+    isa_consts: &HashMap<String, i64>,
+) -> Option<i64> {
+    let lookup = |name: &str| params.get(name).or_else(|| isa_consts.get(name)).copied();
+    match expr {
+        Expr::Lit(Lit::Int(li)) => i64::try_from(li.parse_u64()).ok(),
+        Expr::Ident(id) => lookup(&id.name),
+        Expr::Field(field) => match &*field.base {
+            Expr::Ident(base) if base.name == "self" => lookup(&field.member),
+            _ => None,
+        },
+        Expr::Binary(binary) => {
+            let lhs = const_eval_params(&binary.lhs, params, isa_consts)?;
+            let rhs = const_eval_params(&binary.rhs, params, isa_consts)?;
+            match binary.op {
+                BinOp::Add => lhs.checked_add(rhs),
+                BinOp::Sub => lhs.checked_sub(rhs),
+                BinOp::Mul => lhs.checked_mul(rhs),
+                BinOp::Div | BinOp::UnsignedDiv => lhs.checked_div(rhs),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// A constant `Ordering::<member>` or integer literal, or `None` for anything
 /// else (e.g. a decoded aq/rl operand feeding a future dynamic ordering).
 fn const_eval_u64(expr: &Expr) -> Option<u64> {
@@ -1659,7 +1753,7 @@ impl Call {
                     "load requires 3 or 4 arguments"
                 );
                 let address = self.arguments[0].lower_with_ctx(ctx);
-                let bytes = self.arguments[1].lower_with_ctx(ctx);
+                let bytes = ctx.lower_memory_size(&self.arguments[1]);
                 let metadata =
                     pack_ordering_meta(ctx, Some(&self.arguments[2]), self.arguments.get(3));
                 ctx.add_node(tir::sem::SymKind::LoadMemory, &[address, bytes, metadata])
@@ -1670,7 +1764,7 @@ impl Call {
                     "store requires 3 or 4 arguments"
                 );
                 let address = self.arguments[0].lower_with_ctx(ctx);
-                let bytes = self.arguments[1].lower_with_ctx(ctx);
+                let bytes = ctx.lower_memory_size(&self.arguments[1]);
                 let value = self.arguments[2].lower_with_ctx(ctx);
                 let address_space = pack_ordering_meta(ctx, None, self.arguments.get(3));
                 ctx.add_node(

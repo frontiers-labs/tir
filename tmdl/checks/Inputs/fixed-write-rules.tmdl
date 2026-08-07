@@ -1,0 +1,72 @@
+// Instructions whose behavior writes a fixed register besides the value
+// output. Consumed by Rust/fixed-write-rules.tmdl (emit-rust).
+
+isa FIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [FIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class GPR for [FIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => {                         },
+    }
+}
+
+// Pop-shaped: the operand write is a plain load, but the behavior also
+// advances the fixed stack register. A single-value tile cannot claim both
+// writes, so no selection rule may root here.
+instruction PopLike for [FIsa] {
+    param MNEMONIC: String = "poplike";
+    param OPCODE: bits<7> = 0b0001011;
+
+    operands { rd: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, }
+    asm { "{self.MNEMONIC} {rd}" }
+
+    behavior {
+        rd = load(GPR::x2, 8, 0b0);
+        GPR::x2 = GPR::x2 + zext(0b1000, self.XLEN);
+    }
+}
+
+// Push-shaped: a store plus a fixed-register update; same exclusion.
+instruction PushLike for [FIsa] {
+    param MNEMONIC: String = "pushlike";
+    param OPCODE: bits<7> = 0b0011011;
+
+    operands { rs: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rs, }
+    asm { "{self.MNEMONIC} {rs}" }
+
+    behavior {
+        GPR::x2 = GPR::x2 - zext(0b1000, self.XLEN);
+        store(GPR::x2 - zext(0b1000, self.XLEN), 8, rs);
+    }
+}
+
+// Control: reads a fixed register without writing one — the read surfaces as
+// a demand and the rule still roots.
+instruction LoadFixedBase for [FIsa] {
+    param MNEMONIC: String = "loadfixedbase";
+    param OPCODE: bits<7> = 0b0000011;
+
+    operands { rd: GPR, }
+    encoding { 0..6 => OPCODE, 7..11 => rd, }
+    asm { "{self.MNEMONIC} {rd}" }
+
+    behavior {
+        rd = load(GPR::x2, 8, 0b0);
+    }
+}

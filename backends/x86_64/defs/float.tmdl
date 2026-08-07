@@ -63,10 +63,9 @@ register_class XMMzx for [SSE2] : XMM128 {
     }
 }
 
-// Low-XMM subclass (xmm0..xmm7) selected post-RA for the REX-free SSE encodings
-// GNU as emits when no register-number 4th bit is needed. Shares the XMM file,
-// carries no traits, and is never an allocation class (its ops leave their
-// values unmodeled, so they root no isel rule).
+// Low-XMM subclass (xmm0..xmm7): the REX-free SSE encodings GNU as emits when
+// no register-number 4th bit is needed. Same float views of the XMM file as
+// XMM/XMM32, restricted to the low indices.
 register_class XMMlow for [SSE2] {
     file = XMM128;
     param ENCODING_LEN: Integer = 4;
@@ -74,14 +73,14 @@ register_class XMMlow for [SSE2] {
     param WRITE_POLICY: String = "merge";
 
     registers {
-        xmm0 => { index = 0 },
-        xmm1 => { index = 1 },
-        xmm2 => { index = 2 },
-        xmm3 => { index = 3 },
-        xmm4 => { index = 4 },
-        xmm5 => { index = 5 },
-        xmm6 => { index = 6 },
-        xmm7 => { index = 7 },
+        xmm0 => { index = 0, traits = [float] },
+        xmm1 => { index = 1, traits = [float] },
+        xmm2 => { index = 2, traits = [float] },
+        xmm3 => { index = 3, traits = [float] },
+        xmm4 => { index = 4, traits = [float] },
+        xmm5 => { index = 5, traits = [float] },
+        xmm6 => { index = 6, traits = [float] },
+        xmm7 => { index = 7, traits = [float] },
     }
 }
 
@@ -92,14 +91,14 @@ register_class XMM32low for [SSE] {
     param WRITE_POLICY: String = "merge";
 
     registers {
-        xmm0 => { index = 0 },
-        xmm1 => { index = 1 },
-        xmm2 => { index = 2 },
-        xmm3 => { index = 3 },
-        xmm4 => { index = 4 },
-        xmm5 => { index = 5 },
-        xmm6 => { index = 6 },
-        xmm7 => { index = 7 },
+        xmm0 => { index = 0, traits = [float] },
+        xmm1 => { index = 1, traits = [float] },
+        xmm2 => { index = 2, traits = [float] },
+        xmm3 => { index = 3, traits = [float] },
+        xmm4 => { index = 4, traits = [float] },
+        xmm5 => { index = 5, traits = [float] },
+        xmm6 => { index = 6, traits = [float] },
+        xmm7 => { index = 7, traits = [float] },
     }
 }
 
@@ -290,12 +289,11 @@ fp_convert_norex_template!(Cvttsd2si32NorexTemplate, SSE2, GPR32low, XMMlow)
 fp_convert_norex_template!(MovdXmmGpr32NorexTemplate, SSE2, XMM32low, GPR32low)
 
 // No-REX SSE forms: canonicalize target for the low-xmm ALU and movsd copies,
-// and the assembler's preferred candidate for xmm0..xmm7. The value semantics
-// stay unmodeled (`todo()`) so these root no selection rule, but the
-// destination's direction is part of the operand declaration, not of the
-// modeled value: the arithmetic forms are two-address (dst is read and
-// written), movsd only writes. Dropping that made every low-xmm chain look
-// dependency-free to the scheduler.
+// and the assembler's preferred candidate for xmm0..xmm7. The destination's
+// direction is part of the operand declaration, not of the modeled value: the
+// arithmetic forms are two-address (dst is read and written), movsd only
+// writes. Dropping that made every low-xmm chain look dependency-free to the
+// scheduler.
 macro fp_norex {
     ( $feature:ident, $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $op:literal, $mn:literal, $opc:literal ) ),* ) => {
         $( instruction $name for [$feature] : $tmpl {
@@ -308,37 +306,43 @@ macro fp_norex {
     };
 }
 
-fp_norex!(SSE, FpArith32Norex, WriteFPAdd, { dst = todo(dst); },
-    (AddssNorex, "addss_norex", "addss", 0x58),
+fp_norex!(SSE, FpArith32Norex, WriteFPAdd, { dst = fadd(dst, src); },
+    (AddssNorex, "addss_norex", "addss", 0x58)
+)
+
+fp_norex!(SSE, FpArith32Norex, WriteFPAdd, { dst = fsub(dst, src); },
     (SubssNorex, "subss_norex", "subss", 0x5C)
 )
 
-fp_norex!(SSE, FpArith32Norex, WriteFPMul, { dst = todo(dst); },
+fp_norex!(SSE, FpArith32Norex, WriteFPMul, { dst = fmul(dst, src); },
     (MulssNorex, "mulss_norex", "mulss", 0x59)
 )
 
-fp_norex!(SSE, FpArith32Norex, WriteFPDiv, { dst = todo(dst); },
+fp_norex!(SSE, FpArith32Norex, WriteFPDiv, { dst = fdiv(dst, src); },
     (DivssNorex, "divss_norex", "divss", 0x5E)
 )
 
-fp_norex!(SSE, FpArith32Norex, WriteFPMove, { dst = todo(); },
+fp_norex!(SSE, FpArith32Norex, WriteFPMove, { dst = src; },
     (MovssNorex, "movss_norex", "movss", 0x10)
 )
 
-fp_norex!(SSE2, FpArithNorex, WriteFPAdd, { dst = todo(dst); },
-    (AddsdNorex, "addsd_norex", "addsd", 0x58),
+fp_norex!(SSE2, FpArithNorex, WriteFPAdd, { dst = fadd(dst, src); },
+    (AddsdNorex, "addsd_norex", "addsd", 0x58)
+)
+
+fp_norex!(SSE2, FpArithNorex, WriteFPAdd, { dst = fsub(dst, src); },
     (SubsdNorex, "subsd_norex", "subsd", 0x5C)
 )
 
-fp_norex!(SSE2, FpArithNorex, WriteFPMul, { dst = todo(dst); },
+fp_norex!(SSE2, FpArithNorex, WriteFPMul, { dst = fmul(dst, src); },
     (MulsdNorex, "mulsd_norex", "mulsd", 0x59)
 )
 
-fp_norex!(SSE2, FpArithNorex, WriteFPDiv, { dst = todo(dst); },
+fp_norex!(SSE2, FpArithNorex, WriteFPDiv, { dst = fdiv(dst, src); },
     (DivsdNorex, "divsd_norex", "divsd", 0x5E)
 )
 
-fp_norex!(SSE2, FpArithNorex, WriteFPMove, { dst = todo(); },
+fp_norex!(SSE2, FpArithNorex, WriteFPMove, { dst = src; },
     (MovsdNorex, "movsd_norex", "movsd", 0x10)
 )
 
@@ -448,11 +452,27 @@ instruction UcomissNorex for [SSE] : UcomissNorexTemplate {
     schedule { units = [WriteFPCompare]; }
 
     behavior {
-        EFLAGS::cf = todo(lhs, rhs);
-        EFLAGS::pf = todo(lhs, rhs);
-        EFLAGS::zf = todo(lhs, rhs);
-        EFLAGS::sf = todo(lhs, rhs);
-        EFLAGS::of = todo(lhs, rhs);
+        EFLAGS::cf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else if lhs < rhs {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::pf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else if lhs == rhs {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = zext(0b0, 1);
+        EFLAGS::of = zext(0b0, 1);
     }
 }
 
@@ -463,11 +483,27 @@ instruction UcomisdNorex for [SSE2] : UcomisdNorexTemplate {
     schedule { units = [WriteFPCompare]; }
 
     behavior {
-        EFLAGS::cf = todo(lhs, rhs);
-        EFLAGS::pf = todo(lhs, rhs);
-        EFLAGS::zf = todo(lhs, rhs);
-        EFLAGS::sf = todo(lhs, rhs);
-        EFLAGS::of = todo(lhs, rhs);
+        EFLAGS::cf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else if lhs < rhs {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::pf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::zf = if (lhs != lhs) | (rhs != rhs) {
+            zext(0b1, 1)
+        } else if lhs == rhs {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = zext(0b0, 1);
+        EFLAGS::of = zext(0b0, 1);
     }
 }
 
@@ -722,7 +758,7 @@ instruction MovdXmmGpr32Norex for [SSE2] : MovdXmmGpr32NorexTemplate {
     param PREFIX: bits<8> = 0x66;
     param OPCODE: bits<8> = 0x6E;
     schedule { units = [WriteFPMove]; }
-    behavior { dst = todo(src); }
+    behavior { dst = bitcast(src); }
 }
 
 template MovdGpr32XmmNorexTemplate for [SSE2] {
@@ -743,7 +779,7 @@ instruction MovdGpr32XmmNorex for [SSE2] : MovdGpr32XmmNorexTemplate {
     param OPNAME: String = "movd_gpr32_xmm_norex";
     param MNEMONIC: String = "movd";
     schedule { units = [WriteFPMove]; }
-    behavior { dst = todo(src); }
+    behavior { dst = bitcast(src); }
 }
 
 instruction MovdGpr32Xmm for [X86_64] {
@@ -774,7 +810,7 @@ instruction Cvtsi2ss32Norex for [SSE] : Cvtsi2ss32NorexTemplate {
     param PREFIX: bits<8> = 0xF3;
     param OPCODE: bits<8> = 0x2A;
     schedule { units = [WriteSIToFP]; }
-    behavior { dst = todo(src); }
+    behavior { dst = sitofp(src, 8, 23); }
 }
 
 instruction Cvttss2si32Norex for [SSE] : Cvttss2si32NorexTemplate {
@@ -783,7 +819,7 @@ instruction Cvttss2si32Norex for [SSE] : Cvttss2si32NorexTemplate {
     param PREFIX: bits<8> = 0xF3;
     param OPCODE: bits<8> = 0x2C;
     schedule { units = [WriteFPToSI]; }
-    behavior { dst = todo(src); }
+    behavior { dst = fptosi(src, 32); }
 }
 
 instruction Cvtsi2sd32Norex for [SSE2] : Cvtsi2sd32NorexTemplate {
@@ -792,7 +828,7 @@ instruction Cvtsi2sd32Norex for [SSE2] : Cvtsi2sd32NorexTemplate {
     param PREFIX: bits<8> = 0xF2;
     param OPCODE: bits<8> = 0x2A;
     schedule { units = [WriteSIToFP]; }
-    behavior { dst = todo(src); }
+    behavior { dst = sitofp(src, 11, 52); }
 }
 
 instruction Cvttsd2si32Norex for [SSE2] : Cvttsd2si32NorexTemplate {
@@ -801,7 +837,7 @@ instruction Cvttsd2si32Norex for [SSE2] : Cvttsd2si32NorexTemplate {
     param PREFIX: bits<8> = 0xF2;
     param OPCODE: bits<8> = 0x2C;
     schedule { units = [WriteFPToSI]; }
-    behavior { dst = todo(src); }
+    behavior { dst = fptosi(src, 32); }
 }
 
 instruction Cvtsi2ss32 for [X86_64] {
@@ -1081,7 +1117,7 @@ instruction Cvttsd2si64 for [X86_64] {
 }
 
 macro fp_mem_norex {
-    ( $feature:ident, $xmm:ident, $prefix:literal,
+    ( $feature:ident, $xmm:ident, $prefix:literal, $bytes:literal,
       $load:ident, $load_op:literal, $store:ident, $store_op:literal,
       $load_sib:ident, $load_sib_op:literal,
       $store_sib:ident, $store_sib_op:literal,
@@ -1101,7 +1137,7 @@ macro fp_mem_norex {
                 32..63 => imm,
             }
             asm { "{self.MNEMONIC} {dst}, [{base} + {imm}]" }
-            behavior { dst = todo(); }
+            behavior { dst = load(base + sext(imm, self.XLEN), $bytes, 0b0); }
         }
 
         instruction $store for [$feature] {
@@ -1119,7 +1155,7 @@ macro fp_mem_norex {
                 32..63 => imm,
             }
             asm { "{self.MNEMONIC} [{base} + {imm}], {src}" }
-            behavior { }
+            behavior { store(base + sext(imm, self.XLEN), $bytes, src); }
         }
 
         instruction $load_sib for [$feature] {
@@ -1138,7 +1174,7 @@ macro fp_mem_norex {
                 40..71 => imm,
             }
             asm { "{self.MNEMONIC} {dst}, [{base} + {imm}]" }
-            behavior { dst = todo(); }
+            behavior { dst = load(base + sext(imm, self.XLEN), $bytes, 0b0); }
         }
 
         instruction $store_sib for [$feature] {
@@ -1157,12 +1193,12 @@ macro fp_mem_norex {
                 40..71 => imm,
             }
             asm { "{self.MNEMONIC} [{base} + {imm}], {src}" }
-            behavior { }
+            behavior { store(base + sext(imm, self.XLEN), $bytes, src); }
         }
     };
 }
 
-fp_mem_norex!(SSE, XMM32low, 0xF3,
+fp_mem_norex!(SSE, XMM32low, 0xF3, 4,
     MovssLoadDispNorex, "movss_load_disp_norex",
     MovssStoreDispNorex, "movss_store_disp_norex",
     MovssLoadDispSibNorex, "movss_load_disp_sib_norex",
@@ -1170,7 +1206,7 @@ fp_mem_norex!(SSE, XMM32low, 0xF3,
     "movss"
 )
 
-fp_mem_norex!(SSE2, XMMlow, 0xF2,
+fp_mem_norex!(SSE2, XMMlow, 0xF2, 8,
     MovsdLoadDispNorex, "movsd_load_disp_norex",
     MovsdStoreDispNorex, "movsd_store_disp_norex",
     MovsdLoadDispSibNorex, "movsd_load_disp_sib_norex",
@@ -1276,7 +1312,9 @@ instruction MovssLoadDispSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base} + {imm}]"
     }
 
-    behavior { dst = todo(); }
+    behavior {
+        dst = load(base + sext(imm, self.XLEN), 4, 0b0);
+    }
 }
 
 instruction MovssStoreDispSib for [X86_64] {
@@ -1309,7 +1347,9 @@ instruction MovssStoreDispSib for [X86_64] {
         "{self.MNEMONIC} [{base} + {imm}], {src}"
     }
 
-    behavior { }
+    behavior {
+        store(base + sext(imm, self.XLEN), 4, src);
+    }
 }
 
 instruction MovsdLoadDisp for [X86_64] {
@@ -1410,7 +1450,9 @@ instruction MovsdLoadDispSib for [X86_64] {
         "{self.MNEMONIC} {dst}, [{base} + {imm}]"
     }
 
-    behavior { dst = todo(); }
+    behavior {
+        dst = load(base + sext(imm, self.XLEN), 8, 0b0);
+    }
 }
 
 instruction MovsdStoreDispSib for [X86_64] {
@@ -1443,5 +1485,7 @@ instruction MovsdStoreDispSib for [X86_64] {
         "{self.MNEMONIC} [{base} + {imm}], {src}"
     }
 
-    behavior { }
+    behavior {
+        store(base + sext(imm, self.XLEN), 8, src);
+    }
 }

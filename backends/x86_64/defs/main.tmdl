@@ -622,11 +622,9 @@ macro alu_rr {
     };
 }
 
-// No-REX register/register ALU forms (low subclasses). Their values stay
-// unmodeled (`todo()`) so they root no isel rule and remain produced only by
-// `canonicalize_encodings`, but the destination's direction is an operand
-// declaration rather than a modeled value: without it the scheduler saw no
-// loop-carried dependency through eax..edi, al..bl or xmm0..xmm7.
+// No-REX register/register ALU forms (low subclasses): full twins of the REX
+// forms, one encoding byte shorter, so size-aware isel costs pick them when
+// every register is low; `canonicalize_encodings` still downgrades post-RA.
 macro alu_rr_norex {
     ( $suf:literal, $tmpl:ident, $class:ident, $b:tt, $( ( $name:ident, $mn:literal, $opc:literal ) ),* ) => {
         $( instruction ${concat($name, $suf, "Norex")} for [X86] : $tmpl {
@@ -1378,10 +1376,7 @@ macro setcc_ops {
     };
 }
 
-// No-REX setcc forms (al/cl/dl/bl). The materialized value stays unmodeled
-// (canonicalize-only), but the guard is passed to `todo()` so the flags the
-// condition tests are declared as reads: without them a `cmp`/`setcc` pair
-// carried no dependency at all.
+// No-REX setcc forms (al/cl/dl/bl): same semantics as the REX-capable forms.
 macro setcc_norex {
     ( $( ( $name:ident, $op:literal, $mn:literal, $cc:literal, { $($cond:tt)* } ) ),* ) => {
         $( instruction $name for [X86] : SetccRegNorex {
@@ -1389,7 +1384,13 @@ macro setcc_norex {
                param MNEMONIC: String = $mn;
                param CC: bits<8> = $cc;
                schedule { units = [WriteIConditional]; }
-               behavior { dst = todo($($cond)*); }
+               behavior {
+                   dst = if $($cond)* {
+                       zext(0b1, 8)
+                   } else {
+                       zext(0b0, 8)
+                   };
+               }
            } )*
     };
 }
@@ -1436,19 +1437,19 @@ macro sub_flags {
 // Addition: cf is the unsigned carry out, of the signed overflow (operands
 // agree in sign, result differs).
 macro add_flags {
-    ( { $($rhs:tt)* }, { $($w:tt)* }, { $($msb:tt)* } ) => {
-        EFLAGS::cf = if (dst + $($rhs)*) ~< dst {
+    ( { $($lhs:tt)* }, { $($rhs:tt)* }, { $($w:tt)* }, { $($msb:tt)* } ) => {
+        EFLAGS::cf = if ($($lhs)* + $($rhs)*) ~< $($lhs)* {
             zext(0b1, 1)
         } else {
             zext(0b0, 1)
         };
-        EFLAGS::zf = if (dst + $($rhs)*) == zext(0b0, $($w)*) {
+        EFLAGS::zf = if ($($lhs)* + $($rhs)*) == zext(0b0, $($w)*) {
             zext(0b1, 1)
         } else {
             zext(0b0, 1)
         };
-        EFLAGS::sf = extract(dst + $($rhs)*, $($msb)*, $($msb)*);
-        EFLAGS::of = extract(~(dst ^ $($rhs)*) & (dst ^ (dst + $($rhs)*)), $($msb)*, $($msb)*);
+        EFLAGS::sf = extract($($lhs)* + $($rhs)*, $($msb)*, $($msb)*);
+        EFLAGS::of = extract(~($($lhs)* ^ $($rhs)*) & ($($lhs)* ^ ($($lhs)* + $($rhs)*)), $($msb)*, $($msb)*);
     };
 }
 
@@ -1463,29 +1464,6 @@ macro logic_flags {
         };
         EFLAGS::sf = extract($($res)*, $($msb)*, $($msb)*);
         EFLAGS::of = zext(0b0, 1);
-    };
-}
-
-// The flag effects of a canonicalize-only form, whose value stays unmodeled.
-// *Which* flags an encoding writes is an architectural fact independent of the
-// values it writes, and the scheduler needs it: without these the REX-free
-// compare/ALU encodings looked flag-free, so compare/setcc chains scheduled as
-// if they were independent.
-macro todo_flags {
-    ( ) => {
-        EFLAGS::cf = todo();
-        EFLAGS::pf = todo();
-        EFLAGS::zf = todo();
-        EFLAGS::sf = todo();
-        EFLAGS::of = todo();
-    };
-}
-
-// Rotates leave the arithmetic flags alone and write only carry and overflow.
-macro todo_rotate_flags {
-    ( ) => {
-        EFLAGS::cf = todo();
-        EFLAGS::of = todo();
     };
 }
 

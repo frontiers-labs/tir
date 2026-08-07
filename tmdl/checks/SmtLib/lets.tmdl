@@ -1,0 +1,17 @@
+// SMT-LIB lowering of `let` bindings. Value terms read the entry state, so a
+// binding is a shared sub-term; only its state transition (an atomic RMW here)
+// is committed once, at the `let` statement. Do not regenerate with
+// update_checks.py.
+
+// RUN: tmdlc --action=emit-smtlib --dialect=lisa --isa=LIsa --output=- %S/../Inputs/lets.tmdl | filecheck %s
+
+// CHECK: (define-fun execute_adddouble
+// CHECK-NEXT: (write_gpr st rd (bvadd (bvadd (read_gpr st rs1) (read_gpr st rs2)) (bvadd (read_gpr st rs1) (read_gpr st rs2)))))
+
+// The bound RMW writes memory exactly once, and the destination receives the
+// value read from the entry state.
+// CHECK: (define-fun execute_amoaddwlet
+// CHECK-NEXT: (write_gpr (write_mem_4 st (read_gpr st rs1) (bvadd (read_mem_4 st (read_gpr st rs1)) ((_ extract 31 0) (read_gpr st rs2)))) rd ((_ sign_extend 32) (read_mem_4 st (read_gpr st rs1)))))
+
+// CHECK: (define-fun execute_loadtwice
+// CHECK-NEXT: (write_gpr st rd ((_ sign_extend 32) (bvadd (read_mem_4 st (read_gpr st rs1)) (read_mem_4 st (read_gpr st rs1))))))

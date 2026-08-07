@@ -92,7 +92,7 @@ impl<'a, K: Eq + Hash, V: PartialEq> IntoIterator for &'a mut StableHashMap<K, V
 /// e.g. it references an unknown parameter or a register.
 pub fn eval_bits_width(expr: &ast::Expr, params: &HashMap<String, i64>) -> Option<u16> {
     let mut graph = tir::sem::SemGraph::new();
-    let lowering = expr.lower_to_sema(&mut graph, params)?;
+    let lowering = expr.lower_to_sema(&mut graph, params, &HashMap::new())?;
     if !lowering.variable_symbols.is_empty() || !lowering.register_symbols.is_empty() {
         return None;
     }
@@ -212,6 +212,21 @@ pub fn get_encoding_arms<'a>(
     item_cache: &HashMap<&'a str, &'a Item>,
 ) -> Vec<ast::EncodingArm> {
     resolve_effective_encoding_for_instruction(instruction, item_cache).to_vec()
+}
+
+/// The instruction's encoding size in bytes. With no encoding (a text-only
+/// pseudo-ISA) there is no binary width; report 0 bytes rather than the 32-bit
+/// default assumed for real ISAs.
+pub fn encoding_width_bytes<'a>(
+    instruction: &'a Instruction,
+    item_cache: &HashMap<&'a str, &'a Item>,
+) -> u64 {
+    get_encoding_arms(instruction, item_cache)
+        .iter()
+        .map(|arm| arm.end.unwrap_or(arm.start))
+        .max()
+        .map(|max_end| ((max_end + 1) as u32).div_ceil(8) as u64)
+        .unwrap_or(0)
 }
 
 pub fn resolve_params_for_instruction<'a>(
@@ -367,6 +382,7 @@ pub fn behavior_uses_todo(expr: &ast::Expr) -> bool {
         ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
         ast::Expr::Path(_) | ast::Expr::Invalid => false,
         ast::Expr::Assign(a) => behavior_uses_todo(&a.dest) || behavior_uses_todo(&a.value),
+        ast::Expr::Let(l) => behavior_uses_todo(&l.value),
         ast::Expr::Binary(b) => behavior_uses_todo(&b.lhs) || behavior_uses_todo(&b.rhs),
         ast::Expr::Unary(u) => behavior_uses_todo(&u.x),
         ast::Expr::Block(b) => b.stmts.iter().any(behavior_uses_todo),
@@ -385,6 +401,134 @@ pub fn behavior_uses_todo(expr: &ast::Expr) -> bool {
             behavior_uses_todo(&t.body) || t.handlers.iter().any(|h| behavior_uses_todo(&h.body))
         }
         ast::Expr::Lambda(l) => behavior_uses_todo(&l.body),
+    }
+}
+
+/// Substitute every `let` binding into its uses and drop the `let` statements.
+/// Selection patterns are matched against the expression a binding stands for,
+/// so they must not see the name; execution keeps the bindings, which is where
+/// the single-evaluation guarantee lives.
+pub fn inline_let_bindings(expr: &ast::Expr) -> ast::Expr {
+    fn inline(expr: &ast::Expr, bindings: &mut HashMap<String, ast::Expr>) -> ast::Expr {
+        match expr {
+            ast::Expr::Ident(id) => bindings
+                .get(&id.name)
+                .cloned()
+                .unwrap_or_else(|| expr.clone()),
+            ast::Expr::Block(b) => {
+                let outer = bindings.clone();
+                let stmts = b
+                    .stmts
+                    .iter()
+                    .filter_map(|stmt| match stmt {
+                        ast::Expr::Let(l) => {
+                            let value = inline(&l.value, bindings);
+                            bindings.insert(l.name.clone(), value);
+                            None
+                        }
+                        other => Some(inline(other, bindings)),
+                    })
+                    .collect();
+                *bindings = outer;
+                ast::Expr::Block(ast::Block {
+                    stmts,
+                    last_expr_return: b.last_expr_return,
+                    span: b.span,
+                })
+            }
+            // A `let` outside a block binds nothing that follows it.
+            ast::Expr::Let(l) => inline(&l.value, bindings),
+            other => map_child_exprs(other, &mut |child| inline(child, bindings)),
+        }
+    }
+
+    inline(expr, &mut HashMap::new())
+}
+
+/// Rebuild `expr` with `f` applied to each immediate child. Leaves are
+/// returned unchanged.
+pub(crate) fn map_child_exprs(
+    expr: &ast::Expr,
+    f: &mut dyn FnMut(&ast::Expr) -> ast::Expr,
+) -> ast::Expr {
+    match expr {
+        ast::Expr::Assign(a) => ast::Expr::Assign(ast::Assign {
+            dest: a.dest.clone(),
+            value: Box::new(f(&a.value)),
+            span: a.span,
+        }),
+        ast::Expr::Let(l) => ast::Expr::Let(ast::Let {
+            name: l.name.clone(),
+            value: Box::new(f(&l.value)),
+            span: l.span,
+        }),
+        ast::Expr::Binary(b) => ast::Expr::Binary(ast::Binary {
+            lhs: Box::new(f(&b.lhs)),
+            rhs: Box::new(f(&b.rhs)),
+            op: b.op.clone(),
+            span: b.span,
+        }),
+        ast::Expr::Unary(u) => ast::Expr::Unary(ast::Unary {
+            x: Box::new(f(&u.x)),
+            op: u.op.clone(),
+            span: u.span,
+        }),
+        ast::Expr::Block(b) => ast::Expr::Block(ast::Block {
+            stmts: b.stmts.iter().map(&mut *f).collect(),
+            last_expr_return: b.last_expr_return,
+            span: b.span,
+        }),
+        ast::Expr::Call(c) => ast::Expr::Call(ast::Call {
+            callee: Box::new(f(&c.callee)),
+            arguments: c.arguments.iter().map(&mut *f).collect(),
+            span: c.span,
+        }),
+        ast::Expr::Field(field) => ast::Expr::Field(ast::Field {
+            base: Box::new(f(&field.base)),
+            member: field.member.clone(),
+            span: field.span,
+        }),
+        ast::Expr::If(i) => ast::Expr::If(ast::If {
+            cond: Box::new(f(&i.cond)),
+            then: Box::new(f(&i.then)),
+            else_: i.else_.as_ref().map(|e| Box::new(f(e))),
+            span: i.span,
+        }),
+        ast::Expr::IndexAccess(i) => ast::Expr::IndexAccess(ast::IndexAccess {
+            base: Box::new(f(&i.base)),
+            index: i.index,
+            span: i.span,
+        }),
+        ast::Expr::Slice(s) => ast::Expr::Slice(ast::Slice {
+            base: Box::new(f(&s.base)),
+            start: s.start,
+            end: s.end,
+            span: s.span,
+        }),
+        ast::Expr::Try(t) => ast::Expr::Try(ast::TryExcept {
+            body: Box::new(f(&t.body)),
+            handlers: t
+                .handlers
+                .iter()
+                .map(|h| ast::ExceptClause {
+                    kind: h.kind.clone(),
+                    binding: h.binding.clone(),
+                    body: f(&h.body),
+                    span: h.span,
+                })
+                .collect(),
+            span: t.span,
+        }),
+        ast::Expr::Lambda(l) => ast::Expr::Lambda(ast::Lambda {
+            params: l.params.clone(),
+            body: Box::new(f(&l.body)),
+            span: l.span,
+        }),
+        ast::Expr::Ident(_)
+        | ast::Expr::Path(_)
+        | ast::Expr::Lit(_)
+        | ast::Expr::BuiltinFunction(_)
+        | ast::Expr::Invalid => expr.clone(),
     }
 }
 

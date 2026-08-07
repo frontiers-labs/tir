@@ -44,6 +44,12 @@ pub enum EffectPayload {
         kind: String,
         binding: Option<String>,
     },
+    /// A `let` statement. The bound term is the node's only child; the symbol is
+    /// how targets that evaluate statements one at a time refer back to it.
+    Bind {
+        name: String,
+        symbol: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +65,8 @@ pub struct BehaviorGraph {
     pub variable_symbols: HashMap<String, u32>,
     pub register_symbols: HashMap<(String, u32), u32>,
     pub regnum_symbols: HashMap<String, u32>,
+    /// Value node -> symbol id for each `let` binding.
+    pub let_symbols: HashMap<NodeId, u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -118,6 +126,13 @@ fn sequence_behavior(expr: &ast::Expr, bindings: &mut Bindings) -> ast::Expr {
                 span: assign.span,
             })
         }
+        // A `let` name is not rewritten: it denotes the term lowered once for
+        // its right-hand side, which every use then shares.
+        ast::Expr::Let(binding) => ast::Expr::Let(ast::Let {
+            name: binding.name.clone(),
+            value: Box::new(sequence_behavior(&binding.value, bindings)),
+            span: binding.span,
+        }),
         ast::Expr::Binary(binary) => ast::Expr::Binary(ast::Binary {
             lhs: Box::new(sequence_behavior(&binary.lhs, bindings)),
             rhs: Box::new(sequence_behavior(&binary.rhs, bindings)),
@@ -256,6 +271,21 @@ fn sequence_behavior(expr: &ast::Expr, bindings: &mut Bindings) -> ast::Expr {
     }
 }
 
+fn is_state_kind(kind: SymKind) -> bool {
+    matches!(
+        kind,
+        SymKind::StateAssign
+            | SymKind::StateStore
+            | SymKind::StateStoreConditional
+            | SymKind::StateFence
+            | SymKind::StateTrap
+            | SymKind::StateBlock
+            | SymKind::StateIf
+            | SymKind::StateTry
+            | SymKind::StateHandler
+    )
+}
+
 impl BehaviorGraph {
     pub fn effect_nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.graph.preorder(self.root)
@@ -291,24 +321,74 @@ impl BehaviorGraph {
         }
     }
 
+    /// Like [`BehaviorGraph::value_graph`], but every `let`-bound sub-term is
+    /// replaced by its symbol, including `root` itself. Targets that execute
+    /// statements in sequence use this so a binding's right-hand side runs once,
+    /// at its `let`, instead of once per use.
+    pub fn bound_value_graph(&self, root: NodeId) -> Option<(ValueGraph, NodeId)> {
+        let Some(&symbol) = self.let_symbols.get(&root) else {
+            return self.binding_value_graph(root);
+        };
+        let mut out = ValueGraph::new();
+        let leaf = out.add_node(SymKind::Symbol);
+        out.set_leaf_data(leaf, SymPayload::SymbolId(symbol));
+        Some((out, leaf))
+    }
+
+    /// The term a `let` statement itself evaluates: `root` is expanded, nested
+    /// bindings read their symbols.
+    pub fn binding_value_graph(&self, root: NodeId) -> Option<(ValueGraph, NodeId)> {
+        // The term stops at a bound node: what lies below it is the binding's
+        // own statement, not part of this one.
+        let mut needed = std::collections::HashSet::new();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            if !needed.insert(node.index()) {
+                continue;
+            }
+            if node != root && self.let_symbols.contains_key(&node) {
+                continue;
+            }
+            pending.extend(self.graph.children(node));
+        }
+
+        let mut out = ValueGraph::new();
+        let mut remap = HashMap::new();
+        for node in self.graph.postorder(root) {
+            if !needed.contains(&node.index()) {
+                continue;
+            }
+            if let Some(&symbol) = self.let_symbols.get(&node)
+                && node != root
+            {
+                let leaf = out.add_node(SymKind::Symbol);
+                out.set_leaf_data(leaf, SymPayload::SymbolId(symbol));
+                remap.insert(node.index(), leaf);
+                continue;
+            }
+            let kind = *self.graph.get_node(node);
+            if is_state_kind(kind) {
+                return None;
+            }
+            let new = out.add_node(kind);
+            if let Some(BehaviorPayload::Value(payload)) = self.graph.get_leaf_data(node) {
+                out.set_leaf_data(new, payload.clone());
+            }
+            for child in self.graph.children(node) {
+                out.add_edge(new, *remap.get(&child.index())?);
+            }
+            remap.insert(node.index(), new);
+        }
+        Some((out, *remap.get(&root.index())?))
+    }
+
     /// Copy one value term out for APIs that consume a scalar-only SemGraph.
     pub fn value_graph(&self, root: NodeId) -> Option<(ValueGraph, NodeId)> {
         let mut out = ValueGraph::new();
         let mut remap = HashMap::new();
         for node in self.graph.postorder(root) {
             let kind = *self.graph.get_node(node);
-            if matches!(
-                kind,
-                SymKind::StateAssign
-                    | SymKind::StateStore
-                    | SymKind::StateStoreConditional
-                    | SymKind::StateFence
-                    | SymKind::StateTrap
-                    | SymKind::StateBlock
-                    | SymKind::StateIf
-                    | SymKind::StateTry
-                    | SymKind::StateHandler
-            ) {
+            if is_state_kind(kind) {
                 return None;
             }
             let new = out.add_node(kind);
@@ -342,6 +422,9 @@ pub trait BehaviorEmitter {
         value: NodeId,
         state: &Self::State,
     ) -> Option<Self::State>;
+    /// A `let` statement. Its uses read the bound term directly, so this only
+    /// has to commit the term's own state transition, if it has one.
+    fn bind(&self, value: NodeId, state: &Self::State) -> Option<Self::State>;
     fn trap(
         &self,
         arguments: &[NodeId],
@@ -389,6 +472,13 @@ pub fn fold_behavior<E: BehaviorEmitter>(
             *behavior.graph.get_node(node),
             behavior.effect_payload(node),
         ) {
+            (SymKind::StateAssign, Some(EffectPayload::Bind { .. })) => {
+                let Some(&value) = children.first() else {
+                    emitter.unsupported();
+                    return state.clone();
+                };
+                unsupported(emitter.bind(value, state))
+            }
             (SymKind::StateAssign, Some(EffectPayload::Assign { destination })) => {
                 let Some(&value) = children.first() else {
                     emitter.unsupported();
@@ -505,6 +595,9 @@ fn collect_values<'a>(
 ) -> Option<()> {
     match expr {
         ast::Expr::Assign(a) => out.push(&a.value),
+        // The binding lowers as a whole so that the lowering records the bound
+        // node under its name for the statements that follow.
+        ast::Expr::Let(_) => out.push(expr),
         ast::Expr::Call(c) => match builtin(expr)? {
             ast::BuiltinFunction::Trap => {
                 out.extend(c.arguments.iter());
@@ -548,6 +641,7 @@ struct EffectLowerer<'a> {
     _exprs: Vec<&'a ast::Expr>,
     trap_handler: Option<&'a ast::TrapHandler>,
     register_indices: HashMap<(String, String), u32>,
+    let_symbols: HashMap<NodeId, u32>,
 }
 
 impl EffectLowerer<'_> {
@@ -574,6 +668,14 @@ impl EffectLowerer<'_> {
                     destination: destination(&a.dest, &self.register_indices)?,
                 };
                 Some(self.add(SymKind::StateAssign, payload, &[self.value(&a.value)?]))
+            }
+            ast::Expr::Let(l) => {
+                let value = self.value(expr)?;
+                let payload = EffectPayload::Bind {
+                    name: l.name.clone(),
+                    symbol: *self.let_symbols.get(&value)?,
+                };
+                Some(self.add(SymKind::StateAssign, payload, &[value]))
             }
             ast::Expr::Call(c) => {
                 let kind = builtin(expr)?;
@@ -675,23 +777,31 @@ pub fn lower_behavior<'a>(
     let mut exprs = Vec::new();
     collect_values(&expr, trap_handler.as_ref(), &mut exprs)?;
     let mut values = ValueGraph::new();
-    let (value_roots, variable_symbols, register_symbols, regnum_symbols) = if exprs.is_empty() {
-        (Vec::new(), HashMap::new(), HashMap::new(), HashMap::new())
-    } else {
-        let (roots, symbols) = ast::Expr::lower_all_to_sema_with_isa(
-            &exprs,
-            &mut values,
-            params,
-            isa_consts,
-            register_indices,
-        )?;
-        (
-            roots,
-            symbols.variable_symbols,
-            symbols.register_symbols,
-            symbols.regnum_symbols,
-        )
-    };
+    let (value_roots, variable_symbols, register_symbols, regnum_symbols, value_let_symbols) =
+        if exprs.is_empty() {
+            (
+                Vec::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            )
+        } else {
+            let (roots, symbols) = ast::Expr::lower_all_to_sema_with_isa(
+                &exprs,
+                &mut values,
+                params,
+                isa_consts,
+                register_indices,
+            )?;
+            (
+                roots,
+                symbols.variable_symbols,
+                symbols.register_symbols,
+                symbols.regnum_symbols,
+                symbols.let_symbols,
+            )
+        };
     let mut graph = UnifiedGraph::new();
     let mut remap = HashMap::new();
     for &root in &value_roots {
@@ -714,12 +824,17 @@ pub fn lower_behavior<'a>(
         .zip(value_roots)
         .map(|(e, root)| Some((*e as *const ast::Expr as usize, *remap.get(&root.index())?)))
         .collect::<Option<HashMap<_, _>>>()?;
+    let let_symbols = value_let_symbols
+        .iter()
+        .map(|(node, symbol)| Some((*remap.get(&node.index())?, *symbol)))
+        .collect::<Option<HashMap<_, _>>>()?;
     let mut lowerer = EffectLowerer {
         graph,
         roots,
         _exprs: exprs,
         trap_handler: trap_handler.as_ref(),
         register_indices: register_indices.clone(),
+        let_symbols: let_symbols.clone(),
     };
     let root = lowerer.lower(&expr)?;
     Some(BehaviorGraph {
@@ -728,6 +843,7 @@ pub fn lower_behavior<'a>(
         variable_symbols,
         register_symbols,
         regnum_symbols,
+        let_symbols,
     })
 }
 

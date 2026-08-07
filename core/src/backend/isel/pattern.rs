@@ -80,6 +80,7 @@ impl CompiledIselPattern {
         egraph: &SemEGraph,
         ctx: &Context,
         matched: &tir_symbolic::egraph::EMatch<u32>,
+        pointer_width: Option<u32>,
     ) -> bool {
         let mut unifier = TypeUnifier::default();
         let nodes_match = self.node_meta.iter().enumerate().all(|(index, meta)| {
@@ -93,9 +94,13 @@ impl CompiledIselPattern {
             class_semantic_type(ctx, egraph, class)
                 .is_none_or(|actual| unifier.unify(expected, &actual).is_ok())
         });
+        // The root check must see pointer-typed classes at the data layout's
+        // pointer width: `class_semantic_type` has no answer for them, and
+        // accepting on `None` let an 8-bit immediate move claim a 64-bit
+        // pointer constant.
         nodes_match
             && self.result_register.is_none_or(|register| {
-                class_semantic_type(ctx, egraph, matched.root)
+                class_register_type(ctx, egraph, matched.root, pointer_width)
                     .is_none_or(|actual| register.accepts(&actual))
             })
     }
@@ -162,7 +167,7 @@ impl CompiledIselPattern {
         egraph: &SemEGraph,
         ctx: &Context,
     ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
-        self.search_with_legality(egraph, ctx, &|node, class| {
+        self.search_with_legality(egraph, ctx, None, &|node, class| {
             self.boundary_ok(egraph, ctx, node, class, None)
         })
     }
@@ -171,6 +176,7 @@ impl CompiledIselPattern {
         &self,
         egraph: &SemEGraph,
         ctx: &Context,
+        pointer_width: Option<u32>,
         allowed: &dyn Fn(Id, Id) -> bool,
     ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
         if self.copy {
@@ -179,7 +185,7 @@ impl CompiledIselPattern {
         self.pattern
             .search_with_legality(egraph, allowed)
             .into_iter()
-            .filter(|matched| self.match_types(egraph, ctx, matched))
+            .filter(|matched| self.match_types(egraph, ctx, matched, pointer_width))
             .collect()
     }
 
@@ -188,6 +194,7 @@ impl CompiledIselPattern {
         egraph: &SemEGraph,
         ctx: &Context,
         roots: impl IntoIterator<Item = Id>,
+        pointer_width: Option<u32>,
         allowed: &dyn Fn(Id, Id) -> bool,
     ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
         if self.copy {
@@ -196,7 +203,7 @@ impl CompiledIselPattern {
         self.pattern
             .search_roots_with_legality(egraph, roots, allowed)
             .into_iter()
-            .filter(|matched| self.match_types(egraph, ctx, matched))
+            .filter(|matched| self.match_types(egraph, ctx, matched, pointer_width))
             .collect()
     }
 
@@ -207,7 +214,7 @@ impl CompiledIselPattern {
         roots: impl IntoIterator<Item = Id>,
         pointer_width: Option<u32>,
     ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
-        self.search_roots_with_legality(egraph, ctx, roots, &|node, class| {
+        self.search_roots_with_legality(egraph, ctx, roots, pointer_width, &|node, class| {
             self.boundary_ok(egraph, ctx, node, class, pointer_width)
         })
     }

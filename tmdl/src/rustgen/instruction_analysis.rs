@@ -1,12 +1,12 @@
 fn analyze_instruction_semantics(
-    inst: &ast::Instruction,
+    behavior: &ast::Expr,
     operands: &[(String, Type)],
     defined_register_operands: &[String],
     numeric_params: &HashMap<String, i64>,
     isa_param_values: &HashMap<String, i64>,
     register_index_map: &HashMap<(String, String), u32>,
 ) -> Option<InstructionSemantics> {
-    let rhs = resolve_behavior_rhs(inst, operands, defined_register_operands)?;
+    let rhs = resolve_behavior_rhs(behavior, operands, defined_register_operands)?;
     let mut pattern = tir::sem::SemGraph::new();
     let lowering = rhs.lower_to_sema_with_isa(
         &mut pattern,
@@ -18,7 +18,7 @@ fn analyze_instruction_semantics(
 
     let guarded_semantics = defined_register_operands.first().and_then(|dst| {
         analyze_guarded_semantics(
-            inst,
+            behavior,
             dst,
             numeric_params,
             isa_param_values,
@@ -42,14 +42,14 @@ fn analyze_instruction_semantics(
 /// selection pattern (which lowers the else arm alone) — a prerequisite for the
 /// pass-construction relaxation proof to share the pattern's op node.
 fn analyze_guarded_semantics(
-    inst: &ast::Instruction,
+    behavior: &ast::Expr,
     dst: &str,
     numeric_params: &HashMap<String, i64>,
     isa_param_values: &HashMap<String, i64>,
     register_index_map: &HashMap<(String, String), u32>,
 ) -> Option<(tir::sem::SemGraph, tir::graph::NodeId)> {
     use tir::graph::MutDag;
-    let (cond, then_value, else_value) = guarded_assignment_shape(&inst.behavior, dst)?;
+    let (cond, then_value, else_value) = guarded_assignment_shape(behavior, dst)?;
     // Resolve `self.XLEN` and friends to their concrete per-ISA width (the value
     // `execute()` uses, e.g. 64 for RV32+RV64), so the guarded semantics is a
     // width-concrete graph the relaxation proof can bit-blast — patterns keep it
@@ -183,6 +183,7 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
             collect_referenced_idents(&a.dest, operands, out);
             collect_referenced_idents(&a.value, operands, out);
         }
+        ast::Expr::Let(l) => collect_referenced_idents(&l.value, operands, out),
         ast::Expr::Binary(b) => {
             collect_referenced_idents(&b.lhs, operands, out);
             collect_referenced_idents(&b.rhs, operands, out);
@@ -411,6 +412,9 @@ fn emit_operand_registers(
             } else {
                 quote! { tir::backend::isel::RegisterRequirement::low_bits(#capability) }
             };
+            let requirement = quote! {
+                #requirement.at_view_offset(register_view_offset(#class_lit))
+            };
             quote! {
                 if let Some((_, width)) =
                     __register_widths.iter().find(|(class, _)| *class == #class_lit)
@@ -454,7 +458,8 @@ fn emit_result_register_call(
             __register_widths
                 .iter()
                 .find(|(class, _)| *class == #class_lit)
-                .map(|(_, width)| tir::backend::isel::RegisterRequirement::low_bits(#capability))
+                .map(|(_, width)| tir::backend::isel::RegisterRequirement::low_bits(#capability)
+                    .at_view_offset(register_view_offset(#class_lit)))
         )
     }
 }
@@ -598,6 +603,7 @@ fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> boo
             behavior_references_pc(&a.dest, pc_classes)
                 || behavior_references_pc(&a.value, pc_classes)
         }
+        ast::Expr::Let(l) => behavior_references_pc(&l.value, pc_classes),
         ast::Expr::Binary(b) => {
             behavior_references_pc(&b.lhs, pc_classes) || behavior_references_pc(&b.rhs, pc_classes)
         }
@@ -651,6 +657,7 @@ fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>
             behavior_reads_flag_register(&a.value, flag_classes)
                 || (!dest_is_flag_write && behavior_reads_flag_register(&a.dest, flag_classes))
         }
+        ast::Expr::Let(l) => behavior_reads_flag_register(&l.value, flag_classes),
         ast::Expr::Binary(b) => {
             behavior_reads_flag_register(&b.lhs, flag_classes)
                 || behavior_reads_flag_register(&b.rhs, flag_classes)
@@ -683,6 +690,86 @@ fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>
                     .any(|h| behavior_reads_flag_register(&h.body, flag_classes))
         }
         ast::Expr::Lambda(l) => behavior_reads_flag_register(&l.body, flag_classes),
+    }
+}
+
+/// Whether the *value* a behavior defines reads a status-flag register. Only
+/// this portion may veto a value rule: the right-hand sides feeding non-flag
+/// destinations, plus any statement-level guard around such an assignment. A
+/// flag read confined to a flag output's own right-hand side (x86 rotate's
+/// count-zero carry preservation) leaves the value expression flag-free, so the
+/// rule still roots. Call with the let-inlined behavior, so a binding shared
+/// between the value and a flag output is seen on the value side too.
+fn value_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
+    match expr {
+        ast::Expr::Assign(a) => {
+            !assignment_dest_register_path(&a.dest)
+                .is_some_and(|(class, _)| flag_classes.contains(&class))
+                && behavior_reads_flag_register(expr, flag_classes)
+        }
+        ast::Expr::Block(b) => b
+            .stmts
+            .iter()
+            .any(|stmt| value_reads_flag_register(stmt, flag_classes)),
+        ast::Expr::If(i) => {
+            value_reads_flag_register(&i.then, flag_classes)
+                || i.else_
+                    .as_ref()
+                    .is_some_and(|e| value_reads_flag_register(e, flag_classes))
+                || (defines_value(&i.then, flag_classes)
+                    || i.else_
+                        .as_ref()
+                        .is_some_and(|e| defines_value(e, flag_classes)))
+                    && behavior_reads_flag_register(&i.cond, flag_classes)
+        }
+        ast::Expr::Try(t) => value_reads_flag_register(&t.body, flag_classes),
+        other => behavior_reads_flag_register(other, flag_classes),
+    }
+}
+
+/// Whether a statement defines anything but a status flag — the guarded arms
+/// whose condition therefore feeds the value (see [`value_reads_flag_register`]).
+fn defines_value(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
+    match expr {
+        ast::Expr::Assign(a) => !assignment_dest_register_path(&a.dest)
+            .is_some_and(|(class, _)| flag_classes.contains(&class)),
+        ast::Expr::Block(b) => b
+            .stmts
+            .iter()
+            .any(|stmt| defines_value(stmt, flag_classes)),
+        ast::Expr::If(i) => {
+            defines_value(&i.then, flag_classes)
+                || i.else_
+                    .as_ref()
+                    .is_some_and(|e| defines_value(e, flag_classes))
+        }
+        ast::Expr::Try(t) => defines_value(&t.body, flag_classes),
+        ast::Expr::Lit(_) | ast::Expr::Ident(_) | ast::Expr::Path(_) => false,
+        _ => true,
+    }
+}
+
+/// Whether the behavior assigns a fixed register path (`GPR::rsp = …`) outside
+/// the flag classes. A single-value tile claims only its operand write; a
+/// sibling fixed-register write would be dropped from the claim while the
+/// fixed read binds as a free pattern variable — a `pop` rule matching any
+/// load. Flag-path writes stay legal: the flag machinery composes them.
+fn behavior_writes_fixed_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
+    match expr {
+        ast::Expr::Assign(a) => assignment_dest_register_path(&a.dest)
+            .is_some_and(|(class, _)| !flag_classes.contains(&class)),
+        ast::Expr::Block(b) => b
+            .stmts
+            .iter()
+            .any(|stmt| behavior_writes_fixed_register(stmt, flag_classes)),
+        ast::Expr::If(i) => {
+            behavior_writes_fixed_register(&i.then, flag_classes)
+                || i.else_
+                    .as_ref()
+                    .is_some_and(|e| behavior_writes_fixed_register(e, flag_classes))
+        }
+        ast::Expr::Try(t) => behavior_writes_fixed_register(&t.body, flag_classes),
+        _ => false,
     }
 }
 
@@ -773,14 +860,14 @@ fn infer_defined_register_operands(
 }
 
 fn resolve_behavior_rhs<'a>(
-    inst: &'a ast::Instruction,
+    behavior: &'a ast::Expr,
     operands: &[(String, Type)],
     defined_register_operands: &[String],
 ) -> Option<&'a ast::Expr> {
     let register_operands = register_operand_names(operands);
 
     let mut assignments = Vec::new();
-    collect_behavior_assignments(&inst.behavior, &mut assignments);
+    collect_behavior_assignments(behavior, &mut assignments);
     for (dst, rhs) in assignments.iter().rev() {
         if defined_register_operands.iter().any(|d| d == dst) {
             return Some(*rhs);
@@ -791,10 +878,10 @@ fn resolve_behavior_rhs<'a>(
             return Some(*rhs);
         }
     }
-    if let Some(store) = find_store_effect_expr(&inst.behavior) {
+    if let Some(store) = find_store_effect_expr(behavior) {
         return Some(store);
     }
-    match &inst.behavior {
+    match behavior {
         ast::Expr::Assign(a) => Some(a.value.as_ref()),
         ast::Expr::Block(_) | ast::Expr::If(_) => None,
         other => Some(other),

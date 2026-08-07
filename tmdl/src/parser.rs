@@ -2106,7 +2106,19 @@ where
                 })
             })
             .labelled("assignment");
-        let stmt = expr.clone().or(assign).or(inline_expr()).boxed();
+        let let_ = just(Token::KwLet)
+            .ignore_then(ident)
+            .then_ignore(just(Token::Equals))
+            .then(expr.clone().or(inline_expr()))
+            .map_with(|(name, value), e| {
+                Expr::Let(Let {
+                    name,
+                    value: Box::new(value),
+                    span: e.span(),
+                })
+            })
+            .labelled("let binding");
+        let stmt = let_.or(expr.clone()).or(assign).or(inline_expr()).boxed();
 
         let block = stmt
             .separated_by(just(Token::Semicolon))
@@ -2457,7 +2469,7 @@ mod tests {
         let parsed = parse_inline("reduce(split(rs1, 4), |acc, x| acc + x)");
         let mut graph = SemGraph::new();
         let lowering = parsed
-            .lower_to_sema(&mut graph, &HashMap::new())
+            .lower_to_sema(&mut graph, &HashMap::new(), &HashMap::new())
             .expect("functional pipeline lowers");
 
         let mut symbols = vec![Value::Int(APInt::new(1, 0)); lowering.variable_symbols.len()];

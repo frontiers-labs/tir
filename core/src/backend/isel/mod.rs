@@ -188,12 +188,15 @@ pub struct RegisterCapability {
     float: bool,
 }
 
-/// A register operand's storage capability and whether its instruction reads
-/// the value's full architectural width rather than only its defined low bits.
+/// A register operand's storage capability, whether its instruction reads the
+/// value's full architectural width rather than only its defined low bits, and
+/// where its register class views the storage element (`view_offset`, x86 `ah`
+/// at bit 8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegisterRequirement {
     capability: RegisterCapability,
     whole: bool,
+    view_offset: u32,
 }
 
 impl RegisterRequirement {
@@ -201,6 +204,7 @@ impl RegisterRequirement {
         Self {
             capability,
             whole: false,
+            view_offset: 0,
         }
     }
 
@@ -208,7 +212,21 @@ impl RegisterRequirement {
         Self {
             capability,
             whole: true,
+            view_offset: 0,
         }
+    }
+
+    /// Place this operand's class at `offset` bits into its storage element (a
+    /// TMDL `BIT_OFFSET` view, x86 `ah`). A value crosses between a producer and
+    /// a consumer for free only when both view their storage at the same offset:
+    /// no instruction moves bits across offsets implicitly.
+    pub fn at_view_offset(mut self, offset: u32) -> Self {
+        self.view_offset = offset;
+        self
+    }
+
+    pub fn view_offset(&self) -> u32 {
+        self.view_offset
     }
 
     pub fn accepts(&self, ty: &tir::sem::SemType) -> bool {
@@ -316,6 +334,13 @@ pub enum RuleKind {
     Value,
     CondBranch { target_symbol: u32 },
 }
+
+/// The latency weight of a rule cost: `cost = latency * LATENCY_COST_SCALE +
+/// encoding_bytes`. x86's longest instruction is 15 bytes, so the byte term
+/// never reaches a whole latency unit — latency decides the cost, and encoding
+/// size only breaks ties between equally fast instructions (a REX-free form
+/// against its REX twin).
+pub const LATENCY_COST_SCALE: u32 = 16;
 
 pub struct Rule {
     pub name: &'static str,
@@ -1239,9 +1264,14 @@ impl InstructionSelectPass {
                     return Vec::new();
                 }
                 let pattern_root = compiled.pattern.root();
-                compiled.search_with_legality(&fs.egraph, context, &|node, class| {
-                    value_match_allowed(fs, context, compiled, pattern_root, node, class)
-                })
+                compiled.search_with_legality(
+                    &fs.egraph,
+                    context,
+                    fs.pointer_width,
+                    &|node, class| {
+                        value_match_allowed(fs, context, compiled, pattern_root, node, class)
+                    },
+                )
             })
             .collect()
     }
@@ -2381,6 +2411,7 @@ impl InstructionSelectPass {
                     &fs.egraph,
                     context,
                     roots.iter().copied(),
+                    fs.pointer_width,
                     &|node, class| {
                         value_match_allowed(fs, context, compiled, pattern_root, node, class)
                     },
@@ -2491,6 +2522,9 @@ impl InstructionSelectPass {
                             class,
                             is_boundary,
                             demand,
+                            view_offset: meta
+                                .register
+                                .map_or(0, |requirement| requirement.view_offset()),
                         }
                     })
                     .collect();
@@ -2506,6 +2540,19 @@ impl InstructionSelectPass {
                 }) {
                     continue;
                 }
+                // The virtual register a match defines for an IR value leaves
+                // selection's control: copies, spills and ABI pinning treat the
+                // registers of a file as freely interchangeable, which only holds
+                // for views of one bit offset. A rule writing a shifted view (x86
+                // `ah`) may therefore only cover a rewrite-introduced class, whose
+                // consumers are tiles this cover checks.
+                let result_view_offset = rule
+                    .result_register
+                    .map_or(0, |requirement| requirement.view_offset());
+                if result_view_offset != 0 && fs.has_values(root) {
+                    continue;
+                }
+
                 let bindings = FullMatchBindings {
                     captures,
                     pattern_nodes,
@@ -2530,6 +2577,7 @@ impl InstructionSelectPass {
                     pattern_root,
                     bindings,
                     cost,
+                    result_view_offset,
                 });
             }
         }

@@ -19,6 +19,7 @@ type FixedReg = (String, u16);
 struct Definer<'a> {
     inst: &'a ast::Instruction,
     mnemonic: String,
+    encoding_bytes: u64,
     written: FixedReg,
     /// The right-hand side of the single fixed-register write.
     write_rhs: &'a ast::Expr,
@@ -30,6 +31,7 @@ struct Definer<'a> {
 struct Reader<'a> {
     inst: &'a ast::Instruction,
     mnemonic: String,
+    encoding_bytes: u64,
     ops: Vec<(String, Type)>,
     cond: &'a ast::Expr,
     /// The then-arm's fixed-register writes, `(written register, rhs)`.
@@ -80,11 +82,19 @@ fn emit_fixed_register_rules<'a>(
             &isa_param_values,
         );
 
-        if let Some(definer) = classify_definer(inst, &mnemonic, &ops, register_index_map) {
-            definers.push(definer);
-        } else if let Some(reader) =
-            classify_reader(inst, &mnemonic, &ops, register_index_map, &isa_param_values)
+        let encoding_bytes = encoding_width_bytes(inst, item_cache);
+        if let Some(definer) =
+            classify_definer(inst, &mnemonic, encoding_bytes, &ops, register_index_map)
         {
+            definers.push(definer);
+        } else if let Some(reader) = classify_reader(
+            inst,
+            &mnemonic,
+            encoding_bytes,
+            &ops,
+            register_index_map,
+            &isa_param_values,
+        ) {
             readers.push(reader);
         }
     }
@@ -555,8 +565,8 @@ fn emit_one_division_rule(
         "{}+{} {}",
         definer.mnemonic, reader.mnemonic, kind
     ));
-    let reader_mnemonic_lit = proc_macro2::Literal::string(&reader.mnemonic);
-    let definer_mnemonic_lit = proc_macro2::Literal::string(&definer.mnemonic);
+    let reader_cost = isel_rule_cost(&reader.mnemonic, reader.encoding_bytes);
+    let definer_cost = isel_rule_cost(&definer.mnemonic, definer.encoding_bytes);
 
     let shared_isas: Vec<String> = reader
         .inst
@@ -670,8 +680,7 @@ fn emit_one_division_rule(
                 tir::backend::isel::Rule::new(
                     #rule_name_lit,
                     #pattern_fn_ident(context),
-                    instruction_cost(#definer_mnemonic_lit)
-                        + instruction_cost(#reader_mnemonic_lit),
+                    (#definer_cost) + (#reader_cost),
                     #emit_fn_ident,
                 )
                 .with_prelude_emitter(#prelude_fn_ident)
@@ -754,6 +763,7 @@ fn collect_register_path_reads(expr: &ast::Expr, out: &mut HashSet<(String, Stri
             }
             collect_register_path_reads(&a.value, out);
         }
+        ast::Expr::Let(l) => collect_register_path_reads(&l.value, out),
         ast::Expr::Binary(b) => {
             collect_register_path_reads(&b.lhs, out);
             collect_register_path_reads(&b.rhs, out);
@@ -805,6 +815,7 @@ fn resolve_fixed_reg(
 fn classify_definer<'a>(
     inst: &'a ast::Instruction,
     mnemonic: &str,
+    encoding_bytes: u64,
     ops: &[(String, Type)],
     register_index_map: &HashMap<(String, String), u32>,
 ) -> Option<Definer<'a>> {
@@ -826,6 +837,7 @@ fn classify_definer<'a>(
     Some(Definer {
         inst,
         mnemonic: mnemonic.to_string(),
+        encoding_bytes,
         written,
         write_rhs: rhs,
     })
@@ -836,6 +848,7 @@ fn classify_definer<'a>(
 fn classify_reader<'a>(
     inst: &'a ast::Instruction,
     mnemonic: &str,
+    encoding_bytes: u64,
     ops: &[(String, Type)],
     register_index_map: &HashMap<(String, String), u32>,
     isa_param_values: &HashMap<String, i64>,
@@ -871,6 +884,7 @@ fn classify_reader<'a>(
     Some(Reader {
         inst,
         mnemonic: mnemonic.to_string(),
+        encoding_bytes,
         ops: ops.to_vec(),
         cond: &if_expr.cond,
         then_writes,

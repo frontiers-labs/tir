@@ -13,6 +13,8 @@ pub(super) enum Expr {
         destination: Box<Expr>,
         value: Box<Expr>,
     },
+    /// Immutable behavior-local binding.
+    Let { name: String, value: Box<Expr> },
     /// Binary operator application.
     Binary {
         op: BinOp,
@@ -84,6 +86,10 @@ impl From<&ast::Expr> for Expr {
             ast::Expr::Assign(assign) => Self::Assign {
                 destination: Box::new(Expr::from(assign.dest.as_ref())),
                 value: Box::new(Expr::from(assign.value.as_ref())),
+            },
+            ast::Expr::Let(binding) => Self::Let {
+                name: binding.name.clone(),
+                value: Box::new(Expr::from(binding.value.as_ref())),
             },
             ast::Expr::Binary(binary) => Self::Binary {
                 op: BinOp::from(binary.op.clone()),

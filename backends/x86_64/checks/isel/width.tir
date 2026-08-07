@@ -1,9 +1,15 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// Narrow-width instruction forms are typed at their destination register
-// class's width: an i32 add selects `add32` (not the 64-bit `add`), i16 the
-// 16-bit form, i8 the byte form. The full-width forms stay width-agnostic, so
-// i64 still selects `add`.
+// Instruction forms are chosen by honest cost (latency first, then encoding
+// bytes), so a narrow IR type may select a wider form: under the junk-upper
+// contract a narrow value's high bits are undefined, and the 64-bit `sub` (3
+// bytes) encodes shorter than `sub16` (4 bytes: 0x66 + REX). An i32 add still
+// picks `add32` (no REX needed), and i64 the width-agnostic `add`.
+//
+// An i8 value lives at bit offset 0 of its register, so it must select an
+// offset-0 byte form (`xor8`). The high-byte forms view their register file at
+// bit offset 8; no instruction copies across that offset, so they are never
+// compatible with an offset-0 value.
 
 module {
   func @width64(%0: !i64, %1: !i64) -> !i64 {
@@ -22,6 +28,10 @@ module {
     %2 = xori %0, %1 : !i8
     return %2
   }
+  func @const8() -> !i8 {
+    %0 = constant {value = 7} : !i8
+    return %0
+  }
   func @imm(%0: !i32) -> !i32 {
     %1 = constant {value = 5} : !i32
     %2 = addi %0, %1 : !i32
@@ -32,10 +42,14 @@ module {
 
 // CHECK:      x86_64.add {dst = %virt2:GPR, dst_tied = %virt0:GPR, src = %virt1:GPR}
 // CHECK:      x86_64.add32 {dst = %virt{{[0-9]+}}:GPR32, dst_tied = %virt{{[0-9]+}}:GPR32, src = %virt{{[0-9]+}}:GPR32}
-// CHECK:      x86_64.sub16 {dst = %virt{{[0-9]+}}:GPR16, dst_tied = %virt{{[0-9]+}}:GPR16, src = %virt{{[0-9]+}}:GPR16}
+// CHECK:      x86_64.sub {dst = %virt{{[0-9]+}}:GPR, dst_tied = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:GPR}
 // CHECK:      x86_64.xor8 {dst = %virt{{[0-9]+}}:GPR8, dst_tied = %virt{{[0-9]+}}:GPR8, src = %virt{{[0-9]+}}:GPR8}
 
-// The immediate form is typed the same way: an i32 add with a constant folds
-// into `add_imm32`.
+// Materializing an i8 constant defines an ordinary offset-0 value too.
+// CHECK: asm.symbol {name = "const8"
+// CHECK: x86_64.mov_imm8 {dst = %virt{{[0-9]+}}:GPR8, imm = 7}
+
+// An i32 add with a constant folds the constant into the encoding; 5 fits an
+// imm8, so the sign-extending `add_imm8s32` (3 bytes) beats `add_imm32` (6).
 // CHECK: asm.symbol {name = "imm"
-// CHECK: x86_64.add_imm32 {dst = %virt{{[0-9]+}}:GPR32, dst_tied = %virt{{[0-9]+}}:GPR32, imm = 5}
+// CHECK: x86_64.add_imm8s32 {dst = %virt{{[0-9]+}}:GPR32, dst_tied = %virt{{[0-9]+}}:GPR32, imm = 5}

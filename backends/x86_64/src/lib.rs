@@ -758,6 +758,15 @@ mod isa {
         g1_imm64!(CmpImmOp, CmpImm8sOpBuilder);
 
         // mov/test immediates: no 0x83 form, only the REX-free downgrade.
+        // Direct isel picks of the 0x83 imm8 short forms still need the
+        // REX-free downgrade.
+        ri_norex!(AddImm8s32Op, AddImm8s32NorexOpBuilder, LO);
+        ri_norex!(OrImm8s32Op, OrImm8s32NorexOpBuilder, LO);
+        ri_norex!(AndImm8s32Op, AndImm8s32NorexOpBuilder, LO);
+        ri_norex!(XorImm8s32Op, XorImm8s32NorexOpBuilder, LO);
+        ri_norex!(SubImm8s32Op, SubImm8s32NorexOpBuilder, LO);
+        ri_norex!(CmpImm8s32Op, CmpImm8s32NorexOpBuilder, LO);
+
         ri_norex!(MovImm32Op, MovImm32NorexOpBuilder, LO);
         ri_norex!(TestImm32Op, TestImm32NorexOpBuilder, LO);
         ri_norex!(MovImm16Op, MovImm16NorexOpBuilder, LO);
@@ -994,9 +1003,55 @@ mod isa {
         AttributeValue::Register(RegisterAttr::Physical { class, index })
     }
 
+    /// The move family a register class is copied and spilled with. A class is a
+    /// view over a register file, so the family follows from that view — the file
+    /// it draws from, the width of the view and where the view starts — and never
+    /// from the class name: `GPR32` and the REX-free `GPR32low` are the same
+    /// 32-bit view of the GPR file and move alike.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum MoveKind {
+        Gpr64,
+        Gpr32,
+        Gpr16,
+        Gpr8,
+        Gpr8High,
+        Xmm64,
+        Xmm32,
+    }
+
     /// Register allocation target. Frame adjustment is `add rsp, ±size`; GPR
     /// spills use the displacement-based `mov` memory forms.
-    struct X86RegAlloc;
+    struct X86RegAlloc {
+        /// Architectural width per register class under the enabled features
+        /// (`GPR` is `XLEN` wide, so this is not a compile-time constant).
+        widths: Vec<(&'static str, u32)>,
+    }
+
+    impl X86RegAlloc {
+        fn new(features: &[Feature]) -> Self {
+            Self {
+                widths: register_widths(features),
+            }
+        }
+
+        fn move_kind(&self, class: tir::backend::regalloc::RegClassId) -> Option<MoveKind> {
+            let width = self
+                .widths
+                .iter()
+                .find(|(name, _)| *name == class.name())
+                .map(|(_, width)| *width)?;
+            match (class.file(), width, class.view.bit_offset) {
+                ("GPR", 64, 0) => Some(MoveKind::Gpr64),
+                ("GPR", 32, 0) => Some(MoveKind::Gpr32),
+                ("GPR", 16, 0) => Some(MoveKind::Gpr16),
+                ("GPR", 8, 0) => Some(MoveKind::Gpr8),
+                ("GPR", 8, 8) => Some(MoveKind::Gpr8High),
+                ("XMM128", 64, 0) => Some(MoveKind::Xmm64),
+                ("XMM128", 32, 0) => Some(MoveKind::Xmm32),
+                _ => None,
+            }
+        }
+    }
 
     impl tir::backend::regalloc::TargetRegAlloc for X86RegAlloc {
         fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
@@ -1011,43 +1066,43 @@ mod isa {
             frame: &tir::backend::liveness::PhysReg,
             offset: i64,
         ) -> Box<dyn Operation> {
-            match class.name() {
-                "GPR" => Box::new(
+            match self.move_kind(class) {
+                Some(MoveKind::Gpr64) => Box::new(
                     MovStoreDispOpBuilder::new(context)
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .attr("src", virt(value, class))
                         .build(),
                 ),
-                "GPR32" => Box::new(
+                Some(MoveKind::Gpr32) => Box::new(
                     Mov32StoreDispOpBuilder::new(context)
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .attr("src", virt(value, class))
                         .build(),
                 ),
-                "GPR8" => Box::new(
+                Some(MoveKind::Gpr8) => Box::new(
                     Mov8StoreDispOpBuilder::new(context)
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .attr("src", virt(value, class))
                         .build(),
                 ),
-                "XMM" | "XMMzx" => Box::new(
+                Some(MoveKind::Xmm64) => Box::new(
                     MovsdStoreDispOpBuilder::new(context)
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .attr("src", virt(value, class))
                         .build(),
                 ),
-                "XMM32" | "XMM32zx" => Box::new(
+                Some(MoveKind::Xmm32) => Box::new(
                     MovssStoreDispOpBuilder::new(context)
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .attr("src", virt(value, class))
                         .build(),
                 ),
-                other => unimplemented!("x86-64 spilling for {other} is not implemented"),
+                _ => unimplemented!("x86-64 spilling for {} is not implemented", class.name()),
             }
         }
 
@@ -1059,43 +1114,43 @@ mod isa {
             frame: &tir::backend::liveness::PhysReg,
             offset: i64,
         ) -> Box<dyn Operation> {
-            match class.name() {
-                "GPR" => Box::new(
+            match self.move_kind(class) {
+                Some(MoveKind::Gpr64) => Box::new(
                     MovLoadDispOpBuilder::new(context)
                         .attr("dst", virt(value, class))
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .build(),
                 ),
-                "GPR32" => Box::new(
+                Some(MoveKind::Gpr32) => Box::new(
                     Mov32LoadDispOpBuilder::new(context)
                         .attr("dst", virt(value, class))
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .build(),
                 ),
-                "GPR8" => Box::new(
+                Some(MoveKind::Gpr8) => Box::new(
                     Mov8LoadDispOpBuilder::new(context)
                         .attr("dst", virt(value, class))
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .build(),
                 ),
-                "XMM" | "XMMzx" => Box::new(
+                Some(MoveKind::Xmm64) => Box::new(
                     MovsdLoadDispOpBuilder::new(context)
                         .attr("dst", virt(value, class))
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .build(),
                 ),
-                "XMM32" | "XMM32zx" => Box::new(
+                Some(MoveKind::Xmm32) => Box::new(
                     MovssLoadDispOpBuilder::new(context)
                         .attr("dst", virt(value, class))
                         .attr("base", phys(frame.0, frame.1))
                         .attr("imm", AttributeValue::Int(offset))
                         .build(),
                 ),
-                other => unimplemented!("x86-64 spilling for {other} is not implemented"),
+                _ => unimplemented!("x86-64 spilling for {} is not implemented", class.name()),
             }
         }
 
@@ -1112,50 +1167,50 @@ mod isa {
                     class: Some(class),
                 })
             };
-            match class.name() {
-                "GPR" => Box::new(
+            match self.move_kind(class) {
+                Some(MoveKind::Gpr64) => Box::new(
                     MovOpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
                         .build(),
                 ),
-                "GPR32" => Box::new(
+                Some(MoveKind::Gpr32) => Box::new(
                     Mov32OpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
                         .build(),
                 ),
-                "GPR16" => Box::new(
+                Some(MoveKind::Gpr16) => Box::new(
                     Mov16OpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
                         .build(),
                 ),
-                "GPR8" => Box::new(
+                Some(MoveKind::Gpr8) => Box::new(
                     Mov8OpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
                         .build(),
                 ),
-                "GPR8H" => Box::new(
+                Some(MoveKind::Gpr8High) => Box::new(
                     Mov8HOpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
                         .build(),
                 ),
-                "XMM" | "XMMzx" => Box::new(
+                Some(MoveKind::Xmm64) => Box::new(
                     MovsdOpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
                         .build(),
                 ),
-                "XMM32" | "XMM32zx" => Box::new(
+                Some(MoveKind::Xmm32) => Box::new(
                     MovssOpBuilder::new(context)
                         .attr("dst", virt(dst))
                         .attr("src", virt(src))
                         .build(),
                 ),
-                other => unreachable!("unknown x86-64 register class {other}"),
+                None => unreachable!("unknown x86-64 register class {}", class.name()),
             }
         }
 
@@ -1209,7 +1264,7 @@ mod isa {
             frame: &tir::backend::liveness::PhysReg,
             offset: i64,
         ) -> Result<Vec<Box<dyn Operation>>, tir::PassError> {
-            if !matches!(class.name(), "GPR" | "GPRaddrIndex") {
+            if self.move_kind(class) != Some(MoveKind::Gpr64) {
                 return Err(tir::PassError::InvalidRuleSet(format!(
                     "x86-64 stack allocation addresses for register class {} are not supported",
                     class.name()
@@ -1249,6 +1304,13 @@ mod isa {
     const R_X86_64_PLT32: u32 = 4;
     const R_X86_64_64: u32 = 1;
 
+    /// The mnemonic an op name encodes. The base-ISA (`_legacy`) forms of the
+    /// pc-relative branches share their 64-bit counterpart's encoding, so they
+    /// relocate and measure their displacement identically.
+    fn branch_mnemonic(op: &str) -> &str {
+        op.strip_suffix("_legacy").unwrap_or(op)
+    }
+
     fn object_format() -> tir::backend::binary::ObjectFormatInfo {
         use tir::backend::binary::{EM_X86_64, ElfClass, ObjectFormatInfo, RelocKind};
         ObjectFormatInfo {
@@ -1256,7 +1318,7 @@ mod isa {
             elf_class: ElfClass::Elf64,
             elf_flags: 0,
             absolute_reloc: |width| (width == 8).then_some(R_X86_64_64),
-            reloc_for: |op| match op {
+            reloc_for: |op| match branch_mnemonic(op) {
                 // `call rel32`: the disp32 follows the 1-byte opcode.
                 "call" => Some(RelocKind {
                     r_type: R_X86_64_PLT32,
@@ -1289,7 +1351,7 @@ mod isa {
             // (RIP points past the branch when the displacement applies).
             pc_rel_from_end: |op| {
                 matches!(
-                    op,
+                    branch_mnemonic(op),
                     "jmp"
                         | "je"
                         | "jne"
@@ -1435,7 +1497,7 @@ mod isa {
 
         fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
             tir::backend::regalloc::RegisterAllocationPass::with_abi(
-                Box::new(X86RegAlloc),
+                Box::new(X86RegAlloc::new(self.config.features())),
                 self.abi(),
             )
         }
@@ -1902,10 +1964,31 @@ mod isa {
             }
         }
 
+        // A REX-free subclass is a view over the GPR file, so copying one is the
+        // file's move at the subclass's width, not an unknown class.
+        #[test]
+        fn subclass_copies_use_the_file_move_at_the_class_width() {
+            let context = tir::Context::with_default_dialects();
+            let target = X86RegAlloc::new(&[Feature::X86, Feature::X86_64]);
+            let copy = |class| {
+                let op = tir::backend::regalloc::TargetRegAlloc::emit_copy(
+                    &target, &context, class, 0, 1,
+                );
+                context.get_op(op.id()).name().as_str().to_string()
+            };
+
+            assert_eq!(copy(RegClass::GPR32low.id()), "mov32");
+            assert_eq!(copy(RegClass::GPR16low.id()), "mov16");
+            assert_eq!(copy(RegClass::GPR8low.id()), "mov8");
+            assert_eq!(copy(RegClass::GPRlow.id()), "mov");
+            assert_eq!(copy(RegClass::XMMlow.id()), "movsd");
+            assert_eq!(copy(RegClass::XMM32low.id()), "movss");
+        }
+
         #[test]
         fn scalar_single_spills_use_movss() {
             let context = tir::Context::with_default_dialects();
-            let target = X86RegAlloc;
+            let target = X86RegAlloc::new(&[Feature::X86, Feature::X86_64]);
             let class = RegClass::XMM32.id();
             let frame = (RegClass::GPR.id(), 4);
             let store = tir::backend::regalloc::TargetRegAlloc::emit_spill_store(

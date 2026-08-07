@@ -1686,6 +1686,25 @@ fn check_instruction_consistent(
         file_name,
     ));
 
+    let reserved: HashSet<String> = operands_cache
+        .keys()
+        .chain(params_cache.keys())
+        .map(|name| name.to_string())
+        .chain(
+            item_cache
+                .iter()
+                .filter(|(_, item)| matches!(item, ast::Item::RegisterClass(_)))
+                .map(|(name, _)| name.to_string()),
+        )
+        .collect();
+    check_let_bindings(
+        &instruction.name,
+        &instruction.behavior,
+        &reserved,
+        file_name,
+        &mut diags,
+    );
+
     diags
 }
 
@@ -1730,6 +1749,7 @@ fn check_behavior(
                 walk_paths(&a.dest, out);
                 walk_paths(&a.value, out);
             }
+            ast::Expr::Let(l) => walk_paths(&l.value, out),
             ast::Expr::Binary(b) => {
                 walk_paths(&b.lhs, out);
                 walk_paths(&b.rhs, out);
@@ -1895,6 +1915,130 @@ fn check_behavior(
     diags
 }
 
+/// `let` scoping: a binding is visible only to the statements that follow it in
+/// its own block, and its name must be fresh — an operand, parameter, register
+/// class or another binding of that name is a redefinition.
+fn check_let_bindings(
+    owner: &str,
+    behavior: &ast::Expr,
+    reserved: &HashSet<String>,
+    file_name: &str,
+    diags: &mut Vec<(String, Diag)>,
+) {
+    let mut bound = HashSet::new();
+    visit_exprs(behavior, &mut |e| {
+        if let ast::Expr::Let(l) = e {
+            bound.insert(l.name.clone());
+        }
+    });
+    if bound.is_empty() {
+        return;
+    }
+
+    struct Walker<'a> {
+        owner: &'a str,
+        bound: HashSet<String>,
+        reserved: &'a HashSet<String>,
+        file_name: &'a str,
+    }
+
+    impl Walker<'_> {
+        fn err(&self, diags: &mut Vec<(String, Diag)>, span: Span, message: String) {
+            diags.push((self.file_name.to_string(), Rich::custom(span, message)));
+        }
+
+        /// Walk `expr` in source order; `scope` holds the bindings visible at
+        /// this point, and is truncated back on leaving a nested scope.
+        fn walk(&self, expr: &ast::Expr, scope: &mut Vec<String>, diags: &mut Vec<(String, Diag)>) {
+            let nested = |walker: &Self, e: &ast::Expr, scope: &mut Vec<String>, diags: &mut _| {
+                let depth = scope.len();
+                walker.walk(e, scope, diags);
+                scope.truncate(depth);
+            };
+            match expr {
+                ast::Expr::Let(l) => {
+                    self.walk(&l.value, scope, diags);
+                    let owner = self.owner;
+                    if scope.contains(&l.name) || self.reserved.contains(&l.name) {
+                        self.err(
+                            diags,
+                            l.span,
+                            format!(
+                                "binding '{}' redefines an existing name in '{owner}'",
+                                l.name
+                            ),
+                        );
+                    }
+                    // Bind regardless, so a rejected redefinition does not also
+                    // report every later use as undefined.
+                    scope.push(l.name.clone());
+                }
+                ast::Expr::Ident(id) => {
+                    if self.bound.contains(&id.name) && !scope.contains(&id.name) {
+                        let owner = self.owner;
+                        self.err(
+                            diags,
+                            id.span,
+                            format!(
+                                "binding '{}' is used before its definition in '{owner}'",
+                                id.name
+                            ),
+                        );
+                    }
+                }
+                ast::Expr::Block(b) => {
+                    let depth = scope.len();
+                    for stmt in &b.stmts {
+                        self.walk(stmt, scope, diags);
+                    }
+                    scope.truncate(depth);
+                }
+                ast::Expr::Assign(a) => {
+                    self.walk(&a.dest, scope, diags);
+                    self.walk(&a.value, scope, diags);
+                }
+                ast::Expr::Binary(b) => {
+                    self.walk(&b.lhs, scope, diags);
+                    self.walk(&b.rhs, scope, diags);
+                }
+                ast::Expr::Unary(u) => self.walk(&u.x, scope, diags),
+                ast::Expr::Call(c) => {
+                    for argument in &c.arguments {
+                        self.walk(argument, scope, diags);
+                    }
+                }
+                ast::Expr::Field(f) => self.walk(&f.base, scope, diags),
+                ast::Expr::If(i) => {
+                    self.walk(&i.cond, scope, diags);
+                    nested(self, &i.then, scope, diags);
+                    if let Some(e) = &i.else_ {
+                        nested(self, e, scope, diags);
+                    }
+                }
+                ast::Expr::IndexAccess(ix) => self.walk(&ix.base, scope, diags),
+                ast::Expr::Slice(s) => self.walk(&s.base, scope, diags),
+                ast::Expr::Try(t) => {
+                    nested(self, &t.body, scope, diags);
+                    for handler in &t.handlers {
+                        nested(self, &handler.body, scope, diags);
+                    }
+                }
+                ast::Expr::Lambda(l) => nested(self, &l.body, scope, diags),
+                ast::Expr::Lit(_) | ast::Expr::Path(_) | ast::Expr::BuiltinFunction(_) => {}
+                ast::Expr::Invalid => {}
+            }
+        }
+    }
+
+    let walker = Walker {
+        owner,
+        bound,
+        reserved,
+        file_name,
+    };
+    walker.walk(behavior, &mut Vec::new(), diags);
+}
+
 /// A `load_reserved`/`store_conditional`/`atomic_rmw` call.
 fn is_atomic_call(e: &ast::Expr) -> bool {
     matches!(e, ast::Expr::Call(c) if matches!(
@@ -1933,6 +2077,7 @@ fn visit_exprs<'a>(e: &'a ast::Expr, f: &mut dyn FnMut(&'a ast::Expr)) {
             visit_exprs(&a.dest, f);
             visit_exprs(&a.value, f);
         }
+        ast::Expr::Let(l) => visit_exprs(&l.value, f),
         ast::Expr::Binary(b) => {
             visit_exprs(&b.lhs, f);
             visit_exprs(&b.rhs, f);
@@ -2014,6 +2159,22 @@ fn check_atomic_structure(
                 );
             }
         }
+        // A binding is an assignment-RHS position: the atomic runs once, at the
+        // `let`, and its uses share that single access.
+        ast::Expr::Let(l) => {
+            if count_matching(&l.value, is_atomic_call) > 1 {
+                err(
+                    l.span,
+                    format!("at most one atomic access is allowed per statement in '{owner}'"),
+                );
+            }
+            if count_matching(stmt, is_fence_call) > 0 {
+                err(
+                    l.span,
+                    format!("fence is only valid in statement position in '{owner}'"),
+                );
+            }
+        }
         // A statement-level `if`/`try` guard: recurse into the bodies, but the
         // condition/body must not hold an atomic or fence in a value position.
         ast::Expr::If(i) => {
@@ -2064,6 +2225,7 @@ fn check_atomic_structure(
 fn expr_span(e: &ast::Expr) -> Span {
     match e {
         ast::Expr::Assign(a) => a.span,
+        ast::Expr::Let(l) => l.span,
         ast::Expr::Binary(b) => b.span,
         ast::Expr::Unary(u) => u.span,
         ast::Expr::Block(b) => b.span,

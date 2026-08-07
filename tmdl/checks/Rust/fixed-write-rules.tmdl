@@ -1,0 +1,10 @@
+// A behavior that writes a fixed register besides its value output roots no
+// selection rule: the tile would drop the second write and bind the fixed
+// read as a free operand (a `pop` matching any load). A fixed-register read
+// alone stays legal — it surfaces as a demand.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/fixed-write-rules.tmdl | filecheck %s
+
+// CHECK: isel_pattern_loadfixedbase
+// CHECK-NOT: isel_pattern_poplike
+// CHECK-NOT: isel_pattern_pushlike

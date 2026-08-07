@@ -48,6 +48,7 @@ fn emit_flag_rules<'a>(
             inst,
             ops,
             mnemonic,
+            encoding_bytes: encoding_width_bytes(inst, item_cache),
             isa_param_values,
         };
         if let Some(sem) = analyze_flag_definer_semantics(
@@ -233,8 +234,8 @@ fn emit_flag_branch_rules(
             let (prelude_fn_ident, operand_constraint_entries) =
                 emit_flag_definer_prelude(d, d_sem, emitted_preludes, isel_rule_emitters);
 
-            let d_mnemonic_lit = proc_macro2::Literal::string(&d.mnemonic);
-            let b_mnemonic_lit = proc_macro2::Literal::string(&b.mnemonic);
+            let d_cost = isel_rule_cost(&d.mnemonic, d.encoding_bytes);
+            let b_cost = isel_rule_cost(&b.mnemonic, b.encoding_bytes);
 
             isel_rule_emitters.push(quote! {
                 fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
@@ -268,8 +269,7 @@ fn emit_flag_branch_rules(
                         tir::backend::isel::Rule::new(
                             #rule_name_lit,
                             #pattern_fn_ident(context),
-                            instruction_cost(#d_mnemonic_lit)
-                                + instruction_cost(#b_mnemonic_lit),
+                            (#d_cost) + (#b_cost),
                             #emit_fn_ident,
                         )
                         .with_kind(tir::backend::isel::RuleKind::CondBranch {
@@ -557,8 +557,8 @@ fn emit_aliased_zero_branch_rules(
             let emit_fn_ident = format_ident!("emit_isel_{}_via_{}_selfzero", b_lower, d_lower);
             let rule_name_lit =
                 proc_macro2::Literal::string(&format!("{}+{}(self-zero)", d.mnemonic, b.mnemonic));
-            let d_mnemonic_lit = proc_macro2::Literal::string(&d.mnemonic);
-            let b_mnemonic_lit = proc_macro2::Literal::string(&b.mnemonic);
+            let d_cost = isel_rule_cost(&d.mnemonic, d.encoding_bytes);
+            let b_cost = isel_rule_cost(&b.mnemonic, b.encoding_bytes);
             let pair_features = feature_slice(&shared_isas);
             // The definer compares the aliased operand against zero, so it reads
             // every bit of the register: a narrower value must not bind.
@@ -600,8 +600,7 @@ fn emit_aliased_zero_branch_rules(
                         tir::backend::isel::Rule::new(
                             #rule_name_lit,
                             #pattern_fn_ident(context),
-                            instruction_cost(#d_mnemonic_lit)
-                                + instruction_cost(#b_mnemonic_lit),
+                            (#d_cost) + (#b_cost),
                             #emit_fn_ident,
                         )
                         .with_kind(tir::backend::isel::RuleKind::CondBranch {
@@ -934,8 +933,8 @@ fn emit_flag_reader_rules(
                 emit_flag_definer_prelude(d, d_sem, emitted_preludes, isel_rule_emitters);
             operand_constraint_entries.extend(reader_constraint_entries);
 
-            let d_mnemonic_lit = proc_macro2::Literal::string(&d.mnemonic);
-            let r_mnemonic_lit = proc_macro2::Literal::string(&r.mnemonic);
+            let d_cost = isel_rule_cost(&d.mnemonic, d.encoding_bytes);
+            let r_cost = isel_rule_cost(&r.mnemonic, r.encoding_bytes);
 
             isel_rule_emitters.push(quote! {
                 fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
@@ -978,8 +977,7 @@ fn emit_flag_reader_rules(
                         tir::backend::isel::Rule::new(
                             #rule_name_lit,
                             #pattern_fn_ident(context),
-                            instruction_cost(#d_mnemonic_lit)
-                                + instruction_cost(#r_mnemonic_lit),
+                            (#d_cost) + (#r_cost),
                             #emit_fn_ident,
                         )
                         .with_prelude_emitter(#prelude_fn_ident)

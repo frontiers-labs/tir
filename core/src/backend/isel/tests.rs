@@ -8,8 +8,8 @@ use tir::{
 
 use super::{
     BranchEmitters, EmitRequest, ImmRange, InstructionSelectPass, IselCostModel,
-    RegisterCapability, RegisterRequirement, Rule, RuleEmitFn, RuleKind, RuleMatch, SemEGraph,
-    SemNode, template_node,
+    LATENCY_COST_SCALE, RegisterCapability, RegisterRequirement, Rule, RuleEmitFn, RuleKind,
+    RuleMatch, SemEGraph, SemNode, template_node,
 };
 
 #[test]
@@ -125,9 +125,19 @@ fn pbqp_selector_consumes_internal_nodes_of_selected_pattern() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("add-mul", add_mul_pattern(), 1, emit_add),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
-        Rule::new("mul", atomic_pattern(SymKind::Mul), 10, emit_mul),
+        Rule::new("add-mul", add_mul_pattern(), LATENCY_COST_SCALE, emit_add),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "mul",
+            atomic_pattern(SymKind::Mul),
+            10 * LATENCY_COST_SCALE,
+            emit_mul,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -151,6 +161,87 @@ fn pbqp_selector_consumes_internal_nodes_of_selected_pattern() {
     let mut fmt = IRFormatter::new(&mut buf);
     module.print(&mut fmt).expect("print lowered module");
     assert!(!buf.contains("muli"));
+}
+
+/// A rule whose register class views its storage element at a nonzero bit
+/// offset (x86 `ah`) is only compatible with values living at that same offset:
+/// no instruction moves bits across views. Ordinary IR values live at offset 0,
+/// so such a rule may neither read them as operands nor define them.
+#[test]
+fn shifted_register_view_rule_does_not_select_for_offset_zero_values() {
+    let run = |operand_offset: u32, result_offset: u32| {
+        let context = Context::with_default_dialects();
+        let module = ops::module(&context, None).build();
+
+        let i32_ty = IntegerType::new(&context, 32);
+        let x = context.create_value(i32_ty, None);
+        let y = context.create_value(i32_ty, None);
+        let (x_id, y_id) = (x.id(), y.id());
+        let region = context.create_region();
+        let block = context.create_block(vec![x, y]);
+        region.add_block(block.id());
+
+        let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+        let mut fb = IRBuilder::new(func.body());
+        let add = ops::addi(&context, x_id, y_id, i32_ty).build();
+        let add_result = add.result();
+        fb.insert(add);
+        fb.insert(ops::r#return(&context, add_result).build());
+
+        let mut mb = IRBuilder::new(module.body());
+        mb.insert(func);
+        mb.insert(ops::module_end(&context).build());
+
+        let capability = RegisterCapability::integer(32);
+        let operand = RegisterRequirement::low_bits(capability).at_view_offset(operand_offset);
+        let plain = RegisterRequirement::low_bits(capability);
+        let rules = vec![
+            // The cheaper rule, distinguished by emitting `muli`.
+            Rule::new(
+                "shifted-add",
+                atomic_pattern(SymKind::Add),
+                LATENCY_COST_SCALE,
+                emit_mul,
+            )
+            .with_operand_registers(vec![(0, operand), (1, operand)])
+            .with_result_register(
+                RegisterRequirement::low_bits(capability).at_view_offset(result_offset),
+            ),
+            Rule::new(
+                "add",
+                atomic_pattern(SymKind::Add),
+                10 * LATENCY_COST_SCALE,
+                emit_add,
+            )
+            .with_operand_registers(vec![(0, plain), (1, plain)])
+            .with_result_register(plain),
+        ];
+
+        let mut pm = PassManager::new();
+        pm.nest::<FuncOp>()
+            .add_pass(InstructionSelectPass::new(rules));
+        pm.run(&context, context.get_op(module.id()))
+            .expect("pass pipeline should succeed");
+
+        context
+            .get_region(region.id())
+            .iter(context.clone())
+            .next()
+            .unwrap()
+            .op_ids()
+            .into_iter()
+            .map(|op_id| context.get_op(op_id).name().as_str().to_string())
+            .next()
+            .expect("a selected instruction")
+    };
+
+    assert_eq!(run(0, 0), "muli", "the cheaper offset-0 rule wins");
+    assert_eq!(run(8, 0), "addi", "shifted operands cannot read the args");
+    assert_eq!(
+        run(0, 8),
+        "addi",
+        "a shifted result cannot define the value"
+    );
 }
 
 #[test]
@@ -183,7 +274,12 @@ fn rule_validation_rejects_missing_atomic_materializer() {
     mb.insert(func);
     mb.insert(ops::module_end(&context).build());
 
-    let rules = vec![Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add)];
+    let rules = vec![Rule::new(
+        "add",
+        atomic_pattern(SymKind::Add),
+        10 * LATENCY_COST_SCALE,
+        emit_add,
+    )];
 
     let mut pm = PassManager::new();
     pm.nest::<FuncOp>()
@@ -234,7 +330,7 @@ fn axioms_chain_through_unselectable_kinds() {
     let pass = InstructionSelectPass::new(vec![Rule::new(
         "sub-chain",
         sub_chain_pattern(),
-        1,
+        LATENCY_COST_SCALE,
         emit_sub,
     )])
     .with_axioms(axioms);
@@ -285,9 +381,19 @@ fn pbqp_selector_duplicates_shared_pure_internal_nodes() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("add-mul", add_mul_pattern(), 1, emit_add),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
-        Rule::new("mul", atomic_pattern(SymKind::Mul), 10, emit_mul),
+        Rule::new("add-mul", add_mul_pattern(), LATENCY_COST_SCALE, emit_add),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "mul",
+            atomic_pattern(SymKind::Mul),
+            10 * LATENCY_COST_SCALE,
+            emit_mul,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -339,9 +445,19 @@ fn unused_consumer_does_not_create_demand() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("add-mul", add_mul_pattern(), 1, emit_add),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
-        Rule::new("mul", atomic_pattern(SymKind::Mul), 10, emit_mul),
+        Rule::new("add-mul", add_mul_pattern(), LATENCY_COST_SCALE, emit_add),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "mul",
+            atomic_pattern(SymKind::Mul),
+            10 * LATENCY_COST_SCALE,
+            emit_mul,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -423,9 +539,19 @@ fn cost_model_override_changes_selection() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("add-mul", add_mul_pattern(), 1, emit_add),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
-        Rule::new("mul", atomic_pattern(SymKind::Mul), 10, emit_mul),
+        Rule::new("add-mul", add_mul_pattern(), LATENCY_COST_SCALE, emit_add),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "mul",
+            atomic_pattern(SymKind::Mul),
+            10 * LATENCY_COST_SCALE,
+            emit_mul,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -483,9 +609,24 @@ fn composite_rule_falls_back_to_atomic_cover() {
     // provides; the pass synthesizes it. Selection must remain valid and, with
     // fusion priced high, fall back to the atomic cover.
     let rules = vec![
-        Rule::new("add-mul-add", add_mul_add_pattern(), 100, emit_add),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
-        Rule::new("mul", atomic_pattern(SymKind::Mul), 10, emit_mul),
+        Rule::new(
+            "add-mul-add",
+            add_mul_add_pattern(),
+            100 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "mul",
+            atomic_pattern(SymKind::Mul),
+            10 * LATENCY_COST_SCALE,
+            emit_mul,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -562,10 +703,15 @@ fn unused_typed_operation_is_not_selected() {
         Rule::new(
             "add.i32",
             typed_binary_pattern(SymKind::Add, i32_ty),
-            1,
+            LATENCY_COST_SCALE,
             emit_sub,
         ),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -630,8 +776,13 @@ fn run_inner_typed_fusion(inner_width: Option<u32>) -> Vec<&'static str> {
     }
 
     let rules = vec![
-        Rule::new("add-add", pattern, 1, emit_sub),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+        Rule::new("add-add", pattern, LATENCY_COST_SCALE, emit_sub),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -696,15 +847,20 @@ fn emit_materializer_marker(
 }
 
 fn materializer_rule(emit: RuleEmitFn) -> Rule {
-    Rule::new("li", zero_materializer_pattern(), 5, emit)
-        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
-        .with_operand_imm_ranges(vec![(
-            1,
-            ImmRange {
-                width: 12,
-                signed: true,
-            },
-        )])
+    Rule::new(
+        "li",
+        zero_materializer_pattern(),
+        5 * LATENCY_COST_SCALE,
+        emit,
+    )
+    .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+    .with_operand_imm_ranges(vec![(
+        1,
+        ImmRange {
+            width: 12,
+            signed: true,
+        },
+    )])
 }
 
 fn emit_integer_materializer_marker(
@@ -767,7 +923,12 @@ fn introduced_integer_materializer_uses_its_class_type_under_float_bitcast() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("bitcast", bitcast_pattern(), 1, emit_float_marker),
+        Rule::new(
+            "bitcast",
+            bitcast_pattern(),
+            LATENCY_COST_SCALE,
+            emit_float_marker,
+        ),
         materializer_rule(emit_integer_materializer_marker),
     ];
 
@@ -805,15 +966,20 @@ fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("addi", atomic_pattern(SymKind::Add), 1, emit_add_imm_marker)
-            .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
-            .with_operand_imm_ranges(vec![(
-                1,
-                ImmRange {
-                    width: 12,
-                    signed: true,
-                },
-            )]),
+        Rule::new(
+            "addi",
+            atomic_pattern(SymKind::Add),
+            LATENCY_COST_SCALE,
+            emit_add_imm_marker,
+        )
+        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+        .with_operand_imm_ranges(vec![(
+            1,
+            ImmRange {
+                width: 12,
+                signed: true,
+            },
+        )]),
         materializer_rule(emit_materializer_marker),
     ];
 
@@ -863,16 +1029,26 @@ fn run_immediate_range(constant: i64) -> Vec<&'static str> {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("addi", atomic_pattern(SymKind::Add), 1, emit_add_imm_marker)
-            .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
-            .with_operand_imm_ranges(vec![(
-                1,
-                super::ImmRange {
-                    width: 12,
-                    signed: true,
-                },
-            )]),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+        Rule::new(
+            "addi",
+            atomic_pattern(SymKind::Add),
+            LATENCY_COST_SCALE,
+            emit_add_imm_marker,
+        )
+        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+        .with_operand_imm_ranges(vec![(
+            1,
+            super::ImmRange {
+                width: 12,
+                signed: true,
+            },
+        )]),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -1096,12 +1272,17 @@ fn select_sign_extension(slli_rule: Rule) -> Vec<&'static str> {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("add", atomic_pattern(SymKind::Add), 1, emit_add),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            LATENCY_COST_SCALE,
+            emit_add,
+        ),
         slli_rule,
         Rule::new(
             "srai",
             shift_imm_pattern(SymKind::ShiftRightArithmetic),
-            1,
+            LATENCY_COST_SCALE,
             emit_srai,
         )
         .with_operand_constraints(vec![(1, OperandConstraint::Immediate)]),
@@ -1130,8 +1311,13 @@ fn select_sign_extension(slli_rule: Rule) -> Vec<&'static str> {
 /// introduced `slli` (an e-class with no original op) before the `srai`.
 #[test]
 fn square_sign_extension_lowers_to_shift_pair() {
-    let slli_rule = Rule::new("slli", shift_imm_pattern(SymKind::ShiftLeft), 1, emit_slli)
-        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)]);
+    let slli_rule = Rule::new(
+        "slli",
+        shift_imm_pattern(SymKind::ShiftLeft),
+        LATENCY_COST_SCALE,
+        emit_slli,
+    )
+    .with_operand_constraints(vec![(1, OperandConstraint::Immediate)]);
     let body_ops = select_sign_extension(slli_rule);
 
     // add (from the addi), then the slli/srai sign-extension idiom, then return.
@@ -1140,9 +1326,14 @@ fn square_sign_extension_lowers_to_shift_pair() {
 
 #[test]
 fn introduced_rule_emits_prelude_before_instruction() {
-    let slli_rule = Rule::new("slli", shift_imm_pattern(SymKind::ShiftLeft), 1, emit_slli)
-        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
-        .with_prelude_emitter(emit_shift_prelude);
+    let slli_rule = Rule::new(
+        "slli",
+        shift_imm_pattern(SymKind::ShiftLeft),
+        LATENCY_COST_SCALE,
+        emit_slli,
+    )
+    .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+    .with_prelude_emitter(emit_shift_prelude);
     let body_ops = select_sign_extension(slli_rule);
 
     assert_eq!(body_ops, vec!["addi", "subi", "shli", "shrsi", "return"]);
@@ -1410,8 +1601,18 @@ fn gamma_selection_names(select_cost: u32, trapping_else: bool) -> Vec<&'static 
     pass_manager.nest::<FuncOp>().add_pass(
         InstructionSelectPass::new(vec![
             select_rule,
-            Rule::new("add", atomic_pattern(SymKind::Add), 1, emit_add),
-            Rule::new("div", atomic_pattern(SymKind::Div), 1, emit_div),
+            Rule::new(
+                "add",
+                atomic_pattern(SymKind::Add),
+                LATENCY_COST_SCALE,
+                emit_add,
+            ),
+            Rule::new(
+                "div",
+                atomic_pattern(SymKind::Div),
+                LATENCY_COST_SCALE,
+                emit_div,
+            ),
         ])
         .with_branch_emitters(branch_emitters()),
     );
@@ -1428,19 +1629,25 @@ fn gamma_selection_names(select_cost: u32, trapping_else: bool) -> Vec<&'static 
 #[test]
 fn cheaper_value_rule_covers_gamma() {
     assert_eq!(
-        gamma_selection_names(1, false),
+        gamma_selection_names(LATENCY_COST_SCALE, false),
         vec!["muli", "addi", "return"]
     );
 }
 
 #[test]
 fn expensive_value_rule_leaves_gamma_reified() {
-    assert_eq!(gamma_selection_names(10, false), vec!["addi", "return"]);
+    assert_eq!(
+        gamma_selection_names(10 * LATENCY_COST_SCALE, false),
+        vec!["addi", "return"]
+    );
 }
 
 #[test]
 fn trapping_gamma_arm_disables_value_rule() {
-    assert_eq!(gamma_selection_names(1, true), vec!["addi", "return"]);
+    assert_eq!(
+        gamma_selection_names(LATENCY_COST_SCALE, true),
+        vec!["addi", "return"]
+    );
 }
 
 /// A multi-operand pattern node (LoadMemory/StoreMemory shapes).
@@ -1539,8 +1746,13 @@ fn memory_ops_select_via_interfaces() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("load", load_pattern(), 1, emit_load_marker),
-        Rule::new("store", store_pattern(), 1, emit_store_marker),
+        Rule::new("load", load_pattern(), LATENCY_COST_SCALE, emit_load_marker),
+        Rule::new(
+            "store",
+            store_pattern(),
+            LATENCY_COST_SCALE,
+            emit_store_marker,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -1635,9 +1847,24 @@ fn merged_value_classes_resolve_to_earliest_def() {
     }
 
     let rules = vec![
-        Rule::new("mul", atomic_pattern(SymKind::Mul), 1, emit_mul),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
-        Rule::new("sub", atomic_pattern(SymKind::Sub), 1, emit_sub_bound),
+        Rule::new(
+            "mul",
+            atomic_pattern(SymKind::Mul),
+            LATENCY_COST_SCALE,
+            emit_mul,
+        ),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "sub",
+            atomic_pattern(SymKind::Sub),
+            LATENCY_COST_SCALE,
+            emit_sub_bound,
+        ),
     ];
 
     let mut pm = PassManager::new();
@@ -1777,14 +2004,14 @@ fn forced_constant_materialization_does_not_override_branch_rule_cost() {
         Rule::new(
             "expensive-literal-branch",
             literal_rhs_pattern(SymKind::Eq, 7),
-            100,
+            100 * LATENCY_COST_SCALE,
             emit_unary_branch_marker,
         )
         .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
         Rule::new(
             "cheap-register-branch",
             atomic_pattern(SymKind::Eq),
-            1,
+            LATENCY_COST_SCALE,
             emit_fused_branch_marker,
         )
         .with_kind(RuleKind::CondBranch { target_symbol: 2 })
@@ -1813,7 +2040,7 @@ fn branch_rule() -> Rule {
     Rule::new(
         "blt-marker",
         atomic_pattern(SymKind::Lt),
-        1,
+        LATENCY_COST_SCALE,
         emit_fused_branch_marker,
     )
     .with_kind(RuleKind::CondBranch { target_symbol: 2 })
@@ -1960,7 +2187,7 @@ fn flag_branch_rule_emits_prelude_before_branch() {
     let rule = Rule::new(
         "cmp+jlt-marker",
         atomic_pattern(SymKind::Lt),
-        1,
+        LATENCY_COST_SCALE,
         emit_fused_branch_marker,
     )
     .with_kind(RuleKind::CondBranch { target_symbol: 2 })
@@ -1998,7 +2225,7 @@ fn register_constrained_branch_does_not_read_an_unmaterialized_constant() {
     let branch = Rule::new(
         "jeq-marker",
         atomic_pattern(SymKind::Eq),
-        1,
+        LATENCY_COST_SCALE,
         emit_fused_branch_marker,
     )
     .with_kind(RuleKind::CondBranch { target_symbol: 2 })
@@ -2009,7 +2236,12 @@ fn register_constrained_branch_does_not_read_an_unmaterialized_constant() {
     let materializer = materializer_rule(emit_materializer_marker);
     let rules = vec![
         branch,
-        Rule::new("eq-marker", atomic_pattern(SymKind::Eq), 10, emit_sub),
+        Rule::new(
+            "eq-marker",
+            atomic_pattern(SymKind::Eq),
+            10 * LATENCY_COST_SCALE,
+            emit_sub,
+        ),
         materializer,
     ];
 
@@ -2087,7 +2319,7 @@ fn bare_bool_guard_refuses_whole_width_zero_compare_branch() {
     let rule = Rule::new(
         "cbnz-marker",
         zero_branch_pattern(),
-        1,
+        LATENCY_COST_SCALE,
         emit_zero_branch_marker,
     )
     .with_kind(RuleKind::CondBranch { target_symbol: 2 })
@@ -2117,7 +2349,7 @@ fn zero_comparison_guard_selects_zero_compare_branch() {
     let rule = Rule::new(
         "cbnz-marker",
         zero_branch_pattern(),
-        1,
+        LATENCY_COST_SCALE,
         emit_zero_branch_marker,
     )
     .with_kind(RuleKind::CondBranch { target_symbol: 2 })
@@ -2186,8 +2418,18 @@ fn escaping_compare_materializes_and_fuses() {
 
     let rules = vec![
         branch_rule(),
-        Rule::new("slt-marker", atomic_pattern(SymKind::Lt), 10, emit_sub),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+        Rule::new(
+            "slt-marker",
+            atomic_pattern(SymKind::Lt),
+            10 * LATENCY_COST_SCALE,
+            emit_sub,
+        ),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
     ];
     let mut pm = PassManager::new();
     pm.nest::<FuncOp>()
@@ -2343,7 +2585,7 @@ fn run_dominated_compare(
         Rule::new(
             "beq-marker",
             atomic_pattern(SymKind::Eq),
-            1,
+            LATENCY_COST_SCALE,
             emit_fused_branch_marker,
         )
         .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
@@ -2488,11 +2730,16 @@ fn equal_cost_tie_breaks_to_more_specific_rule() {
     // Same opcode, same cost; only the type constraint differs. The typed rule
     // (subi marker) must be selected.
     let rules = vec![
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
         Rule::new(
             "add.i32",
             typed_binary_pattern(SymKind::Add, i32_ty),
-            10,
+            10 * LATENCY_COST_SCALE,
             emit_sub,
         ),
     ];
@@ -2698,17 +2945,32 @@ fn eq_guard_folds_value_to_immediate() {
     // the compare materialized (eq-materializer). The immediate add rule folds the
     // constant-proven `a`; the register add is the costlier fallback.
     let rules = vec![
-        Rule::new("eq-mat", atomic_pattern(SymKind::Eq), 10, emit_sub),
-        Rule::new("addi", atomic_pattern(SymKind::Add), 1, emit_add_imm_marker)
-            .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
-            .with_operand_imm_ranges(vec![(
-                1,
-                super::ImmRange {
-                    width: 12,
-                    signed: true,
-                },
-            )]),
-        Rule::new("add", atomic_pattern(SymKind::Add), 10, emit_add),
+        Rule::new(
+            "eq-mat",
+            atomic_pattern(SymKind::Eq),
+            10 * LATENCY_COST_SCALE,
+            emit_sub,
+        ),
+        Rule::new(
+            "addi",
+            atomic_pattern(SymKind::Add),
+            LATENCY_COST_SCALE,
+            emit_add_imm_marker,
+        )
+        .with_operand_constraints(vec![(1, OperandConstraint::Immediate)])
+        .with_operand_imm_ranges(vec![(
+            1,
+            super::ImmRange {
+                width: 12,
+                signed: true,
+            },
+        )]),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            10 * LATENCY_COST_SCALE,
+            emit_add,
+        ),
     ];
     let mut pm = PassManager::new();
     pm.nest::<FuncOp>()
@@ -2769,8 +3031,18 @@ fn refuses_cross_block_binding_to_non_escaping_value() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("sub", atomic_pattern(SymKind::Sub), 1, emit_sub),
-        Rule::new("add", atomic_pattern(SymKind::Add), 1, emit_add),
+        Rule::new(
+            "sub",
+            atomic_pattern(SymKind::Sub),
+            LATENCY_COST_SCALE,
+            emit_sub,
+        ),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            LATENCY_COST_SCALE,
+            emit_add,
+        ),
     ];
     let mut pm = PassManager::new();
     pm.nest::<FuncOp>()
@@ -2847,12 +3119,22 @@ fn eq_fact_binds_through_bindable_member() {
     mb.insert(ops::module_end(&context).build());
 
     let rules = vec![
-        Rule::new("sub", atomic_pattern(SymKind::Sub), 1, emit_sub),
-        Rule::new("add", atomic_pattern(SymKind::Add), 1, emit_add),
+        Rule::new(
+            "sub",
+            atomic_pattern(SymKind::Sub),
+            LATENCY_COST_SCALE,
+            emit_sub,
+        ),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            LATENCY_COST_SCALE,
+            emit_add,
+        ),
         Rule::new(
             "beq",
             atomic_pattern(SymKind::Eq),
-            1,
+            LATENCY_COST_SCALE,
             emit_fused_branch_marker,
         )
         .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
@@ -2938,7 +3220,7 @@ fn branch_reads_register_of_constant_merged_operand() {
         Rule::new(
             "beq",
             atomic_pattern(SymKind::Eq),
-            1,
+            LATENCY_COST_SCALE,
             emit_fused_branch_marker,
         )
         .with_kind(RuleKind::CondBranch { target_symbol: 2 }),
@@ -3020,7 +3302,7 @@ fn guarded_div(guard_rhs: u64, else_swapped: bool) -> SemGraph {
 
 #[test]
 fn guarded_div_rule_with_correct_relaxation_is_accepted() {
-    let rule = Rule::new("div", div_pattern(), 1, emit_unreachable)
+    let rule = Rule::new("div", div_pattern(), LATENCY_COST_SCALE, emit_unreachable)
         .with_guarded_semantics(guarded_div(0, false));
     assert!(InstructionSelectPass::try_new(vec![rule]).is_ok());
 }
@@ -3029,7 +3311,7 @@ fn guarded_div_rule_with_correct_relaxation_is_accepted() {
 fn guarded_div_rule_with_wrong_guard_region_is_rejected() {
     // Guarding on `b == 1` instead of `b == 0` leaves the pure `div` unequal to
     // the behavior at `b == 1` (where `div(a,1) == a`, not all-ones).
-    let rule = Rule::new("div", div_pattern(), 1, emit_unreachable)
+    let rule = Rule::new("div", div_pattern(), LATENCY_COST_SCALE, emit_unreachable)
         .with_guarded_semantics(guarded_div(1, false));
     match InstructionSelectPass::try_new(vec![rule]) {
         Err(tir::PassError::InvalidRuleSet(msg)) => assert!(msg.contains("div")),
@@ -3041,7 +3323,7 @@ fn guarded_div_rule_with_wrong_guard_region_is_rejected() {
 #[test]
 fn guarded_div_rule_with_mismatched_else_arm_is_rejected() {
     // The else arm computes `div(b, a)` while the selection pattern is `div(a, b)`.
-    let rule = Rule::new("div", div_pattern(), 1, emit_unreachable)
+    let rule = Rule::new("div", div_pattern(), LATENCY_COST_SCALE, emit_unreachable)
         .with_guarded_semantics(guarded_div(0, true));
     match InstructionSelectPass::try_new(vec![rule]) {
         Err(tir::PassError::InvalidRuleSet(msg)) => assert!(msg.contains("div")),

@@ -257,6 +257,10 @@ fn infer<'a>(
             val_ty.apply(subst)
         }
 
+        // A `let` outside a block introduces no visible scope; its type is the
+        // bound value's. Blocks bind the name (see the `Block` arm below).
+        ast::Expr::Let(binding) => infer(&binding.value, env, tvg, subst, cache, diags, file_name),
+
         ast::Expr::Path(path) => {
             // `Ordering::<member>` is a memory-ordering constant of type `bits<3>`,
             // resolved before register-class lookup since `Ordering` is not a class.
@@ -301,6 +305,21 @@ fn infer<'a>(
             let mut block_env = env.clone();
             let mut ty = Type::Integer;
             for stmt in &block.stmts {
+                if let ast::Expr::Let(binding) = stmt {
+                    let val_ty = infer(
+                        &binding.value,
+                        &block_env,
+                        tvg,
+                        subst,
+                        cache,
+                        diags,
+                        file_name,
+                    );
+                    block_env.bind(binding.name.clone(), TypeScheme::mono(val_ty.clone()));
+                    cache.insert(stmt, val_ty.clone());
+                    ty = val_ty;
+                    continue;
+                }
                 if let ast::Expr::Assign(asgn) = stmt
                     && let ast::Expr::Ident(id) = &*asgn.dest
                     && block_env.get(&id.name).is_none()

@@ -174,10 +174,18 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
             }
             _ => proc_macro2::Literal::u16_unsuffixed(1),
         };
+        let mut indices = rc
+            .resolve_registers()
+            .filter_map(|reg| reg.encoding_index())
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        indices.dedup();
+        let index_lits = indices.iter().map(|i| proc_macro2::Literal::u16_unsuffixed(*i));
         class_entries.push(quote! {
             tir::backend::regalloc::RegClassInfo {
                 name: #name_lit,
                 file: #file_lit,
+                registers: &[#(#index_lits),*],
                 group_width: #group_width,
                 view: #view,
             }
@@ -264,6 +272,15 @@ fn emit_register_info(files: &[ast::File]) -> Result<proc_macro2::TokenStream, T
         pub fn register_views(features: &[Feature]) -> Vec<(&'static str, tir::backend::regalloc::RegisterView)> {
             let _ = features;
             REG_CLASSES.iter().map(|class| (class.name, class.view)).collect()
+        }
+
+        /// Where a register class views its storage element (`BIT_OFFSET`, x86
+        /// `ah` at bit 8); 0 for an ordinary class.
+        pub fn register_view_offset(class: &str) -> u32 {
+            REG_CLASSES
+                .iter()
+                .find(|entry| entry.name == class)
+                .map_or(0, |entry| entry.view.bit_offset)
         }
     })
 }
