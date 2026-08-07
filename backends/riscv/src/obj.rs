@@ -19,17 +19,20 @@ const R_RISCV_RVC_BRANCH: u32 = 44;
 const R_RISCV_RVC_JUMP: u32 = 45;
 
 const EF_RISCV_RVC: u32 = 0x1;
+const EF_RISCV_FLOAT_ABI_SINGLE: u32 = 0x2;
 const EF_RISCV_FLOAT_ABI_DOUBLE: u32 = 0x4;
 
 pub(crate) fn object_format(xlen: u32, features: &[crate::Feature]) -> ObjectFormatInfo {
     // e_flags declare the ABI the object was built for; linkers refuse to mix
-    // float ABIs, so D-extension targets must claim lp64d/ilp32d.
+    // float ABIs, so F/D-extension targets must claim their hardware float ABI.
     let mut elf_flags = 0;
     if features.contains(&crate::Feature::C) {
         elf_flags |= EF_RISCV_RVC;
     }
     if features.contains(&crate::Feature::D) {
         elf_flags |= EF_RISCV_FLOAT_ABI_DOUBLE;
+    } else if features.contains(&crate::Feature::F) {
+        elf_flags |= EF_RISCV_FLOAT_ABI_SINGLE;
     }
     ObjectFormatInfo {
         elf_machine: EM_RISCV,

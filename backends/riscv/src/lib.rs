@@ -1188,6 +1188,9 @@ fn select_riscv(
         None if config.features.contains(&Feature::D) => {
             riscv_abi_by_name("lp64d").expect("RISC-V must define lp64d")
         }
+        None if config.features.contains(&Feature::F) => {
+            riscv_abi_by_name("lp64f").expect("RISC-V must define lp64f")
+        }
         None => riscv_abi_by_name("lp64").expect("RISC-V must define lp64"),
     };
     Ok(Some(Box::new(RiscvTarget {
@@ -1303,12 +1306,15 @@ mod tests {
         let target = tir::backend::select_target("rv64id", None, None).unwrap();
         assert_eq!(target.abi().name, "lp64d");
 
+        let target = tir::backend::select_target("rv64if", None, None).unwrap();
+        assert_eq!(target.abi().name, "lp64f");
+
         let error = tir::backend::select_target_with_abi("riscv64", None, None, Some("unknown"))
             .err()
             .unwrap();
         assert_eq!(
             error,
-            "unknown ABI 'unknown' for riscv (available: lp64, lp64d)"
+            "unknown ABI 'unknown' for riscv (available: lp64, lp64f, lp64d)"
         );
     }
 

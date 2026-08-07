@@ -90,6 +90,13 @@ abi LP64("lp64") for [RV64I, RVV] {
     classifier = riscv;
 }
 
+abi LP64F("lp64f") for [F, RVV] : LP64 {
+    args float -> [FPR32::f10..FPR32::f17], then int;
+    rets float -> [FPR32::f10, FPR32::f11];
+    callee_saved = [GPR::x2, GPR::x8..GPR::x9, GPR::x18..GPR::x27,
+                    FPR32::f8..FPR32::f9, FPR32::f18..FPR32::f27];
+}
+
 abi LP64D("lp64d") for [D, RVV] : LP64 {
     args float -> [FPR64::f10..FPR64::f17], then int;
     rets float -> [FPR64::f10, FPR64::f11];
