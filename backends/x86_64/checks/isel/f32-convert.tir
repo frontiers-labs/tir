@@ -44,18 +44,18 @@ module {
   module_end
 }
 
-// CHECK: x86_64.cvtsi2ss32 {dst = %virt{{[0-9]+}}:XMM32, src = %virt{{[0-9]+}}:GPR32}
+// CHECK: x86_64.cvtsi2ss32_norex {dst = %virt{{[0-9]+}}:XMM32low, src = %virt{{[0-9]+}}:GPR32low}
 // CHECK: x86_64.cvtsi2ss64 {dst = %virt{{[0-9]+}}:XMM32, src = %virt{{[0-9]+}}:GPR}
 // CHECK: x86_64.movzxd
 // CHECK-NEXT: x86_64.cvtsi2ss64
-// CHECK: x86_64.cvttss2si32 {dst = %virt{{[0-9]+}}:GPR32, src = %virt{{[0-9]+}}:XMM32}
+// CHECK: x86_64.cvttss2si32_norex {dst = %virt{{[0-9]+}}:GPR32low, src = %virt{{[0-9]+}}:XMM32low}
 // CHECK: x86_64.cvttss2si64 {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM32}
 // CHECK: x86_64.cvttss2si64
-// CHECK: x86_64.ucomiss {lhs = %virt{{[0-9]+}}:XMM32, rhs = %virt{{[0-9]+}}:XMM32}
-// CHECK-NEXT: x86_64.seta
-// CHECK: x86_64.mov_imm
-// CHECK-NEXT: x86_64.movd_xmm_gpr32
+// CHECK: x86_64.ucomiss_norex {lhs = %virt{{[0-9]+}}:XMM32low, rhs = %virt{{[0-9]+}}:XMM32low}
+// CHECK-NEXT: x86_64.seta_norex
+// CHECK: x86_64.mov_imm32_norex
+// CHECK-NEXT: x86_64.movd_xmm_gpr32_norex
 // CHECK-LABEL: asm.symbol {name = "bits_to_float"
-// CHECK: x86_64.movd_xmm_gpr32
+// CHECK: x86_64.movd_xmm_gpr32_norex
 // CHECK-LABEL: asm.symbol {name = "float_to_bits"
-// CHECK: x86_64.movd_gpr32_xmm
+// CHECK: x86_64.movd_gpr32_xmm_norex

@@ -12,10 +12,10 @@ module {
   module_end
 }
 
-// CHECK:      x86_64.addss {dst = %virt2:XMM32, dst_tied = %virt0:XMM32, src = %virt1:XMM32}
-// CHECK-NEXT: x86_64.mulss {dst = %virt3:XMM32, dst_tied = %virt1:XMM32, src = %virt2:XMM32}
-// CHECK-NEXT: x86_64.subss {dst = %virt4:XMM32, dst_tied = %virt3:XMM32, src = %virt0:XMM32}
-// CHECK-NEXT: x86_64.divss {dst = %virt5:XMM32, dst_tied = %virt4:XMM32, src = %virt1:XMM32}
+// CHECK:      x86_64.addss_norex {dst = %virt2:XMM32low, dst_tied = %virt0:XMM32low, src = %virt1:XMM32low}
+// CHECK-NEXT: x86_64.mulss_norex {dst = %virt3:XMM32low, dst_tied = %virt1:XMM32low, src = %virt2:XMM32low}
+// CHECK-NEXT: x86_64.subss_norex {dst = %virt4:XMM32low, dst_tied = %virt3:XMM32low, src = %virt0:XMM32low}
+// CHECK-NEXT: x86_64.divss_norex {dst = %virt5:XMM32low, dst_tied = %virt4:XMM32low, src = %virt1:XMM32low}
 // CHECK-NEXT: asm.vret
 
 // ENC: .section .text

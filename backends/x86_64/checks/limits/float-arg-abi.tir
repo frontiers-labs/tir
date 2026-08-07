@@ -11,4 +11,4 @@ module {
 }
 
 // CHECK: arg_regs = [%virt0:XMM, %virt1:XMM]
-// CHECK: x86_64.addsd {dst = xmm0, src = xmm1}
+// CHECK: x86_64.addsd_norex {dst = xmm0, src = xmm1}

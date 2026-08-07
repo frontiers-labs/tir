@@ -73,15 +73,15 @@ module {
   module_end
 }
 
-// CHECK:      x86_64.addsd {dst = %virt2:XMM, dst_tied = %virt0:XMM, src = %virt1:XMM}
-// CHECK-NEXT: x86_64.mulsd {dst = %virt3:XMM, dst_tied = %virt1:XMM, src = %virt2:XMM}
-// CHECK-NEXT: x86_64.subsd {dst = %virt4:XMM, dst_tied = %virt3:XMM, src = %virt0:XMM}
-// CHECK-NEXT: x86_64.divsd {dst = %virt5:XMM, dst_tied = %virt4:XMM, src = %virt1:XMM}
+// CHECK:      x86_64.addsd_norex {dst = %virt2:XMMlow, dst_tied = %virt0:XMMlow, src = %virt1:XMMlow}
+// CHECK-NEXT: x86_64.mulsd_norex {dst = %virt3:XMMlow, dst_tied = %virt1:XMMlow, src = %virt2:XMMlow}
+// CHECK-NEXT: x86_64.subsd_norex {dst = %virt4:XMMlow, dst_tied = %virt3:XMMlow, src = %virt0:XMMlow}
+// CHECK-NEXT: x86_64.divsd_norex {dst = %virt5:XMMlow, dst_tied = %virt4:XMMlow, src = %virt1:XMMlow}
 // CHECK-NEXT: asm.vret
-// CHECK:      x86_64.cvtsi2sd32 {dst = %virt7:XMM, src = %virt6:GPR32}
+// CHECK:      x86_64.cvtsi2sd32_norex {dst = %virt7:XMMlow, src = %virt6:GPR32low}
 // CHECK:      x86_64.movzxd {dst = %virt[[ZEXT:[0-9]+]]:GPR, src = %virt8:GPR32}
 // CHECK-NEXT: x86_64.cvtsi2sd64 {dst = %virt9:XMM, src = %virt[[ZEXT]]:GPR}
-// CHECK:      x86_64.cvttsd2si32 {dst = %virt11:GPR32, src = %virt10:XMM}
+// CHECK:      x86_64.cvttsd2si32_norex {dst = %virt11:GPR32low, src = %virt10:XMMlow}
 // The i32 result is the low half of the 64-bit conversion: a zero-instruction
 // re-view, so no truncating mov follows.
 // CHECK:      x86_64.cvttsd2si64 {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM}
@@ -91,26 +91,26 @@ module {
 // CHECK-LABEL: asm.symbol {name = "shared_zero"
 // CHECK:      x86_64.mov_imm {dst = %virt[[ZERO:[0-9]+]]:GPR, imm = 0}
 // CHECK-NEXT: x86_64.movq_xmm_gpr {dst = %virt{{[0-9]+}}:XMMzx, src = %virt[[ZERO]]:GPR}
-// CHECK:      x86_64.movsd_store_disp
+// CHECK:      x86_64.movsd_store_disp_norex
 // CHECK:      x86_64.mov_load
-// CHECK:      x86_64.ucomisd {lhs = %virt{{[0-9]+}}:XMM, rhs = %virt{{[0-9]+}}:XMM}
-// CHECK-NEXT: x86_64.seta {dst = %virt{{[0-9]+}}:GPR8}
-// CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.setae
-// CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.seta
-// CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.setae
+// CHECK:      x86_64.ucomisd_norex {lhs = %virt{{[0-9]+}}:XMMlow, rhs = %virt{{[0-9]+}}:XMMlow}
+// CHECK-NEXT: x86_64.seta_norex {dst = %virt{{[0-9]+}}:GPR8low}
+// CHECK:      x86_64.ucomisd_norex
+// CHECK-NEXT: x86_64.setae_norex
+// CHECK:      x86_64.ucomisd_norex
+// CHECK-NEXT: x86_64.seta_norex
+// CHECK:      x86_64.ucomisd_norex
+// CHECK-NEXT: x86_64.setae_norex
 // CHECK-LABEL: asm.symbol {name = "equal"
-// CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.set{{a|ae}}
-// CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.set{{a|ae}}
+// CHECK:      x86_64.ucomisd_norex
+// CHECK-NEXT: x86_64.set{{a|ae}}_norex
+// CHECK:      x86_64.ucomisd_norex
+// CHECK-NEXT: x86_64.set{{a|ae}}_norex
 // CHECK:      x86_64.and
 // CHECK-LABEL: asm.symbol {name = "not_equal"
-// CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.set{{a|ae}}
-// CHECK:      x86_64.ucomisd
-// CHECK-NEXT: x86_64.set{{a|ae}}
+// CHECK:      x86_64.ucomisd_norex
+// CHECK-NEXT: x86_64.set{{a|ae}}_norex
+// CHECK:      x86_64.ucomisd_norex
+// CHECK-NEXT: x86_64.set{{a|ae}}_norex
 // CHECK:      x86_64.and
 // CHECK-NEXT: x86_64.xor_imm

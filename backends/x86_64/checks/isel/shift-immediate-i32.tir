@@ -9,5 +9,5 @@ module {
   module_end
 }
 
-// CHECK: x86_64.shl32 {{.*}}imm = 2
+// CHECK: x86_64.shl32_norex {{.*}}imm = 2
 // CHECK-NOT: x86_64.shl_cl
