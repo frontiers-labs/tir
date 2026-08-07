@@ -2014,7 +2014,7 @@ fn run_z3(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output> {
         .arg(path)
         .output()?;
     anyhow::ensure!(
-        !solver_statuses(&second).is_empty(),
+        !solver_rejected(&second),
         "z3 rejected {}:\n{}{}",
         path.display(),
         String::from_utf8_lossy(&second.stdout),
@@ -2024,25 +2024,31 @@ fn run_z3(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output> {
 }
 
 fn solver_statuses(output: &std::process::Output) -> Vec<String> {
+    if solver_rejected(output) {
+        return Vec::new();
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let statuses = stdout
+    stdout
         .lines()
         .filter(|line| matches!(*line, "sat" | "unsat" | "unknown"))
         .map(str::to_string)
-        .collect::<Vec<_>>();
-    let expected_model_error = statuses.last().is_some_and(|status| status == "unsat");
+        .collect()
+}
+
+fn solver_rejected(output: &std::process::Output) -> bool {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected_model_error = stdout
+        .lines()
+        .rfind(|line| matches!(*line, "sat" | "unsat" | "unknown"))
+        .is_some_and(|status| status == "unsat");
     let errors = stdout
         .lines()
         .filter(|line| line.trim_start().starts_with("(error "))
         .collect::<Vec<_>>();
-    if errors
+    errors
         .iter()
         .any(|line| !(expected_model_error && line.contains("model is not available")))
         || (!output.status.success() && errors.is_empty())
-    {
-        return Vec::new();
-    }
-    statuses
 }
 
 fn run_solver(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output> {
@@ -2233,6 +2239,20 @@ mod tests {
             stderr: vec![],
         };
 
+        assert!(solver_statuses(&output).is_empty());
+    }
+
+    #[test]
+    fn solver_timeout_is_not_rejection() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"timeout\n".to_vec(),
+            stderr: vec![],
+        };
+
+        assert!(!solver_rejected(&output));
         assert!(solver_statuses(&output).is_empty());
     }
 
