@@ -1495,11 +1495,8 @@ mod isa {
             .with_data_layout(self.data_layout())
         }
 
-        fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
-            tir::backend::regalloc::RegisterAllocationPass::with_abi(
-                Box::new(X86RegAlloc::new(self.config.features())),
-                self.abi(),
-            )
+        fn regalloc_target(&self) -> Box<dyn tir::backend::regalloc::TargetRegAlloc> {
+            Box::new(X86RegAlloc::new(self.config.features()))
         }
 
         fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {

@@ -13,7 +13,7 @@ use tir::Context;
 
 use crate::backend::binary::{BinaryWriter, ObjectFormatInfo};
 use crate::backend::isel::{InstructionSelectPass, OpLowering};
-use crate::backend::regalloc::{RegisterAllocationPass, RegisterInfo};
+use crate::backend::regalloc::{RegisterInfo, TargetRegAlloc};
 use crate::backend::sched::MachineModel;
 use crate::backend::{AsmParser, AsmPrinter};
 
@@ -50,9 +50,16 @@ pub trait TargetMachine {
     /// The instruction-selection pass, nested under each function.
     fn isel_pass(&self, context: &Context) -> InstructionSelectPass;
 
-    /// The register-allocation pass, run module-wide after instruction
-    /// selection.
-    fn regalloc_pass(&self) -> RegisterAllocationPass;
+    /// The target's register-allocation hooks: register file, spill frame
+    /// layout, and the instructions that move values between registers and
+    /// stack slots. Called once per pass in [`regalloc_stage`](Self::regalloc_stage).
+    fn regalloc_target(&self) -> Box<dyn TargetRegAlloc>;
+
+    /// The register-allocation stage, run module-wide after instruction
+    /// selection: the pre-allocation lowerings followed by the allocation pass.
+    fn regalloc_stage(&self) -> Vec<Box<dyn crate::pass::Pass>> {
+        crate::backend::prealloc::regalloc_stage_for(|| self.regalloc_target(), self.abi())
+    }
 
     /// The target's register file description. Beyond register allocation this
     /// also tells the simulator which register classes share a physical file

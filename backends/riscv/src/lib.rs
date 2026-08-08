@@ -963,14 +963,11 @@ impl tir::backend::regalloc::TargetRegAlloc for RiscvRegAlloc {
     }
 }
 
-pub fn create_regalloc_pass() -> tir::backend::regalloc::RegisterAllocationPass {
-    create_regalloc_pass_for(riscv_abi_by_name("lp64d").expect("RISC-V must define lp64d"))
-}
-
-fn create_regalloc_pass_for(
-    abi: &'static tir::backend::abi::AbiInfo,
-) -> tir::backend::regalloc::RegisterAllocationPass {
-    tir::backend::regalloc::RegisterAllocationPass::with_abi(Box::new(RiscvRegAlloc), abi)
+pub fn create_regalloc_stage() -> Vec<Box<dyn tir::Pass>> {
+    tir::backend::prealloc::regalloc_stage_for(
+        || Box::new(RiscvRegAlloc),
+        riscv_abi_by_name("lp64d").expect("RISC-V must define lp64d"),
+    )
 }
 
 /// The RISC-V target, selected via `--march`/`--mcpu`.
@@ -1040,8 +1037,8 @@ impl tir::backend::TargetMachine for RiscvTarget {
             .with_data_layout(self.data_layout())
     }
 
-    fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
-        create_regalloc_pass_for(self.abi())
+    fn regalloc_target(&self) -> Box<dyn tir::backend::regalloc::TargetRegAlloc> {
+        Box::new(RiscvRegAlloc)
     }
 
     fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
@@ -1233,7 +1230,7 @@ mod tests {
         builtin::{FuncOp, IntegerType, UnitType, ops},
     };
 
-    use crate::{RegClass, RiscvDialect, create_isel_pass, create_regalloc_pass};
+    use crate::{RegClass, RiscvDialect, create_isel_pass, create_regalloc_stage};
 
     #[test]
     fn target_abi_matches_lp64d_register_convention() {
@@ -1956,7 +1953,9 @@ mod tests {
 
         let mut pm = PassManager::new();
         pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
-        pm.add_pass(create_regalloc_pass());
+        for pass in create_regalloc_stage() {
+            pm.add_boxed_pass(pass);
+        }
         pm.run(&context, context.get_op(module.id()))
             .expect("isel + regalloc should succeed");
 
@@ -2025,7 +2024,9 @@ mod tests {
 
         let mut pm = PassManager::new();
         pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
-        pm.add_pass(create_regalloc_pass());
+        for pass in create_regalloc_stage() {
+            pm.add_boxed_pass(pass);
+        }
         pm.run(&context, context.get_op(module.id()))
             .expect("isel + regalloc should succeed");
 
@@ -2398,15 +2399,17 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.add_pass(tir::backend::regalloc::RegisterAllocationPass::with_abi(
-            Box::new(TinyRiscv(crate::RiscvRegAlloc)),
+        for pass in tir::backend::prealloc::regalloc_stage_for(
+            || Box::new(TinyRiscv(crate::RiscvRegAlloc)) as _,
             abi_with_callers(
                 vec![5, 6, 7, 10, 11]
                     .into_iter()
                     .map(|index| (RegClass::GPR.id(), index))
                     .collect(),
             ),
-        ));
+        ) {
+            pm.add_boxed_pass(pass);
+        }
         pm.run(&context, context.get_op(module.id()))
             .expect("register allocation should converge with spilling");
 
@@ -2567,8 +2570,8 @@ mod tests {
         mb.insert(ops::module_end(&context).build());
 
         let mut pm = PassManager::new();
-        pm.add_pass(tir::backend::regalloc::RegisterAllocationPass::with_abi(
-            Box::new(TinyFprRiscv(crate::RiscvRegAlloc)),
+        for pass in tir::backend::prealloc::regalloc_stage_for(
+            || Box::new(TinyFprRiscv(crate::RiscvRegAlloc)) as _,
             abi_with_callers(vec![
                 (RegClass::GPR.id(), 10),
                 (RegClass::GPR.id(), 11),
@@ -2576,7 +2579,9 @@ mod tests {
                 (RegClass::FPR32.id(), 0),
                 (RegClass::FPR32.id(), 1),
             ]),
-        ));
+        ) {
+            pm.add_boxed_pass(pass);
+        }
         pm.run(&context, context.get_op(module.id()))
             .expect("register allocation should converge with FP spilling");
 

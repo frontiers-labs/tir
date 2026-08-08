@@ -22,13 +22,9 @@ use tir::{
     PreservedAnalyses, Rewriter, ValueId,
 };
 
-use crate::backend::abi::{
-    GroupRollback, align_argument_group, reserve_indirect_result_argument, value_kind,
-};
 use crate::backend::liveness::{self, Liveness, PhysReg};
-use crate::backend::{
-    SymbolOp, VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp,
-};
+use crate::backend::prealloc;
+use crate::backend::{SymbolOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp};
 use crate::ptr::AllocaOp;
 
 /// Architectural metadata for one register class.
@@ -650,21 +646,9 @@ impl Pass for RegisterAllocationPass {
             return Ok(PreservedAnalyses::all());
         }
 
-        let fixed_precolor = self.lower_fixed_registers(context, rewriter, &blocks)?;
-        self.lower_tied_operands(context, rewriter, &blocks)?;
-        self.lower_block_args(context, rewriter, &blocks)?;
-
-        let abi = abi_precolor(
-            context,
-            op,
-            &info,
-            self.abi,
-            self.target.as_ref(),
-            rewriter,
-            &blocks,
-            fixed_precolor,
-        )?;
-        let affinities: Vec<_> = abi.copies.iter().map(|copy| (copy.src, copy.dst)).collect();
+        let precolor = self.lower_fixed_registers(context, rewriter, op, &blocks)?;
+        let abi_copies = collect_abi_copies(context, &blocks)?;
+        let affinities: Vec<_> = abi_copies.iter().map(|copy| (copy.src, copy.dst)).collect();
 
         let (outgoing_size, has_calls) = outgoing_stack_layout(context, &blocks)?;
         let mut frame = FramePlan::new(self.abi);
@@ -698,7 +682,7 @@ impl Pass for RegisterAllocationPass {
                     info: &info,
                     abi: self.abi,
                     liveness: &liveness,
-                    precolor: &abi.precolor,
+                    precolor: &precolor,
                     spill_cost: &spill_cost,
                 },
                 &affinities,
@@ -719,13 +703,20 @@ impl Pass for RegisterAllocationPass {
             }
         };
 
-        for copy in &abi.copies {
-            let (Some(src), Some(dst)) = (assignment.get(&copy.src), assignment.get(&copy.dst))
-            else {
+        for copy in &abi_copies {
+            if !context.has_operation(copy.op) {
                 continue;
-            };
-            if src.0.span(src.1) == dst.0.span(dst.1) && context.has_operation(copy.op) {
+            }
+            let endpoints = copy_endpoints(context, copy.op);
+            let erasable = endpoints == Some((copy.src, copy.dst))
+                && matches!(
+                    (assignment.get(&copy.src), assignment.get(&copy.dst)),
+                    (Some(src), Some(dst)) if src.0.span(src.1) == dst.0.span(dst.1)
+                );
+            if erasable {
                 rewriter.erase_op(&op_ref_in(context, copy.block, copy.op))?;
+            } else {
+                strip_attr(context, copy.op, prealloc::ABI_COPY_ATTR);
             }
         }
         // Preserve the callee-saved registers the allocation used for this
@@ -735,12 +726,13 @@ impl Pass for RegisterAllocationPass {
 
         let frame_size = frame.prologue_adjustment(has_calls, saves.len());
         erase_stack_allocas(context, rewriter, &stack_allocas)?;
+        let stack_args = collect_stack_arg_loads(context, &blocks)?;
         self.insert_incoming_stack_arg_loads(
             context,
             rewriter,
             &blocks,
             &assignment,
-            &abi.stack_args,
+            &stack_args,
             &frame,
             frame_size,
             saves.len(),
@@ -826,6 +818,7 @@ impl RegisterAllocationPass {
         &self,
         context: &Context,
         rewriter: &mut Rewriter,
+        op: &OperationRef,
         blocks: &[BlockId],
     ) -> Result<HashMap<u32, PhysReg>, PassError> {
         let mut precolor = HashMap::new();
@@ -878,144 +871,20 @@ impl RegisterAllocationPass {
                 context.set_op_attributes(op_id, attributes);
             }
         }
+        // Symbol-level pins the ABI precolor pass recorded on `arg_regs` and
+        // `result_address`: a `FixedDef` entry pins its value at the function
+        // boundary, then reads as an ordinary virtual register again.
+        let mut attributes = op.op().attributes.clone();
+        let mut changed = false;
+        for attr in &mut attributes {
+            if matches!(attr.name.as_str(), "arg_regs" | "result_address") {
+                changed |= consume_fixed_defs(&mut attr.value, &mut precolor)?;
+            }
+        }
+        if changed {
+            context.set_op_attributes(op.op().id, attributes);
+        }
         Ok(precolor)
-    }
-
-    /// Lower tied (two-address) operands ahead of allocation. Instruction
-    /// selection emits `op {dst = %r (ReadWrite), dst_tied = %x, ...}` for an
-    /// instruction whose behavior reads its destination (e.g. the x86
-    /// `dst = dst + src`): the op defines `%r` but must read `%x` through the same
-    /// register. Insert `copy %r <- %x` ahead of the op and drop the marker
-    /// attribute, leaving a plain read-modify-write of `%r` that liveness and
-    /// coloring already model.
-    fn lower_tied_operands(
-        &self,
-        context: &Context,
-        rewriter: &mut Rewriter,
-        blocks: &[BlockId],
-    ) -> Result<(), PassError> {
-        for &block_id in blocks {
-            for op_id in context.get_block(block_id).op_ids() {
-                let op = context.get_op(op_id);
-                let mut ties = Vec::new();
-                for attr in &op.attributes {
-                    let Some(base) = attr.name.strip_suffix("_tied") else {
-                        continue;
-                    };
-                    if role_of(&op, base) != AttributeRole::ReadWrite {
-                        continue;
-                    }
-                    let AttributeValue::Register(RegisterAttr::Virtual { id: src, .. }) =
-                        &attr.value
-                    else {
-                        continue;
-                    };
-                    let Some(AttributeValue::Register(RegisterAttr::Virtual { id: dst, class })) =
-                        op.attributes
-                            .iter()
-                            .find(|a| a.name == base)
-                            .map(|a| &a.value)
-                    else {
-                        continue;
-                    };
-                    let class = class.ok_or_else(|| {
-                        PassError::InvalidRuleSet(format!(
-                            "tied operand {} has no register class",
-                            attr.name
-                        ))
-                    })?;
-                    ties.push((attr.name.clone(), *dst, *src, class));
-                }
-                if ties.is_empty() {
-                    continue;
-                }
-                let op_ref = op_ref_in(context, block_id, op_id);
-                for (_, dst, src, class) in &ties {
-                    let copy = self.target.emit_copy(context, *class, *dst, *src);
-                    rewriter.insert_op_before(&op_ref, copy.as_ref())?;
-                }
-                let mut attrs = op.attributes.clone();
-                attrs.retain(|a| !ties.iter().any(|(name, ..)| a.name == *name));
-                context.set_op_attributes(op_id, attrs);
-            }
-        }
-        Ok(())
-    }
-
-    /// Lower forwarded block arguments on unconditional branches to explicit
-    /// copies ahead of allocation. A `vbr` carries the values forwarded to its
-    /// destination's block parameters as SSA operands (`dest_args`); nothing
-    /// otherwise connects a predecessor's forwarded value to the successor's
-    /// parameter register. For each edge, insert `copy param <- arg` before the
-    /// branch and clear `dest_args`, leaving the parameter defined in every
-    /// predecessor. The copies of one edge form a parallel copy (all sources read
-    /// before any destination is written), so they are sequentialized with a fresh
-    /// temporary per cycle (e.g. a loop edge that swaps two parameters).
-    fn lower_block_args(
-        &self,
-        context: &Context,
-        rewriter: &mut Rewriter,
-        blocks: &[BlockId],
-    ) -> Result<(), PassError> {
-        let info = self.target.register_info();
-        let default_class = info.default_integer_class(self.abi);
-        for &block_id in blocks {
-            for op_id in context.get_block(block_id).op_ids() {
-                let op = context.get_op(op_id);
-                if !op.is::<VirtualBranchOp>() || op.operands.is_empty() {
-                    continue;
-                }
-                let args: Vec<u32> = op.operands.iter().map(|v| v.number()).collect();
-                let Some(dest) = op.attributes.iter().find_map(|a| match &a.value {
-                    AttributeValue::Block(b) if a.name == "dest" => Some(*b),
-                    _ => None,
-                }) else {
-                    return Err(PassError::InvalidRuleSet(
-                        "vbr with block arguments is missing its 'dest' target".to_string(),
-                    ));
-                };
-                let params: Vec<u32> = context
-                    .get_block(dest)
-                    .arguments()
-                    .iter()
-                    .map(|v| v.id().number())
-                    .collect();
-                if params.len() != args.len() {
-                    return Err(PassError::InvalidRuleSet(format!(
-                        "branch forwards {} argument(s) to a block with {} parameter(s)",
-                        args.len(),
-                        params.len()
-                    )));
-                }
-
-                // Pair each parameter with its forwarded value and the register
-                // class to copy it in (from either endpoint's uses, else the
-                // default integer class).
-                let mut pairs: Vec<(u32, u32, RegClassId)> = Vec::new();
-                for (&param, &arg) in params.iter().zip(args.iter()) {
-                    if param == arg {
-                        continue;
-                    }
-                    let class = vreg_class_in(context, blocks, arg)
-                        .or_else(|| vreg_class_in(context, blocks, param))
-                        .or(default_class)
-                        .ok_or_else(|| {
-                            PassError::InvalidRuleSet(format!(
-                                "block argument vreg {arg} has no register class"
-                            ))
-                        })?;
-                    pairs.push((param, arg, class));
-                }
-
-                let op_ref = op_ref_in(context, block_id, op_id);
-                for (dst, src, class) in sequence_parallel_copies(context, pairs) {
-                    let copy = self.target.emit_copy(context, class, dst, src);
-                    rewriter.insert_op_before(&op_ref, copy.as_ref())?;
-                }
-                context.set_op_operands(op_id, Vec::new());
-            }
-        }
-        Ok(())
     }
 
     /// Lower every spilled virtual register by splitting its live range: each def is
@@ -1154,12 +1023,7 @@ impl RegisterAllocationPass {
         };
         let frame_register = self.frame_register();
         for arg in args {
-            let load_id = arg.load.ok_or_else(|| {
-                PassError::InvalidRuleSet(format!(
-                    "stack argument vreg {} has no incoming load",
-                    arg.vreg
-                ))
-            })?;
+            let load_id = arg.load;
             let op = context.get_op(load_id);
             let Some(liveness::RegRef::Virtual { id, .. }) =
                 liveness::op_regs(&op).defs.into_iter().next()
@@ -1368,7 +1232,7 @@ fn erase_stack_allocas(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum RoleClass {
+pub(crate) enum RoleClass {
     Read,
     Write,
 }
@@ -1402,7 +1266,7 @@ fn block_successors(context: &Context, blocks: &[BlockId]) -> HashMap<BlockId, V
 }
 
 /// The blocks of an `asm.symbol` op's body region, in program order.
-fn symbol_body_blocks(context: &Context, op: &OperationRef) -> Vec<BlockId> {
+pub(crate) fn symbol_body_blocks(context: &Context, op: &OperationRef) -> Vec<BlockId> {
     let Some(&region_id) = op.op().regions.first() else {
         return Vec::new();
     };
@@ -1413,7 +1277,7 @@ fn symbol_body_blocks(context: &Context, op: &OperationRef) -> Vec<BlockId> {
         .collect()
 }
 
-fn op_ref_in(context: &Context, block_id: BlockId, op_id: OpId) -> OperationRef {
+pub(crate) fn op_ref_in(context: &Context, block_id: BlockId, op_id: OpId) -> OperationRef {
     OperationRef::new(
         context.get_op(op_id),
         Some(context.get_block(block_id)),
@@ -1467,52 +1331,6 @@ fn callee_saved_slots(
         .collect()
 }
 
-/// Sequentialize a parallel copy: a set of `dst <- src` moves (destinations
-/// unique) whose sources are all read before any destination is written. Emit a
-/// copy whose destination is not still needed as a source first; when only cycles
-/// remain, save one destination into a fresh temporary and reroute the reads of it
-/// through the temporary, which frees that destination and breaks the cycle. Each
-/// tuple carries the register class to copy the destination in; a temporary
-/// inherits the class and type of the value it saves.
-fn sequence_parallel_copies(
-    context: &Context,
-    mut copies: Vec<(u32, u32, RegClassId)>,
-) -> Vec<(u32, u32, RegClassId)> {
-    let mut result = Vec::new();
-    while !copies.is_empty() {
-        if let Some(i) = copies
-            .iter()
-            .position(|(dst, _, _)| !copies.iter().any(|(_, src, _)| src == dst))
-        {
-            result.push(copies.remove(i));
-        } else {
-            // Only cycles remain: break one by saving its destination.
-            let (dst, _, class) = copies[0];
-            let ty = context.get_value(ValueId::from_number(dst)).ty();
-            let temp = context.create_value(ty, None).id().number();
-            result.push((temp, dst, class));
-            for (_, src, _) in copies.iter_mut() {
-                if *src == dst {
-                    *src = temp;
-                }
-            }
-        }
-    }
-    result
-}
-
-/// Compute calling-convention pre-coloring at function entry and returns.
-///
-/// Register arguments are copied from pinned entry temporaries into free body
-/// vregs. Each return is copied into a fresh vreg pinned at its `vret`. ABI
-/// registers are point constraints, so they must not pin an entire SSA live
-/// range across calls. This mutates the IR and runs once outside the spill loop.
-struct AbiPrecolor {
-    precolor: HashMap<u32, PhysReg>,
-    stack_args: Vec<IncomingStackArg>,
-    copies: Vec<AbiCopy>,
-}
-
 struct AbiCopy {
     block: BlockId,
     op: OpId,
@@ -1520,330 +1338,160 @@ struct AbiCopy {
     dst: u32,
 }
 
+/// The copies the ABI precolor pass marked with [`prealloc::ABI_COPY_ATTR`]:
+/// their endpoint registers seed the coalescing affinity, and after allocation
+/// a copy whose endpoints landed in one register is erased. Endpoints are
+/// recorded before the spill loop so a copy whose registers were renamed by
+/// spill splitting is never erased (its inserted reload/store still needs it).
+fn collect_abi_copies(context: &Context, blocks: &[BlockId]) -> Result<Vec<AbiCopy>, PassError> {
+    let mut copies = Vec::new();
+    for &block_id in blocks {
+        for op_id in context.get_block(block_id).op_ids() {
+            if !has_attr(context, op_id, prealloc::ABI_COPY_ATTR) {
+                continue;
+            }
+            let (src, dst) = copy_endpoints(context, op_id).ok_or_else(|| {
+                PassError::InvalidRuleSet(format!(
+                    "ABI copy {op_id:?} does not move one virtual register to another"
+                ))
+            })?;
+            copies.push(AbiCopy {
+                block: block_id,
+                op: op_id,
+                src,
+                dst,
+            });
+        }
+    }
+    Ok(copies)
+}
+
+/// The `(source, destination)` virtual registers of a copy op: its first read
+/// and first written virtual register.
+fn copy_endpoints(context: &Context, op_id: OpId) -> Option<(u32, u32)> {
+    let regs = liveness::op_regs(&context.get_op(op_id));
+    let virtual_id = |r: &liveness::RegRef| match r {
+        liveness::RegRef::Virtual { id, .. } => Some(*id),
+        _ => None,
+    };
+    let src = regs.uses.iter().find_map(virtual_id)?;
+    let dst = regs.defs.iter().find_map(virtual_id)?;
+    Some((src, dst))
+}
+
+fn has_attr(context: &Context, op_id: OpId, name: &str) -> bool {
+    context
+        .get_op(op_id)
+        .attributes
+        .iter()
+        .any(|attr| attr.name == name)
+}
+
+fn strip_attr(context: &Context, op_id: OpId, name: &str) {
+    let mut attrs = context.get_op(op_id).attributes.clone();
+    attrs.retain(|attr| attr.name != name);
+    context.set_op_attributes(op_id, attrs);
+}
+
+/// Consume `FixedDef` pins recorded on a symbol attribute (`arg_regs`,
+/// `result_address`) into `precolor`, rewriting each entry back to a plain
+/// virtual register. Recurses into argument groups (arrays and dicts).
+fn consume_fixed_defs(
+    value: &mut AttributeValue,
+    precolor: &mut HashMap<u32, PhysReg>,
+) -> Result<bool, PassError> {
+    match value {
+        AttributeValue::Register(RegisterAttr::FixedDef { id, class, index }) => {
+            let (id, pin) = (*id, (*class, *index));
+            if let Some(previous) = precolor.insert(id, pin)
+                && previous != pin
+            {
+                return Err(PassError::InvalidRuleSet(format!(
+                    "virtual register {id} is pinned to conflicting physical registers"
+                )));
+            }
+            *value = AttributeValue::Register(RegisterAttr::Virtual {
+                id,
+                class: Some(pin.0),
+            });
+            Ok(true)
+        }
+        AttributeValue::Array(items) => {
+            let mut changed = false;
+            for item in items {
+                changed |= consume_fixed_defs(item, precolor)?;
+            }
+            Ok(changed)
+        }
+        AttributeValue::Dict(map) => {
+            let mut changed = false;
+            for item in map.values_mut() {
+                changed |= consume_fixed_defs(item, precolor)?;
+            }
+            Ok(changed)
+        }
+        _ => Ok(false),
+    }
+}
+
 struct IncomingStackArg {
     vreg: u32,
     class: RegClassId,
     stack_index: usize,
-    load: Option<OpId>,
+    load: OpId,
 }
 
-fn next_abi_register(
-    abi: &crate::backend::abi::AbiInfo,
-    class: RegClassId,
-    mut kind: crate::backend::abi::ValueKind,
-    next_slot: &mut HashMap<crate::backend::abi::ValueKind, usize>,
-) -> Option<PhysReg> {
-    let mut visited = HashSet::new();
-    loop {
-        if !visited.insert(kind) {
-            return None;
-        }
-        let sequence = match abi.args.iter().find(|sequence| sequence.kind == kind) {
-            Some(sequence) => sequence,
-            None if kind != crate::backend::abi::ValueKind::Int => {
-                kind = crate::backend::abi::ValueKind::Int;
-                continue;
-            }
-            None => return None,
-        };
-        let slot = next_slot.entry(kind).or_insert(0);
-        let register = if class.group_width > 1
-            && sequence
-                .regs
-                .first()
-                .is_some_and(|register| register.0.file() == class.file())
-        {
-            let first = sequence.regs.first().unwrap();
-            let last = sequence.regs.last().unwrap();
-            let index = first.1 + (*slot as u16 * class.group_width);
-            (index <= last.1).then_some((class, index))
-        } else {
-            sequence.regs.get(*slot).copied()
-        };
-        if let Some(register) = register {
-            *slot += 1;
-            return Some(if register.0.file() == class.file() {
-                (class, register.1)
-            } else {
-                register
-            });
-        }
-        match sequence.overflow {
-            crate::backend::abi::Overflow::Chain(next) => kind = next,
-            crate::backend::abi::Overflow::Stack => return None,
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn abi_precolor(
+/// The placeholder loads the ABI precolor pass marked with
+/// [`prealloc::ABI_STACK_INDEX_ATTR`], one per incoming stack argument.
+fn collect_stack_arg_loads(
     context: &Context,
-    op: &OperationRef,
-    info: &RegisterInfo,
-    abi: &crate::backend::abi::AbiInfo,
-    target: &dyn TargetRegAlloc,
-    rewriter: &mut Rewriter,
     blocks: &[BlockId],
-    // Fixed-register precolors (e.g. a `FixedDef` result pinned to `rdx`), seeded
-    // so the return handler sees a value already pinned elsewhere and breaks the
-    // point conflict with a copy into the return register instead of double-pinning.
-    fixed_precolor: HashMap<u32, PhysReg>,
-) -> Result<AbiPrecolor, PassError> {
-    let mut precolor: HashMap<u32, PhysReg> = fixed_precolor;
-    let mut stack_args = Vec::new();
-    let mut copies = Vec::new();
-
-    // Argument vregs: the symbol's `arg_regs` attribute carries each argument's
-    // register class (assigned by the target's function lowering, e.g. vectors
-    // in `VR`, floats in `FPR32`/`FPR64`, everything else in `GPR`). Each
-    // argument takes the next calling-convention register of its class, with
-    // the slot counter shared across classes of one register *file*: an f32 and
-    // an f64 argument draw fa0 and fa1 from the same fa0..fa7 sequence.
-    let mut next_abi_slot: HashMap<crate::backend::abi::ValueKind, usize> = HashMap::new();
-    let mut next_stack_slot = 0;
-    if let Some(AttributeValue::Array(args)) = op
-        .op()
-        .attributes
-        .iter()
-        .find(|attribute| attribute.name == "arg_regs")
-        .map(|attribute| &attribute.value)
-    {
-        let entry = blocks
-            .first()
-            .and_then(|block| context.get_block(*block).op_ids().first().copied())
-            .map(|first| op_ref_in(context, blocks[0], first));
-        let mut precolor_register = |incoming: u32, pin: PhysReg| {
-            let ty = context.get_value(ValueId::from_number(incoming)).ty();
-            let body = context.create_value(ty, None).id().number();
-            for &block_id in blocks {
-                for op_id in context.get_block(block_id).op_ids() {
-                    rename_attr(context, op_id, incoming, body, RoleClass::Read);
-                }
-            }
-            context.replace_value_uses(ValueId::from_number(incoming), ValueId::from_number(body));
-            let copy = target.emit_copy(context, pin.0, body, incoming);
-            let copy_id = copy.id();
-            rewriter.insert_op_before(
-                entry.as_ref().ok_or_else(|| {
-                    PassError::InvalidRuleSet(
-                        "function with register arguments has no entry operation".to_string(),
-                    )
-                })?,
-                copy.as_ref(),
-            )?;
-            copies.push(AbiCopy {
-                block: blocks[0],
-                op: copy_id,
-                src: incoming,
-                dst: body,
-            });
-            if let Some(previous) = precolor.insert(incoming, pin)
-                && previous != pin
-            {
-                return Err(PassError::InvalidRuleSet(format!(
-                    "argument vreg {incoming} pinned to conflicting registers {previous:?} and {pin:?}"
-                )));
-            }
-            Ok(())
-        };
-
-        if let Some(AttributeValue::Register(RegisterAttr::Virtual { id, .. })) = op
-            .op()
-            .attributes
-            .iter()
-            .find(|attribute| attribute.name == "result_address")
-            .map(|attribute| &attribute.value)
-        {
-            let register = abi.indirect_result.ok_or_else(|| {
-                PassError::InvalidRuleSet("ABI has no result-address register".to_string())
-            })?;
-            precolor_register(*id, register)?;
-            reserve_indirect_result_argument(abi, &mut next_abi_slot);
-        }
-
-        for attribute in args {
-            let group = match attribute {
-                AttributeValue::Array(group) => Some((group, 1)),
-                AttributeValue::Dict(group) => {
-                    let members = match group.get("members") {
-                        Some(AttributeValue::Array(members)) => members,
-                        _ => {
-                            return Err(PassError::InvalidRuleSet(
-                                "ABI argument group has no members".to_string(),
-                            ));
-                        }
-                    };
-                    let alignment = match group.get("alignment") {
-                        Some(AttributeValue::UInt(alignment)) => *alignment,
-                        Some(AttributeValue::Int(alignment)) if *alignment >= 0 => {
-                            *alignment as u64
-                        }
-                        _ => {
-                            return Err(PassError::InvalidRuleSet(
-                                "ABI argument group has invalid alignment".to_string(),
-                            ));
-                        }
-                    };
-                    Some((members, alignment))
-                }
-                _ => None,
-            };
-            if let Some((group, alignment)) = group {
-                let members = group
-                    .iter()
-                    .map(|member| {
-                        let AttributeValue::Register(RegisterAttr::Virtual { id, class }) = member
-                        else {
-                            return Err(PassError::InvalidRuleSet(
-                                "ABI argument group contains a non-register".to_string(),
-                            ));
-                        };
-                        let class = class
-                            .or_else(|| info.default_integer_class(abi))
-                            .ok_or_else(|| {
-                                PassError::InvalidRuleSet(
-                                    "ABI argument group has no register class".to_string(),
-                                )
-                            })?;
-                        Ok((*id, class, value_kind(context, ValueId::from_number(*id))))
-                    })
-                    .collect::<Result<Vec<_>, PassError>>()?;
-                let mut trial_slots = next_abi_slot.clone();
-                align_argument_group(
-                    abi,
-                    alignment,
-                    members.iter().map(|&(_, _, kind)| kind),
-                    &mut trial_slots,
-                );
-                let pins = if abi.argument_group_fits_register_limit(members.len()) {
-                    members
-                        .iter()
-                        .map(|&(_, class, kind)| {
-                            next_abi_register(abi, class, kind, &mut trial_slots)
-                        })
-                        .collect::<Option<Vec<_>>>()
-                } else {
-                    None
-                };
-                if let Some(pins) = pins {
-                    next_abi_slot = trial_slots;
-                    for ((incoming, _, _), pin) in members.into_iter().zip(pins) {
-                        precolor_register(incoming, pin)?;
-                    }
-                } else {
-                    for (incoming, class, kind) in members {
-                        if abi.argument_group_rollback() == GroupRollback::Exhaust {
-                            crate::backend::abi::exhaust_argument_registers(
-                                abi,
-                                kind,
-                                &mut next_abi_slot,
-                            );
-                        }
-                        stack_args.push(IncomingStackArg {
-                            vreg: incoming,
-                            class,
-                            stack_index: next_stack_slot,
-                            load: None,
-                        });
-                        next_stack_slot += 1;
-                    }
-                }
-                continue;
-            }
-
-            let AttributeValue::Register(RegisterAttr::Virtual { id, class }) = attribute else {
-                continue;
-            };
-            let Some(class) = class.or_else(|| info.default_integer_class(abi)) else {
-                continue;
-            };
-            let kind = value_kind(context, ValueId::from_number(*id));
-            let pin = next_abi_register(abi, class, kind, &mut next_abi_slot);
-            if let Some(pin) = pin {
-                precolor_register(*id, pin)?;
-            } else {
-                stack_args.push(IncomingStackArg {
-                    vreg: *id,
-                    class,
-                    stack_index: next_stack_slot,
-                    load: None,
-                });
-                next_stack_slot += 1;
-            }
-        }
-        let _ = precolor_register;
-        // Give stack arguments real definitions before allocation so ordinary
-        // spilling can split them. Their final offsets are patched after the
-        // frame and callee-save layout are known.
-        for argument in &mut stack_args {
-            let load = target.emit_spill_reload(context, argument.vreg, argument.class, &abi.sp, 0);
-            let load_id = load.id();
-            rewriter.insert_op_before(
-                entry.as_ref().ok_or_else(|| {
-                    PassError::InvalidRuleSet(
-                        "function with stack arguments has no entry operation".to_string(),
-                    )
-                })?,
-                load.as_ref(),
-            )?;
-            argument.load = Some(load_id);
-        }
-    }
-
-    // Return operands take consecutive registers within each ABI value class.
+) -> Result<Vec<IncomingStackArg>, PassError> {
+    let mut args = Vec::new();
     for &block_id in blocks {
         for op_id in context.get_block(block_id).op_ids() {
-            let body_op = context.get_op(op_id);
-            if !body_op.is::<VirtualReturnOp>() {
+            let op = context.get_op(op_id);
+            let Some(stack_index) =
+                op.attributes
+                    .iter()
+                    .find_map(|attr| match (&attr.name[..], &attr.value) {
+                        (name, AttributeValue::UInt(index))
+                            if name == prealloc::ABI_STACK_INDEX_ATTR =>
+                        {
+                            Some(*index as usize)
+                        }
+                        _ => None,
+                    })
+            else {
                 continue;
-            }
-            let mut next_slot = HashMap::new();
-            for (operand_index, value) in body_op.operands.iter().copied().enumerate() {
-                let vreg = value.number();
-                let class = vreg_class_in(context, blocks, vreg);
-                let kind = value_kind(context, value);
-                let slot = next_slot.entry(kind).or_insert(0usize);
-                let Some(sequence) = abi.rets.iter().find(|sequence| sequence.kind == kind) else {
-                    continue;
-                };
-                let Some(&register) = sequence.regs.get(*slot) else {
-                    continue;
-                };
-                *slot += 1;
-                let rc = match class {
-                    Some(class) if class.file() == register.0.file() => class,
-                    _ => register.0,
-                };
-                let ret_pin = (rc, register.1);
-
-                let ty = context.get_value(value).ty();
-                let outgoing = context.create_value(ty, None).id().number();
-                let copy = target.emit_copy(context, rc, outgoing, vreg);
-                let copy_id = copy.id();
-                let op_ref = op_ref_in(context, block_id, op_id);
-                rewriter.insert_op_before(&op_ref, copy.as_ref())?;
-                context.set_op_operand(op_id, operand_index, ValueId::from_number(outgoing));
-                precolor.insert(outgoing, ret_pin);
-                copies.push(AbiCopy {
-                    block: block_id,
-                    op: copy_id,
-                    src: vreg,
-                    dst: outgoing,
-                });
-            }
+            };
+            let Some(liveness::RegRef::Virtual {
+                id,
+                class: Some(class),
+            }) = liveness::op_regs(&op).defs.into_iter().next()
+            else {
+                return Err(PassError::InvalidRuleSet(
+                    "stack argument load has no class-qualified virtual definition".to_string(),
+                ));
+            };
+            args.push(IncomingStackArg {
+                vreg: id,
+                class,
+                stack_index,
+                load: op_id,
+            });
         }
     }
-
-    Ok(AbiPrecolor {
-        precolor,
-        stack_args,
-        copies,
-    })
+    Ok(args)
 }
 
 /// The register class a virtual register is referenced with, from the first
 /// class-qualified register attribute naming it.
-fn vreg_class_in(context: &Context, blocks: &[BlockId], vreg: u32) -> Option<RegClassId> {
+pub(crate) fn vreg_class_in(
+    context: &Context,
+    blocks: &[BlockId],
+    vreg: u32,
+) -> Option<RegClassId> {
     let class_of = |value: &AttributeValue| match value {
         AttributeValue::Register(RegisterAttr::Virtual { id, class: Some(c) }) if *id == vreg => {
             Some(*c)
@@ -1887,7 +1535,13 @@ fn reference_counts(context: &Context, blocks: &[BlockId]) -> HashMap<u32, u32> 
 
 /// Rewrite a single op's register attributes: replace virtual register `from` with
 /// virtual register `to` in attributes matching the given role direction.
-fn rename_attr(context: &Context, op_id: OpId, from: u32, to: u32, role_class: RoleClass) {
+pub(crate) fn rename_attr(
+    context: &Context,
+    op_id: OpId,
+    from: u32,
+    to: u32,
+    role_class: RoleClass,
+) {
     let op = context.get_op(op_id);
     let mut attrs = op.attributes.clone();
     let mut changed = false;
@@ -1946,7 +1600,7 @@ fn rewrite_registers(context: &Context, blocks: &[BlockId], assignment: &HashMap
     }
 }
 
-fn role_of(op: &Arc<tir::OpInstance>, name: &str) -> AttributeRole {
+pub(crate) fn role_of(op: &Arc<tir::OpInstance>, name: &str) -> AttributeRole {
     op.clone()
         .as_interface::<dyn tir::attributes::RegisterSemantics>()
         .map(|semantics| semantics.attribute_roles())
@@ -2211,56 +1865,6 @@ mod tests {
             map[&w.number()],
             "a value live across a block edge must not reuse a later entry-block register",
         );
-    }
-
-    // Sequentializing a parallel copy that swaps two registers (a loop edge
-    // forwarding `^loop(%b, %a)` from within `^loop(%a, %b)`) needs one temporary
-    // to break the cycle: naive `a<-b; b<-a` would lose a's value.
-    #[test]
-    fn parallel_copy_swap_uses_a_temporary() {
-        let context = Context::with_default_dialects();
-        let ty = IntegerType::new(&context, 64);
-        let a = context.create_value(ty, None).id().number();
-        let b = context.create_value(ty, None).id().number();
-
-        let seq = sequence_parallel_copies(&context, vec![(a, b, r_id()), (b, a, r_id())]);
-        assert_eq!(seq.len(), 3, "a swap needs a saving temporary");
-
-        // Simulate: each register starts holding its own original value; applying
-        // the emitted copies in order must swap a and b.
-        let mut regs: HashMap<u32, u32> = HashMap::new();
-        regs.insert(a, a);
-        regs.insert(b, b);
-        for (dst, src, _) in &seq {
-            let v = *regs.get(src).expect("source read before it is written");
-            regs.insert(*dst, v);
-        }
-        assert_eq!(regs[&a], b, "a receives b's original value");
-        assert_eq!(regs[&b], a, "b receives a's original value");
-    }
-
-    // A non-cyclic parallel copy is ordered so a value is never overwritten before
-    // it is read: `c<-a` must precede `a<-b`.
-    #[test]
-    fn parallel_copy_orders_reads_before_writes() {
-        let context = Context::with_default_dialects();
-        let ty = IntegerType::new(&context, 64);
-        let a = context.create_value(ty, None).id().number();
-        let b = context.create_value(ty, None).id().number();
-        let c = context.create_value(ty, None).id().number();
-
-        let seq = sequence_parallel_copies(&context, vec![(a, b, r_id()), (c, a, r_id())]);
-        assert_eq!(seq.len(), 2, "no cycle, no temporary");
-        let mut regs: HashMap<u32, u32> = HashMap::new();
-        regs.insert(a, a);
-        regs.insert(b, b);
-        regs.insert(c, c);
-        for (dst, src, _) in &seq {
-            let v = *regs.get(src).unwrap();
-            regs.insert(*dst, v);
-        }
-        assert_eq!(regs[&a], b);
-        assert_eq!(regs[&c], a, "c must capture a's original value, not b's");
     }
 
     #[test]

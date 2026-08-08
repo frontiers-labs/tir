@@ -118,7 +118,9 @@ pub fn build_pipeline(
     for pass in target.machine_passes() {
         pm.add_boxed_pass(pass);
     }
-    pm.add_pass(target.regalloc_pass());
+    for pass in target.regalloc_stage() {
+        pm.add_boxed_pass(pass);
+    }
     if stop == StopAfter::RegAlloc {
         return pm;
     }

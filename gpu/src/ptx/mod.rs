@@ -70,9 +70,13 @@ impl tir::backend::TargetMachine for PtxTarget {
         Some(tir::target_env_spec(self.name(), &features))
     }
 
-    fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
-        tir::backend::regalloc::RegisterAllocationPass::with_abi(
-            Box::new(PtxRegAlloc),
+    fn regalloc_target(&self) -> Box<dyn tir::backend::regalloc::TargetRegAlloc> {
+        Box::new(PtxRegAlloc)
+    }
+
+    fn regalloc_stage(&self) -> Vec<Box<dyn tir::Pass>> {
+        tir::backend::prealloc::regalloc_stage_for(
+            || Box::new(PtxRegAlloc) as _,
             ptx_regalloc_abi(),
         )
     }

@@ -543,14 +543,8 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
     }
 }
 
-pub fn create_regalloc_pass() -> tir::backend::regalloc::RegisterAllocationPass {
-    create_regalloc_pass_for(arm64_default_abi())
-}
-
-fn create_regalloc_pass_for(
-    abi: &'static tir::backend::abi::AbiInfo,
-) -> tir::backend::regalloc::RegisterAllocationPass {
-    tir::backend::regalloc::RegisterAllocationPass::with_abi(Box::new(Arm64RegAlloc), abi)
+pub fn create_regalloc_stage() -> Vec<Box<dyn tir::Pass>> {
+    tir::backend::prealloc::regalloc_stage_for(|| Box::new(Arm64RegAlloc) as _, arm64_default_abi())
 }
 
 /// The AArch64 application-profile target, selected via `--march`/`--mcpu`.
@@ -613,8 +607,8 @@ impl tir::backend::TargetMachine for Arm64Target {
             .with_data_layout(self.data_layout())
     }
 
-    fn regalloc_pass(&self) -> tir::backend::regalloc::RegisterAllocationPass {
-        create_regalloc_pass_for(self.abi())
+    fn regalloc_target(&self) -> Box<dyn tir::backend::regalloc::TargetRegAlloc> {
+        Box::new(Arm64RegAlloc)
     }
 
     fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
@@ -762,7 +756,7 @@ mod tests {
         builtin::{FuncOp, IntegerType, UnitType, ops},
     };
 
-    use crate::{Arm64Dialect, RegClass, create_isel_pass, create_regalloc_pass};
+    use crate::{Arm64Dialect, RegClass, create_isel_pass, create_regalloc_stage};
 
     #[test]
     fn generated_abi_matches_aapcs64_register_convention() {
@@ -1153,7 +1147,9 @@ mod tests {
 
         let mut pm = PassManager::new();
         pm.nest::<FuncOp>().add_pass(create_isel_pass(&context));
-        pm.add_pass(create_regalloc_pass());
+        for pass in create_regalloc_stage() {
+            pm.add_boxed_pass(pass);
+        }
         pm.run(&context, context.get_op(module.id()))
             .expect("isel + regalloc should succeed");
 
@@ -1317,10 +1313,12 @@ mod tests {
                 .into_boxed_slice(),
         );
         abi.callee_saved = &[];
-        pm.add_pass(tir::backend::regalloc::RegisterAllocationPass::with_abi(
-            Box::new(TinyArm64(crate::Arm64RegAlloc)),
+        for pass in tir::backend::prealloc::regalloc_stage_for(
+            || Box::new(TinyArm64(crate::Arm64RegAlloc)) as _,
             Box::leak(Box::new(abi)),
-        ));
+        ) {
+            pm.add_boxed_pass(pass);
+        }
         pm.run(&context, context.get_op(module.id()))
             .expect("register allocation should converge with spilling");
 

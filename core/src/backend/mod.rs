@@ -11,6 +11,7 @@ pub mod lower;
 mod operations;
 mod parser;
 pub mod pipeline;
+pub mod prealloc;
 mod printer;
 pub mod regalloc;
 pub mod sched;
