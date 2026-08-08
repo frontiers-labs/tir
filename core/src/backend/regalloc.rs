@@ -1559,15 +1559,38 @@ pub(crate) fn rename_attr(
         if !matches_dir {
             continue;
         }
-        if let AttributeValue::Register(RegisterAttr::Virtual { id, class }) = &attr.value
-            && *id == from
-        {
-            attr.value = AttributeValue::Register(RegisterAttr::Virtual {
-                id: to,
-                class: *class,
-            });
-            changed = true;
-        }
+        attr.value = match &attr.value {
+            AttributeValue::Register(RegisterAttr::Virtual { id, class }) if *id == from => {
+                AttributeValue::Register(RegisterAttr::Virtual {
+                    id: to,
+                    class: *class,
+                })
+            }
+            // Fixed-register references also name a virtual register; a use
+            // that survives under its old id would keep the pinned value live
+            // past its point constraint (e.g. an ABI argument read by an x86
+            // division across a call).
+            AttributeValue::Register(RegisterAttr::FixedUse { id, class, index })
+                if *id == from && role_class == RoleClass::Read =>
+            {
+                AttributeValue::Register(RegisterAttr::FixedUse {
+                    id: to,
+                    class: *class,
+                    index: *index,
+                })
+            }
+            AttributeValue::Register(RegisterAttr::FixedDef { id, class, index })
+                if *id == from && role_class == RoleClass::Write =>
+            {
+                AttributeValue::Register(RegisterAttr::FixedDef {
+                    id: to,
+                    class: *class,
+                    index: *index,
+                })
+            }
+            _ => continue,
+        };
+        changed = true;
     }
     if changed {
         context.set_op_attributes(op_id, attrs);
