@@ -476,7 +476,7 @@ fn emit_one_division_rule(
             pattern_widths[index] = *forced;
         }
     }
-    let (pattern_stmts, _root_var) = emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+    let pattern_expr = emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
 
     // Both operands of a division are width-sensitive: their full width reaches
     // the result.
@@ -580,7 +580,7 @@ fn emit_one_division_rule(
     isel_rule_emitters.push(quote! {
         fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
             let mut g = tir::sem::SemGraph::new();
-            #(#pattern_stmts)*
+            #pattern_expr;
             g
         }
 

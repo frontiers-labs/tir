@@ -752,21 +752,20 @@ fn emit_instructions<'a>(
             {
                 pattern_widths[canon_root.index()] = Some(width);
             }
-            let (mut pattern_stmts, root_var) =
-                emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+            let pattern_expr = emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+            let mut pattern_body = quote! { #pattern_expr; };
             // The destination's full guarded semantics, emitted alongside the
             // relaxed pattern so pass construction proves the guard drop sound.
             let guarded_fn_ident = format_ident!("isel_guarded_{}", inst.name.to_lowercase());
             let (guarded_emitter, guarded_semantics_call) = match &semantics.guarded_semantics {
                 Some((guarded, guarded_root)) => {
                     let guarded_widths = tir::sem::infer_widths(guarded, |_| None);
-                    let (guarded_stmts, _) =
-                        emit_dag_as_code(guarded, *guarded_root, &guarded_widths);
+                    let guarded_expr = emit_dag_as_code(guarded, *guarded_root, &guarded_widths);
                     (
                         quote! {
                             fn #guarded_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
                                 let mut g = tir::sem::SemGraph::new();
-                                #(#guarded_stmts)*
+                                #guarded_expr;
                                 g
                             }
                         },
@@ -787,8 +786,11 @@ fn emit_instructions<'a>(
                         64 => quote! { tir::builtin::FloatType::f64(_context) },
                         _ => unreachable!("unsupported scalar float register width {width}"),
                     };
-                    pattern_stmts.insert(0, quote! { use tir::graph::MetaMutDag as _; });
-                    pattern_stmts.push(quote! { g.set_actual_type(#root_var, #result_ty); });
+                    pattern_body = quote! {
+                        use tir::graph::MetaMutDag as _;
+                        let __sem_root = #pattern_expr;
+                        g.set_actual_type(__sem_root, #result_ty);
+                    };
                     let width = proc_macro2::Literal::u32_unsuffixed(width);
                     quote! { .with_float_constant_materializer(#width) }
                 } else {
@@ -857,7 +859,7 @@ fn emit_instructions<'a>(
             isel_rule_emitters.push(quote! {
                 fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
                     let mut g = tir::sem::SemGraph::new();
-                    #(#pattern_stmts)*
+                    #pattern_body
                     g
                 }
 

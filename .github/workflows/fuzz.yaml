@@ -17,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
       - name: Build fuzz targets
         run: cargo check -p tir-fuzz --bins

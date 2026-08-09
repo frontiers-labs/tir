@@ -8,7 +8,7 @@ fn emit_as_sem_expr_impl(
     let lowering = rhs.lower_to_sema(&mut dag, numeric_params, isa_param_values)?;
     // The AsSemExpr impl carries no type annotations (the program-graph builder
     // infers them), so pass no widths.
-    let (stmts, root_var) = emit_dag_as_code(&dag, lowering.root, &[]);
+    let root_expr = emit_dag_as_code(&dag, lowering.root, &[]);
 
     Some(quote! {
         impl tir::sem::AsSemExpr for #name_ident {
@@ -16,8 +16,7 @@ fn emit_as_sem_expr_impl(
                 &self,
                 g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
             ) -> tir::graph::NodeId {
-                #(#stmts)*
-                #root_var
+                #root_expr
             }
         }
     })
@@ -305,14 +304,14 @@ fn emit_lowered_value_eval(
     mnemonic_lit: &proc_macro2::Literal,
 ) -> Option<proc_macro2::TokenStream> {
     // Build the semantic graph inline (no type annotations, so no `_context`).
-    let (dag_stmts, _root) = emit_dag_as_code(dag, root, &[]);
+    let dag_expr = emit_dag_as_code(dag, root, &[]);
 
     Some(quote! {
         let value = {
             let mut __g = tir::sem::SemGraph::new();
             {
                 let g = &mut __g;
-                #(#dag_stmts)*
+                #dag_expr;
             }
             let __syms = __tmdl_entry_syms.clone();
             struct __TmdlMachineMemory<'a>(&'a mut dyn tir::backend::MachineContext);
@@ -676,7 +675,7 @@ fn emit_cond_branch_rule(
             pattern_widths[index] = *forced;
         }
     }
-    let (pattern_stmts, _root_var) = emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
+    let pattern_expr = emit_dag_as_code(&canon_pattern, canon_root, &pattern_widths);
     let operand_register_call = emit_operand_register_call(
         ops,
         variable_symbols,
@@ -691,7 +690,7 @@ fn emit_cond_branch_rule(
     let emitter = quote! {
         fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
             let mut g = tir::sem::SemGraph::new();
-            #(#pattern_stmts)*
+            #pattern_expr;
             g
         }
 
@@ -797,7 +796,7 @@ fn emit_dag_as_code(
     dag: &impl tir::graph::Dag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
     root: tir::graph::NodeId,
     widths: &[Option<u32>],
-) -> (Vec<proc_macro2::TokenStream>, proc_macro2::Ident) {
+) -> proc_macro2::TokenStream {
     let mut ops: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut node_indices: HashMap<usize, u32> = HashMap::new();
     let mut has_typed_node = false;
@@ -839,23 +838,21 @@ fn emit_dag_as_code(
         node_indices.insert(node_id.index(), counter as u32);
     }
 
-    let root_var = format_ident!("__sem_root");
-    let stmt = if has_typed_node {
+    if has_typed_node {
         quote! {
-            let #root_var = {
+            {
                 use tir::sem::ExtendSemOpsTyped as _;
                 g.extend_sem_ops_typed(_context, &[#(#ops),*])
-            };
+            }
         }
     } else {
         quote! {
-            let #root_var = {
+            {
                 use tir::sem::ExtendSemOps as _;
                 g.extend_sem_ops(&[#(#ops),*])
-            };
+            }
         }
-    };
-    (vec![stmt], root_var)
+    }
 }
 
 fn emit_payload_desc_ts(
