@@ -19,7 +19,7 @@ tir-pdl = { path = "../utils/pdl", default-features = false }
 
 [dev-dependencies]
 tir-lit = { path = "../utils/lit" }
-criterion = { workspace = true, features = ["html_reports"] }
+criterion = { workspace = true }
 
 [[test]]
 name = "lit"

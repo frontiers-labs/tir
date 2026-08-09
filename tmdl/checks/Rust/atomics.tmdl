@@ -27,7 +27,8 @@
 // A plain store with an explicit ordering packs the ordering code into the
 // inert metadata operand (`seq_cst` = 4 -> bits 3:1 -> value 8, width 4) and
 // keeps its selection rule.
-// CHECK: int_payload(4, 8
+// CHECK: width: 4,
+// CHECK-NEXT: value: 8,
 // CHECK: impl tir::sem::AsSemExpr for StRelOp
 
 // Atomic instructions get neither an op-sem pattern nor a selection rule.

@@ -579,7 +579,6 @@ fn emit_one_division_rule(
 
     isel_rule_emitters.push(quote! {
         fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
-            use tir::graph::MutDag;
             let mut g = tir::sem::SemGraph::new();
             #(#pattern_stmts)*
             g

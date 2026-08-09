@@ -1,0 +1,56 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+// Instructions resolving to the same class share one emitted constant, and the
+// per-machine table is static data rather than an imperative constructor.
+
+// CHECK: const [[ALU:SCHED_C[0-9]+]]: tir::backend::sched::InstrSchedClass = tir::backend::sched::InstrSchedClass {
+// CHECK: latency: 1,
+// CHECK: resources: &["P0"],
+// CHECK: const [[MUL:SCHED_C[0-9]+]]: tir::backend::sched::InstrSchedClass = tir::backend::sched::InstrSchedClass {
+// CHECK: latency: 3,
+// CHECK: resources: &["P1"],
+// CHECK: static TEST_CORE_SCHED: &[(&str, tir::backend::sched::InstrSchedClass)] = &[
+// CHECK-NEXT: ("add", [[ALU]]),
+// CHECK-NEXT: ("mul", [[MUL]]),
+// CHECK-NEXT: ("sub", [[ALU]]),
+// CHECK: static TEST_CORE_MODEL: tir::backend::sched::MachineModel = tir::backend::sched::MachineModel {
+// CHECK: sched: TEST_CORE_SCHED,
+// CHECK: pub fn test_core_model() -> tir::backend::sched::MachineModel {
+// CHECK-NEXT: TEST_CORE_MODEL
+// CHECK-NEXT: }
+
+isa TestIsa {}
+
+sched_class WriteALU;
+sched_class WriteIMul;
+
+instruction Add for [TestIsa] {
+    param OPNAME: String = "add";
+    param MNEMONIC: String = "add";
+    asm { "add" }
+    behavior { todo(); }
+    schedule { units = [WriteALU]; }
+}
+
+instruction Sub for [TestIsa] {
+    param OPNAME: String = "sub";
+    param MNEMONIC: String = "sub";
+    asm { "sub" }
+    behavior { todo(); }
+    schedule { units = [WriteALU]; }
+}
+
+instruction Mul for [TestIsa] {
+    param OPNAME: String = "mul";
+    param MNEMONIC: String = "mul";
+    asm { "mul" }
+    behavior { todo(); }
+    schedule { units = [WriteIMul]; }
+}
+
+machine TestCore for [TestIsa] {
+    unit P0 { count = 1; }
+    unit P1 { count = 1; }
+    bind WriteALU { latency = 1; uses = [P0]; }
+    bind WriteIMul { latency = 3; uses = [P1]; }
+}

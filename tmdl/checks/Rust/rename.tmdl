@@ -1,11 +1,13 @@
 // RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
-// CHECK: "a-move"
+// CHECK: const [[MOVE:SCHED_C[0-9]+]]: tir::backend::sched::InstrSchedClass = tir::backend::sched::InstrSchedClass {
 // CHECK: eliminated: true,
 // CHECK: zero_idiom: false,
-// CHECK: "b-xor"
+// CHECK: const [[XOR:SCHED_C[0-9]+]]: tir::backend::sched::InstrSchedClass = tir::backend::sched::InstrSchedClass {
 // CHECK: eliminated: false,
 // CHECK: zero_idiom: true,
+// CHECK: ("a-move", [[MOVE]]),
+// CHECK-NEXT: ("b-xor", [[XOR]]),
 
 isa TestIsa {}
 

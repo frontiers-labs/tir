@@ -1,6 +1,7 @@
 use tir::helpers::dialect;
 
 pub mod abi;
+pub mod asm_desc;
 pub mod asm_syntax;
 pub mod binary;
 pub mod call_lowering;

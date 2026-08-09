@@ -1,3 +1,9 @@
+/// A parse step matching one punctuation token of an instruction's syntax.
+fn asm_symbol_step(symbol: &str) -> proc_macro2::TokenStream {
+    let symbol_ident = format_ident!("{}", symbol);
+    quote! { ParseStep::Symbol(AsmSymbol::#symbol_ident) }
+}
+
 struct InstructionOptions<'a> {
     dialect: &'a str,
     text_only: bool,
@@ -37,8 +43,10 @@ fn emit_instructions<'a>(
         usize,
         proc_macro2::TokenStream,
     )> = vec![];
-    let mut instruction_printers_impls: Vec<proc_macro2::TokenStream> = vec![];
-    let mut instruction_printer_map_inits: Vec<proc_macro2::TokenStream> = vec![];
+    // One descriptor per assembled instruction, in source order: the shared
+    // runtime parser and printer interpret these instead of a generated
+    // function body per instruction.
+    let mut instruction_descs: Vec<proc_macro2::TokenStream> = vec![];
     let mut isel_rule_emitters: Vec<proc_macro2::TokenStream> = vec![];
     let mut isel_rule_inits: Vec<proc_macro2::TokenStream> = vec![];
     let mut machine_instruction_impls: Vec<proc_macro2::TokenStream> = vec![];
@@ -757,7 +765,6 @@ fn emit_instructions<'a>(
                     (
                         quote! {
                             fn #guarded_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
-                                use tir::graph::MutDag;
                                 let mut g = tir::sem::SemGraph::new();
                                 #(#guarded_stmts)*
                                 g
@@ -849,7 +856,6 @@ fn emit_instructions<'a>(
 
             isel_rule_emitters.push(quote! {
                 fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
-                    use tir::graph::MutDag;
                     let mut g = tir::sem::SemGraph::new();
                     #(#pattern_stmts)*
                     g
@@ -1341,24 +1347,6 @@ fn emit_instructions<'a>(
                     )
                 })
                 .count();
-            // Operand-less instructions (e.g. ecall) consume no tokens beyond
-            // the mnemonic and set no attributes.
-            let parses_operands = actions.iter().any(|a| {
-                matches!(
-                    a,
-                    AsmAction::Comma
-                        | AsmAction::LParen
-                        | AsmAction::RParen
-                        | AsmAction::LBracket
-                        | AsmAction::RBracket
-                        | AsmAction::Star
-                        | AsmAction::Plus
-                        | AsmAction::Number(_)
-                        | AsmAction::Operand(_)
-                        | AsmAction::Keyword(_)
-                )
-            });
-
             let plus_before_immediate: Vec<bool> = actions
                 .iter()
                 .enumerate()
@@ -1374,202 +1362,74 @@ fn emit_instructions<'a>(
             let mut parse_steps: Vec<proc_macro2::TokenStream> = Vec::new();
             for (action_index, act) in actions.into_iter().enumerate() {
                 match act {
-                    AsmAction::Comma => {
-                        parse_steps.push(quote! {
-                            parser
-                                .expect_symbol(tir::parse::tokens::Symbol::Comma)
-                                .map_err(|_| ())?;
-                        });
-                    }
-                    AsmAction::Operand(op_name) => {
-                        if let Some(ty) = ops_map.get(&op_name) {
-                            let op_name_lit = proc_macro2::Literal::string(&op_name);
-                            match ty {
-                                Type::Struct(class_name) => {
-                                    let fn_ident =
-                                        format_ident!("parse_{}", class_name.to_lowercase());
-                                    let class_id = reg_class_id(class_name);
-                                    parse_steps.push(quote! {
-                                        let idx = #fn_ident(parser).ok_or(())?;
-                                        op_builder = op_builder.attr(
-                                            #op_name_lit,
-                                            tir::attributes::AttributeValue::Register(
-                                                tir::attributes::RegisterAttr::Physical {
-                                                    class: #class_id,
-                                                    index: idx,
-                                                },
-                                            ),
-                                        );
-                                    });
-                                }
-                                Type::Integer | Type::Bits(_) => {
-                                    let signed_by_separator = action_index > 0
-                                        && plus_before_immediate[action_index - 1];
-                                    let apply_separator_sign = signed_by_separator
-                                        .then(|| {
-                                            quote! {
-                                                let value = value
-                                                    .checked_mul(immediate_sign)
-                                                    .ok_or(())?;
-                                            }
-                                        });
-                                    let reject_signed_symbol = signed_by_separator
-                                        .then(|| quote! { if immediate_sign < 0 { return Err(()); } });
-                                    // Reject integers that do not fit the operand's
-                                    // `bits<N>` width so the per-mnemonic dispatch
-                                    // backtracks to a wider form instead of failing
-                                    // later in the encoder. Mirrors the encoder's
-                                    // union of the signed and unsigned N-bit ranges:
-                                    // [-(2^(N-1)), 2^N - 1].
-                                    let imm_guard = match ty {
-                                        Type::Bits(n) if *n < 64 => {
-                                            let min = proc_macro2::Literal::i64_suffixed(
-                                                -(1i64 << (n - 1)),
-                                            );
-                                            let max = proc_macro2::Literal::i64_suffixed(1i64 << n);
-                                            Some(
-                                                quote! { if !(#min..#max).contains(&value) { return Err(()); } },
-                                            )
-                                        }
-                                        _ => None,
-                                    };
-                                    parse_steps.push(quote! {
-                                        let val = if let Some(tok) = parser.peek() {
-                                            match tok {
-                                                tir::backend::Token::DecNumber(n) => {
-                                                    let value = (*n).parse::<i64>().map_err(|_| ())?;
-                                                    #apply_separator_sign
-                                                    #imm_guard
-                                                    let _ = parser.bump();
-                                                    tir::attributes::AttributeValue::Int(value)
-                                                }
-                                                tir::backend::Token::HexNumber(h) => {
-                                                    let s = *h;
-                                                    let neg = s.starts_with('-');
-                                                    let s = if neg { &s[1..] } else { s };
-                                                    let s = if s.starts_with("0x") || s.starts_with("0X") { &s[2..] } else { s };
-                                                    let v = i128::from_str_radix(s, 16).map_err(|_| ())?;
-                                                    let v = if neg { -v } else { v };
-                                                    let value: i64 = v.try_into().map_err(|_| ())?;
-                                                    #apply_separator_sign
-                                                    #imm_guard
-                                                    let _ = parser.bump();
-                                                    tir::attributes::AttributeValue::Int(value)
-                                                }
-                                                // A bare identifier in an immediate position is a
-                                                // symbol reference, resolved at object emission.
-                                                tir::backend::Token::Ident(name) => {
-                                                    #reject_signed_symbol
-                                                    let symbol = (*name).to_string();
-                                                    let _ = parser.bump();
-                                                    tir::attributes::AttributeValue::Str(symbol)
-                                                }
-                                                _ => { return Err(()); }
-                                            }
-                                        } else { return Err(()); };
-                                        op_builder = op_builder.attr(#op_name_lit, val);
-                                    });
-                                }
-                                Type::String => {
-                                    // Strings in asm templates aren't currently used as operands; skip for now.
-                                    parse_steps.push(quote! { let _ = parser.peek(); });
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    AsmAction::Skip => {
-                        parse_steps.push(quote! {});
-                    }
-                    AsmAction::SkipMnemonic => {
-                        parse_steps.push(quote! {});
-                    }
-                    AsmAction::LParen => {
-                        parse_steps.push(quote! {
-                            match parser.bump() {
-                                Some(tir::backend::Token::LParen) => {}
-                                _ => return Err(()),
-                            }
-                        });
-                    }
-                    AsmAction::RParen => {
-                        parse_steps.push(quote! {
-                            match parser.bump() {
-                                Some(tir::backend::Token::RParen) => {}
-                                _ => return Err(()),
-                            }
-                        });
-                    }
-                    AsmAction::LBracket => {
-                        parse_steps.push(quote! {
-                            match parser.bump() {
-                                Some(tir::backend::Token::LBracket) => {}
-                                _ => return Err(()),
-                            }
-                        });
-                    }
-                    AsmAction::RBracket => {
-                        parse_steps.push(quote! {
-                            match parser.bump() {
-                                Some(tir::backend::Token::RBracket) => {}
-                                _ => return Err(()),
-                            }
-                        });
-                    }
-                    AsmAction::Star => {
-                        parse_steps.push(quote! {
-                            match parser.bump() {
-                                Some(tir::backend::Token::Star) => {}
-                                _ => return Err(()),
-                            }
-                        });
-                    }
+                    AsmAction::Comma => parse_steps.push(asm_symbol_step("Comma")),
+                    AsmAction::LParen => parse_steps.push(asm_symbol_step("LParen")),
+                    AsmAction::RParen => parse_steps.push(asm_symbol_step("RParen")),
+                    AsmAction::LBracket => parse_steps.push(asm_symbol_step("LBracket")),
+                    AsmAction::RBracket => parse_steps.push(asm_symbol_step("RBracket")),
+                    AsmAction::Star => parse_steps.push(asm_symbol_step("Star")),
                     AsmAction::Plus => {
                         if plus_before_immediate[action_index] {
-                            parse_steps.push(quote! {
-                                let immediate_sign = match parser.peek() {
-                                    Some(tir::backend::Token::Plus) => {
-                                        let _ = parser.bump();
-                                        1i64
-                                    }
-                                    Some(tir::backend::Token::Minus) => {
-                                        let _ = parser.bump();
-                                        -1i64
-                                    }
-                                    Some(tir::backend::Token::DecNumber(value))
-                                        if value.starts_with('-') => 1i64,
-                                    Some(tir::backend::Token::HexNumber(value))
-                                        if value.starts_with('-') => 1i64,
-                                    _ => return Err(()),
-                                };
-                            });
+                            parse_steps.push(quote! { ParseStep::Sign });
                         } else {
-                            parse_steps.push(quote! {
-                                match parser.bump() {
-                                    Some(tir::backend::Token::Plus) => {}
-                                    _ => return Err(()),
-                                }
-                            });
+                            parse_steps.push(asm_symbol_step("Plus"));
                         }
                     }
                     AsmAction::Number(number) => {
                         let number_lit = proc_macro2::Literal::string(&number);
-                        parse_steps.push(quote! {
-                            match parser.bump() {
-                                Some(tir::backend::Token::DecNumber(value))
-                                    if *value == #number_lit => {}
-                                _ => return Err(()),
-                            }
-                        });
+                        parse_steps
+                            .push(quote! { ParseStep::Number(#number_lit) });
                     }
                     AsmAction::Keyword(kw) => {
                         let kw_lit = proc_macro2::Literal::string(&kw);
-                        parse_steps.push(quote! {
-                            match parser.bump() {
-                                Some(tir::backend::Token::Ident(s)) if *s == #kw_lit => {}
-                                _ => return Err(()),
+                        parse_steps
+                            .push(quote! { ParseStep::Keyword(#kw_lit) });
+                    }
+                    // A `{...}` slot the template names but the instruction has no
+                    // operand for, and the mnemonic itself, consume no tokens.
+                    AsmAction::Skip | AsmAction::SkipMnemonic => {}
+                    AsmAction::Operand(op_name) => {
+                        let Some(ty) = ops_map.get(&op_name) else {
+                            continue;
+                        };
+                        let op_name_lit = proc_macro2::Literal::string(&op_name);
+                        match ty {
+                            Type::Struct(class_name) => {
+                                let fn_ident =
+                                    format_ident!("parse_{}", class_name.to_lowercase());
+                                let class_id = reg_class_id(class_name);
+                                parse_steps.push(quote! {
+                                    ParseStep::Register(#op_name_lit, #class_id, #fn_ident)
+                                });
                             }
-                        });
+                            Type::Integer | Type::Bits(_) => {
+                                let signed = action_index > 0
+                                    && plus_before_immediate[action_index - 1];
+                                // Reject integers that do not fit the operand's
+                                // `bits<N>` width so the per-mnemonic dispatch
+                                // backtracks to a wider form instead of failing
+                                // later in the encoder. Mirrors the encoder's
+                                // union of the signed and unsigned N-bit ranges:
+                                // [-(2^(N-1)), 2^N - 1].
+                                let range = match ty {
+                                    Type::Bits(n) if *n < 64 => {
+                                        let min = proc_macro2::Literal::i64_suffixed(
+                                            -(1i64 << (n - 1)),
+                                        );
+                                        let max = proc_macro2::Literal::i64_suffixed(1i64 << n);
+                                        quote! { Some((#min, #max)) }
+                                    }
+                                    _ => quote! { None },
+                                };
+                                parse_steps.push(quote! {
+                                    ParseStep::Immediate(#op_name_lit, #signed, #range)
+                                });
+                            }
+                            // Strings in asm templates aren't currently used as
+                            // operands, and consume no tokens.
+                            Type::String => {}
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -1620,148 +1480,90 @@ fn emit_instructions<'a>(
                 continue;
             }
 
-            let prints_operands = print_parts
-                .iter()
-                .any(|p| matches!(p, AsmPrintPart::Operand(_)));
+            // Adjacent literal text (the mnemonic and the space after it, an
+            // operand separator and a sigil) prints as one string.
+            let print_parts = print_parts.into_iter().fold(
+                Vec::new(),
+                |mut merged: Vec<AsmPrintPart>, part| {
+                    match (merged.last_mut(), &part) {
+                        (Some(AsmPrintPart::Text(prev)), AsmPrintPart::Text(text)) => {
+                            prev.push_str(text)
+                        }
+                        _ => merged.push(part),
+                    }
+                    merged
+                },
+            );
+
             let mut print_steps: Vec<proc_macro2::TokenStream> = Vec::new();
             for part in print_parts {
                 match part {
                     AsmPrintPart::Text(text) => {
                         if !text.is_empty() {
-                            let mut chars = text.chars();
-                            let first = chars.next().expect("text is not empty");
-                            if chars.next().is_none() {
-                                let char_lit = proc_macro2::Literal::character(first);
-                                print_steps.push(quote! {
-                                    out.push(#char_lit);
-                                });
-                            } else {
-                                let text_lit = proc_macro2::Literal::string(&text);
-                                print_steps.push(quote! {
-                                    out.push_str(#text_lit);
-                                });
-                            }
+                            let text_lit = proc_macro2::Literal::string(&text);
+                            print_steps
+                                .push(quote! { PrintPart::Text(#text_lit) });
                         }
                     }
                     AsmPrintPart::Operand(op_name) => {
-                        if let Some(ty) = ops_map.get(&op_name) {
-                            let op_name_lit = proc_macro2::Literal::string(&op_name);
-                            match ty {
-                                Type::Struct(class_name) => {
-                                    let fn_ident =
-                                        format_ident!("print_{}", class_name.to_lowercase());
-                                    print_steps.push(quote! {
-                                        let attr = attrs.iter().find(|attr| attr.name == #op_name_lit)?;
-                                        let operand = match &attr.value {
-                                            tir::attributes::AttributeValue::Register(
-                                                tir::attributes::RegisterAttr::Physical { index, .. },
-                                            ) => #fn_ident(*index, false)?,
-                                            tir::attributes::AttributeValue::Register(
-                                                tir::attributes::RegisterAttr::Virtual { id, .. },
-                                            ) => format!("%virt{id}"),
-                                            _ => return None,
-                                        };
-                                        out.push_str(&operand);
-                                    });
-                                }
-                                Type::Integer | Type::Bits(_) => {
-                                    print_steps.push(quote! {
-                                        let attr = attrs.iter().find(|attr| attr.name == #op_name_lit)?;
-                                        match &attr.value {
-                                            tir::attributes::AttributeValue::Int(value) => {
-                                                out.push_str(&value.to_string());
-                                            }
-                                            tir::attributes::AttributeValue::UInt(value) => {
-                                                out.push_str(&value.to_string());
-                                            }
-                                            tir::attributes::AttributeValue::Str(symbol) => {
-                                                out.push_str(symbol);
-                                            }
-                                            // A local branch target: print the block's label,
-                                            // falling back to `.L<n>` for unnamed blocks.
-                                            tir::attributes::AttributeValue::Block(block) => {
-                                                match _ctx.get_block(*block).attr("name") {
-                                                    Some(tir::attributes::AttributeValue::Str(label)) => {
-                                                        out.push_str(&label);
-                                                    }
-                                                    _ => {
-                                                        out.push_str(".L");
-                                                        out.push_str(&block.number().to_string());
-                                                    }
-                                                }
-                                            }
-                                            _ => return None,
-                                        }
-                                    });
-                                }
-                                Type::String => {
-                                    print_steps.push(quote! {
-                                        let attr = attrs.iter().find(|attr| attr.name == #op_name_lit)?;
-                                        match &attr.value {
-                                            tir::attributes::AttributeValue::Str(value) => {
-                                                out.push_str(value);
-                                            }
-                                            _ => return None,
-                                        }
-                                    });
-                                }
-                                _ => {}
+                        let Some(ty) = ops_map.get(&op_name) else {
+                            continue;
+                        };
+                        let op_name_lit = proc_macro2::Literal::string(&op_name);
+                        match ty {
+                            Type::Struct(class_name) => {
+                                let fn_ident =
+                                    format_ident!("print_{}", class_name.to_lowercase());
+                                print_steps.push(quote! {
+                                    PrintPart::Register(#op_name_lit, #fn_ident)
+                                });
                             }
+                            Type::Integer | Type::Bits(_) => {
+                                print_steps.push(quote! {
+                                    PrintPart::Immediate(#op_name_lit)
+                                });
+                            }
+                            Type::String => {
+                                print_steps.push(quote! {
+                                    PrintPart::Str(#op_name_lit)
+                                });
+                            }
+                            _ => {}
                         }
                     }
                 }
             }
 
-            let print_fn_ident = format_ident!("print_{}_inst", &inst.name.to_lowercase());
-            // Operand-less instructions (e.g. ecall) never consult the attributes.
-            let (op_param, attrs_binding) = if prints_operands {
-                (quote! { op }, quote! { let attrs = &op.attributes; })
-            } else {
-                (quote! { _op }, quote! {})
-            };
+            let parse_fn_ident = format_ident!("parse_{}_inst", &inst.name.to_lowercase());
             if !custom_assembly {
-                instruction_printers_impls.push(quote! {
-                    fn #print_fn_ident(_ctx: &tir::Context, #op_param: &tir::OpInstance) -> Option<String> {
-                        #attrs_binding
-                        let mut out = String::new();
-                        #(#print_steps)*
-                        Some(out)
+                let desc_index = proc_macro2::Literal::usize_unsuffixed(instruction_descs.len());
+                let desc_op_name_lit = proc_macro2::Literal::string(op_name);
+                instruction_descs.push(quote! {
+                    InstrDesc {
+                        op_name: #desc_op_name_lit,
+                        parse: &[#(#parse_steps),*],
+                        print: &[#(#print_steps),*],
                     }
                 });
-            }
 
-            let printer_op_name_lit = proc_macro2::Literal::string(op_name);
-            if !custom_assembly {
-                instruction_printer_map_inits.push(quote! {
-                    let f: tir::backend::AsmInstructionPrinter = #print_fn_ident;
-                    map.insert(#printer_op_name_lit.to_string(), f);
-                });
-            }
-
-            let parse_fn_ident = format_ident!("parse_{}_inst", &inst.name.to_lowercase());
-            let (parser_param, builder_binding) = if parses_operands {
-                (quote! { parser }, quote! { let mut op_builder })
-            } else {
-                (quote! { _parser }, quote! { let op_builder })
-            };
-            if !custom_assembly {
                 instruction_parsers_impls.push(quote! {
                     fn #parse_fn_ident<'src>(
                         context: &tir::Context,
                         builder: &mut tir::IRBuilder,
-                        #parser_param: &mut tir::parse::tokens::Parser<'src, tir::backend::Token<'src>>,
+                        parser: &mut tir::parse::tokens::Parser<'src, tir::backend::Token<'src>>,
                     ) -> Result<(), ()> {
-                        #builder_binding = #builder_ident::new(context);
-                        #(#parse_steps)*
-                        // A trailing comma means the input has more operands than
-                        // this form — another candidate with the same mnemonic
-                        // (e.g. a masked ", v0.t" twin) must get its turn.
-                        if matches!(#parser_param.peek(), Some(tir::backend::Token::Comma)) {
-                            return Err(());
-                        }
-                        let op = op_builder.build();
-                        builder.insert(op);
-                        Ok(())
+                        asm_desc::parse_and_insert(
+                            &INSTRUCTION_DESCS[#desc_index],
+                            parser,
+                            builder,
+                            |attributes| {
+                                let mut op_builder = #builder_ident::new(context);
+                                for attribute in attributes {
+                                    op_builder = op_builder.attr(&attribute.name, attribute.value);
+                                }
+                                op_builder.build()
+                            },
+                        )
                     }
                 });
             }
@@ -2034,6 +1836,22 @@ fn emit_instructions<'a>(
         }
     } else {
         quote! {
+            use tir::backend::asm_desc::{self, AsmSymbol, InstrDesc, ParseStep, PrintPart};
+
+            /// The assembly syntax of every instruction this target assembles,
+            /// interpreted by the shared descriptor-driven parser and printer.
+            static INSTRUCTION_DESCS: &[InstrDesc] = &[#(#instruction_descs),*];
+
+            static INSTRUCTION_DESC_INDEX: asm_desc::DescIndex =
+                asm_desc::DescIndex::new(INSTRUCTION_DESCS);
+
+            fn print_instruction_asm(
+                context: &tir::Context,
+                op: &tir::OpInstance,
+            ) -> Option<String> {
+                INSTRUCTION_DESC_INDEX.print(context, op)
+            }
+
             #registry_visibility fn get_instruction_parsers(
                 features: &[Feature],
             ) -> (
@@ -2050,8 +1868,10 @@ fn emit_instructions<'a>(
 
             #registry_visibility fn get_instruction_printers() -> std::collections::HashMap<String, tir::backend::AsmInstructionPrinter> {
                 let mut map: std::collections::HashMap<String, tir::backend::AsmInstructionPrinter> = std::collections::HashMap::new();
-                #(#instruction_printers_impls)*
-                #(#instruction_printer_map_inits)*
+                for desc in INSTRUCTION_DESCS {
+                    let f: tir::backend::AsmInstructionPrinter = print_instruction_asm;
+                    map.insert(desc.op_name.to_string(), f);
+                }
                 map
             }
         }

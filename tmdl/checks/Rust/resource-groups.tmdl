@@ -1,7 +1,6 @@
 // RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
-// CHECK: "mul",
-// CHECK: tir::backend::sched::InstrSchedClass {
+// CHECK: const [[CLS:SCHED_C[0-9]+]]: tir::backend::sched::InstrSchedClass = tir::backend::sched::InstrSchedClass {
 // CHECK: resources: &[],
 // CHECK: uops: &[
 // CHECK-COUNT-2: tir::backend::sched::MicroOp {
@@ -13,6 +12,7 @@
 // CHECK: cycles: 1,
 // CHECK: resource: "Multiply",
 // CHECK: cycles: 3,
+// CHECK: ("mul", [[CLS]]),
 
 isa TestIsa {}
 

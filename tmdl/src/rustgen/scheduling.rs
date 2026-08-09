@@ -1,9 +1,9 @@
-/// Emit one `fn <machine>_model() -> tir::backend::sched::MachineModel` per TMDL
-/// `machine` block. Each instruction's `unit` membership is resolved against the
-/// machine's `bind`s at compile time into a concrete per-operation scheduling class,
-/// so the runtime lookup is a binary search. This is the static half of the
-/// performance model: the same table feeds the compiler cost model and the
-/// cycle-approximate simulator, so they cannot disagree.
+/// Emit one `static <MACHINE>_MODEL` (plus the `fn <machine>_model()` accessor that
+/// returns it) per TMDL `machine` block. Each instruction's `unit` membership is
+/// resolved against the machine's `bind`s at compile time into a concrete
+/// per-operation scheduling class, so the runtime lookup is a binary search. This is
+/// the static half of the performance model: the same table feeds the compiler cost
+/// model and the cycle-approximate simulator, so they cannot disagree.
 fn emit_machine_models<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -14,6 +14,7 @@ fn emit_machine_models<'a>(
     let mut model_fns = Vec::new();
     let mut lookup_arms = Vec::new();
     let mut machine_names = Vec::new();
+    let mut class_pool = SchedClassPool::default();
     for machine in files.iter().flat_map(|f| f.machines()) {
         let binds: HashMap<&str, &ast::UnitBind> =
             machine.binds.iter().map(|b| (b.unit.as_str(), b)).collect();
@@ -66,62 +67,14 @@ fn emit_machine_models<'a>(
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         entries.dedup_by(|a, b| a.0 == b.0);
 
-        let sched_lits = entries.iter().map(|(mnem, c)| {
-            let mnem_lit = proc_macro2::Literal::string(mnem);
-            let lat_lit = proc_macro2::Literal::u16_unsuffixed(c.latency);
-            let read_lit = proc_macro2::Literal::u16_unsuffixed(c.read_cycle);
-            let rthr_lit = proc_macro2::Literal::u16_unsuffixed(c.rthroughput);
-            let res_lits = c.resources.iter().map(|r| proc_macro2::Literal::string(r));
-            let uop_lits = c.uops.iter().map(|uop| {
-                let route_lits = uop.routes.iter().map(|route| {
-                    let use_lits = route.iter().map(|use_| {
-                        let resource = proc_macro2::Literal::string(&use_.resource);
-                        let cycles = proc_macro2::Literal::u16_unsuffixed(use_.cycles);
-                        quote! {
-                            tir::backend::sched::ResourceUse {
-                                resource: #resource,
-                                cycles: #cycles,
-                            }
-                        }
-                    });
-                    quote! {
-                        tir::backend::sched::ResourceRoute {
-                            resources: &[#(#use_lits),*],
-                        }
-                    }
-                });
-                quote! {
-                    tir::backend::sched::MicroOp {
-                        routes: &[#(#route_lits),*],
-                    }
-                }
-            });
-            let decode_uops = proc_macro2::Literal::u16_unsuffixed(c.decode_uops);
-            let decoder = match &c.decoder {
-                Some(decoder) => {
-                    let decoder = proc_macro2::Literal::string(decoder);
-                    quote! { Some(#decoder) }
-                }
-                None => quote! { None },
-            };
-            let decode_cycles = proc_macro2::Literal::u16_unsuffixed(c.decode_cycles);
-            let eliminated = c.eliminated;
-            let zero_idiom = c.zero_idiom;
-            quote! {
-                (#mnem_lit, tir::backend::sched::InstrSchedClass {
-                    latency: #lat_lit,
-                    read_cycle: #read_lit,
-                    rthroughput: #rthr_lit,
-                    resources: &[#(#res_lits),*],
-                    uops: &[#(#uop_lits),*],
-                    decode_uops: #decode_uops,
-                    decoder: #decoder,
-                    decode_cycles: #decode_cycles,
-                    eliminated: #eliminated,
-                    zero_idiom: #zero_idiom,
-                })
-            }
-        });
+        let sched_lits: Vec<_> = entries
+            .iter()
+            .map(|(mnem, class)| {
+                let mnem_lit = proc_macro2::Literal::string(mnem);
+                let ident = sched_class_ident(class, &mut class_pool);
+                quote! { (#mnem_lit, #ident) }
+            })
+            .collect();
 
         let pipeline_lits = machine.pipeline.iter().map(|p| {
             let name_lit = proc_macro2::Literal::string(&p.name);
@@ -189,8 +142,14 @@ fn emit_machine_models<'a>(
             })
             .collect();
 
+        let screaming = to_snake_case(&machine.name).to_uppercase();
+        let sched_ident = format_ident!("{screaming}_SCHED");
+        let model_ident = format_ident!("{screaming}_MODEL");
         model_fns.push(quote! {
-            pub fn #fn_ident() -> tir::backend::sched::MachineModel {
+            static #sched_ident: &[(&str, tir::backend::sched::InstrSchedClass)] =
+                &[#(#sched_lits),*];
+
+            static #model_ident: tir::backend::sched::MachineModel =
                 tir::backend::sched::MachineModel {
                     name: #name_lit,
                     issue_width: #issue_width_lit,
@@ -200,9 +159,12 @@ fn emit_machine_models<'a>(
                     pipeline: &[#(#pipeline_lits),*],
                     forwards: &[#(#forward_lits),*],
                     reg_files: &[#(#reg_file_lits),*],
-                    sched: &[#(#sched_lits),*],
+                    sched: #sched_ident,
                     fusions: &[#(#fusion_lits),*],
-                }
+                };
+
+            pub fn #fn_ident() -> tir::backend::sched::MachineModel {
+                #model_ident
             }
         });
 
@@ -241,7 +203,15 @@ fn emit_machine_models<'a>(
         });
     }
 
+    let class_defs = class_pool.classes.iter().enumerate().map(|(i, class)| {
+        let ident = format_ident!("SCHED_C{i}");
+        let body = sched_class_ts(class);
+        quote! { const #ident: tir::backend::sched::InstrSchedClass = #body; }
+    });
+
     Ok(quote! {
+        #(#class_defs)*
+
         #(#model_fns)*
 
         /// Resolve a machine by its TMDL name or alias. `None` when the name is
@@ -260,6 +230,84 @@ fn emit_machine_models<'a>(
             names
         }
     })
+}
+
+/// Distinct scheduling classes across all machines, each emitted once as a
+/// `SCHED_C<n>` constant. Instruction tables reference these instead of repeating
+/// the struct literal: the overwhelming majority of an ISA's instructions resolve
+/// to one of a few dozen classes, so this keeps the generated file (and rustc's
+/// work on it) proportional to the number of distinct classes, not instructions.
+#[derive(Default)]
+struct SchedClassPool {
+    /// First-use order, which drives constant numbering and so must stay a `Vec`
+    /// for reproducible output.
+    classes: Vec<ResolvedClass>,
+    index: HashMap<ResolvedClass, usize>,
+}
+
+fn sched_class_ident(class: &ResolvedClass, pool: &mut SchedClassPool) -> proc_macro2::Ident {
+    let next = pool.classes.len();
+    let index = *pool.index.entry(class.clone()).or_insert_with(|| {
+        pool.classes.push(class.clone());
+        next
+    });
+    format_ident!("SCHED_C{index}")
+}
+
+fn sched_class_ts(c: &ResolvedClass) -> proc_macro2::TokenStream {
+    let lat_lit = proc_macro2::Literal::u16_unsuffixed(c.latency);
+    let read_lit = proc_macro2::Literal::u16_unsuffixed(c.read_cycle);
+    let rthr_lit = proc_macro2::Literal::u16_unsuffixed(c.rthroughput);
+    let res_lits = c.resources.iter().map(|r| proc_macro2::Literal::string(r));
+    let uop_lits = c.uops.iter().map(|uop| {
+        let route_lits = uop.routes.iter().map(|route| {
+            let use_lits = route.iter().map(|use_| {
+                let resource = proc_macro2::Literal::string(&use_.resource);
+                let cycles = proc_macro2::Literal::u16_unsuffixed(use_.cycles);
+                quote! {
+                    tir::backend::sched::ResourceUse {
+                        resource: #resource,
+                        cycles: #cycles,
+                    }
+                }
+            });
+            quote! {
+                tir::backend::sched::ResourceRoute {
+                    resources: &[#(#use_lits),*],
+                }
+            }
+        });
+        quote! {
+            tir::backend::sched::MicroOp {
+                routes: &[#(#route_lits),*],
+            }
+        }
+    });
+    let decode_uops = proc_macro2::Literal::u16_unsuffixed(c.decode_uops);
+    let decoder = match &c.decoder {
+        Some(decoder) => {
+            let decoder = proc_macro2::Literal::string(decoder);
+            quote! { Some(#decoder) }
+        }
+        None => quote! { None },
+    };
+    let decode_cycles = proc_macro2::Literal::u16_unsuffixed(c.decode_cycles);
+    let eliminated = c.eliminated;
+    let zero_idiom = c.zero_idiom;
+    quote! {
+        tir::backend::sched::InstrSchedClass {
+            latency: #lat_lit,
+            read_cycle: #read_lit,
+            rthroughput: #rthr_lit,
+            resources: &[#(#res_lits),*],
+            uops: &[#(#uop_lits),*],
+            decode_uops: #decode_uops,
+            decoder: #decoder,
+            decode_cycles: #decode_cycles,
+            eliminated: #eliminated,
+            zero_idiom: #zero_idiom,
+        }
+    }
 }
 
 /// Resource-agnostic `unit` defaults, keyed by name. Used both when a machine
@@ -388,6 +436,7 @@ fn phase_cycle(pipeline: &[ast::PipelinePhase], name: &str) -> Option<u16> {
 }
 
 /// The resolved scheduling cost of an instruction on one machine.
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct ResolvedClass {
     latency: u16,
     read_cycle: u16,
@@ -401,12 +450,12 @@ struct ResolvedClass {
     zero_idiom: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct ResolvedMicroOp {
     routes: Vec<Vec<ResolvedResourceUse>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct ResolvedResourceUse {
     resource: String,
     cycles: u16,

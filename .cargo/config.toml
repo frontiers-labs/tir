@@ -1,2 +1,8 @@
 [alias]
 xtask = "run --package xtask --"
+
+# 40+ statically linked test binaries make link time a large share of
+# incremental builds. Note: a RUSTFLAGS env var overrides this section; CI
+# gets mold via rui314/setup-mold instead.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

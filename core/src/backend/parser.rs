@@ -251,7 +251,7 @@ fn resolve_labels(context: &tir::Context, block: &Arc<Block>, labels: &HashMap<S
     }
 }
 
-fn parse_hex(text: &str) -> Result<i64, ()> {
+pub(crate) fn parse_hex(text: &str) -> Result<i64, ()> {
     let (neg, text) = match text.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, text),

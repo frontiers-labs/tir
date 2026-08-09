@@ -30,6 +30,104 @@ pub(crate) use discover::{con, op};
 /// carry its originating op and inferred type.
 pub type SemGraph = PostOrderDag<SymKind, SymPayload<ValueId>, NodeMeta>;
 
+/// A payload literal in a serialized [`SemOp`] program. Plain-old-data so op
+/// arrays are const-promotable; decoded to [`SymPayload`] on replay.
+#[derive(Clone, Copy, Debug)]
+pub enum SemPayloadDesc {
+    SymbolId(u32),
+    Value(u32),
+    Int {
+        width: u32,
+        value: u64,
+        signed: bool,
+    },
+    Float(f64),
+}
+
+impl SemPayloadDesc {
+    fn decode(self) -> SymPayload<ValueId> {
+        match self {
+            SemPayloadDesc::SymbolId(id) => SymPayload::SymbolId(id),
+            SemPayloadDesc::Value(number) => SymPayload::Value(ValueId::from_number(number)),
+            SemPayloadDesc::Int {
+                width,
+                value,
+                signed,
+            } => int_payload(width, value, signed),
+            SemPayloadDesc::Float(value) => float_payload(value),
+        }
+    }
+}
+
+/// One step of a serialized semantic-graph construction. TMDL-generated
+/// backends used to build every graph with one `add_node`/`add_edge` call per
+/// statement; hundreds of thousands of such statements dominated rustc time on
+/// the generated crates, so codegen now emits const `SemOp` arrays replayed by
+/// [`ExtendSemOps::extend_sem_ops`]. `Payload`/`Typed` apply to the most
+/// recently added node; `Edge` indices count nodes of the current array from 0.
+#[derive(Clone, Copy, Debug)]
+pub enum SemOp {
+    Node(SymKind),
+    Payload(SemPayloadDesc),
+    Typed(u32),
+    Edge(u32, u32),
+}
+
+fn replay_sem_ops<G, F>(g: &mut G, ops: &[SemOp], mut set_type: F) -> NodeId
+where
+    G: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>,
+    F: FnMut(&mut G, NodeId, u32),
+{
+    let mut nodes: Vec<NodeId> = Vec::new();
+    for op in ops {
+        match *op {
+            SemOp::Node(kind) => nodes.push(g.add_node(kind)),
+            SemOp::Payload(desc) => {
+                let node = *nodes.last().expect("payload before any node");
+                g.set_leaf_data(node, desc.decode());
+            }
+            SemOp::Typed(width) => {
+                let node = *nodes.last().expect("type before any node");
+                set_type(g, node, width);
+            }
+            SemOp::Edge(parent, child) => {
+                g.add_edge(nodes[parent as usize], nodes[child as usize]);
+            }
+        }
+    }
+    *nodes.last().expect("empty sem op array")
+}
+
+/// Replays a [`SemOp`] array into any semantic-graph sink; returns the root
+/// (the last node, as op arrays are emitted in post order).
+pub trait ExtendSemOps: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>> + Sized {
+    fn extend_sem_ops(&mut self, ops: &[SemOp]) -> NodeId {
+        replay_sem_ops(self, ops, |_, _, _| {
+            unreachable!("SemOp::Typed requires extend_sem_ops_typed")
+        })
+    }
+}
+
+impl<G: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>> ExtendSemOps for G {}
+
+/// [`ExtendSemOps`] for graphs that carry [`NodeMeta`], resolving
+/// [`SemOp::Typed`] widths against the context's interned integer types.
+pub trait ExtendSemOpsTyped:
+    MutDag<Node = SymKind, Leaf = SymPayload<ValueId>, Annotation = NodeMeta> + Sized
+{
+    fn extend_sem_ops_typed(&mut self, context: &crate::Context, ops: &[SemOp]) -> NodeId {
+        use crate::graph::MetaMutDag as _;
+        replay_sem_ops(self, ops, |g, node, width| {
+            g.set_actual_type(node, crate::builtin::IntegerType::new(context, width));
+        })
+    }
+}
+
+impl<G: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>, Annotation = NodeMeta>> ExtendSemOpsTyped
+    for G
+{
+}
+
 /// The definedness condition of a partial integer operation, materialized as new
 /// nodes in `g` over the operation's own operands. The partial kinds are the
 /// IR-level division/remainder ops, undefined at a zero divisor (and, for the

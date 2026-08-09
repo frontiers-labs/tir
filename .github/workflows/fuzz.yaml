@@ -37,7 +37,10 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - uses: rui314/setup-mold@v1
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.1
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz@0.13.1
       - name: Fuzz
         run: cargo +nightly fuzz run --fuzz-dir utils/fuzz ${{ matrix.target }} -- -max_total_time=60 -max_len=16384

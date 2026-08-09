@@ -6,16 +6,16 @@
 // CHECK: impl tir::backend::MachineInstruction for AddDoubleOp
 
 // The bound sum is built once from the two operand symbols.
-// CHECK: SymPayload::SymbolId(0)
-// CHECK: SymPayload::SymbolId(1)
+// CHECK: SemPayloadDesc::SymbolId(0)
+// CHECK: SemPayloadDesc::SymbolId(1)
 // CHECK: SymKind::Add
 // CHECK: __tmdl_entry_syms[2] = match value
 
 // Both uses of the binding read the same symbol; the addition is not rebuilt
 // from the operands.
-// CHECK: SymPayload::SymbolId(2)
+// CHECK: SemPayloadDesc::SymbolId(2)
 // CHECK: SymKind::Add
-// CHECK-NOT: SymPayload::SymbolId(0)
+// CHECK-NOT: SemPayloadDesc::SymbolId(0)
 // CHECK: write_register_value
 
 // An atomic RMW bound by a `let` is one memory transition: the RMW node is
@@ -46,10 +46,10 @@
 // Selection patterns see through a binding: the op semantics is the underlying
 // expression over the operands, not an opaque binding symbol.
 // CHECK: impl tir::sem::AsSemExpr for AddDoubleOp
-// CHECK: SymPayload::SymbolId(0)
-// CHECK: SymPayload::SymbolId(1)
+// CHECK: SemPayloadDesc::SymbolId(0)
+// CHECK: SemPayloadDesc::SymbolId(1)
 // CHECK: SymKind::Add
-// CHECK: SymPayload::SymbolId(0)
-// CHECK: SymPayload::SymbolId(1)
+// CHECK: SemPayloadDesc::SymbolId(0)
+// CHECK: SemPayloadDesc::SymbolId(1)
 // CHECK: SymKind::Add
 // CHECK: SymKind::Add

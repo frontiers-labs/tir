@@ -72,7 +72,7 @@ typed-arena = "2"
 
 [profile.bench]
 debug = true
-lto = true
+lto = "thin"
 
 # Full debug info makes a clean `cargo test --no-run` produce a ~22 GB target
 # dir (40+ statically linked binaries, ~97% DWARF). Line tables keep file:line
@@ -82,9 +82,11 @@ debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
 # Backend build scripts link all of tmdl; without this each one is a ~220 MB
-# executable.
+# executable. opt-level 2 makes the tmdl compiler run 5x faster inside them
+# (37.8s -> 7.3s for the riscv backend), which dominates every .tmdl rebuild.
 [profile.dev.build-override]
 debug = false
+opt-level = 2
 
 [profile.dev.package.filecheck]
 debug = false

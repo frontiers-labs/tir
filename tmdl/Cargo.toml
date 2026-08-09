@@ -25,7 +25,7 @@ name = "tmdlc"
 path = "bin.rs"
 
 [dev-dependencies]
-criterion = { workspace = true, features = ["html_reports"] }
+criterion = { workspace = true }
 jsonschema.workspace = true
 tir-lit.workspace = true
 

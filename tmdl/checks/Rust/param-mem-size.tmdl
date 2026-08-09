@@ -7,14 +7,18 @@
 // The interpreted behavior loads eight bytes; the division is folded away.
 // CHECK: impl tir::backend::MachineInstruction for LoadWordOp
 // CHECK-NOT: SymKind::Div
-// CHECK: tir::sem::int_payload(4, 8, false)
+// CHECK: SemPayloadDesc::Int {
+// CHECK-NEXT: width: 4,
+// CHECK-NEXT: value: 8,
 // CHECK: SymKind::LoadMemory
 
 // CHECK: impl tir::backend::MachineInstruction for LoadDynOp
 
 // CHECK: impl tir::backend::MachineInstruction for StoreWordOp
 // CHECK-NOT: SymKind::Div
-// CHECK: tir::sem::int_payload(4, 8, false)
+// CHECK: SemPayloadDesc::Int {
+// CHECK-NEXT: width: 4,
+// CHECK-NEXT: value: 8,
 // CHECK: SymKind::StoreMemory
 
 // The op semantics carries the same concrete size.

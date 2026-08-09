@@ -10,7 +10,7 @@ tir.workspace = true
 tmdl.workspace = true
 
 [dev-dependencies]
-criterion = { workspace = true, features = ["html_reports"] }
+criterion = { workspace = true }
 tir-lit.workspace = true
 
 [[test]]

@@ -311,7 +311,6 @@ fn emit_lowered_value_eval(
         let value = {
             let mut __g = tir::sem::SemGraph::new();
             {
-                use tir::graph::MutDag as _;
                 let g = &mut __g;
                 #(#dag_stmts)*
             }
@@ -691,7 +690,6 @@ fn emit_cond_branch_rule(
 
     let emitter = quote! {
         fn #pattern_fn_ident(_context: &tir::Context) -> tir::sem::SemGraph {
-            use tir::graph::MutDag;
             let mut g = tir::sem::SemGraph::new();
             #(#pattern_stmts)*
             g
@@ -800,18 +798,16 @@ fn emit_dag_as_code(
     root: tir::graph::NodeId,
     widths: &[Option<u32>],
 ) -> (Vec<proc_macro2::TokenStream>, proc_macro2::Ident) {
-    let mut stmts: Vec<proc_macro2::TokenStream> = Vec::new();
-    let mut node_vars: HashMap<usize, proc_macro2::Ident> = HashMap::new();
+    let mut ops: Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut node_indices: HashMap<usize, u32> = HashMap::new();
     let mut has_typed_node = false;
     for (counter, node_id) in dag.postorder(root).enumerate() {
-        let var = format_ident!("__sem_{}", counter);
-
         let kind_ts = emit_expr_kind_ts(dag.get_node(node_id));
-        stmts.push(quote! { let #var = g.add_node(#kind_ts); });
+        ops.push(quote! { tir::sem::SemOp::Node(#kind_ts) });
 
         if let Some(data) = dag.get_leaf_data(node_id) {
-            let data_ts = emit_expr_payload_ts(data);
-            stmts.push(quote! { g.set_leaf_data(#var, #data_ts); });
+            let data_ts = emit_payload_desc_ts(data);
+            ops.push(quote! { tir::sem::SemOp::Payload(#data_ts) });
         }
 
         if !matches!(
@@ -829,27 +825,67 @@ fn emit_dag_as_code(
             && let Some(Some(width)) = widths.get(node_id.index()).copied()
         {
             let width_lit = proc_macro2::Literal::u32_unsuffixed(width);
-            stmts.push(quote! {
-                g.set_actual_type(#var, tir::builtin::IntegerType::new(_context, #width_lit));
-            });
+            ops.push(quote! { tir::sem::SemOp::Typed(#width_lit) });
             has_typed_node = true;
         }
 
+        let parent_lit = proc_macro2::Literal::u32_unsuffixed(counter as u32);
         let children: Vec<tir::graph::NodeId> = dag.children(node_id).collect();
         for child_id in children {
-            let child_var = node_vars[&child_id.index()].clone();
-            stmts.push(quote! { g.add_edge(#var, #child_var); });
+            let child_lit = proc_macro2::Literal::u32_unsuffixed(node_indices[&child_id.index()]);
+            ops.push(quote! { tir::sem::SemOp::Edge(#parent_lit, #child_lit) });
         }
 
-        node_vars.insert(node_id.index(), var);
+        node_indices.insert(node_id.index(), counter as u32);
     }
 
-    if has_typed_node {
-        stmts.insert(0, quote! { use tir::graph::MetaMutDag as _; });
-    }
+    let root_var = format_ident!("__sem_root");
+    let stmt = if has_typed_node {
+        quote! {
+            let #root_var = {
+                use tir::sem::ExtendSemOpsTyped as _;
+                g.extend_sem_ops_typed(_context, &[#(#ops),*])
+            };
+        }
+    } else {
+        quote! {
+            let #root_var = {
+                use tir::sem::ExtendSemOps as _;
+                g.extend_sem_ops(&[#(#ops),*])
+            };
+        }
+    };
+    (vec![stmt], root_var)
+}
 
-    let root_var = node_vars[&root.index()].clone();
-    (stmts, root_var)
+fn emit_payload_desc_ts(
+    payload: &tir::sem::SymPayload<tir::ValueId>,
+) -> proc_macro2::TokenStream {
+    use tir::sem::SymPayload;
+    match payload {
+        SymPayload::SymbolId(id) => {
+            let id_lit = proc_macro2::Literal::u32_unsuffixed(*id);
+            quote! { tir::sem::SemPayloadDesc::SymbolId(#id_lit) }
+        }
+        SymPayload::Value(value) => {
+            let value_lit = proc_macro2::Literal::u32_unsuffixed(value.number());
+            quote! { tir::sem::SemPayloadDesc::Value(#value_lit) }
+        }
+        SymPayload::Int(v) => {
+            let width = proc_macro2::Literal::u32_unsuffixed(v.width());
+            let signed = v.is_signed();
+            let val = if signed {
+                proc_macro2::Literal::u64_unsuffixed(v.to_i64() as u64)
+            } else {
+                proc_macro2::Literal::u64_unsuffixed(v.to_u64())
+            };
+            quote! { tir::sem::SemPayloadDesc::Int { width: #width, value: #val, signed: #signed } }
+        }
+        SymPayload::Float(f) => {
+            let val = proc_macro2::Literal::f64_unsuffixed(f.to_f64());
+            quote! { tir::sem::SemPayloadDesc::Float(#val) }
+        }
+    }
 }
 
 fn emit_expr_kind_ts(kind: &tir::sem::SymKind) -> proc_macro2::TokenStream {
@@ -860,33 +896,6 @@ fn emit_expr_kind_ts(kind: &tir::sem::SymKind) -> proc_macro2::TokenStream {
     quote! { tir::sem::SymKind::#variant }
 }
 
-fn emit_expr_payload_ts(payload: &tir::sem::SymPayload<tir::ValueId>) -> proc_macro2::TokenStream {
-    use tir::sem::SymPayload;
-    match payload {
-        SymPayload::SymbolId(id) => {
-            let id_lit = proc_macro2::Literal::u32_unsuffixed(*id);
-            quote! { tir::sem::SymPayload::SymbolId(#id_lit) }
-        }
-        SymPayload::Value(value) => {
-            let value_lit = proc_macro2::Literal::u32_unsuffixed(value.number());
-            quote! { tir::sem::SymPayload::Value(tir::ValueId::from_number(#value_lit)) }
-        }
-        SymPayload::Int(v) => {
-            let width = proc_macro2::Literal::u32_unsuffixed(v.width());
-            if v.is_signed() {
-                let val = proc_macro2::Literal::u64_unsuffixed(v.to_i64() as u64);
-                quote! { tir::sem::int_payload(#width, #val, true) }
-            } else {
-                let val = proc_macro2::Literal::u64_unsuffixed(v.to_u64());
-                quote! { tir::sem::int_payload(#width, #val, false) }
-            }
-        }
-        SymPayload::Float(f) => {
-            let val = proc_macro2::Literal::f64_unsuffixed(f.to_f64());
-            quote! { tir::sem::float_payload(#val) }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Instruction encoders
