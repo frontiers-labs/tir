@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "./defs/main.tmdl",
         "./defs/versions.tmdl",
         "./defs/float.tmdl",
+        "./defs/advsimd.tmdl",
         "./defs/data_processing.tmdl",
         "./defs/loads_stores.tmdl",
         "./defs/atomics.tmdl",

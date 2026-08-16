@@ -1,0 +1,82 @@
+// RUN: tir mc --march=armv8.0-a --filetype=obj-ascii %s | filecheck %s
+
+// Floating-point three-same operations over the single- and
+// double-precision arrangements.
+
+.global advsimd_float_arith
+advsimd_float_arith:
+    fadd v0.2s, v9.2s, v18.2s
+    fadd v1.4s, v10.4s, v19.4s
+    fadd v2.2d, v11.2d, v20.2d
+    fsub v0.2s, v9.2s, v18.2s
+    fsub v1.4s, v10.4s, v19.4s
+    fsub v2.2d, v11.2d, v20.2d
+    fmul v0.2s, v9.2s, v18.2s
+    fmul v1.4s, v10.4s, v19.4s
+    fmul v2.2d, v11.2d, v20.2d
+    fdiv v0.2s, v9.2s, v18.2s
+    fdiv v1.4s, v10.4s, v19.4s
+    fdiv v2.2d, v11.2d, v20.2d
+    fmaxnm v0.2s, v9.2s, v18.2s
+    fmaxnm v1.4s, v10.4s, v19.4s
+    fmaxnm v2.2d, v11.2d, v20.2d
+    fminnm v0.2s, v9.2s, v18.2s
+    fminnm v1.4s, v10.4s, v19.4s
+    fminnm v2.2d, v11.2d, v20.2d
+    fabd v0.2s, v9.2s, v18.2s
+    fabd v1.4s, v10.4s, v19.4s
+    fabd v2.2d, v11.2d, v20.2d
+    fcmeq v0.2s, v9.2s, v18.2s
+    fcmeq v1.4s, v10.4s, v19.4s
+    fcmeq v2.2d, v11.2d, v20.2d
+    fcmge v0.2s, v9.2s, v18.2s
+    fcmge v1.4s, v10.4s, v19.4s
+    fcmge v2.2d, v11.2d, v20.2d
+    fcmgt v0.2s, v9.2s, v18.2s
+    fcmgt v1.4s, v10.4s, v19.4s
+    fcmgt v2.2d, v11.2d, v20.2d
+    facge v0.2s, v9.2s, v18.2s
+    facge v1.4s, v10.4s, v19.4s
+    facge v2.2d, v11.2d, v20.2d
+    facgt v0.2s, v9.2s, v18.2s
+    facgt v1.4s, v10.4s, v19.4s
+    facgt v2.2d, v11.2d, v20.2d
+
+// CHECK: .section .text
+// CHECK-NEXT: advsimd_float_arith:
+// CHECK-NEXT: [0x20, 0xD5, 0x32, 0x0E]
+// CHECK-NEXT: [0x41, 0xD5, 0x33, 0x4E]
+// CHECK-NEXT: [0x62, 0xD5, 0x74, 0x4E]
+// CHECK-NEXT: [0x20, 0xD5, 0xB2, 0x0E]
+// CHECK-NEXT: [0x41, 0xD5, 0xB3, 0x4E]
+// CHECK-NEXT: [0x62, 0xD5, 0xF4, 0x4E]
+// CHECK-NEXT: [0x20, 0xDD, 0x32, 0x2E]
+// CHECK-NEXT: [0x41, 0xDD, 0x33, 0x6E]
+// CHECK-NEXT: [0x62, 0xDD, 0x74, 0x6E]
+// CHECK-NEXT: [0x20, 0xFD, 0x32, 0x2E]
+// CHECK-NEXT: [0x41, 0xFD, 0x33, 0x6E]
+// CHECK-NEXT: [0x62, 0xFD, 0x74, 0x6E]
+// CHECK-NEXT: [0x20, 0xC5, 0x32, 0x0E]
+// CHECK-NEXT: [0x41, 0xC5, 0x33, 0x4E]
+// CHECK-NEXT: [0x62, 0xC5, 0x74, 0x4E]
+// CHECK-NEXT: [0x20, 0xC5, 0xB2, 0x0E]
+// CHECK-NEXT: [0x41, 0xC5, 0xB3, 0x4E]
+// CHECK-NEXT: [0x62, 0xC5, 0xF4, 0x4E]
+// CHECK-NEXT: [0x20, 0xD5, 0xB2, 0x2E]
+// CHECK-NEXT: [0x41, 0xD5, 0xB3, 0x6E]
+// CHECK-NEXT: [0x62, 0xD5, 0xF4, 0x6E]
+// CHECK-NEXT: [0x20, 0xE5, 0x32, 0x0E]
+// CHECK-NEXT: [0x41, 0xE5, 0x33, 0x4E]
+// CHECK-NEXT: [0x62, 0xE5, 0x74, 0x4E]
+// CHECK-NEXT: [0x20, 0xE5, 0x32, 0x2E]
+// CHECK-NEXT: [0x41, 0xE5, 0x33, 0x6E]
+// CHECK-NEXT: [0x62, 0xE5, 0x74, 0x6E]
+// CHECK-NEXT: [0x20, 0xE5, 0xB2, 0x2E]
+// CHECK-NEXT: [0x41, 0xE5, 0xB3, 0x6E]
+// CHECK-NEXT: [0x62, 0xE5, 0xF4, 0x6E]
+// CHECK-NEXT: [0x20, 0xED, 0x32, 0x2E]
+// CHECK-NEXT: [0x41, 0xED, 0x33, 0x6E]
+// CHECK-NEXT: [0x62, 0xED, 0x74, 0x6E]
+// CHECK-NEXT: [0x20, 0xED, 0xB2, 0x2E]
+// CHECK-NEXT: [0x41, 0xED, 0xB3, 0x6E]
+// CHECK-NEXT: [0x62, 0xED, 0xF4, 0x6E]

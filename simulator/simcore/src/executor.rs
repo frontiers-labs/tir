@@ -749,13 +749,28 @@ impl Executor {
             return;
         }
         for (class, index, value) in snapshot {
+            // Vector registers are wider than a word, so they are rendered from
+            // their byte lanes (most significant first) rather than through an
+            // integer, which only holds up to 64 bits.
+            let rendered = if value.width() <= 64 {
+                format!("0x{:x}", value.to_apint())
+            } else {
+                let digits: String = value
+                    .bytes()
+                    .iter()
+                    .rev()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                let trimmed = digits.trim_start_matches('0');
+                format!("0x{}", if trimmed.is_empty() { "0" } else { trimmed })
+            };
             Self::emit_trace_line(
                 out,
                 &format!(
-                    "  {}[{}] = 0x{:x} (width={})",
+                    "  {}[{}] = {} (width={})",
                     class,
                     index,
-                    value.to_apint(),
+                    rendered,
                     value.width()
                 ),
             );

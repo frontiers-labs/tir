@@ -717,7 +717,7 @@ instruction LoadVector128 for [AdvSIMD] {
     schedule { units = [WriteLoad]; }
 
     operands {
-        vt: VPR,
+        vt: QPR,
         rn: GPRsp,
         imm: bits<16>,
     }
@@ -748,7 +748,7 @@ instruction StoreVector128 for [AdvSIMD] {
     schedule { units = [WriteStore]; }
 
     operands {
-        vt: VPR,
+        vt: QPR,
         rn: GPRsp,
         imm: bits<16>,
     }

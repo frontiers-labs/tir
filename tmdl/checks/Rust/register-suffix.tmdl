@@ -1,0 +1,78 @@
+// A `suffix` on a register class appends an assembly-syntax qualifier to every
+// register's ISA name (AArch64 arrangement specifiers: `v0.16b`, `z0.s`). The
+// suffix is assembly syntax only: the declared names keep deriving the encoding
+// index, so `v3.4s` still encodes as 3.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa SuffixIsa {
+    param XLEN: Integer = 64;
+}
+
+register_class PC for [SuffixIsa] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        pc => { traits = [program_counter] },
+    }
+}
+
+register_class VPR for [SuffixIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 128;
+
+    registers {
+        v0..v31 => { traits = [float] },
+    }
+}
+
+register_class VPR4S for [SuffixIsa] {
+    file = VPR;
+    suffix = ".4s";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 128;
+
+    registers {
+        v0..v31 => { traits = [float] },
+    }
+}
+
+instruction AddVector4S for [SuffixIsa] {
+    param MNEMONIC: String = "add";
+
+    operands {
+        vd: VPR4S,
+        vn: VPR4S,
+        vm: VPR4S,
+    }
+
+    encoding {
+        0..4 => vd,
+        5..9 => vn,
+        10..15 => 0b100001,
+        16..20 => vm,
+        21..31 => 0b01001110101,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, {vn}, {vm}"
+    }
+
+    behavior {
+        vd = concat(map(zip(split(vn, 4, 32), split(vm, 4, 32)), |a, b| a + b));
+    }
+}
+
+// The unsuffixed file keeps the bare names...
+// CHECK: pub fn parse_vpr<
+// CHECK: "v0" => Some(0)
+// CHECK: pub fn print_vpr(
+// CHECK: 3 => Some("v3".to_string())
+
+// ...while the suffixed class parses and prints the qualified name.
+// CHECK: pub fn parse_vpr4s
+// CHECK: "v0.4s" => Some(0)
+// CHECK: "v31.4s" => Some(31)
+// CHECK: pub fn print_vpr4s
+// CHECK: 3 => Some("v3.4s".to_string())

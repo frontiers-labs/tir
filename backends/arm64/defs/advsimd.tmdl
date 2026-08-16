@@ -1,0 +1,433 @@
+//! Advanced SIMD (NEON): the V register file viewed through its arrangement
+//! specifiers, and the vector data-processing instructions over them.
+//!
+//! An AArch64 vector operand names both a register and how its bits are cut
+//! into lanes (`v0.4s` is v0 read as four 32-bit lanes). The arrangement is
+//! part of the assembly syntax, not of the register, so each arrangement is a
+//! register class over the shared `VPR` file whose `suffix` carries the
+//! specifier. The 64-bit arrangements are the low half of the same registers;
+//! writing one zeroes the upper half, which the class's narrower `WIDTH` over
+//! the wider file already expresses.
+//!
+//! Behaviors follow the lane idiom: sources are `split` into lanes of the
+//! arrangement's element size, combined with `map`/`zip`, and `concat`enated
+//! back, so no carry, shift or rounding crosses a lane boundary.
+
+register_class VPR8B for [AdvSIMD] {
+    file = VPR;
+    suffix = ".8b";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+
+    registers {
+        v0..v31 => { traits = [polymorphic] },
+    }
+}
+
+register_class VPR16B for [AdvSIMD] {
+    file = VPR;
+    suffix = ".16b";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 128;
+
+    registers {
+        v0..v31 => { traits = [polymorphic] },
+    }
+}
+
+register_class VPR4H for [AdvSIMD] {
+    file = VPR;
+    suffix = ".4h";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+
+    registers {
+        v0..v31 => { traits = [polymorphic] },
+    }
+}
+
+register_class VPR8H for [AdvSIMD] {
+    file = VPR;
+    suffix = ".8h";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 128;
+
+    registers {
+        v0..v31 => { traits = [polymorphic] },
+    }
+}
+
+register_class VPR2S for [AdvSIMD] {
+    file = VPR;
+    suffix = ".2s";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+
+    registers {
+        v0..v31 => { traits = [polymorphic] },
+    }
+}
+
+register_class VPR4S for [AdvSIMD] {
+    file = VPR;
+    suffix = ".4s";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 128;
+
+    registers {
+        v0..v31 => { traits = [polymorphic] },
+    }
+}
+
+register_class VPR1D for [AdvSIMD] {
+    file = VPR;
+    suffix = ".1d";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+
+    registers {
+        v0..v31 => { traits = [polymorphic] },
+    }
+}
+
+register_class VPR2D for [AdvSIMD] {
+    file = VPR;
+    suffix = ".2d";
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 128;
+
+    registers {
+        v0..v31 => { traits = [polymorphic] },
+    }
+}
+
+// Advanced SIMD three same: `0 Q U 01110 size 1 Rm opcode 1 Rn Rd`. The
+// arrangement fixes both the encoded `Q`/`size` pair and the lane shape the
+// behavior splits into, so each (operation, arrangement) is its own
+// instruction, as one behavior = one instruction requires.
+macro advsimd_three_same {
+    ( $( ( $name:ident, $mnemonic:literal, $opname:literal, $cls:ident,
+           $lanes:literal, $esize:literal, $q:literal, $size:literal,
+           $u:literal, $opcode:literal, $sched:ident, $op:tt ) ),* ) => {
+        $( instruction $name for [AdvSIMD] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            param Q: bits<1> = $q;
+            param U: bits<1> = $u;
+            param SIZE: bits<2> = $size;
+            param OPCODE: bits<5> = $opcode;
+            schedule { units = [$sched]; }
+
+            operands {
+                vd: $cls,
+                vn: $cls,
+                vm: $cls,
+            }
+
+            encoding {
+                0..4 => vd,
+                5..9 => vn,
+                10 => 0b1,
+                11..15 => OPCODE,
+                16..20 => vm,
+                21 => 0b1,
+                22..23 => SIZE,
+                24..28 => 0b01110,
+                29 => U,
+                30 => Q,
+                31 => 0b0,
+            }
+
+            asm {
+                "{self.MNEMONIC} {vd}, {vn}, {vm}"
+            }
+
+            behavior {
+                vd = concat(map(zip(split(vn, $lanes, $esize), split(vm, $lanes, $esize)),
+                    |a, b| $op));
+            }
+        } )*
+    };
+}
+
+// The integer three-same operations, in encoding order of the arrangement
+// table. `add`/`sub`/`mul` wrap within the lane; the `cm*` compares set the
+// whole lane to ones or zeros; `smax`/`umin`/... pick a lane by signed or
+// unsigned order; `sabd`/`uabd` take the absolute difference. There is no `.1d`
+// arrangement in this class -- the 64-bit scalar cases are SISD encodings --
+// and `mul`, the min/max pair and the absolute differences have no `.2d` form.
+// The bitwise operations are byte arrangements only: they encode the operation
+// in the `size` field, so the lane width carries no meaning.
+advsimd_three_same!(
+    (AddVector8B, "add", "add_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b10000, WriteIALU, (a + b)),
+    (AddVector16B, "add", "add_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b10000, WriteIALU, (a + b)),
+    (AddVector4H, "add", "add_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b10000, WriteIALU, (a + b)),
+    (AddVector8H, "add", "add_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b10000, WriteIALU, (a + b)),
+    (AddVector2S, "add", "add_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b10000, WriteIALU, (a + b)),
+    (AddVector4S, "add", "add_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b10000, WriteIALU, (a + b)),
+    (AddVector2D, "add", "add_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b10000, WriteIALU, (a + b)),
+    (SubVector8B, "sub", "sub_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b10000, WriteIALU, (a - b)),
+    (SubVector16B, "sub", "sub_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b10000, WriteIALU, (a - b)),
+    (SubVector4H, "sub", "sub_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b10000, WriteIALU, (a - b)),
+    (SubVector8H, "sub", "sub_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b10000, WriteIALU, (a - b)),
+    (SubVector2S, "sub", "sub_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b10000, WriteIALU, (a - b)),
+    (SubVector4S, "sub", "sub_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b10000, WriteIALU, (a - b)),
+    (SubVector2D, "sub", "sub_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b10000, WriteIALU, (a - b)),
+    (MulVector8B, "mul", "mul_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b10011, WriteIMul, (a * b)),
+    (MulVector16B, "mul", "mul_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b10011, WriteIMul, (a * b)),
+    (MulVector4H, "mul", "mul_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b10011, WriteIMul, (a * b)),
+    (MulVector8H, "mul", "mul_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b10011, WriteIMul, (a * b)),
+    (MulVector2S, "mul", "mul_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b10011, WriteIMul, (a * b)),
+    (MulVector4S, "mul", "mul_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b10011, WriteIMul, (a * b)),
+    (SMaxVector8B, "smax", "smax_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01100, WriteIALU, (if a > b { a } else { b })),
+    (SMaxVector16B, "smax", "smax_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01100, WriteIALU, (if a > b { a } else { b })),
+    (SMaxVector4H, "smax", "smax_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01100, WriteIALU, (if a > b { a } else { b })),
+    (SMaxVector8H, "smax", "smax_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01100, WriteIALU, (if a > b { a } else { b })),
+    (SMaxVector2S, "smax", "smax_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01100, WriteIALU, (if a > b { a } else { b })),
+    (SMaxVector4S, "smax", "smax_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01100, WriteIALU, (if a > b { a } else { b })),
+    (SMinVector8B, "smin", "smin_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01101, WriteIALU, (if a < b { a } else { b })),
+    (SMinVector16B, "smin", "smin_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01101, WriteIALU, (if a < b { a } else { b })),
+    (SMinVector4H, "smin", "smin_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01101, WriteIALU, (if a < b { a } else { b })),
+    (SMinVector8H, "smin", "smin_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01101, WriteIALU, (if a < b { a } else { b })),
+    (SMinVector2S, "smin", "smin_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01101, WriteIALU, (if a < b { a } else { b })),
+    (SMinVector4S, "smin", "smin_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01101, WriteIALU, (if a < b { a } else { b })),
+    (UMaxVector8B, "umax", "umax_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01100, WriteIALU, (if a ~> b { a } else { b })),
+    (UMaxVector16B, "umax", "umax_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01100, WriteIALU, (if a ~> b { a } else { b })),
+    (UMaxVector4H, "umax", "umax_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01100, WriteIALU, (if a ~> b { a } else { b })),
+    (UMaxVector8H, "umax", "umax_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01100, WriteIALU, (if a ~> b { a } else { b })),
+    (UMaxVector2S, "umax", "umax_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01100, WriteIALU, (if a ~> b { a } else { b })),
+    (UMaxVector4S, "umax", "umax_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01100, WriteIALU, (if a ~> b { a } else { b })),
+    (UMinVector8B, "umin", "umin_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
+    (UMinVector16B, "umin", "umin_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
+    (UMinVector4H, "umin", "umin_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
+    (UMinVector8H, "umin", "umin_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
+    (UMinVector2S, "umin", "umin_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
+    (UMinVector4S, "umin", "umin_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
+    (SAbdVector8B, "sabd", "sabd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
+    (SAbdVector16B, "sabd", "sabd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
+    (SAbdVector4H, "sabd", "sabd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
+    (SAbdVector8H, "sabd", "sabd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
+    (SAbdVector2S, "sabd", "sabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
+    (SAbdVector4S, "sabd", "sabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
+    (UAbdVector8B, "uabd", "uabd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
+    (UAbdVector16B, "uabd", "uabd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
+    (UAbdVector4H, "uabd", "uabd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
+    (UAbdVector8H, "uabd", "uabd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
+    (UAbdVector2S, "uabd", "uabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
+    (UAbdVector4S, "uabd", "uabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
+    (CmEqVector8B, "cmeq", "cmeq_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmEqVector16B, "cmeq", "cmeq_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmEqVector4H, "cmeq", "cmeq_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmEqVector8H, "cmeq", "cmeq_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmEqVector2S, "cmeq", "cmeq_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmEqVector4S, "cmeq", "cmeq_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmEqVector2D, "cmeq", "cmeq_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (CmGtVector8B, "cmgt", "cmgt_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b00110, WriteIALU, (if a > b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmGtVector16B, "cmgt", "cmgt_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b00110, WriteIALU, (if a > b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmGtVector4H, "cmgt", "cmgt_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b00110, WriteIALU, (if a > b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmGtVector8H, "cmgt", "cmgt_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b00110, WriteIALU, (if a > b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmGtVector2S, "cmgt", "cmgt_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b00110, WriteIALU, (if a > b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmGtVector4S, "cmgt", "cmgt_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b00110, WriteIALU, (if a > b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmGtVector2D, "cmgt", "cmgt_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b00110, WriteIALU, (if a > b { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (CmGeVector8B, "cmge", "cmge_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b00111, WriteIALU, (if a >= b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmGeVector16B, "cmge", "cmge_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b00111, WriteIALU, (if a >= b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmGeVector4H, "cmge", "cmge_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b00111, WriteIALU, (if a >= b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmGeVector8H, "cmge", "cmge_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b00111, WriteIALU, (if a >= b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmGeVector2S, "cmge", "cmge_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b00111, WriteIALU, (if a >= b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmGeVector4S, "cmge", "cmge_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b00111, WriteIALU, (if a >= b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmGeVector2D, "cmge", "cmge_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b00111, WriteIALU, (if a >= b { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (CmHiVector8B, "cmhi", "cmhi_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b00110, WriteIALU, (if a ~> b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmHiVector16B, "cmhi", "cmhi_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b00110, WriteIALU, (if a ~> b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmHiVector4H, "cmhi", "cmhi_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b00110, WriteIALU, (if a ~> b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmHiVector8H, "cmhi", "cmhi_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b00110, WriteIALU, (if a ~> b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmHiVector2S, "cmhi", "cmhi_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b00110, WriteIALU, (if a ~> b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmHiVector4S, "cmhi", "cmhi_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b00110, WriteIALU, (if a ~> b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmHiVector2D, "cmhi", "cmhi_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b00110, WriteIALU, (if a ~> b { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (CmHsVector8B, "cmhs", "cmhs_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b00111, WriteIALU, (if a ~>= b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmHsVector16B, "cmhs", "cmhs_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b00111, WriteIALU, (if a ~>= b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmHsVector4H, "cmhs", "cmhs_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b00111, WriteIALU, (if a ~>= b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmHsVector8H, "cmhs", "cmhs_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b00111, WriteIALU, (if a ~>= b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmHsVector2S, "cmhs", "cmhs_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b00111, WriteIALU, (if a ~>= b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmHsVector4S, "cmhs", "cmhs_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b00111, WriteIALU, (if a ~>= b { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmHsVector2D, "cmhs", "cmhs_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b00111, WriteIALU, (if a ~>= b { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (CmTstVector8B, "cmtst", "cmtst_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b10001, WriteIALU, (if (a & b) != zext(0b0, 8) { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmTstVector16B, "cmtst", "cmtst_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b10001, WriteIALU, (if (a & b) != zext(0b0, 8) { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
+    (CmTstVector4H, "cmtst", "cmtst_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b10001, WriteIALU, (if (a & b) != zext(0b0, 16) { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmTstVector8H, "cmtst", "cmtst_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b10001, WriteIALU, (if (a & b) != zext(0b0, 16) { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
+    (CmTstVector2S, "cmtst", "cmtst_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b10001, WriteIALU, (if (a & b) != zext(0b0, 32) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmTstVector4S, "cmtst", "cmtst_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b10001, WriteIALU, (if (a & b) != zext(0b0, 32) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (CmTstVector2D, "cmtst", "cmtst_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b10001, WriteIALU, (if (a & b) != zext(0b0, 64) { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (AndVector8B, "and", "and_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b00011, WriteIALU, (a & b)),
+    (AndVector16B, "and", "and_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b00011, WriteIALU, (a & b)),
+    (OrrVector8B, "orr", "orr_v8b", VPR8B, 8, 8, 0b0, 0b10, 0b0, 0b00011, WriteIALU, (a | b)),
+    (OrrVector16B, "orr", "orr_v16b", VPR16B, 16, 8, 0b1, 0b10, 0b0, 0b00011, WriteIALU, (a | b)),
+    (EorVector8B, "eor", "eor_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b00011, WriteIALU, (a ^ b)),
+    (EorVector16B, "eor", "eor_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b00011, WriteIALU, (a ^ b)),
+    (BicVector8B, "bic", "bic_v8b", VPR8B, 8, 8, 0b0, 0b01, 0b0, 0b00011, WriteIALU, (a & ~b)),
+    (BicVector16B, "bic", "bic_v16b", VPR16B, 16, 8, 0b1, 0b01, 0b0, 0b00011, WriteIALU, (a & ~b)),
+    (OrnVector8B, "orn", "orn_v8b", VPR8B, 8, 8, 0b0, 0b11, 0b0, 0b00011, WriteIALU, (a | ~b)),
+    (OrnVector16B, "orn", "orn_v16b", VPR16B, 16, 8, 0b1, 0b11, 0b0, 0b00011, WriteIALU, (a | ~b)),
+// The floating-point three-same operations over the single- and
+// double-precision arrangements. `fmaxnm`/`fminnm` are IEEE
+// maximumNumber/minimumNumber; the `fmax`/`fmin` pair, which propagates NaNs
+// instead, is not modeled here. `fabd` and the absolute compares clear the
+// sign bit with the all-but-top-bit mask rather than negating.
+    (FAddVector2S, "fadd", "fadd_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11010, WriteIALU, (fadd(a, b))),
+    (FAddVector4S, "fadd", "fadd_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11010, WriteIALU, (fadd(a, b))),
+    (FAddVector2D, "fadd", "fadd_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11010, WriteIALU, (fadd(a, b))),
+    (FSubVector2S, "fsub", "fsub_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11010, WriteIALU, (fsub(a, b))),
+    (FSubVector4S, "fsub", "fsub_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11010, WriteIALU, (fsub(a, b))),
+    (FSubVector2D, "fsub", "fsub_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11010, WriteIALU, (fsub(a, b))),
+    (FMulVector2S, "fmul", "fmul_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b1, 0b11011, WriteIALU, (fmul(a, b))),
+    (FMulVector4S, "fmul", "fmul_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b1, 0b11011, WriteIALU, (fmul(a, b))),
+    (FMulVector2D, "fmul", "fmul_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b1, 0b11011, WriteIALU, (fmul(a, b))),
+    (FDivVector2S, "fdiv", "fdiv_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b1, 0b11111, WriteIALU, (fdiv(a, b))),
+    (FDivVector4S, "fdiv", "fdiv_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b1, 0b11111, WriteIALU, (fdiv(a, b))),
+    (FDivVector2D, "fdiv", "fdiv_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b1, 0b11111, WriteIALU, (fdiv(a, b))),
+    (FMaxNmVector2S, "fmaxnm", "fmaxnm_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11000, WriteIALU, (fmax(a, b))),
+    (FMaxNmVector4S, "fmaxnm", "fmaxnm_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11000, WriteIALU, (fmax(a, b))),
+    (FMaxNmVector2D, "fmaxnm", "fmaxnm_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11000, WriteIALU, (fmax(a, b))),
+    (FMinNmVector2S, "fminnm", "fminnm_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11000, WriteIALU, (fmin(a, b))),
+    (FMinNmVector4S, "fminnm", "fminnm_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11000, WriteIALU, (fmin(a, b))),
+    (FMinNmVector2D, "fminnm", "fminnm_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11000, WriteIALU, (fmin(a, b))),
+    (FAbdVector2S, "fabd", "fabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b11010, WriteIALU, (fsub(a, b) & ((zext(0b0, 32) - zext(0b1, 32)) >> 1))),
+    (FAbdVector4S, "fabd", "fabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b11010, WriteIALU, (fsub(a, b) & ((zext(0b0, 32) - zext(0b1, 32)) >> 1))),
+    (FAbdVector2D, "fabd", "fabd_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b11010, WriteIALU, (fsub(a, b) & ((zext(0b0, 64) - zext(0b1, 64)) >> 1))),
+    (FCmEqVector2S, "fcmeq", "fcmeq_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11100, WriteIALU, (if asfloat(a) == asfloat(b) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FCmEqVector4S, "fcmeq", "fcmeq_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11100, WriteIALU, (if asfloat(a) == asfloat(b) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FCmEqVector2D, "fcmeq", "fcmeq_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11100, WriteIALU, (if asfloat(a) == asfloat(b) { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (FCmGeVector2S, "fcmge", "fcmge_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b1, 0b11100, WriteIALU, (if asfloat(a) >= asfloat(b) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FCmGeVector4S, "fcmge", "fcmge_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b1, 0b11100, WriteIALU, (if asfloat(a) >= asfloat(b) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FCmGeVector2D, "fcmge", "fcmge_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b1, 0b11100, WriteIALU, (if asfloat(a) >= asfloat(b) { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (FCmGtVector2S, "fcmgt", "fcmgt_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b11100, WriteIALU, (if asfloat(a) > asfloat(b) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FCmGtVector4S, "fcmgt", "fcmgt_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b11100, WriteIALU, (if asfloat(a) > asfloat(b) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FCmGtVector2D, "fcmgt", "fcmgt_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b11100, WriteIALU, (if asfloat(a) > asfloat(b) { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (FAcGeVector2S, "facge", "facge_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) >= asfloat(b & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FAcGeVector4S, "facge", "facge_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) >= asfloat(b & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FAcGeVector2D, "facge", "facge_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 64) - zext(0b1, 64)) >> 1)) >= asfloat(b & ((zext(0b0, 64) - zext(0b1, 64)) >> 1)) { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
+    (FAcGtVector2S, "facgt", "facgt_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) > asfloat(b & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FAcGtVector4S, "facgt", "facgt_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) > asfloat(b & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
+    (FAcGtVector2D, "facgt", "facgt_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 64) - zext(0b1, 64)) >> 1)) > asfloat(b & ((zext(0b0, 64) - zext(0b1, 64)) >> 1)) { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) }))
+)
+
+// The 128-bit view of the SIMD&FP file used by whole-register loads and
+// stores, which name a register without an arrangement (`ldr q0, [x1]`).
+register_class QPR for [AdvSIMD] {
+    file = VPR;
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 128;
+
+    registers {
+        q0..q31 => { traits = [polymorphic] },
+    }
+}
+
+// DUP (general): `0 Q 001110000 imm5 000011 Rn Rd`. The `imm5` field selects
+// the element size (00001 = B, 00010 = H, 00100 = S, 01000 = D), which the
+// arrangement already fixes. `iota` supplies the lane count; every lane takes
+// the same low bits of the source register.
+macro advsimd_dup_general {
+    ( $( ( $name:ident, $opname:literal, $cls:ident, $gpr:ident,
+           $lanes:literal, $esize:literal, $q:literal, $imm5:literal ) ),* ) => {
+        $( instruction $name for [AdvSIMD] {
+            param MNEMONIC: String = "dup";
+            param OPNAME: String = $opname;
+            param Q: bits<1> = $q;
+            param IMM5: bits<5> = $imm5;
+            schedule { units = [WriteIALU]; }
+
+            operands {
+                vd: $cls,
+                rn: $gpr,
+            }
+
+            encoding {
+                0..4 => vd,
+                5..9 => rn,
+                10..15 => 0b000011,
+                16..20 => IMM5,
+                21..28 => 0b01110000,
+                29 => 0b0,
+                30 => Q,
+                31 => 0b0,
+            }
+
+            asm {
+                "{self.MNEMONIC} {vd}, {rn}"
+            }
+
+            behavior {
+                vd = concat(map(iota($lanes, $esize), |i| extract(rn, $esize - 1, 0)));
+            }
+        } )*
+    };
+}
+
+advsimd_dup_general!(
+    (DupGeneral8B, "dup_v8b", VPR8B, GPR32, 8, 8, 0b0, 0b00001),
+    (DupGeneral16B, "dup_v16b", VPR16B, GPR32, 16, 8, 0b1, 0b00001),
+    (DupGeneral4H, "dup_v4h", VPR4H, GPR32, 4, 16, 0b0, 0b00010),
+    (DupGeneral8H, "dup_v8h", VPR8H, GPR32, 8, 16, 0b1, 0b00010),
+    (DupGeneral2S, "dup_v2s", VPR2S, GPR32, 2, 32, 0b0, 0b00100),
+    (DupGeneral4S, "dup_v4s", VPR4S, GPR32, 4, 32, 0b1, 0b00100),
+    (DupGeneral2D, "dup_v2d", VPR2D, GPR, 2, 64, 0b1, 0b01000)
+)
+
+// Modified immediate: `0 Q op 0111100000 abc cmode 01 defgh Rd`, where the
+// 8-bit immediate is split as `abc` = imm[7:5] and `defgh` = imm[4:0]. `cmode`
+// selects how the byte is expanded into a lane: 1110 replicates it per byte,
+// 0000 and 1000 zero-extend it into 32- and 16-bit lanes, and `op` inverts the
+// result for `mvni`.
+macro advsimd_modified_immediate {
+    ( $( ( $name:ident, $mnemonic:literal, $opname:literal, $cls:ident,
+           $lanes:literal, $esize:literal, $q:literal, $op:literal,
+           $cmode:literal, $expand:tt ) ),* ) => {
+        $( instruction $name for [AdvSIMD] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            param Q: bits<1> = $q;
+            param OP: bits<1> = $op;
+            param CMODE: bits<4> = $cmode;
+            schedule { units = [WriteIALU]; }
+
+            operands {
+                vd: $cls,
+                imm: bits<8>,
+            }
+
+            encoding {
+                0..4 => vd,
+                5..9 => imm[0..4],
+                10..11 => 0b01,
+                12..15 => CMODE,
+                16..18 => imm[5..7],
+                19..23 => 0b00000,
+                24..28 => 0b01111,
+                29 => OP,
+                30 => Q,
+                31 => 0b0,
+            }
+
+            asm {
+                "{self.MNEMONIC} {vd}, {imm}"
+            }
+
+            behavior {
+                vd = concat(map(iota($lanes, $esize), |i| $expand));
+            }
+        } )*
+    };
+}
+
+advsimd_modified_immediate!(
+    (MoveImmediate8B, "movi", "movi_v8b", VPR8B, 8, 8, 0b0, 0b0, 0b1110, (imm)),
+    (MoveImmediate16B, "movi", "movi_v16b", VPR16B, 16, 8, 0b1, 0b0, 0b1110, (imm)),
+    (MoveImmediate4H, "movi", "movi_v4h", VPR4H, 4, 16, 0b0, 0b0, 0b1000, (zext(imm, 16))),
+    (MoveImmediate8H, "movi", "movi_v8h", VPR8H, 8, 16, 0b1, 0b0, 0b1000, (zext(imm, 16))),
+    (MoveImmediate2S, "movi", "movi_v2s", VPR2S, 2, 32, 0b0, 0b0, 0b0000, (zext(imm, 32))),
+    (MoveImmediate4S, "movi", "movi_v4s", VPR4S, 4, 32, 0b1, 0b0, 0b0000, (zext(imm, 32))),
+    (MoveInverseImmediate4H, "mvni", "mvni_v4h", VPR4H, 4, 16, 0b0, 0b1, 0b1000, (~zext(imm, 16))),
+    (MoveInverseImmediate8H, "mvni", "mvni_v8h", VPR8H, 8, 16, 0b1, 0b1, 0b1000, (~zext(imm, 16))),
+    (MoveInverseImmediate2S, "mvni", "mvni_v2s", VPR2S, 2, 32, 0b0, 0b1, 0b0000, (~zext(imm, 32))),
+    (MoveInverseImmediate4S, "mvni", "mvni_v4s", VPR4S, 4, 32, 0b1, 0b1, 0b0000, (~zext(imm, 32)))
+)

@@ -1,0 +1,93 @@
+// RUN: tir mc --march=armv8.0-a --filetype=obj-ascii %s | filecheck %s
+
+// Integer three-same compares: each sets its lane to all ones or all zeros.
+
+.global advsimd_integer_compare
+advsimd_integer_compare:
+    cmeq v0.8b, v9.8b, v18.8b
+    cmeq v1.16b, v10.16b, v19.16b
+    cmeq v2.4h, v11.4h, v20.4h
+    cmeq v3.8h, v12.8h, v21.8h
+    cmeq v4.2s, v13.2s, v22.2s
+    cmeq v5.4s, v14.4s, v23.4s
+    cmeq v6.2d, v15.2d, v16.2d
+    cmgt v0.8b, v9.8b, v18.8b
+    cmgt v1.16b, v10.16b, v19.16b
+    cmgt v2.4h, v11.4h, v20.4h
+    cmgt v3.8h, v12.8h, v21.8h
+    cmgt v4.2s, v13.2s, v22.2s
+    cmgt v5.4s, v14.4s, v23.4s
+    cmgt v6.2d, v15.2d, v16.2d
+    cmge v0.8b, v9.8b, v18.8b
+    cmge v1.16b, v10.16b, v19.16b
+    cmge v2.4h, v11.4h, v20.4h
+    cmge v3.8h, v12.8h, v21.8h
+    cmge v4.2s, v13.2s, v22.2s
+    cmge v5.4s, v14.4s, v23.4s
+    cmge v6.2d, v15.2d, v16.2d
+    cmhi v0.8b, v9.8b, v18.8b
+    cmhi v1.16b, v10.16b, v19.16b
+    cmhi v2.4h, v11.4h, v20.4h
+    cmhi v3.8h, v12.8h, v21.8h
+    cmhi v4.2s, v13.2s, v22.2s
+    cmhi v5.4s, v14.4s, v23.4s
+    cmhi v6.2d, v15.2d, v16.2d
+    cmhs v0.8b, v9.8b, v18.8b
+    cmhs v1.16b, v10.16b, v19.16b
+    cmhs v2.4h, v11.4h, v20.4h
+    cmhs v3.8h, v12.8h, v21.8h
+    cmhs v4.2s, v13.2s, v22.2s
+    cmhs v5.4s, v14.4s, v23.4s
+    cmhs v6.2d, v15.2d, v16.2d
+    cmtst v0.8b, v9.8b, v18.8b
+    cmtst v1.16b, v10.16b, v19.16b
+    cmtst v2.4h, v11.4h, v20.4h
+    cmtst v3.8h, v12.8h, v21.8h
+    cmtst v4.2s, v13.2s, v22.2s
+    cmtst v5.4s, v14.4s, v23.4s
+    cmtst v6.2d, v15.2d, v16.2d
+
+// CHECK: .section .text
+// CHECK-NEXT: advsimd_integer_compare:
+// CHECK-NEXT: [0x20, 0x8D, 0x32, 0x2E]
+// CHECK-NEXT: [0x41, 0x8D, 0x33, 0x6E]
+// CHECK-NEXT: [0x62, 0x8D, 0x74, 0x2E]
+// CHECK-NEXT: [0x83, 0x8D, 0x75, 0x6E]
+// CHECK-NEXT: [0xA4, 0x8D, 0xB6, 0x2E]
+// CHECK-NEXT: [0xC5, 0x8D, 0xB7, 0x6E]
+// CHECK-NEXT: [0xE6, 0x8D, 0xF0, 0x6E]
+// CHECK-NEXT: [0x20, 0x35, 0x32, 0x0E]
+// CHECK-NEXT: [0x41, 0x35, 0x33, 0x4E]
+// CHECK-NEXT: [0x62, 0x35, 0x74, 0x0E]
+// CHECK-NEXT: [0x83, 0x35, 0x75, 0x4E]
+// CHECK-NEXT: [0xA4, 0x35, 0xB6, 0x0E]
+// CHECK-NEXT: [0xC5, 0x35, 0xB7, 0x4E]
+// CHECK-NEXT: [0xE6, 0x35, 0xF0, 0x4E]
+// CHECK-NEXT: [0x20, 0x3D, 0x32, 0x0E]
+// CHECK-NEXT: [0x41, 0x3D, 0x33, 0x4E]
+// CHECK-NEXT: [0x62, 0x3D, 0x74, 0x0E]
+// CHECK-NEXT: [0x83, 0x3D, 0x75, 0x4E]
+// CHECK-NEXT: [0xA4, 0x3D, 0xB6, 0x0E]
+// CHECK-NEXT: [0xC5, 0x3D, 0xB7, 0x4E]
+// CHECK-NEXT: [0xE6, 0x3D, 0xF0, 0x4E]
+// CHECK-NEXT: [0x20, 0x35, 0x32, 0x2E]
+// CHECK-NEXT: [0x41, 0x35, 0x33, 0x6E]
+// CHECK-NEXT: [0x62, 0x35, 0x74, 0x2E]
+// CHECK-NEXT: [0x83, 0x35, 0x75, 0x6E]
+// CHECK-NEXT: [0xA4, 0x35, 0xB6, 0x2E]
+// CHECK-NEXT: [0xC5, 0x35, 0xB7, 0x6E]
+// CHECK-NEXT: [0xE6, 0x35, 0xF0, 0x6E]
+// CHECK-NEXT: [0x20, 0x3D, 0x32, 0x2E]
+// CHECK-NEXT: [0x41, 0x3D, 0x33, 0x6E]
+// CHECK-NEXT: [0x62, 0x3D, 0x74, 0x2E]
+// CHECK-NEXT: [0x83, 0x3D, 0x75, 0x6E]
+// CHECK-NEXT: [0xA4, 0x3D, 0xB6, 0x2E]
+// CHECK-NEXT: [0xC5, 0x3D, 0xB7, 0x6E]
+// CHECK-NEXT: [0xE6, 0x3D, 0xF0, 0x6E]
+// CHECK-NEXT: [0x20, 0x8D, 0x32, 0x0E]
+// CHECK-NEXT: [0x41, 0x8D, 0x33, 0x4E]
+// CHECK-NEXT: [0x62, 0x8D, 0x74, 0x0E]
+// CHECK-NEXT: [0x83, 0x8D, 0x75, 0x4E]
+// CHECK-NEXT: [0xA4, 0x8D, 0xB6, 0x0E]
+// CHECK-NEXT: [0xC5, 0x8D, 0xB7, 0x4E]
+// CHECK-NEXT: [0xE6, 0x8D, 0xF0, 0x4E]

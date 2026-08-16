@@ -443,6 +443,7 @@ where
         .then(
             choice((
                 register_class_file().map(RegClassBody::File),
+                register_class_suffix().map(RegClassBody::Suffix),
                 parameter().map(RegClassBody::Param),
                 register_class_registers().map(RegClassBody::Registers),
             ))
@@ -473,12 +474,17 @@ where
                 RegClassBody::File(f) => Some(f.clone()),
                 _ => None,
             });
+            let suffix = body.iter().find_map(|b| match b {
+                RegClassBody::Suffix(s) => Some(s.clone()),
+                _ => None,
+            });
             RegisterClass {
                 doc: None,
                 name,
                 for_isas,
                 base,
                 file,
+                suffix,
                 parameters,
                 registers,
                 span: e.span(),
@@ -491,6 +497,7 @@ enum RegClassBody {
     Param((String, (Type, Option<ast::Expr>))),
     Registers(Vec<RegisterDef>),
     File(String),
+    Suffix(String),
 }
 
 // `file = GPR;` — the physical register file this class aliases, when it is not
@@ -506,6 +513,20 @@ where
         .ignore_then(ident)
         .then_ignore(just(Token::Semicolon))
         .labelled("register class file")
+}
+
+// `suffix = ".4s";` — the assembly-syntax qualifier every register name in this
+// class carries (see [`RegisterClass::suffix`]).
+fn register_class_suffix<'src, I>()
+-> impl Parser<'src, I, String, extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    just(Token::Identifier("suffix"))
+        .then_ignore(just(Token::Equals))
+        .ignore_then(select! { Token::StringLit(s) => s.to_string() })
+        .then_ignore(just(Token::Semicolon))
+        .labelled("register class suffix")
 }
 
 fn template_def<'src, I>()
