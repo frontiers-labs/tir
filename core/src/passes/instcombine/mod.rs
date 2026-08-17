@@ -329,20 +329,38 @@ impl Driver<'_> {
     /// Whether the def of `value` dominates the operation `op` — what a value an
     /// arm yields must do for the terminator that yields it.
     fn dominates_op(&self, value: ValueId, op: OpId) -> bool {
-        let (Some(vb), Some(ob)) = (
-            self.def_block(value),
-            self.context.get_op(op).parent_block(),
-        ) else {
+        let Some(vb) = self.def_block(value) else {
             return false;
         };
-        if vb != ob {
-            return self.dom.dominates(vb, ob) && self.reaches_into(value, vb, ob);
+        self.precedes(vb, self.context.get_value(value).defining_op(), op)
+    }
+
+    /// Whether what `op` defines is in scope where `target` sits — what a port
+    /// grown on a gate is worth to a read outside it.
+    fn op_reaches(&self, op: OpId, target: &OperationRef) -> bool {
+        let Some(block) = self.context.get_op(op).parent_block() else {
+            return false;
+        };
+        self.precedes(block, Some(op), target.op().id)
+    }
+
+    /// Whether a definition in `block` — `def`, or a block argument where there is
+    /// none — is in scope at `op`.
+    fn precedes(&self, block: BlockId, def: Option<OpId>, op: OpId) -> bool {
+        let Some(ob) = self.context.get_op(op).parent_block() else {
+            return false;
+        };
+        // A block argument precedes every op in its block.
+        let Some(def) = def else {
+            return block == ob || self.dom.dominates(block, ob);
+        };
+        if block != ob {
+            return self.dom.dominates(block, ob)
+                && self
+                    .holder_in(block, ob)
+                    .is_none_or(|holder| self.context.get_block(block).is_before(def, holder));
         }
-        match self.context.get_value(value).defining_op() {
-            Some(def) => self.context.get_block(vb).is_before(def, op),
-            // A block argument precedes every op in its block.
-            None => true,
-        }
+        self.context.get_block(block).is_before(def, op)
     }
 
     /// Whether `a`, defined in `ab`, is in scope in `bb`. A block dominates the
@@ -460,13 +478,22 @@ impl Driver<'_> {
             (Some(SymKind::If), Prov::Op(gate)) => {
                 // A gate inside a loop the reader has left answers through the
                 // loop, not through a port of its own.
-                let value =
+                let held =
                     match self.latched_result(extraction, class, expected_ty, target, rewriter)? {
                         Some(value) => Some(value),
                         None => {
                             self.commit_gamma_port(extraction, gate, node, expected_ty, rewriter)?
                         }
                     };
+                // A port on the gate the extraction chose names the value where
+                // that gate is in scope and nowhere else, so a read outside it
+                // takes the form of a gate further out.
+                let value = match held {
+                    Some(value) if self.reaches(value, target) => Some(value),
+                    held => self
+                        .gamma_port(extraction, class, expected_ty, target, rewriter)?
+                        .or(held),
+                };
                 let Some(value) = value else {
                     return Ok(None);
                 };
@@ -683,23 +710,41 @@ impl Driver<'_> {
         target: &OperationRef,
         rewriter: &mut Rewriter,
     ) -> Result<Option<ValueId>, PassError> {
-        let gate = self
-            .eg
-            .nodes(class)
-            .iter()
-            .find_map(|node| match (node.sym(), node.prov) {
-                (Some(SymKind::If), Prov::Op(gate)) if self.answers(gate, target) => {
-                    Some((gate, node))
-                }
-                _ => None,
-            });
-        if let Some((gate, node)) = gate
-            && let Some(value) = self.commit_gamma_port(extraction, gate, node, ty, rewriter)?
-            && self.reaches(value, target)
-        {
+        if let Some(value) = self.gamma_port(extraction, class, ty, target, rewriter)? {
             return Ok(Some(value));
         }
         self.latched_result(extraction, class, ty, target, rewriter)
+    }
+
+    /// The class carried out on a port of the gate that answers where `target`
+    /// sits. A class written under nested gates names a gate form per gate it is
+    /// written under, and only the form whose gate is in scope at the read carries
+    /// the value all the way out — the inner ones name it where the reader cannot
+    /// see it. So the gates are tried in the order the graph holds them and the
+    /// first whose port reaches answers, which grows a port on every gate in
+    /// between as each arm materializes the form one level down.
+    fn gamma_port(
+        &self,
+        extraction: &Extraction<Node>,
+        class: Id,
+        ty: TypeId,
+        target: &OperationRef,
+        rewriter: &mut Rewriter,
+    ) -> Result<Option<ValueId>, PassError> {
+        for node in self.eg.nodes(class) {
+            let (Some(SymKind::If), Prov::Op(gate)) = (node.sym(), node.prov) else {
+                continue;
+            };
+            if !self.answers(gate, target) || !self.op_reaches(gate, target) {
+                continue;
+            }
+            if let Some(value) = self.commit_gamma_port(extraction, gate, node, ty, rewriter)?
+                && self.reaches(value, target)
+            {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
     }
 
     /// The loop result a class the loop is left holding takes outside it.
@@ -894,12 +939,17 @@ impl Driver<'_> {
             .rev()
             .find(|&&(bound, _)| self.eg.find(bound) == class)
             .map(|&(_, value)| value);
+        // Nested loops each carry the class on a port of their own, and the one
+        // the read sits innermost inside is the one holding it there — not
+        // whichever was grown first.
         bound.or_else(|| {
             self.theta_ports
                 .borrow()
                 .iter()
                 .filter_map(|(_, port)| port.as_ref())
-                .find_map(|port| self.port_value(port, class, target))
+                .filter_map(|port| self.port_value(port, class, target))
+                .min_by_key(|&(regions_out, _)| regions_out)
+                .map(|(_, value)| value)
         })
     }
 
@@ -1046,7 +1096,9 @@ impl Driver<'_> {
             arguments,
             result: (carried_class, result),
         };
-        let value = self.port_value(&port, class, target);
+        let value = self
+            .port_value(&port, class, target)
+            .map(|(_, value)| value);
         if let Some((_, place)) = self
             .theta_ports
             .borrow_mut()
@@ -1100,13 +1152,20 @@ impl Driver<'_> {
         (fed, failure)
     }
 
-    /// What `port` is worth for `class` where `target` sits: the argument of the
-    /// innermost loop region holding it, or the loop's result outside every one of
-    /// them. `None` where the port holds another class there — the value it does
-    /// carry answers for a different point of the loop.
-    fn port_value(&self, port: &ThetaPort, class: Id, target: &OperationRef) -> Option<ValueId> {
+    /// What `port` is worth for `class` where `target` sits, and how many regions
+    /// out it answers from: the argument of the innermost loop region holding it,
+    /// or the loop's result outside every one of them. `None` where the port holds
+    /// another class there — the value it does carry answers for a different point
+    /// of the loop.
+    fn port_value(
+        &self,
+        port: &ThetaPort,
+        class: Id,
+        target: &OperationRef,
+    ) -> Option<(usize, ValueId)> {
         let class = self.eg.find(class);
         let mut block = self.context.get_op(target.op().id).parent_block();
+        let mut regions_out = 0;
         while let Some(current) = block {
             let Some(region) = self.context.parent_region(current) else {
                 break;
@@ -1119,15 +1178,16 @@ impl Driver<'_> {
             if held.peek().is_some() {
                 return held
                     .find(|&&(_, carried, _)| self.eg.find(carried) == class)
-                    .map(|&(.., value)| value);
+                    .map(|&(.., value)| (regions_out, value));
             }
+            regions_out += 1;
             block = self
                 .context
                 .get_region(region)
                 .parent_op()
                 .and_then(|op| self.context.get_op(op).parent_block());
         }
-        (self.eg.find(port.result.0) == class).then_some(port.result.1)
+        (self.eg.find(port.result.0) == class).then_some((usize::MAX, port.result.1))
     }
 
     /// A read a law distributed into an arm that stored nothing: with no value

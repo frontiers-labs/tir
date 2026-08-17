@@ -1,0 +1,77 @@
+// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+
+// A slot written inside a loop nested under two gates is one class read at every
+// level, and the class names a gate form per gate it is written under. The loop's
+// latch is taken outside them all, so the form it takes there is the outermost
+// gate's — a port on the inner gate alone names a value the condition cannot see,
+// and the loop would carry what it was entered with.
+
+module {
+  func.declare @sink(!i32) -> !i32
+  func.func @f(%0: !i1) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = constant {value = 0} : !i32
+    ptr.store %3, %1
+    scf.while {
+      %30 = scf.if %0 -> !i1 {
+        %4 = constant {value = 3} : !i32
+        %5 = ptr.load %1 : !i32
+        %6 = cmpi %5, %4 {predicate = "slt"} : !i1
+        scf.if %6 {
+          %7 = constant {value = 0} : !i32
+          ptr.store %7, %2
+          scf.while {
+            %8 = constant {value = 2} : !i32
+            %9 = ptr.load %2 : !i32
+            %10 = cmpi %9, %8 {predicate = "slt"} : !i1
+            %31 = scf.if %10 -> !i1 {
+              %11 = ptr.load %1 : !i32
+              %12 = constant {value = 1} : !i32
+              %13 = addi %11, %12 : !i32
+              ptr.store %13, %1
+              %14 = ptr.load %2 : !i32
+              %15 = constant {value = 1} : !i32
+              %16 = addi %14, %15 : !i32
+              ptr.store %16, %2
+              %17 = constant {value = 1} : !i1
+              scf.yield %17
+            } else {
+              %18 = constant {value = 0} : !i1
+              scf.yield %18
+            }
+            scf.condition %31
+          } do {
+            scf.yield
+          }
+          scf.yield
+        } else {
+          scf.yield
+        }
+        %19 = ptr.load %1 : !i32
+        %20 = func.call @sink(%19 : !i32) -> !i32
+        %21 = constant {value = 1} : !i1
+        scf.yield %21
+      } else {
+        %22 = constant {value = 0} : !i1
+        scf.yield %22
+      }
+      scf.condition %30
+    } do {
+      scf.yield
+    }
+    %23 = ptr.load %1 : !i32
+    func.return %23
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @f
+// CHECK-NOT: ptr.alloca
+// CHECK: scf.while iter_args(%[[ACC:[0-9]+]] = %3) -> !i32 {
+// CHECK: %{{[0-9]+}}, %[[POST:[0-9]+]] = scf.if %0 -> !i1, !i32 {
+// CHECK: %[[GUARDED:[0-9]+]]{{.*}} = scf.if %{{[0-9]+}} -> !i32{{.*}} {
+// CHECK: scf.yield %{{[0-9]+}}, %[[GUARDED]]
+// CHECK: else {
+// CHECK: scf.yield %{{[0-9]+}}, %[[ACC]]
+// CHECK: scf.condition %{{[0-9]+}}, %[[POST]]
