@@ -50,5 +50,5 @@ fn describes_addi_faithfully() {
         .map(|v| v.as_str().unwrap())
         .collect();
     assert!(interfaces.contains(&"Commutative"));
-    assert!(interfaces.contains(&"SameOperandType"));
+    assert!(interfaces.contains(&"SameOperandAndResultType"));
 }

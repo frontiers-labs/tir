@@ -3,7 +3,7 @@ use crate::operation;
 use crate as tir;
 use crate::{
     Any, Commutative, ConstantLike, Context, Error, IntegerArithmetic, OpCost, Operation,
-    SameOperandType,
+    SameOperandAndResultType,
 };
 
 operation! {
@@ -53,13 +53,13 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [Commutative, SameOperandType, IntegerArithmetic],
+        interfaces: [Commutative, SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (add lhs rhs))",
     }
 }
 
 impl Commutative for AddIOp {}
-impl SameOperandType for AddIOp {}
+impl SameOperandAndResultType for AddIOp {}
 impl IntegerArithmetic for AddIOp {}
 
 operation! {
@@ -73,12 +73,12 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [SameOperandType, IntegerArithmetic],
+        interfaces: [SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (sub lhs rhs))",
     }
 }
 
-impl SameOperandType for SubIOp {}
+impl SameOperandAndResultType for SubIOp {}
 impl IntegerArithmetic for SubIOp {}
 
 operation! {
@@ -92,13 +92,13 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [Commutative, SameOperandType, OpCost, IntegerArithmetic],
+        interfaces: [Commutative, SameOperandAndResultType, OpCost, IntegerArithmetic],
         sem: "(set result (mul lhs rhs))",
     }
 }
 
 impl Commutative for MulIOp {}
-impl SameOperandType for MulIOp {}
+impl SameOperandAndResultType for MulIOp {}
 impl IntegerArithmetic for MulIOp {}
 
 impl crate::OpCost for MulIOp {
@@ -118,12 +118,12 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [SameOperandType, IntegerArithmetic],
+        interfaces: [SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (div lhs rhs))",
     }
 }
 
-impl SameOperandType for DivSIOp {}
+impl SameOperandAndResultType for DivSIOp {}
 impl IntegerArithmetic for DivSIOp {}
 
 operation! {
@@ -137,12 +137,12 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [SameOperandType, IntegerArithmetic],
+        interfaces: [SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (udiv lhs rhs))",
     }
 }
 
-impl SameOperandType for DivUIOp {}
+impl SameOperandAndResultType for DivUIOp {}
 impl IntegerArithmetic for DivUIOp {}
 
 operation! {
@@ -162,12 +162,12 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [SameOperandType, IntegerArithmetic],
+        interfaces: [SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (sub lhs (mul (div lhs rhs) rhs)))",
     }
 }
 
-impl SameOperandType for RemSIOp {}
+impl SameOperandAndResultType for RemSIOp {}
 impl IntegerArithmetic for RemSIOp {}
 
 operation! {
@@ -181,12 +181,12 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [SameOperandType, IntegerArithmetic],
+        interfaces: [SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (sub lhs (mul (udiv lhs rhs) rhs)))",
     }
 }
 
-impl SameOperandType for RemUIOp {}
+impl SameOperandAndResultType for RemUIOp {}
 impl IntegerArithmetic for RemUIOp {}
 
 operation! {
@@ -200,13 +200,13 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [Commutative, SameOperandType, IntegerArithmetic],
+        interfaces: [Commutative, SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (and lhs rhs))",
     }
 }
 
 impl Commutative for AndIOp {}
-impl SameOperandType for AndIOp {}
+impl SameOperandAndResultType for AndIOp {}
 impl IntegerArithmetic for AndIOp {}
 
 operation! {
@@ -220,13 +220,13 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [Commutative, SameOperandType, IntegerArithmetic],
+        interfaces: [Commutative, SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (or lhs rhs))",
     }
 }
 
 impl Commutative for OrIOp {}
-impl SameOperandType for OrIOp {}
+impl SameOperandAndResultType for OrIOp {}
 impl IntegerArithmetic for OrIOp {}
 
 operation! {
@@ -240,13 +240,13 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [Commutative, SameOperandType, IntegerArithmetic],
+        interfaces: [Commutative, SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (xor lhs rhs))",
     }
 }
 
 impl Commutative for XOrIOp {}
-impl SameOperandType for XOrIOp {}
+impl SameOperandAndResultType for XOrIOp {}
 impl IntegerArithmetic for XOrIOp {}
 
 operation! {
@@ -260,12 +260,12 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [SameOperandType, IntegerArithmetic],
+        interfaces: [SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (shl lhs rhs))",
     }
 }
 
-impl SameOperandType for ShlIOp {}
+impl SameOperandAndResultType for ShlIOp {}
 impl IntegerArithmetic for ShlIOp {}
 
 operation! {
@@ -279,12 +279,12 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [SameOperandType, IntegerArithmetic],
+        interfaces: [SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (lshr lhs rhs))",
     }
 }
 
-impl SameOperandType for ShrUIOp {}
+impl SameOperandAndResultType for ShrUIOp {}
 impl IntegerArithmetic for ShrUIOp {}
 
 operation! {
@@ -298,12 +298,12 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [SameOperandType, IntegerArithmetic],
+        interfaces: [SameOperandAndResultType, IntegerArithmetic],
         sem: "(set result (ashr lhs rhs))",
     }
 }
 
-impl SameOperandType for ShrSIOp {}
+impl SameOperandAndResultType for ShrSIOp {}
 impl IntegerArithmetic for ShrSIOp {}
 
 operation! {
@@ -575,8 +575,8 @@ mod tests {
         );
     }
 
-    // The SameOperandType verifier failure is covered by the FileCheck suite at
-    // core/checks/Verifier/addi-operands-same-type.tir.
+    // The SameOperandAndResultType verifier failure is covered by the FileCheck suite at
+    // core/checks/Verifier/addi-operands-same-type.tir and addi-result-matches-operands.tir.
 
     fn make_binary_op_context() -> (Context, crate::ValueId, crate::ValueId) {
         let context = Context::with_default_dialects();

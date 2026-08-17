@@ -49,8 +49,8 @@ pub use error::Error;
 pub use interfaces::{
     BranchGuard, BranchTerminator, Commutative, Conditional, ConstantFold, ConstantLike,
     CountedLoop, EntryGuard, GuardOrdering, GuardedLoop, IntegerArithmetic, LoopLike, MemoryRead,
-    MemoryWrite, OpCost, PromotableAllocation, SameOperandType, Symbol, Terminator, TokenScope,
-    Visibility,
+    MemoryWrite, OpCost, PromotableAllocation, SameOperandAndResultType, SameOperandType, Symbol,
+    Terminator, TokenScope, Visibility,
 };
 pub use ir_formatter::IRFormatter;
 pub use layout::{DATA_LAYOUT, DataLayout, Endianness, data_layout_spec};

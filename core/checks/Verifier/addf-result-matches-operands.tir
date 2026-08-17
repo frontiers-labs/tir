@@ -1,0 +1,14 @@
+// RUN: not tir opt --verify %s
+
+// addf requires its result to share the operand type; f32 operands with an f64
+// result fails.
+
+module {
+  func @f() -> !f64 {
+    %0 = constantf {value = 1.5} : !f32
+    %1 = constantf {value = 2.5} : !f32
+    %2 = addf %0, %1 : !f64
+    return %2
+  }
+  module_end
+}

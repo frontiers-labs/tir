@@ -10,7 +10,7 @@
 use crate::operation;
 
 use crate as tir;
-use crate::{Commutative, Context, OpId, SameOperandType, attributes::AttributeValue};
+use crate::{Commutative, Context, OpId, SameOperandAndResultType, attributes::AttributeValue};
 
 /// The attribute consulted by [`fp_math_flags`], valid on blocks and on
 /// region-owning operations. Its value is a string accepted by
@@ -322,13 +322,13 @@ operation! {
         results: R {
             result: "crate::builtin::FloatType",
         },
-        interfaces: [Commutative, SameOperandType],
+        interfaces: [Commutative, SameOperandAndResultType],
         sem: "(set result (fadd lhs rhs))",
     }
 }
 
 impl Commutative for AddFOp {}
-impl SameOperandType for AddFOp {}
+impl SameOperandAndResultType for AddFOp {}
 
 operation! {
     SubFOp {
@@ -341,12 +341,12 @@ operation! {
         results: R {
             result: "crate::builtin::FloatType",
         },
-        interfaces: [SameOperandType],
+        interfaces: [SameOperandAndResultType],
         sem: "(set result (fsub lhs rhs))",
     }
 }
 
-impl SameOperandType for SubFOp {}
+impl SameOperandAndResultType for SubFOp {}
 
 operation! {
     MulFOp {
@@ -359,13 +359,13 @@ operation! {
         results: R {
             result: "crate::builtin::FloatType",
         },
-        interfaces: [Commutative, SameOperandType],
+        interfaces: [Commutative, SameOperandAndResultType],
         sem: "(set result (fmul lhs rhs))",
     }
 }
 
 impl Commutative for MulFOp {}
-impl SameOperandType for MulFOp {}
+impl SameOperandAndResultType for MulFOp {}
 
 operation! {
     DivFOp {
@@ -378,12 +378,12 @@ operation! {
         results: R {
             result: "crate::builtin::FloatType",
         },
-        interfaces: [SameOperandType],
+        interfaces: [SameOperandAndResultType],
         sem: "(set result (fdiv lhs rhs))",
     }
 }
 
-impl SameOperandType for DivFOp {}
+impl SameOperandAndResultType for DivFOp {}
 
 #[cfg(test)]
 mod tests {

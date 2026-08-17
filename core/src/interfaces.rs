@@ -369,6 +369,36 @@ pub trait SameOperandType {
     }
 }
 
+/// An operation whose operands and results all carry one type. Memory state ports
+/// are exempt: `!state` describes a side channel, not the value being computed.
+pub trait SameOperandAndResultType {
+    fn verify_interface(
+        &self,
+        this: &dyn Operation,
+        context: &Context,
+    ) -> Result<(), crate::Error> {
+        let types: Vec<_> = this
+            .operands()
+            .iter()
+            .chain(this.handle().results().iter())
+            .map(|&value| context.get_value(value).ty())
+            .filter(|&ty| {
+                (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
+                    .downcast_ref::<crate::builtin::StateType>()
+                    .is_none()
+            })
+            .collect();
+
+        if !types.windows(2).all(|pair| pair[0] == pair[1]) {
+            return Err(crate::Error::VerificationError(
+                "operand and result types must be the same".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 /// Identifies an operation that creates a memory location eligible for local SSA
 /// promotion. Implementations describe the location generically rather than tying
 /// the promoting transforms to a concrete pointer dialect.
