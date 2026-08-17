@@ -1,7 +1,7 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
 // RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
 
-// The true successor of `cond_br %c` is entered only when `%c` holds, so the
+// The true successor of `cfg.cond_br %c` is entered only when `%c` holds, so the
 // driver assumes `c == 1` there. The redundant compare in ^bb1 hash-conses with
 // %c, whose class now carries the boolean constant, so it folds to `true`. The
 // defining compare in the entry block (where %c is unknown) stays.
@@ -9,7 +9,7 @@
 module {
   func @f(%a: !i32, %b: !i32) -> !i1 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
-    cond_br %c, ^bb1, ^bb2
+    cfg.cond_br %c, ^bb1, ^bb2
   ^bb1:
     %d = cmpi %a, %b {predicate = "eq"} : !i1
     return %d
@@ -21,7 +21,7 @@ module {
 
 // CHECK-LABEL: func @f
 // CHECK: cmpi
-// CHECK: cond_br
+// CHECK: cfg.cond_br
 // CHECK: ^bb1:
 // CHECK-NEXT: constant {value = 1}
 // CHECK-NOT: cmpi

@@ -7,10 +7,10 @@
 module {
   func @excluded_nest(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
-    cond_br %2, ^bb1, ^bb2
+    cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
     %3 = cmpi %0, %1 {predicate = "slt"} : !i1
-    cond_br %3, ^bb3, ^bb4
+    cfg.cond_br %3, ^bb3, ^bb4
   ^bb2:
     %4 = constant {value = 0} : !i64
     return %4
@@ -19,7 +19,7 @@ module {
     return %5
   ^bb4:
     %6 = cmpi %1, %0 {predicate = "slt"} : !i1
-    cond_br %6, ^bb5, ^bb6
+    cfg.cond_br %6, ^bb5, ^bb6
   ^bb5:
     %7 = constant {value = 2} : !i64
     return %7

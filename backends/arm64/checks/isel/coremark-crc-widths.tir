@@ -15,7 +15,7 @@ module {
     %10 = extui %9 : !i32
     %11 = constant {value = 0} : !i32
     %12 = cmpi %10, %11 {predicate = "ne"} : !i1
-    cond_br %12, ^bb1, ^bb2
+    cfg.cond_br %12, ^bb1, ^bb2
   ^bb1:
     %13 = constant {value = 1} : !i64
     return %13

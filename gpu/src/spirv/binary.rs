@@ -5,6 +5,7 @@ use tir::attributes::AttributeValue;
 use tir::builtin::{
     FloatType, FuncOp, IntegerType, ModuleOp as BuiltinModuleOp, UnitType, ops as bops,
 };
+use tir::cfg::ops as cbops;
 use tir::vector::VectorType;
 use tir::{BlockHandle, BlockId, Context, Operation, TypeId, ValueId};
 
@@ -326,10 +327,10 @@ impl<'a> Writer<'a> {
             )?);
             instruction(out, 43, &operands);
             Ok(())
-        } else if let Some(branch) = op.clone().as_op::<tir::builtin::BranchOp>() {
+        } else if let Some(branch) = op.clone().as_op::<tir::cfg::BranchOp>() {
             instruction(out, 249, &[block_ids[&branch.dest()]]);
             Ok(())
-        } else if let Some(branch) = op.clone().as_op::<tir::builtin::CondBranchOp>() {
+        } else if let Some(branch) = op.clone().as_op::<tir::cfg::CondBranchOp>() {
             instruction(
                 out,
                 250,
@@ -851,7 +852,7 @@ impl<'a> Reader<'a> {
                         .map(|id| self.value_ref(id))
                         .collect::<Result<Vec<_>>>()?;
                     (
-                        bops::br(self.context, args, blocks[&o[0]].id())
+                        cbops::br(self.context, args, blocks[&o[0]].id())
                             .build()
                             .id(),
                         None,
@@ -867,7 +868,7 @@ impl<'a> Reader<'a> {
                         .map(|id| self.value_ref(id))
                         .collect::<Result<Vec<_>>>()?;
                     (
-                        bops::cond_br(
+                        cbops::cond_br(
                             self.context,
                             self.value_ref(o[0])?,
                             true_args,
@@ -977,12 +978,12 @@ impl<'a> Reader<'a> {
 }
 
 fn branch_argument(op: tir::OpHandle, destination: BlockId, index: usize) -> Option<ValueId> {
-    if let Some(branch) = op.clone().as_op::<tir::builtin::BranchOp>()
+    if let Some(branch) = op.clone().as_op::<tir::cfg::BranchOp>()
         && branch.dest() == destination
     {
         return branch.dest_args().get(index).copied();
     }
-    if let Some(branch) = op.as_op::<tir::builtin::CondBranchOp>() {
+    if let Some(branch) = op.as_op::<tir::cfg::CondBranchOp>() {
         let args = if branch.true_dest() == destination {
             branch.true_args()
         } else if branch.false_dest() == destination {

@@ -66,7 +66,14 @@ fn memory_and_control_flow() {
                \x20 ret i32 %r\n\
                }\n";
     let out = import_and_print(src);
-    for needle in ["alloca", "cond_br", "store", "br ^", "load", "return"] {
+    for needle in [
+        "alloca",
+        "cfg.cond_br",
+        "store",
+        "cfg.br ^",
+        "load",
+        "return",
+    ] {
         assert!(out.contains(needle), "missing {needle} in:\n{out}");
     }
 }

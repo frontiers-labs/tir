@@ -5,18 +5,18 @@ module {
     %0 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %1 = constant {value = 0} : !i32
     ptr.store %1, %0
-    br ^bb1
+    cfg.br ^bb1
   ^bb1:
     %3 = ptr.load %0 : !i32
     %4 = constant {value = 3} : !i32
     %5 = cmpi %3, %4 {predicate = "slt"} : !i1
-    cond_br %5, ^bb2, ^bb3
+    cfg.cond_br %5, ^bb2, ^bb3
   ^bb2:
     %6 = ptr.load %0 : !i32
     %7 = constant {value = 1} : !i32
     %8 = addi %6, %7 : !i32
     ptr.store %8, %0
-    br ^bb1
+    cfg.br ^bb1
   ^bb3:
     %9 = ptr.load %0 : !i32
     return %9

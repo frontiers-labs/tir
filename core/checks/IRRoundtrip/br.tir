@@ -2,7 +2,7 @@
 
 module {
   func @jump() -> !i32 {
-    br ^bb1
+    cfg.br ^bb1
   ^bb1:
     %0 = constant {value = 42} : !i32
     return %0
@@ -12,7 +12,7 @@ module {
 
 // CHECK: module {
 // CHECK-NEXT: func @jump() -> !i32 {
-// CHECK-NEXT: br ^bb1
+// CHECK-NEXT: cfg.br ^bb1
 // CHECK-NEXT: ^bb1:
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 42} : !i32
 // CHECK-NEXT: return %{{[0-9]+}}

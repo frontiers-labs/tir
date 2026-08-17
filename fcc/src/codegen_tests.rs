@@ -245,8 +245,8 @@ int main(void) { printf("hello"); return 0; }"#,
         // The mid-end takes structured control flow only: no C construct may
         // reach it as a branch, so every function this helper lowers is held to
         // that, not just the ones whose test says so.
-        assert!(!lowered.contains("cond_br"), "{lowered}");
-        assert!(!lowered.contains("br ^"), "{lowered}");
+        assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
+        assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         lowered
     }
 
@@ -268,15 +268,15 @@ int main(void) { printf("hello"); return 0; }"#,
         assert!(!lowered.contains("cir.while"));
         assert!(lowered.contains("scf.while"));
         assert!(lowered.contains("scf.condition"));
-        assert!(!lowered.contains("cond_br"));
+        assert!(!lowered.contains("cfg.cond_br"));
     }
 
     #[test]
     fn early_return_lowers_to_structured_control_flow() {
         let lowered = lower_cir_control_flow("int f(int x) { if (x) return 1; return 2; }");
 
-        assert!(!lowered.contains("cond_br"), "{lowered}");
-        assert!(!lowered.contains("br ^"), "{lowered}");
+        assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
+        assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         assert!(lowered.contains("scf.if"), "{lowered}");
     }
 
@@ -286,8 +286,8 @@ int main(void) { printf("hello"); return 0; }"#,
             "int f(int n) { int i = 0; while (i < n) { if (i == 3) return i; i = i + 1; } return 0; }",
         );
 
-        assert!(!lowered.contains("cond_br"), "{lowered}");
-        assert!(!lowered.contains("br ^"), "{lowered}");
+        assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
+        assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         assert!(lowered.contains("scf.while"), "{lowered}");
         assert!(lowered.contains("scf.break"), "{lowered}");
     }
@@ -305,8 +305,8 @@ int main(void) { printf("hello"); return 0; }"#,
             "int f(int n) { int t = 0; do { t = t + 1; if (t == 3) { return 3; } } while (t < n); return t; }",
         );
 
-        assert!(!lowered.contains("cond_br"), "{lowered}");
-        assert!(!lowered.contains("br ^"), "{lowered}");
+        assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
+        assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         assert!(lowered.contains("scf.while"), "{lowered}");
     }
 
@@ -318,7 +318,7 @@ int main(void) { printf("hello"); return 0; }"#,
         assert!(!lowered.contains("cir.while"));
         assert!(lowered.contains("scf.while"), "{lowered}");
         assert!(lowered.contains("scf.break"), "{lowered}");
-        assert!(!lowered.contains("cond_br"), "{lowered}");
+        assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
     }
 
     /// The mid-end must see structured control flow only. After the CIR
@@ -359,8 +359,8 @@ int main(void) { printf("hello"); return 0; }"#,
                }"#,
         );
 
-        assert!(!lowered.contains("cond_br"), "{lowered}");
-        assert!(!lowered.contains("br ^"), "{lowered}");
+        assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
+        assert!(!lowered.contains("cfg.br ^"), "{lowered}");
     }
 
     /// `break` and `continue` in a `for`, and `continue` in a `do`, are the loop
@@ -409,8 +409,8 @@ int main(void) { printf("hello"); return 0; }"#,
                }"#,
         );
 
-        assert!(!lowered.contains("cond_br"), "{lowered}");
-        assert!(!lowered.contains("br ^"), "{lowered}");
+        assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
+        assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         assert!(lowered.contains("scf.break"), "{lowered}");
     }
 
@@ -429,8 +429,8 @@ int main(void) { printf("hello"); return 0; }"#,
                }"#,
         );
 
-        assert!(!lowered.contains("cond_br"), "{lowered}");
-        assert!(!lowered.contains("br ^"), "{lowered}");
+        assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
+        assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         assert!(lowered.contains("scf.break"), "{lowered}");
         assert!(!lowered.contains("call @bump"), "{lowered}");
     }
@@ -445,7 +445,7 @@ int main(void) { printf("hello"); return 0; }"#,
     cir.while %1 cond {
       cir.condition %0
     } body {
-      br ^bb1
+      cfg.br ^bb1
       ^bb1:
       cir.yield
     }
@@ -469,7 +469,7 @@ int main(void) { printf("hello"); return 0; }"#,
         tir::Operation::print(&module, &mut fmt).expect("print");
         assert!(!lowered.contains("cir.while"));
         assert!(!lowered.contains("scf.while"));
-        assert!(lowered.contains("cond_br"));
+        assert!(lowered.contains("cfg.cond_br"));
         let roundtrip_context = fcc_context();
         tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(&roundtrip_context, &lowered)
             .expect("lowered multiblock CFG should parse");

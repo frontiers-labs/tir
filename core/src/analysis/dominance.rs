@@ -397,6 +397,7 @@ mod tests {
     use crate::{
         BlockHandle, Context, Operand, Operation, RegionId,
         builtin::{IntegerType, UnitType, ops},
+        cfg::ops as cfg_ops,
     };
 
     fn block_succs(tree: &DominatorTree, block: BlockId) -> HashSet<BlockId> {
@@ -442,10 +443,10 @@ mod tests {
 
         terminate(
             &entry,
-            ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build(),
+            cfg_ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build(),
         );
-        terminate(&t, ops::br(&context, vec![], merge.id()).build());
-        terminate(&f, ops::br(&context, vec![], merge.id()).build());
+        terminate(&t, cfg_ops::br(&context, vec![], merge.id()).build());
+        terminate(&f, cfg_ops::br(&context, vec![], merge.id()).build());
         terminate(&merge, ops::r#return(&context, Operand::none()).build());
 
         let dt = DominatorTree::new(&context, func_with_region(&context, region.id()));
@@ -484,12 +485,12 @@ mod tests {
             region.add_block(block.id());
         }
 
-        terminate(&entry, ops::br(&context, vec![], header.id()).build());
+        terminate(&entry, cfg_ops::br(&context, vec![], header.id()).build());
         terminate(
             &header,
-            ops::cond_br(&context, cond_id, vec![], vec![], body.id(), exit.id()).build(),
+            cfg_ops::cond_br(&context, cond_id, vec![], vec![], body.id(), exit.id()).build(),
         );
-        terminate(&body, ops::br(&context, vec![], header.id()).build());
+        terminate(&body, cfg_ops::br(&context, vec![], header.id()).build());
         terminate(&exit, ops::r#return(&context, Operand::none()).build());
 
         let dt = DominatorTree::new(&context, func_with_region(&context, region.id()));
@@ -568,10 +569,10 @@ mod tests {
 
         terminate(
             &entry,
-            ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build(),
+            cfg_ops::cond_br(&context, cond_id, vec![], vec![], t.id(), f.id()).build(),
         );
-        terminate(&t, ops::br(&context, vec![], merge.id()).build());
-        terminate(&f, ops::br(&context, vec![], merge.id()).build());
+        terminate(&t, cfg_ops::br(&context, vec![], merge.id()).build());
+        terminate(&f, cfg_ops::br(&context, vec![], merge.id()).build());
         terminate(&merge, ops::r#return(&context, Operand::none()).build());
 
         let pdt = DominatorTree::post_dominator(&context, func_with_region(&context, region.id()));

@@ -732,6 +732,7 @@ mod tests {
     use crate::{
         Context, Operation,
         builtin::{AddIOp, FuncOp, IntegerType, ops},
+        cfg::ops as cfg_ops,
     };
 
     use super::{AnalysisManager, Pass, PassError, PassManager, PassTarget};
@@ -971,7 +972,7 @@ mod tests {
         let target = context.create_block(vec![]);
         region.add_block(entry.id());
         region.add_block(target.id());
-        entry.append_op(ops::br(&context, vec![], target.id()).build());
+        entry.append_op(cfg_ops::br(&context, vec![], target.id()).build());
         target
             .clone()
             .append_op(ops::r#return(&context, crate::Operand::none()).build());
@@ -988,7 +989,7 @@ mod tests {
         assert!(!blocks.contains(&target.id()));
         let branch = context
             .get_op(context.get_block(blocks[0]).op_ids()[0])
-            .as_op::<crate::builtin::BranchOp>()
+            .as_op::<crate::cfg::BranchOp>()
             .expect("the clone keeps the branch");
         assert_eq!(branch.dest(), blocks[1]);
     }

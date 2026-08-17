@@ -1,6 +1,7 @@
 use tir::{
     Context, IRFormatter, Operation, PassManager, TypeId,
     builtin::{FloatType, FuncOp, IntegerType, ops},
+    cfg::ops as cfg_ops,
     graph::{MetaMutDag, MutDag, OperandConstraint},
     sem::{FloatFormat, SemGraph, SemType, SymKind, SymPayload},
 };
@@ -1387,7 +1388,7 @@ fn builder_anchors_join_block_argument() {
     ops::func(&context, "gamma", i32, Some(region.id())).build();
 
     entry.append_op(
-        ops::cond_br(
+        cfg_ops::cond_br(
             &context,
             cond_id,
             vec![],
@@ -1397,8 +1398,8 @@ fn builder_anchors_join_block_argument() {
         )
         .build(),
     );
-    then_block.append_op(ops::br(&context, vec![x_id], join.id()).build());
-    else_block.append_op(ops::br(&context, vec![y_id], join.id()).build());
+    then_block.append_op(cfg_ops::br(&context, vec![x_id], join.id()).build());
+    else_block.append_op(cfg_ops::br(&context, vec![y_id], join.id()).build());
     join.append_op(ops::r#return(&context, merged_id).build());
 
     let value_to_def = HashMap::new();
@@ -1863,7 +1864,7 @@ fn refuses_cross_block_binding_to_non_escaping_value() {
     entry.append_op(d);
     let g = ops::subi(&context, d_res, m_id, i64_ty).build();
     entry.append_op(g);
-    entry.append_op(ops::br(&context, vec![], bb1.id()).build());
+    entry.append_op(cfg_ops::br(&context, vec![], bb1.id()).build());
 
     // %e = a - b recomputes the same expression (CSE-merged with %d); the add
     // consumes it, resolving its operand under the binding rule.

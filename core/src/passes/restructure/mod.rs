@@ -87,16 +87,16 @@ mod tests {
     /// entered at two of its members, and irreducible however it is traversed.
     fn tangle(blocks: usize) -> String {
         let mut source = String::from("func @tangle(%0: !i1, %1: !i32) -> !i32 {\n");
-        source.push_str("  cond_br %0, ^bb1, ^bb2\n");
+        source.push_str("  cfg.cond_br %0, ^bb1, ^bb2\n");
         for block in 1..=blocks {
             let next = block % blocks + 1;
             let after = (block + 1) % blocks + 1;
             source.push_str(&format!("^bb{block}:\n"));
             source.push_str(&format!("  %v{block} = addi %1, %1 : !i32\n"));
             if block == blocks {
-                source.push_str(&format!("  cond_br %0, ^bb{next}, ^bb{}\n", blocks + 1));
+                source.push_str(&format!("  cfg.cond_br %0, ^bb{next}, ^bb{}\n", blocks + 1));
             } else {
-                source.push_str(&format!("  cond_br %0, ^bb{next}, ^bb{after}\n"));
+                source.push_str(&format!("  cfg.cond_br %0, ^bb{next}, ^bb{after}\n"));
             }
         }
         source.push_str(&format!("^bb{}:\n  return %1\n}}\n", blocks + 1));

@@ -7,11 +7,11 @@
 module {
   func @pure(%c: !i64, %d: !i64, %a: !i64, %b: !i64, %z: !i64) -> !i64 {
     %cond = cmpi %c, %d {predicate = "slt"} : !i1
-    cond_br %cond, ^bb1, ^bb2
+    cfg.cond_br %cond, ^bb1, ^bb2
   ^bb1:
-    br ^bb3(%a : !i64)
+    cfg.br ^bb3(%a : !i64)
   ^bb2:
-    br ^bb3(%b : !i64)
+    cfg.br ^bb3(%b : !i64)
   ^bb3(%selected: !i64):
     %result = addi %selected, %z : !i64
     return %result
@@ -19,12 +19,12 @@ module {
 
   func @trapping(%c: !i64, %d: !i64, %a: !i64, %b: !i64, %z: !i64) -> !i64 {
     %cond = cmpi %c, %d {predicate = "slt"} : !i1
-    cond_br %cond, ^bb1, ^bb2
+    cfg.cond_br %cond, ^bb1, ^bb2
   ^bb1:
-    br ^bb3(%a : !i64)
+    cfg.br ^bb3(%a : !i64)
   ^bb2:
     %quotient = divsi %b, %z : !i64
-    br ^bb3(%quotient : !i64)
+    cfg.br ^bb3(%quotient : !i64)
   ^bb3(%selected: !i64):
     %result = addi %selected, %z : !i64
     return %result

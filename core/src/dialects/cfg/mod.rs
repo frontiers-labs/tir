@@ -2,15 +2,27 @@ use crate::Any;
 use crate::attributes::AttributeValue;
 use crate::{
     BlockId, BranchGuard, BranchTerminator, Context, Error, Operation, Terminator, ValueId,
-    operation,
+    dialect, operation,
 };
 
 use crate as tir;
 
+pub mod ops {
+    pub use super::{br, cond_br};
+}
+
+dialect! {
+    CfgDialect {
+        name: "cfg",
+        operations: [BranchOp, CondBranchOp],
+        types: [],
+    }
+}
+
 operation! {
     BranchOp {
         name: "br",
-        dialect: "builtin",
+        dialect: "cfg",
         format: "custom",
         operands: O {
             dest_args: "*Any",
@@ -46,7 +58,7 @@ impl BranchOp {
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        fmt.write("br ")?;
+        fmt.write("cfg.br ")?;
         print_successor(fmt, &context, self.dest(), &self.dest_args())?;
         fmt.write("\n")
     }
@@ -68,7 +80,7 @@ impl BranchOp {
 operation! {
     CondBranchOp {
         name: "cond_br",
-        dialect: "builtin",
+        dialect: "cfg",
         format: "custom",
         operands: O {
             condition: "crate::Integer<1>",
@@ -149,7 +161,7 @@ impl CondBranchOp {
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        fmt.write(format!("cond_br %{}, ", self.condition().number()))?;
+        fmt.write(format!("cfg.cond_br %{}, ", self.condition().number()))?;
         print_successor(fmt, &context, self.true_dest(), &self.true_args())?;
         fmt.write(", ")?;
         print_successor(fmt, &context, self.false_dest(), &self.false_args())?;
@@ -304,11 +316,11 @@ fn expect_token(
 mod tests {
     use crate::{
         Context, IRFormatter, Operation, Terminator,
-        builtin::{IntegerType, UnitType, ops},
+        builtin::{IntegerType, UnitType},
         parse::ir::parse_ir,
     };
 
-    use super::{BranchOp, CondBranchOp};
+    use super::{BranchOp, CondBranchOp, ops};
 
     #[test]
     fn br_no_args_roundtrip() {
@@ -322,7 +334,7 @@ mod tests {
         let mut buf = String::new();
         let mut fmt = IRFormatter::new(&mut buf);
         op.print(&mut fmt).expect("print ok");
-        assert_eq!(buf.trim_end(), format!("br ^bb{}", dest.id().number()));
+        assert_eq!(buf.trim_end(), format!("cfg.br ^bb{}", dest.id().number()));
 
         let parsed = parse_ir::<BranchOp>(&context, &buf).expect("parse br");
         assert_eq!(parsed.dest(), dest.id());
@@ -347,7 +359,7 @@ mod tests {
         assert_eq!(
             buf.trim_end(),
             format!(
-                "br ^bb{}(%{}, %{} : !i32, !i32)",
+                "cfg.br ^bb{}(%{}, %{} : !i32, !i32)",
                 dest.id().number(),
                 a_id.number(),
                 b_id.number()
@@ -384,7 +396,7 @@ mod tests {
         assert_eq!(
             buf.trim_end(),
             format!(
-                "cond_br %{}, ^bb{}(%{} : !i32), ^bb{}(%{} : !i32)",
+                "cfg.cond_br %{}, ^bb{}(%{} : !i32), ^bb{}(%{} : !i32)",
                 cond_id.number(),
                 t.id().number(),
                 a_id.number(),
@@ -456,7 +468,9 @@ mod tests {
         region.add_block(entry.id());
         let target = context.create_block(vec![]);
 
-        let func = ops::func(&context, "jump", UnitType::new(&context), Some(region.id())).build();
+        let func =
+            crate::builtin::ops::func(&context, "jump", UnitType::new(&context), Some(region.id()))
+                .build();
 
         func.body()
             .append_op(ops::br(&context, vec![], target.id()).build());

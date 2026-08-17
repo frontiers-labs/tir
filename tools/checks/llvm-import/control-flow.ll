@@ -2,9 +2,9 @@
 
 ; CHECK: func @choose
 ; CHECK: alloca
-; CHECK: cond_br
+; CHECK: cfg.cond_br
 ; CHECK: store
-; CHECK: br ^
+; CHECK: cfg.br ^
 ; CHECK: load
 ; CHECK: return
 

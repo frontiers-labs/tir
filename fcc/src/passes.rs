@@ -3,9 +3,8 @@ use tir::BlockHandle;
 
 use tir::analysis::AnalysisManager;
 use tir::attributes::AttributeValue;
-use tir::builtin::{
-    BranchOp, CondBranchOp, FuncOp, IntegerType, ModuleOp, ReturnOp, TokenType, ops as b,
-};
+use tir::builtin::{FuncOp, IntegerType, ModuleOp, ReturnOp, TokenType, ops as b};
+use tir::cfg::{BranchOp, CondBranchOp, ops as cb};
 use tir::ptr::{PtrType, ops as p};
 use tir::{
     BlockId, Context, Operation, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter,
@@ -486,7 +485,7 @@ impl LowerCirControlFlowPass {
                 let replacement: Option<Box<dyn Operation>> =
                     if let Some(branch) = op.clone().as_op::<BranchOp>() {
                         mapping.get(&branch.dest()).map(|destination| {
-                            Box::new(b::br(context, branch.dest_args(), *destination).build())
+                            Box::new(cb::br(context, branch.dest_args(), *destination).build())
                                 as Box<dyn Operation>
                         })
                     } else if let Some(branch) = op.clone().as_op::<CondBranchOp>() {
@@ -501,7 +500,7 @@ impl LowerCirControlFlowPass {
                         (true_dest != branch.true_dest() || false_dest != branch.false_dest()).then(
                             || {
                                 Box::new(
-                                    b::cond_br(
+                                    cb::cond_br(
                                         context,
                                         branch.condition(),
                                         branch.true_args(),
@@ -571,7 +570,7 @@ impl LowerCirControlFlowPass {
     ) -> Result<(), PassError> {
         let block = context.get_block(block.id());
         let terminator = context.get_op(*block.op_ids().last().unwrap());
-        let branch = b::br(context, vec![], destination).build();
+        let branch = cb::br(context, vec![], destination).build();
         rewriter.replace_op(
             &OperationRef::new(terminator, Some(block.clone()), None),
             &branch,
@@ -596,7 +595,7 @@ impl LowerCirControlFlowPass {
                 )
             })?
             .operands()[0];
-        let branch = b::cond_br(context, condition, vec![], vec![], true_dest, false_dest).build();
+        let branch = cb::cond_br(context, condition, vec![], vec![], true_dest, false_dest).build();
         rewriter.replace_op(
             &OperationRef::new(terminator, Some(block.clone()), None),
             &branch,
@@ -917,7 +916,7 @@ impl LowerCirControlFlowPass {
                 std::slice::from_ref(&continuation),
             );
             Self::erase_control_op(rewriter, &block, op)?;
-            block.append_op(b::br(context, vec![], condition[0].id()).build());
+            block.append_op(cb::br(context, vec![], condition[0].id()).build());
             Self::rewrite_condition(
                 context,
                 rewriter,
@@ -948,7 +947,7 @@ impl LowerCirControlFlowPass {
                 std::slice::from_ref(&continuation),
             );
             Self::erase_control_op(rewriter, &block, op)?;
-            block.append_op(b::br(context, vec![], condition[0].id()).build());
+            block.append_op(cb::br(context, vec![], condition[0].id()).build());
             Self::rewrite_condition(
                 context,
                 rewriter,
@@ -978,7 +977,7 @@ impl LowerCirControlFlowPass {
                 std::slice::from_ref(&continuation),
             );
             Self::erase_control_op(rewriter, &block, op)?;
-            block.append_op(b::br(context, vec![], body[0].id()).build());
+            block.append_op(cb::br(context, vec![], body[0].id()).build());
             Self::rewrite_region_exits(context, rewriter, &body, condition[0].id(), loop_targets)?;
             Self::rewrite_condition(
                 context,
@@ -1001,7 +1000,7 @@ impl LowerCirControlFlowPass {
             let condition = op.operands()[0];
             Self::erase_control_op(rewriter, &block, op)?;
             block.append_op(
-                b::cond_br(
+                cb::cond_br(
                     context,
                     condition,
                     vec![],

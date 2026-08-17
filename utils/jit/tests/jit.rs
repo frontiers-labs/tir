@@ -99,7 +99,7 @@ fn conditional_branch() {
         module {
           func @lt(%0: !i64, %1: !i64) -> !i64 {
             %2 = cmpi %0, %1 {predicate = "slt"} : !i1
-            cond_br %2, ^bb1, ^bb2
+            cfg.cond_br %2, ^bb1, ^bb2
           ^bb1:
             %3 = constant {value = 1} : !i64
             return %3
@@ -130,7 +130,7 @@ fn value_live_across_branch() {
           func @cross(%0: !i64, %1: !i64) -> !i64 {
             %v = addi %0, %1 : !i64
             %c = cmpi %0, %1 {predicate = "slt"} : !i1
-            cond_br %c, ^bb1, ^bb2
+            cfg.cond_br %c, ^bb1, ^bb2
           ^bb1:
             %t = addi %0, %0 : !i64
             %r = addi %v, %t : !i64
@@ -186,11 +186,11 @@ fn block_argument_diamond() {
         module {
           func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
             %cond = cmpi %c, %d {predicate = "slt"} : !i1
-            cond_br %cond, ^bb1, ^bb2
+            cfg.cond_br %cond, ^bb1, ^bb2
           ^bb1:
-            br ^bb3(%a : !i64)
+            cfg.br ^bb3(%a : !i64)
           ^bb2:
-            br ^bb3(%b : !i64)
+            cfg.br ^bb3(%b : !i64)
           ^bb3(%r: !i64):
             return %r
           }
@@ -214,14 +214,14 @@ fn loop_carried_block_argument() {
         module {
           func @count(%limit: !i64) -> !i64 {
             %zero = constant {value = 0} : !i64
-            br ^bb1(%zero : !i64)
+            cfg.br ^bb1(%zero : !i64)
           ^bb1(%iv: !i64):
             %keep_going = cmpi %iv, %limit {predicate = "slt"} : !i1
-            cond_br %keep_going, ^bb2, ^bb3
+            cfg.cond_br %keep_going, ^bb2, ^bb3
           ^bb2:
             %one = constant {value = 1} : !i64
             %next = addi %iv, %one : !i64
-            br ^bb1(%next : !i64)
+            cfg.br ^bb1(%next : !i64)
           ^bb3:
             return %iv
           }
@@ -247,17 +247,17 @@ fn loop_accumulator_in_a_slot() {
             %acc = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
             %zero = constant {value = 0} : !i64
             ptr.store %zero, %acc
-            br ^bb1(%zero : !i64)
+            cfg.br ^bb1(%zero : !i64)
           ^bb1(%iv: !i64):
             %keep_going = cmpi %iv, %limit {predicate = "slt"} : !i1
-            cond_br %keep_going, ^bb2, ^bb3
+            cfg.cond_br %keep_going, ^bb2, ^bb3
           ^bb2:
             %current = ptr.load %acc : !i64
             %grown = addi %current, %iv : !i64
             ptr.store %grown, %acc
             %one = constant {value = 1} : !i64
             %next = addi %iv, %one : !i64
-            br ^bb1(%next : !i64)
+            cfg.br ^bb1(%next : !i64)
           ^bb3:
             %total = ptr.load %acc : !i64
             return %total
@@ -285,7 +285,7 @@ fn conditional_edge_arguments() {
         module {
           func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
             %cond = cmpi %c, %d {predicate = "slt"} : !i1
-            cond_br %cond, ^bb1(%a : !i64), ^bb2(%b : !i64)
+            cfg.cond_br %cond, ^bb1(%a : !i64), ^bb2(%b : !i64)
           ^bb1(%x: !i64):
             return %x
           ^bb2(%y: !i64):
@@ -370,7 +370,7 @@ fn aarch64_cross_load() {
         module {
           func @lt(%0: !i64, %1: !i64) -> !i64 {
             %2 = cmpi %0, %1 {predicate = "slt"} : !i1
-            cond_br %2, ^bb1, ^bb2
+            cfg.cond_br %2, ^bb1, ^bb2
           ^bb1:
             %3 = constant {value = 1} : !i64
             return %3

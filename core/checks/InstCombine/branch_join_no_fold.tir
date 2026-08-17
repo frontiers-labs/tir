@@ -7,11 +7,11 @@
 
 module {
   func @join(%c: !i1, %y: !i1) -> !i1 {
-    cond_br %c, ^bb1, ^bb2
+    cfg.cond_br %c, ^bb1, ^bb2
   ^bb1:
-    br ^bb3
+    cfg.br ^bb3
   ^bb2:
-    br ^bb3
+    cfg.br ^bb3
   ^bb3:
     %r = muli %c, %y : !i1
     return %r

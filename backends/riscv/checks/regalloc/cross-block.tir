@@ -8,7 +8,7 @@ module {
   func @f(%a: !i64, %b: !i64, %c: !i64) -> !i64 {
     %v = addi %a, %b : !i64
     %cond = cmpi %a, %c {predicate = "slt"} : !i1
-    cond_br %cond, ^bb1, ^bb2
+    cfg.cond_br %cond, ^bb1, ^bb2
   ^bb1:
     %t = addi %c, %c : !i64
     %r = addi %v, %t : !i64

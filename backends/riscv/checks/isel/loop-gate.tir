@@ -7,14 +7,14 @@
 module {
   func @count(%limit: !i64) -> !i64 {
     %zero = constant {value = 0} : !i64
-    br ^bb1(%zero : !i64)
+    cfg.br ^bb1(%zero : !i64)
   ^bb1(%iv: !i64):
     %keep_going = cmpi %iv, %limit {predicate = "slt"} : !i1
-    cond_br %keep_going, ^bb2, ^bb3
+    cfg.cond_br %keep_going, ^bb2, ^bb3
   ^bb2:
     %one = constant {value = 1} : !i64
     %next = addi %iv, %one : !i64
-    br ^bb1(%next : !i64)
+    cfg.br ^bb1(%next : !i64)
   ^bb3:
     return %iv
   }

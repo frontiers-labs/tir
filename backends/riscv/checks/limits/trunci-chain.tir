@@ -10,7 +10,7 @@
 module {
   func @t(%0: !i64) -> !i16 {
     %1 = trunci %0 : !i32
-    br ^bb1
+    cfg.br ^bb1
   ^bb1:
     %2 = trunci %1 : !i16
     return %2

@@ -8,31 +8,31 @@ module {
   func @exclusive(%c: !i64, %a: !i64, %b: !i64) -> !i64 {
     %z = constant {value = 0} : !i64
     %sel = cmpi %c, %z {predicate = "eq"} : !i1
-    cond_br %sel, ^bb1, ^bb2
+    cfg.cond_br %sel, ^bb1, ^bb2
   ^bb1:
     %p1 = cmpi %a, %z {predicate = "slt"} : !i1
-    cond_br %p1, ^bb3, ^bb4
+    cfg.cond_br %p1, ^bb3, ^bb4
   ^bb2:
     %p2 = cmpi %a, %z {predicate = "slt"} : !i1
-    cond_br %p2, ^bb5, ^bb6
+    cfg.cond_br %p2, ^bb5, ^bb6
   ^bb3:
     %x1 = muli %a, %b : !i64
-    br ^bb7(%x1 : !i64)
+    cfg.br ^bb7(%x1 : !i64)
   ^bb4:
     %y1 = addi %a, %b : !i64
-    br ^bb7(%y1 : !i64)
+    cfg.br ^bb7(%y1 : !i64)
   ^bb5:
     %x2 = muli %a, %b : !i64
-    br ^bb8(%x2 : !i64)
+    cfg.br ^bb8(%x2 : !i64)
   ^bb6:
     %y2 = addi %a, %b : !i64
-    br ^bb8(%y2 : !i64)
+    cfg.br ^bb8(%y2 : !i64)
   ^bb7(%g1: !i64):
     %r1 = subi %g1, %c : !i64
-    br ^bb9(%r1 : !i64)
+    cfg.br ^bb9(%r1 : !i64)
   ^bb8(%g2: !i64):
     %r2 = subi %g2, %b : !i64
-    br ^bb9(%r2 : !i64)
+    cfg.br ^bb9(%r2 : !i64)
   ^bb9(%out: !i64):
     return %out
   }

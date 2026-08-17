@@ -15,7 +15,7 @@ module {
     %3 = trunci %2 : !i32
     %4 = constant {value = 0} : !i32
     %5 = cmpi %3, %4 {predicate = "ne"} : !i1
-    cond_br %5, ^bb1, ^bb2
+    cfg.cond_br %5, ^bb1, ^bb2
   ^bb1:
     %6 = constant {value = 3} : !i32
     return %6

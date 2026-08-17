@@ -10,7 +10,7 @@ module {
   func @eq_zero_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i64
     %2 = cmpi %0, %1 {predicate = "eq"} : !i1
-    cond_br %2, ^bb1, ^bb2
+    cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
     %3 = constant {value = 1} : !i64
     return %3
@@ -25,7 +25,7 @@ module {
   func @ne_zero_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i64
     %2 = cmpi %0, %1 {predicate = "ne"} : !i1
-    cond_br %2, ^bb1, ^bb2
+    cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
     %3 = constant {value = 1} : !i64
     return %3
@@ -42,7 +42,7 @@ module {
   func @slt_imm_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 5} : !i64
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
-    cond_br %2, ^bb1, ^bb2
+    cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
     %3 = constant {value = 1} : !i64
     return %3
@@ -58,7 +58,7 @@ module {
   func @ult_imm_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 5} : !i64
     %2 = cmpi %0, %1 {predicate = "ult"} : !i1
-    cond_br %2, ^bb1, ^bb2
+    cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
     %3 = constant {value = 1} : !i64
     return %3

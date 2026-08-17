@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use tir::attributes::AttributeValue;
 use tir::backend::abi::{Overflow, ValueKind, type_kind};
 use tir::builtin::{FloatType, IntegerType, ModuleOp, TokenType, TupleType, UnitType, ops as b};
+use tir::cfg::ops as cb;
 use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
 use tir::{Context, Operand, Operation, TypeId, ValueId};
@@ -2178,7 +2179,7 @@ impl FnCodegen<'_> {
             return;
         }
         self.builder
-            .append_op(b::br(self.context, vec![], block.id()).build());
+            .append_op(cb::br(self.context, vec![], block.id()).build());
         self.terminated = true;
     }
 
@@ -2189,7 +2190,7 @@ impl FnCodegen<'_> {
         if_false: &tir::BlockHandle,
     ) {
         self.builder.append_op(
-            b::cond_br(
+            cb::cond_br(
                 self.context,
                 condition,
                 vec![],

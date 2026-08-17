@@ -14,6 +14,7 @@ use crate::{
     attributes::{AttributeValue, NamedAttribute},
     block::{BlockHandle, BlockId},
     builtin::BuiltinDialect,
+    dialects::cfg::CfgDialect,
     dialects::scf::ScfDialect,
     dialects::state::StateDialect,
     ir_formatter::IRFormatter,
@@ -402,6 +403,7 @@ impl Context {
         let context = Context::new();
 
         context.register_dialect::<BuiltinDialect>();
+        context.register_dialect::<CfgDialect>();
         context.register_dialect::<PtrDialect>();
         context.register_dialect::<ScfDialect>();
         context.register_dialect::<StateDialect>();

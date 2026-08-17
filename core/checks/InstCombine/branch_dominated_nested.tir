@@ -9,9 +9,9 @@
 module {
   func @nested(%a: !i32, %b: !i32) -> !i1 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
-    cond_br %c, ^bb1, ^bb2
+    cfg.cond_br %c, ^bb1, ^bb2
   ^bb1:
-    br ^bb3
+    cfg.br ^bb3
   ^bb2:
     return %c
   ^bb3:

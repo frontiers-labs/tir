@@ -6,9 +6,9 @@
 
 module {
   func @forward(%c: !i1, %0: !f64, %1: !f64) -> !f64 {
-    cond_br %c, ^bb1(%0 : !f64), ^bb2
+    cfg.cond_br %c, ^bb1(%0 : !f64), ^bb2
     ^bb2:
-    br ^bb1(%1 : !f64)
+    cfg.br ^bb1(%1 : !f64)
     ^bb1(%2: !f64):
     %3 = addf %2, %0 : !f64
     return %3

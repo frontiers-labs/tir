@@ -14,6 +14,7 @@ use tir::BlockHandle;
 
 use tir::builtin::ops as b;
 use tir::builtin::{FuncOp, IntegerType, ModuleOp};
+use tir::cfg::ops as cb;
 use tir::{Context, IRFormatter, Operation, PassManager};
 
 /// How many backward edges a run may take.
@@ -292,7 +293,7 @@ impl Program {
         let empty = entry
             .append_op(b::constant(context, 0, integer).build())
             .result();
-        entry.append_op(b::br(context, vec![seed, fuel], blocks[0].id()).build());
+        entry.append_op(cb::br(context, vec![seed, fuel], blocks[0].id()).build());
 
         for (index, specification) in self.blocks.iter().enumerate() {
             let block = &blocks[index];
@@ -335,7 +336,7 @@ impl Program {
                 )
                 .result();
             block.append_op(
-                b::cond_br(
+                cb::cond_br(
                     context,
                     condition,
                     vec![value, remaining],

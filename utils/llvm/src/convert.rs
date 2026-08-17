@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use tir::BlockHandle;
 
 use tir::builtin::{self, IntegerType, UnitType, ops as bops};
+use tir::cfg::ops as cbops;
 use tir::ptr::{PtrType, ops as pops};
 use tir::{Context, Operand, TypeId, ValueId};
 
@@ -239,7 +240,7 @@ fn lower_inst(
                 .get(dest)
                 .ok_or_else(|| Error::UndefinedBlock(dest.clone()))?
                 .id();
-            body.append_op(bops::br(context, vec![], target).build());
+            body.append_op(cbops::br(context, vec![], target).build());
         }
         Inst::CondBr {
             cond,
@@ -255,7 +256,7 @@ fn lower_inst(
                 .get(if_false)
                 .ok_or_else(|| Error::UndefinedBlock(if_false.clone()))?
                 .id();
-            body.append_op(bops::cond_br(context, c, vec![], vec![], t, f).build());
+            body.append_op(cbops::cond_br(context, c, vec![], vec![], t, f).build());
         }
         Inst::Ret { value } => match value {
             None => {

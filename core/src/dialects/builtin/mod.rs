@@ -1,6 +1,5 @@
 mod arith;
 mod call;
-mod control;
 mod declare;
 mod float;
 mod func;
@@ -19,7 +18,6 @@ use crate as tir;
 
 pub use arith::*;
 pub use call::*;
-pub use control::*;
 pub use declare::*;
 pub use float::*;
 pub use func::*;
@@ -30,7 +28,6 @@ pub use tuple::*;
 pub mod ops {
     pub use super::arith::*;
     pub use super::call::*;
-    pub use super::control::*;
     pub use super::declare::*;
     pub use super::float::*;
     pub use super::func::*;
@@ -157,8 +154,6 @@ dialect! {
             FPToSIOp,
             FPToUIOp,
             CmpFOp,
-            BranchOp,
-            CondBranchOp,
             CallOp,
             IndirectCallOp,
             MakeTupleOp,

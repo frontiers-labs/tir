@@ -338,7 +338,7 @@ mod tests {
     fn parse_text_labeled_blocks() {
         let context = Context::with_default_dialects();
         let src = r#"  func @jump() -> !i32 {
-    br ^bb1
+    cfg.br ^bb1
   ^bb1:
     %0 = constant {value = 42} : !i32
     return %0
