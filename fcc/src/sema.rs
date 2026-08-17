@@ -2099,10 +2099,10 @@ impl Analyzer<'_> {
                     }
                     (error, ValueCategory::Value)
                 } else if self.is_arithmetic(types[1]) && self.is_arithmetic(types[2]) {
-                    (
-                        self.common_arithmetic_type(types[1], types[2]),
-                        ValueCategory::Value,
-                    )
+                    let common = self.common_arithmetic_type(types[1], types[2]);
+                    self.record_conversion(children[1], common);
+                    self.record_conversion(children[2], common);
+                    (common, ValueCategory::Value)
                 } else if types[1] == types[2]
                     || matches!(self.types.kind(types[1]), TypeKind::Pointer(_))
                         && self
@@ -2111,6 +2111,7 @@ impl Analyzer<'_> {
                             .and_then(|info| info.constant)
                             == Some(0)
                 {
+                    self.record_conversion(children[2], types[1]);
                     (types[1], ValueCategory::Value)
                 } else if matches!(self.types.kind(types[2]), TypeKind::Pointer(_))
                     && self
@@ -2119,6 +2120,7 @@ impl Analyzer<'_> {
                         .and_then(|info| info.constant)
                         == Some(0)
                 {
+                    self.record_conversion(children[1], types[2]);
                     (types[2], ValueCategory::Value)
                 } else {
                     self.diagnostics.push(
