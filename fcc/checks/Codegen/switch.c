@@ -2,11 +2,11 @@
 
 // CHECK: func.func @classify
 // CHECK: cmpi {{.*}} {predicate = "eq"}
+// CHECK: scf.if
 // CHECK: cmpi {{.*}} {predicate = "eq"}
+// CHECK: scf.if
 // CHECK: cmpi {{.*}} {predicate = "eq"}
-// CHECK: cir.if
-// CHECK: ptr.store
-// CHECK: cir.if
+// CHECK: scf.switch
 // CHECK: addi
 // CHECK: ptr.store
 // CHECK: func.return

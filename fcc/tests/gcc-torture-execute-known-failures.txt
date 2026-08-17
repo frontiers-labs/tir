@@ -14,9 +14,7 @@ execute/20000706-3.c
 execute/20000706-4.c
 execute/20000706-5.c
 execute/20000715-1.c
-execute/20000717-1.c
 execute/20000717-3.c
-execute/20000717-5.c
 execute/20000722-1.c
 execute/20000726-1.c
 execute/20000731-1.c
@@ -160,7 +158,6 @@ execute/20040423-1.c
 execute/20040520-1.c
 execute/20040625-1.c
 execute/20040629-1.c
-execute/20040703-1.c
 execute/20040705-1.c
 execute/20040705-2.c
 execute/20040707-1.c
@@ -205,7 +202,6 @@ execute/20050929-1.c
 execute/20051012-1.c
 execute/20060420-1.c
 execute/20060905-1.c
-execute/20060930-1.c
 execute/20060930-2.c
 execute/20061031-1.c
 execute/20061220-1.c
@@ -370,7 +366,6 @@ execute/930527-1.c
 execute/930603-1.c
 execute/930603-3.c
 execute/930608-1.c
-execute/930614-1.c
 execute/930614-2.c
 execute/930621-1.c
 execute/930622-1.c
@@ -428,9 +423,7 @@ execute/950704-1.c
 execute/950706-1.c
 execute/950809-1.c
 execute/950906-1.c
-execute/950929-1.c
 execute/951115-1.c
-execute/960117-1.c
 execute/960209-1.c
 execute/960215-1.c
 execute/960218-1.c
@@ -483,13 +476,11 @@ execute/990326-1.c
 execute/990413-2.c
 execute/990524-1.c
 execute/990525-1.c
-execute/990525-2.c
 execute/990531-1.c
 execute/990604-1.c
 execute/990628-1.c
 execute/990826-0.c
 execute/991014-1.c
-execute/991016-1.c
 execute/991023-1.c
 execute/991030-1.c
 execute/991112-1.c
@@ -633,7 +624,6 @@ execute/cmpsf-1.c
 execute/cmpsi-1.c
 execute/cmpsi-2.c
 execute/comp-goto-2.c
-execute/compare-1.c
 execute/complex-1.c
 execute/complex-2.c
 execute/complex-3.c
@@ -644,10 +634,6 @@ execute/complex-7.c
 execute/const-addr-expr-1.c
 execute/conversion.c
 execute/dbra-1.c
-execute/divcmp-1.c
-execute/divcmp-2.c
-execute/divcmp-3.c
-execute/divcmp-4.c
 execute/divmod-1.c
 execute/doloop-1.c
 execute/doloop-2.c
@@ -674,7 +660,6 @@ execute/ieee/920518-1.c
 execute/ieee/920810-1.c
 execute/ieee/930529-1.c
 execute/ieee/980619-1.c
-execute/ieee/acc1.c
 execute/ieee/acc2.c
 execute/ieee/bfloat16-builtin-issignaling-1.c
 execute/ieee/builtin-issignaling-1.c
@@ -821,7 +806,6 @@ execute/pr109778.c
 execute/pr109925.c
 execute/pr109938.c
 execute/pr109986.c
-execute/pr110115.c
 execute/pr110165-1.c
 execute/pr110166-1.c
 execute/pr110252-1.c
@@ -841,7 +825,6 @@ execute/pr111331-3.c
 execute/pr111408.c
 execute/pr111422.c
 execute/pr111431-1.c
-execute/pr111469-1.c
 execute/pr111613.c
 execute/pr111863-1.c
 execute/pr112581-1.c
@@ -868,7 +851,6 @@ execute/pr119428.c
 execute/pr120630.c
 execute/pr120677.c
 execute/pr121957.c
-execute/pr122000.c
 execute/pr122943.c
 execute/pr123625-2.c
 execute/pr123625-3.c
@@ -927,7 +909,6 @@ execute/pr31448-2.c
 execute/pr31448.c
 execute/pr32244-1.c
 execute/pr32500.c
-execute/pr33142.c
 execute/pr33382.c
 execute/pr33631.c
 execute/pr33870-1.c

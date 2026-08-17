@@ -78,9 +78,8 @@ pub(super) fn lower_to_ir(
     describe_target(context, &module, machine.as_ref())
 }
 
-/// Raise the functions codegen emitted as a flat graph of blocks — the ones
-/// holding a `goto` — back to structured control flow. A function emitted
-/// structurally is one block, which the pass leaves alone.
+/// Raise the flat graph of blocks codegen emits back to structured control
+/// flow. A function whose body is one block is left alone.
 fn restructure(context: &tir::Context, module: &tir::builtin::ModuleOp) {
     use tir::Operation;
 

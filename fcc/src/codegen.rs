@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tir::attributes::AttributeValue;
 use tir::backend::abi::{Overflow, ValueKind, type_kind};
-use tir::builtin::{FloatType, IntegerType, ModuleOp, TokenType, TupleType, UnitType, ops as b};
+use tir::builtin::{FloatType, IntegerType, ModuleOp, TupleType, UnitType, ops as b};
 use tir::cfg::ops as cb;
 use tir::func::ops as func_ops;
 use tir::graph::{Dag, NodeId};
@@ -52,20 +52,6 @@ struct DataRelocation {
     width: u64,
 }
 
-#[derive(Clone, Copy)]
-enum BreakScope {
-    Loop(ValueId),
-    Switch(Slot),
-}
-
-/// What a structured `return` must do with the control flow that encloses the
-/// statement sequence it appears in.
-#[derive(Clone, Copy)]
-enum Tail {
-    Fallthrough,
-    ExitLoop(ValueId),
-}
-
 enum SwitchItem {
     Case(i64),
     Default,
@@ -88,24 +74,13 @@ struct FnCodegen<'a> {
     signatures: &'a HashMap<EntityId, Signature>,
     return_abi: &'a AbiReturn,
     indirect_return: Option<ValueId>,
-    loop_scopes: Vec<ValueId>,
-    break_scopes: Vec<BreakScope>,
     terminated: bool,
-    /// Set for functions whose returns are not in tail position. `return` then
-    /// records its value and raises the flag instead of terminating a block, so
-    /// the whole function stays structured.
-    return_flag: Option<Slot>,
     return_slot: Option<Slot>,
-    /// Set while lowering the body of a loop whose `continue` cannot be a
-    /// `cir.continue`: a `for` runs its step and a `do` its condition on the
-    /// way to the next iteration, and both trail the body once structured.
-    /// `continue` raises the flag and the rest of the body is skipped instead.
-    continue_flag: Option<Slot>,
-    /// The function body's region, which a flat lowering appends blocks to.
+    /// The type a `return` converts its value to, for a function returning one.
+    result_type: Option<QualType>,
+    /// The function body's region, which the lowering appends blocks to.
     body_region: tir::RegionId,
-    /// Set for functions that contain a label, which are lowered as a flat
-    /// graph of blocks and branches and raised back to structured control flow
-    /// by the `restructure` pass. Every `return` leaves through this block.
+    /// The one block every `return` leaves through.
     exit_block: Option<tir::BlockHandle>,
     /// The block each label names, created the first time it is mentioned.
     label_blocks: HashMap<String, tir::BlockHandle>,
@@ -1349,12 +1324,9 @@ fn lower_function(
         signatures,
         return_abi: &signature.ret,
         indirect_return,
-        loop_scopes: Vec::new(),
-        break_scopes: Vec::new(),
         terminated: false,
-        return_flag: None,
         return_slot: None,
-        continue_flag: None,
+        result_type: None,
         body_region: region.id(),
         exit_block: None,
         label_blocks: HashMap::new(),
@@ -2063,44 +2035,14 @@ impl FnCodegen<'_> {
         let returns_void = matches!(self.typed.types().kind(result), TypeKind::Void);
 
         let statements = ast.children(func).skip(params.len()).collect::<Vec<_>>();
-        if statements.iter().any(|&s| self.contains_label(s)) {
-            return self.lower_flat_body(&statements, result, returns_void);
-        }
-        if self.needs_return_flag(&statements) {
-            self.open_return_slots(result, returns_void);
-        }
-        self.lower_statements(&statements, Tail::Fallthrough)?;
-
-        if self.return_flag.is_some() {
-            let operand = self.return_operand(result, returns_void);
-            self.builder
-                .append_op(func_ops::r#return(self.context, operand).build());
-            self.terminated = true;
-        } else if returns_void && !self.terminated {
-            self.builder
-                .append_op(func_ops::r#return(self.context, Operand::none()).build());
-            self.terminated = true;
-        }
-
-        Ok(())
+        self.lower_statements(&statements, result, returns_void)
     }
 
-    /// A function needs the flag whenever a `return` can be reached with
-    /// statements still to run: those returns cannot be block terminators
-    /// without introducing unstructured control flow.
-    fn needs_return_flag(&self, statements: &[NodeId]) -> bool {
-        let Some((last, rest)) = statements.split_last() else {
-            return false;
-        };
-        rest.iter().any(|&s| self.contains_return(s))
-            || (self.ast.get_node(*last).kind != AstKind::Return && self.contains_return(*last))
-    }
-
-    /// Lower a function holding a label as a flat graph of blocks and branches:
-    /// a `goto` is an edge like any other, and the `restructure` pass raises the
-    /// whole body back to structured control flow. Every `return` stores its
-    /// value and leaves through the one exit block.
-    fn lower_flat_body(
+    /// Lower a function body as a flat graph of blocks and branches: a `goto` is
+    /// an edge like any other, and the `restructure` pass raises the whole body
+    /// back to structured control flow. Every `return` stores its value and
+    /// leaves through the one exit block.
+    fn lower_statements(
         &mut self,
         statements: &[NodeId],
         result: QualType,
@@ -2112,13 +2054,14 @@ impl FnCodegen<'_> {
             self.hoist_declarations(statement);
         }
         if !returns_void {
+            self.result_type = Some(result);
             self.open_return_value_slot(result);
         }
         let exit = self.context.create_block(vec![]);
         self.exit_block = Some(exit.clone());
 
         for &statement in statements {
-            self.lower_flat_stmt(statement)?;
+            self.lower_stmt(statement)?;
         }
         self.leave_block(&exit);
 
@@ -2223,7 +2166,7 @@ impl FnCodegen<'_> {
     /// Lower one statement of a function that holds a label. Control flow
     /// becomes branches between blocks; everything else lowers exactly as it
     /// does in a structured function.
-    fn lower_flat_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+    fn lower_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
         let ast = self.ast;
         if self.terminated {
             // What follows a branch is unreachable, but it may still hold a
@@ -2234,7 +2177,7 @@ impl FnCodegen<'_> {
         match ast.get_node(stmt).kind {
             AstKind::Block | AstKind::DeclGroup => {
                 for child in ast.children(stmt).collect::<Vec<_>>() {
-                    self.lower_flat_stmt(child)?;
+                    self.lower_stmt(child)?;
                 }
                 Ok(())
             }
@@ -2242,7 +2185,7 @@ impl FnCodegen<'_> {
                 let block = self.label_block(stmt);
                 self.leave_block(&block);
                 self.enter_block(block);
-                self.lower_flat_stmt(ast.children(stmt).next().unwrap())
+                self.lower_stmt(ast.children(stmt).next().unwrap())
             }
             AstKind::Goto => {
                 let block = self.label_block(stmt);
@@ -2277,12 +2220,12 @@ impl FnCodegen<'_> {
                 self.branch_on(condition, &then_block, &else_block);
 
                 self.enter_block(then_block);
-                self.lower_flat_stmt(then_stmt)?;
+                self.lower_stmt(then_stmt)?;
                 self.leave_block(&join);
 
                 self.enter_block(else_block);
                 if let Some(else_stmt) = else_stmt {
-                    self.lower_flat_stmt(else_stmt)?;
+                    self.lower_stmt(else_stmt)?;
                 }
                 self.leave_block(&join);
 
@@ -2303,7 +2246,7 @@ impl FnCodegen<'_> {
                 self.branch_on(value, &body_block, &exit);
 
                 self.enter_block(body_block);
-                self.lower_flat_loop_body(body, &exit, &header)?;
+                self.lower_loop_body(body, &exit, &header)?;
                 self.leave_block(&header);
 
                 self.enter_block(exit);
@@ -2319,7 +2262,7 @@ impl FnCodegen<'_> {
                 self.leave_block(&body_block);
 
                 self.enter_block(body_block.clone());
-                self.lower_flat_loop_body(body, &exit, &latch)?;
+                self.lower_loop_body(body, &exit, &latch)?;
                 self.leave_block(&latch);
 
                 self.enter_block(latch);
@@ -2335,7 +2278,7 @@ impl FnCodegen<'_> {
                     unreachable!("for statement has four children");
                 };
                 if ast.get_node(*init).kind != AstKind::Empty {
-                    self.lower_flat_stmt(*init)?;
+                    self.lower_stmt(*init)?;
                 }
                 let header = self.new_block();
                 let body_block = self.new_block();
@@ -2348,7 +2291,7 @@ impl FnCodegen<'_> {
                 self.branch_on(value, &body_block, &exit);
 
                 self.enter_block(body_block);
-                self.lower_flat_loop_body(*body, &exit, &step_block)?;
+                self.lower_loop_body(*body, &exit, &step_block)?;
                 self.leave_block(&step_block);
 
                 self.enter_block(step_block);
@@ -2358,12 +2301,12 @@ impl FnCodegen<'_> {
                 self.enter_block(exit);
                 Ok(())
             }
-            AstKind::Switch => self.lower_flat_switch(stmt),
-            _ => self.lower_structured_stmt(stmt),
+            AstKind::Switch => self.lower_switch(stmt),
+            _ => self.lower_plain_stmt(stmt),
         }
     }
 
-    fn lower_flat_loop_body(
+    fn lower_loop_body(
         &mut self,
         body: NodeId,
         exit: &tir::BlockHandle,
@@ -2371,7 +2314,7 @@ impl FnCodegen<'_> {
     ) -> Result<(), Diagnostic> {
         self.break_blocks.push(exit.clone());
         self.continue_blocks.push(next.clone());
-        let lowered = self.lower_flat_stmt(body);
+        let lowered = self.lower_stmt(body);
         self.continue_blocks.pop();
         self.break_blocks.pop();
         lowered
@@ -2380,7 +2323,7 @@ impl FnCodegen<'_> {
     /// Lower a `switch` as the comparison chain it is: the controlling value is
     /// tested against each case in turn, the arms fall through to one another in
     /// source order, and an unmatched value reaches the default arm or leaves.
-    fn lower_flat_switch(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+    fn lower_switch(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
         let mut children = self.ast.children(stmt);
         let value = self.lower_expr(children.next().unwrap())?;
         let value_ty = self.context.get_value(value).ty();
@@ -2444,7 +2387,7 @@ impl FnCodegen<'_> {
     ) -> Result<(), Diagnostic> {
         for (item, arm) in items.iter().zip(arms) {
             match (item, arm) {
-                (SwitchItem::Statement(statement), _) => self.lower_flat_stmt(*statement)?,
+                (SwitchItem::Statement(statement), _) => self.lower_stmt(*statement)?,
                 (_, Some(arm)) => {
                     self.leave_block(arm);
                     self.enter_block(arm.clone());
@@ -2453,43 +2396,6 @@ impl FnCodegen<'_> {
             }
         }
         Ok(())
-    }
-
-    fn contains_return(&self, statement: NodeId) -> bool {
-        self.ast.get_node(statement).kind == AstKind::Return
-            || self
-                .ast
-                .children(statement)
-                .any(|child| self.contains_return(child))
-    }
-
-    /// A `continue` binds to the nearest enclosing loop, so the ones a nested
-    /// loop owns say nothing about the statements around that loop.
-    fn contains_continue(&self, statement: NodeId) -> bool {
-        match self.ast.get_node(statement).kind {
-            AstKind::Continue => true,
-            AstKind::While | AstKind::DoWhile | AstKind::For => false,
-            _ => self
-                .ast
-                .children(statement)
-                .any(|child| self.contains_continue(child)),
-        }
-    }
-
-    fn open_return_slots(&mut self, result: QualType, returns_void: bool) {
-        let i32_ty = IntegerType::new(self.context, 32);
-        let flag = self.alloca(i32_ty, 4, 4);
-        let zero = self
-            .builder
-            .append_op(b::constant(self.context, 0, i32_ty).build())
-            .result();
-        self.builder
-            .append_op(p::store(self.context, zero, flag.ptr).build());
-        self.return_flag = Some(flag);
-        if returns_void {
-            return;
-        }
-        self.open_return_value_slot(result);
     }
 
     /// The slot a `return` leaves its value in, for a function whose returns are
@@ -2533,76 +2439,6 @@ impl FnCodegen<'_> {
         )
     }
 
-    /// Lower a statement sequence, guarding what follows a `return` against
-    /// having already returned. In a loop body the guard leaves the loop
-    /// instead, so neither the remaining body, the step nor the loop condition
-    /// runs again. A `continue` that raised a flag guards the same way, but the
-    /// loop is left running: only the rest of the body is skipped.
-    fn lower_statements(&mut self, statements: &[NodeId], tail: Tail) -> Result<(), Diagnostic> {
-        for (index, &statement) in statements.iter().enumerate() {
-            self.lower_stmt(statement)?;
-            // `self.terminated` means the statement left the region for good
-            // (`break`, `continue`), so whatever follows is unreachable and
-            // needs no guard.
-            let returns = self.return_flag.is_some() && self.contains_return(statement);
-            let continues = self.continue_flag.is_some() && self.contains_continue(statement);
-            if self.terminated || !(returns || continues) {
-                continue;
-            }
-            let rest = &statements[index + 1..];
-            let leaves_loop = returns && matches!(tail, Tail::ExitLoop(_));
-            if rest.is_empty() && !leaves_loop {
-                break;
-            }
-            let guarded = |cg: &mut Self| {
-                if !returns {
-                    return cg.lower_statements(rest, tail);
-                }
-                cg.lower_if_not_returned(
-                    |cg| cg.lower_statements(rest, tail),
-                    |cg| {
-                        if let Tail::ExitLoop(scope) = tail {
-                            cg.builder
-                                .append_op(cir::ops::r#break(cg.context, scope).build());
-                        }
-                        Ok(())
-                    },
-                )
-            };
-            if continues {
-                self.lower_if_not_continued(guarded)?;
-            } else {
-                guarded(self)?;
-            }
-            break;
-        }
-        Ok(())
-    }
-
-    /// The flag a `for` or `do` body needs to hold a `continue`, or `None` when
-    /// the body has none of its own.
-    fn loop_continue_flag(&mut self, body: NodeId) -> Option<Slot> {
-        self.contains_continue(body)
-            .then(|| self.alloca(IntegerType::new(self.context, 32), 4, 4))
-    }
-
-    fn lower_loop_body(&mut self, body: NodeId, scope: ValueId) -> Result<(), Diagnostic> {
-        if self.return_flag.is_none() {
-            return self.lower_stmt(body);
-        }
-        self.lower_statements(&self.body_statements(body), Tail::ExitLoop(scope))
-    }
-
-    /// The statements a loop or a branch runs, as a sequence of its own: a
-    /// compound statement contributes its statements, anything else itself.
-    fn body_statements(&self, body: NodeId) -> Vec<NodeId> {
-        if self.ast.get_node(body).kind == AstKind::Block {
-            self.ast.children(body).collect()
-        } else {
-            vec![body]
-        }
-    }
-
     fn lower_for_condition(&mut self, condition: NodeId) -> Result<ValueId, Diagnostic> {
         if self.ast.get_node(condition).kind == AstKind::Empty {
             return Ok(self
@@ -2623,142 +2459,10 @@ impl FnCodegen<'_> {
         }
         Ok(())
     }
-
-    /// The condition that decides whether a body runs, held across the guard
-    /// that must not evaluate it: once the function has returned the loop stops.
-    fn lower_running_condition(
-        &mut self,
-        condition: NodeId,
-        held: Slot,
-    ) -> Result<ValueId, Diagnostic> {
-        let guard = self.has_not_returned();
-        self.lower_guard(
-            guard,
-            |cg| {
-                let value = cg.lower_for_condition(condition)?;
-                let value = cg
-                    .builder
-                    .append_op(b::extui(cg.context, value, held.elem).build())
-                    .result();
-                cg.builder
-                    .append_op(p::store(cg.context, value, held.ptr).build());
-                Ok(())
-            },
-            |cg| {
-                let zero = cg
-                    .builder
-                    .append_op(b::constant(cg.context, 0, held.elem).build())
-                    .result();
-                cg.builder
-                    .append_op(p::store(cg.context, zero, held.ptr).build());
-                Ok(())
-            },
-        )?;
-        let value = self
-            .builder
-            .append_op(p::load(self.context, held.ptr, held.elem).build())
-            .result();
-        Ok(self.truth_value(value))
-    }
-
-    fn lower_if_not_returned(
-        &mut self,
-        then: impl FnOnce(&mut Self) -> Result<(), Diagnostic>,
-        otherwise: impl FnOnce(&mut Self) -> Result<(), Diagnostic>,
-    ) -> Result<(), Diagnostic> {
-        let condition = self.has_not_returned();
-        self.lower_guard(condition, then, otherwise)
-    }
-
-    fn lower_if_not_continued(
-        &mut self,
-        then: impl FnOnce(&mut Self) -> Result<(), Diagnostic>,
-    ) -> Result<(), Diagnostic> {
-        let condition = self.has_not_continued();
-        self.lower_guard(condition, then, |_| Ok(()))
-    }
-
-    fn lower_guard(
-        &mut self,
-        condition: ValueId,
-        then: impl FnOnce(&mut Self) -> Result<(), Diagnostic>,
-        otherwise: impl FnOnce(&mut Self) -> Result<(), Diagnostic>,
-    ) -> Result<(), Diagnostic> {
-        let then_region = self.context.create_region();
-        let then_block = self.context.create_block(vec![]);
-        then_region.add_block(then_block.id());
-        self.in_block(then_block.clone(), |cg| {
-            then(cg)?;
-            cg.ensure_cir_yield(then_block);
-            Ok(())
-        })?;
-        let else_region = self.context.create_region();
-        let else_block = self.context.create_block(vec![]);
-        else_region.add_block(else_block.id());
-        self.in_block(else_block.clone(), |cg| {
-            otherwise(cg)?;
-            cg.ensure_cir_yield(else_block);
-            Ok(())
-        })?;
-        self.builder.append_op(
-            cir::ops::r#if(
-                self.context,
-                condition,
-                Some(then_region.id()),
-                Some(else_region.id()),
-            )
-            .build(),
-        );
-        Ok(())
-    }
-
-    fn has_not_returned(&mut self) -> ValueId {
-        let flag = self.return_flag.unwrap();
-        self.flag_is_clear(flag)
-    }
-
-    fn has_not_continued(&mut self) -> ValueId {
-        let flag = self.continue_flag.unwrap();
-        self.flag_is_clear(flag)
-    }
-
-    fn flag_is_clear(&mut self, flag: Slot) -> ValueId {
-        let value = self
-            .builder
-            .append_op(p::load(self.context, flag.ptr, flag.elem).build())
-            .result();
-        self.compare_against_zero(value, "eq")
-    }
-
-    fn store_flag(&mut self, flag: Slot, value: i64) {
-        let value = self
-            .builder
-            .append_op(b::constant(self.context, value, flag.elem).build())
-            .result();
-        self.builder
-            .append_op(p::store(self.context, value, flag.ptr).build());
-    }
-
-    fn lower_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
-        if self.exit_block.is_some() {
-            return self.lower_flat_stmt(stmt);
-        }
-        self.lower_structured_stmt(stmt)
-    }
-
-    fn lower_structured_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
+    /// Lower a statement that carries no control flow of its own.
+    fn lower_plain_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
         let ast = self.ast;
-        if self.terminated {
-            return Ok(());
-        }
         match ast.get_node(stmt).kind {
-            AstKind::DeclGroup => {
-                let declarations = ast.children(stmt).collect::<Vec<_>>();
-                for declaration in declarations {
-                    self.lower_stmt(declaration)?;
-                }
-                Ok(())
-            }
             AstKind::EnumDecl | AstKind::Empty => Ok(()),
             AstKind::Decl => {
                 let AstLeaf::Decl { .. } = ast.get_leaf_data(stmt).unwrap() else {
@@ -2801,391 +2505,14 @@ impl FnCodegen<'_> {
                 }
                 Ok(())
             }
-            AstKind::Return => {
-                if self.return_flag.is_some() {
-                    return self.lower_structured_return(ast.children(stmt).next());
-                }
-                let operand = match ast.children(stmt).next() {
-                    Some(e) if self.return_abi.indirect => {
-                        self.lower_indirect_return(e)?;
-                        if self.return_abi.ty == UnitType::new(self.context) {
-                            Operand::none()
-                        } else {
-                            Operand::from(self.indirect_return.unwrap())
-                        }
-                    }
-                    Some(e) => Operand::from(self.lower_return_value(e)?),
-                    None => Operand::none(),
-                };
-                self.builder
-                    .append_op(func_ops::r#return(self.context, operand).build());
-                self.terminated = true;
-                Ok(())
-            }
             AstKind::ExprStmt => {
                 if let Some(expr) = ast.children(stmt).next() {
                     self.lower_expr(expr)?;
                 }
                 Ok(())
             }
-            AstKind::Block => self.lower_statements(&self.body_statements(stmt), Tail::Fallthrough),
-            AstKind::While => {
-                let mut children = ast.children(stmt);
-                let condition = children.next().unwrap();
-                let body = children.next().unwrap();
-                let scope = self
-                    .context
-                    .create_value(TokenType::new(self.context), None);
-
-                let condition_region = self.context.create_region();
-                let condition_block = self.context.create_block(vec![]);
-                condition_region.add_block(condition_block.id());
-                self.in_block(condition_block, |cg| {
-                    let value = cg.lower_condition(condition)?;
-                    cg.builder
-                        .append_op(cir::ops::condition(cg.context, value).build());
-                    Ok(())
-                })?;
-
-                let body_region = self.context.create_region();
-                let body_block = self.context.create_block(vec![scope.clone()]);
-                body_region.add_block(body_block.id());
-                let outer_continue_flag = self.continue_flag.take();
-                self.loop_scopes.push(scope.id());
-                self.break_scopes.push(BreakScope::Loop(scope.id()));
-                self.in_block(body_block.clone(), |cg| {
-                    cg.lower_loop_body(body, scope.id())?;
-                    cg.ensure_cir_yield(body_block);
-                    Ok(())
-                })?;
-                self.break_scopes.pop();
-                self.loop_scopes.pop();
-                self.continue_flag = outer_continue_flag;
-
-                self.builder.append_op(
-                    cir::ops::r#while(
-                        self.context,
-                        Some(condition_region.id()),
-                        Some(body_region.id()),
-                    )
-                    .build(),
-                );
-                Ok(())
-            }
-            AstKind::DoWhile => {
-                let mut children = ast.children(stmt);
-                let body = children.next().unwrap();
-                let condition = children.next().unwrap();
-
-                let scope = self
-                    .context
-                    .create_value(TokenType::new(self.context), None);
-                let continue_flag = self.loop_continue_flag(body);
-                let body_region = self.context.create_region();
-                let body_block = self.context.create_block(vec![scope.clone()]);
-                body_region.add_block(body_block.id());
-                let outer_continue_flag = std::mem::replace(&mut self.continue_flag, continue_flag);
-                self.loop_scopes.push(scope.id());
-                self.break_scopes.push(BreakScope::Loop(scope.id()));
-                self.in_block(body_block.clone(), |cg| {
-                    if let Some(flag) = continue_flag {
-                        cg.store_flag(flag, 0);
-                    }
-                    cg.lower_loop_body(body, scope.id())?;
-                    cg.ensure_cir_yield(body_block);
-                    Ok(())
-                })?;
-                self.break_scopes.pop();
-                self.loop_scopes.pop();
-                self.continue_flag = outer_continue_flag;
-
-                let condition_region = self.context.create_region();
-                let condition_block = self.context.create_block(vec![]);
-                condition_region.add_block(condition_block.id());
-                self.in_block(condition_block, |cg| {
-                    let value = cg.lower_condition(condition)?;
-                    cg.builder
-                        .append_op(cir::ops::condition(cg.context, value).build());
-                    Ok(())
-                })?;
-
-                self.builder.append_op(
-                    cir::ops::r#do(
-                        self.context,
-                        Some(body_region.id()),
-                        Some(condition_region.id()),
-                    )
-                    .build(),
-                );
-                Ok(())
-            }
-            AstKind::For => {
-                let children = ast.children(stmt).collect::<Vec<_>>();
-                let [init, condition, step, body] = children.as_slice() else {
-                    unreachable!("for statement has four children");
-                };
-                if ast.get_node(*init).kind != AstKind::Empty {
-                    self.lower_stmt(*init)?;
-                }
-                let scope = self
-                    .context
-                    .create_value(TokenType::new(self.context), None);
-                // A `return` in the body must stop the step and the next
-                // condition, which a `break` cannot express: the step belongs
-                // to the loop body once structured, and C runs it on the way
-                // out of an iteration that a `break` does not take.
-                let returns = self.return_flag.is_some() && self.contains_return(*body);
-                let held = returns.then(|| self.alloca(IntegerType::new(self.context, 32), 4, 4));
-                let continue_flag = self.loop_continue_flag(*body);
-
-                let condition_region = self.context.create_region();
-                let condition_block = self.context.create_block(vec![]);
-                condition_region.add_block(condition_block.id());
-                self.in_block(condition_block, |cg| {
-                    let value = match held {
-                        Some(held) => cg.lower_running_condition(*condition, held)?,
-                        None => cg.lower_for_condition(*condition)?,
-                    };
-                    cg.builder
-                        .append_op(cir::ops::condition(cg.context, value).build());
-                    Ok(())
-                })?;
-
-                let body_region = self.context.create_region();
-                let body_block = self.context.create_block(vec![scope.clone()]);
-                body_region.add_block(body_block.id());
-                let outer_continue_flag = std::mem::replace(&mut self.continue_flag, continue_flag);
-                self.loop_scopes.push(scope.id());
-                self.break_scopes.push(BreakScope::Loop(scope.id()));
-                self.in_block(body_block.clone(), |cg| {
-                    if let Some(flag) = continue_flag {
-                        cg.store_flag(flag, 0);
-                    }
-                    if returns {
-                        cg.lower_statements(&cg.body_statements(*body), Tail::Fallthrough)?;
-                    } else {
-                        cg.lower_loop_body(*body, scope.id())?;
-                    }
-                    cg.ensure_cir_yield(body_block);
-                    Ok(())
-                })?;
-                self.break_scopes.pop();
-                self.loop_scopes.pop();
-                self.continue_flag = outer_continue_flag;
-
-                let step_region = self.context.create_region();
-                let step_block = self.context.create_block(vec![]);
-                step_region.add_block(step_block.id());
-                self.in_block(step_block.clone(), |cg| {
-                    if returns {
-                        cg.lower_if_not_returned(|cg| cg.lower_for_step(*step), |_| Ok(()))?;
-                    } else {
-                        cg.lower_for_step(*step)?;
-                    }
-                    cg.ensure_cir_yield(step_block);
-                    Ok(())
-                })?;
-
-                self.builder.append_op(
-                    cir::ops::r#for(
-                        self.context,
-                        Some(condition_region.id()),
-                        Some(body_region.id()),
-                        Some(step_region.id()),
-                    )
-                    .build(),
-                );
-                Ok(())
-            }
-            AstKind::Switch => self.lower_switch(stmt),
-            AstKind::If => {
-                let mut children = ast.children(stmt);
-                let condition = children.next().unwrap();
-                let then_stmt = children.next().unwrap();
-                let else_stmt = children.next();
-                let condition = self.lower_condition(condition)?;
-
-                let then_region = self.context.create_region();
-                let then_block = self.context.create_block(vec![]);
-                then_region.add_block(then_block.id());
-                self.in_block(then_block.clone(), |cg| {
-                    cg.lower_statements(&cg.body_statements(then_stmt), Tail::Fallthrough)?;
-                    cg.ensure_cir_yield(then_block);
-                    Ok(())
-                })?;
-
-                let else_region = self.context.create_region();
-                let else_block = self.context.create_block(vec![]);
-                else_region.add_block(else_block.id());
-                self.in_block(else_block.clone(), |cg| {
-                    if let Some(else_stmt) = else_stmt {
-                        cg.lower_statements(&cg.body_statements(else_stmt), Tail::Fallthrough)?;
-                    }
-                    cg.ensure_cir_yield(else_block);
-                    Ok(())
-                })?;
-
-                self.builder.append_op(
-                    cir::ops::r#if(
-                        self.context,
-                        condition,
-                        Some(then_region.id()),
-                        Some(else_region.id()),
-                    )
-                    .build(),
-                );
-                Ok(())
-            }
-            AstKind::Break => {
-                match *self.break_scopes.last().unwrap() {
-                    BreakScope::Loop(scope) => {
-                        self.builder
-                            .append_op(cir::ops::r#break(self.context, scope).build());
-                    }
-                    BreakScope::Switch(done) => {
-                        let one = self
-                            .builder
-                            .append_op(b::constant(self.context, 1, done.elem).build())
-                            .result();
-                        self.builder
-                            .append_op(p::store(self.context, one, done.ptr).build());
-                    }
-                }
-                self.terminated = true;
-                Ok(())
-            }
-            AstKind::Continue => {
-                match self.continue_flag {
-                    Some(flag) => self.store_flag(flag, 1),
-                    None => {
-                        let scope = *self.loop_scopes.last().unwrap();
-                        self.builder
-                            .append_op(cir::ops::r#continue(self.context, scope).build());
-                    }
-                }
-                self.terminated = true;
-                Ok(())
-            }
             kind => Err(unsupported(ast, stmt, format!("statement {kind:?}"))),
         }
-    }
-
-    fn contains_label(&self, statement: NodeId) -> bool {
-        self.ast.get_node(statement).kind == AstKind::Label
-            || self
-                .ast
-                .children(statement)
-                .any(|child| self.contains_label(child))
-    }
-
-    fn lower_switch(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
-        let mut children = self.ast.children(stmt);
-        let value = self.lower_expr(children.next().unwrap())?;
-        let body = children.next().unwrap();
-        let value_ty = self.context.get_value(value).ty();
-        let i32_ty = IntegerType::new(self.context, 32);
-        let active = self.alloca(i32_ty, 4, 4);
-        let done = self.alloca(i32_ty, 4, 4);
-        let zero = self
-            .builder
-            .append_op(b::constant(self.context, 0, i32_ty).build())
-            .result();
-        self.builder
-            .append_op(p::store(self.context, zero, active.ptr).build());
-        self.builder
-            .append_op(p::store(self.context, zero, done.ptr).build());
-
-        let mut items = Vec::new();
-        self.flatten_switch_items(body, &mut items)?;
-        let mut case_conditions = HashMap::new();
-        let mut any_match = zero;
-        for (index, item) in items.iter().enumerate() {
-            let SwitchItem::Case(case_value) = item else {
-                continue;
-            };
-            let case_value = self
-                .builder
-                .append_op(b::constant(self.context, *case_value, value_ty).build())
-                .result();
-            let condition = self
-                .builder
-                .append_op(
-                    b::CmpIOpBuilder::new(self.context)
-                        .lhs(value)
-                        .rhs(case_value)
-                        .predicate("eq")
-                        .result_type(IntegerType::new(self.context, 1))
-                        .build(),
-                )
-                .result();
-            let condition_value = self
-                .builder
-                .append_op(b::extui(self.context, condition, i32_ty).build())
-                .result();
-            any_match = self
-                .builder
-                .append_op(b::ori(self.context, any_match, condition_value, i32_ty).build())
-                .result();
-            case_conditions.insert(index, condition);
-        }
-        let default_condition = self
-            .builder
-            .append_op(
-                b::CmpIOpBuilder::new(self.context)
-                    .lhs(any_match)
-                    .rhs(zero)
-                    .predicate("eq")
-                    .result_type(IntegerType::new(self.context, 1))
-                    .build(),
-            )
-            .result();
-
-        self.break_scopes.push(BreakScope::Switch(done));
-        for (index, item) in items.into_iter().enumerate() {
-            let activation = match &item {
-                SwitchItem::Case(_) => Some(case_conditions[&index]),
-                SwitchItem::Default => Some(default_condition),
-                SwitchItem::Statement(_) => None,
-            };
-            let condition = self.switch_item_condition(active, done, activation, i32_ty);
-            let then_region = self.context.create_region();
-            let then_block = self.context.create_block(vec![]);
-            then_region.add_block(then_block.id());
-            self.in_block(then_block.clone(), |cg| {
-                match item {
-                    SwitchItem::Case(_) | SwitchItem::Default => {
-                        let one = cg
-                            .builder
-                            .append_op(b::constant(cg.context, 1, i32_ty).build())
-                            .result();
-                        cg.builder
-                            .append_op(p::store(cg.context, one, active.ptr).build());
-                    }
-                    SwitchItem::Statement(statement) => cg.lower_stmt(statement)?,
-                }
-                cg.ensure_cir_yield(then_block);
-                Ok(())
-            })?;
-
-            let else_region = self.context.create_region();
-            let else_block = self.context.create_block(vec![]);
-            else_region.add_block(else_block.id());
-            self.in_block(else_block.clone(), |cg| {
-                cg.ensure_cir_yield(else_block);
-                Ok(())
-            })?;
-            self.builder.append_op(
-                cir::ops::r#if(
-                    self.context,
-                    condition,
-                    Some(then_region.id()),
-                    Some(else_region.id()),
-                )
-                .build(),
-            );
-        }
-        self.break_scopes.pop();
-        Ok(())
     }
 
     fn flatten_switch_items(
@@ -3218,86 +2545,6 @@ impl FnCodegen<'_> {
             _ => items.push(SwitchItem::Statement(statement)),
         }
         Ok(())
-    }
-
-    fn switch_item_condition(
-        &mut self,
-        active: Slot,
-        done: Slot,
-        activation: Option<ValueId>,
-        i32_ty: TypeId,
-    ) -> ValueId {
-        let active = self
-            .builder
-            .append_op(p::load(self.context, active.ptr, active.elem).build())
-            .result();
-        let active = self.truth_value(active);
-        let selected = if let Some(activation) = activation {
-            let active = self
-                .builder
-                .append_op(b::extui(self.context, active, i32_ty).build())
-                .result();
-            let activation = self
-                .builder
-                .append_op(b::extui(self.context, activation, i32_ty).build())
-                .result();
-            let selected = self
-                .builder
-                .append_op(b::ori(self.context, active, activation, i32_ty).build())
-                .result();
-            self.truth_value(selected)
-        } else {
-            active
-        };
-        let done = self
-            .builder
-            .append_op(p::load(self.context, done.ptr, done.elem).build())
-            .result();
-        let zero = self
-            .builder
-            .append_op(b::constant(self.context, 0, i32_ty).build())
-            .result();
-        let not_done = self
-            .builder
-            .append_op(
-                b::CmpIOpBuilder::new(self.context)
-                    .lhs(done)
-                    .rhs(zero)
-                    .predicate("eq")
-                    .result_type(IntegerType::new(self.context, 1))
-                    .build(),
-            )
-            .result();
-        let selected = self
-            .builder
-            .append_op(b::extui(self.context, selected, i32_ty).build())
-            .result();
-        let not_done = self
-            .builder
-            .append_op(b::extui(self.context, not_done, i32_ty).build())
-            .result();
-        let condition = self
-            .builder
-            .append_op(b::andi(self.context, selected, not_done, i32_ty).build())
-            .result();
-        // A `return` or a `continue` inside a case leaves the switch, so no later
-        // item — not even one reached by fallthrough — may run.
-        let mut condition = condition;
-        for flag in [self.return_flag, self.continue_flag] {
-            let Some(flag) = flag else {
-                continue;
-            };
-            let clear = self.flag_is_clear(flag);
-            let clear = self
-                .builder
-                .append_op(b::extui(self.context, clear, i32_ty).build())
-                .result();
-            condition = self
-                .builder
-                .append_op(b::andi(self.context, condition, clear, i32_ty).build())
-                .result();
-        }
-        self.truth_value(condition)
     }
 
     fn in_block<T>(
@@ -3584,21 +2831,6 @@ impl FnCodegen<'_> {
         destination
     }
 
-    fn lower_return_value(&mut self, node: NodeId) -> Result<ValueId, Diagnostic> {
-        let expression = self.lower_expr_value(node)?;
-        if self.return_abi.aggregate.is_none() {
-            return Ok(self.materialize(expression));
-        }
-        let LoweredExpr::Address { ptr, .. } = expression else {
-            return Err(unsupported(
-                self.ast,
-                node,
-                "non-addressable aggregate return value".to_string(),
-            ));
-        };
-        Ok(self.abi_return_value(ptr, node_type(self.typed, node)))
-    }
-
     /// Load the ABI return value of an aggregate held at `ptr`.
     fn abi_return_value(&mut self, ptr: ValueId, source_ty: QualType) -> ValueId {
         let pieces = self.return_abi.aggregate.clone().unwrap();
@@ -3623,20 +2855,6 @@ impl FnCodegen<'_> {
                     .build(),
             )
             .result()
-    }
-
-    /// Record a `return` in the function's return slots; the single `return`
-    /// terminator is emitted once, at the end of the function.
-    fn lower_structured_return(&mut self, value: Option<NodeId>) -> Result<(), Diagnostic> {
-        self.store_return_value(value)?;
-        let flag = self.return_flag.unwrap();
-        let one = self
-            .builder
-            .append_op(b::constant(self.context, 1, flag.elem).build())
-            .result();
-        self.builder
-            .append_op(p::store(self.context, one, flag.ptr).build());
-        Ok(())
     }
 
     /// Write what a `return` returns to the slot the function's one exit reads
@@ -3671,7 +2889,11 @@ impl FnCodegen<'_> {
             }
             Some(node) => {
                 let slot = self.return_slot.unwrap();
+                let source = converted_node_type(self.typed, node);
                 let value = self.lower_expr(node)?;
+                let source_ty = lower_type(self.context, self.typed, source);
+                let value = self.promote_boolean_result(value, source_ty);
+                let value = self.convert_scalar(value, source, self.result_type.unwrap());
                 self.builder
                     .append_op(p::store(self.context, value, slot.ptr).build());
             }
@@ -3742,11 +2964,18 @@ impl FnCodegen<'_> {
             self.values.insert(node, expression);
             return Ok(expression);
         }
-        if matches!(kind, AstKind::LogAnd | AstKind::LogOr) {
-            return self.lower_logical(node, kind);
-        }
-        if kind == AstKind::Conditional {
-            return self.lower_conditional(node);
+        if matches!(
+            kind,
+            AstKind::LogAnd | AstKind::LogOr | AstKind::Conditional
+        ) {
+            let expression = if kind == AstKind::Conditional {
+                self.lower_conditional(node)?
+            } else {
+                self.lower_logical(node, kind)?
+            };
+            let expression = self.apply_conversions(node, expression);
+            self.values.insert(node, expression);
+            return Ok(expression);
         }
 
         for child in ast.children(node) {
@@ -4152,6 +3381,20 @@ impl FnCodegen<'_> {
                         lower_type(self.context, self.typed, node_type(self.typed, node));
                     let value = match kind {
                         AstKind::Pos => operand,
+                        AstKind::Neg
+                            if matches!(
+                                self.typed.types().kind(node_type(self.typed, node)),
+                                TypeKind::Double
+                            ) =>
+                        {
+                            let zero = self
+                                .builder
+                                .append_op(b::constantf(self.context, 0.0, result_ty).build())
+                                .result();
+                            self.builder
+                                .append_op(b::subf(self.context, zero, operand, result_ty).build())
+                                .result()
+                        }
                         AstKind::Neg => {
                             let zero = self
                                 .builder

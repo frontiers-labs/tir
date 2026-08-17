@@ -231,6 +231,7 @@ int main(void) { printf("hello"); return 0; }"#,
         let (context, module) = lower(src);
         let mut passes = tir::PassManager::new();
         let function_pipeline = passes.nest::<tir::func::FuncOp>();
+        function_pipeline.add_pass(tir::passes::RestructurePass::new());
         function_pipeline.add_pass(crate::passes::LowerCirControlFlowPass::new());
         function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
         function_pipeline.add_pass(tir::passes::InstCombinePass::new());
@@ -289,14 +290,15 @@ int main(void) { printf("hello"); return 0; }"#,
         assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
         assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         assert!(lowered.contains("scf.while"), "{lowered}");
-        assert!(lowered.contains("scf.break"), "{lowered}");
     }
 
     #[test]
     fn unreachable_return_after_break_emits_no_operations() {
-        let ir = compile("int f(int c, int x) { while (c) { break; if (x) return 1; } return 0; }");
+        let lowered = lower_cir_control_flow(
+            "int f(int c, int x) { while (c) { break; if (x) return 1; } return 0; }",
+        );
 
-        assert_eq!(ir.matches("cir.break").count(), 1, "{ir}");
+        assert!(!lowered.contains("value = 1"), "{lowered}");
     }
 
     #[test]
@@ -317,7 +319,6 @@ int main(void) { printf("hello"); return 0; }"#,
 
         assert!(!lowered.contains("cir.while"));
         assert!(lowered.contains("scf.while"), "{lowered}");
-        assert!(lowered.contains("scf.break"), "{lowered}");
         assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
     }
 
@@ -411,7 +412,7 @@ int main(void) { printf("hello"); return 0; }"#,
 
         assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
         assert!(!lowered.contains("cfg.br ^"), "{lowered}");
-        assert!(lowered.contains("scf.break"), "{lowered}");
+        assert!(lowered.contains("scf.while"), "{lowered}");
     }
 
     #[test]
@@ -431,7 +432,6 @@ int main(void) { printf("hello"); return 0; }"#,
 
         assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
         assert!(!lowered.contains("cfg.br ^"), "{lowered}");
-        assert!(lowered.contains("scf.break"), "{lowered}");
         assert!(!lowered.contains("func.call @bump"), "{lowered}");
     }
 

@@ -7,7 +7,8 @@ int advance(int limit) {
     return value;
 }
 
-// CHECK: cir.for
-// CHECK: step {
+// CHECK: scf.while {
+// CHECK: cmpi {{.*}} {predicate = "slt"}
 // CHECK: addi
 // CHECK: ptr.store
+// CHECK: scf.condition

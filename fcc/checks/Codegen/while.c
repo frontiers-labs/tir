@@ -1,6 +1,8 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/basic_while.c | filecheck %s
 
-// CHECK: cir.while %{{[0-9]+}} cond {
-// CHECK: cir.condition
-// CHECK: body {
-// CHECK: cir.yield
+// CHECK: scf.while {
+// CHECK: cmpi {{.*}} {predicate = "slt"}
+// CHECK: scf.if
+// CHECK: scf.condition
+// CHECK: do {
+// CHECK: scf.yield

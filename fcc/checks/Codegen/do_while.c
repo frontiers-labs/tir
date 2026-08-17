@@ -1,6 +1,10 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/basic_do_while.c | filecheck %s
 
-// CHECK: cir.do %{{[0-9]+}} body {
-// CHECK: cir.yield
-// CHECK: cond {
-// CHECK: cir.condition
+// A `do` is tail-controlled: the body runs before the condition, so both live
+// in the condition region of the `scf.while`.
+
+// CHECK: scf.while {
+// CHECK: addi
+// CHECK: ptr.store
+// CHECK: cmpi {{.*}} {predicate = "slt"}
+// CHECK: scf.condition
