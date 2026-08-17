@@ -1,9 +1,9 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 module {
-  func @load_pointer(%0: !ptr.p<!ptr.p<!i32>>) -> !ptr.p<!i32> {
+  func.func @load_pointer(%0: !ptr.p<!ptr.p<!i32>>) -> !ptr.p<!i32> {
     %1 = ptr.load %0 : !ptr.p<!i32>
-    return %1
+    func.return %1
   }
   module_end
 }

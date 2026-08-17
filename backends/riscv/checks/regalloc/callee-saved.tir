@@ -2,18 +2,18 @@
 
 // %a is computed, passed to an external call, then read again after it, so it is
 // live across the call and must occupy a callee-saved register (s1 = x9). The
-// return address saved across the call rides the same mechanism in a second
+// func.return address saved across the call rides the same mechanism in a second
 // callee-saved register (s2 = x18). Both must be preserved for this function's
 // caller: the prologue saves them into the frame and the epilogue restores them
-// before the return.
+// before the func.return.
 
 module {
-  declare @ext(!i64) -> !i64
-  func @f(%0: !i64) -> !i64 {
+  func.declare @ext(!i64) -> !i64
+  func.func @f(%0: !i64) -> !i64 {
     %a = addi %0, %0 : !i64
-    %1 = call @ext(%a : !i64) -> !i64
+    %1 = func.call @ext(%a : !i64) -> !i64
     %2 = addi %a, %1 : !i64
-    return %2
+    func.return %2
   }
   module_end
 }
@@ -23,7 +23,7 @@ module {
 // CHECK: riscv.sd {rs1 = x2, rs2 = x9, imm = 0}
 // CHECK: riscv.sd {rs1 = x2, rs2 = x18, imm = 8}
 // CHECK: asm.vcall {callee = "ext"
-// Epilogue: restore both and release the frame before the return.
+// Epilogue: restore both and release the frame before the func.return.
 // CHECK: riscv.ld {rd = x9, rs1 = x2, imm = 0}
 // CHECK: riscv.ld {rd = x18, rs1 = x2, imm = 8}
 // CHECK: riscv.addi {rd = x2, rs1 = x2, imm = 16}

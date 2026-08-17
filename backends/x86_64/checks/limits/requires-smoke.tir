@@ -5,9 +5,9 @@
 // must run.
 
 module {
-  func @loadq(%0: !ptr.p<!i64>) -> !i64 {
+  func.func @loadq(%0: !ptr.p<!i64>) -> !i64 {
     %1 = ptr.load %0 : !i64
-    return %1
+    func.return %1
   }
   module_end
 }

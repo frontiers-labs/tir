@@ -1,18 +1,18 @@
 // RUN: tir opt --pass lower-memory-intrinsics %s | filecheck %s
 
 module {
-  func @copy(%0: !ptr.p, %1: !ptr.p, %2: !i64) {
+  func.func @copy(%0: !ptr.p, %1: !ptr.p, %2: !i64) {
     ptr.memcpy %0, %1, %2
-    return
+    func.return
   }
   module_end
 }
 
 // CHECK: module {
-// CHECK-NEXT: declare @memcpy(!ptr.p, !ptr.p, !i64) -> !ptr.p
-// CHECK-NEXT: func @copy(%[[DEST:[0-9]+]]: !ptr.p, %[[SOURCE:[0-9]+]]: !ptr.p, %[[SIZE:[0-9]+]]: !i64) {
-// CHECK-NEXT: %{{[0-9]+}} = call @memcpy(%[[DEST]], %[[SOURCE]], %[[SIZE]] : !ptr.p, !ptr.p, !i64) -> !ptr.p
-// CHECK-NEXT: return
+// CHECK-NEXT: func.declare @memcpy(!ptr.p, !ptr.p, !i64) -> !ptr.p
+// CHECK-NEXT: func.func @copy(%[[DEST:[0-9]+]]: !ptr.p, %[[SOURCE:[0-9]+]]: !ptr.p, %[[SIZE:[0-9]+]]: !i64) {
+// CHECK-NEXT: %{{[0-9]+}} = func.call @memcpy(%[[DEST]], %[[SOURCE]], %[[SIZE]] : !ptr.p, !ptr.p, !i64) -> !ptr.p
+// CHECK-NEXT: func.return
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end
 // CHECK-NEXT: }

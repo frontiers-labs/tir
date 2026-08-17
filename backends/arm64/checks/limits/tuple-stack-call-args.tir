@@ -1,11 +1,11 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 module {
-  declare @ext(!f64,!f64,!f64,!f64,!f64,!f64,!tuple<!f64, !f64, !f64, !f64>) -> !f64
-  func @caller(%0: !f64) -> !f64 {
+  func.declare @ext(!f64,!f64,!f64,!f64,!f64,!f64,!tuple<!f64, !f64, !f64, !f64>) -> !f64
+  func.func @caller(%0: !f64) -> !f64 {
     %1 = make_tuple %0, %0, %0, %0 : !tuple<!f64, !f64, !f64, !f64>
-    %2 = call @ext(%0,%0,%0,%0,%0,%0,%1 : !f64,!f64,!f64,!f64,!f64,!f64,!tuple<!f64, !f64, !f64, !f64>) -> !f64
-    return %2
+    %2 = func.call @ext(%0,%0,%0,%0,%0,%0,%1 : !f64,!f64,!f64,!f64,!f64,!f64,!tuple<!f64, !f64, !f64, !f64>) -> !f64
+    func.return %2
   }
   module_end
 }

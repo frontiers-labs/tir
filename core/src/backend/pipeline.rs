@@ -9,7 +9,8 @@ use tir::Operation as _;
 use tir::{
     AnalysisManager, Context, IntegerArithmetic, OperationRef, Pass, PassError, PassManager,
     PassTarget, Rewriter,
-    builtin::{FuncOp, IntegerType, ModuleOp},
+    builtin::{IntegerType, ModuleOp},
+    func::FuncOp,
 };
 
 use crate::backend::TargetMachine;

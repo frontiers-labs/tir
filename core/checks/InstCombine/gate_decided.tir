@@ -1,4 +1,4 @@
-// RUN: tir opt --pass builtin.func(instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) --verify %s | filecheck %s
 
 // A gate whose decision is a known constant publishes what the arm that constant
 // selects yields. The arm is the one whose *case value* the decision equals, which
@@ -6,7 +6,7 @@
 // the default.
 
 module {
-  func @picks_the_case_arm(%0: !i64, %1: !i64) -> !i64 {
+  func.func @picks_the_case_arm(%0: !i64, %1: !i64) -> !i64 {
     %2 = constant {value = 0} : !i32
     %3 = scf.switch %2 -> !i64 case 0 {
       scf.yield %0
@@ -14,9 +14,9 @@ module {
      default {
       scf.yield %1
     }
-    return %3
+    func.return %3
   }
-  func @picks_the_default_arm(%4: !i64, %5: !i64) -> !i64 {
+  func.func @picks_the_default_arm(%4: !i64, %5: !i64) -> !i64 {
     %6 = constant {value = 7} : !i32
     %7 = scf.switch %6 -> !i64 case 0 {
       scf.yield %4
@@ -24,9 +24,9 @@ module {
      default {
       scf.yield %5
     }
-    return %7
+    func.return %7
   }
-  func @picks_the_then_arm(%8: !i64, %9: !i64) -> !i64 {
+  func.func @picks_the_then_arm(%8: !i64, %9: !i64) -> !i64 {
     %10 = constant {value = 1} : !i1
     %11 = scf.if %10 -> !i64 {
       scf.yield %8
@@ -34,9 +34,9 @@ module {
      else {
       scf.yield %9
     }
-    return %11
+    func.return %11
   }
-  func @picks_the_else_arm(%12: !i64, %13: !i64) -> !i64 {
+  func.func @picks_the_else_arm(%12: !i64, %13: !i64) -> !i64 {
     %14 = constant {value = 0} : !i1
     %15 = scf.if %14 -> !i64 {
       scf.yield %12
@@ -44,16 +44,16 @@ module {
      else {
       scf.yield %13
     }
-    return %15
+    func.return %15
   }
   module_end
 }
 
-// CHECK-LABEL: func @picks_the_case_arm(%[[L:[0-9]+]]: !i64, %{{[0-9]+}}: !i64)
-// CHECK: return %[[L]]
-// CHECK-LABEL: func @picks_the_default_arm(%{{[0-9]+}}: !i64, %[[R:[0-9]+]]: !i64)
-// CHECK: return %[[R]]
-// CHECK-LABEL: func @picks_the_then_arm(%[[T:[0-9]+]]: !i64, %{{[0-9]+}}: !i64)
-// CHECK: return %[[T]]
-// CHECK-LABEL: func @picks_the_else_arm(%{{[0-9]+}}: !i64, %[[E:[0-9]+]]: !i64)
-// CHECK: return %[[E]]
+// CHECK-LABEL: func.func @picks_the_case_arm(%[[L:[0-9]+]]: !i64, %{{[0-9]+}}: !i64)
+// CHECK: func.return %[[L]]
+// CHECK-LABEL: func.func @picks_the_default_arm(%{{[0-9]+}}: !i64, %[[R:[0-9]+]]: !i64)
+// CHECK: func.return %[[R]]
+// CHECK-LABEL: func.func @picks_the_then_arm(%[[T:[0-9]+]]: !i64, %{{[0-9]+}}: !i64)
+// CHECK: func.return %[[T]]
+// CHECK-LABEL: func.func @picks_the_else_arm(%{{[0-9]+}}: !i64, %[[E:[0-9]+]]: !i64)
+// CHECK: func.return %[[E]]

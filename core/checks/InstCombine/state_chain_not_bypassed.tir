@@ -2,37 +2,37 @@
 
 // Both guards fold to false, so the e-graph proves the state leaving the second
 // gate equal to the entry state. The gates stay (instcombine never collapses a
-// region op), so rerouting the return to the entry state would leave that state
+// region op), so rerouting the func.return to the entry state would leave that state
 // consumed twice: a state operand is only ever rewired by a rewrite that erases
 // the consumers it bypasses.
 
 module {
-  func @p() {
-    return
+  func.func @p() {
+    func.return
   }
-  func @f() {
+  func.func @f() {
     %0 = constant {value = 0} : !i32
     %1 = constant {value = 0} : !i32
     %2 = cmpi %0, %1 {predicate = "ne"} : !i1
     %3 = state.entry_state : !state
     %4 = scf.if %2 args(%3) -> !state (%5) {
-      call @p() state(%5 -> %6)
+      func.call @p() state(%5 -> %6)
       scf.yield %6
     } else (%7) {
       scf.yield %7
     }
     %8 = scf.if %2 args(%4) -> !state (%9) {
-      call @p() state(%9 -> %10)
+      func.call @p() state(%9 -> %10)
       scf.yield %10
     } else (%11) {
       scf.yield %11
     }
-    return state(%8)
+    func.return state(%8)
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: %[[FIRST:[0-9]+]] = scf.if
 // CHECK: %[[SECOND:[0-9]+]] = scf.if %{{[0-9]+}} args(%[[FIRST]])
-// CHECK: return state(%[[SECOND]])
+// CHECK: func.return state(%[[SECOND]])

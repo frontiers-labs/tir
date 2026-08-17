@@ -13,13 +13,13 @@ long forward_large(struct Large value, long tail) {
     return consume_large(value, tail);
 }
 
-// CHECK: func @consume_large(%[[VALUE:[0-9]+]]: !tuple<!i64, !i64, !i64>, %{{[0-9]+}}: !i64) -> !i64 {
+// CHECK: func.func @consume_large(%[[VALUE:[0-9]+]]: !tuple<!i64, !i64, !i64>, %{{[0-9]+}}: !i64) -> !i64 {
 // CHECK-DAG: %{{[0-9]+}} = tuple_get %[[VALUE]] {index = 0} : !i64
 // CHECK-DAG: %{{[0-9]+}} = tuple_get %[[VALUE]] {index = 1} : !i64
 // CHECK-DAG: %{{[0-9]+}} = tuple_get %[[VALUE]] {index = 2} : !i64
-// CHECK: func @forward_large(%{{[0-9]+}}: !tuple<!i64, !i64, !i64>, %{{[0-9]+}}: !i64) -> !i64 {
+// CHECK: func.func @forward_large(%{{[0-9]+}}: !tuple<!i64, !i64, !i64>, %{{[0-9]+}}: !i64) -> !i64 {
 // CHECK: %[[GROUP:[0-9]+]] = make_tuple %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} : !tuple<!i64, !i64, !i64>
-// CHECK: call @consume_large(%[[GROUP]], %{{[0-9]+}} : !tuple<!i64, !i64, !i64>, !i64) -> !i64
+// CHECK: func.call @consume_large(%[[GROUP]], %{{[0-9]+}} : !tuple<!i64, !i64, !i64>, !i64) -> !i64
 
 // ASM-LABEL: consume_large:
 // ASM-DAG: mov {{.*}}, [rsp + 40]

@@ -7,7 +7,7 @@
 // was entered with — never the one the other arm was.
 
 module {
-  func @sibling(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
+  func.func @sibling(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
     %s = addi %a, %b : !i64
     %r = scf.if %c args(%s) -> !i64 (%p) {
       %x = muli %p, %a : !i64
@@ -16,7 +16,7 @@ module {
       %y = subi %q, %b : !i64
       scf.yield %y
     }
-    return %r
+    func.return %r
   }
   module_end
 }

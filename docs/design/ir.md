@@ -289,8 +289,8 @@ IR itself. No pass recomputes chains; no seeder invents serial numbers.
 | `ptr.alloca` | *produces* the initial state of its slot's chain (alongside the pointer) |
 | `ptr.load` | *takes* a state operand; produces no state — a read leaves the chain |
 | `ptr.store`, `ptr.memset`, `ptr.memcpy` | take state, produce state |
-| `builtin.call` / `indirect_call` | take and produce the conservative chain, as a trailing operand/result **excluded from callee signature resolution** |
-| `builtin.return` | optional trailing state operand: the function's final conservative state |
+| `func.call` / `func.indirect_call` | take and produce the conservative chain, as a trailing operand/result **excluded from callee signature resolution** |
+| `func.return` | optional trailing state operand: the function's final conservative state |
 | entry-state op (nullary) | produces the conservative chain's initial state at region entry |
 
 The conservative chain never enters function *signatures*: call resolution is

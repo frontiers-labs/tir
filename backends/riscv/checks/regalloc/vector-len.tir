@@ -7,11 +7,11 @@
 // the grant, so ops demanding the granted count need no further vset{i}vli.
 
 module {
-  func @evl_body(%0: !vector.vec<i32>, %1: !vector.vec<i32>, %2: !index) -> !vector.vec<i32> {
+  func.func @evl_body(%0: !vector.vec<i32>, %1: !vector.vec<i32>, %2: !index) -> !vector.vec<i32> {
     %3 = vector.vector_len %2 {sew = 32} : !index
     %4 = vector.add %0, %1, %3 : !vector.vec<i32>
     %5 = vector.mul %4, %1, %3 : !vector.vec<i32>
-    return %5
+    func.return %5
   }
   module_end
 }

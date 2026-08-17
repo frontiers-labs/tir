@@ -11,7 +11,7 @@ struct Mixed make_mixed(double fp, long integer) {
     return result;
 }
 
-// CHECK: func @make_mixed(
+// CHECK: func.func @make_mixed(
 // CHECK-SAME: ) -> !tuple<!f64, !i64> {
 // CHECK: make_tuple {{.*}} : !tuple<!f64, !i64>
 

@@ -1,19 +1,19 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 // Same operator and operand, different result type: the two truncs are NOT congruent
 // (result type is part of the hash-cons key), so neither is eliminated. Merging them
 // would substitute a wrong-typed value.
 
 module {
-  func @typed(%x: !i32) -> !i16 {
+  func.func @typed(%x: !i32) -> !i16 {
     %0 = trunci %x : !i16
     %1 = trunci %x : !i8
-    return %0
+    func.return %0
   }
   module_end
 }
 
-// CHECK-LABEL: func @typed
+// CHECK-LABEL: func.func @typed
 // CHECK: trunci %{{[0-9]+}} : !i16
 // CHECK: trunci %{{[0-9]+}} : !i8

@@ -10,7 +10,7 @@ long consume_mixed(struct Mixed value) {
     return value.integer;
 }
 
-// CHECK: func @consume_mixed(%{{[0-9]+}}: !tuple<!f64, !i64>) -> !i64 {
+// CHECK: func.func @consume_mixed(%{{[0-9]+}}: !tuple<!f64, !i64>) -> !i64 {
 
 // ASM-LABEL: consume_mixed:
 // ASM: movsd {{.*}}, xmm0

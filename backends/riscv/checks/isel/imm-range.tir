@@ -5,12 +5,12 @@
 // constant outside the range is refused instead of silently truncating.
 
 module {
-  func @edges(%0: !i64) -> !i64 {
+  func.func @edges(%0: !i64) -> !i64 {
     %1 = constant {value = 2047} : !i64
     %2 = addi %0, %1 : !i64
     %3 = constant {value = -2048} : !i64
     %4 = addi %2, %3 : !i64
-    return %4
+    func.return %4
   }
   module_end
 }

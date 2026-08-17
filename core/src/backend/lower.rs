@@ -16,7 +16,8 @@ pub fn lower_function_and_return(
     argument_class: impl Fn(TypeId) -> Result<RegClassId, PassError>,
 ) -> Result<bool, PassError> {
     use tir::attributes::{AttributeValue, RegisterAttr};
-    use tir::builtin::{FuncOp, MakeTupleOp, ReturnOp, TupleGetOp, TupleType};
+    use tir::builtin::{MakeTupleOp, TupleGetOp, TupleType};
+    use tir::func::{FuncOp, ReturnOp};
     use tir::{Operation, Symbol};
 
     if let Some(func) = op.as_op::<FuncOp>() {

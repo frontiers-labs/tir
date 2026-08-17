@@ -9,7 +9,7 @@ use crate::{Context, Error, Operation, Symbol, Terminator, Visibility};
 operation! {
     FuncOp {
         name: "func",
-        dialect: "builtin",
+        dialect: "func",
         format: "custom",
         verifier: "true",
         interfaces: [Symbol],
@@ -102,8 +102,8 @@ impl FuncOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         use tir::Operation;
 
-        // func @name(%0: i32, %1: i32) -> i32 {
-        fmt.write("func")?;
+        // func.func @name(%0: i32, %1: i32) -> i32 {
+        fmt.write("func.func")?;
         if self.symbol_visibility() == Visibility::Private {
             fmt.write(" private")?;
         }
@@ -261,7 +261,7 @@ impl tir::Verifiable for FuncOp {
 operation! {
     ReturnOp {
         name: "return",
-        dialect: "builtin",
+        dialect: "func",
         operands: O {
             value: "?Any",
         },
@@ -276,7 +276,8 @@ impl Terminator for ReturnOp {}
 mod tests {
     use crate::{
         Context, IRFormatter, Operation,
-        builtin::{FuncOp, IntegerType, ops},
+        builtin::IntegerType,
+        func::{FuncOp, ops as func_ops},
         parse::ir::parse_ir,
     };
 
@@ -295,7 +296,7 @@ mod tests {
         region.add_block(block.id());
 
         // Build function op
-        let func = ops::func(
+        let func = func_ops::func(
             &context,
             "add",
             IntegerType::new(&context, 32),
@@ -305,7 +306,7 @@ mod tests {
 
         // Insert return op into body
         func.body()
-            .append_op(ops::r#return(&context, param0_id).build());
+            .append_op(func_ops::r#return(&context, param0_id).build());
 
         assert_eq!(func.regions().len(), 1);
         assert_eq!(func.body().arguments().len(), 2);
@@ -320,9 +321,9 @@ mod tests {
         let context = Context::with_default_dialects();
         // Names are neither contiguous nor numeric; they must still resolve to the
         // actual allocated value ids rather than being read as literal ids.
-        let src = r#"func @nc(%100: !i32) -> !i32 {
+        let src = r#"func.func @nc(%100: !i32) -> !i32 {
     %sum = addi %100, %100 : !i32
-    return %sum
+    func.return %sum
   }"#;
         let func = parse_ir::<FuncOp>(&context, src).expect("parse");
         assert!(func.verify(&context).is_ok());
@@ -337,11 +338,11 @@ mod tests {
     #[test]
     fn parse_text_labeled_blocks() {
         let context = Context::with_default_dialects();
-        let src = r#"  func @jump() -> !i32 {
+        let src = r#"  func.func @jump() -> !i32 {
     cfg.br ^bb1
   ^bb1:
     %0 = constant {value = 42} : !i32
-    return %0
+    func.return %0
   }"#;
         let func = parse_ir::<FuncOp>(&context, src).expect("parse labeled blocks");
         let region = func.regions().next().unwrap();

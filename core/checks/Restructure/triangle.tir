@@ -4,18 +4,18 @@
 // already reached the branch.
 
 module {
-  func @maybe_double(%0: !i1, %1: !i32) -> !i32 {
+  func.func @maybe_double(%0: !i1, %1: !i32) -> !i32 {
     cfg.cond_br %0, ^bb1, ^bb2(%1 : !i32)
   ^bb1:
     %2 = addi %1, %1 : !i32
     cfg.br ^bb2(%2 : !i32)
   ^bb2(%3: !i32):
-    return %3
+    func.return %3
   }
   module_end
 }
 
-// CHECK-LABEL: func @maybe_double
+// CHECK-LABEL: func.func @maybe_double
 // CHECK-NOT: br
 // CHECK: %[[R:[0-9]+]] = scf.if %[[C:[0-9]+]] -> !i32 {
 // CHECK-NEXT: %[[T:[0-9]+]] = addi
@@ -24,4 +24,4 @@ module {
 // CHECK-NEXT: else {
 // CHECK-NEXT: scf.yield %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: return %[[R]]
+// CHECK-NEXT: func.return %[[R]]

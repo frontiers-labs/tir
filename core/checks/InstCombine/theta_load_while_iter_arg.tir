@@ -5,7 +5,7 @@
 // argument on, and the body yields the update the θ's latch names.
 
 module {
-  func @spin(%0: !i1, %1: !i32) -> !i32 {
+  func.func @spin(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.while {
@@ -17,12 +17,12 @@ module {
       scf.yield
     }
     %5 = ptr.load %2 : !i32
-    return %5
+    func.return %5
   }
   module_end
 }
 
-// CHECK-LABEL: func @spin
+// CHECK-LABEL: func.func @spin
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%[[COND:[0-9]+]] = %1) -> !i32 {
 // CHECK-NEXT: scf.condition %0, %[[COND]]
@@ -31,4 +31,4 @@ module {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[BODY]], %[[BODY]] : !i32
 // CHECK-NEXT: scf.yield %[[NEXT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: return %[[RESULT]]
+// CHECK-NEXT: func.return %[[RESULT]]

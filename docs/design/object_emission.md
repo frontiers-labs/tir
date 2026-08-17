@@ -63,7 +63,7 @@ fcc-emitted function.
 
 - `.text` only; no data sections or globals.
 - Calls exist at the machine-IR level (`jal`/`bl` to a symbol); there is no
-  `builtin.call` op and fcc cannot parse call expressions yet.
+  `func.call` op and fcc cannot parse call expressions yet.
 - The RISC-V `call` pseudo (`auipc`+`jalr`, `R_RISCV_CALL_PLT`) is not
   implemented; `jal` covers ±1 MiB.
 - Block arguments on branch edges (phi values) are rejected by codegen, so

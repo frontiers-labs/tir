@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func @loop(%0: !i1) -> !i32 {
+  func.func @loop(%0: !i1) -> !i32 {
     %1 = constant {value = 0} : !i32
     %2 = constant {value = 1} : !i64
     %3, %4 = scf.while iter_args(%5 = %1, %6 = %2) -> !i32, !i64 {
@@ -11,7 +11,7 @@ module {
       %10 = addi %8, %2 : !i64
       scf.yield %9, %10
     }
-    return %3
+    func.return %3
   }
   module_end
 }

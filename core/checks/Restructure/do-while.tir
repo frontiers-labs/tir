@@ -5,19 +5,19 @@
 // reads it.
 
 module {
-  func @dowhile(%0: !i32) -> !i32 {
+  func.func @dowhile(%0: !i32) -> !i32 {
     cfg.br ^bb1(%0 : !i32)
   ^bb1(%1: !i32):
     %2 = addi %1, %1 : !i32
     %3 = cmpi %2, %0 {predicate = "slt"} : !i1
     cfg.cond_br %3, ^bb1(%2 : !i32), ^bb2
   ^bb2:
-    return %2
+    func.return %2
   }
   module_end
 }
 
-// CHECK-LABEL: func @dowhile
+// CHECK-LABEL: func.func @dowhile
 // CHECK-NOT: br
 // CHECK: scf.while iter_args
 // CHECK: %[[SUM:[0-9]+]] = addi

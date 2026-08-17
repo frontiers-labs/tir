@@ -12,8 +12,8 @@ int bump(void)
   return counter + 1;
 }
 
-// IR: declare @counter
-// IR: addr_of {sym_name = "counter"}
+// IR: func.declare @counter
+// IR: func.addr_of {sym_name = "counter"}
 
 // CHECK-LABEL: bump:
 // CHECK: counter

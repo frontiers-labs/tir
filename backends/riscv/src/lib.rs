@@ -1222,7 +1222,8 @@ mod tests {
     use tir::backend::AsmDialect;
     use tir::{
         Context, IRFormatter, Operation, PassManager,
-        builtin::{FuncOp, IntegerType, ops},
+        builtin::{IntegerType, ops},
+        func::{FuncOp, ops as func_ops},
     };
 
     use crate::{RegClass, RiscvDialect, create_isel_pass, create_regalloc_stage};
@@ -1551,7 +1552,7 @@ mod tests {
         let block = context.create_block(vec![a, b, c]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
         let body = func.body();
         let args = body.arguments();
         let (a, b, c) = (args[0].id(), args[1].id(), args[2].id());
@@ -1569,7 +1570,8 @@ mod tests {
         let t4 = ops::ori(&context, t3r, b, i32).build();
         let t4r = t4.result();
         func.body().append_op(t4);
-        func.body().append_op(ops::r#return(&context, t4r).build());
+        func.body()
+            .append_op(func_ops::r#return(&context, t4r).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -1616,7 +1618,7 @@ mod tests {
         let block = context.create_block(vec![a, b]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
         let body = func.body();
         let args = body.arguments();
         let (a, b) = (args[0].id(), args[1].id());
@@ -1627,7 +1629,8 @@ mod tests {
         let s = ops::shli(&context, a, b, i32).build();
         let sr = s.result();
         func.body().append_op(s);
-        func.body().append_op(ops::r#return(&context, sr).build());
+        func.body()
+            .append_op(func_ops::r#return(&context, sr).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -1662,7 +1665,7 @@ mod tests {
         let block = context.create_block(vec![a]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
         let body = func.body();
         let a = body.arguments()[0].id();
 
@@ -1673,7 +1676,8 @@ mod tests {
         let s = ops::shli(&context, a, three_r, i32).build();
         let sr = s.result();
         func.body().append_op(s);
-        func.body().append_op(ops::r#return(&context, sr).build());
+        func.body()
+            .append_op(func_ops::r#return(&context, sr).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -1752,13 +1756,13 @@ mod tests {
         let block = context.create_block(vec![]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
 
         let five = ops::constant(&context, 5, i32).build();
         let five_r = five.result();
         func.body().append_op(five);
         func.body()
-            .append_op(ops::r#return(&context, five_r).build());
+            .append_op(func_ops::r#return(&context, five_r).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -1828,7 +1832,7 @@ mod tests {
         let block = context.create_block(vec![a, b]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
         let fbody = func.body();
         let args = fbody.arguments();
         let (a, b) = (args[0].id(), args[1].id());
@@ -1836,7 +1840,7 @@ mod tests {
         let add_r = add.result();
         func.body().append_op(add);
         func.body()
-            .append_op(ops::r#return(&context, add_r).build());
+            .append_op(func_ops::r#return(&context, add_r).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -1887,7 +1891,7 @@ mod tests {
         let block = context.create_block(vec![a, b, c]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
         let fbody = func.body();
         let args = fbody.arguments();
         let (a, b, c) = (args[0].id(), args[1].id(), args[2].id());
@@ -1905,7 +1909,8 @@ mod tests {
         let t4 = ops::ori(&context, t3r, b, i32).build();
         let t4r = t4.result();
         func.body().append_op(t4);
-        func.body().append_op(ops::r#return(&context, t4r).build());
+        func.body()
+            .append_op(func_ops::r#return(&context, t4r).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -1952,12 +1957,12 @@ mod tests {
         let block = context.create_block(vec![a, b]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "caller", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "caller", i32, Some(region.id())).build();
         let fbody = func.body();
         let args = fbody.arguments();
         let (a, b) = (args[0].id(), args[1].id());
 
-        let call = tir::builtin::CallOpBuilder::new(&context)
+        let call = tir::func::CallOpBuilder::new(&context)
             .args(vec![a, b])
             .attr(
                 "callee",
@@ -1968,7 +1973,7 @@ mod tests {
         let call_r = call.result();
         func.body().append_op(call);
         func.body()
-            .append_op(ops::r#return(&context, call_r).build());
+            .append_op(func_ops::r#return(&context, call_r).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -2014,10 +2019,10 @@ mod tests {
         let block = context.create_block(vec![a]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "caller", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "caller", i32, Some(region.id())).build();
         let a = func.body().arguments()[0].id();
 
-        let call = tir::builtin::CallOpBuilder::new(&context)
+        let call = tir::func::CallOpBuilder::new(&context)
             .args(vec![a])
             .attr(
                 "callee",
@@ -2028,7 +2033,7 @@ mod tests {
         let call_r = call.result();
         func.body().append_op(call);
         func.body()
-            .append_op(ops::r#return(&context, call_r).build());
+            .append_op(func_ops::r#return(&context, call_r).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -2098,12 +2103,12 @@ mod tests {
         let block = context.create_block(vec![callee, x]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "caller", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "caller", i32, Some(region.id())).build();
         let fbody = func.body();
         let args = fbody.arguments();
         let (callee, x) = (args[0].id(), args[1].id());
 
-        let call = tir::builtin::IndirectCallOpBuilder::new(&context)
+        let call = tir::func::IndirectCallOpBuilder::new(&context)
             .callee(callee)
             .args(vec![x])
             .result_type(i32)
@@ -2111,7 +2116,7 @@ mod tests {
         let call_r = call.result();
         func.body().append_op(call);
         func.body()
-            .append_op(ops::r#return(&context, call_r).build());
+            .append_op(func_ops::r#return(&context, call_r).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());

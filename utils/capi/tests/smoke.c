@@ -7,12 +7,12 @@
 
 static const char *MODULE =
     "module {\n"
-    "  func @f(%0: !i32, %1: !i32) -> !i32 {\n"
+    "  func.func @f(%0: !i32, %1: !i32) -> !i32 {\n"
     "    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>\n"
     "    ptr.store %0, %2\n"
     "    %5 = ptr.load %2 : !i32\n"
     "    %7 = muli %5, %5 : !i32\n"
-    "    return %7\n"
+    "    func.return %7\n"
     "  }\n"
     "  module_end\n"
     "}\n";
@@ -31,7 +31,7 @@ int main(void) {
     }
 
     TirPassManager *pm =
-        tir_pipeline_parse("builtin.func(thread-state,instcombine,erase-state)");
+        tir_pipeline_parse("func.func(thread-state,instcombine,erase-state)");
     if (!pm) {
         fprintf(stderr, "pipeline parse failed: %s\n", tir_last_error());
         return 1;

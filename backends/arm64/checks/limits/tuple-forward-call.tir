@@ -1,12 +1,12 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 module {
-  declare @make_pair() -> !tuple<!f64, !f64>
-  declare @consume(!tuple<!f64, !f64>) -> !f64
-  func @forward() -> !f64 {
-    %0 = call @make_pair() -> !tuple<!f64, !f64>
-    %1 = call @consume(%0 : !tuple<!f64, !f64>) -> !f64
-    return %1
+  func.declare @make_pair() -> !tuple<!f64, !f64>
+  func.declare @consume(!tuple<!f64, !f64>) -> !f64
+  func.func @forward() -> !f64 {
+    %0 = func.call @make_pair() -> !tuple<!f64, !f64>
+    %1 = func.call @consume(%0 : !tuple<!f64, !f64>) -> !f64
+    func.return %1
   }
   module_end
 }

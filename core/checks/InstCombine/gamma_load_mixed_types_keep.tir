@@ -7,7 +7,7 @@
 // the law may distribute a read of, and the slot stays in memory.
 
 module {
-  func @mixed(%0: !i1, %1: !i32, %2: !f32) -> !i32 {
+  func.func @mixed(%0: !i1, %1: !i32, %2: !f32) -> !i32 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p
     scf.if %0 {
       ptr.store %1, %3
@@ -17,13 +17,13 @@ module {
       scf.yield
     }
     %4 = ptr.load %3 : !i32
-    return %4
+    func.return %4
   }
   module_end
 }
 
-// CHECK-LABEL: func @mixed
+// CHECK-LABEL: func.func @mixed
 // CHECK: ptr.alloca
 // CHECK: scf.if %0 {
 // CHECK: %[[RESULT:[0-9]+]] = ptr.load
-// CHECK: return %[[RESULT]]
+// CHECK: func.return %[[RESULT]]

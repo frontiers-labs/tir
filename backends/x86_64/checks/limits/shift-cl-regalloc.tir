@@ -4,9 +4,9 @@
 // argument arrives in rsi, so register allocation inserts the required copy.
 
 module {
-  func @shl(%a: !i64, %b: !i64, %c: !i64, %d: !i64) -> !i64 {
+  func.func @shl(%a: !i64, %b: !i64, %c: !i64, %d: !i64) -> !i64 {
     %r = shli %a, %b : !i64
-    return %r
+    func.return %r
   }
   module_end
 }

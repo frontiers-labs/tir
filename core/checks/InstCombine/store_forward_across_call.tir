@@ -4,15 +4,15 @@
 // store left and cannot take its value.
 
 module {
-  func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
+  func.func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
     %2 = state.entry_state : !state
     ptr.store %1, %0 state(%2 -> %3)
-    call @g() state(%3 -> %4)
+    func.call @g() state(%3 -> %4)
     %5 = ptr.load %0 : !i32 state(%4)
-    return %5
+    func.return %5
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: ptr.load

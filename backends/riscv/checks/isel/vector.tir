@@ -5,9 +5,9 @@
 // instruction selection matches them structurally.
 
 module {
-  func @vadd(%0: !vector.vec<4xi32>, %1: !vector.vec<4xi32>) -> !vector.vec<4xi32> {
+  func.func @vadd(%0: !vector.vec<4xi32>, %1: !vector.vec<4xi32>) -> !vector.vec<4xi32> {
     %2 = vector.add %0, %1 : !vector.vec<4xi32>
-    return %2
+    func.return %2
   }
   module_end
 }

@@ -4,10 +4,10 @@
 // parameter on unconditional edges. Register allocation lowers each forwarded
 // value to an explicit copy into the parameter's register, so the merge sees one
 // consistently-colored parameter: both arms copy into the same register (a0, the
-// return register, since the merge value is returned).
+// func.return register, since the merge value is returned).
 
 module {
-  func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
+  func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
     %cond = cmpi %c, %d {predicate = "slt"} : !i1
     cfg.cond_br %cond, ^bb1, ^bb2
   ^bb1:
@@ -15,7 +15,7 @@ module {
   ^bb2:
     cfg.br ^bb3(%b : !i64)
   ^bb3(%r: !i64):
-    return %r
+    func.return %r
   }
   module_end
 }

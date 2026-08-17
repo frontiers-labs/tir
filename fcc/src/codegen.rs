@@ -16,6 +16,7 @@ use tir::attributes::AttributeValue;
 use tir::backend::abi::{Overflow, ValueKind, type_kind};
 use tir::builtin::{FloatType, IntegerType, ModuleOp, TokenType, TupleType, UnitType, ops as b};
 use tir::cfg::ops as cb;
+use tir::func::ops as func_ops;
 use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
 use tir::{Context, Operand, Operation, TypeId, ValueId};
@@ -404,7 +405,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     continue;
                 }
                 let sig = signatures.get(&entity).unwrap();
-                module.body().append_op(b::declare_op(
+                module.body().append_op(func_ops::declare_op(
                     context,
                     name,
                     sig.ret.ty,
@@ -431,7 +432,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                         && declared_globals.insert(entity)
                     {
                         module.body().append_op(
-                            b::DeclareOpBuilder::new(context)
+                            func_ops::DeclareOpBuilder::new(context)
                                 .attr("sym_name", AttributeValue::Str(global.name.clone().into()))
                                 .build(),
                         );
@@ -1325,7 +1326,8 @@ fn lower_function(
     let block = context.create_block(param_values);
     region.add_block(block.id());
 
-    let mut func_builder = b::func(context, name.as_str(), signature.ret.ty, Some(region.id()));
+    let mut func_builder =
+        func_ops::func(context, name.as_str(), signature.ret.ty, Some(region.id()));
     if signature.ret.indirect {
         func_builder = func_builder.result_address();
     }
@@ -2072,11 +2074,11 @@ impl FnCodegen<'_> {
         if self.return_flag.is_some() {
             let operand = self.return_operand(result, returns_void);
             self.builder
-                .append_op(b::r#return(self.context, operand).build());
+                .append_op(func_ops::r#return(self.context, operand).build());
             self.terminated = true;
         } else if returns_void && !self.terminated {
             self.builder
-                .append_op(b::r#return(self.context, Operand::none()).build());
+                .append_op(func_ops::r#return(self.context, Operand::none()).build());
             self.terminated = true;
         }
 
@@ -2126,7 +2128,7 @@ impl FnCodegen<'_> {
         self.enter_block(exit);
         let operand = self.return_operand(result, returns_void);
         self.builder
-            .append_op(b::r#return(self.context, operand).build());
+            .append_op(func_ops::r#return(self.context, operand).build());
         self.terminated = true;
         Ok(())
     }
@@ -2816,7 +2818,7 @@ impl FnCodegen<'_> {
                     None => Operand::none(),
                 };
                 self.builder
-                    .append_op(b::r#return(self.context, operand).build());
+                    .append_op(func_ops::r#return(self.context, operand).build());
                 self.terminated = true;
                 Ok(())
             }
@@ -3837,7 +3839,7 @@ impl FnCodegen<'_> {
                         );
                         LoweredExpr::Value(
                             self.builder
-                                .append_op(b::addr_of_op(self.context, name, ptr_ty))
+                                .append_op(func_ops::addr_of_op(self.context, name, ptr_ty))
                                 .result(),
                         )
                     } else {
@@ -3853,7 +3855,11 @@ impl FnCodegen<'_> {
                             LoweredExpr::Address {
                                 ptr: self
                                     .builder
-                                    .append_op(b::addr_of_op(self.context, &global.name, ptr_ty))
+                                    .append_op(func_ops::addr_of_op(
+                                        self.context,
+                                        &global.name,
+                                        ptr_ty,
+                                    ))
                                     .result(),
                                 elem: global.elem,
                             }
@@ -3931,7 +3937,7 @@ impl FnCodegen<'_> {
                                     let ptr_ty = PtrType::opaque(self.context);
                                     let address = self
                                         .builder
-                                        .append_op(b::addr_of_op(
+                                        .append_op(func_ops::addr_of_op(
                                             self.context,
                                             &global.name,
                                             ptr_ty,
@@ -3994,7 +4000,7 @@ impl FnCodegen<'_> {
                         args.insert(0, slot.ptr);
                         argument_alignments.insert(0, 1);
                         if let Some(callee) = callee {
-                            let mut call = b::IndirectCallOpBuilder::new(self.context)
+                            let mut call = func_ops::IndirectCallOpBuilder::new(self.context)
                                 .callee(callee)
                                 .args(args)
                                 .result_address()
@@ -4004,7 +4010,7 @@ impl FnCodegen<'_> {
                             }
                             self.builder.append_op(call.build());
                         } else {
-                            let mut call = b::CallOpBuilder::new(self.context)
+                            let mut call = func_ops::CallOpBuilder::new(self.context)
                                 .args(args)
                                 .attr(
                                     "callee",
@@ -4025,7 +4031,7 @@ impl FnCodegen<'_> {
                         }
                     } else {
                         let result = if let Some(callee) = callee {
-                            let mut call = b::IndirectCallOpBuilder::new(self.context)
+                            let mut call = func_ops::IndirectCallOpBuilder::new(self.context)
                                 .callee(callee)
                                 .args(args)
                                 .result_type(sig.ret.ty);
@@ -4034,7 +4040,7 @@ impl FnCodegen<'_> {
                             }
                             self.builder.append_op(call.build()).result()
                         } else {
-                            let mut call = b::CallOpBuilder::new(self.context)
+                            let mut call = func_ops::CallOpBuilder::new(self.context)
                                 .args(args)
                                 .attr(
                                     "callee",
@@ -4615,7 +4621,7 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
 
     for op_id in module.body().op_ids() {
         let op = context.get_op(op_id);
-        if op.clone().as_op::<tir::builtin::FuncOp>().is_none() {
+        if op.clone().as_op::<tir::func::FuncOp>().is_none() {
             continue;
         }
         // A string use sits wherever the body puts it, including inside the
@@ -4643,7 +4649,7 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
                     })
                     .clone();
                 let result_ty = context.get_value(string.result()).ty();
-                let addr = b::addr_of_op(context, &label, result_ty);
+                let addr = func_ops::addr_of_op(context, &label, result_ty);
                 rewriter.replace_op(
                     &tir::OperationRef::new(op, Some(block.clone()), None),
                     &addr,

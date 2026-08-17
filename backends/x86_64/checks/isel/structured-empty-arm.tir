@@ -5,13 +5,13 @@
 // it is the trampoline the taken edge needs to perform its assignment on.
 
 module {
-  func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
+  func.func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
     %r = scf.if %c args(%a, %b) -> !i64 (%p, %q) {
       scf.yield %p
     } else (%u, %v) {
       scf.yield %v
     }
-    return %r
+    func.return %r
   }
   module_end
 }

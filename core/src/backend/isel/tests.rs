@@ -1,7 +1,8 @@
 use tir::{
     Context, IRFormatter, Operation, PassManager, TypeId,
-    builtin::{FloatType, FuncOp, IntegerType, ops},
+    builtin::{FloatType, IntegerType, ops},
     cfg::ops as cfg_ops,
+    func::{FuncOp, ops as func_ops},
     graph::{MetaMutDag, MutDag, OperandConstraint},
     sem::{FloatFormat, SemGraph, SemType, SymKind, SymPayload},
 };
@@ -116,7 +117,7 @@ fn pbqp_selector_consumes_internal_nodes_of_selected_pattern() {
     let block = context.create_block(vec![x, y, z]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let mul = ops::muli(&context, x_id, y_id, i32_ty).build();
     let mul_result = mul.result();
     func.body().append_op(mul);
@@ -124,7 +125,7 @@ fn pbqp_selector_consumes_internal_nodes_of_selected_pattern() {
     let add_result = add.result();
     func.body().append_op(add);
     func.body()
-        .append_op(ops::r#return(&context, add_result).build());
+        .append_op(func_ops::r#return(&context, add_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -186,12 +187,12 @@ fn shifted_register_view_rule_does_not_select_for_offset_zero_values() {
         let block = context.create_block(vec![x, y]);
         region.add_block(block.id());
 
-        let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
         let add = ops::addi(&context, x_id, y_id, i32_ty).build();
         let add_result = add.result();
         func.body().append_op(add);
         func.body()
-            .append_op(ops::r#return(&context, add_result).build());
+            .append_op(func_ops::r#return(&context, add_result).build());
 
         module.body().append_op(func);
         module.body().append_op(ops::module_end(&context).build());
@@ -267,12 +268,12 @@ fn rule_validation_rejects_missing_atomic_materializer() {
     // A standalone Mul that no rule can root and no parent match can consume:
     // the e-graph cover is infeasible, so selection fails naming the kind.
     let _ = z_id;
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let mul = ops::muli(&context, x_id, y_id, i32_ty).build();
     let mul_result = mul.result();
     func.body().append_op(mul);
     func.body()
-        .append_op(ops::r#return(&context, mul_result).build());
+        .append_op(func_ops::r#return(&context, mul_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -366,7 +367,7 @@ fn pbqp_selector_duplicates_shared_pure_internal_nodes() {
     let block = context.create_block(vec![x, y, z]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let mul = ops::muli(&context, x_id, y_id, i32_ty).build();
     let mul_result = mul.result();
     func.body().append_op(mul);
@@ -377,7 +378,7 @@ fn pbqp_selector_duplicates_shared_pure_internal_nodes() {
     let add1_result = add1.result();
     func.body().append_op(add1);
     func.body()
-        .append_op(ops::r#return(&context, add1_result).build());
+        .append_op(func_ops::r#return(&context, add1_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -433,14 +434,14 @@ fn unused_consumer_does_not_create_demand() {
     let block = context.create_block(vec![x, y, z]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let mul = ops::muli(&context, x_id, y_id, i32_ty).build();
     let mul_result = mul.result();
     func.body().append_op(mul);
     let add = ops::addi(&context, mul_result, z_id, i32_ty).build();
     func.body().append_op(add);
     func.body()
-        .append_op(ops::r#return(&context, mul_result).build());
+        .append_op(func_ops::r#return(&context, mul_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -525,7 +526,7 @@ fn cost_model_override_changes_selection() {
     let block = context.create_block(vec![x, y, z]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let mul = ops::muli(&context, x_id, y_id, i32_ty).build();
     let mul_result = mul.result();
     func.body().append_op(mul);
@@ -533,7 +534,7 @@ fn cost_model_override_changes_selection() {
     let add_result = add.result();
     func.body().append_op(add);
     func.body()
-        .append_op(ops::r#return(&context, add_result).build());
+        .append_op(func_ops::r#return(&context, add_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -588,7 +589,7 @@ fn composite_rule_falls_back_to_atomic_cover() {
     let block = context.create_block(vec![a, b, c, d]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let add0 = ops::addi(&context, a_id, b_id, i32_ty).build();
     let add0_result = add0.result();
     func.body().append_op(add0);
@@ -599,7 +600,7 @@ fn composite_rule_falls_back_to_atomic_cover() {
     let add1_result = add1.result();
     func.body().append_op(add1);
     func.body()
-        .append_op(ops::r#return(&context, add1_result).build());
+        .append_op(func_ops::r#return(&context, add1_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -691,14 +692,14 @@ fn unused_typed_operation_is_not_selected() {
     let block = context.create_block(vec![a32v, b32v, a64v, b64v]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i64_ty, Some(region.id())).build();
     let add32 = ops::addi(&context, a32, b32, i32_ty).build();
     func.body().append_op(add32);
     let add64 = ops::addi(&context, a64, b64, i64_ty).build();
     let add64_result = add64.result();
     func.body().append_op(add64);
     func.body()
-        .append_op(ops::r#return(&context, add64_result).build());
+        .append_op(func_ops::r#return(&context, add64_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -754,7 +755,7 @@ fn run_inner_typed_fusion(inner_width: Option<u32>) -> Vec<&'static str> {
     let block = context.create_block(vec![a, b, c]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let add0 = ops::addi(&context, a_id, b_id, i32_ty).build();
     let add0_result = add0.result();
     func.body().append_op(add0);
@@ -762,7 +763,7 @@ fn run_inner_typed_fusion(inner_width: Option<u32>) -> Vec<&'static str> {
     let add1_result = add1.result();
     func.body().append_op(add1);
     func.body()
-        .append_op(ops::r#return(&context, add1_result).build());
+        .append_op(func_ops::r#return(&context, add1_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -913,13 +914,13 @@ fn introduced_integer_materializer_uses_its_class_type_under_float_bitcast() {
     let region = context.create_region();
     let block = context.create_block(vec![]);
     region.add_block(block.id());
-    let func = ops::func(&context, "demo", f32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", f32_ty, Some(region.id())).build();
 
     let value = ops::constantf(&context, 0.0, f32_ty).build();
     let result = value.result();
     func.body().append_op(value);
     func.body()
-        .append_op(ops::r#return(&context, result).build());
+        .append_op(func_ops::r#return(&context, result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -949,7 +950,7 @@ fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
     let region = context.create_region();
     let block = context.create_block(vec![]);
     region.add_block(block.id());
-    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i64_ty, Some(region.id())).build();
 
     let lhs = ops::constant(&context, 5, i64_ty).build();
     let lhs_result = lhs.result();
@@ -961,7 +962,7 @@ fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
     let add_result = add.result();
     func.body().append_op(add);
     func.body()
-        .append_op(ops::r#return(&context, add_result).build());
+        .append_op(func_ops::r#return(&context, add_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -1015,7 +1016,7 @@ fn run_immediate_range(constant: i64) -> Vec<&'static str> {
     let block = context.create_block(vec![a]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i64_ty, Some(region.id())).build();
     let c = ops::constant(&context, constant, i64_ty).build();
     let c_result = c.result();
     func.body().append_op(c);
@@ -1023,7 +1024,7 @@ fn run_immediate_range(constant: i64) -> Vec<&'static str> {
     let add_result = add.result();
     func.body().append_op(add);
     func.body()
-        .append_op(ops::r#return(&context, add_result).build());
+        .append_op(func_ops::r#return(&context, add_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -1257,7 +1258,7 @@ fn select_sign_extension(slli_rule: Rule) -> Vec<&'static str> {
     let block = context.create_block(vec![a, b]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "square", i64_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "square", i64_ty, Some(region.id())).build();
     let add = ops::addi(&context, a_id, b_id, i16_ty).build();
     let add_result = add.result();
     func.body().append_op(add);
@@ -1265,7 +1266,7 @@ fn select_sign_extension(slli_rule: Rule) -> Vec<&'static str> {
     let ext_result = ext.result();
     func.body().append_op(ext);
     func.body()
-        .append_op(ops::r#return(&context, ext_result).build());
+        .append_op(func_ops::r#return(&context, ext_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -1349,7 +1350,7 @@ fn opaque_leaves_are_distinct() {
     let context = Context::with_default_dialects();
     let i32 = IntegerType::new(&context, 32);
     let region = context.create_region();
-    ops::func(&context, "empty", i32, Some(region.id())).build();
+    func_ops::func(&context, "empty", i32, Some(region.id())).build();
     let value_to_def = HashMap::new();
     let mut egraph = SemEGraph::new();
     let mut builder = SemDagBuilder::new(&context, &value_to_def, &mut egraph, None);
@@ -1385,7 +1386,7 @@ fn builder_anchors_join_block_argument() {
     for block in [&entry, &then_block, &else_block, &join] {
         region.add_block(block.id());
     }
-    ops::func(&context, "gamma", i32, Some(region.id())).build();
+    func_ops::func(&context, "gamma", i32, Some(region.id())).build();
 
     entry.append_op(
         cfg_ops::cond_br(
@@ -1400,7 +1401,7 @@ fn builder_anchors_join_block_argument() {
     );
     then_block.append_op(cfg_ops::br(&context, vec![x_id], join.id()).build());
     else_block.append_op(cfg_ops::br(&context, vec![y_id], join.id()).build());
-    join.append_op(ops::r#return(&context, merged_id).build());
+    join.append_op(func_ops::r#return(&context, merged_id).build());
 
     let value_to_def = HashMap::new();
     let mut egraph = SemEGraph::new();
@@ -1484,14 +1485,14 @@ fn builder_seeds_a_loop_port_as_a_theta_over_its_edges() {
     let (egraph, value_to_class, func) = seed_regions(
         &context,
         "module {
-  func @accumulate(%0: !i1, %1: !i64) -> !i64 {
+  func.func @accumulate(%0: !i1, %1: !i64) -> !i64 {
     %2 = scf.while iter_args(%3 = %1) -> !i64 {
       scf.condition %0, %3
     } do scope(%4)(%5) {
       %6 = addi %5, %5 : !i64
       scf.yield %6
     }
-    return %2
+    func.return %2
   }
   module_end
 }",
@@ -1610,7 +1611,7 @@ fn memory_ops_select_via_interfaces() {
     let block = context.create_block(vec![param]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let slot_ty = tir::ptr::PtrType::typed(&context, i32_ty);
     let slot = func
         .body()
@@ -1621,7 +1622,7 @@ fn memory_ops_select_via_interfaces() {
         .body()
         .append_op(tir::ptr::ops::load(&context, slot.result(), i32_ty).build());
     func.body()
-        .append_op(ops::r#return(&context, loaded.result()).build());
+        .append_op(func_ops::r#return(&context, loaded.result()).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -1673,7 +1674,7 @@ fn merged_value_classes_resolve_to_earliest_def() {
     let block = context.create_block(vec![x, y, z]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let mul = ops::muli(&context, x_id, y_id, i32_ty).build();
     func.body().append_op(mul);
     let add = ops::addi(&context, x_id, y_id, i32_ty).build();
@@ -1683,7 +1684,7 @@ fn merged_value_classes_resolve_to_earliest_def() {
     let sub_result = sub.result();
     func.body().append_op(sub);
     func.body()
-        .append_op(ops::r#return(&context, sub_result).build());
+        .append_op(func_ops::r#return(&context, sub_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -1794,12 +1795,12 @@ fn equal_cost_tie_breaks_to_more_specific_rule() {
     let block = context.create_block(vec![a, b]);
     region.add_block(block.id());
 
-    let func = ops::func(&context, "demo", i32_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i32_ty, Some(region.id())).build();
     let add = ops::addi(&context, a_id, b_id, i32_ty).build();
     let add_result = add.result();
     func.body().append_op(add);
     func.body()
-        .append_op(ops::r#return(&context, add_result).build());
+        .append_op(func_ops::r#return(&context, add_result).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());
@@ -1856,7 +1857,7 @@ fn refuses_cross_block_binding_to_non_escaping_value() {
         region.add_block(block.id());
     }
 
-    let func = ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let func = func_ops::func(&context, "demo", i64_ty, Some(region.id())).build();
 
     // %d = a - b is used only within the entry block, so it never escapes.
     let d = ops::subi(&context, a_id, b_id, i64_ty).build();
@@ -1874,7 +1875,7 @@ fn refuses_cross_block_binding_to_non_escaping_value() {
     let r = ops::addi(&context, e_res, m_id, i64_ty).build();
     let r_res = r.result();
     bb1.append_op(r);
-    bb1.append_op(ops::r#return(&context, r_res).build());
+    bb1.append_op(func_ops::r#return(&context, r_res).build());
 
     module.body().append_op(func);
     module.body().append_op(ops::module_end(&context).build());

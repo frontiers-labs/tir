@@ -10,7 +10,7 @@ moduleSrc :: String
 moduleSrc =
   unlines
     [ "module {"
-    , "  func @f(%0: !i32, %1: !i32) -> !i32 {"
+    , "  func.func @f(%0: !i32, %1: !i32) -> !i32 {"
     , "    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>"
     , "    ptr.store %0, %2"
     , "    %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>"
@@ -23,7 +23,7 @@ moduleSrc =
     , "    %8 = ptr.load %4 : !i32"
     , "    %9 = constant {value = 1} : !i32"
     , "    %10 = addi %8, %9 : !i32"
-    , "    return %10"
+    , "    func.return %10"
     , "  }"
     , "  module_end"
     , "}"
@@ -39,7 +39,7 @@ main = withContext $ \ctx -> do
   before <- opToString ctx m
   check "parses allocas" ("ptr.alloca" `isInfixOf` before)
 
-  runPipeline ctx m "builtin.func(thread-state,instcombine,erase-state)"
+  runPipeline ctx m "func.func(thread-state,instcombine,erase-state)"
   after <- opToString ctx m
   check "promotion removes allocas" (not ("ptr.alloca" `isInfixOf` after))
   check "promotion promotes operands" ("muli %0, %1" `isInfixOf` after)

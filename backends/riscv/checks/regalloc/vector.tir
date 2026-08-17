@@ -9,10 +9,10 @@
 // immediate, while a dynamic vl operand becomes a vsetvli register AVL.
 
 module {
-  func @fixed(%0: !vector.vec<4xi32>, %1: !vector.vec<4xi32>) -> !vector.vec<4xi32> {
+  func.func @fixed(%0: !vector.vec<4xi32>, %1: !vector.vec<4xi32>) -> !vector.vec<4xi32> {
     %2 = vector.add %0, %1 : !vector.vec<4xi32>
     %3 = vector.mul %2, %1 : !vector.vec<4xi32>
-    return %3
+    func.return %3
   }
   module_end
 }

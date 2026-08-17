@@ -1,10 +1,10 @@
 // RUN: not tir opt --verify %s
 
 module {
-  declare @consume(!i64) -> !unit
-  func @bad(%0: !i64) {
-    call @consume(%0 : !i64) argument_alignments [3]
-    return
+  func.declare @consume(!i64) -> !unit
+  func.func @bad(%0: !i64) {
+    func.call @consume(%0 : !i64) argument_alignments [3]
+    func.return
   }
   module_end
 }

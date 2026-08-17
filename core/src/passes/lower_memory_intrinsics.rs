@@ -1,6 +1,7 @@
 use crate::analysis::AnalysisManager;
 use crate::attributes::AttributeValue;
-use crate::builtin::{DeclareOp, IntegerType, ModuleOp, ops as b};
+use crate::builtin::{IntegerType, ModuleOp, ops as b};
+use crate::func::{DeclareOp, ops as func_ops};
 use crate::ptr::{MemcpyOp, MemsetOp, PtrType};
 use crate::{
     Context, OpHandle, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter, TypeId,
@@ -98,7 +99,7 @@ impl Pass for LowerMemoryIntrinsicsPass {
             let copy = operation
                 .as_op::<MemcpyOp>()
                 .expect("operation was collected as ptr.memcpy");
-            let call = b::CallOpBuilder::new(context)
+            let call = func_ops::CallOpBuilder::new(context)
                 .args(copy.operands().to_vec())
                 .attr("callee", AttributeValue::Str("memcpy".to_string().into()))
                 .result_type(pointer)
@@ -111,7 +112,7 @@ impl Pass for LowerMemoryIntrinsicsPass {
                 .expect("operation was collected as ptr.memset");
             let extended = b::extui(context, set.operands()[1], value).build();
             rewriter.insert_op_before(&operation, &extended)?;
-            let call = b::CallOpBuilder::new(context)
+            let call = func_ops::CallOpBuilder::new(context)
                 .args(vec![
                     set.operands()[0],
                     extended.result(),
@@ -148,7 +149,7 @@ fn ensure_declaration(
             )));
         }
     } else {
-        let declaration = b::declare_op(context, name, return_type, argument_types);
+        let declaration = func_ops::declare_op(context, name, return_type, argument_types);
         module.body().insert(0, declaration.id());
     }
     Ok(())

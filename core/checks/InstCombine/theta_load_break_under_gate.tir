@@ -6,7 +6,7 @@
 // write, and the break carries the value reaching it out of the loop.
 
 module {
-  func @countdown(%0: !i1, %1: !i32) -> !i32 {
+  func.func @countdown(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.while {
@@ -23,16 +23,16 @@ module {
       scf.yield
     }
     %6 = ptr.load %2 : !i32
-    return %6
+    func.return %6
   }
   module_end
 }
 
-// CHECK-LABEL: func @countdown
+// CHECK-LABEL: func.func @countdown
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%{{[0-9]+}} = %1) -> !i32 {
 // CHECK: do scope(%[[SCOPE:[0-9]+]])(%[[BODY:[0-9]+]]) {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[BODY]], %[[BODY]] : !i32
 // CHECK: scf.break %[[SCOPE]], %[[NEXT]]
 // CHECK: scf.yield %[[NEXT]]
-// CHECK: return %[[RESULT]]
+// CHECK: func.return %[[RESULT]]

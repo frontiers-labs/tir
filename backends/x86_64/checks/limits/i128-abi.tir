@@ -4,9 +4,9 @@
 // selection instead of being truncated to a single 64-bit add.
 
 module {
-  func @f(%0:!i128,%1:!i128) -> !i128 {
+  func.func @f(%0:!i128,%1:!i128) -> !i128 {
     %2 = addi %0, %1 : !i128
-    return %2
+    func.return %2
   }
   module_end
 }

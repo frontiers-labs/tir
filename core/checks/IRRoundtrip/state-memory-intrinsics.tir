@@ -1,11 +1,11 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func @f(%0: !ptr.p, %1: !ptr.p, %2: !i8, %3: !i64) {
+  func.func @f(%0: !ptr.p, %1: !ptr.p, %2: !i8, %3: !i64) {
     %4 = state.entry_state : !state
     ptr.memset %0, %2, %3 state(%4 -> %5)
     ptr.memcpy %1, %0, %3 state(%5 -> %6)
-    return
+    func.return
   }
   module_end
 }

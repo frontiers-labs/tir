@@ -4,11 +4,11 @@
 // calls. The frame planner must not add an empty local adjustment around it.
 
 module {
-  declare @g(!i64) -> !i64
-  func @f(%0: !i64) -> !i64 {
-    %r = call @g(%0 : !i64) -> !i64
+  func.declare @g(!i64) -> !i64
+  func.func @f(%0: !i64) -> !i64 {
+    %r = func.call @g(%0 : !i64) -> !i64
     %res = muli %0, %r : !i64
-    return %res
+    func.return %res
   }
   module_end
 }

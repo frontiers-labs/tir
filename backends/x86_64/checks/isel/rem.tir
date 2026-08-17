@@ -2,21 +2,21 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s --check-prefix=REGALLOC
 
 module {
-  func @rem32(%0: !i32, %1: !i32) -> !i32 {
+  func.func @rem32(%0: !i32, %1: !i32) -> !i32 {
     %2 = remsi %0, %1 : !i32
-    return %2
+    func.return %2
   }
-  func @rem64(%0: !i64, %1: !i64) -> !i64 {
+  func.func @rem64(%0: !i64, %1: !i64) -> !i64 {
     %2 = remsi %0, %1 : !i64
-    return %2
+    func.return %2
   }
-  func @remu32(%0: !i32, %1: !i32) -> !i32 {
+  func.func @remu32(%0: !i32, %1: !i32) -> !i32 {
     %2 = remui %0, %1 : !i32
-    return %2
+    func.return %2
   }
-  func @remu64(%0: !i64, %1: !i64) -> !i64 {
+  func.func @remu64(%0: !i64, %1: !i64) -> !i64 {
     %2 = remui %0, %1 : !i64
-    return %2
+    func.return %2
   }
   module_end
 }
@@ -35,8 +35,8 @@ module {
 // ISEL: zero_extend_dividend
 // ISEL-NEXT: unsigned_divide
 
-// The remainder register (rdx) differs from the return register (rax), so a
-// move copies it into place before the return.
+// The remainder register (rdx) differs from the func.return register (rax), so a
+// move copies it into place before the func.return.
 // REGALLOC-LABEL: name = "rem64"
 // REGALLOC: signed_divide {dst = rsi, rax = GPR[0], rax_def = GPR[0], rdx = GPR[2], rdx_def = GPR[2]}
 // REGALLOC: mov {dst = rax, src = rdx}

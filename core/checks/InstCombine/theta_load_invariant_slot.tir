@@ -7,7 +7,7 @@
 // leaves memory without the loop growing a port for it.
 
 module {
-  func @accumulate(%0: !index, %1: !index, %2: !index, %3: !i32, %4: !i32) -> !i32 {
+  func.func @accumulate(%0: !index, %1: !index, %2: !index, %3: !i32, %4: !i32) -> !i32 {
     %5 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %5
     %6 = scf.for %0, %1, %2 iter_args(%7 = %4) -> !i32 {
@@ -15,15 +15,15 @@ module {
       %9 = addi %7, %8 : !i32
       scf.yield %9
     }
-    return %6
+    func.return %6
   }
   module_end
 }
 
-// CHECK-LABEL: func @accumulate
+// CHECK-LABEL: func.func @accumulate
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.for %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %4) -> !i32 {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[CARRIED]], %3 : !i32
 // CHECK-NEXT: scf.yield %[[NEXT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: return %[[RESULT]]
+// CHECK-NEXT: func.return %[[RESULT]]

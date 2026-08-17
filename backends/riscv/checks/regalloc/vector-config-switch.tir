@@ -5,10 +5,10 @@
 // demand change, not per instruction.
 
 module {
-  func @switch(%0: !vector.vec<i32>, %1: !vector.vec<i32>, %2: !index, %3: !index) -> !vector.vec<i32> {
+  func.func @switch(%0: !vector.vec<i32>, %1: !vector.vec<i32>, %2: !index, %3: !index) -> !vector.vec<i32> {
     %4 = vector.add %0, %1, %2 : !vector.vec<i32>
     %5 = vector.mul %4, %1, %3 : !vector.vec<i32>
-    return %5
+    func.return %5
   }
   module_end
 }

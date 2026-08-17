@@ -27,7 +27,8 @@ use std::ffi::c_void;
 use std::fmt;
 
 use tir::backend::pipeline::{StopAfter, build_pipeline};
-use tir::builtin::{FuncOp, ModuleOp};
+use tir::builtin::ModuleOp;
+use tir::func::FuncOp;
 use tir::{Context, Operation, PassManager};
 
 /// A JIT compiler for a single target.

@@ -5,7 +5,7 @@
 // which is the only one its path wrote.
 
 module {
-  func @exclusive(%c: !i64, %a: !i64, %b: !i64) -> !i64 {
+  func.func @exclusive(%c: !i64, %a: !i64, %b: !i64) -> !i64 {
     %z = constant {value = 0} : !i64
     %sel = cmpi %c, %z {predicate = "eq"} : !i1
     cfg.cond_br %sel, ^bb1, ^bb2
@@ -34,7 +34,7 @@ module {
     %r2 = subi %g2, %b : !i64
     cfg.br ^bb9(%r2 : !i64)
   ^bb9(%out: !i64):
-    return %out
+    func.return %out
   }
   module_end
 }

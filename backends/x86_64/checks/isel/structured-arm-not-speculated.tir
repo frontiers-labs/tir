@@ -8,7 +8,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func @maybe_store(%c: !i1, %p: !ptr.p<!i64>, %v: !i64) {
+  func.func @maybe_store(%c: !i1, %p: !ptr.p<!i64>, %v: !i64) {
     scf.if %c {
       %l = ptr.load %p : !i64
       %s = addi %l, %v : !i64
@@ -17,7 +17,7 @@ module {data_layout = #data_layout} {
     } else {
       scf.yield
     }
-    return
+    func.return
   }
   module_end
 }

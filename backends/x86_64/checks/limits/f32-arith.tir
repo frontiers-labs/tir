@@ -2,12 +2,12 @@
 // RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s --check-prefix=ENC
 
 module {
-  func @f(%0:!f32, %1:!f32) -> !f32 {
+  func.func @f(%0:!f32, %1:!f32) -> !f32 {
     %2 = addf %0, %1 : !f32
     %3 = mulf %2, %1 : !f32
     %4 = subf %3, %0 : !f32
     %5 = divf %4, %1 : !f32
-    return %5
+    func.return %5
   }
   module_end
 }

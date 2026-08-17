@@ -75,6 +75,7 @@ pub(crate) fn merge_into(base: &mut AttributeDict, overlay: AttributeDict) {
 mod tests {
     use super::*;
     use crate::builtin::{UnitType, ops};
+    use crate::func::ops as func_ops;
     use crate::{Context, Operation};
 
     fn dict(entries: impl IntoIterator<Item = (&'static str, AttributeValue)>) -> AttributeValue {
@@ -126,7 +127,7 @@ mod tests {
             )
             .build();
         let func = module.body().append_op(
-            ops::func(&context, "f", UnitType::new(&context), None)
+            func_ops::func(&context, "f", UnitType::new(&context), None)
                 .attr(
                     "data_layout",
                     dict([("types", dict([("i32", dict([("abi", 8.into())]))]))]),

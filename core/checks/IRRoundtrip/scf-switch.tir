@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func @dispatch(%0: !i32) {
+  func.func @dispatch(%0: !i32) {
     scf.switch %0 case 1 {
       scf.yield
     }
@@ -11,7 +11,7 @@ module {
     default {
       scf.yield
     }
-    return
+    func.return
   }
   module_end
 }
@@ -25,4 +25,4 @@ module {
 // CHECK-NEXT: default {
 // CHECK-NEXT: scf.yield
 // CHECK-NEXT: }
-// CHECK-NEXT: return
+// CHECK-NEXT: func.return

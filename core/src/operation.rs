@@ -345,7 +345,7 @@ fn verify_token_region_arguments(context: &Context, instance: &OpHandle) -> Resu
             }
         }
     }
-    if instance.is::<crate::builtin::FuncOp>()
+    if instance.is::<crate::func::FuncOp>()
         && matches!(
             instance.attr("ret_type"),
             Some(crate::attributes::AttributeValue::Type(ty)) if ty == token

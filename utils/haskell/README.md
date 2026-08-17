@@ -30,6 +30,6 @@ import Tir
 
 main = withContext $ \ctx -> do
   m <- parseModule ctx "module { func @f() { return } module_end }"
-  runPipeline ctx m "builtin.func(instcombine)"
+  runPipeline ctx m "func.func(instcombine)"
   putStrLn =<< opToString ctx m
 ```

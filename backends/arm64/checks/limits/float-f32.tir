@@ -1,9 +1,9 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
 
 module {
-  func @f(%0: !f32, %1: !f32) -> !f32 {
+  func.func @f(%0: !f32, %1: !f32) -> !f32 {
     %2 = addf %0, %1 : !f32
-    return %2
+    func.return %2
   }
   module_end
 }

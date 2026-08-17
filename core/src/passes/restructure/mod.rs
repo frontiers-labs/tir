@@ -21,7 +21,7 @@ mod liveness;
 mod loops;
 
 use crate::analysis::AnalysisManager;
-use crate::builtin::FuncOp;
+use crate::func::FuncOp;
 use crate::{Context, OperationRef, Pass, PassError, PassTarget, Rewriter};
 
 pub struct RestructurePass;
@@ -79,14 +79,14 @@ fn restructure_region(context: &Context, region: crate::RegionId) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builtin::FuncOp;
+    use crate::func::FuncOp;
     use crate::parse::ir::parse_ir;
     use crate::{Operation, PassManager};
 
     /// A ring of blocks, each branching to the next two: strongly connected,
     /// entered at two of its members, and irreducible however it is traversed.
     fn tangle(blocks: usize) -> String {
-        let mut source = String::from("func @tangle(%0: !i1, %1: !i32) -> !i32 {\n");
+        let mut source = String::from("func.func @tangle(%0: !i1, %1: !i32) -> !i32 {\n");
         source.push_str("  cfg.cond_br %0, ^bb1, ^bb2\n");
         for block in 1..=blocks {
             let next = block % blocks + 1;
@@ -99,7 +99,7 @@ mod tests {
                 source.push_str(&format!("  cfg.cond_br %0, ^bb{next}, ^bb{after}\n"));
             }
         }
-        source.push_str(&format!("^bb{}:\n  return %1\n}}\n", blocks + 1));
+        source.push_str(&format!("^bb{}:\n  func.return %1\n}}\n", blocks + 1));
         source
     }
 

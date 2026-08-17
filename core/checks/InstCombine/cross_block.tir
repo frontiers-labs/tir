@@ -1,23 +1,23 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 // A value computed in the entry block feeds an op in a successor. The cross-block
 // value is opaque to the successor's e-graph, so addi(_, 0) still folds without
 // modeling the branch, and muli(x, 2) becomes shli(x, 1).
 
 module {
-  func @fwd(%0: !i32) -> !i32 {
+  func.func @fwd(%0: !i32) -> !i32 {
     %1 = constant {value = 2} : !i32
     %2 = muli %0, %1 : !i32
     cfg.br ^bb1
   ^bb1:
     %3 = constant {value = 0} : !i32
     %4 = addi %2, %3 : !i32
-    return %4
+    func.return %4
   }
   module_end
 }
 
-// CHECK-LABEL: func @fwd
+// CHECK-LABEL: func.func @fwd
 // CHECK-NOT: addi
 // CHECK: shli

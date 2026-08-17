@@ -5,21 +5,21 @@
 // chain rooted at the entry state.
 
 module {
-  declare @sink(!ptr.p<!i32>) -> !unit
-  func @f(%0: !i32) -> !i32 {
+  func.declare @sink(!ptr.p<!i32>) -> !unit
+  func.func @f(%0: !i32) -> !i32 {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %1
-    call @sink(%1 : !ptr.p<!i32>)
+    func.call @sink(%1 : !ptr.p<!i32>)
     %2 = ptr.load %1 : !i32
-    return %2
+    func.return %2
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
 // CHECK-NEXT: ptr.store %0, %{{[0-9]+}} state(%[[ENTRY]] -> %[[S1:[0-9]+]])
-// CHECK-NEXT: call @sink(%{{[0-9]+}} : !ptr.p<!i32>) state(%[[S1]] -> %[[S2:[0-9]+]])
+// CHECK-NEXT: func.call @sink(%{{[0-9]+}} : !ptr.p<!i32>) state(%[[S1]] -> %[[S2:[0-9]+]])
 // CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[S2]] -> %[[S3:[0-9]+]])
-// CHECK-NEXT: return %{{[0-9]+}} state(%[[S3]])
+// CHECK-NEXT: func.return %{{[0-9]+}} state(%[[S3]])

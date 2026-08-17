@@ -34,7 +34,7 @@ fn arithmetic_function() {
     let out = import_and_print(
         "define i32 @add(i32 %a, i32 %b) {\n  %s = add i32 %a, %b\n  ret i32 %s\n}\n",
     );
-    assert!(out.contains("func @add"), "{out}");
+    assert!(out.contains("func.func @add"), "{out}");
     assert!(out.contains("addi"), "{out}");
     assert!(out.contains("return"), "{out}");
 }
@@ -89,7 +89,7 @@ fn icmp_cast_and_call() {
     let out = import_and_print(src);
     assert!(out.contains("cmpi"), "{out}");
     assert!(out.contains("extui"), "{out}");
-    assert!(out.contains("call @g"), "{out}");
+    assert!(out.contains("func.call @g"), "{out}");
 }
 
 #[test]

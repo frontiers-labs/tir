@@ -4,16 +4,16 @@
 // conservative chain in the order they are written.
 
 module {
-  func @c(%0: !ptr.p, %1: !ptr.p, %2: !i8, %3: !i64) {
+  func.func @c(%0: !ptr.p, %1: !ptr.p, %2: !i8, %3: !i64) {
     ptr.memset %0, %2, %3
     ptr.memcpy %1, %0, %3
-    return
+    func.return
   }
   module_end
 }
 
-// CHECK-LABEL: func @c
+// CHECK-LABEL: func.func @c
 // CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
 // CHECK-NEXT: ptr.memset %0, %2, %3 state(%[[ENTRY]] -> %[[S1:[0-9]+]])
 // CHECK-NEXT: ptr.memcpy %1, %0, %3 state(%[[S1]] -> %[[S2:[0-9]+]])
-// CHECK-NEXT: return state(%[[S2]])
+// CHECK-NEXT: func.return state(%[[S2]])

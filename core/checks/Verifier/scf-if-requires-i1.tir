@@ -3,13 +3,13 @@
 // An scf.if condition must be i1; an i32 condition fails verification.
 
 module {
-  func @cond(%0: !i32) {
+  func.func @cond(%0: !i32) {
     scf.if %0 {
       scf.yield
     } else {
       scf.yield
     }
-    return
+    func.return
   }
   module_end
 }

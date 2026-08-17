@@ -469,7 +469,7 @@ mod tests {
         let target = context.create_block(vec![]);
 
         let func =
-            crate::builtin::ops::func(&context, "jump", UnitType::new(&context), Some(region.id()))
+            crate::func::ops::func(&context, "jump", UnitType::new(&context), Some(region.id()))
                 .build();
 
         func.body()

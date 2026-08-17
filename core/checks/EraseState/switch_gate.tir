@@ -3,7 +3,7 @@
 // The n-ary gate loses its ports the same way, the default arm included.
 
 module {
-  func @h(%0: !i32, %1: !i32) -> !i32 {
+  func.func @h(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.switch %0 case 1 {
@@ -14,12 +14,12 @@ module {
       scf.yield
     }
     %3 = ptr.load %2 : !i32
-    return %3
+    func.return %3
   }
   module_end
 }
 
-// CHECK-LABEL: func @h(%0: !i32, %1: !i32) -> !i32 {
+// CHECK-LABEL: func.func @h(%0: !i32, %1: !i32) -> !i32 {
 // CHECK-NEXT: %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
 // CHECK-NEXT: ptr.store %1, %2
 // CHECK-NEXT: scf.switch %0 case 1 {
@@ -30,5 +30,5 @@ module {
 // CHECK-NEXT: scf.yield
 // CHECK-NEXT: }
 // CHECK-NEXT: %3 = ptr.load %2 : !i32
-// CHECK-NEXT: return %3
+// CHECK-NEXT: func.return %3
 // CHECK-NEXT: }

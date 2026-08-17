@@ -7,7 +7,7 @@
 // the read inside the loop takes the head the test was entered on.
 
 module {
-  func @sum(%0: !i1, %1: !i32) -> !i32 {
+  func.func @sum(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     %3 = scf.while {
@@ -26,12 +26,12 @@ module {
       scf.yield
     }
     %9 = ptr.load %2 : !i32
-    return %9
+    func.return %9
   }
   module_end
 }
 
-// CHECK-LABEL: func @sum
+// CHECK-LABEL: func.func @sum
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%[[HEAD:[0-9]+]] = %1) -> !i32 {
 // CHECK: %[[COND:[0-9]+]], %[[LATCH:[0-9]+]] = scf.if %0 -> !i1, !i32 {
@@ -42,4 +42,4 @@ module {
 // CHECK: do(%[[BODY:[0-9]+]]) {
 // CHECK-NEXT: scf.yield %[[BODY]]
 // CHECK-NEXT: }
-// CHECK-NEXT: return %[[RESULT]]
+// CHECK-NEXT: func.return %[[RESULT]]

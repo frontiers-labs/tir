@@ -5,10 +5,10 @@
 // outside that area and already contributes to call-site alignment.
 
 module {
-  declare @g(!i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
-  func @f(%0:!i64) -> !i64 {
-    %r = call @g(%0, %0, %0, %0, %0, %0, %0 : !i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
-    return %r
+  func.declare @g(!i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
+  func.func @f(%0:!i64) -> !i64 {
+    %r = func.call @g(%0, %0, %0, %0, %0, %0, %0 : !i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
+    func.return %r
   }
   module_end
 }

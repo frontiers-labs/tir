@@ -4,15 +4,15 @@
 // the state between them, so the first store leaves memory as it found it.
 
 module {
-  func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) {
+  func.func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) {
     %3 = state.entry_state : !state
     ptr.store %1, %0 state(%3 -> %4)
     ptr.store %2, %0 state(%4 -> %5)
-    return state(%5)
+    func.return state(%5)
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK-NOT: ptr.store %1,
 // CHECK: ptr.store %2,

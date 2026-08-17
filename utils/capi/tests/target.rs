@@ -14,7 +14,7 @@ fn owned(raw: *mut c_char) -> Option<String> {
     Some(s)
 }
 
-const MODULE: &str = "module {\n  func @a(%0: !i32, %1: !i32) -> !i32 {\n    %2 = addi %0, %1 : !i32\n    return %2\n  }\n  module_end\n}";
+const MODULE: &str = "module {\n  func.func @a(%0: !i32, %1: !i32) -> !i32 {\n    %2 = addi %0, %1 : !i32\n    func.return %2\n  }\n  module_end\n}";
 
 #[test]
 fn lists_supported_targets() {

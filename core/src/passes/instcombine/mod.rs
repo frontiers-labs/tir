@@ -30,7 +30,8 @@ use crate::{
     AnalysisManager, BlockId, Conditional, ConstantLike, Context, EntryGuard, GuardedLoop,
     LoopLike, MemoryRead, OpHandle, OpId, OpInstance, OperationRef, Pass, PassError, PassTarget,
     RegionId, Rewriter, TokenScope, TypeId, ValueId,
-    builtin::{FuncOp, StateType, ops},
+    builtin::{StateType, ops},
+    func::FuncOp,
     utils::APInt,
 };
 

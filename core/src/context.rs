@@ -15,6 +15,7 @@ use crate::{
     block::{BlockHandle, BlockId},
     builtin::BuiltinDialect,
     dialects::cfg::CfgDialect,
+    dialects::func::FuncDialect,
     dialects::scf::ScfDialect,
     dialects::state::StateDialect,
     ir_formatter::IRFormatter,
@@ -404,6 +405,7 @@ impl Context {
 
         context.register_dialect::<BuiltinDialect>();
         context.register_dialect::<CfgDialect>();
+        context.register_dialect::<FuncDialect>();
         context.register_dialect::<PtrDialect>();
         context.register_dialect::<ScfDialect>();
         context.register_dialect::<StateDialect>();
@@ -1731,7 +1733,7 @@ mod staging_tests {
     use super::Context;
     use crate::{
         BlockHandle, BlockId, IRFormatter, OpId, Operand, Operation, RegionId, ValueId, builtin,
-        scf,
+        func, scf,
     };
 
     /// `module { func demo(%cond) { %c = 1; scf.if %cond { %old = 7; scf.yield }; return } }`
@@ -1783,13 +1785,9 @@ mod staging_tests {
         )
         .build();
         entry.append(if_op.id());
-        entry.append(
-            builtin::ops::r#return(context, Operand::none())
-                .build()
-                .id(),
-        );
+        entry.append(func::ops::r#return(context, Operand::none()).build().id());
 
-        let func = builtin::ops::func(context, "demo", unit, Some(body.id())).build();
+        let func = func::ops::func(context, "demo", unit, Some(body.id())).build();
         let module = builtin::ops::module(context, None).build();
         module.body().append(func.id());
 
@@ -1975,12 +1973,8 @@ mod staging_tests {
         let sibling_body = context.create_region();
         let sibling_entry = context.create_block(vec![]);
         sibling_body.add_block(sibling_entry.id());
-        sibling_entry.append(
-            builtin::ops::r#return(&context, Operand::none())
-                .build()
-                .id(),
-        );
-        let sibling = builtin::ops::func(&context, "sib", unit, Some(sibling_body.id())).build();
+        sibling_entry.append(func::ops::r#return(&context, Operand::none()).build().id());
+        let sibling = func::ops::func(&context, "sib", unit, Some(sibling_body.id())).build();
         f.module_body.append(sibling.id());
 
         let analyses = AnalysisManager::new();
@@ -2006,12 +2000,12 @@ mod port_tests {
 
     /// A loop with no carried port yet, and a constant outside it to carry in.
     const LOOP: &str = r#"module {
-  func @f(%0: !index, %1: !index, %2: !index) -> !i32 {
+  func.func @f(%0: !index, %1: !index, %2: !index) -> !i32 {
     %3 = constant {value = 7} : !i32
     scf.for %0, %1, %2 {
       scf.yield
     }
-    return %3
+    func.return %3
   }
   module_end
 }"#;
@@ -2144,7 +2138,7 @@ mod port_tests {
 #[cfg(test)]
 mod tests {
     use super::Context;
-    use crate::{BlockHandle, Commutative, OpId, Operand, Operation, Terminator, builtin};
+    use crate::{BlockHandle, Commutative, OpId, Operand, Operation, Terminator, builtin, func};
 
     #[test]
     fn default_context() {
@@ -2208,7 +2202,7 @@ mod tests {
         let region = context.create_region();
         let block = context.create_block(vec![]);
         region.add_block(block.id());
-        let func = builtin::ops::func(context, "demo", i32, Some(region.id())).build();
+        let func = func::ops::func(context, "demo", i32, Some(region.id())).build();
         let module = builtin::ops::module(context, None).build();
         module.body().append(func.id());
         (module.id(), func.id(), context.get_block(block.id()))
@@ -2278,11 +2272,7 @@ mod tests {
         let context = Context::with_default_dialects();
         let (module, func, body) = module_with_function(&context);
         assert_bumps_spine(&context, module, func, || {
-            body.append(
-                builtin::ops::r#return(&context, Operand::none())
-                    .build()
-                    .id(),
-            );
+            body.append(func::ops::r#return(&context, Operand::none()).build().id());
         });
     }
 
@@ -2293,9 +2283,7 @@ mod tests {
         assert_bumps_spine(&context, module, func, || {
             body.insert(
                 0,
-                builtin::ops::r#return(&context, Operand::none())
-                    .build()
-                    .id(),
+                func::ops::r#return(&context, Operand::none()).build().id(),
             );
         });
     }
@@ -2304,7 +2292,7 @@ mod tests {
     fn removing_an_op_bumps_the_spine() {
         let context = Context::with_default_dialects();
         let (module, func, body) = module_with_function(&context);
-        let ret = builtin::ops::r#return(&context, Operand::none()).build();
+        let ret = func::ops::r#return(&context, Operand::none()).build();
         body.append(ret.id());
         assert_bumps_spine(&context, module, func, || {
             assert!(body.remove_op(ret.id()));
@@ -2315,9 +2303,9 @@ mod tests {
     fn replacing_an_op_bumps_the_spine() {
         let context = Context::with_default_dialects();
         let (module, func, body) = module_with_function(&context);
-        let old = builtin::ops::r#return(&context, Operand::none()).build();
+        let old = func::ops::r#return(&context, Operand::none()).build();
         body.append(old.id());
-        let new = builtin::ops::r#return(&context, Operand::none()).build();
+        let new = func::ops::r#return(&context, Operand::none()).build();
         assert_bumps_spine(&context, module, func, || {
             assert!(body.replace_op(old.id(), new.id()));
         });
@@ -2360,7 +2348,7 @@ mod tests {
     fn setting_op_attributes_bumps_the_spine() {
         let context = Context::with_default_dialects();
         let (module, func, body) = module_with_function(&context);
-        let ret = builtin::ops::r#return(&context, Operand::none()).build();
+        let ret = func::ops::r#return(&context, Operand::none()).build();
         body.append(ret.id());
         assert_bumps_spine(&context, module, func, || {
             context.set_op_attributes(ret.id(), vec![]);
@@ -2405,11 +2393,7 @@ mod tests {
         let (_, untouched, _) = module_with_function(&context);
         context.take_dirty_ops();
 
-        body.append(
-            builtin::ops::r#return(&context, Operand::none())
-                .build()
-                .id(),
-        );
+        body.append(func::ops::r#return(&context, Operand::none()).build().id());
 
         let dirty = context.take_dirty_ops();
         assert_eq!(dirty, vec![func], "only the edited subtree is verified");
@@ -2427,11 +2411,7 @@ mod tests {
         let (_, untouched, _) = module_with_function(&context);
         let before = context.op_version(untouched);
 
-        body.append(
-            builtin::ops::r#return(&context, Operand::none())
-                .build()
-                .id(),
-        );
+        body.append(func::ops::r#return(&context, Operand::none()).build().id());
 
         assert!(context.op_version(edited) > 0);
         assert_eq!(context.op_version(untouched), before);
@@ -2525,7 +2505,7 @@ mod tests {
         let argument = context.create_value(i32, None);
         let block = context.create_block(vec![argument.clone()]);
         region.add_block(block.id());
-        let func = builtin::ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func::ops::func(&context, "demo", i32, Some(region.id())).build();
         let module = builtin::ops::module(&context, None).build();
         module.body().append(func.id());
         let reader = builtin::ops::addi(&context, argument.id(), argument.id(), i32).build();
@@ -2566,7 +2546,7 @@ mod tests {
     fn builtin_terminator_interface() {
         let context = Context::with_default_dialects();
         let value = context.create_value(builtin::IntegerType::new(&context, 32), None);
-        let ret = builtin::ops::r#return(&context, value.id()).build();
+        let ret = func::ops::r#return(&context, value.id()).build();
 
         let iface = context
             .get_op(ret.id())

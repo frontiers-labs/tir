@@ -7,11 +7,11 @@
 // object file". Same for scf.while / scf.if. This probe marks the missing pass.
 
 module {
-  func @loop(%0: !index, %1: !index, %2: !index) {
+  func.func @loop(%0: !index, %1: !index, %2: !index) {
     scf.for %0, %1, %2 {
       scf.yield
     }
-    return
+    func.return
   }
   module_end
 }

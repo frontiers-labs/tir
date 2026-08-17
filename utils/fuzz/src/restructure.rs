@@ -13,8 +13,10 @@
 use tir::BlockHandle;
 
 use tir::builtin::ops as b;
-use tir::builtin::{FuncOp, IntegerType, ModuleOp};
+use tir::builtin::{IntegerType, ModuleOp};
 use tir::cfg::ops as cb;
+use tir::func::ops as func_ops;
+use tir::func::FuncOp;
 use tir::{Context, IRFormatter, Operation, PassManager};
 
 /// How many backward edges a run may take.
@@ -308,7 +310,7 @@ impl Program {
             let value = context.get_op(arithmetic).results()[0];
             let left = match specification.terminator {
                 Terminator::Return => {
-                    block.append_op(b::r#return(context, value).build());
+                    block.append_op(func_ops::r#return(context, value).build());
                     continue;
                 }
                 Terminator::Branch(left, _) => left,
@@ -348,7 +350,7 @@ impl Program {
             );
         }
 
-        let func = b::func(context, "f", integer, Some(region.id())).build();
+        let func = func_ops::func(context, "f", integer, Some(region.id())).build();
         let module = b::module(context, None).build();
         module.body().append(func.id());
         module.body().append(b::module_end(context).build().id());

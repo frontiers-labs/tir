@@ -7,9 +7,9 @@
 // the boolean is matched regardless of setcc's 8-bit destination width.
 
 module {
-  func @f(%0:!i64, %1:!i64) -> !i1 {
+  func.func @f(%0:!i64, %1:!i64) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
-    return %2
+    func.return %2
   }
   module_end
 }

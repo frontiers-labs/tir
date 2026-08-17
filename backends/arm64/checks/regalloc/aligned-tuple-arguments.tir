@@ -1,18 +1,18 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 module {
-  declare @consume(!i64, !tuple<!i64, !i64>) -> !i64
-  func @consume_defined(%0: !i64, %1: !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16] {
+  func.declare @consume(!i64, !tuple<!i64, !i64>) -> !i64
+  func.func @consume_defined(%0: !i64, %1: !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16] {
     %2 = tuple_get %1 {index = 0} : !i64
     %3 = tuple_get %1 {index = 1} : !i64
     %4 = addi %0, %2 : !i64
     %5 = addi %4, %3 : !i64
-    return %5
+    func.return %5
   }
-  func @forward(%0: !i64, %1: !i64, %2: !i64) -> !i64 {
+  func.func @forward(%0: !i64, %1: !i64, %2: !i64) -> !i64 {
     %3 = make_tuple %1, %2 : !tuple<!i64, !i64>
-    %4 = call @consume(%0, %3 : !i64, !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16]
-    return %4
+    %4 = func.call @consume(%0, %3 : !i64, !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16]
+    func.return %4
   }
   module_end
 }

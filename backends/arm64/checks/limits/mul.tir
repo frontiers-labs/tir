@@ -5,9 +5,9 @@
 // bare `Mul` the program emits, so integer multiply selects.
 
 module {
-  func @f(%0: !i64, %1: !i64) -> !i64 {
+  func.func @f(%0: !i64, %1: !i64) -> !i64 {
     %2 = muli %0, %1 : !i64
-    return %2
+    func.return %2
   }
   module_end
 }

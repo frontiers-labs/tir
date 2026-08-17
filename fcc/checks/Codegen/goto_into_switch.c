@@ -4,6 +4,6 @@
 // chain the switch lowers to, which `restructure` turns back into nested
 // conditionals: the arm jumped into is emitted once and still falls through.
 
-// CHECK: func @dispatch
+// CHECK: func.func @dispatch
 // CHECK: scf.if
-// CHECK: return
+// CHECK: func.return

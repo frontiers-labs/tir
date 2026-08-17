@@ -8,7 +8,7 @@ use crate as tir;
 operation! {
     CallOp {
         name: "call",
-        dialect: "builtin",
+        dialect: "func",
         format: "custom",
         verifier: "true",
         operands: O {
@@ -73,7 +73,7 @@ impl CallOp {
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        let header = format!("call @{}", self.callee());
+        let header = format!("func.call @{}", self.callee());
         print_call(
             &context,
             fmt,
@@ -101,7 +101,7 @@ impl CallOp {
         let result_address = parser.parse_token("result_address");
         let argument_alignments = super::parse_argument_alignments(parser, context)?;
 
-        let state = super::parse_state_clause(parser)?;
+        let state = crate::builtin::parse_state_clause(parser)?;
 
         let mut builder = CallOpBuilder::new(context)
             .args(args)
@@ -148,7 +148,7 @@ impl CallOpBuilder {
 operation! {
     IndirectCallOp {
         name: "indirect_call",
-        dialect: "builtin",
+        dialect: "func",
         format: "custom",
         verifier: "true",
         operands: O {
@@ -181,7 +181,7 @@ impl IndirectCallOp {
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        let header = format!("indirect_call %{}", self.callee().number());
+        let header = format!("func.indirect_call %{}", self.callee().number());
         print_call(
             &context,
             fmt,
@@ -214,7 +214,7 @@ impl IndirectCallOp {
         let result_address = parser.parse_token("result_address");
         let argument_alignments = super::parse_argument_alignments(parser, context)?;
 
-        let state = super::parse_state_clause(parser)?;
+        let state = crate::builtin::parse_state_clause(parser)?;
 
         let mut builder = IndirectCallOpBuilder::new(context)
             .callee(callee)
@@ -339,7 +339,7 @@ fn print_call(
         fmt.write(" result_address")?;
     }
     super::print_argument_alignments(fmt, argument_alignments)?;
-    super::print_state_clause(fmt, state_operand, state_result)?;
+    crate::builtin::print_state_clause(fmt, state_operand, state_result)?;
     fmt.write("\n")
 }
 
@@ -402,7 +402,7 @@ fn parse_ret_type(
 /// Bind the name a parsed `state(... -> %n)` clause gave the state the op produces.
 fn bind_state_result(
     parser: &mut tir::parse::text::Parser,
-    state: &super::StateClause,
+    state: &crate::builtin::StateClause,
     result: Option<ValueId>,
 ) {
     if let (Some(name), Some(result)) = (state.result_name.as_deref(), result) {
@@ -479,7 +479,7 @@ mod tests {
         let block = context.create_block(vec![a]);
         region.add_block(block.id());
 
-        let func = crate::builtin::ops::func(&context, "caller", i32_ty, Some(region.id())).build();
+        let func = crate::func::ops::func(&context, "caller", i32_ty, Some(region.id())).build();
         let func_id = crate::Operation::id(&func);
         let call = super::CallOpBuilder::new(&context)
             .args(vec![a_id])
@@ -492,7 +492,7 @@ mod tests {
         let result = call.result();
         func.body().append_op(call);
         func.body()
-            .append_op(crate::builtin::ops::r#return(&context, result).build());
+            .append_op(crate::func::ops::r#return(&context, result).build());
 
         let def_use = crate::analysis::DefUse::new(&context, func_id);
         assert!(def_use.is_used(a_id.number()));

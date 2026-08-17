@@ -4,7 +4,7 @@
 // fewer values than the op produces fails verification.
 
 module {
-  func @bad(%0: !i1) -> !i32 {
+  func.func @bad(%0: !i1) -> !i32 {
     %1, %2 = scf.if %0 -> !i32, !i64 {
       %3 = constant {value = 7} : !i32
       %4 = constant {value = 8} : !i64
@@ -13,7 +13,7 @@ module {
       %5 = constant {value = 9} : !i32
       scf.yield %5
     }
-    return %1
+    func.return %1
   }
   module_end
 }

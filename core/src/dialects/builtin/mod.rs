@@ -1,8 +1,5 @@
 mod arith;
-mod call;
-mod declare;
 mod float;
-mod func;
 mod module;
 mod state;
 mod tuple;
@@ -10,111 +7,23 @@ mod tuple;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::attributes::AttributeValue;
 use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, Operation, TirType, Type, TypeId, dialect, parse::Span};
+use crate::{Context, Error, IRFormatter, TirType, Type, TypeId, dialect, parse::Span};
 
 use crate as tir;
 
 pub use arith::*;
-pub use call::*;
-pub use declare::*;
 pub use float::*;
-pub use func::*;
 pub use module::*;
 pub use state::*;
 pub use tuple::*;
 
 pub mod ops {
     pub use super::arith::*;
-    pub use super::call::*;
-    pub use super::declare::*;
     pub use super::float::*;
-    pub use super::func::*;
     pub use super::module::*;
     pub use super::state::*;
     pub use super::tuple::*;
-}
-
-fn argument_alignments(op: &impl Operation) -> Vec<u64> {
-    match op.attr("argument_alignments") {
-        Some(AttributeValue::Array(values)) => values
-            .iter()
-            .map(|value| match value {
-                AttributeValue::UInt(value) => *value,
-                AttributeValue::Int(value) if *value >= 0 => *value as u64,
-                _ => 0,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn parse_argument_alignments(
-    parser: &mut tir::parse::text::Parser,
-    context: &Context,
-) -> Result<Option<AttributeValue>, (Span, Error)> {
-    use tir::parse::common::Cursor;
-    if !parser.parse_token("argument_alignments") {
-        return Ok(None);
-    }
-    let value = parser
-        .parse_attribute_value(context)?
-        .ok_or_else(|| (parser.span(), Error::ExpectedToken("alignment list")))?;
-    if !matches!(value, AttributeValue::Array(_)) {
-        return Err((parser.span(), Error::ExpectedToken("alignment list")));
-    }
-    Ok(Some(value))
-}
-
-fn print_argument_alignments(
-    fmt: &mut IRFormatter,
-    alignments: &[u64],
-) -> Result<(), std::fmt::Error> {
-    if alignments.is_empty() {
-        return Ok(());
-    }
-    fmt.write(" argument_alignments [")?;
-    for (index, alignment) in alignments.iter().enumerate() {
-        if index > 0 {
-            fmt.write(", ")?;
-        }
-        fmt.write(alignment.to_string())?;
-    }
-    fmt.write("]")
-}
-
-fn verify_argument_alignments(
-    op: &impl Operation,
-    arguments: usize,
-    operation: &str,
-) -> Result<(), Error> {
-    let Some(attribute) = op.attr("argument_alignments") else {
-        return Ok(());
-    };
-    let AttributeValue::Array(alignments) = attribute else {
-        return Err(Error::VerificationError(format!(
-            "{operation} argument alignments must be an array"
-        )));
-    };
-    if alignments.len() != arguments {
-        return Err(Error::VerificationError(format!(
-            "{operation} argument alignment count must match its arguments"
-        )));
-    }
-    if alignments.iter().any(|alignment| {
-        let alignment = match alignment {
-            AttributeValue::UInt(value) => *value,
-            AttributeValue::Int(value) if *value >= 0 => *value as u64,
-            _ => return true,
-        };
-        !alignment.is_power_of_two()
-    }) {
-        return Err(Error::VerificationError(format!(
-            "{operation} argument alignments must be powers of two"
-        )));
-    }
-    Ok(())
 }
 
 dialect! {
@@ -123,8 +32,6 @@ dialect! {
         operations: [
             ModuleOp,
             ModuleEndOp,
-            FuncOp,
-            ReturnOp,
             ConstantOp,
             AddIOp,
             SubIOp,
@@ -154,12 +61,8 @@ dialect! {
             FPToSIOp,
             FPToUIOp,
             CmpFOp,
-            CallOp,
-            IndirectCallOp,
             MakeTupleOp,
             TupleGetOp,
-            DeclareOp,
-            AddressOfOp,
         ],
         types: [IntegerType, FloatType, IndexType, UnitType, TokenType, TupleType, StateType],
     }

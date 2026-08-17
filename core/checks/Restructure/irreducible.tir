@@ -5,7 +5,7 @@
 // edge wanted — instead of copying either of them.
 
 module {
-  func @irr(%0: !i1, %1: !i32) -> !i32 {
+  func.func @irr(%0: !i1, %1: !i32) -> !i32 {
     cfg.cond_br %0, ^bb1, ^bb2
   ^bb1:
     %2 = addi %1, %1 : !i32
@@ -14,12 +14,12 @@ module {
     %3 = subi %1, %1 : !i32
     cfg.cond_br %0, ^bb1, ^bb3
   ^bb3:
-    return %1
+    func.return %1
   }
   module_end
 }
 
-// CHECK-LABEL: func @irr
+// CHECK-LABEL: func.func @irr
 // CHECK-NOT: br
 // CHECK: scf.while iter_args
 // CHECK: scf.switch %{{[0-9]+}} -> !i32, !i1 case 0 {
@@ -27,4 +27,4 @@ module {
 // CHECK: default {
 // CHECK: subi
 // CHECK: scf.condition
-// CHECK: return
+// CHECK: func.return

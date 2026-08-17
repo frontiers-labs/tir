@@ -14,13 +14,13 @@ fn main() {
     // A straight-line arithmetic kernel — a stand-in for a generated candidate.
     let ir = r#"
         module {
-          func @kernel(%0: !i64) -> !i64 {
+          func.func @kernel(%0: !i64) -> !i64 {
             %1 = muli %0, %0 : !i64
             %2 = addi %1, %0 : !i64
             %c = constant {value = 3} : !i64
             %3 = muli %2, %c : !i64
             %4 = subi %3, %0 : !i64
-            return %4
+            func.return %4
           }
           module_end
         }

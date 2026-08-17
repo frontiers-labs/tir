@@ -12,30 +12,30 @@
 // compatible with an offset-0 value.
 
 module {
-  func @width64(%0: !i64, %1: !i64) -> !i64 {
+  func.func @width64(%0: !i64, %1: !i64) -> !i64 {
     %2 = addi %0, %1 : !i64
-    return %2
+    func.return %2
   }
-  func @width32(%0: !i32, %1: !i32) -> !i32 {
+  func.func @width32(%0: !i32, %1: !i32) -> !i32 {
     %2 = addi %0, %1 : !i32
-    return %2
+    func.return %2
   }
-  func @width16(%0: !i16, %1: !i16) -> !i16 {
+  func.func @width16(%0: !i16, %1: !i16) -> !i16 {
     %2 = subi %0, %1 : !i16
-    return %2
+    func.return %2
   }
-  func @width8(%0: !i8, %1: !i8) -> !i8 {
+  func.func @width8(%0: !i8, %1: !i8) -> !i8 {
     %2 = xori %0, %1 : !i8
-    return %2
+    func.return %2
   }
-  func @const8() -> !i8 {
+  func.func @const8() -> !i8 {
     %0 = constant {value = 7} : !i8
-    return %0
+    func.return %0
   }
-  func @imm(%0: !i32) -> !i32 {
+  func.func @imm(%0: !i32) -> !i32 {
     %1 = constant {value = 5} : !i32
     %2 = addi %0, %1 : !i32
-    return %2
+    func.return %2
   }
   module_end
 }

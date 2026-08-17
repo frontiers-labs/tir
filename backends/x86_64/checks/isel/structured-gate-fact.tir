@@ -6,7 +6,7 @@
 // twice.
 
 module {
-  func @equal_arm(%a: !i64, %b: !i64) -> !i64 {
+  func.func @equal_arm(%a: !i64, %b: !i64) -> !i64 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
     %r = scf.if %c -> !i64 {
       %s = subi %a, %b : !i64
@@ -15,7 +15,7 @@ module {
       %z = constant {value = 0} : !i64
       scf.yield %z
     }
-    return %r
+    func.return %r
   }
   module_end
 }

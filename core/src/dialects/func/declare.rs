@@ -9,7 +9,7 @@ use crate as tir;
 operation! {
     DeclareOp {
         name: "declare",
-        dialect: "builtin",
+        dialect: "func",
         format: "custom",
         verifier: "true",
         interfaces: [Symbol],
@@ -111,7 +111,7 @@ impl DeclareOp {
             Visibility::Private => " private",
             Visibility::Public => "",
         };
-        fmt.write(format!("declare{visibility} @{}", self.sym_name()))?;
+        fmt.write(format!("func.declare{visibility} @{}", self.sym_name()))?;
         let (Some(arg_types), Some(ret_type)) = (self.arg_types(), self.ret_type()) else {
             return fmt.write("\n");
         };
@@ -185,7 +185,7 @@ impl DeclareOp {
 operation! {
     AddressOfOp {
         name: "addr_of",
-        dialect: "builtin",
+        dialect: "func",
         verifier: "true",
         attributes: A {
             sym_name: "Str",

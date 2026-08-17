@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::analysis::AnalysisManager;
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes};
 use crate::analysis::slots::collect_slots;
-use crate::builtin::{CallOp, FuncOp, IndirectCallOp, ReturnOp, StateType};
+use crate::builtin::StateType;
+use crate::func::{CallOp, FuncOp, IndirectCallOp, ReturnOp};
 use crate::ptr::MemcpyOp;
 use crate::state::EntryStateOpBuilder;
 use crate::{

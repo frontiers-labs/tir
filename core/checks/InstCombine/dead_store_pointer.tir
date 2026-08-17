@@ -6,15 +6,15 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func @f(%0: !ptr.p<!ptr.p<!i32>>, %1: !ptr.p<!i32>, %2: !ptr.p<!i32>) {
+  func.func @f(%0: !ptr.p<!ptr.p<!i32>>, %1: !ptr.p<!i32>, %2: !ptr.p<!i32>) {
     %3 = state.entry_state : !state
     ptr.store %1, %0 state(%3 -> %4)
     ptr.store %2, %0 state(%4 -> %5)
-    return state(%5)
+    func.return state(%5)
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK-NOT: ptr.store %1,
 // CHECK: ptr.store %2,

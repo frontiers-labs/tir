@@ -1,9 +1,9 @@
 // RUN: not tir opt --verify %s
 
 module {
-  func @bad(%0: !ptr.p, %1: !i32, %2: !i64) {
+  func.func @bad(%0: !ptr.p, %1: !i32, %2: !i64) {
     ptr.memset %0, %1, %2
-    return
+    func.return
   }
   module_end
 }

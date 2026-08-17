@@ -1,8 +1,8 @@
 // RUN: not tir opt --verify %s
 
 module {
-  func @bad(%0: !i64) result_address {
-    return
+  func.func @bad(%0: !i64) result_address {
+    func.return
   }
   module_end
 }

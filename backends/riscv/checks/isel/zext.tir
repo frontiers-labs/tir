@@ -6,13 +6,13 @@
 // (0xffff does not encode, so i16 lowers through slli/srli).
 
 module {
-  func @z8(%0: !i8) -> !i64 {
+  func.func @z8(%0: !i8) -> !i64 {
     %1 = extui %0 : !i64
-    return %1
+    func.return %1
   }
-  func @z16(%0: !i16) -> !i64 {
+  func.func @z16(%0: !i16) -> !i64 {
     %1 = extui %0 : !i64
-    return %1
+    func.return %1
   }
   module_end
 }

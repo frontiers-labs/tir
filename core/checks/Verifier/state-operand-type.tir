@@ -1,9 +1,9 @@
 // RUN: not tir opt --verify %s
 
 module {
-  func @bad(%0: !ptr.p, %1: !i32) {
+  func.func @bad(%0: !ptr.p, %1: !i32) {
     %2 = ptr.load %0 : !i32 state(%1)
-    return
+    func.return
   }
   module_end
 }

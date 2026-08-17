@@ -4,7 +4,7 @@
 // yielded values and n results.
 
 module {
-  func @loop(%0: !index, %1: !index, %2: !index) -> !i32 {
+  func.func @loop(%0: !index, %1: !index, %2: !index) -> !i32 {
     %3 = constant {value = 0} : !i32
     %4 = constant {value = 1} : !i64
     %5, %6 = scf.for %0, %1, %2 iter_args(%7 = %3, %8 = %4) -> !i32, !i64 {
@@ -12,7 +12,7 @@ module {
       %10 = addi %8, %4 : !i64
       scf.yield %9, %10
     }
-    return %5
+    func.return %5
   }
   module_end
 }

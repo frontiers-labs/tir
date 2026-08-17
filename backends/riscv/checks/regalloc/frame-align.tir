@@ -1,14 +1,14 @@
 // RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
 
-// The call preserves the return address in a single callee-saved register (s1 =
+// The call preserves the func.return address in a single callee-saved register (s1 =
 // x9), a lone 8-byte spill slot. The RISC-V psABI requires 16-byte stack
 // alignment, so the frame is rounded up from 8 to 16 bytes.
 
 module {
-  declare @ext(!i64) -> !i64
-  func @f(%0: !i64) -> !i64 {
-    %1 = call @ext(%0 : !i64) -> !i64
-    return %1
+  func.declare @ext(!i64) -> !i64
+  func.func @f(%0: !i64) -> !i64 {
+    %1 = func.call @ext(%0 : !i64) -> !i64
+    func.return %1
   }
   module_end
 }

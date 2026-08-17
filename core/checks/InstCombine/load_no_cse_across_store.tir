@@ -1,20 +1,20 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 // The store publishes a new state, so the second load reads a different one and
 // is a different term. The difference must stay.
 
 module {
-  func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
+  func.func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
     %2 = state.entry_state : !state
     %3 = ptr.load %0 : !i32 state(%2 -> %4)
     ptr.store %1, %0 state(%4 -> %5)
     %6 = ptr.load %0 : !i32 state(%5)
     %7 = subi %3, %6 : !i32
-    return %7
+    func.return %7
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: subi

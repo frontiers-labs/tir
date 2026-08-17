@@ -4,7 +4,7 @@
 // beside it, so the arms yield their value first and the state they leave second.
 
 module {
-  func @h(%0: !i1, %1: !i32) -> !i32 {
+  func.func @h(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     %3 = scf.if %0 -> !i32 {
@@ -13,12 +13,12 @@ module {
     } else {
       scf.yield %1
     }
-    return %3
+    func.return %3
   }
   module_end
 }
 
-// CHECK-LABEL: func @h
+// CHECK-LABEL: func.func @h
 // CHECK: %[[VALUE:[0-9]+]], %{{[0-9]+}} = scf.if %0 args(%{{[0-9]+}}) -> !i32, !state (%[[T:[0-9]+]]) {
 // CHECK-NEXT: %[[READ:[0-9]+]] = ptr.load %{{[0-9]+}} : !i32 state(%[[T]] -> %[[T1:[0-9]+]])
 // CHECK-NEXT: scf.yield %[[READ]], %[[T1]]
@@ -26,4 +26,4 @@ module {
 // CHECK-NEXT: else (%[[E:[0-9]+]]) {
 // CHECK-NEXT: scf.yield %1, %[[E]]
 // CHECK-NEXT: }
-// CHECK-NEXT: return %[[VALUE]]
+// CHECK-NEXT: func.return %[[VALUE]]

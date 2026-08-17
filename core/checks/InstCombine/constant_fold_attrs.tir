@@ -4,15 +4,15 @@
 // operands like any other: the search index must key on the attributes too.
 
 module {
-  func @f() -> !i1 {
+  func.func @f() -> !i1 {
     %0 = constant {value = 2} : !i32
     %1 = constant {value = 3} : !i32
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
-    return %2
+    func.return %2
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK-NOT: cmpi
 // CHECK: constant {value = 1}

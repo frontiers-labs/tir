@@ -1,21 +1,21 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 // Both arms of the scf.if yield the same value, so its result (a gamma gate) folds to
 // that value regardless of the condition. The side-effecting if is left in place.
 
 module {
-  func @f(%c: !i1, %k: !i32) -> !i32 {
+  func.func @f(%c: !i1, %k: !i32) -> !i32 {
     %r = scf.if %c -> !i32 {
       scf.yield %k
     } else {
       scf.yield %k
     }
-    return %r
+    func.return %r
   }
   module_end
 }
 
-// CHECK-LABEL: func @f(%{{[0-9]+}}: !i1, %[[K:[0-9]+]]: !i32)
+// CHECK-LABEL: func.func @f(%{{[0-9]+}}: !i1, %[[K:[0-9]+]]: !i32)
 // CHECK: scf.if
-// CHECK: return %[[K]]
+// CHECK: func.return %[[K]]

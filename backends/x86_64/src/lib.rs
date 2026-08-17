@@ -164,7 +164,7 @@ mod isa {
         op: &tir::OperationRef,
         rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
-        use tir::builtin::AddressOfOp;
+        use tir::func::AddressOfOp;
 
         let Some(addr_of) = op.as_op::<AddressOfOp>() else {
             return Ok(false);

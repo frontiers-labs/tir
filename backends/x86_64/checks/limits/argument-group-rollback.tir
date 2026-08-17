@@ -4,14 +4,14 @@
 // registers, so the following scalar still arrives in rdi.
 
 module {
-  func @sum_large_and_scalar(%0: !tuple<!i64, !i64, !i64>, %1: !i64) -> !i64 {
+  func.func @sum_large_and_scalar(%0: !tuple<!i64, !i64, !i64>, %1: !i64) -> !i64 {
     %2 = tuple_get %0 {index = 0} : !i64
     %3 = tuple_get %0 {index = 1} : !i64
     %4 = tuple_get %0 {index = 2} : !i64
     %5 = addi %2, %3 : !i64
     %6 = addi %5, %4 : !i64
     %7 = addi %6, %1 : !i64
-    return %7
+    func.return %7
   }
   module_end
 }

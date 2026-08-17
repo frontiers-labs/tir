@@ -6,10 +6,10 @@
 // block that forwards %1, the fallthrough forwards %2.
 
 module {
-  func @pick(%0: !i1, %1: !i64, %2: !i64) -> !i64 {
+  func.func @pick(%0: !i1, %1: !i64, %2: !i64) -> !i64 {
     cfg.cond_br %0, ^bb1(%1 : !i64), ^bb1(%2 : !i64)
   ^bb1(%3: !i64):
-    return %3
+    func.return %3
   }
   module_end
 }

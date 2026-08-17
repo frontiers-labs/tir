@@ -7,7 +7,7 @@ module {
     spirv.Capability {name = "Kernel"}
     spirv.EntryPoint {execution_model = "Kernel", function = "square", interfaces = []}
     spirv.ExecutionMode {function = "square", mode = "LocalSize", values = [64, 1, 1]}
-    func @square(%0: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %1: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %2: !i64) {
+    func.func @square(%0: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %1: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %2: !i64) {
       %3 = spirv.AccessChain %0, %2 : !spirv.ptr<!f32, CrossWorkgroup>
       %4 = spirv.AccessChain %1, %2 : !spirv.ptr<!f32, CrossWorkgroup>
       %5 = spirv.Load %3 : !f32
@@ -24,7 +24,7 @@ module {
 // CHECK-NEXT: spirv.Capability {name = "Kernel"}
 // CHECK-NEXT: spirv.EntryPoint {execution_model = "Kernel", function = "square", interfaces = []}
 // CHECK-NEXT: spirv.ExecutionMode {function = "square", mode = "LocalSize", values = [64, 1, 1]}
-// CHECK-NEXT: func @square(%[[IN:[0-9]+]]: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %[[OUT:[0-9]+]]: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %[[IDX:[0-9]+]]: !i64) {
+// CHECK-NEXT: func.func @square(%[[IN:[0-9]+]]: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %[[OUT:[0-9]+]]: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %[[IDX:[0-9]+]]: !i64) {
 // CHECK-NEXT: %[[IP:[0-9]+]] = spirv.AccessChain %[[IN]], %[[IDX]] : !spirv.ptr<!f32, CrossWorkgroup>
 // CHECK-NEXT: %[[OP:[0-9]+]] = spirv.AccessChain %[[OUT]], %[[IDX]] : !spirv.ptr<!f32, CrossWorkgroup>
 // CHECK-NEXT: %[[VALUE:[0-9]+]] = spirv.Load %[[IP]] : !f32
@@ -35,7 +35,7 @@ module {
 // IMPORT-NEXT: spirv.Capability {name = "Kernel"}
 // IMPORT-NEXT: spirv.EntryPoint {execution_model = "Kernel", function = "square", interfaces = []}
 // IMPORT-NEXT: spirv.ExecutionMode {function = "square", mode = "LocalSize", values = [64, 1, 1]}
-// IMPORT-NEXT: func @square(%[[IN:[0-9]+]]: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %[[OUT:[0-9]+]]: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %[[IDX:[0-9]+]]: !i64) {
+// IMPORT-NEXT: func.func @square(%[[IN:[0-9]+]]: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %[[OUT:[0-9]+]]: !spirv.ptr<!spirv.rtarray<!f32, stride=4>, CrossWorkgroup>, %[[IDX:[0-9]+]]: !i64) {
 // IMPORT-NEXT: %[[IP:[0-9]+]] = spirv.AccessChain %[[IN]], %[[IDX]] : !spirv.ptr<!f32, CrossWorkgroup>
 // IMPORT-NEXT: %[[OP:[0-9]+]] = spirv.AccessChain %[[OUT]], %[[IDX]] : !spirv.ptr<!f32, CrossWorkgroup>
 // IMPORT-NEXT: %[[VALUE:[0-9]+]] = spirv.Load %[[IP]] : !f32

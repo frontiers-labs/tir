@@ -1,21 +1,21 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 // A loop carries no reasoning yet — its port is an anchor — but its body is read
 // like any other region, so `muli %6, 2` there becomes a shift.
 
 module {
-  func @f(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
+  func.func @f(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
     %5 = scf.for %0, %1, %2 iter_args(%6 = %3) -> !i32 {
       %7 = constant {value = 2} : !i32
       %8 = muli %6, %7 : !i32
       scf.yield %8
     }
-    return %5
+    func.return %5
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK-NOT: muli
 // CHECK: shli

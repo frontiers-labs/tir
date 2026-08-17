@@ -3,13 +3,13 @@
 // SysV aggregate groups larger than two eightbytes arrive entirely in memory.
 
 module {
-  func @sum_large(%0: !tuple<!i64, !i64, !i64>) -> !i64 {
+  func.func @sum_large(%0: !tuple<!i64, !i64, !i64>) -> !i64 {
     %1 = tuple_get %0 {index = 0} : !i64
     %2 = tuple_get %0 {index = 1} : !i64
     %3 = tuple_get %0 {index = 2} : !i64
     %4 = addi %1, %2 : !i64
     %5 = addi %4, %3 : !i64
-    return %5
+    func.return %5
   }
   module_end
 }

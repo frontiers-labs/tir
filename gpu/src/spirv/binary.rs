@@ -2,10 +2,9 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 
 use tir::attributes::AttributeValue;
-use tir::builtin::{
-    FloatType, FuncOp, IntegerType, ModuleOp as BuiltinModuleOp, UnitType, ops as bops,
-};
+use tir::builtin::{FloatType, IntegerType, ModuleOp as BuiltinModuleOp, UnitType, ops as bops};
 use tir::cfg::ops as cbops;
+use tir::func::{FuncOp, ops as func_ops};
 use tir::vector::VectorType;
 use tir::{BlockHandle, BlockId, Context, Operation, TypeId, ValueId};
 
@@ -909,7 +908,7 @@ impl<'a> Reader<'a> {
                 self.values.insert(spirv_id, value);
             }
         }
-        Ok(bops::func(self.context, name.as_str(), return_type, Some(region.id())).build())
+        Ok(func_ops::func(self.context, name.as_str(), return_type, Some(region.id())).build())
     }
 
     fn type_ref(&self, id: u32) -> Result<TypeId> {

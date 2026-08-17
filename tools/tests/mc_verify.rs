@@ -15,7 +15,7 @@ fn mc_rejects_undefined_value_without_panicking() {
         .stdin
         .as_mut()
         .expect("stdin")
-        .write_all(b"module { func @f() -> !i64 { return %99 } module_end }")
+        .write_all(b"module { func.func @f() -> !i64 { func.return %99 } module_end }")
         .expect("write input");
 
     let output = child.wait_with_output().expect("wait for tir");

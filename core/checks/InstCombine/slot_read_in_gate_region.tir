@@ -6,7 +6,7 @@
 // arm asks for the value — and the slot is left unread, so the sweep takes it.
 
 module {
-  func @forward(%0: !i1, %1: !i32) -> !i32 {
+  func.func @forward(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.if %0 {
@@ -16,12 +16,12 @@ module {
     } else {
       scf.yield
     }
-    return %1
+    func.return %1
   }
   module_end
 }
 
-// CHECK-LABEL: func @forward
+// CHECK-LABEL: func.func @forward
 // CHECK-NOT: ptr.
 // CHECK: scf.if %0 {
 // CHECK-NEXT: addi %1, %1

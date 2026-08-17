@@ -9,7 +9,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func @stored_pointer(%0: !i32, %1: !i32) -> !i32 {
+  func.func @stored_pointer(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %2
     %3 = ptr.alloca {size = 8, align = 8} : !ptr.p<!ptr.p<!i32>>
@@ -17,11 +17,11 @@ module {data_layout = #data_layout} {
     %4 = ptr.load %3 : !ptr.p<!i32>
     ptr.store %1, %4
     %5 = ptr.load %2 : !i32
-    return %5
+    func.return %5
   }
   module_end
 }
 
-// CHECK-LABEL: func @stored_pointer
+// CHECK-LABEL: func.func @stored_pointer
 // CHECK-NOT: ptr.load
-// CHECK: return %1
+// CHECK: func.return %1

@@ -3,9 +3,9 @@
 // Taking the address of a symbol the module does not define is an error.
 
 module {
-  func @f() -> !ptr.p {
-    %0 = addr_of {sym_name = "missing"} : !ptr.p
-    return %0
+  func.func @f() -> !ptr.p {
+    %0 = func.addr_of {sym_name = "missing"} : !ptr.p
+    func.return %0
   }
   module_end
 }

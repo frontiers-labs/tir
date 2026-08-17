@@ -7,7 +7,7 @@
 // available because the gate names it later.
 
 module {
-  func @adopt(%p: !ptr.p, %c: !i1) -> !i32 {
+  func.func @adopt(%p: !ptr.p, %c: !i1) -> !i32 {
     %v = ptr.load %p : !i8
     %z = extui %v : !i32
     %g = scf.if %c -> !i8 {
@@ -17,7 +17,7 @@ module {
     }
     %w = extui %g : !i32
     %s = addi %z, %w : !i32
-    return %s
+    func.return %s
   }
   module_end
 }

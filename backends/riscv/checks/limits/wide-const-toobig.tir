@@ -5,9 +5,9 @@
 // decomposition selects (128 << 12) << 12 == 0x80000000.
 
 module {
-  func @too_big() -> !i64 {
+  func.func @too_big() -> !i64 {
     %0 = constant {value = 2147483648} : !i64
-    return %0
+    func.return %0
   }
   module_end
 }

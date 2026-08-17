@@ -7,15 +7,15 @@
 // bits, so selection must refuse instead of miscompiling.
 
 module {
-  func @pick(%0: !i32, %1: !i32) -> !i32 {
+  func.func @pick(%0: !i32, %1: !i32) -> !i32 {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
     %3 = constant {value = 1} : !i32
-    return %3
+    func.return %3
   ^bb2:
     %4 = constant {value = 0} : !i32
-    return %4
+    func.return %4
   }
   module_end
 }

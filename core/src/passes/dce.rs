@@ -13,7 +13,7 @@ use crate::analysis::{DefUse, RegRef, op_regs};
 use crate::backend::SymbolOp;
 use crate::{
     AnalysisManager, ConstantLike, Context, MemoryWrite, OpHandle, OperationRef, Pass, PassError,
-    PassTarget, Rewriter, Terminator, builtin::FuncOp,
+    PassTarget, Rewriter, Terminator, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -140,6 +140,7 @@ mod tests {
     use crate::{
         Context, Operation, PassManager,
         builtin::{IntegerType, ops},
+        func::ops as func_ops,
     };
 
     use super::DeadCodeEliminationPass;
@@ -154,7 +155,7 @@ mod tests {
         let arg_id = arg.id();
         let block = context.create_block(vec![arg]);
         region.add_block(block.id());
-        let func = ops::func(&context, "f", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "f", i32, Some(region.id())).build();
 
         let b = block;
         // A dead chain: the constant feeds only the add, which feeds nothing.
@@ -162,13 +163,13 @@ mod tests {
         let dead = b.append_op(ops::addi(&context, arg_id, c.result(), i32).build());
         // An effectful op with an unread result must survive.
         let call = b.append_op(
-            crate::builtin::CallOpBuilder::new(&context)
+            crate::func::CallOpBuilder::new(&context)
                 .args(vec![arg_id])
                 .attr("callee", crate::attributes::AttributeValue::Str("g".into()))
                 .result_type(i32)
                 .build(),
         );
-        b.append_op(ops::r#return(&context, arg_id).build());
+        b.append_op(func_ops::r#return(&context, arg_id).build());
 
         let mut pm = PassManager::new();
         pm.add_pass(DeadCodeEliminationPass::new());

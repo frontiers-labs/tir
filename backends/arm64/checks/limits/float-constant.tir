@@ -2,9 +2,9 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s --check-prefix=ISEL
 
 module {
-  func @f() -> !f64 {
+  func.func @f() -> !f64 {
     %0 = constantf {value = 1.5} : !f64
-    return %0
+    func.return %0
   }
   module_end
 }

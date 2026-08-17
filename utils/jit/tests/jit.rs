@@ -11,9 +11,9 @@ use tir_jit::Jit;
 fn add_two_integers() {
     let ir = r#"
         module {
-          func @add(%0: !i64, %1: !i64) -> !i64 {
+          func.func @add(%0: !i64, %1: !i64) -> !i64 {
             %2 = addi %0, %1 : !i64
-            return %2
+            func.return %2
           }
           module_end
         }
@@ -30,11 +30,11 @@ fn add_two_integers() {
 fn arithmetic_chain() {
     let ir = r#"
         module {
-          func @chain(%0: !i64, %1: !i64) -> !i64 {
+          func.func @chain(%0: !i64, %1: !i64) -> !i64 {
             %2 = addi %0, %1 : !i64
             %3 = subi %0, %2 : !i64
             %4 = muli %3, %1 : !i64
-            return %4
+            func.return %4
           }
           module_end
         }
@@ -53,12 +53,12 @@ fn multiply_by_constant() {
     // Exercises the immediate-multiply form (`imul r, r/m, imm`).
     let ir = r#"
         module {
-          func @scale(%0: !i64) -> !i64 {
+          func.func @scale(%0: !i64) -> !i64 {
             %1 = constant {value = 7} : !i64
             %2 = muli %0, %1 : !i64
             %3 = constant {value = -3} : !i64
             %4 = muli %2, %3 : !i64
-            return %4
+            func.return %4
           }
           module_end
         }
@@ -76,9 +76,9 @@ fn multiply_by_constant() {
 fn multiply_registers() {
     let ir = r#"
         module {
-          func @mul(%0: !i64, %1: !i64) -> !i64 {
+          func.func @mul(%0: !i64, %1: !i64) -> !i64 {
             %2 = muli %0, %1 : !i64
-            return %2
+            func.return %2
           }
           module_end
         }
@@ -97,15 +97,15 @@ fn conditional_branch() {
     // returns 1 when a < b, else 0.
     let ir = r#"
         module {
-          func @lt(%0: !i64, %1: !i64) -> !i64 {
+          func.func @lt(%0: !i64, %1: !i64) -> !i64 {
             %2 = cmpi %0, %1 {predicate = "slt"} : !i1
             cfg.cond_br %2, ^bb1, ^bb2
           ^bb1:
             %3 = constant {value = 1} : !i64
-            return %3
+            func.return %3
           ^bb2:
             %4 = constant {value = 0} : !i64
-            return %4
+            func.return %4
           }
           module_end
         }
@@ -127,17 +127,17 @@ fn value_live_across_branch() {
     // CFG successors in liveness) returns a clobbered value.
     let ir = r#"
         module {
-          func @cross(%0: !i64, %1: !i64) -> !i64 {
+          func.func @cross(%0: !i64, %1: !i64) -> !i64 {
             %v = addi %0, %1 : !i64
             %c = cmpi %0, %1 {predicate = "slt"} : !i1
             cfg.cond_br %c, ^bb1, ^bb2
           ^bb1:
             %t = addi %0, %0 : !i64
             %r = addi %v, %t : !i64
-            return %r
+            func.return %r
           ^bb2:
             %s = addi %1, %1 : !i64
-            return %s
+            func.return %s
           }
           module_end
         }
@@ -162,8 +162,8 @@ fn returns_first_argument_directly() {
     // with a copy into the return register.
     let ir = r#"
         module {
-          func @first(%0: !i64, %1: !i64) -> !i64 {
-            return %0
+          func.func @first(%0: !i64, %1: !i64) -> !i64 {
+            func.return %0
           }
           module_end
         }
@@ -184,7 +184,7 @@ fn block_argument_diamond() {
     // single consistently-colored parameter regardless of the path taken.
     let ir = r#"
         module {
-          func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
+          func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
             %cond = cmpi %c, %d {predicate = "slt"} : !i1
             cfg.cond_br %cond, ^bb1, ^bb2
           ^bb1:
@@ -192,7 +192,7 @@ fn block_argument_diamond() {
           ^bb2:
             cfg.br ^bb3(%b : !i64)
           ^bb3(%r: !i64):
-            return %r
+            func.return %r
           }
           module_end
         }
@@ -212,7 +212,7 @@ fn block_argument_diamond() {
 fn loop_carried_block_argument() {
     let ir = r#"
         module {
-          func @count(%limit: !i64) -> !i64 {
+          func.func @count(%limit: !i64) -> !i64 {
             %zero = constant {value = 0} : !i64
             cfg.br ^bb1(%zero : !i64)
           ^bb1(%iv: !i64):
@@ -223,7 +223,7 @@ fn loop_carried_block_argument() {
             %next = addi %iv, %one : !i64
             cfg.br ^bb1(%next : !i64)
           ^bb3:
-            return %iv
+            func.return %iv
           }
           module_end
         }
@@ -243,7 +243,7 @@ fn loop_accumulator_in_a_slot() {
     // result pins what the mid-end does to a slot a loop carries.
     let ir = r#"
         module {
-          func @sum(%limit: !i64) -> !i64 {
+          func.func @sum(%limit: !i64) -> !i64 {
             %acc = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
             %zero = constant {value = 0} : !i64
             ptr.store %zero, %acc
@@ -260,7 +260,7 @@ fn loop_accumulator_in_a_slot() {
             cfg.br ^bb1(%next : !i64)
           ^bb3:
             %total = ptr.load %acc : !i64
-            return %total
+            func.return %total
           }
           module_end
         }
@@ -283,13 +283,13 @@ fn conditional_edge_arguments() {
     // to a copy into the merge parameter's register.
     let ir = r#"
         module {
-          func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
+          func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
             %cond = cmpi %c, %d {predicate = "slt"} : !i1
             cfg.cond_br %cond, ^bb1(%a : !i64), ^bb2(%b : !i64)
           ^bb1(%x: !i64):
-            return %x
+            func.return %x
           ^bb2(%y: !i64):
-            return %y
+            func.return %y
           }
           module_end
         }
@@ -314,10 +314,10 @@ fn external_host_call() {
     // The call is the tail expression: nothing is live across it.
     let ir = r#"
         module {
-          declare @host_triple(!i64) -> !i64
-          func @via_host(%0: !i64) -> !i64 {
-            %1 = call @host_triple(%0 : !i64) -> !i64
-            return %1
+          func.declare @host_triple(!i64) -> !i64
+          func.func @via_host(%0: !i64) -> !i64 {
+            %1 = func.call @host_triple(%0 : !i64) -> !i64
+            func.return %1
           }
           module_end
         }
@@ -341,12 +341,12 @@ fn value_live_across_host_call() {
     // address saved across the call rides the same mechanism).
     let ir = r#"
         module {
-          declare @host_triple(!i64) -> !i64
-          func @f(%0: !i64) -> !i64 {
+          func.declare @host_triple(!i64) -> !i64
+          func.func @f(%0: !i64) -> !i64 {
             %a = addi %0, %0 : !i64
-            %1 = call @host_triple(%a : !i64) -> !i64
+            %1 = func.call @host_triple(%a : !i64) -> !i64
             %2 = addi %a, %1 : !i64
-            return %2
+            func.return %2
           }
           module_end
         }
@@ -368,15 +368,15 @@ fn value_live_across_host_call() {
 fn aarch64_cross_load() {
     let branch = r#"
         module {
-          func @lt(%0: !i64, %1: !i64) -> !i64 {
+          func.func @lt(%0: !i64, %1: !i64) -> !i64 {
             %2 = cmpi %0, %1 {predicate = "slt"} : !i1
             cfg.cond_br %2, ^bb1, ^bb2
           ^bb1:
             %3 = constant {value = 1} : !i64
-            return %3
+            func.return %3
           ^bb2:
             %4 = constant {value = 0} : !i64
-            return %4
+            func.return %4
           }
           module_end
         }
@@ -387,10 +387,10 @@ fn aarch64_cross_load() {
 
     let external = r#"
         module {
-          declare @host_triple(!i64) -> !i64
-          func @via_host(%0: !i64) -> !i64 {
-            %1 = call @host_triple(%0 : !i64) -> !i64
-            return %1
+          func.declare @host_triple(!i64) -> !i64
+          func.func @via_host(%0: !i64) -> !i64 {
+            %1 = func.call @host_triple(%0 : !i64) -> !i64
+            func.return %1
           }
           module_end
         }

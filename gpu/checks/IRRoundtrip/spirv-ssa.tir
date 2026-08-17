@@ -10,7 +10,7 @@ module {
     %2 = spirv.GlobalVariable {sym_name = "output", storage_class = "StorageBuffer", decorations = {descriptor_set = 0, binding = 1}} : !spirv.ptr<!spirv.rtarray<!f32, stride=4>, StorageBuffer>
     spirv.EntryPoint {execution_model = "GLCompute", function = "square", interfaces = ["global_id", "input", "output"]}
     spirv.ExecutionMode {function = "square", mode = "LocalSize", values = [64, 1, 1]}
-    func @square() {
+    func.func @square() {
       %3 = spirv.Load %0 : !vector.vec<3xi32>
       %4 = spirv.CompositeExtract %3 {indices = [0]} : !i32
       %5 = spirv.AccessChain %1, %4 : !spirv.ptr<!f32, StorageBuffer>
@@ -29,7 +29,7 @@ module {
 // CHECK-NEXT: spirv.Capability {name = "Shader"}
 // CHECK-NEXT: %[[GID:[0-9]+]] = spirv.GlobalVariable {sym_name = "global_id", storage_class = "Input", decorations = {builtin = "GlobalInvocationId"}} : !spirv.ptr<!vector.vec<3xi32>, Input>
 // CHECK: spirv.EntryPoint {execution_model = "GLCompute", function = "square", interfaces = ["global_id", "input", "output"]}
-// CHECK: func @square() {
+// CHECK: func.func @square() {
 // CHECK-NEXT: %[[VEC:[0-9]+]] = spirv.Load %[[GID]] : !vector.vec<3xi32>
 // CHECK-NEXT: %[[IDX:[0-9]+]] = spirv.CompositeExtract %[[VEC]] {indices = [0]} : !i32
 // CHECK: %[[VALUE:[0-9]+]] = spirv.Load %{{[0-9]+}} : !f32
@@ -39,7 +39,7 @@ module {
 // IMPORT-NEXT: spirv.Capability {name = "Shader"}
 // IMPORT-NEXT: %[[GID:[0-9]+]] = spirv.GlobalVariable {sym_name = "global_id", storage_class = "Input", decorations = {builtin = "GlobalInvocationId"}} : !spirv.ptr<!vector.vec<3xi32>, Input>
 // IMPORT: spirv.EntryPoint {execution_model = "GLCompute", function = "square", interfaces = ["global_id", "input", "output"]}
-// IMPORT: func @square() {
+// IMPORT: func.func @square() {
 // IMPORT-NEXT: %[[VEC:[0-9]+]] = spirv.Load %[[GID]] : !vector.vec<3xi32>
 // IMPORT-NEXT: %[[IDX:[0-9]+]] = spirv.CompositeExtract %[[VEC]] {indices = [0]} : !i32
 // IMPORT: %[[VALUE:[0-9]+]] = spirv.Load %{{[0-9]+}} : !f32

@@ -1,7 +1,7 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
 
 module {
-  func @crc_bit_branch(%0: !ptr.p<!i16>) -> !i64 {
+  func.func @crc_bit_branch(%0: !ptr.p<!i16>) -> !i64 {
     %1 = ptr.alloca {size = 1, align = 1} : !ptr.p<!i8>
     %2 = ptr.load %0 : !i16
     %3 = extsi %2 : !i32
@@ -18,22 +18,22 @@ module {
     cfg.cond_br %12, ^bb1, ^bb2
   ^bb1:
     %13 = constant {value = 1} : !i64
-    return %13
+    func.return %13
   ^bb2:
     %14 = constant {value = 0} : !i64
-    return %14
+    func.return %14
   }
 
-  func @crc_shift_u16(%0: !i16) -> !i16 {
+  func.func @crc_shift_u16(%0: !i16) -> !i16 {
     %1 = constant {value = 1} : !i16
     %2 = shrui %0, %1 : !i16
-    return %2
+    func.return %2
   }
 
-  func @crc_shift_u8(%0: !i8) -> !i8 {
+  func.func @crc_shift_u8(%0: !i8) -> !i8 {
     %1 = constant {value = 1} : !i8
     %2 = shrui %0, %1 : !i8
-    return %2
+    func.return %2
   }
 
   module_end

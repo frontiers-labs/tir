@@ -7,30 +7,30 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func @below(%0: !ptr.p, %1: !ptr.p) -> !i64 {
+  func.func @below(%0: !ptr.p, %1: !ptr.p) -> !i64 {
     %2 = ptr.cmp %0, %1 {predicate = "ult"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
     %3 = constant {value = 1} : !i64
-    return %3
+    func.return %3
   ^bb2:
     %4 = constant {value = 0} : !i64
-    return %4
+    func.return %4
   }
   // CHECK: asm.symbol {name = "below"
   // CHECK: x86_64.cmp {dst = %virt10:GPR, src = %virt11:GPR}
   // CHECK-NEXT: x86_64.jb {imm = ^bb1}
 
-  func @is_null(%0: !ptr.p) -> !i64 {
+  func.func @is_null(%0: !ptr.p) -> !i64 {
     %1 = ptr.null : !ptr.p
     %2 = ptr.cmp %0, %1 {predicate = "eq"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
     %3 = constant {value = 1} : !i64
-    return %3
+    func.return %3
   ^bb2:
     %4 = constant {value = 0} : !i64
-    return %4
+    func.return %4
   }
   // CHECK: asm.symbol {name = "is_null"
   // CHECK: x86_64.cmp_imm8s {dst = %virt{{[0-9]+}}:GPR, imm = 0}

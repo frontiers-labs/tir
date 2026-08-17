@@ -6,10 +6,10 @@
 // view's source is neither in a register there nor extracted there — so the
 // constant must still be
 // materialized. Treating a view as unconditionally available left the class
-// with no instruction and the return reading an undefined value.
+// with no instruction and the func.return reading an undefined value.
 
 module {
-  func @demanded_low_view_constant(%0: !i64) -> !i32 {
+  func.func @demanded_low_view_constant(%0: !i64) -> !i32 {
     %1 = constant {value = 32} : !i64
     %2 = shrui %0, %1 : !i64
     %3 = trunci %2 : !i32
@@ -18,10 +18,10 @@ module {
     cfg.cond_br %5, ^bb1, ^bb2
   ^bb1:
     %6 = constant {value = 3} : !i32
-    return %6
+    func.return %6
   ^bb2:
     %7 = constant {value = 0} : !i32
-    return %7
+    func.return %7
   }
   module_end
 }

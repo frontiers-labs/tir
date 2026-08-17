@@ -5,7 +5,7 @@
 // behind is the memory it was given whenever that arm runs.
 
 module {
-  func @h(%0: !i1, %1: !i32) -> !i32 {
+  func.func @h(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.if %0 {
@@ -15,12 +15,12 @@ module {
       scf.yield
     }
     %3 = ptr.load %2 : !i32
-    return %3
+    func.return %3
   }
   module_end
 }
 
-// CHECK-LABEL: func @h
+// CHECK-LABEL: func.func @h
 // CHECK: %[[GATE:[0-9]+]] = scf.if %0 args(%[[IN:[0-9]+]]) -> !state (%[[T:[0-9]+]]) {
 // CHECK-NEXT: ptr.store %1, %{{[0-9]+}} state(%[[T]] -> %[[T1:[0-9]+]])
 // CHECK-NEXT: scf.yield %[[T1]]

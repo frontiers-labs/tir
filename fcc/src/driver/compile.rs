@@ -85,7 +85,7 @@ fn restructure(context: &tir::Context, module: &tir::builtin::ModuleOp) {
     use tir::Operation;
 
     let mut pm = tir::PassManager::new();
-    pm.nest::<tir::builtin::FuncOp>()
+    pm.nest::<tir::func::FuncOp>()
         .add_pass(tir::passes::RestructurePass::new());
     pm.run(context, context.get_op(module.id()))
         .unwrap_or_else(|e| {
@@ -175,7 +175,7 @@ pub(super) fn emit_machine_code(
 
     let mut pm = tir::PassManager::new();
     pm.add_pass(crate::passes::LowerCirStructsPass::new());
-    let function_pipeline = pm.nest::<tir::builtin::FuncOp>();
+    let function_pipeline = pm.nest::<tir::func::FuncOp>();
     function_pipeline.add_pass(crate::passes::LowerCirControlFlowPass::new());
     function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
     function_pipeline.add_pass(tir::passes::InstCombinePass::new());

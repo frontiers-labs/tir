@@ -2,10 +2,10 @@
 // RUN: tir mc --march=rv64id --mabi=lp64d --stage=isel %s | filecheck %s --check-prefix=LP64D
 
 module {
-  declare @sink(!f64) -> !f64
-  func @caller(%0: !f64) -> !f64 {
-    %1 = call @sink(%0 : !f64) -> !f64
-    return %1
+  func.declare @sink(!f64) -> !f64
+  func.func @caller(%0: !f64) -> !f64 {
+    %1 = func.call @sink(%0 : !f64) -> !f64
+    func.return %1
   }
   module_end
 }

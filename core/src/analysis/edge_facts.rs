@@ -175,12 +175,13 @@ mod tests {
     use super::*;
     use crate::{
         BlockHandle, Context, Operand, Operation, RegionId,
-        builtin::{IntegerType, UnitType, ops},
+        builtin::{IntegerType, UnitType},
         cfg::ops as cfg_ops,
+        func::ops as func_ops,
     };
 
     fn analyze(context: &Context, region: RegionId) -> DominatingEdgeFacts {
-        let root = ops::func(context, "f", UnitType::new(context), Some(region))
+        let root = func_ops::func(context, "f", UnitType::new(context), Some(region))
             .build()
             .id();
         let dom = DominatorTree::new(context, root);
@@ -216,7 +217,10 @@ mod tests {
         );
         terminate(&t, cfg_ops::br(&context, vec![], merge.id()).build());
         terminate(&f, cfg_ops::br(&context, vec![], merge.id()).build());
-        terminate(&merge, ops::r#return(&context, Operand::none()).build());
+        terminate(
+            &merge,
+            func_ops::r#return(&context, Operand::none()).build(),
+        );
 
         let facts = analyze(&context, region.id());
 
@@ -271,9 +275,18 @@ mod tests {
             &outer_t,
             cfg_ops::cond_br(&context, c2, vec![], vec![], inner_t.id(), inner_f.id()).build(),
         );
-        terminate(&outer_f, ops::r#return(&context, Operand::none()).build());
-        terminate(&inner_t, ops::r#return(&context, Operand::none()).build());
-        terminate(&inner_f, ops::r#return(&context, Operand::none()).build());
+        terminate(
+            &outer_f,
+            func_ops::r#return(&context, Operand::none()).build(),
+        );
+        terminate(
+            &inner_t,
+            func_ops::r#return(&context, Operand::none()).build(),
+        );
+        terminate(
+            &inner_f,
+            func_ops::r#return(&context, Operand::none()).build(),
+        );
 
         let facts = analyze(&context, region.id());
 
@@ -319,7 +332,7 @@ mod tests {
             cfg_ops::cond_br(&context, c, vec![], vec![], body.id(), exit.id()).build(),
         );
         terminate(&body, cfg_ops::br(&context, vec![], header.id()).build());
-        terminate(&exit, ops::r#return(&context, Operand::none()).build());
+        terminate(&exit, func_ops::r#return(&context, Operand::none()).build());
 
         let facts = analyze(&context, region.id());
 
@@ -340,7 +353,7 @@ mod tests {
         }
 
         terminate(&entry, cfg_ops::br(&context, vec![], next.id()).build());
-        terminate(&next, ops::r#return(&context, Operand::none()).build());
+        terminate(&next, func_ops::r#return(&context, Operand::none()).build());
 
         let facts = analyze(&context, region.id());
         assert_eq!(facts.own_fact(next.id()), None);
@@ -369,7 +382,7 @@ mod tests {
             crate::scf::ops::r#if(&context, c, vec![], vec![], Some(then_region.id()), None)
                 .build();
         entry.append_op(if_op);
-        entry.append_op(ops::r#return(&context, Operand::none()).build());
+        entry.append_op(func_ops::r#return(&context, Operand::none()).build());
 
         let facts = analyze(&context, region.id());
         // The nested region's entry has an implicit incoming edge.
@@ -393,7 +406,10 @@ mod tests {
             &entry,
             cfg_ops::cond_br(&context, c, vec![], vec![], target.id(), target.id()).build(),
         );
-        terminate(&target, ops::r#return(&context, Operand::none()).build());
+        terminate(
+            &target,
+            func_ops::r#return(&context, Operand::none()).build(),
+        );
 
         let facts = analyze(&context, region.id());
         // Both guarded edges land on `target`: two in-edges, so no single fact.

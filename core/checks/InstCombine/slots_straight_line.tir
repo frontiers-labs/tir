@@ -1,6 +1,6 @@
 // RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
-// RUN: tir opt --pass builtin.func(thread-state) --pass builtin.func(instcombine) --pass builtin.func(erase-state) --verify %s | filecheck %s
-// RUN: not tir opt --pass builtin.func(nope) %s
+// RUN: tir opt --pass func.func(thread-state) --pass func.func(instcombine) --pass func.func(erase-state) --verify %s | filecheck %s
+// RUN: not tir opt --pass func.func(nope) %s
 
 // The shape a front end leaves for a straight-line function: one slot per name,
 // written once and read where the name is used. Each read is on the state its
@@ -8,7 +8,7 @@
 // afterwards — the sweep takes the allocations and the stores with them.
 
 module {
-  func @f(%0: !i32, %1: !i32) -> !i32 {
+  func.func @f(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %2
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
@@ -21,14 +21,14 @@ module {
     %8 = ptr.load %4 : !i32
     %9 = constant {value = 1} : !i32
     %10 = addi %8, %9 : !i32
-    return %10
+    func.return %10
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK-NOT: ptr.
 // CHECK: %[[PRODUCT:[0-9]+]] = muli %0, %1 : !i32
 // CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[PRODUCT]], %[[ONE]] : !i32
-// CHECK-NEXT: return %[[SUM]]
+// CHECK-NEXT: func.return %[[SUM]]

@@ -5,14 +5,14 @@
 // and the loop keeps reading memory.
 
 module {
-  declare @sink(!ptr.p<!i32>) -> !i32
-  func @escapes(%0: !i1, %1: !i32) -> !i32 {
+  func.declare @sink(!ptr.p<!i32>) -> !i32
+  func.func @escapes(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     %3 = scf.while {
       %4 = scf.if %0 -> !i1 {
         %5 = ptr.load %2 : !i32
-        %6 = call @sink(%2 : !ptr.p<!i32>) -> !i32
+        %6 = func.call @sink(%2 : !ptr.p<!i32>) -> !i32
         %7 = addi %5, %6 : !i32
         ptr.store %7, %2
         %8 = constant {value = 1} : !i1
@@ -26,12 +26,12 @@ module {
       scf.yield
     }
     %10 = ptr.load %2 : !i32
-    return %10
+    func.return %10
   }
   module_end
 }
 
-// CHECK-LABEL: func @escapes
+// CHECK-LABEL: func.func @escapes
 // CHECK: ptr.alloca
 // CHECK: ptr.store
 // CHECK: scf.while

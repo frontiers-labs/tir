@@ -4,7 +4,7 @@
 // type; a then-arm yielding i1 for an i32 result fails verification.
 
 module {
-  func @bad(%0: !i1) -> !i32 {
+  func.func @bad(%0: !i1) -> !i32 {
     %1 = scf.if %0 -> !i32 {
       %2 = constant {value = 1} : !i1
       scf.yield %2
@@ -12,7 +12,7 @@ module {
       %3 = constant {value = 0} : !i32
       scf.yield %3
     }
-    return %1
+    func.return %1
   }
   module_end
 }

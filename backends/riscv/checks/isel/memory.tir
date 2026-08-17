@@ -5,7 +5,7 @@
 // and a zero immediate offset.
 
 module {
-  func @sum(%0: !i32, %1: !i32) -> !i32 {
+  func.func @sum(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %2
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
@@ -13,7 +13,7 @@ module {
     %4 = ptr.load %2 : !i32
     %5 = ptr.load %3 : !i32
     %6 = addi %4, %5 : !i32
-    return %6
+    func.return %6
   }
   module_end
 }

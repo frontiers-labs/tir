@@ -1,12 +1,12 @@
 // RUN: tir mc --march=armv8 --stage=isel %s | filecheck %s
 
 module {
-  func @chain(%0: !i32, %1: !i32) -> !i32 {
+  func.func @chain(%0: !i32, %1: !i32) -> !i32 {
     %2 = addi %0, %1 : !i32
     %3 = subi %2, %1 : !i32
     %4 = andi %3, %0 : !i32
     %5 = ori %4, %1 : !i32
-    return %5
+    func.return %5
   }
   module_end
 }

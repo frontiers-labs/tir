@@ -14,17 +14,17 @@ struct Large forward_large(long a, long b, long c) {
     return make_large(a, b, c);
 }
 
-// CHECK-LABEL: func @make_large(%[[MAKE_DEST:[0-9]+]]: !ptr.p,
+// CHECK-LABEL: func.func @make_large(%[[MAKE_DEST:[0-9]+]]: !ptr.p,
 // CHECK-SAME: ) -> !ptr.p result_address {
 // CHECK: ptr.memcpy %[[MAKE_DEST]]
-// CHECK: return %[[MAKE_DEST]]
-// CHECK-LABEL: func @forward_large(%[[FORWARD_DEST:[0-9]+]]: !ptr.p,
+// CHECK: func.return %[[MAKE_DEST]]
+// CHECK-LABEL: func.func @forward_large(%[[FORWARD_DEST:[0-9]+]]: !ptr.p,
 // CHECK-SAME: ) -> !ptr.p result_address {
 // CHECK: %[[TEMP:[0-9]+]] = ptr.alloca {size = 24, align = 8}
-// CHECK: %{{[0-9]+}} = call @make_large(%[[TEMP]]
+// CHECK: %{{[0-9]+}} = func.call @make_large(%[[TEMP]]
 // CHECK-SAME: ) -> !ptr.p result_address
 // CHECK: ptr.memcpy %[[FORWARD_DEST]], %[[TEMP]]
-// CHECK: return %[[FORWARD_DEST]]
+// CHECK: func.return %[[FORWARD_DEST]]
 
 // ASM-LABEL: make_large:
 // ASM: call memcpy

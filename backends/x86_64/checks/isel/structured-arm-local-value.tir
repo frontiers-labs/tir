@@ -6,7 +6,7 @@
 // gate computes it again instead of reading the arm's.
 
 module {
-  func @no_escape(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
+  func.func @no_escape(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
     %r = scf.if %c args(%a, %b) -> !i64 (%p, %q) {
       %x = muli %p, %q : !i64
       %y = addi %x, %p : !i64
@@ -15,7 +15,7 @@ module {
       scf.yield %u
     }
     %z = muli %a, %b : !i64
-    return %z
+    func.return %z
   }
   module_end
 }

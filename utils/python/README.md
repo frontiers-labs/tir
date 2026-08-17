@@ -22,7 +22,7 @@ import tir
 
 with tir.Context() as ctx:
     module = ctx.parse_module(open("prog.tir").read())
-    ctx.run_pipeline(module, "builtin.func(instcombine)")
+    ctx.run_pipeline(module, "func.func(instcombine)")
     for op in module.walk():
         print(op.dialect, op.name)
 

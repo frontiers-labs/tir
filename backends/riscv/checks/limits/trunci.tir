@@ -6,9 +6,9 @@
 // NOT emit a sign/zero-extension (that is the job of the explicit widening ops).
 
 module {
-  func @t(%0: !i64) -> !i32 {
+  func.func @t(%0: !i64) -> !i32 {
     %1 = trunci %0 : !i32
-    return %1
+    func.return %1
   }
   module_end
 }

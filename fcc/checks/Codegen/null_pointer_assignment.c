@@ -10,7 +10,7 @@ void clear(struct node *node)
   node->next = (struct node *)0;
 }
 
-// IR-LABEL: func @clear
+// IR-LABEL: func.func @clear
 // IR: %[[ZERO:.*]] = ptr.null : !ptr.p
 // IR: ptr.store %[[ZERO]]
 

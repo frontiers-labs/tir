@@ -4,9 +4,9 @@
 // have the same width.
 
 module {
-  func @bad(%0: !i32) -> !f64 {
+  func.func @bad(%0: !i32) -> !f64 {
     %1 = bitcast %0 : !f64
-    return %1
+    func.return %1
   }
   module_end
 }

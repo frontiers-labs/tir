@@ -19,8 +19,8 @@ double pair_sum(struct Pair pair) {
     return pair.left + pair.right;
 }
 
-// CHECK: func @scalar_value(%{{[0-9]+}}: !f64) -> !f64 {
-// CHECK: func @pair_sum(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !f64) -> !f64 {
+// CHECK: func.func @scalar_value(%{{[0-9]+}}: !f64) -> !f64 {
+// CHECK: func.func @pair_sum(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !f64) -> !f64 {
 
 // ASM-LABEL: scalar_value:
 // ASM: fsd f10, 0({{.*}})
@@ -28,5 +28,5 @@ double pair_sum(struct Pair pair) {
 // ASM: fsd f10, 0({{.*}})
 // ASM: fsd f11, 8({{.*}})
 
-// SOFT: func @scalar_value(%{{[0-9]+}}: !i64) -> !f64 {
-// SOFT: func @pair_sum(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64) -> !f64 {
+// SOFT: func.func @scalar_value(%{{[0-9]+}}: !i64) -> !f64 {
+// SOFT: func.func @pair_sum(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64) -> !f64 {

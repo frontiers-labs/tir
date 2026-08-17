@@ -5,7 +5,7 @@
 // gate is not a branch: the body holds its back edge and no test at all.
 
 module {
-  func @spin(%c: !i1, %n: !i32) -> !i32 {
+  func.func @spin(%c: !i1, %n: !i32) -> !i32 {
     %r = scf.while iter_args(%i = %n) -> !i32 {
       scf.condition %c, %i
     } do scope(%tok)(%v) {
@@ -16,7 +16,7 @@ module {
       }
       scf.yield %v
     }
-    return %r
+    func.return %r
   }
   module_end
 }

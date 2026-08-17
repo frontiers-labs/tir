@@ -3,13 +3,13 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func @null() -> !ptr.p {
+  func.func @null() -> !ptr.p {
     %0 = ptr.null : !ptr.p
-    return %0
+    func.return %0
   }
   module_end
 }
 
-// CHECK: func @null() -> !ptr.p {
+// CHECK: func.func @null() -> !ptr.p {
 // CHECK-NEXT: %{{[0-9]+}} = ptr.null : !ptr.p
-// CHECK-NEXT: return %{{[0-9]+}}
+// CHECK-NEXT: func.return %{{[0-9]+}}

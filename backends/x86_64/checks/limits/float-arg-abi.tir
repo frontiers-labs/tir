@@ -3,9 +3,9 @@
 // SysV classifies f64 parameters in the XMM register file, beginning at xmm0.
 
 module {
-  func @addf(%0: !f64, %1: !f64) -> !f64 {
+  func.func @addf(%0: !f64, %1: !f64) -> !f64 {
     %2 = addf %0, %1 : !f64
-    return %2
+    func.return %2
   }
   module_end
 }

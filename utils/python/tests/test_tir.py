@@ -9,12 +9,12 @@ import tir
 
 MODULE = """
 module {
-  func @f(%0: !i32, %1: !i32) -> !i32 {
+  func.func @f(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %2
     %5 = ptr.load %2 : !i32
     %7 = muli %5, %1 : !i32
-    return %7
+    func.return %7
   }
   module_end
 }
@@ -26,7 +26,7 @@ class TirTest(unittest.TestCase):
         with tir.Context() as ctx:
             module = ctx.parse_module(MODULE)
             self.assertIn("ptr.alloca", module.to_string())
-            ctx.run_pipeline(module, "builtin.func(thread-state,instcombine,erase-state)")
+            ctx.run_pipeline(module, "func.func(thread-state,instcombine,erase-state)")
             after = module.to_string()
             self.assertNotIn("ptr.alloca", after)
 
@@ -79,8 +79,8 @@ class TirTest(unittest.TestCase):
     def test_target_lowering(self):
         self.assertIn("riscv64", tir.supported_targets())
         arith = (
-            "module {\n  func @a(%0: !i32, %1: !i32) -> !i32 {\n"
-            "    %2 = addi %0, %1 : !i32\n    return %2\n  }\n  module_end\n}"
+            "module {\n  func.func @a(%0: !i32, %1: !i32) -> !i32 {\n"
+            "    %2 = addi %0, %1 : !i32\n    func.return %2\n  }\n  module_end\n}"
         )
         with tir.Context() as ctx:
             module = ctx.parse_module(arith)

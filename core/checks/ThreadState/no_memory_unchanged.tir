@@ -4,14 +4,14 @@
 // no entry state and no ports.
 
 module {
-  func @pure(%0: !i32) -> !i32 {
+  func.func @pure(%0: !i32) -> !i32 {
     %1 = addi %0, %0 : !i32
-    return %1
+    func.return %1
   }
   module_end
 }
 
-// CHECK-LABEL: func @pure
+// CHECK-LABEL: func.func @pure
 // CHECK-NOT: state.entry_state
 // CHECK-NOT: state(
-// CHECK: return %1
+// CHECK: func.return %1

@@ -6,7 +6,7 @@
 // one yields the carry, which inside the body is the port argument.
 
 module {
-  func @dispatch(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+  func.func @dispatch(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %2, %3
     scf.while {
@@ -28,12 +28,12 @@ module {
       scf.yield
     }
     %6 = ptr.load %3 : !i32
-    return %6
+    func.return %6
   }
   module_end
 }
 
-// CHECK-LABEL: func @dispatch
+// CHECK-LABEL: func.func @dispatch
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%[[COND:[0-9]+]] = %2) -> !i32 {
 // CHECK-NEXT: scf.condition %0, %[[COND]]
@@ -51,4 +51,4 @@ module {
 // CHECK-NEXT: }
 // CHECK-NEXT: scf.yield %[[GATE]]
 // CHECK-NEXT: }
-// CHECK-NEXT: return %[[RESULT]]
+// CHECK-NEXT: func.return %[[RESULT]]

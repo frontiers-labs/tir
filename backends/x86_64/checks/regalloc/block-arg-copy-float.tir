@@ -9,10 +9,10 @@
 // allocator with a register-class conflict.
 
 module {
-  func @fwd(%0: !i1, %1: !f64, %2: !f64) -> !f64 {
+  func.func @fwd(%0: !i1, %1: !f64, %2: !f64) -> !f64 {
     cfg.cond_br %0, ^bb1(%1 : !f64), ^bb1(%2 : !f64)
   ^bb1(%3: !f64):
-    return %3
+    func.return %3
   }
   module_end
 }

@@ -1,5 +1,5 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 // The `c == 1` fact of the guarded edge into ^bb1 holds throughout the blocks
 // ^bb1 dominates. ^bb3 has ^bb1 as its sole predecessor, so it inherits the fact
@@ -7,21 +7,21 @@
 // levels below the guard.
 
 module {
-  func @nested(%a: !i32, %b: !i32) -> !i1 {
+  func.func @nested(%a: !i32, %b: !i32) -> !i1 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
     cfg.cond_br %c, ^bb1, ^bb2
   ^bb1:
     cfg.br ^bb3
   ^bb2:
-    return %c
+    func.return %c
   ^bb3:
     %d = cmpi %a, %b {predicate = "eq"} : !i1
-    return %d
+    func.return %d
   }
   module_end
 }
 
-// CHECK-LABEL: func @nested
+// CHECK-LABEL: func.func @nested
 // CHECK: cmpi
 // CHECK: ^bb3:
 // CHECK-NEXT: constant {value = 1}

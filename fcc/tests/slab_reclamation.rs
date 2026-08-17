@@ -112,7 +112,7 @@ fn passes_do_not_leak_entities() {
         ("erase-state", Box::new(tir::passes::EraseStatePass::new())),
     ] {
         let mut pm = PassManager::new();
-        pm.nest::<tir::builtin::FuncOp>().add_boxed_pass(pass);
+        pm.nest::<tir::func::FuncOp>().add_boxed_pass(pass);
         run(name, pm);
     }
 }

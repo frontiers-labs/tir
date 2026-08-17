@@ -10,7 +10,7 @@
 // a read of what the slot holds there, and the slot stays in memory around it.
 
 module {
-  func @find(%0: !i1, %1: !i32) -> !i32 {
+  func.func @find(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 1, align = 1} : !ptr.p<!i1>
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %4 = constant {value = 0} : !i1
@@ -30,12 +30,12 @@ module {
       scf.yield
     }
     %7 = ptr.load %3 : !i32
-    return %7
+    func.return %7
   }
   module_end
 }
 
-// CHECK-LABEL: func @find
+// CHECK-LABEL: func.func @find
 // CHECK-NOT: ptr.alloca {size = 1
 // CHECK: %[[INIT:[0-9]+]] = ptr.load %3 : !i32
 // CHECK: %[[RESULT:[0-9]+]], %{{[0-9]+}} = scf.while iter_args(%[[VALUE:[0-9]+]] = %[[INIT]], %[[FLAG:[0-9]+]] = %4) -> !i32, !i1 {
@@ -47,4 +47,4 @@ module {
 // CHECK: else {
 // CHECK-NEXT: scf.yield %[[BODY]], %[[BODYFLAG]]
 // CHECK: scf.yield %[[TAKEN]], %[[SET]]
-// CHECK: return %[[RESULT]]
+// CHECK: func.return %[[RESULT]]

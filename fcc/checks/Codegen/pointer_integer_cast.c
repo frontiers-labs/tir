@@ -10,7 +10,7 @@ uptr address(void *pointer)
   return (uptr)pointer - 1;
 }
 
-// CHECK-LABEL: func @address
+// CHECK-LABEL: func.func @address
 // CHECK: %[[NULL:[0-9]+]] = ptr.null : !ptr.p
 // CHECK: ptr.ptrdiff %{{[0-9]+}}, %[[NULL]] : !i64
 
@@ -19,7 +19,7 @@ void *aligned(void *pointer)
   return (void *)(((uptr)pointer + 3) & ~3);
 }
 
-// CHECK-LABEL: func @aligned
+// CHECK-LABEL: func.func @aligned
 // CHECK: ptr.ptrdiff
 // CHECK: %[[NULL2:[0-9]+]] = ptr.null : !ptr.p
 // CHECK-NEXT: ptr.ptradd %[[NULL2]], %{{[0-9]+}} : !ptr.p

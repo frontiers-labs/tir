@@ -19,7 +19,7 @@ use fcc::passes::{LowerCirControlFlowPass, LowerCirStructsPass};
 use fcc::sema::{TypedAst, analyze};
 use tir::backend::TargetMachine;
 use tir::backend::pipeline::{StopAfter, build_pipeline};
-use tir::builtin::FuncOp;
+use tir::func::FuncOp;
 use tir::passes::{EraseStatePass, InstCombinePass, ThreadStatePass};
 use tir::{Context, Operation, PassManager};
 
@@ -196,8 +196,7 @@ fn bench_promote(c: &mut Criterion) {
             },
             |(ctx, module)| {
                 let mut pm =
-                    tir::parse_pipeline("builtin.func(thread-state,instcombine,erase-state)")
-                        .unwrap();
+                    tir::parse_pipeline("func.func(thread-state,instcombine,erase-state)").unwrap();
                 pm.run(&ctx, ctx.get_op(module.id())).unwrap();
             },
             BatchSize::SmallInput,

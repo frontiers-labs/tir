@@ -3,8 +3,9 @@ use tir::BlockHandle;
 
 use tir::analysis::AnalysisManager;
 use tir::attributes::AttributeValue;
-use tir::builtin::{FuncOp, IntegerType, ModuleOp, ReturnOp, TokenType, ops as b};
+use tir::builtin::{IntegerType, ModuleOp, TokenType, ops as b};
 use tir::cfg::{BranchOp, CondBranchOp, ops as cb};
+use tir::func::{FuncOp, ReturnOp};
 use tir::ptr::{PtrType, ops as p};
 use tir::{
     BlockId, Context, Operation, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter,

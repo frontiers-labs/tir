@@ -5,16 +5,16 @@
 // and erases the copy wherever it is granted.
 
 module {
-  func @accumulate(%0: !i64, %1: !i64) -> !i64 {
+  func.func @accumulate(%0: !i64, %1: !i64) -> !i64 {
     %2 = addi %0, %1 : !i64
     %3 = addi %2, %1 : !i64
-    return %3
+    func.return %3
   }
-  func @keep(%0: !i64, %1: !i64) -> !i64 {
+  func.func @keep(%0: !i64, %1: !i64) -> !i64 {
     %2 = addi %0, %1 : !i64
     %3 = addi %2, %0 : !i64
     %4 = muli %2, %3 : !i64
-    return %4
+    func.return %4
   }
   module_end
 }

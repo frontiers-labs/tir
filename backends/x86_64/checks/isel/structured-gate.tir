@@ -5,7 +5,7 @@
 // into the arm's instruction as an immediate.
 
 module {
-  func @choose(%0: !i1, %1: !i64) -> !i64 {
+  func.func @choose(%0: !i1, %1: !i64) -> !i64 {
     %c = constant {value = 7} : !i64
     %r = scf.if %0 -> !i64 {
       %a = addi %1, %c : !i64
@@ -14,7 +14,7 @@ module {
       %b = subi %1, %c : !i64
       scf.yield %b
     }
-    return %r
+    func.return %r
   }
   module_end
 }

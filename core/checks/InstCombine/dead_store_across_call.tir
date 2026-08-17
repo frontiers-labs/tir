@@ -4,16 +4,16 @@
 // does not overwrite it unobserved.
 
 module {
-  func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) {
+  func.func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) {
     %3 = state.entry_state : !state
     ptr.store %1, %0 state(%3 -> %4)
-    call @g() state(%4 -> %5)
+    func.call @g() state(%4 -> %5)
     ptr.store %2, %0 state(%5 -> %6)
-    return state(%6)
+    func.return state(%6)
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: ptr.store %1,
 // CHECK: ptr.store %2,

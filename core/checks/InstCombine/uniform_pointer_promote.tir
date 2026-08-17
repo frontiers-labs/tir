@@ -8,7 +8,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func @uniform(%0: !i1, %1: !ptr.p, %2: !ptr.p) -> !ptr.p {
+  func.func @uniform(%0: !i1, %1: !ptr.p, %2: !ptr.p) -> !ptr.p {
     %3 = ptr.alloca {size = 8, align = 8} : !ptr.p
     scf.if %0 {
       ptr.store %1, %3
@@ -18,12 +18,12 @@ module {data_layout = #data_layout} {
       scf.yield
     }
     %4 = ptr.load %3 : !ptr.p
-    return %4
+    func.return %4
   }
   module_end
 }
 
-// CHECK-LABEL: func @uniform
+// CHECK-LABEL: func.func @uniform
 // CHECK-NOT: ptr.alloca
 // CHECK-NOT: ptr.store
 // CHECK-NOT: ptr.load
@@ -33,4 +33,4 @@ module {data_layout = #data_layout} {
 // CHECK: else {
 // CHECK-NEXT: scf.yield %2
 // CHECK-NEXT: }
-// CHECK-NEXT: return %[[RESULT]]
+// CHECK-NEXT: func.return %[[RESULT]]

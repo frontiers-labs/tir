@@ -1,11 +1,11 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 module {
-  func @repeat_first(%0: !tuple<!f64, !f64>) -> !f64 {
+  func.func @repeat_first(%0: !tuple<!f64, !f64>) -> !f64 {
     %1 = tuple_get %0 {index = 0} : !f64
     %2 = tuple_get %0 {index = 0} : !f64
     %3 = addf %1, %2 : !f64
-    return %3
+    func.return %3
   }
   module_end
 }

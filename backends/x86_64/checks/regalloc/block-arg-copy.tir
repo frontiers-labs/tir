@@ -5,14 +5,14 @@
 // want one register, and the copy must disappear once they get it.
 
 module {
-  func @fwd(%c: !i1, %0: !i64, %1: !i64) -> !i64 {
+  func.func @fwd(%c: !i1, %0: !i64, %1: !i64) -> !i64 {
     %2 = addi %0, %1 : !i64
     cfg.cond_br %c, ^bb1(%1 : !i64), ^bb2
   ^bb2:
     cfg.br ^bb1(%2 : !i64)
   ^bb1(%3: !i64):
     %4 = addi %3, %3 : !i64
-    return %4
+    func.return %4
   }
   module_end
 }

@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use tir::attributes::AttributeValue;
-use tir::builtin::{FuncOp, ModuleOp};
+use tir::builtin::ModuleOp;
+use tir::func::FuncOp;
 use tir::{Context, OpId, Operation, RegionId, ValueId};
 
 pub fn evaluate(context: &Context, module: &ModuleOp, arguments: &[i64]) -> Option<i64> {
@@ -75,7 +76,7 @@ fn run(context: &Context, ops: Vec<OpId>, values: &mut HashMap<ValueId, i64>) ->
             continue;
         }
 
-        if named("builtin", "return") {
+        if named("func", "return") {
             return Some(Leave::Return(operands(&instance.operands(), values)?));
         }
         if named("scf", "yield") {

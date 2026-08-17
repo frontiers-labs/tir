@@ -80,7 +80,7 @@ mod tests {
         );
         let region = context.create_region();
         region.add_block(context.create_block(vec![]).id());
-        let func = tir::builtin::ops::func(
+        let func = tir::func::ops::func(
             &context,
             "x",
             tir::builtin::UnitType::new(&context),
@@ -88,7 +88,7 @@ mod tests {
         )
         .build();
         func.body()
-            .append_op(tir::builtin::ops::r#return(&context, tir::Operand::none()).build());
+            .append_op(tir::func::ops::r#return(&context, tir::Operand::none()).build());
         module.body().append_op(func);
         module
             .body()
@@ -230,7 +230,7 @@ int main(void) { printf("hello"); return 0; }"#,
     fn lower_cir_control_flow(src: &str) -> String {
         let (context, module) = lower(src);
         let mut passes = tir::PassManager::new();
-        let function_pipeline = passes.nest::<tir::builtin::FuncOp>();
+        let function_pipeline = passes.nest::<tir::func::FuncOp>();
         function_pipeline.add_pass(crate::passes::LowerCirControlFlowPass::new());
         function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
         function_pipeline.add_pass(tir::passes::InstCombinePass::new());
@@ -432,7 +432,7 @@ int main(void) { printf("hello"); return 0; }"#,
         assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
         assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         assert!(lowered.contains("scf.break"), "{lowered}");
-        assert!(!lowered.contains("call @bump"), "{lowered}");
+        assert!(!lowered.contains("func.call @bump"), "{lowered}");
     }
 
     #[test]
@@ -441,7 +441,7 @@ int main(void) { printf("hello"); return 0; }"#,
         let module = tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(
             &context,
             r#"module {
-  func @f(%0: !i1) {
+  func.func @f(%0: !i1) {
     cir.while %1 cond {
       cir.condition %0
     } body {
@@ -449,7 +449,7 @@ int main(void) { printf("hello"); return 0; }"#,
       ^bb1:
       cir.yield
     }
-    return
+    func.return
   }
   module_end
 }
@@ -458,7 +458,7 @@ int main(void) { printf("hello"); return 0; }"#,
         .expect("parse multiblock CIR");
         let mut passes = tir::PassManager::new();
         passes
-            .nest::<tir::builtin::FuncOp>()
+            .nest::<tir::func::FuncOp>()
             .add_pass(crate::passes::LowerCirControlFlowPass::new());
         passes
             .run(&context, context.get_op(tir::Operation::id(&module)))

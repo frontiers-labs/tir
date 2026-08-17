@@ -10,8 +10,8 @@ long first(long a, long b, long c) {
     return make_large(a, b, c).values[0];
 }
 
-// CHECK: declare @make_large(!ptr.p, !i64, !i64, !i64) -> !unit
+// CHECK: func.declare @make_large(!ptr.p, !i64, !i64, !i64) -> !unit
 // CHECK: %[[TEMP:[0-9]+]] = ptr.alloca {size = 24, align = 8}
-// CHECK: call @make_large(%[[TEMP]]
+// CHECK: func.call @make_large(%[[TEMP]]
 // CHECK-SAME: ) result_address
 // CHECK: cir.get_member %[[TEMP]]

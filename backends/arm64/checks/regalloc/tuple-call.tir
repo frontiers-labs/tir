@@ -1,11 +1,11 @@
 // RUN: tir mc --march=armv8 --stage=regalloc %s | filecheck %s
 
 module {
-  declare @make_pair() -> !tuple<!i64, !i64>
-  func @right() -> !i64 {
-    %0 = call @make_pair() -> !tuple<!i64, !i64>
+  func.declare @make_pair() -> !tuple<!i64, !i64>
+  func.func @right() -> !i64 {
+    %0 = func.call @make_pair() -> !tuple<!i64, !i64>
     %1 = tuple_get %0 {index = 1} : !i64
-    return %1
+    func.return %1
   }
   module_end
 }

@@ -106,7 +106,7 @@ parseModule ctx src =
     when (op == invalidId) $ throwIO . TirError =<< lastError
     pure op
 
--- | Run an MLIR-style pass pipeline (e.g. @"builtin.func(instcombine)"@) over @root@.
+-- | Run an MLIR-style pass pipeline (e.g. @"func.func(instcombine)"@) over @root@.
 runPipeline :: Ptr Context -> OpId -> String -> IO ()
 runPipeline ctx root spec =
   withCString spec $ \cspec -> do

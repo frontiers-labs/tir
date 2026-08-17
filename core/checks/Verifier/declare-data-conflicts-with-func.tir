@@ -3,10 +3,10 @@
 // A data declaration owns its name outright, so no function may share it.
 
 module {
-  declare @counter
-  func @counter() -> !i32 {
+  func.declare @counter
+  func.func @counter() -> !i32 {
     %0 = constant {value = 0} : !i32
-    return %0
+    func.return %0
   }
   module_end
 }

@@ -81,6 +81,7 @@ pub use value::{Value, ValueId};
 pub use dialects::builtin;
 pub use dialects::builtin::Integer;
 pub use dialects::cfg;
+pub use dialects::func;
 pub use dialects::ptr;
 pub use dialects::scf;
 pub use dialects::state;

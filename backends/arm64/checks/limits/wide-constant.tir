@@ -5,24 +5,24 @@
 // with MOVK.
 
 module {
-  func @f() -> !i64 {
+  func.func @f() -> !i64 {
     %0 = constant {value = 65536} : !i64
-    return %0
+    func.return %0
   }
 
-  func @lane32() -> !i64 {
+  func.func @lane32() -> !i64 {
     %0 = constant {value = 4294967296} : !i64
-    return %0
+    func.return %0
   }
 
-  func @lane48() -> !i64 {
+  func.func @lane48() -> !i64 {
     %0 = constant {value = 281474976710656} : !i64
-    return %0
+    func.return %0
   }
 
-  func @negative() -> !i64 {
+  func.func @negative() -> !i64 {
     %0 = constant {value = -1} : !i64
-    return %0
+    func.return %0
   }
   module_end
 }

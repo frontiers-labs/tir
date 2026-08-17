@@ -5,7 +5,7 @@
 // the base pointer bound and a zero immediate offset.
 
 module {
-  func @sum(%0: !i32, %1: !i32) -> !i32 {
+  func.func @sum(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %2
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
@@ -13,42 +13,42 @@ module {
     %4 = ptr.load %2 : !i32
     %5 = ptr.load %3 : !i32
     %6 = addi %4, %5 : !i32
-    return %6
+    func.return %6
   }
 
-  func @word_reg_offset(%0: !ptr.p<!i32>, %1: !i64, %2: !i32) -> !i32 {
+  func.func @word_reg_offset(%0: !ptr.p<!i32>, %1: !i64, %2: !i32) -> !i32 {
     %3 = ptr.ptradd %0, %1 : !ptr.p<!i32>
     %4 = ptr.load %3 : !i32
     ptr.store %2, %3
-    return %4
+    func.return %4
   }
 
-  func @byte_reg_offset(%0: !ptr.p<!i8>, %1: !i64, %2: !i8) -> !i8 {
+  func.func @byte_reg_offset(%0: !ptr.p<!i8>, %1: !i64, %2: !i8) -> !i8 {
     %3 = ptr.ptradd %0, %1 : !ptr.p<!i8>
     %4 = ptr.load %3 : !i8
     ptr.store %2, %3
-    return %4
+    func.return %4
   }
 
-  func @byte_through_loaded_pointer(%0: !ptr.p<!i8>, %1: !i8) {
+  func.func @byte_through_loaded_pointer(%0: !ptr.p<!i8>, %1: !i8) {
     %2 = ptr.alloca {size = 8, align = 8} : !ptr.p<!ptr.p<!i8>>
     ptr.store %0, %2
     %3 = ptr.load %2 : !ptr.p<!i8>
     %4 = ptr.load %3 : !i8
     %5 = xori %4, %1 : !i8
     ptr.store %5, %3
-    return
+    func.return
   }
 
-  func @signed_i16_load_to_i32(%0: !ptr.p<!i16>) -> !i32 {
+  func.func @signed_i16_load_to_i32(%0: !ptr.p<!i16>) -> !i32 {
     %1 = ptr.load %0 : !i16
     %2 = extsi %1 : !i32
-    return %2
+    func.return %2
   }
 
-  func @signed_i8_arg_to_i32(%0: !i8) -> !i32 {
+  func.func @signed_i8_arg_to_i32(%0: !i8) -> !i32 {
     %1 = extsi %0 : !i32
-    return %1
+    func.return %1
   }
   module_end
 }

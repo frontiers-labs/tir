@@ -4,9 +4,9 @@
 // including both signed boundaries.
 
 module {
-  func @min() -> !i32 {
+  func.func @min() -> !i32 {
     %0 = constant {value = -2147483648} : !i32
-    return %0
+    func.return %0
   }
   // CHECK-LABEL: min:
   // CHECK-NEXT: addi x5, x0, -128
@@ -16,9 +16,9 @@ module {
   // CHECK-NEXT: addi x10, x5, 0
   // CHECK-NEXT: jalr x0, 0(x1)
 
-  func @max() -> !i32 {
+  func.func @max() -> !i32 {
     %0 = constant {value = 2147483647} : !i32
-    return %0
+    func.return %0
   }
   // CHECK-LABEL: max:
   // CHECK-NEXT: addi x5, x0, -128

@@ -1,11 +1,11 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass builtin.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 // Inside scf.if %cond the engine assumes cond==1, so muli(cond, y) folds to y
 // there. The identical multiply in the entry block stays (cond is unknown).
 
 module {
-  func @f(%0: !i1, %1: !i1) -> !i1 {
+  func.func @f(%0: !i1, %1: !i1) -> !i1 {
     %2 = muli %0, %1 : !i1
     scf.if %0 {
       %3 = muli %0, %1 : !i1
@@ -13,11 +13,11 @@ module {
     } else {
       scf.yield
     }
-    return %1
+    func.return %1
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: muli
 // CHECK-NOT: muli

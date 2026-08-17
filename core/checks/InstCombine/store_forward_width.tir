@@ -4,14 +4,14 @@
 // the stored value.
 
 module {
-  func @f(%0: !ptr.p, %1: !i32) -> !i16 {
+  func.func @f(%0: !ptr.p, %1: !i32) -> !i16 {
     %2 = state.entry_state : !state
     ptr.store %1, %0 state(%2 -> %3)
     %4 = ptr.load %0 : !i16 state(%3)
-    return %4
+    func.return %4
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: ptr.load

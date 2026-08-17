@@ -8,11 +8,11 @@
 // This probe marks the missing lowering pass.
 
 module {
-  func @a(%lo: !index, %hi: !index, %st: !index) {
+  func.func @a(%lo: !index, %hi: !index, %st: !index) {
     scf.for %lo, %hi, %st {
       scf.yield
     }
-    return
+    func.return
   }
   module_end
 }

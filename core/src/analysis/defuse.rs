@@ -266,6 +266,7 @@ mod tests {
     use crate::{
         Operation,
         builtin::{IntegerType, UnitType, ops},
+        func::ops as func_ops,
     };
 
     #[test]
@@ -278,13 +279,14 @@ mod tests {
         let arg_id = arg.id();
         let block = context.create_block(vec![arg]);
         region.add_block(block.id());
-        let func = ops::func(&context, "f", UnitType::new(&context), Some(region.id())).build();
+        let func =
+            func_ops::func(&context, "f", UnitType::new(&context), Some(region.id())).build();
 
         let b = block;
         let dead = b.append_op(ops::constant(&context, 7, i32).build());
         let sum = b.append_op(ops::addi(&context, arg_id, arg_id, i32).build());
         let sum_val = sum.result();
-        let ret = b.append_op(ops::r#return(&context, sum_val).build());
+        let ret = b.append_op(func_ops::r#return(&context, sum_val).build());
 
         let am = AnalysisManager::new();
         let du = am.get::<DefUse>(&context, func.id());

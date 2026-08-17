@@ -1,12 +1,12 @@
 // RUN: not tir opt --verify %s
 
-// The call result type must match the return type of the resolved overload.
+// The call result type must match the func.return type of the resolved overload.
 
 module {
-  declare @f(!i32) -> !i32
-  func @caller(%0: !i32) -> !i64 {
-    %1 = call @f(%0 : !i32) -> !i64
-    return %1
+  func.declare @f(!i32) -> !i32
+  func.func @caller(%0: !i32) -> !i64 {
+    %1 = func.call @f(%0 : !i32) -> !i64
+    func.return %1
   }
   module_end
 }

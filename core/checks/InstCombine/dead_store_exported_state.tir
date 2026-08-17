@@ -5,7 +5,7 @@
 // it out of the gate, so the state is observed and neither store dies.
 
 module {
-  func @f(%0: !i1, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) {
+  func.func @f(%0: !i1, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) {
     %4 = state.entry_state : !state
     %5 = scf.if %0 args(%4) -> !state (%6) {
       ptr.store %2, %1 state(%6 -> %7)
@@ -15,12 +15,12 @@ module {
       ptr.store %2, %1 state(%9 -> %10)
       scf.yield %10
     }
-    return state(%5)
+    func.return state(%5)
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: ptr.store %2,
 // CHECK: ptr.store %3,
 // CHECK: else

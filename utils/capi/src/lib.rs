@@ -232,7 +232,7 @@ pub unsafe extern "C" fn tir_op_to_string(ctx: *const Context, id: u32) -> *mut 
     })
 }
 
-/// Parse an MLIR-style pass pipeline (e.g. `builtin.func(instcombine)`) from a
+/// Parse an MLIR-style pass pipeline (e.g. `func.func(instcombine)`) from a
 /// null-terminated string. Returns a manager handle, or null on error. Free
 /// with [`tir_pipeline_destroy`].
 ///

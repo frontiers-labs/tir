@@ -8,12 +8,12 @@
 // before.
 
 module {
-  func @narrow(%0: !i1, %1: !i16) -> !i16 {
+  func.func @narrow(%0: !i1, %1: !i16) -> !i16 {
     %2 = trunci %1 : !i8
     %3 = extui %2 : !i16
     cfg.cond_br %0, ^bb1(%1 : !i16), ^bb1(%3 : !i16)
   ^bb1(%4: !i16):
-    return %4
+    func.return %4
   }
   module_end
 }

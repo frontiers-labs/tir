@@ -13,10 +13,10 @@ long call_aligned(long head, struct Aligned *value) {
     return consume_aligned(head, *value);
 }
 
-// CHECK-LABEL: func @consume_aligned(
+// CHECK-LABEL: func.func @consume_aligned(
 // CHECK-SAME: %{{[0-9]+}}: !i64, %{{[0-9]+}}: !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16] {
-// CHECK-LABEL: func @call_aligned(
-// CHECK: call @consume_aligned({{.*}} : !i64, !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16]
+// CHECK-LABEL: func.func @call_aligned(
+// CHECK: func.call @consume_aligned({{.*}} : !i64, !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16]
 
 // ASM-LABEL: consume_aligned:
 // ASM: str x2

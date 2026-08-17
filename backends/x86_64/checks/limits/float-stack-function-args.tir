@@ -4,14 +4,14 @@
 // parameters is reloaded from the incoming stack area into XMM registers.
 
 module {
-  func @ninth(%0: !f64, %1: !f64, %2: !f64, %3: !f64, %4: !f64, %5: !f64, %6: !f64, %7: !tuple<!f64, !f64>) -> !i64 {
+  func.func @ninth(%0: !f64, %1: !f64, %2: !f64, %3: !f64, %4: !f64, %5: !f64, %6: !f64, %7: !tuple<!f64, !f64>) -> !i64 {
     %slot = ptr.alloca {size = 8, align = 8} : !ptr.p<!f64>
     %8 = tuple_get %7 {index = 0} : !f64
     %9 = tuple_get %7 {index = 1} : !f64
     ptr.store %8, %slot
     ptr.store %9, %slot
     %10 = constant {value = 0} : !i64
-    return %10
+    func.return %10
   }
   module_end
 }

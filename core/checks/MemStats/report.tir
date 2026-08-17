@@ -2,10 +2,10 @@
 // RUN: tir opt --pass instcombine %s 2>&1 | filecheck --check-prefix=QUIET %s
 
 module {
-  func @f(%0: !i32) -> !i32 {
+  func.func @f(%0: !i32) -> !i32 {
     %1 = constant {value = 0} : !i32
     %2 = addi %0, %1 : !i32
-    return %2
+    func.return %2
   }
   module_end
 }

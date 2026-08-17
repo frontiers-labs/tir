@@ -17,9 +17,9 @@ rather than only in the driver's flags:
 #target_env = {arch = "riscv64", features = ["rv64i", "rvm", "c"]}
 
 module {data_layout = #data_layout, target_env = #target_env} {
-  func @f() -> !i32 {
+  func.func @f() -> !i32 {
     %0 = constant {value = 1} : !i32
-    return %0
+    func.return %0
   }
   module_end
 }

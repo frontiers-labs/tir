@@ -4,12 +4,12 @@
 // test, so the chain destruction mints is empty and nothing decides anything.
 
 module {
-  func @only_default(%p: !i32) -> !i32 {
+  func.func @only_default(%p: !i32) -> !i32 {
     %r = scf.switch %p -> !i32 default {
       %d = addi %p, %p : !i32
       scf.yield %d
     }
-    return %r
+    func.return %r
   }
   module_end
 }

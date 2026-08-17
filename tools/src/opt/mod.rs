@@ -7,7 +7,7 @@ use crate::common::{read_input, write_output};
 
 #[derive(Args)]
 pub struct ToolArgs {
-    /// Pass pipeline in MLIR-style syntax, e.g. `builtin.func(instcombine)`. May be
+    /// Pass pipeline in MLIR-style syntax, e.g. `func.func(instcombine)`. May be
     /// repeated; repeated values are joined into one comma-separated pipeline.
     #[arg(long = "pass", short = 'p')]
     passes: Vec<String>,

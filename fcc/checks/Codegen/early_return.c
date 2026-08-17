@@ -4,7 +4,7 @@
 // condition, the loop step and everything after the loop are guarded by that
 // flag, so the function stays structured and keeps a single `return`.
 
-// CHECK: func @find
+// CHECK: func.func @find
 // CHECK: cir.for %{{[0-9]+}} cond {
 // CHECK-NEXT: ptr.load %[[FLAG:[0-9]+]]
 // CHECK: cir.if
@@ -20,4 +20,4 @@
 // CHECK: ptr.load %[[FLAG]]
 // CHECK: cir.if
 // CHECK: %[[RESULT:[0-9]+]] = ptr.load %[[VALUE]]
-// CHECK-NEXT: return %[[RESULT]]
+// CHECK-NEXT: func.return %[[RESULT]]

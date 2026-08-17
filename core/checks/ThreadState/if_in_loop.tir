@@ -5,7 +5,7 @@
 // yields is the one the gate left behind.
 
 module {
-  func @h(%0: !index, %1: !index, %2: !index, %3: !i1, %4: !i32) -> !i32 {
+  func.func @h(%0: !index, %1: !index, %2: !index, %3: !i1, %4: !i32) -> !i32 {
     %5 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %4, %5
     scf.for %0, %1, %2 {
@@ -18,12 +18,12 @@ module {
       scf.yield
     }
     %6 = ptr.load %5 : !i32
-    return %6
+    func.return %6
   }
   module_end
 }
 
-// CHECK-LABEL: func @h
+// CHECK-LABEL: func.func @h
 // CHECK: %[[FINAL:[0-9]+]] = scf.for %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %{{[0-9]+}}) -> !state {
 // CHECK-NEXT: %[[GATE:[0-9]+]] = scf.if %3 args(%[[CARRIED]]) -> !state (%[[T:[0-9]+]]) {
 // CHECK-NEXT: ptr.store %4, %{{[0-9]+}} state(%[[T]] -> %[[T1:[0-9]+]])

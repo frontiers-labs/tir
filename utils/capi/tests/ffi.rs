@@ -7,7 +7,7 @@ use tir_capi::*;
 
 const MODULE: &str = r#"
 module {
-  func @f(%0: !i32, %1: !i32) -> !i32 {
+  func.func @f(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %2
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
@@ -20,7 +20,7 @@ module {
     %8 = ptr.load %4 : !i32
     %9 = constant {value = 1} : !i32
     %10 = addi %8, %9 : !i32
-    return %10
+    func.return %10
   }
   module_end
 }
@@ -65,7 +65,7 @@ fn parse_run_pipeline_print_roundtrip() {
         "expected allocas before promotion:\n{before}"
     );
 
-    let spec = CString::new("builtin.func(thread-state,instcombine,erase-state)").unwrap();
+    let spec = CString::new("func.func(thread-state,instcombine,erase-state)").unwrap();
     let pm = unsafe { tir_pipeline_parse(spec.as_ptr()) };
     assert!(!pm.is_null(), "pipeline parse failed: {}", last_error());
     assert!(
@@ -108,7 +108,7 @@ fn print_unknown_id_returns_null() {
 
 #[test]
 fn unknown_pass_reports_available() {
-    let spec = CString::new("builtin.func(definitely_not_a_pass)").unwrap();
+    let spec = CString::new("func.func(definitely_not_a_pass)").unwrap();
     let pm = unsafe { tir_pipeline_parse(spec.as_ptr()) };
     assert!(pm.is_null());
     assert!(last_error().contains("available passes"));

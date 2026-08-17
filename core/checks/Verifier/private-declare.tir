@@ -4,6 +4,6 @@
 // private to this module.
 
 module {
-  declare private @external(!i32) -> !i32
+  func.declare private @external(!i32) -> !i32
   module_end
 }

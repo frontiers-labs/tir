@@ -10,7 +10,7 @@ fn identifies_operations_by_type() {
     let instance = context.get_op(module.id());
 
     assert!(instance.is::<ModuleOp>());
-    assert!(!instance.is::<tir::builtin::FuncOp>());
+    assert!(!instance.is::<tir::func::FuncOp>());
     assert_eq!(instance.name(), OperationName::of::<ModuleOp>());
     assert_eq!(instance.dialect(), DialectName::of::<BuiltinDialect>());
 }

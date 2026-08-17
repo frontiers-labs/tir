@@ -8,7 +8,7 @@ module {
   // The else-arm is entered because `%a < %b` is false, which proves
   // `%a >= %b`, so the recomputed opposite comparison is the constant 1 rather
   // than a materialized `slt`/`xori` pair.
-  func @complement_arm(%a: !i64, %b: !i64) -> !i1 {
+  func.func @complement_arm(%a: !i64, %b: !i64) -> !i1 {
     %c = cmpi %a, %b {predicate = "slt"} : !i1
     %r = scf.if %c -> !i1 {
       %t = constant {value = 0} : !i1
@@ -17,7 +17,7 @@ module {
       %d = cmpi %a, %b {predicate = "sge"} : !i1
       scf.yield %d
     }
-    return %r
+    func.return %r
   }
   // CHECK: asm.symbol {name = "complement_arm"
   // CHECK: riscv.blt {rs1 = %virt{{[0-9]+}}:GPR, rs2 = %virt{{[0-9]+}}:GPR, imm = ^[[THEN:bb[0-9]+]]}
@@ -30,7 +30,7 @@ module {
 
   // An `eq` gate makes its operands congruent in the guarded arm, so the arm's
   // use of `%x` binds the constant it is proven equal to — as an immediate.
-  func @eq_arm_immediate(%x: !i64, %p: !i64) -> !i64 {
+  func.func @eq_arm_immediate(%x: !i64, %p: !i64) -> !i64 {
     %k = constant {value = 7} : !i64
     %c = cmpi %x, %k {predicate = "eq"} : !i1
     %r = scf.if %c -> !i64 {
@@ -40,7 +40,7 @@ module {
       %z = constant {value = 0} : !i64
       scf.yield %z
     }
-    return %r
+    func.return %r
   }
   // CHECK: asm.symbol {name = "eq_arm_immediate", arg_regs = [%virt{{[0-9]+}}:GPR, %virt[[P:[0-9]+]]:GPR]}
   // CHECK: riscv.addi {rd = %virt{{[0-9]+}}:GPR, rs1 = %virt[[P]]:GPR, imm = 7}

@@ -1,11 +1,11 @@
 // RUN: tir mc --march=armv8 --stage=regalloc %s | filecheck %s
 
 module {
-  declare @make_quad() -> !tuple<!f64, !f64, !f64, !f64>
-  func @fourth() -> !f64 {
-    %0 = call @make_quad() -> !tuple<!f64, !f64, !f64, !f64>
+  func.declare @make_quad() -> !tuple<!f64, !f64, !f64, !f64>
+  func.func @fourth() -> !f64 {
+    %0 = func.call @make_quad() -> !tuple<!f64, !f64, !f64, !f64>
     %1 = tuple_get %0 {index = 3} : !f64
-    return %1
+    func.return %1
   }
   module_end
 }

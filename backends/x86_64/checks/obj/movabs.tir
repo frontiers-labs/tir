@@ -5,9 +5,9 @@
 // r64, imm64` (REX.W 0xB8+rd io) instead of the `mov r32, imm32` form.
 
 module {
-  func @wide() -> !i64 {
+  func.func @wide() -> !i64 {
     %0 = constant {value = 1234605616436508552} : !i64
-    return %0
+    func.return %0
   }
   module_end
 }

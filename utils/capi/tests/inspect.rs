@@ -6,11 +6,11 @@ use tir_capi::*;
 
 const MODULE: &str = r#"
 module {
-  func @f(%0: !i32, %1: !i32) -> !i32 {
+  func.func @f(%0: !i32, %1: !i32) -> !i32 {
     %2 = muli %0, %1 : !i32
     %3 = constant {value = 1} : !i32
     %4 = addi %2, %3 : !i32
-    return %4
+    func.return %4
   }
   module_end
 }

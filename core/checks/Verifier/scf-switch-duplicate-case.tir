@@ -3,7 +3,7 @@
 // A predicate value selects exactly one arm, so no case value may repeat.
 
 module {
-  func @dispatch(%0: !i32) {
+  func.func @dispatch(%0: !i32) {
     scf.switch %0 case 1 {
       scf.yield
     }
@@ -13,7 +13,7 @@ module {
     default {
       scf.yield
     }
-    return
+    func.return
   }
   module_end
 }

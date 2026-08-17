@@ -1,12 +1,12 @@
 // RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
 
 module {
-  func @f() -> !i32 {
+  func.func @f() -> !i32 {
     %0 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %1 = constant {value = 0} : !i32
     ptr.store %1, %0
     %2 = ptr.load %0 : !i32
-    return %2
+    func.return %2
   }
   module_end
 }

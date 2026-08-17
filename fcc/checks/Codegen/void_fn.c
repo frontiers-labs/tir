@@ -2,11 +2,11 @@
 
 // A void function with no locals has no stack slots and just returns.
 
-// CHECK: func @nop() {
-// CHECK-NEXT: return
+// CHECK: func.func @nop() {
+// CHECK-NEXT: func.return
 // CHECK-NEXT: }
 // CHECK-NOT: ptr.alloca
 
-// CHECK: func @implicit() {
-// CHECK-NEXT: return
+// CHECK: func.func @implicit() {
+// CHECK-NEXT: func.return
 // CHECK-NEXT: }

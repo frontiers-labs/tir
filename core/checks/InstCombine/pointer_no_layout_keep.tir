@@ -5,16 +5,16 @@
 // unseeded and the chain around it is left alone.
 
 module {
-  func @f(%0: !ptr.p<!ptr.p<!i32>>, %1: !ptr.p<!i32>) -> !ptr.p<!i32> {
+  func.func @f(%0: !ptr.p<!ptr.p<!i32>>, %1: !ptr.p<!i32>) -> !ptr.p<!i32> {
     %2 = state.entry_state : !state
     ptr.store %1, %0 state(%2 -> %3)
     %4 = ptr.load %0 : !ptr.p<!i32> state(%3)
-    return %4
+    func.return %4
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: ptr.store %1, %0 state(%[[S0:[0-9]+]] -> %[[S1:[0-9]+]])
 // CHECK-NEXT: %[[V:[0-9]+]] = ptr.load %0 : !ptr.p<!i32> state(%[[S1]])
-// CHECK-NEXT: return %[[V]]
+// CHECK-NEXT: func.return %[[V]]

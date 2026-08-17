@@ -49,7 +49,7 @@ fn build_block_from_scratch_wires_operands() {
 
     // Chain a return on the addi result.
     let r = unsafe { tir_op_result(ctx, addi, 0) };
-    let ret = parse_op_text(ctx, &format!("return %{r}"));
+    let ret = parse_op_text(ctx, &format!("func.return %{r}"));
     assert!(unsafe { tir_block_append_op(ctx, block, ret) });
     assert_eq!(unsafe { tir_block_num_ops(ctx, block) }, 2);
 
@@ -58,9 +58,9 @@ fn build_block_from_scratch_wires_operands() {
 
 const MODULE: &str = r#"
 module {
-  func @f(%0: !i32) -> !i32 {
+  func.func @f(%0: !i32) -> !i32 {
     %1 = addi %0, %0 : !i32
-    return %1
+    func.return %1
   }
   module_end
 }

@@ -6,7 +6,7 @@
 // memory.
 
 module {
-  func @early(%0: !i1, %1: !i32) -> !i32 {
+  func.func @early(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.while {
@@ -16,14 +16,14 @@ module {
       scf.break %3
     }
     %4 = ptr.load %2 : !i32
-    return %4
+    func.return %4
   }
   module_end
 }
 
-// CHECK-LABEL: func @early
+// CHECK-LABEL: func.func @early
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%{{[0-9]+}} = %1) -> !i32 {
 // CHECK: do scope(%[[SCOPE:[0-9]+]])(%{{[0-9]+}}) {
 // CHECK-NEXT: scf.break %[[SCOPE]], %1
-// CHECK: return %[[RESULT]]
+// CHECK: func.return %[[RESULT]]

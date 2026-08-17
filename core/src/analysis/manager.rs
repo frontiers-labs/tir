@@ -107,7 +107,7 @@ impl AnalysisManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Operand, Operation, builtin::ops};
+    use crate::{Operand, Operation, builtin::ops, func::ops as func_ops};
 
     struct Simple;
 
@@ -140,7 +140,7 @@ mod tests {
             .iter(context.clone())
             .next()
             .expect("module has an entry block");
-        block.append(ops::r#return(context, Operand::none()).build().id());
+        block.append(func_ops::r#return(context, Operand::none()).build().id());
     }
 
     #[test]

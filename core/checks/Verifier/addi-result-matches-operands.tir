@@ -4,11 +4,11 @@
 // result fails.
 
 module {
-  func @f() -> !i64 {
+  func.func @f() -> !i64 {
     %0 = constant {value = 1} : !i32
     %1 = constant {value = 2} : !i32
     %2 = addi %0, %1 : !i64
-    return %2
+    func.return %2
   }
   module_end
 }

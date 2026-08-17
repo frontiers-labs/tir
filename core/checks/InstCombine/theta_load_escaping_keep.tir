@@ -5,23 +5,23 @@
 // never read. No port grows and the loop keeps reading memory.
 
 module {
-  declare @sink(!ptr.p<!i32>) -> !i32
-  func @escapes(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
+  func.declare @sink(!ptr.p<!i32>) -> !i32
+  func.func @escapes(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
     %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %4
     scf.for %0, %1, %2 {
       %5 = ptr.load %4 : !i32
-      %7 = call @sink(%4 : !ptr.p<!i32>) -> !i32
+      %7 = func.call @sink(%4 : !ptr.p<!i32>) -> !i32
       ptr.store %5, %4
       scf.yield
     }
     %6 = ptr.load %4 : !i32
-    return %6
+    func.return %6
   }
   module_end
 }
 
-// CHECK-LABEL: func @escapes
+// CHECK-LABEL: func.func @escapes
 // CHECK: ptr.alloca
 // CHECK: ptr.store
 // CHECK: scf.for

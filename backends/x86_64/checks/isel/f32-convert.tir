@@ -1,45 +1,45 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 module {
-  func @from_signed(%0: !i32) -> !f32 {
+  func.func @from_signed(%0: !i32) -> !f32 {
     %1 = sitofp %0 : !f32
-    return %1
+    func.return %1
   }
-  func @from_signed64(%0: !i64) -> !f32 {
+  func.func @from_signed64(%0: !i64) -> !f32 {
     %1 = sitofp %0 : !f32
-    return %1
+    func.return %1
   }
-  func @from_unsigned(%0: !i32) -> !f32 {
+  func.func @from_unsigned(%0: !i32) -> !f32 {
     %1 = uitofp %0 : !f32
-    return %1
+    func.return %1
   }
-  func @to_signed(%0: !f32) -> !i32 {
+  func.func @to_signed(%0: !f32) -> !i32 {
     %1 = fptosi %0 : !i32
-    return %1
+    func.return %1
   }
-  func @to_signed64(%0: !f32) -> !i64 {
+  func.func @to_signed64(%0: !f32) -> !i64 {
     %1 = fptosi %0 : !i64
-    return %1
+    func.return %1
   }
-  func @to_unsigned(%0: !f32) -> !i32 {
+  func.func @to_unsigned(%0: !f32) -> !i32 {
     %1 = fptoui %0 : !i32
-    return %1
+    func.return %1
   }
-  func @less(%0: !f32, %1: !f32) -> !i1 {
+  func.func @less(%0: !f32, %1: !f32) -> !i1 {
     %2 = cmpf %0, %1 {predicate = "olt"} : !i1
-    return %2
+    func.return %2
   }
-  func @constant() -> !f32 {
+  func.func @constant() -> !f32 {
     %0 = constantf {value = 1.5} : !f32
-    return %0
+    func.return %0
   }
-  func @bits_to_float(%0: !i32) -> !f32 {
+  func.func @bits_to_float(%0: !i32) -> !f32 {
     %1 = bitcast %0 : !f32
-    return %1
+    func.return %1
   }
-  func @float_to_bits(%0: !f32) -> !i32 {
+  func.func @float_to_bits(%0: !f32) -> !i32 {
     %1 = bitcast %0 : !i32
-    return %1
+    func.return %1
   }
   module_end
 }

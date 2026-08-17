@@ -44,15 +44,15 @@ mod tests {
 
     #[test]
     fn module_parses_labeled_func_blocks() {
-        use crate::builtin::FuncOp;
+        use crate::func::FuncOp;
 
         let context = Context::with_default_dialects();
         let src = r#"module {
-  func @jump() -> !i32 {
+  func.func @jump() -> !i32 {
     cfg.br ^bb1
   ^bb1:
     %0 = constant {value = 42} : !i32
-    return %0
+    func.return %0
   }
   module_end
 }"#;

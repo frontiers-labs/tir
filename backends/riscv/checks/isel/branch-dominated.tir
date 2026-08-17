@@ -8,7 +8,7 @@
 // arm the decision excludes.
 
 module {
-  func @dominated(%0: !i64, %1: !i64) -> !i64 {
+  func.func @dominated(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
@@ -16,13 +16,13 @@ module {
     cfg.cond_br %3, ^bb3, ^bb4
   ^bb2:
     %4 = constant {value = 0} : !i64
-    return %4
+    func.return %4
   ^bb3:
     %5 = constant {value = 1} : !i64
-    return %5
+    func.return %5
   ^bb4:
     %6 = constant {value = 2} : !i64
-    return %6
+    func.return %6
   }
   module_end
 }

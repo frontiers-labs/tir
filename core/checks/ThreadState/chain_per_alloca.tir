@@ -4,7 +4,7 @@
 // chain of its own rooted at its allocation. Nothing joins them.
 
 module {
-  func @f(%0: !i32, %1: !i32) -> !i32 {
+  func.func @f(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %2
@@ -12,12 +12,12 @@ module {
     %4 = ptr.load %2 : !i32
     %5 = ptr.load %3 : !i32
     %6 = addi %4, %5 : !i32
-    return %6
+    func.return %6
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[A:[0-9]+]])
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[B:[0-9]+]])
@@ -26,4 +26,4 @@ module {
 // CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %{{[0-9]+}})
 // CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[B1]] -> %{{[0-9]+}})
 // CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
-// CHECK-NEXT: return %{{[0-9]+}} state(%[[ENTRY]])
+// CHECK-NEXT: func.return %{{[0-9]+}} state(%[[ENTRY]])

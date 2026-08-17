@@ -7,7 +7,7 @@
 // the body's own back edge.
 
 module {
-  func @find(%n: !i64, %limit: !i64) -> !i64 {
+  func.func @find(%n: !i64, %limit: !i64) -> !i64 {
     %r = scf.while iter_args(%i = %n) -> !i64 {
       %z = constant {value = 0} : !i64
       %c = cmpi %i, %z {predicate = "sgt"} : !i1
@@ -23,7 +23,7 @@ module {
       }
       scf.yield %ni
     }
-    return %r
+    func.return %r
   }
   module_end
 }

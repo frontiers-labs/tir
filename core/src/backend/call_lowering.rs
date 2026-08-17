@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use tir::analysis::DefUse;
 use tir::attributes::{AttributeValue, RegisterAttr};
 use tir::builtin::{
-    CallOp, IndirectCallOp, MakeTupleOp, MakeTupleOpBuilder, ReturnOp, TupleGetOp,
-    TupleGetOpBuilder, TupleType, UnitType,
+    MakeTupleOp, MakeTupleOpBuilder, TupleGetOp, TupleGetOpBuilder, TupleType, UnitType,
 };
+use tir::func::{CallOp, IndirectCallOp, ReturnOp};
 use tir::{Context, OpId, Operand, Operation, OperationRef, PassError, Rewriter, ValueId};
 
 use crate::backend::abi::{
@@ -119,11 +119,9 @@ impl CallLowering {
                                     .build();
                                 let tuple_value = make_tuple.result();
                                 rewriter.insert_op_before(&return_ref, &make_tuple)?;
-                                let replacement = tir::builtin::ops::r#return(
-                                    context,
-                                    Operand::from(tuple_value),
-                                )
-                                .build();
+                                let replacement =
+                                    tir::func::ops::r#return(context, Operand::from(tuple_value))
+                                        .build();
                                 rewriter.replace_op(&return_ref, &replacement)?;
                             }
                         }

@@ -3,18 +3,18 @@
 // RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s --check-prefix=NOC
 
 module {
-  declare @callee(!i32) -> !i32
-  func @caller(%0: !i32) -> !i32 {
-    %1 = call @callee(%0 : !i32) -> !i32
-    return %1
+  func.declare @callee(!i32) -> !i32
+  func.func @caller(%0: !i32) -> !i32 {
+    %1 = func.call @callee(%0 : !i32) -> !i32
+    func.return %1
   }
   module_end
 }
 
 // The post-RA compression pass narrows the register moves to c.mv and the
-// return to c.jr; the call stays a 4-byte jal because its target is a
+// func.return to c.jr; the call stays a 4-byte jal because its target is a
 // link-time fixup and compressed ranges cannot be relaxed. `caller` is non-leaf,
-// so the callee-saved register holding the return address across the call is
+// so the callee-saved register holding the func.return address across the call is
 // preserved by the prologue/epilogue. The frame is a single 8-byte slot rounded
 // up to the psABI's 16-byte alignment, so the sp adjustment compresses to
 // c.addi16sp (c.addi16sp / c.sdsp / c.ldsp).

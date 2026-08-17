@@ -1425,7 +1425,7 @@ fn verify_single_block_region_has_terminator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Operation, builtin::ops as builtin_ops};
+    use crate::{Operation, builtin::ops as builtin_ops, func::ops as func_ops};
 
     fn terminated_region(context: &Context) -> tir::RegionId {
         let region = context.create_region();
@@ -1445,7 +1445,7 @@ mod tests {
         let region = context.create_region();
         let block = context.create_block(vec![condition.clone()]);
         region.add_block(block.id());
-        let func = builtin_ops::func(
+        let func = func_ops::func(
             &context,
             "control",
             crate::builtin::UnitType::new(&context),
@@ -1465,7 +1465,7 @@ mod tests {
 
         func.body().append_op(if_op);
         func.body()
-            .append_op(builtin_ops::r#return(&context, tir::Operand::none()).build());
+            .append_op(func_ops::r#return(&context, tir::Operand::none()).build());
 
         assert!(func.verify(&context).is_ok());
     }
@@ -1555,7 +1555,7 @@ mod tests {
         let region = context.create_region();
         let block = context.create_block(vec![condition.clone(), input.clone()]);
         region.add_block(block.id());
-        let func = builtin_ops::func(
+        let func = func_ops::func(
             &context,
             "gate",
             crate::builtin::UnitType::new(&context),
@@ -1574,7 +1574,7 @@ mod tests {
 
         func.body().append_op(if_op);
         func.body()
-            .append_op(builtin_ops::r#return(&context, tir::Operand::none()).build());
+            .append_op(func_ops::r#return(&context, tir::Operand::none()).build());
 
         assert!(tir::verify_op_tree(&context, func.id()).is_err());
     }

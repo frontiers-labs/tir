@@ -51,8 +51,8 @@ macro_rules! register_pass {
 ///
 /// The grammar is a comma-separated list of elements, where each element is
 /// either a registered pass name or an op-nesting `op(inner-pipeline)`. The op
-/// name may be dialect-qualified (`builtin.func`) or bare (`func`). Example:
-/// `builtin.func(instcombine)` runs `instcombine` nested inside every function.
+/// name may be dialect-qualified (`func.func`) or bare (`func`). Example:
+/// `func.func(instcombine)` runs `instcombine` nested inside every function.
 pub fn parse_pipeline(spec: &str) -> Result<PassManager, String> {
     let mut parser = PipelineParser {
         bytes: spec.as_bytes(),
@@ -166,7 +166,7 @@ impl std::error::Error for PassError {}
 /// Operation targets must be constructed from an operation type:
 ///
 /// ```compile_fail
-/// let _ = tir::PassTarget::Operation("builtin.func");
+/// let _ = tir::PassTarget::Operation("func.func");
 /// ```
 pub enum PassTarget {
     Any,
@@ -436,7 +436,7 @@ impl Rewriter {
 }
 
 /// Match an op against a nesting spec that is either a bare op name (`func`)
-/// or a dialect-qualified name (`builtin.func`).
+/// or a dialect-qualified name (`func.func`).
 fn matches_op_name(op: &OpHandle, spec: &str) -> bool {
     match spec.split_once('.') {
         Some((dialect, name)) => op.is_name(dialect, name),
@@ -731,8 +731,9 @@ impl Default for PassManager {
 mod tests {
     use crate::{
         Context, Operation,
-        builtin::{AddIOp, FuncOp, IntegerType, ops},
+        builtin::{AddIOp, IntegerType, ops},
         cfg::ops as cfg_ops,
+        func::{FuncOp, ops as func_ops},
     };
 
     use super::{AnalysisManager, Pass, PassError, PassManager, PassTarget};
@@ -832,7 +833,7 @@ mod tests {
         }
     }
 
-    /// `func demo(%0) { %1 = addi %0, %0; return %1 }`, with `pass` run over it.
+    /// `func.func demo(%0) { %1 = addi %0, %0; func.return %1 }`, with `pass` run over it.
     fn run_on_broken_candidate(pass: Box<dyn Pass>) -> Result<(), PassError> {
         let context = Context::with_default_dialects();
         let i32 = IntegerType::new(&context, 32);
@@ -840,7 +841,7 @@ mod tests {
         let arg = context.create_value(i32, None);
         let block = context.create_block(vec![arg]);
         region.add_block(block.id());
-        let func = ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
         let body = func.body();
 
         let add = ops::addi(
@@ -852,7 +853,7 @@ mod tests {
         .build();
         let add_result = add.result();
         body.append_op(add);
-        body.append_op(ops::r#return(&context, add_result).build());
+        body.append_op(func_ops::r#return(&context, add_result).build());
 
         let mut pm = PassManager::new();
         pm.verify_ir(true);
@@ -937,8 +938,8 @@ mod tests {
         let block = context.create_block(vec![argument.clone()]);
         region.add_block(block.id());
         let add = block.append_op(ops::addi(context, argument.id(), argument.id(), i32).build());
-        block.append_op(ops::r#return(context, add.result()).build());
-        ops::func(context, "demo", i32, Some(region.id())).build()
+        block.append_op(func_ops::r#return(context, add.result()).build());
+        func_ops::func(context, "demo", i32, Some(region.id())).build()
     }
 
     #[test]
@@ -975,7 +976,7 @@ mod tests {
         entry.append_op(cfg_ops::br(&context, vec![], target.id()).build());
         target
             .clone()
-            .append_op(ops::r#return(&context, crate::Operand::none()).build());
+            .append_op(func_ops::r#return(&context, crate::Operand::none()).build());
         let mut rewriter = super::Rewriter::new(context.clone());
 
         let clone = rewriter.clone_region(region.id());
@@ -1099,7 +1100,7 @@ mod tests {
         let block = context.create_block(vec![param0, param1]);
         region.add_block(block.id());
 
-        let func = ops::func(
+        let func = func_ops::func(
             &context,
             "demo",
             IntegerType::new(&context, 32),
@@ -1120,7 +1121,7 @@ mod tests {
         let add_result = add.result();
         let add_id = add.id();
         func_builder.append_op(add);
-        func_builder.append_op(ops::r#return(&context, add_result).build());
+        func_builder.append_op(func_ops::r#return(&context, add_result).build());
 
         module.body().append_op(func);
 
@@ -1163,7 +1164,7 @@ mod tests {
         let arg = context.create_value(i32, None);
         let block = context.create_block(vec![arg.clone()]);
         region.add_block(block.id());
-        let func = ops::func(&context, "demo", i32, Some(region.id())).build();
+        let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
         let body = func.body();
 
         let neg = ops::subi(
@@ -1200,10 +1201,10 @@ mod tests {
         let pm = parse_pipeline("instcombine").expect("bare pass should parse");
         assert!(matches!(pm.passes.as_slice(), [PassNode::Pass(_)]));
 
-        let pm = parse_pipeline(" builtin.func( instcombine ) ").expect("nested should parse");
+        let pm = parse_pipeline(" func.func( instcombine ) ").expect("nested should parse");
         match pm.passes.as_slice() {
             [PassNode::Nested { op_name, manager }] => {
-                assert_eq!(op_name, "builtin.func");
+                assert_eq!(op_name, "func.func");
                 assert!(matches!(manager.passes.as_slice(), [PassNode::Pass(_)]));
             }
             _ => panic!("expected a single nested node"),
@@ -1213,17 +1214,18 @@ mod tests {
     #[test]
     fn pipeline_reports_errors() {
         assert!(super::parse_pipeline("definitely-not-a-pass").is_err());
-        assert!(super::parse_pipeline("builtin.func(instcombine").is_err());
+        assert!(super::parse_pipeline("func.func(instcombine").is_err());
         assert!(super::parse_pipeline("instcombine)").is_err());
     }
 
     #[test]
     fn matches_bare_and_qualified_op_names() {
         let context = Context::with_default_dialects();
-        let func = ops::func(&context, "demo", IntegerType::new(&context, 32), None).build();
+        let func = func_ops::func(&context, "demo", IntegerType::new(&context, 32), None).build();
         let op = context.get_op(func.id());
         assert!(super::matches_op_name(&op, "func"));
-        assert!(super::matches_op_name(&op, "builtin.func"));
+        assert!(super::matches_op_name(&op, "func.func"));
+        assert!(!super::matches_op_name(&op, "builtin.func"));
         assert!(!super::matches_op_name(&op, "scf.func"));
         assert!(!super::matches_op_name(&op, "module"));
     }

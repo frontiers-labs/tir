@@ -5,10 +5,10 @@
 // (fmv.d.x), so materialization is rv64-only; rv32 fails loudly.
 
 module {
-  func @zero(%0: !f64) -> !f64 {
+  func.func @zero(%0: !f64) -> !f64 {
     %1 = constantf {value = 0.0} : !f64
     %2 = addf %0, %1 : !f64
-    return %2
+    func.return %2
   }
   module_end
 }

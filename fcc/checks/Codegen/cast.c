@@ -1,15 +1,15 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_cast.c | filecheck %s
 
-// CHECK: func @truncate
+// CHECK: func.func @truncate
 // CHECK: trunci
 // CHECK: extui
-// CHECK: func @widen
+// CHECK: func.func @widen
 // CHECK: extsi
-// CHECK: func @widen_unsigned
+// CHECK: func.func @widen_unsigned
 // CHECK: extui
-// CHECK-LABEL: func @null_pointer
+// CHECK-LABEL: func.func @null_pointer
 // CHECK: ptr.null : !ptr.p
-// CHECK-LABEL: func @negative_pointer
+// CHECK-LABEL: func.func @negative_pointer
 // CHECK: extsi
-// CHECK-LABEL: func @clear
+// CHECK-LABEL: func.func @clear
 // CHECK: ptr.null : !ptr.p

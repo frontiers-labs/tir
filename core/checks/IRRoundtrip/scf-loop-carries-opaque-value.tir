@@ -6,7 +6,7 @@
 // loops as a value.
 
 module {
-  func @carry(%0: !index, %1: !index, %2: !index, %3: !unit, %4: !i1) -> !unit {
+  func.func @carry(%0: !index, %1: !index, %2: !index, %3: !unit, %4: !i1) -> !unit {
     %5 = scf.for %0, %1, %2 iter_args(%6 = %3) -> !unit {
       scf.yield %6
     }
@@ -15,7 +15,7 @@ module {
     } do(%9) {
       scf.yield %9
     }
-    return %7
+    func.return %7
   }
   module_end
 }

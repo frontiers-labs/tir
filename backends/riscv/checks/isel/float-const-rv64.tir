@@ -2,10 +2,10 @@
 // RUN: not tir mc --march=rv32ifd --stage=isel %s
 
 module {
-  func @scale(%0: !f64) -> !f64 {
+  func.func @scale(%0: !f64) -> !f64 {
     %1 = constantf {value = 2.5} : !f64
     %2 = mulf %0, %1 : !f64
-    return %2
+    func.return %2
   }
   module_end
 }

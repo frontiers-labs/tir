@@ -7,9 +7,9 @@
 #data_layout = {endianness = "little", stack_alignment = 128, types = {p = {size = 32, abi = 32}}}
 
 module {data_layout = #data_layout} {
-  func @deref(%0: !ptr.p<!ptr.p>) -> !ptr.p {
+  func.func @deref(%0: !ptr.p<!ptr.p>) -> !ptr.p {
     %1 = ptr.load %0 : !ptr.p
-    return %1
+    func.return %1
   }
   module_end
 }

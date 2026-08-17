@@ -5,7 +5,7 @@
 // hands the state it reached to the loop's port instead of yielding it.
 
 module {
-  func @f(%0: !i1, %1: !i32) -> !i32 {
+  func.func @f(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.while {
@@ -20,12 +20,12 @@ module {
       scf.yield
     }
     %4 = ptr.load %2 : !i32
-    return %4
+    func.return %4
   }
   module_end
 }
 
-// CHECK-LABEL: func @f
+// CHECK-LABEL: func.func @f
 // CHECK: %[[FINAL:[0-9]+]] = scf.while iter_args(%[[COND:[0-9]+]] = %{{[0-9]+}}) -> !state {
 // CHECK-NEXT: scf.condition %0, %[[COND]]
 // CHECK-NEXT: }

@@ -1,14 +1,14 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
 
 module {
-  func @constant() -> !i64 {
+  func.func @constant() -> !i64 {
     %value = constant {value = 4} : !i64
-    return %value
+    func.return %value
   }
 
-  func @negative_i16() -> !i16 {
+  func.func @negative_i16() -> !i16 {
     %value = constant {value = -32640} : !i16
-    return %value
+    func.return %value
   }
   module_end
 }

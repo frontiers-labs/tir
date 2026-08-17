@@ -8,10 +8,10 @@
 // number).
 
 module {
-  func @m2(%0: !vector.vec<8xi32>, %1: !vector.vec<8xi32>) -> !vector.vec<8xi32> {
+  func.func @m2(%0: !vector.vec<8xi32>, %1: !vector.vec<8xi32>) -> !vector.vec<8xi32> {
     %2 = vector.add %0, %1 : !vector.vec<8xi32>
     %3 = vector.mul %2, %1 : !vector.vec<8xi32>
-    return %3
+    func.return %3
   }
   module_end
 }

@@ -8,6 +8,7 @@ use tir::BlockHandle;
 
 use tir::builtin::{self, IntegerType, UnitType, ops as bops};
 use tir::cfg::ops as cbops;
+use tir::func::ops as func_ops;
 use tir::ptr::{PtrType, ops as pops};
 use tir::{Context, Operand, TypeId, ValueId};
 
@@ -32,11 +33,11 @@ fn declare_external_callees(context: &Context, module: &builtin::ModuleOp, body:
     let table = tir::SymbolTable::build(context, tir::Operation::id(module));
     let mut declarations = Vec::new();
     for op in module.body().iter(context.clone()) {
-        let Some(func) = op.as_op::<builtin::FuncOp>() else {
+        let Some(func) = op.as_op::<tir::func::FuncOp>() else {
             continue;
         };
         for op in func.body().iter(context.clone()) {
-            let Some(call) = op.as_op::<builtin::CallOp>() else {
+            let Some(call) = op.as_op::<tir::func::CallOp>() else {
                 continue;
             };
             let args: Vec<_> = call
@@ -56,7 +57,7 @@ fn declare_external_callees(context: &Context, module: &builtin::ModuleOp, body:
         }
     }
     for (name, args, ret) in declarations {
-        body.append_op(builtin::declare_op(context, &name, ret, &args));
+        body.append_op(tir::func::declare_op(context, &name, ret, &args));
     }
 }
 
@@ -69,7 +70,7 @@ fn lower_type(context: &Context, ty: &Type) -> TypeId {
     }
 }
 
-fn lower_function(context: &Context, func: &ast::Function) -> Result<builtin::FuncOp, Error> {
+fn lower_function(context: &Context, func: &ast::Function) -> Result<tir::func::FuncOp, Error> {
     let region = context.create_region();
     let mut values: HashMap<String, ValueId> = HashMap::new();
 
@@ -99,7 +100,7 @@ fn lower_function(context: &Context, func: &ast::Function) -> Result<builtin::Fu
     }
 
     let ret_ty = lower_type(context, &func.ret);
-    let op = bops::func(context, func.name.as_str(), ret_ty, Some(region.id())).build();
+    let op = func_ops::func(context, func.name.as_str(), ret_ty, Some(region.id())).build();
 
     for (block, created) in func.blocks.iter().zip(blocks.iter()) {
         let builder = created.clone();
@@ -260,11 +261,11 @@ fn lower_inst(
         }
         Inst::Ret { value } => match value {
             None => {
-                body.append_op(bops::r#return(context, Operand::none()).build());
+                body.append_op(func_ops::r#return(context, Operand::none()).build());
             }
             Some((ty, op)) => {
                 let v = val!(op, ty);
-                body.append_op(bops::r#return(context, v).build());
+                body.append_op(func_ops::r#return(context, v).build());
             }
         },
         Inst::Call {
@@ -278,7 +279,7 @@ fn lower_inst(
                 arg_ids.push(val!(op, ty));
             }
             let ret_ty = lower_type(context, ret);
-            let o = bops::call(context, arg_ids, callee.as_str(), ret_ty).build();
+            let o = func_ops::call(context, arg_ids, callee.as_str(), ret_ty).build();
             if let Some(name) = result {
                 values.insert(name.clone(), o.result());
             }

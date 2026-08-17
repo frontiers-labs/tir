@@ -3,7 +3,8 @@ use std::error::Error;
 use std::fmt::{self, Display};
 
 use tir::attributes::AttributeValue;
-use tir::builtin::{DeclareOp, ModuleEndOp, ModuleOp};
+use tir::builtin::{ModuleEndOp, ModuleOp};
+use tir::func::DeclareOp;
 use tir::{Context, OpHandle, Operation};
 
 use crate::backend::{

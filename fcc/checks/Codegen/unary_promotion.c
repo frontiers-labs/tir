@@ -12,7 +12,7 @@ void negate(ee_s16 value)
   take(-value);
 }
 
-// CHECK-LABEL: func @negate
+// CHECK-LABEL: func.func @negate
 // CHECK: %[[WIDE:[0-9]+]] = extsi %{{[0-9]+}} : !i32
 // CHECK: subi %{{[0-9]+}}, %[[WIDE]] : !i32
 
@@ -21,6 +21,6 @@ void complement(ee_s16 value)
   take(~value);
 }
 
-// CHECK-LABEL: func @complement
+// CHECK-LABEL: func.func @complement
 // CHECK: %[[WIDE2:[0-9]+]] = extsi %{{[0-9]+}} : !i32
 // CHECK: xori %[[WIDE2]], %{{[0-9]+}} : !i32
