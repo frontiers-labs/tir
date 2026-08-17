@@ -141,6 +141,10 @@ pub enum PassError {
         pass: &'static str,
         error: crate::Error,
     },
+    WrongForm {
+        pass: &'static str,
+        error: crate::Error,
+    },
 }
 
 impl std::fmt::Display for PassError {
@@ -153,6 +157,9 @@ impl std::fmt::Display for PassError {
             PassError::RewriteFailed(op) => write!(f, "failed to rewrite op {op:?}"),
             PassError::InvalidIR { pass, error } => {
                 write!(f, "pass '{pass}' produced invalid IR: {error:?}")
+            }
+            PassError::WrongForm { pass, error } => {
+                write!(f, "pass '{pass}' got input in the wrong form: {error}")
             }
         }
     }
@@ -256,6 +263,13 @@ pub trait Pass: Send {
     /// contract, so it does not describe that output.
     fn emits_machine_ir(&self) -> bool {
         false
+    }
+
+    /// The IR contract this pass expects on input, as the set of dialects its
+    /// input may be spelled in (see [`crate::Form`]). `None` means the pass
+    /// accepts any dialect.
+    fn required_form(&self) -> Option<crate::Form> {
+        None
     }
 
     /// Run on `op`. A pass reports nothing about what it changed: every edit
@@ -643,6 +657,19 @@ impl PassManager {
                 let version_before = context.op_version(root.op.id);
                 PassManager::walk_ops(context, root, &mut |op_ref| {
                     if pass.target().matches(op_ref.op()) {
+                        // A form is a precondition on the pass input, not a
+                        // re-check of IR validity, so the verification gate
+                        // does not switch it off.
+                        if let Some(form) = pass.required_form()
+                            && !is_machine_ir(context, op_ref.op.id)
+                        {
+                            crate::verify_form(context, op_ref.op.id, &form).map_err(|error| {
+                                PassError::WrongForm {
+                                    pass: pass.name(),
+                                    error,
+                                }
+                            })?;
+                        }
                         pass.run(&op_ref, context, rewriter, analyses)?;
                     }
                     Ok(())

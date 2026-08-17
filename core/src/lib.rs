@@ -14,6 +14,7 @@ mod diagnostics;
 mod dialect;
 mod dialects;
 mod error;
+pub mod form;
 pub mod graph;
 mod interfaces;
 mod ir_formatter;
@@ -46,6 +47,7 @@ pub use context::{Context, ContextIterator, ContextRef, GetFromContext, StagedRe
 pub use diagnostics::{print_error_range, print_parse_error};
 pub use dialect::{Dialect, OperationParser};
 pub use error::Error;
+pub use form::{Form, verify_form};
 pub use interfaces::{
     BranchGuard, BranchTerminator, Commutative, Conditional, ConstantFold, ConstantLike,
     CountedLoop, EntryGuard, GuardOrdering, GuardedLoop, IntegerArithmetic, LoopLike, MemoryRead,
