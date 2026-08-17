@@ -341,34 +341,6 @@ pub trait BranchGuard {
     }
 }
 
-pub trait SameOperandType {
-    fn verify_interface(
-        &self,
-        this: &dyn Operation,
-        context: &Context,
-    ) -> Result<(), crate::Error> {
-        if this.operands().is_empty() {
-            return Ok(());
-        }
-
-        let first_operand = *this.operands().first().unwrap();
-        let first_type = context.get_value(first_operand).ty();
-
-        let result = this
-            .operands()
-            .iter()
-            .all(|&operand| context.get_value(operand).ty() == first_type);
-
-        if !result {
-            return Err(crate::Error::VerificationError(
-                "operand types must be the same".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-}
-
 /// An operation whose operands and results all carry one type. Memory state ports
 /// are exempt: `!state` describes a side channel, not the value being computed.
 pub trait SameOperandAndResultType {

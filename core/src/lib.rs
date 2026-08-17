@@ -51,8 +51,8 @@ pub use form::{Form, verify_form};
 pub use interfaces::{
     BranchGuard, BranchTerminator, Commutative, Conditional, ConstantFold, ConstantLike,
     CountedLoop, EntryGuard, GuardOrdering, GuardedLoop, IntegerArithmetic, LoopLike, MemoryRead,
-    MemoryWrite, OpCost, PromotableAllocation, SameOperandAndResultType, SameOperandType, Symbol,
-    Terminator, TokenScope, Visibility,
+    MemoryWrite, OpCost, PromotableAllocation, SameOperandAndResultType, Symbol, Terminator,
+    TokenScope, Visibility,
 };
 pub use ir_formatter::IRFormatter;
 pub use layout::{DATA_LAYOUT, DataLayout, Endianness, data_layout_spec};
