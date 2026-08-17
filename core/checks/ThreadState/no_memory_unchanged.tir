@@ -12,6 +12,6 @@ module {
 }
 
 // CHECK-LABEL: func @pure
-// CHECK-NOT: entry_state
+// CHECK-NOT: state.entry_state
 // CHECK-NOT: state(
 // CHECK: return %1

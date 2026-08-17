@@ -82,6 +82,7 @@ pub use dialects::builtin;
 pub use dialects::builtin::Integer;
 pub use dialects::ptr;
 pub use dialects::scf;
+pub use dialects::state;
 pub use dialects::vector;
 
 pub use tir_macros::{TirType, dialect, operation};

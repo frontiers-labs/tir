@@ -5,7 +5,7 @@
 
 module {
   func @f(%0: !ptr.p, %1: !i8, %2: !i64) -> !i8 {
-    %3 = entry_state : !state
+    %3 = state.entry_state : !state
     ptr.memset %0, %1, %2 state(%3 -> %4)
     %5 = ptr.load %0 : !i8 state(%4)
     return %5

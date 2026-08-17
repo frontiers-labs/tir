@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, Type, TypeId, operation, parse::Span};
+use crate::{Context, Error, IRFormatter, Type, TypeId, parse::Span};
 
 use crate as tir;
 
@@ -118,14 +118,4 @@ pub fn parse_state_clause(
         return Err((parser.span(), Error::ExpectedToken(")")));
     }
     Ok(clause)
-}
-
-operation! {
-    EntryStateOp {
-        name: "entry_state",
-        dialect: "builtin",
-        results: R {
-            result: "crate::builtin::StateType",
-        },
-    }
 }

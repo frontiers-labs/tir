@@ -21,7 +21,7 @@ module {
 }
 
 // CHECK-LABEL: func @f
-// CHECK-NEXT: %[[ENTRY:[0-9]+]] = entry_state : !state
+// CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[A:[0-9]+]])
 // CHECK-NEXT: ptr.store %3, %{{[0-9]+}} state(%[[A]] -> %[[A1:[0-9]+]])
 // CHECK-NEXT: %[[FINAL:[0-9]+]] = scf.for %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %[[A1]]) -> !state {

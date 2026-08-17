@@ -1,7 +1,7 @@
 //! Memory state threading.
 //!
 //! Memory order becomes an explicit def-use edge: the function's memory at entry
-//! is named by `builtin.entry_state`, and every operation that touches memory
+//! is named by `state.entry_state`, and every operation that touches memory
 //! consumes the state it observes and produces the state it leaves behind. A slot
 //! whose address never escapes is a memory of its own, so it gets a chain rooted
 //! at its allocation; everything else — escaping slots, unknown pointers, calls —
@@ -13,8 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::analysis::AnalysisManager;
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes};
 use crate::analysis::slots::collect_slots;
-use crate::builtin::{CallOp, EntryStateOpBuilder, FuncOp, IndirectCallOp, ReturnOp, StateType};
+use crate::builtin::{CallOp, FuncOp, IndirectCallOp, ReturnOp, StateType};
 use crate::ptr::MemcpyOp;
+use crate::state::EntryStateOpBuilder;
 use crate::{
     Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation, OperationRef, Pass, PassError,
     PassTarget, PromotableAllocation, RegionId, Rewriter, TypeId, ValueId, scf,

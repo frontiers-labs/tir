@@ -6,7 +6,7 @@
 
 module {
   func @f(%0: !i1, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) {
-    %4 = entry_state : !state
+    %4 = state.entry_state : !state
     %5 = scf.if %0 args(%4) -> !state (%6) {
       ptr.store %2, %1 state(%6 -> %7)
       ptr.store %3, %1 state(%7 -> %8)

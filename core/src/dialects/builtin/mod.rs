@@ -164,7 +164,6 @@ dialect! {
             MakeTupleOp,
             TupleGetOp,
             DeclareOp,
-            EntryStateOp,
             AddressOfOp,
         ],
         types: [IntegerType, FloatType, IndexType, UnitType, TokenType, TupleType, StateType],

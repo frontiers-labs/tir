@@ -7,7 +7,8 @@
 
 use crate::analysis::slots::{collect_slots, load_result};
 use crate::analysis::{AnalysisManager, DefUse};
-use crate::builtin::{EntryStateOp, FuncOp, StateType};
+use crate::builtin::{FuncOp, StateType};
+use crate::state::EntryStateOp;
 use crate::{
     BlockId, Context, MemoryRead, OpId, OperationRef, Pass, PassError, PassTarget, RegionId,
     Rewriter, TypeId,

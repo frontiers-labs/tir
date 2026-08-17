@@ -7,7 +7,7 @@
 
 module {data_layout = #data_layout} {
   func @f(%0: !ptr.p<!ptr.p<!i32>>, %1: !ptr.p<!i32>, %2: !ptr.p<!i32>) {
-    %3 = entry_state : !state
+    %3 = state.entry_state : !state
     ptr.store %1, %0 state(%3 -> %4)
     ptr.store %2, %0 state(%4 -> %5)
     return state(%5)

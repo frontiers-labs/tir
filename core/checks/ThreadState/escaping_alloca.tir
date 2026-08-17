@@ -17,7 +17,7 @@ module {
 }
 
 // CHECK-LABEL: func @f
-// CHECK-NEXT: %[[ENTRY:[0-9]+]] = entry_state : !state
+// CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
 // CHECK-NEXT: ptr.store %0, %{{[0-9]+}} state(%[[ENTRY]] -> %[[S1:[0-9]+]])
 // CHECK-NEXT: call @sink(%{{[0-9]+}} : !ptr.p<!i32>) state(%[[S1]] -> %[[S2:[0-9]+]])

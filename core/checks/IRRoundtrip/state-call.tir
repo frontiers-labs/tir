@@ -2,7 +2,7 @@
 
 module {
   func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
-    %2 = entry_state : !state
+    %2 = state.entry_state : !state
     %3 = call @foo(%1 : !i32) -> !i32 state(%2 -> %4)
     call @log() state(%4 -> %5)
     %6 = indirect_call %0(%3 : !i32) -> !i32 state(%5 -> %7)
@@ -11,7 +11,7 @@ module {
   module_end
 }
 
-// CHECK: %[[S0:[0-9]+]] = entry_state : !state
+// CHECK: %[[S0:[0-9]+]] = state.entry_state : !state
 // CHECK-NEXT: %{{[0-9]+}} = call @foo(%{{[0-9]+}} : !i32) -> !i32 state(%[[S0]] -> %[[S1:[0-9]+]])
 // CHECK-NEXT: call @log() state(%[[S1]] -> %[[S2:[0-9]+]])
 // CHECK-NEXT: %{{[0-9]+}} = indirect_call %{{[0-9]+}}(%{{[0-9]+}} : !i32) -> !i32 state(%[[S2]] -> %[[S3:[0-9]+]])

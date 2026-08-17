@@ -2,12 +2,12 @@
 
 module {
   func @f() {
-    %0 = entry_state : !state
+    %0 = state.entry_state : !state
     return
   }
   module_end
 }
 
 // CHECK: func @f() {
-// CHECK-NEXT: %{{[0-9]+}} = entry_state : !state
+// CHECK-NEXT: %{{[0-9]+}} = state.entry_state : !state
 // CHECK-NEXT: return

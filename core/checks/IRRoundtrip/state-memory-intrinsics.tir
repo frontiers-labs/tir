@@ -2,7 +2,7 @@
 
 module {
   func @f(%0: !ptr.p, %1: !ptr.p, %2: !i8, %3: !i64) {
-    %4 = entry_state : !state
+    %4 = state.entry_state : !state
     ptr.memset %0, %2, %3 state(%4 -> %5)
     ptr.memcpy %1, %0, %3 state(%5 -> %6)
     return
@@ -10,6 +10,6 @@ module {
   module_end
 }
 
-// CHECK: %[[S0:[0-9]+]] = entry_state : !state
+// CHECK: %[[S0:[0-9]+]] = state.entry_state : !state
 // CHECK-NEXT: ptr.memset %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} state(%[[S0]] -> %[[S1:[0-9]+]])
 // CHECK-NEXT: ptr.memcpy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} state(%[[S1]] -> %{{[0-9]+}})

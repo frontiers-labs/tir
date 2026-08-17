@@ -15,6 +15,7 @@ use crate::{
     block::{BlockHandle, BlockId},
     builtin::BuiltinDialect,
     dialects::scf::ScfDialect,
+    dialects::state::StateDialect,
     ir_formatter::IRFormatter,
     operation::{
         ImplementsOpInterface, OpHandle, OpInterfaceConverter, OpNameId, downcast_op_interface,
@@ -403,6 +404,7 @@ impl Context {
         context.register_dialect::<BuiltinDialect>();
         context.register_dialect::<PtrDialect>();
         context.register_dialect::<ScfDialect>();
+        context.register_dialect::<StateDialect>();
         context.register_dialect::<VectorDialect>();
 
         context
