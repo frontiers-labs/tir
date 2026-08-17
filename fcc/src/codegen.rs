@@ -71,6 +71,8 @@ struct FnCodegen<'a> {
     builder: tir::BlockHandle,
     locals: HashMap<EntityId, Slot>,
     globals: &'a HashMap<EntityId, Global>,
+    /// The `.rodata` symbol each string literal of the unit is stored under.
+    strings: &'a BTreeMap<String, String>,
     signatures: &'a HashMap<EntityId, Signature>,
     return_abi: &'a AbiReturn,
     indirect_return: Option<ValueId>,
@@ -285,6 +287,19 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
     // Objects this unit gives storage to, and those it only names.
     let mut defined_globals = HashSet::new();
     let mut declared_globals = HashSet::new();
+    // Every string literal of the unit is one `.rodata` symbol, whether an
+    // initializer or a function body names it.
+    for &item in &items {
+        for node in ast.preorder(item) {
+            let Some(AstLeaf::String(value)) = ast.get_leaf_data(node) else {
+                continue;
+            };
+            let next = global_strings.len();
+            global_strings
+                .entry(value.clone())
+                .or_insert_with(|| format!(".L.str{next}"));
+        }
+    }
     for &item in &items {
         match ast.get_node(item).kind {
             AstKind::Prototype | AstKind::Function => {
@@ -314,15 +329,6 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                         elem: lower_type(context, typed, node_type(typed, item)),
                     },
                 );
-                for node in ast.preorder(item) {
-                    let Some(AstLeaf::String(value)) = ast.get_leaf_data(node) else {
-                        continue;
-                    };
-                    let next = global_strings.len();
-                    global_strings
-                        .entry(value.clone())
-                        .or_insert_with(|| format!(".L.global.str{next}"));
-                }
             }
             AstKind::RecordDecl | AstKind::EnumDecl | AstKind::Typedef | AstKind::Attribute => {}
             _ => return Err(unsupported(ast, item, "top-level item".to_string())),
@@ -388,7 +394,8 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                 ));
             }
             AstKind::Function => {
-                let func_op = lower_function(context, typed, item, &signatures, &globals)?;
+                let func_op =
+                    lower_function(context, typed, item, &signatures, &globals, &global_strings)?;
                 module.body().append_op(func_op);
             }
             AstKind::Global => {
@@ -1266,6 +1273,7 @@ fn lower_function(
     func: NodeId,
     signatures: &HashMap<EntityId, Signature>,
     globals: &HashMap<EntityId, Global>,
+    strings: &BTreeMap<String, String>,
 ) -> Result<impl Operation, Diagnostic> {
     let ast = typed.ast();
     let AstLeaf::Function { name, .. } = ast.get_leaf_data(func).unwrap() else {
@@ -1321,6 +1329,7 @@ fn lower_function(
         builder: func_op.body(),
         locals: HashMap::new(),
         globals,
+        strings,
         signatures,
         return_abi: &signature.ret,
         indirect_return,
@@ -3019,9 +3028,10 @@ impl FnCodegen<'_> {
                         unreachable!("string node carries a string payload");
                     };
                     let ptr_ty = PtrType::opaque(self.context);
+                    let label = &self.strings[value];
                     LoweredExpr::Value(
                         self.builder
-                            .append_op(cir::string_op(self.context, value, ptr_ty))
+                            .append_op(func_ops::addr_of_op(self.context, label, ptr_ty))
                             .result(),
                     )
                 }
@@ -3734,20 +3744,6 @@ impl FnCodegen<'_> {
     }
 }
 
-/// Every block `regions` holds, in pre-order, nested regions included.
-fn body_blocks(context: &Context, regions: &[tir::RegionId]) -> Vec<tir::BlockId> {
-    let mut blocks = Vec::new();
-    for &region in regions {
-        for block in context.get_region(region).iter(context.clone()) {
-            blocks.push(block.id());
-            for op_id in block.op_ids() {
-                blocks.extend(body_blocks(context, &context.get_op(op_id).regions()));
-            }
-        }
-    }
-    blocks
-}
-
 /// Lower frontend data definitions immediately ahead of the machine backend.
 /// String uses become addresses into `.rodata`; scalar globals become symbols
 /// in `.data`.
@@ -3760,7 +3756,6 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
 
     let mut rewriter = tir::Rewriter::new(context.clone());
     let mut strings: Vec<(String, String)> = Vec::new();
-    let mut labels: HashMap<String, String> = HashMap::new();
     let mut globals = Vec::new();
     let mut zero_globals = Vec::new();
 
@@ -3776,53 +3771,11 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
             ));
             rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
         } else if let Some(string) = op.clone().as_op::<cir::GlobalStringOp>() {
-            let label = string.sym_name();
-            let value = string.value();
-            labels.insert(value.clone(), label.clone());
-            strings.push((label, decode_c_escapes(&value)));
+            strings.push((string.sym_name(), decode_c_escapes(&string.value())));
             rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
         } else if let Some(global) = op.clone().as_op::<cir::ZeroGlobalOp>() {
             zero_globals.push((global.sym_name(), global.size(), global.align()));
             rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
-        }
-    }
-
-    for op_id in module.body().op_ids() {
-        let op = context.get_op(op_id);
-        if op.clone().as_op::<tir::func::FuncOp>().is_none() {
-            continue;
-        }
-        // A string use sits wherever the body puts it, including inside the
-        // structured regions the backend takes.
-        for block_id in body_blocks(context, &op.regions()) {
-            let block = context.get_block(block_id);
-            for op_id in block.op_ids() {
-                let op = context.get_op(op_id);
-                let Some(string) = op.clone().as_op::<cir::StringOp>() else {
-                    continue;
-                };
-                let value = string
-                    .attr("value")
-                    .and_then(|value| match value {
-                        AttributeValue::Str(s) => Some(s.to_string()),
-                        _ => None,
-                    })
-                    .expect("cir.string must carry a value");
-                let label = labels
-                    .entry(value.clone())
-                    .or_insert_with(|| {
-                        let label = format!(".L.str{}", strings.len());
-                        strings.push((label.clone(), decode_c_escapes(&value)));
-                        label
-                    })
-                    .clone();
-                let result_ty = context.get_value(string.result()).ty();
-                let addr = func_ops::addr_of_op(context, &label, result_ty);
-                rewriter.replace_op(
-                    &tir::OperationRef::new(op, Some(block.clone()), None),
-                    &addr,
-                )?;
-            }
         }
     }
 

@@ -1,0 +1,22 @@
+// RUN: tir opt --pass restructure --verify %s | filecheck %s
+
+// Input already in RVSDG form needs no restructuring: the pass is skipped and
+// the structured operation survives untouched.
+
+module {
+  func.func @already_structured(%0: !i1) -> !i32 {
+    %2 = scf.if %0 -> !i32 {
+      %3 = constant {value = 7} : !i32
+      scf.yield %3
+    } else {
+      %4 = constant {value = 9} : !i32
+      scf.yield %4
+    }
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @already_structured
+// CHECK: scf.if
+// CHECK: func.return

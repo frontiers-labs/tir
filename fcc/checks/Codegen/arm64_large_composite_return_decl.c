@@ -14,4 +14,4 @@ long first(long a, long b, long c) {
 // CHECK: %[[TEMP:[0-9]+]] = ptr.alloca {size = 24, align = 8}
 // CHECK: func.call @make_large(%[[TEMP]]
 // CHECK-SAME: ) result_address
-// CHECK: cir.get_member %[[TEMP]]
+// CHECK: ptr.ptradd %[[TEMP]]

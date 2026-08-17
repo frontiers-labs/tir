@@ -272,6 +272,15 @@ pub trait Pass: Send {
         None
     }
 
+    /// The IR contract this pass produces. A conversion whose input already
+    /// satisfies it has nothing to convert, so the pass manager skips it: the
+    /// RVSDG construction of Reissmann et al. (arXiv:1912.05036, §5.1.2)
+    /// likewise omits Control Flow Restructuring when the input CFG is already
+    /// amenable to construction. `None` means the pass always runs.
+    fn target_form(&self) -> Option<crate::Form> {
+        None
+    }
+
     /// Run on `op`. A pass reports nothing about what it changed: every edit
     /// bumps the version stamps of the ops it touched (see
     /// [`Context::op_version`]), which is what invalidates cached analyses and
@@ -660,15 +669,20 @@ impl PassManager {
                         // A form is a precondition on the pass input, not a
                         // re-check of IR validity, so the verification gate
                         // does not switch it off.
-                        if let Some(form) = pass.required_form()
-                            && !is_machine_ir(context, op_ref.op.id)
-                        {
-                            crate::verify_form(context, op_ref.op.id, &form).map_err(|error| {
-                                PassError::WrongForm {
-                                    pass: pass.name(),
-                                    error,
-                                }
-                            })?;
+                        if !is_machine_ir(context, op_ref.op.id) {
+                            if let Some(target) = pass.target_form()
+                                && crate::verify_form(context, op_ref.op.id, &target).is_ok()
+                            {
+                                return Ok(());
+                            }
+                            if let Some(form) = pass.required_form() {
+                                crate::verify_form(context, op_ref.op.id, &form).map_err(
+                                    |error| PassError::WrongForm {
+                                        pass: pass.name(),
+                                        error,
+                                    },
+                                )?;
+                            }
                         }
                         pass.run(&op_ref, context, rewriter, analyses)?;
                     }

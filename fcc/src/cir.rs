@@ -11,9 +11,9 @@ use tir::{
 
 pub mod ops {
     pub use super::{
-        CopyStructOp, DefineStructOp, GetMemberOp, GlobalOp, GlobalStringOp, StringOp, VaArgOp,
-        VaEndOp, VaStartOp, ZeroGlobalOp, copy_struct, define_struct, get_member, global,
-        global_string, string, va_arg, va_end, va_start, zero_global,
+        CopyStructOp, DefineStructOp, GetMemberOp, GlobalOp, GlobalStringOp, VaArgOp, VaEndOp,
+        VaStartOp, ZeroGlobalOp, copy_struct, define_struct, get_member, global, global_string,
+        va_arg, va_end, va_start, zero_global,
     };
 }
 
@@ -21,7 +21,6 @@ dialect! {
     CirDialect {
         name: "cir",
         operations: [
-            StringOp,
             GlobalOp,
             GlobalStringOp,
             ZeroGlobalOp,
@@ -54,6 +53,7 @@ operation! {
     GlobalStringOp {
         name: "global_string",
         dialect: "cir",
+        interfaces: [Symbol],
         attributes: A {
             sym_name: "Str",
             value: "Str",
@@ -91,6 +91,7 @@ macro_rules! data_symbol {
 
 data_symbol!(GlobalOp);
 data_symbol!(ZeroGlobalOp);
+data_symbol!(GlobalStringOp);
 
 impl GlobalStringOp {
     pub fn sym_name(&self) -> String {
@@ -391,19 +392,6 @@ impl Type for VaListType {
 }
 
 operation! {
-    StringOp {
-        name: "string",
-        dialect: "cir",
-        attributes: A {
-            value: "Str",
-        },
-        results: R {
-            result: "tir::ptr::PtrType",
-        },
-    }
-}
-
-operation! {
     VaStartOp {
         name: "va_start",
         dialect: "cir",
@@ -434,13 +422,6 @@ operation! {
             list: "crate::cir::VaListType",
         },
     }
-}
-
-pub fn string_op(context: &Context, value: &str, result_type: TypeId) -> StringOp {
-    StringOpBuilder::new(context)
-        .attr("value", AttributeValue::Str(value.to_string().into()))
-        .result_type(result_type)
-        .build()
 }
 
 #[cfg(test)]

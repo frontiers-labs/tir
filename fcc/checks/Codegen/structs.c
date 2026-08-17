@@ -1,8 +1,15 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/structs.c | filecheck %s
 
-// CHECK: cir.define_struct {sym_name = "Pair", fields = [{name = "tag", offset = 0, type = !i8}, {name = "value", offset = 4, type = !i32}], size = 8, align = 4}
+// Struct access reaches the IR as pointer arithmetic: the frontend's layout
+// operations are gone before the mid-end sees a function body.
+
+// CHECK-NOT: cir.
 // CHECK: func.func @read(%{{[0-9]+}}: !ptr.p) -> !i32 {
-// CHECK: cir.get_member %{{[0-9]+}} {field = 1, struct_name = "Pair"} : !ptr.p
+// CHECK: %[[OFF:[0-9]+]] = constant {value = 4} : !i64
+// CHECK: ptr.ptradd %{{[0-9]+}}, %[[OFF]] : !ptr.p
 // CHECK: func.func @copy() -> !i32 {
 // CHECK: ptr.alloca {size = 8, align = 4} : !ptr.p
-// CHECK: cir.copy_struct
+// CHECK: %[[TAG:[0-9]+]] = ptr.load %{{[0-9]+}} : !i8
+// CHECK: ptr.store %[[TAG]], %{{[0-9]+}}
+// CHECK: %[[VALUE:[0-9]+]] = ptr.load %{{[0-9]+}} : !i32
+// CHECK: ptr.store %[[VALUE]], %{{[0-9]+}}
