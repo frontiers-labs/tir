@@ -1,12 +1,14 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_logical.c | filecheck %s
 
 // CHECK: func.func @logical_and
-// CHECK: cir.if
+// CHECK: scf.if
 // CHECK: addi
+// CHECK: scf.yield
 // CHECK: else
-// CHECK: constant {value = 0}
+// CHECK: scf.yield
 // CHECK: func.func @logical_or
-// CHECK: cir.if
-// CHECK: constant {value = 1}
+// CHECK: scf.if
+// CHECK: scf.yield
 // CHECK: else
 // CHECK: addi
+// CHECK: scf.yield

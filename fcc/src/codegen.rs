@@ -2120,11 +2120,17 @@ impl FnCodegen<'_> {
     /// End the current block by falling through to `block`, unless it already
     /// left through a branch of its own.
     fn leave_block(&mut self, block: &tir::BlockHandle) {
+        self.branch_to(block, vec![]);
+    }
+
+    /// End the current block by branching to `block` with `arguments`, unless
+    /// it already left through a branch of its own.
+    fn branch_to(&mut self, block: &tir::BlockHandle, arguments: Vec<ValueId>) {
         if self.terminated {
             return;
         }
         self.builder
-            .append_op(cb::br(self.context, vec![], block.id()).build());
+            .append_op(cb::br(self.context, arguments, block.id()).build());
         self.terminated = true;
     }
 
@@ -2545,33 +2551,6 @@ impl FnCodegen<'_> {
             _ => items.push(SwitchItem::Statement(statement)),
         }
         Ok(())
-    }
-
-    fn in_block<T>(
-        &mut self,
-        block: tir::BlockHandle,
-        lower: impl FnOnce(&mut Self) -> Result<T, Diagnostic>,
-    ) -> Result<T, Diagnostic> {
-        let outer = std::mem::replace(&mut self.builder, block);
-        let outer_terminated = std::mem::replace(&mut self.terminated, false);
-        let result = lower(self);
-        self.builder = outer;
-        self.terminated = outer_terminated;
-        result
-    }
-
-    fn ensure_cir_yield(&mut self, block: tir::BlockHandle) {
-        let block = self.context.get_block(block.id());
-        let terminated = block.op_ids().last().is_some_and(|op| {
-            self.context
-                .get_op(*op)
-                .as_interface::<dyn tir::Terminator>()
-                .is_some()
-        });
-        if !terminated {
-            self.builder
-                .append_op(cir::ops::r#yield(self.context).build());
-        }
     }
 
     fn lower_condition(&mut self, expression: NodeId) -> Result<ValueId, Diagnostic> {
@@ -3674,79 +3653,51 @@ impl FnCodegen<'_> {
         let lhs = self.materialize(lhs);
         let condition = self.truth_value(lhs);
         let result_ty = IntegerType::new(self.context, 32);
-        let result = self.alloca(result_ty, 4, 4);
 
-        let then_region = self.context.create_region();
-        let then_block = self.context.create_block(vec![]);
-        then_region.add_block(then_block.id());
-        self.in_block(then_block.clone(), |cg| {
-            cg.lower_logical_arm(
-                rhs_node,
-                result,
-                result_ty,
-                then_block,
-                kind == AstKind::LogAnd,
-                1,
-            )
-        })?;
+        let rhs_block = self.new_block();
+        let merge = self.new_block();
+        let result = self
+            .context
+            .append_block_argument(merge.id(), result_ty)
+            .id();
 
-        let else_region = self.context.create_region();
-        let else_block = self.context.create_block(vec![]);
-        else_region.add_block(else_block.id());
-        self.in_block(else_block.clone(), |cg| {
-            cg.lower_logical_arm(
-                rhs_node,
-                result,
-                result_ty,
-                else_block,
-                kind == AstKind::LogOr,
-                0,
-            )
-        })?;
-
+        let short_circuit = i64::from(kind == AstKind::LogOr);
+        let short_circuit = self
+            .builder
+            .append_op(b::constant(self.context, short_circuit, result_ty).build())
+            .result();
+        let (if_true, true_args, if_false, false_args) = if kind == AstKind::LogAnd {
+            (&rhs_block, vec![], &merge, vec![short_circuit])
+        } else {
+            (&merge, vec![short_circuit], &rhs_block, vec![])
+        };
         self.builder.append_op(
-            cir::ops::r#if(
+            cb::cond_br(
                 self.context,
                 condition,
-                Some(then_region.id()),
-                Some(else_region.id()),
+                true_args,
+                false_args,
+                if_true.id(),
+                if_false.id(),
             )
             .build(),
         );
-        let expression = LoweredExpr::Value(
-            self.builder
-                .append_op(p::load(self.context, result.ptr, result.elem).build())
-                .result(),
-        );
+        self.terminated = true;
+
+        self.enter_block(rhs_block);
+        let rhs = self.lower_expr_node(rhs_node)?;
+        let rhs = self.materialize(rhs);
+        let rhs = self.truth_value(rhs);
+        let rhs = self
+            .builder
+            .append_op(b::extui(self.context, rhs, result_ty).build())
+            .result();
+        self.branch_to(&merge, vec![rhs]);
+
+        self.enter_block(merge);
+        let expression = LoweredExpr::Value(result);
         self.values.insert(node, expression);
         Ok(expression)
-    }
-
-    fn lower_logical_arm(
-        &mut self,
-        rhs_node: NodeId,
-        result: Slot,
-        result_ty: TypeId,
-        block: tir::BlockHandle,
-        evaluate_rhs: bool,
-        constant: i64,
-    ) -> Result<(), Diagnostic> {
-        let value = if evaluate_rhs {
-            let rhs = self.lower_expr_node(rhs_node)?;
-            let rhs = self.materialize(rhs);
-            let rhs = self.truth_value(rhs);
-            self.builder
-                .append_op(b::extui(self.context, rhs, result_ty).build())
-                .result()
-        } else {
-            self.builder
-                .append_op(b::constant(self.context, constant, result_ty).build())
-                .result()
-        };
-        self.builder
-            .append_op(p::store(self.context, value, result.ptr).build());
-        self.ensure_cir_yield(block);
-        Ok(())
     }
 
     fn lower_conditional(&mut self, node: NodeId) -> Result<LoweredExpr, Diagnostic> {
@@ -3759,53 +3710,27 @@ impl FnCodegen<'_> {
         let condition = self.truth_value(condition);
         let source_ty = node_type(self.typed, node);
         let result_ty = lower_type(self.context, self.typed, source_ty);
-        let (size, align) = source_type_layout(self.typed, source_ty);
-        let result = self.alloca(result_ty, size, align);
 
-        let then_region = self.context.create_region();
-        let then_block = self.context.create_block(vec![]);
-        then_region.add_block(then_block.id());
-        self.in_block(then_block.clone(), |cg| {
-            cg.lower_conditional_arm(then_node, result, then_block)
-        })?;
+        let then_block = self.new_block();
+        let else_block = self.new_block();
+        let merge = self.new_block();
+        let result = self
+            .context
+            .append_block_argument(merge.id(), result_ty)
+            .id();
 
-        let else_region = self.context.create_region();
-        let else_block = self.context.create_block(vec![]);
-        else_region.add_block(else_block.id());
-        self.in_block(else_block.clone(), |cg| {
-            cg.lower_conditional_arm(else_node, result, else_block)
-        })?;
+        self.branch_on(condition, &then_block, &else_block);
+        for (arm, block) in [(then_node, then_block), (else_node, else_block)] {
+            self.enter_block(block);
+            let value = self.lower_expr_node(arm)?;
+            let value = self.materialize(value);
+            self.branch_to(&merge, vec![value]);
+        }
 
-        self.builder.append_op(
-            cir::ops::r#if(
-                self.context,
-                condition,
-                Some(then_region.id()),
-                Some(else_region.id()),
-            )
-            .build(),
-        );
-        let expression = LoweredExpr::Value(
-            self.builder
-                .append_op(p::load(self.context, result.ptr, result.elem).build())
-                .result(),
-        );
+        self.enter_block(merge);
+        let expression = LoweredExpr::Value(result);
         self.values.insert(node, expression);
         Ok(expression)
-    }
-
-    fn lower_conditional_arm(
-        &mut self,
-        node: NodeId,
-        result: Slot,
-        block: tir::BlockHandle,
-    ) -> Result<(), Diagnostic> {
-        let value = self.lower_expr_node(node)?;
-        let value = self.materialize(value);
-        self.builder
-            .append_op(p::store(self.context, value, result.ptr).build());
-        self.ensure_cir_yield(block);
-        Ok(())
     }
 }
 

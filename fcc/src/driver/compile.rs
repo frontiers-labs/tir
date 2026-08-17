@@ -175,7 +175,6 @@ pub(super) fn emit_machine_code(
     let mut pm = tir::PassManager::new();
     pm.add_pass(crate::passes::LowerCirStructsPass::new());
     let function_pipeline = pm.nest::<tir::func::FuncOp>();
-    function_pipeline.add_pass(crate::passes::LowerCirControlFlowPass::new());
     function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
     function_pipeline.add_pass(tir::passes::InstCombinePass::new());
     // Memory state describes the structured mid-end only; codegen takes the

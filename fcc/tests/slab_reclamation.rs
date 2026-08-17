@@ -101,8 +101,8 @@ fn passes_do_not_leak_entities() {
 
     for (name, pass) in [
         (
-            "lower-cir-control-flow",
-            Box::new(fcc::passes::LowerCirControlFlowPass::new()) as Box<dyn tir::Pass>,
+            "restructure",
+            Box::new(tir::passes::RestructurePass::new()) as Box<dyn tir::Pass>,
         ),
         (
             "thread-state",

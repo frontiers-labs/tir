@@ -214,7 +214,7 @@ int main(void) { printf("hello"); return 0; }"#,
     }
 
     #[test]
-    fn cir_loop_ir_roundtrips_through_parser() {
+    fn loop_ir_roundtrips_through_parser() {
         let ir = compile("int f(void) { int i = 0; while (i < 3) { i = i + 1; } return i; }");
 
         let context = fcc_context();
@@ -227,18 +227,17 @@ int main(void) { printf("hello"); return 0; }"#,
         assert_eq!(ir, buf);
     }
 
-    fn lower_cir_control_flow(src: &str) -> String {
+    fn restructured(src: &str) -> String {
         let (context, module) = lower(src);
         let mut passes = tir::PassManager::new();
         let function_pipeline = passes.nest::<tir::func::FuncOp>();
         function_pipeline.add_pass(tir::passes::RestructurePass::new());
-        function_pipeline.add_pass(crate::passes::LowerCirControlFlowPass::new());
         function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
         function_pipeline.add_pass(tir::passes::InstCombinePass::new());
         function_pipeline.add_pass(tir::passes::EraseStatePass::new());
         passes
             .run(&context, context.get_op(tir::Operation::id(&module)))
-            .expect("lower CIR control flow");
+            .expect("restructure");
 
         let mut lowered = String::new();
         let mut fmt = tir::IRFormatter::new(&mut lowered);
@@ -252,21 +251,18 @@ int main(void) { printf("hello"); return 0; }"#,
     }
 
     #[test]
-    fn invariant_cir_while_lowers_to_canonical_scf() {
-        let lowered = lower_cir_control_flow("int f(void) { while (1) {} return 0; }");
+    fn invariant_while_lowers_to_canonical_scf() {
+        let lowered = restructured("int f(void) { while (1) {} return 0; }");
 
         assert!(lowered.contains("scf.while"), "{lowered}");
-        assert!(!lowered.contains("cir.while"));
         assert!(!lowered.contains("scf.while") || !lowered.contains(" cond {"));
     }
 
     #[test]
-    fn single_block_changing_cir_while_lowers_to_scf() {
-        let lowered = lower_cir_control_flow(
-            "int f(void) { int i = 0; while (i < 3) { i = i + 1; } return i; }",
-        );
+    fn single_block_changing_while_lowers_to_scf() {
+        let lowered =
+            restructured("int f(void) { int i = 0; while (i < 3) { i = i + 1; } return i; }");
 
-        assert!(!lowered.contains("cir.while"));
         assert!(lowered.contains("scf.while"));
         assert!(lowered.contains("scf.condition"));
         assert!(!lowered.contains("cfg.cond_br"));
@@ -274,7 +270,7 @@ int main(void) { printf("hello"); return 0; }"#,
 
     #[test]
     fn early_return_lowers_to_structured_control_flow() {
-        let lowered = lower_cir_control_flow("int f(int x) { if (x) return 1; return 2; }");
+        let lowered = restructured("int f(int x) { if (x) return 1; return 2; }");
 
         assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
         assert!(!lowered.contains("cfg.br ^"), "{lowered}");
@@ -283,7 +279,7 @@ int main(void) { printf("hello"); return 0; }"#,
 
     #[test]
     fn return_inside_loop_leaves_the_loop_structurally() {
-        let lowered = lower_cir_control_flow(
+        let lowered = restructured(
             "int f(int n) { int i = 0; while (i < n) { if (i == 3) return i; i = i + 1; } return 0; }",
         );
 
@@ -294,16 +290,15 @@ int main(void) { printf("hello"); return 0; }"#,
 
     #[test]
     fn unreachable_return_after_break_emits_no_operations() {
-        let lowered = lower_cir_control_flow(
-            "int f(int c, int x) { while (c) { break; if (x) return 1; } return 0; }",
-        );
+        let lowered =
+            restructured("int f(int c, int x) { while (c) { break; if (x) return 1; } return 0; }");
 
         assert!(!lowered.contains("value = 1"), "{lowered}");
     }
 
     #[test]
     fn do_while_lowers_to_scf() {
-        let lowered = lower_cir_control_flow(
+        let lowered = restructured(
             "int f(int n) { int t = 0; do { t = t + 1; if (t == 3) { return 3; } } while (t < n); return t; }",
         );
 
@@ -314,10 +309,8 @@ int main(void) { printf("hello"); return 0; }"#,
 
     #[test]
     fn structured_break_preserves_token_scope_in_scf() {
-        let lowered =
-            lower_cir_control_flow("int f(int stop) { while (1) { if (stop) break; } return 0; }");
+        let lowered = restructured("int f(int stop) { while (1) { if (stop) break; } return 0; }");
 
-        assert!(!lowered.contains("cir.while"));
         assert!(lowered.contains("scf.while"), "{lowered}");
         assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
     }
@@ -327,7 +320,7 @@ int main(void) { printf("hello"); return 0; }"#,
     /// `for`, whose step has no structured spelling.
     #[test]
     fn c_constructs_lower_without_unstructured_branches() {
-        let lowered = lower_cir_control_flow(
+        let lowered = restructured(
             r#"int f(int n, int m) {
                    int total = 0;
                    int i;
@@ -369,7 +362,7 @@ int main(void) { printf("hello"); return 0; }"#,
     /// the step and the trailing condition must still run on a `continue`.
     #[test]
     fn loop_control_constructs_lower_without_unstructured_branches() {
-        let lowered = lower_cir_control_flow(
+        let lowered = restructured(
             r#"int f(int n) {
                    int total = 0;
                    int i;
@@ -418,7 +411,7 @@ int main(void) { printf("hello"); return 0; }"#,
     #[test]
     fn break_terminated_do_body_lowers_without_unstructured_branches() {
         // The condition must not be inlined: break leaves before it is evaluated.
-        let lowered = lower_cir_control_flow(
+        let lowered = restructured(
             r#"int bump(void);
                int f(int n) {
                    int total = 0;
@@ -433,45 +426,5 @@ int main(void) { printf("hello"); return 0; }"#,
         assert!(!lowered.contains("cfg.cond_br"), "{lowered}");
         assert!(!lowered.contains("cfg.br ^"), "{lowered}");
         assert!(!lowered.contains("func.call @bump"), "{lowered}");
-    }
-
-    #[test]
-    fn multiblock_cir_while_lowers_directly_to_cfg() {
-        let context = fcc_context();
-        let module = tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(
-            &context,
-            r#"module {
-  func.func @f(%0: !i1) {
-    cir.while %1 cond {
-      cir.condition %0
-    } body {
-      cfg.br ^bb1
-      ^bb1:
-      cir.yield
-    }
-    func.return
-  }
-  module_end
-}
-"#,
-        )
-        .expect("parse multiblock CIR");
-        let mut passes = tir::PassManager::new();
-        passes
-            .nest::<tir::func::FuncOp>()
-            .add_pass(crate::passes::LowerCirControlFlowPass::new());
-        passes
-            .run(&context, context.get_op(tir::Operation::id(&module)))
-            .expect("lower multiblock CIR");
-
-        let mut lowered = String::new();
-        let mut fmt = tir::IRFormatter::new(&mut lowered);
-        tir::Operation::print(&module, &mut fmt).expect("print");
-        assert!(!lowered.contains("cir.while"));
-        assert!(!lowered.contains("scf.while"));
-        assert!(lowered.contains("cfg.cond_br"));
-        let roundtrip_context = fcc_context();
-        tir::parse::ir::parse_ir::<tir::builtin::ModuleOp>(&roundtrip_context, &lowered)
-            .expect("lowered multiblock CFG should parse");
     }
 }

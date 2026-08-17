@@ -15,12 +15,12 @@ use fcc::codegen::codegen;
 use fcc::diagnostics::{Span, intern_file};
 use fcc::lexer::Token;
 use fcc::parser::parse;
-use fcc::passes::{LowerCirControlFlowPass, LowerCirStructsPass};
+use fcc::passes::LowerCirStructsPass;
 use fcc::sema::{TypedAst, analyze};
 use tir::backend::TargetMachine;
 use tir::backend::pipeline::{StopAfter, build_pipeline};
 use tir::func::FuncOp;
-use tir::passes::{EraseStatePass, InstCombinePass, ThreadStatePass};
+use tir::passes::{EraseStatePass, InstCombinePass, RestructurePass, ThreadStatePass};
 use tir::{Context, Operation, PassManager};
 
 const GCC_20011219_1: &str = r#"
@@ -130,7 +130,7 @@ fn lower_before_instcombine(ast: &TypedAst) -> (Context, tir::builtin::ModuleOp)
     let mut pm = PassManager::new();
     pm.add_pass(LowerCirStructsPass::new());
     let function_pipeline = pm.nest::<FuncOp>();
-    function_pipeline.add_pass(LowerCirControlFlowPass::new());
+    function_pipeline.add_pass(RestructurePass::new());
     function_pipeline.add_pass(ThreadStatePass::new());
     pm.run(&context, context.get_op(module.id())).unwrap();
     (context, module)
