@@ -249,9 +249,10 @@ fn parse_successor(
     context: &Context,
 ) -> Result<(BlockId, Vec<ValueId>), (tir::parse::Span, Error)> {
     use tir::parse::common::Cursor;
-    let index = parser
-        .parse_block_index()
-        .ok_or_else(|| (parser.span(), Error::ExpectedToken("^bb")))?;
+    let label = parser
+        .parse_block_label()
+        .ok_or_else(|| (parser.span(), Error::ExpectedToken("^label")))?
+        .to_string();
 
     let mut args = vec![];
     let mut arg_types = vec![];
@@ -274,7 +275,7 @@ fn parse_successor(
         expect_token(parser, ")")?;
     }
 
-    let block = parser.resolve_region_block_index(context, index, &arg_types)?;
+    let block = parser.resolve_region_block_label(context, &label, &arg_types)?;
     Ok((block, args))
 }
 

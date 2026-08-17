@@ -1,0 +1,24 @@
+// RUN: tir opt %s | filecheck %s
+
+// A block label may follow an op with a nested region: the region parse scope
+// is saved and restored across nested regions instead of being clobbered.
+
+module {
+  func.func @f(%0: !i1, %1: !i32) -> !i32 {
+  ^start:
+    %2 = scf.if %0 -> !i32 {
+      scf.yield %1
+    } else {
+      scf.yield %1
+    }
+    cfg.br ^tail(%2 : !i32)
+  ^tail(%3: !i32):
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK: scf.if
+// CHECK: cfg.br ^bb1(%{{[0-9]+}} : !i32)
+// CHECK: ^bb1(%{{[0-9]+}}: !i32):
+// CHECK-NEXT: func.return

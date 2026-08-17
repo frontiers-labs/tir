@@ -1,0 +1,16 @@
+// RUN: not tir opt %s 2>&1 | filecheck %s
+
+// A successor label that no block defines is a parse error, not a silently
+// created empty block.
+
+module {
+  func.func @jump(%0: !i1) -> !i32 {
+    cfg.cond_br %0, ^gone, ^here
+  ^here:
+    %1 = constant {value = 1} : !i32
+    func.return %1
+  }
+  module_end
+}
+
+// CHECK: block ^gone is referenced but never defined

@@ -1,7 +1,7 @@
 use crate::BlockHandle;
 use crate::RegionHandle;
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::attributes::{AttributeValue, NamedAttribute};
 use crate::block::BlockId;
@@ -12,7 +12,7 @@ use super::common::{Cursor, Span};
 use super::text::Parser as TextParser;
 
 type ParseResult<T> = Result<T, (Span, Error)>;
-type BlockLabel = (u32, Vec<(String, crate::TypeId)>, Vec<NamedAttribute>);
+type BlockLabel = (String, Vec<(String, crate::TypeId)>, Vec<NamedAttribute>);
 
 pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, Error)> {
     let mut parser = TextParser::new(src);
@@ -137,14 +137,28 @@ impl<'src> TextParser<'src> {
         region.add_block(entry.id());
 
         let mut current = entry.clone();
+        let enclosing = self.region_parse.take();
         self.region_parse = Some(super::text::RegionParseState {
-            region: region.clone(),
-            indices: HashMap::from([(0, entry.id())]),
+            labels: HashMap::from([("bb0".to_string(), entry.id())]),
+            defined: HashSet::from(["bb0".to_string()]),
         });
 
         let result = self.parse_region_body(context, &region, &mut current);
-        self.region_parse = None;
+        let state = self.region_parse.take();
+        self.region_parse = enclosing;
         result?;
+
+        let state = state.expect("the region parse scope survives its region");
+        if let Some(name) = state
+            .labels
+            .keys()
+            .find(|name| !state.defined.contains(*name))
+        {
+            return Err((
+                self.span(),
+                Error::VerificationError(format!("block ^{name} is referenced but never defined")),
+            ));
+        }
         Ok(region)
     }
 
@@ -154,68 +168,84 @@ impl<'src> TextParser<'src> {
         region: &RegionHandle,
         current: &mut BlockHandle,
     ) -> ParseResult<()> {
+        let entry = current.clone();
+        let mut entry_open = true;
         loop {
             self.skip_trivia();
             if self.parse_token("}") {
                 return Ok(());
             }
 
-            if let Some((block_index, block_args, attrs)) = self.try_parse_block_label(context)? {
-                *current = self.block_at_region_index(context, region, block_index, block_args)?;
+            if let Some((label, block_args, attrs)) = self.try_parse_block_label(context)? {
+                let state = self
+                    .region_parse
+                    .as_mut()
+                    .expect("block labels require an active region parse scope");
+                if entry_open && !state.labels.contains_key(&label) {
+                    state.labels.insert(label.clone(), entry.id());
+                    state.defined.insert(label.clone());
+                }
+                entry_open = false;
+                *current = self.block_at_label(context, region, &label, block_args)?;
                 for attr in attrs {
                     current.set_attr(&context.resolve(attr.name), attr.value);
                 }
                 continue;
             }
 
+            entry_open = false;
             let op = parse_single_op(self, context)?;
             current.append(op.id());
         }
     }
 
-    pub(crate) fn resolve_region_block_index(
+    pub(crate) fn resolve_region_block_label(
         &mut self,
         context: &Context,
-        index: u32,
+        name: &str,
         block_arg_types: &[crate::TypeId],
     ) -> Result<BlockId, (Span, Error)> {
         let Some(state) = &mut self.region_parse else {
-            return Ok(BlockId::from_number(index));
+            // Detached parses (no region scope) address blocks by raw id.
+            return name
+                .strip_prefix("bb")
+                .and_then(|n| n.parse::<u32>().ok())
+                .map(BlockId::from_number)
+                .ok_or_else(|| {
+                    (
+                        self.span(),
+                        Error::VerificationError(format!(
+                            "block ^{name} is not defined in this region"
+                        )),
+                    )
+                });
         };
 
-        if let Some(id) = state.indices.get(&index) {
+        if let Some(id) = state.labels.get(name) {
             let block = context.get_block(*id);
             if !block_arg_types.is_empty() && block.arguments().is_empty() {
                 return Err((
                     self.span(),
                     Error::VerificationError(format!(
-                        "block ^bb{index} was already referenced without arguments"
+                        "block ^{name} was already referenced without arguments"
                     )),
                 ));
             }
             return Ok(*id);
         }
 
-        let len = state.region.iter(context.clone()).len();
-        for missing in len..=index as usize {
-            let block_args = if missing == index as usize {
-                block_arg_types
-                    .iter()
-                    .map(|ty| context.create_value(*ty, None))
-                    .collect()
-            } else {
-                vec![]
-            };
-            let block = context.create_block(block_args);
-            state.region.add_block(block.id());
-            state.indices.insert(missing as u32, block.id());
-        }
-        Ok(state.indices[&index])
+        let block_args = block_arg_types
+            .iter()
+            .map(|ty| context.create_value(*ty, None))
+            .collect();
+        let block = context.create_block(block_args);
+        state.labels.insert(name.to_string(), block.id());
+        Ok(block.id())
     }
 
     fn try_parse_block_label(&mut self, context: &Context) -> ParseResult<Option<BlockLabel>> {
         let mark = self.pos();
-        let Some(block_index) = self.parse_block_index() else {
+        let Some(label) = self.parse_block_label().map(str::to_string) else {
             return Ok(None);
         };
 
@@ -236,7 +266,7 @@ impl<'src> TextParser<'src> {
             return Ok(None);
         }
 
-        Ok(Some((block_index, block_args, attrs)))
+        Ok(Some((label, block_args, attrs)))
     }
 
     /// Parse the block-attribute entries of `{name = value, ...}` after the
@@ -317,42 +347,39 @@ impl<'src> TextParser<'src> {
         }
     }
 
-    fn block_at_region_index(
+    fn block_at_label(
         &mut self,
         context: &Context,
         region: &RegionHandle,
-        index: u32,
+        label: &str,
         named_args: Vec<(String, crate::TypeId)>,
     ) -> Result<BlockHandle, (Span, Error)> {
-        let existing = self
+        let state = self
             .region_parse
             .as_ref()
-            .and_then(|s| s.indices.get(&index).copied());
+            .expect("block labels require an active region parse scope");
 
         // A forward branch may have already created the block from the successor's
-        // type list; bind the label's names to those existing arguments.
-        if let Some(id) = existing {
+        // type list; bind the label's names to those existing arguments and let
+        // the block join the region here, in definition order.
+        if let Some(id) = state.labels.get(label).copied() {
             let block = context.get_block(id);
             if !named_args.is_empty() && block.arguments().is_empty() {
                 return Err((
                     self.span(),
                     Error::VerificationError(format!(
-                        "block ^bb{index} was already referenced without arguments"
+                        "block ^{label} was already referenced without arguments"
                     )),
                 ));
             }
             for ((name, _), arg) in named_args.iter().zip(block.arguments()) {
                 self.define_value(name, arg.id());
             }
+            let state = self.region_parse.as_mut().expect("scope checked above");
+            if state.defined.insert(label.to_string()) {
+                region.add_block(id);
+            }
             return Ok(block);
-        }
-
-        let len = region.iter(context.clone()).len();
-        if index as usize != len {
-            return Err((
-                self.span(),
-                Error::VerificationError(format!("block ^bb{index} is not defined in this region")),
-            ));
         }
 
         let block_args: Vec<Value> = named_args
@@ -364,11 +391,9 @@ impl<'src> TextParser<'src> {
         }
         let block = context.create_block(block_args);
         region.add_block(block.id());
-        self.region_parse
-            .as_mut()
-            .expect("block labels require an active region parse scope")
-            .indices
-            .insert(index, block.id());
+        let state = self.region_parse.as_mut().expect("scope checked above");
+        state.labels.insert(label.to_string(), block.id());
+        state.defined.insert(label.to_string());
         Ok(block)
     }
 }

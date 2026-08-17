@@ -1,0 +1,28 @@
+// RUN: tir opt %s | filecheck %s
+
+// Block labels are names; the printer renumbers them canonically. The first
+// label names the entry block.
+
+module {
+  func.func @select(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+  ^entry:
+    cfg.cond_br %0, ^left(%1 : !i32), ^right(%2 : !i32)
+  ^left(%3: !i32):
+    cfg.br ^exit(%3 : !i32)
+  ^right(%4: !i32):
+    cfg.br ^exit(%4 : !i32)
+  ^exit(%5: !i32):
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK: func.func @select(%{{[0-9]+}}: !i1, %{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
+// CHECK-NEXT: cfg.cond_br %{{[0-9]+}}, ^bb1(%{{[0-9]+}} : !i32), ^bb2(%{{[0-9]+}} : !i32)
+// CHECK-NEXT: ^bb1(%{{[0-9]+}}: !i32):
+// CHECK-NEXT: cfg.br ^bb3(%{{[0-9]+}} : !i32)
+// CHECK-NEXT: ^bb2(%{{[0-9]+}}: !i32):
+// CHECK-NEXT: cfg.br ^bb3(%{{[0-9]+}} : !i32)
+// CHECK-NEXT: ^bb3(%{{[0-9]+}}: !i32):
+// CHECK-NEXT: func.return %{{[0-9]+}}
+// CHECK-NEXT: }

@@ -1,5 +1,4 @@
-use crate::RegionHandle;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::attributes::AttributeValue;
 use crate::block::BlockId;
@@ -7,8 +6,13 @@ use crate::parse::common::{Cursor, Span};
 use crate::value::ValueId;
 
 pub(crate) struct RegionParseState {
-    pub region: RegionHandle,
-    pub indices: HashMap<u32, BlockId>,
+    /// Every label seen so far, whether defined by `^name:` or only referenced
+    /// as a successor. A referenced-only label owns a block that joins the
+    /// region once its definition appears.
+    pub labels: HashMap<String, BlockId>,
+    /// The labels whose defining `^name:` has been parsed. The entry block is
+    /// born defined under the name `bb0`.
+    pub defined: HashSet<String>,
 }
 
 pub struct Parser<'src> {
@@ -309,25 +313,19 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse the region-local index in a `^bb<number>` reference.
-    pub fn parse_block_index(&mut self) -> Option<u32> {
+    /// Parse the label name in a `^name` block reference.
+    pub fn parse_block_label(&mut self) -> Option<&'src str> {
         let mark = self.position;
-        if !self.parse_token("^bb") {
+        if !self.parse_token("^") {
             return None;
         }
-        match self.parse_number() {
-            Some(n) if n >= 0 => Some(n as u32),
-            _ => {
+        match self.parse_ident() {
+            Some(name) => Some(name),
+            None => {
                 self.position = mark;
                 None
             }
         }
-    }
-
-    /// Parse a `^bb<number>` reference, returning a [`BlockId`](crate::BlockId)
-    /// without applying any active region parse scope.
-    pub fn parse_block_ref(&mut self) -> Option<BlockId> {
-        self.parse_block_index().map(BlockId::from_number)
     }
 
     pub fn parse_symbol_name(&mut self) -> Option<&'src str> {
