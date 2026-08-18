@@ -14,7 +14,10 @@ use xshell::{cmd, Shell};
 const GCC_REPOSITORY: &str = "https://github.com/gcc-mirror/gcc.git";
 const GCC_REVISION: &str = "9aab80ddc5b2fa0eef80008e718067ab45f42c50";
 const TORTURE_PATH: &str = "gcc/testsuite/gcc.c-torture";
-const COMPILE_TIMEOUT: Duration = Duration::from_secs(120);
+/// The slowest execute case (`pr35800.c`, a 35-arm fall-through switch) spends
+/// ~45s in instruction selection on a fast desktop, so the budget has to leave
+/// room for a CI core several times slower before it reads as a regression.
+const COMPILE_TIMEOUT: Duration = Duration::from_secs(300);
 const RUN_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const PROGRESS_CASE_INTERVAL: usize = 250;
@@ -434,7 +437,7 @@ mod tests {
 
     #[test]
     fn compile_timeout_covers_slow_codegen_cases() {
-        assert!(COMPILE_TIMEOUT >= Duration::from_secs(120));
+        assert!(COMPILE_TIMEOUT >= Duration::from_secs(300));
     }
 
     #[cfg(unix)]
