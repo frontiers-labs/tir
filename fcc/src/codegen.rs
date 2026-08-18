@@ -76,6 +76,8 @@ struct FnCodegen<'a> {
     signatures: &'a HashMap<EntityId, Signature>,
     return_abi: &'a AbiReturn,
     indirect_return: Option<ValueId>,
+    /// `main` alone returns 0 when control reaches its closing brace.
+    is_main: bool,
     terminated: bool,
     return_slot: Option<Slot>,
     /// The type a `return` converts its value to, for a function returning one.
@@ -1333,6 +1335,7 @@ fn lower_function(
         signatures,
         return_abi: &signature.ret,
         indirect_return,
+        is_main: name == "main",
         terminated: false,
         return_slot: None,
         result_type: None,
@@ -2072,6 +2075,7 @@ impl FnCodegen<'_> {
         for &statement in statements {
             self.lower_stmt(statement)?;
         }
+        self.store_main_exit_status(result);
         self.leave_block(&exit);
 
         self.context
@@ -2430,6 +2434,26 @@ impl FnCodegen<'_> {
             None => (size, align),
         };
         self.return_slot = Some(self.alloca(elem, size, align));
+    }
+
+    /// Stores the zero that C hands back when control reaches the closing brace
+    /// of `main` without a `return`.
+    fn store_main_exit_status(&mut self, result: QualType) {
+        if self.terminated
+            || !self.is_main
+            || !matches!(self.typed.types().kind(result), TypeKind::Integer(_))
+        {
+            return;
+        }
+        let Some(slot) = self.return_slot else {
+            return;
+        };
+        let zero = self
+            .builder
+            .append_op(b::constant(self.context, 0, slot.elem).build())
+            .result();
+        self.builder
+            .append_op(p::store(self.context, zero, slot.ptr).build());
     }
 
     fn return_operand(&mut self, result: QualType, returns_void: bool) -> Operand {
