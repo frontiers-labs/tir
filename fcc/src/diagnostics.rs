@@ -655,9 +655,10 @@ impl Diagnostic {
         self.code.severity() == Severity::Error
     }
 
-    /// Render to stderr with color (the interactive default).
+    /// Render to stderr, with color when stderr is a terminal.
     pub fn eprint(&self) {
-        let _ = self.write(&mut io::stderr(), true);
+        let color = io::IsTerminal::is_terminal(&io::stderr());
+        let _ = self.write(&mut io::stderr(), color);
     }
 
     /// Render to an arbitrary writer; `color` toggles ANSI styling (off for
@@ -755,118 +756,4 @@ pub fn explain(code: &str) -> Option<String> {
         out.push_str(&format!("\nReference: {reference}\n"));
     }
     Some(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Render a diagnostic to a plain (color-free) string.
-    fn render(diag: Diagnostic) -> String {
-        let mut buf = Vec::new();
-        diag.write(&mut buf, false).unwrap();
-        String::from_utf8(buf).unwrap()
-    }
-
-    #[test]
-    fn codes_round_trip_and_are_unique() {
-        let mut seen = Vec::new();
-        for &code in Code::ALL {
-            assert_eq!(Code::from_code(code.as_str()), Some(code));
-            assert!(!seen.contains(&code.as_str()), "duplicate code string");
-            seen.push(code.as_str());
-        }
-        assert_eq!(Code::from_code("e0001"), Some(Code::UnexpectedToken));
-        assert_eq!(Code::from_code("E9999"), None);
-    }
-
-    #[test]
-    fn severity_follows_code_prefix() {
-        for &code in Code::ALL {
-            let expected = if code.as_str().starts_with('W') {
-                Severity::Warning
-            } else {
-                Severity::Error
-            };
-            assert_eq!(code.severity(), expected);
-        }
-    }
-
-    #[test]
-    fn span_packs_file_and_offset() {
-        let file = intern_file("<span-test>", "source");
-        let span = Span::new(file, 1234);
-        assert_eq!(span.file(), file);
-        assert_eq!(span.offset(), 1234);
-    }
-
-    #[test]
-    fn spanned_report_points_at_source() {
-        let src = "int main(void) { return; }";
-        let file = intern_file("<report-test>", src);
-        let at = src.find("return").unwrap();
-        let diag: Diagnostic = UnexpectedToken::new(Span::new(file, at), "found ';'").into();
-
-        let out = render(diag);
-        assert!(out.contains("[E0001]"), "{out}");
-        assert!(out.contains("unexpected token"), "{out}");
-        assert!(out.contains("found ';'"), "{out}");
-        assert!(out.contains("<report-test>"), "{out}");
-        // The standard reference is attached automatically from the catalog.
-        assert!(out.contains("6.9"), "{out}");
-    }
-
-    #[test]
-    fn spanless_diagnostic_renders_compact_header() {
-        let out = render(EmptyTranslationUnit::new().into());
-        assert!(out.starts_with("error[E0901]:"), "{out}");
-        assert!(out.contains("no functions"), "{out}");
-    }
-
-    #[test]
-    fn undeclared_identifier_points_at_its_span() {
-        let src = "int main(void) { return x; }";
-        let file = intern_file("<undeclared-test>", src);
-        let at = src.find('x').unwrap();
-        let out = render(UndeclaredIdentifier::new(Span::new(file, at), "x", "C17 6.5.1").into());
-        assert!(out.contains("[E0200]"), "{out}");
-        assert!(out.contains("undeclared identifier 'x'"), "{out}");
-        assert!(out.contains("not declared in this scope"), "{out}");
-        assert!(out.contains("Help"), "{out}");
-    }
-
-    #[test]
-    fn related_label_can_point_into_another_file() {
-        let first = intern_file("first.h", "int value;\n");
-        let second = intern_file("second.c", "int value;\n");
-        let diagnostic: Diagnostic = Redefinition::new(
-            Span::new(second, 4),
-            Span::new(first, 4),
-            "value",
-            "C23 6.7.1",
-        )
-        .into();
-        let output = render(diagnostic);
-
-        assert!(output.contains("second.c"), "{output}");
-        assert!(output.contains("first.h"), "{output}");
-        assert!(output.contains("previous declaration is here"), "{output}");
-    }
-
-    #[test]
-    fn warning_uses_warning_severity() {
-        let file = intern_file("<warn-test>", "#warning hi");
-        let diag: Diagnostic = PreprocWarning::new(Span::new(file, 0), "hi").into();
-        assert!(!diag.is_error());
-        assert_eq!(diag.code(), Code::PreprocWarning);
-    }
-
-    #[test]
-    fn explain_known_and_unknown() {
-        let text = explain("E0300").unwrap();
-        assert!(text.contains("error[E0300]"));
-        assert!(text.contains("#error"));
-        assert!(text.contains("Reference:"));
-        assert!(explain("nope").is_none());
-    }
 }

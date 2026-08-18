@@ -1,0 +1,7 @@
+// Type groups are not lowered to Rust yet.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+group AnyInt = int<_>;
+rule bad: builtin.addi(x: AnyInt, 0) => x;
+
+// CHECK: type group

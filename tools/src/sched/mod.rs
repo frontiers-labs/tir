@@ -227,30 +227,3 @@ fn collect_instructions(context: &Context, block: tir::BlockHandle, out: &mut Ve
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{static_unroll_stride, text_instruction_layout};
-    use tir::backend::binary::{ObjSection, ObjectFile, SectionKind};
-
-    #[test]
-    fn encoded_text_spans_define_frontend_pcs_and_widths() {
-        let object = ObjectFile {
-            sections: vec![ObjSection {
-                name: ".text".to_string(),
-                kind: SectionKind::Text,
-                align: 16,
-                data: vec![0; 9],
-                relocs: vec![],
-                insn_spans: vec![(0, 2), (2, 3), (5, 4)],
-            }],
-            symbols: vec![],
-        };
-
-        assert_eq!(
-            text_instruction_layout(&object, 3),
-            Some(vec![(0, 2), (2, 3), (5, 4)])
-        );
-        assert_eq!(static_unroll_stride(&[(0, 2), (2, 3), (5, 4)]), 9);
-    }
-}

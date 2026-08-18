@@ -3,10 +3,9 @@ name = "tir-sim"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+test = false
+doctest = false
+
 [dependencies]
 tir.workspace = true
-
-[dev-dependencies]
-tir-riscv.workspace = true
-tir-arm64.workspace = true
-tir-x86_64.workspace = true

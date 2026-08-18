@@ -177,20 +177,6 @@ impl CompiledIselPattern {
         }
     }
 
-    /// Matches across the whole e-graph, honoring only the boundary constraints
-    /// (register/immediate/width) — the entry used where no block-level legality
-    /// applies (conditional-branch selection).
-    #[cfg(test)]
-    pub(crate) fn search(
-        &self,
-        egraph: &SemEGraph,
-        ctx: &Context,
-    ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
-        self.search_with_legality(egraph, ctx, None, &|node, class| {
-            self.boundary_ok(egraph, ctx, node, class, None)
-        })
-    }
-
     pub(crate) fn search_with_legality(
         &self,
         egraph: &SemEGraph,

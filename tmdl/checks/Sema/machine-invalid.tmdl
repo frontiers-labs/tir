@@ -1,0 +1,59 @@
+// Machine-level reference errors rejected by semantic analysis: unknown
+// units, resources, instructions and forward targets, plus duplicate
+// declarations.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+sched_class WriteIALU;
+sched_class WriteIMul { latency = 3; }
+
+instruction Mul {
+    behavior { rd = rs1; }
+    schedule { units = [WirteIMul]; }
+}
+
+machine RocketCore for [RV64I] {
+    unit ALU { count = 2; }
+    unit MUL { count = 1; }
+    bind WriteIALU { latency = 1; uses = [ALU]; }
+    bind WriteIMul { latency = 3; uses = [MUL]; }
+}
+
+machine BadBind for [RV64I] {
+    unit ALU { count = 1; }
+    bind NotAUnit { latency = 1; uses = [ALU]; }
+}
+
+machine BadUse for [RV64I] {
+    unit ALU { count = 1; }
+    bind WriteIALU { latency = 1; uses = [FPU]; }
+}
+
+machine BadOverride for [RV64I] {
+    unit ALU { count = 1; }
+    override Nope { latency = 1; uses = [ALU]; }
+}
+
+machine BadForward for [RV64I] {
+    unit ALU { count = 1; }
+    forward ALU => FPU { latency = 0; }
+}
+
+sched_class W;
+sched_class W;
+
+machine Duplicates for [RV64I] {
+    unit ALU { count = 1; }
+    unit ALU { count = 2; }
+    bind W { latency = 1; uses = [ALU]; }
+    bind W { latency = 2; uses = [ALU]; }
+}
+
+// CHECK-DAG: unknown unit 'WirteIMul'
+// CHECK-DAG: binds unknown unit 'NotAUnit'
+// CHECK-DAG: uses unknown resource 'FPU'
+// CHECK-DAG: overrides unknown instruction 'Nope'
+// CHECK-DAG: forward target 'FPU' is not a resource
+// CHECK-DAG: duplicate unit declaration 'W'
+// CHECK-DAG: duplicate resource 'ALU'
+// CHECK-DAG: duplicate bind for unit 'W'

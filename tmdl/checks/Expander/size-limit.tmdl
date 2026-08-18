@@ -1,0 +1,9 @@
+// Each expansion pass doubles the token count -> hits the size cap.
+
+// RUN: not tmdlc --action=emit-expanded-tokens --output=- %s | filecheck %s
+
+macro m { (a) => { m!(a) m!(a) }; }
+
+m!(a)
+
+// CHECK: macro expansion size limit exceeded

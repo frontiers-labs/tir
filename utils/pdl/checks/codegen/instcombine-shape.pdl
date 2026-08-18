@@ -1,0 +1,19 @@
+// Instcombine-style rules lower to executable Rust: typed pattern/introduced
+// nodes, no legacy helper entry points.
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule add-zero: builtin.addi(x: int<W>, 0) => x;
+rule mul-pow2-to-shl:
+  builtin.muli(x: int<W>, c: const) => builtin.shli(x, const<W>(ctz(c)))
+  where popcount(c) == 1, c != 1;
+
+// CHECK-NOT: commutative_pattern
+// CHECK-NOT: pattern_named
+// CHECK-NOT: introduced_named
+// CHECK: fn generated_ruleset
+// CHECK-NOT: commutative_pattern
+// CHECK: Node::pattern::<crate::builtin::AddIOp>
+// CHECK: Node::introduced::<
+// CHECK: crate::builtin::ShlIOp
+// CHECK-NOT: pattern_named
+// CHECK-NOT: introduced_named

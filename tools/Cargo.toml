@@ -3,6 +3,10 @@ name = "tir-tools"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+test = false
+doctest = false
+
 [[bin]]
 name = "tir"
 path = "src/main.rs"
@@ -18,10 +22,3 @@ tir-x86_64.workspace = true
 tir-gpu.workspace = true
 tir-sim.workspace = true
 tir-llvm.workspace = true
-
-[dev-dependencies]
-tir-lit.workspace = true
-
-[[test]]
-name = "lit"
-harness = false

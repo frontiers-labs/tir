@@ -1,0 +1,6 @@
+// APInt cannot represent widths above 64.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+rule bad: builtin.muli(x: int<W>, c: const<65>) => x;
+
+// CHECK: constant width must be between 1 and 64

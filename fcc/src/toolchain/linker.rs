@@ -51,23 +51,3 @@ impl LinkCommand {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn argv_orders_objects_before_libs() {
-        let cmd = link_command(
-            &[PathBuf::from("a.o"), PathBuf::from("b.o")],
-            Path::new("out"),
-            &[PathBuf::from("/x")],
-            &["m".to_string()],
-        );
-        let expected: Vec<String> = ["cc", "-o", "out", "a.o", "b.o", "-L/x", "-lm"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(cmd.display_argv(), expected);
-    }
-}

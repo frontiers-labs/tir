@@ -188,29 +188,3 @@ pub(crate) fn exhaust_argument_registers(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{ArgumentGroupPolicy, GroupRollback};
-
-    #[test]
-    fn argument_group_policy_enforces_its_register_limit() {
-        let policy = ArgumentGroupPolicy {
-            register_limit: Some(2),
-            rollback: GroupRollback::Preserve,
-        };
-
-        assert!(policy.fits_register_limit(2));
-        assert!(!policy.fits_register_limit(3));
-    }
-
-    #[test]
-    fn argument_group_policy_can_leave_the_register_count_unbounded() {
-        let policy = ArgumentGroupPolicy {
-            register_limit: None,
-            rollback: GroupRollback::Exhaust,
-        };
-
-        assert!(policy.fits_register_limit(usize::MAX));
-    }
-}

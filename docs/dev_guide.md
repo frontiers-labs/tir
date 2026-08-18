@@ -32,9 +32,9 @@ cargo nextest r
 
 ### Running check tests
 
-There are also check-tests, which are very similar to LLVM Integrated Tests
-(LIT). Each test file lives under a crate's `checks/` directory and contains
-one or more `RUN:` lines that pipe a tool's output into `filecheck`, e.g.:
+Check-tests are very similar to LLVM Integrated Tests (LIT). Each test file
+lives under a crate's `checks/` directory and contains one or more `RUN:`
+lines that pipe a tool's output into `filecheck`, e.g.:
 
 ```
 // RUN: tmdlc --action=emit-ast --output=- %S/../Inputs/simple.tmdl | filecheck %s
@@ -42,9 +42,31 @@ one or more `RUN:` lines that pipe a tool's output into `filecheck`, e.g.:
 // CHECK-NEXT:     items: [
 ```
 
-These run as ordinary integration tests, so `cargo test` (or `cargo nextest r`)
-executes them alongside the unit tests — each check file shows up as its own
-test case. `cargo xtask check` is a convenience wrapper around the test suite.
+A single integration test in `utils/lit` discovers every test suite in the
+workspace. A suite is a directory holding a `test_suite.toml` that names it and
+globs its test files:
+
+```toml
+[suite]
+name = "TIR core IR and pass checks"
+glob = ["**/*.tir", "!**/Inputs/**/*"]
+```
+
+The globs are relative to the suite directory; a leading `!` excludes. Each
+selected check file shows up as its own test case named by its path relative to
+the workspace root (e.g. `core/checks/Restructure/while-loop.tir`). It runs as
+part of `cargo test`, or standalone:
+
+```sh
+cargo test -p tir-lit --test lit
+```
+
+Like LLVM LIT, the driver filters by environment variable: `LIT_FILTER` is a
+regex selecting the tests to run, `LIT_FILTER_OUT` excludes matching tests.
+
+```sh
+LIT_FILTER='^fcc/checks/Codegen' cargo test -p tir-lit --test lit
+```
 
 `filecheck` is a small, self-contained reimplementation of LLVM's FileCheck
 (built on `chumsky` and `ariadne`); it lives in `utils/filecheck` and is also
@@ -105,5 +127,25 @@ grcov . --binary-path target/debug/ -s . -t coveralls+ --branch --llvm \
 
 Open `target/coverage/html/index.html` to see the report.
 
-Also `main` branch reports are available at
-https://coveralls.io/github/perf-toolbox/tir.
+Also `master` branch reports are available at
+https://coveralls.io/github/frontiers-labs/tir.
+
+## Test policy
+
+Every new contribution must be accompanied by reasonable amount of testing.
+Tests must demonstrate the intention behind the changes and make it easier
+to understand what the code is doing.
+
+1. Prefer check tests (a.k.a. LIT-style tests) over other kinds of tests
+   whenever possible. Checks are a good option for testing passes, code
+   generation, any other behavior observed via CLI. They require less
+   code to set up and are easier to understand.
+2. Heavy crates (core, backends, simulators, fcc, tmdl, symbolic, …) build
+   with `test = false`. Their unit tests live in `utils/unit-tests`, one
+   `#[cfg(test)]` module per crate, forming a single test binary.
+3. Only public APIs get tests. Never expose private surface (visibility
+   changes, `#[doc(hidden)]`, re-exports) to make something testable; a test
+   that needs private access is rewritten against public API or deleted.
+4. Light utility crates with small dependency footprints (`utils/adt`,
+   `utils/graph`, `utils/filecheck`, `utils/lit`, `utils/pbqp`, `xtask`)
+   keep their unit tests in-crate.

@@ -1,0 +1,21 @@
+// Phase references in binds must name a phase of the machine's pipeline; a
+// machine without a pipeline has no phases at all.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+sched_class W;
+sched_class V;
+
+machine UnknownPhase for [RV64I] {
+    pipeline { IF; ID; }
+    unit L { count = 1; }
+    bind W { reads = ID; writes = NOPE; uses = [L]; }
+}
+
+machine NoPipeline for [RV64I] {
+    unit L { count = 1; }
+    bind V { reads = ID; uses = [L]; }
+}
+
+// CHECK-DAG: references phase 'NOPE' not in machine 'UnknownPhase' pipeline
+// CHECK-DAG: references phase 'ID' not in machine 'NoPipeline' pipeline

@@ -16,8 +16,6 @@ mod emit;
 mod node;
 mod pattern;
 mod rules;
-#[cfg(test)]
-mod tests;
 
 use std::collections::{HashMap, HashSet};
 

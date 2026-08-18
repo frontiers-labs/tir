@@ -1,0 +1,6 @@
+// Bit counts run on the constant's own width.
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule count: builtin.muli(x: int<W>, c: const) => x where clz(c) == 7;
+
+// CHECK: binding_1_value.count_leading_zeros()

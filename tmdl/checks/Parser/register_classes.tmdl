@@ -1,0 +1,626 @@
+// This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
+
+// RUN: tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+
+// Register-class forms: a polymorphic storage trait, inheritance (the dump
+// shows GPRsp with the base's parameters and full register file merged in,
+// slot x31 overridden to `sp` while the base keeps `xzr`), and a `file`
+// override that shares a register file without importing its registers.
+
+isa Isa { param XLEN: Integer = 64; }
+
+register_class GPR for [Isa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers {
+        x0..x30 => {},
+        x31("xzr") => { traits = [hardwired_zero] },
+    }
+}
+
+register_class GPRsp for [Isa] : GPR {
+    registers {
+        x31("sp") => {},
+    }
+}
+
+register_class Poly for [Isa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers {
+        p0 => { traits = [polymorphic] },
+    }
+}
+
+register_class GPR8H for [Isa] {
+    file = GPR;
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = 8;
+    registers {
+        ah => { index = 0 },
+    }
+}
+
+// CHECK: File {
+// CHECK-NEXT:     doc: None,
+// CHECK-NEXT:     items: [
+// CHECK-NEXT:         Isa(
+// CHECK-NEXT:             Isa {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "Isa",
+// CHECK-NEXT:                 requires: None,
+// CHECK-NEXT:                 parameters: {
+// CHECK-NEXT:                     "XLEN": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "64",
+// CHECK-NEXT:                                         span: 503..505,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 trap_handler: None,
+// CHECK-NEXT:                 span: 0..510,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         RegisterClass(
+// CHECK-NEXT:             RegisterClass {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "GPR",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Isa",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 base: None,
+// CHECK-NEXT:                 file: None,
+// CHECK-NEXT:                 parameters: {
+// CHECK-NEXT:                     "ENCODING_LEN": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "5",
+// CHECK-NEXT:                                         span: 575..576,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     "WIDTH": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Field(
+// CHECK-NEXT:                                 Field {
+// CHECK-NEXT:                                     base: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "self",
+// CHECK-NEXT:                                             span: 605..609,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     member: "XLEN",
+// CHECK-NEXT:                                     span: 609..614,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 registers: [
+// CHECK-NEXT:                     Range(
+// CHECK-NEXT:                         RegisterRange {
+// CHECK-NEXT:                             start: "x0",
+// CHECK-NEXT:                             end: "x30",
+// CHECK-NEXT:                             alias_pattern: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x31",
+// CHECK-NEXT:                             alias: Some(
+// CHECK-NEXT:                                 "xzr",
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [
+// CHECK-NEXT:                                 HardwiredZero,
+// CHECK-NEXT:                             ],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 663..706,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 span: 510..717,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         RegisterClass(
+// CHECK-NEXT:             RegisterClass {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "GPRsp",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Isa",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 base: Some(
+// CHECK-NEXT:                     "GPR",
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 file: None,
+// CHECK-NEXT:                 parameters: {
+// CHECK-NEXT:                     "ENCODING_LEN": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "5",
+// CHECK-NEXT:                                         span: 575..576,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     "WIDTH": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Field(
+// CHECK-NEXT:                                 Field {
+// CHECK-NEXT:                                     base: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "self",
+// CHECK-NEXT:                                             span: 605..609,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     member: "XLEN",
+// CHECK-NEXT:                                     span: 609..614,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 registers: [
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x0",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x1",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x2",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x3",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x4",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x5",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x6",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x7",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x8",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x9",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x10",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x11",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x12",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x13",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x14",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x15",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x16",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x17",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x18",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x19",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x20",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x21",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x22",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x23",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x24",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x25",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x26",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x27",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x28",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x29",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x30",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 640..653,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "x31",
+// CHECK-NEXT:                             alias: Some(
+// CHECK-NEXT:                                 "sp",
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 780..795,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 span: 717..806,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         RegisterClass(
+// CHECK-NEXT:             RegisterClass {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "Poly",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Isa",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 base: None,
+// CHECK-NEXT:                 file: None,
+// CHECK-NEXT:                 parameters: {
+// CHECK-NEXT:                     "ENCODING_LEN": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "5",
+// CHECK-NEXT:                                         span: 872..873,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     "WIDTH": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Field(
+// CHECK-NEXT:                                 Field {
+// CHECK-NEXT:                                     base: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "self",
+// CHECK-NEXT:                                             span: 902..906,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     member: "XLEN",
+// CHECK-NEXT:                                     span: 906..911,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 registers: [
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "p0",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: None,
+// CHECK-NEXT:                             traits: [
+// CHECK-NEXT:                                 Polymorphic,
+// CHECK-NEXT:                             ],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 937..969,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 span: 806..980,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         RegisterClass(
+// CHECK-NEXT:             RegisterClass {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "GPR8H",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Isa",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 base: None,
+// CHECK-NEXT:                 file: Some(
+// CHECK-NEXT:                     "GPR",
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 parameters: {
+// CHECK-NEXT:                     "ENCODING_LEN": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "4",
+// CHECK-NEXT:                                         span: 1063..1064,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     "WIDTH": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "8",
+// CHECK-NEXT:                                         span: 1093..1094,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 registers: [
+// CHECK-NEXT:                     Single(
+// CHECK-NEXT:                         Register {
+// CHECK-NEXT:                             name: "ah",
+// CHECK-NEXT:                             alias: None,
+// CHECK-NEXT:                             index: Some(
+// CHECK-NEXT:                                 0,
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             subregisters: [],
+// CHECK-NEXT:                             span: 1120..1139,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 span: 980..30335,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:     ],
+// CHECK-NEXT:     file_name: "{{.*}}/tmdl/checks/Parser/register_classes.tmdl",
+// CHECK-NEXT: }

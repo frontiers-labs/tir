@@ -221,6 +221,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 
 [[package]]
+name = "bstr"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
+dependencies = [
+ "memchr",
+ "serde_core",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -628,7 +638,6 @@ dependencies = [
  "tempfile",
  "tir",
  "tir-arm64",
- "tir-lit",
  "tir-riscv",
  "tir-x86_64",
 ]
@@ -759,6 +768,19 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi 6.0.0",
+]
+
+[[package]]
+name = "globset"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07c34a9410465b45bd9787443bc7370f37735bad04b0f0cd57ff1a3186c98988"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -1695,9 +1717,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.14"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -1854,6 +1876,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "serde_spanned"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+dependencies = [
+ "serde_core",
 ]
 
 [[package]]
@@ -2074,7 +2105,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tir-adt",
  "tir-graph",
- "tir-lit",
  "tir-macros",
  "tir-pbqp",
  "tir-pdl",
@@ -2092,9 +2122,7 @@ dependencies = [
 name = "tir-arm64"
 version = "0.1.0"
 dependencies = [
- "criterion",
  "tir",
- "tir-lit",
  "tmdl",
 ]
 
@@ -2103,7 +2131,6 @@ name = "tir-capi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
- "serde_json",
  "tir",
  "tir-arm64",
  "tir-riscv",
@@ -2128,7 +2155,6 @@ name = "tir-gpu"
 version = "0.1.0"
 dependencies = [
  "tir",
- "tir-lit",
  "tmdl",
 ]
 
@@ -2154,7 +2180,6 @@ dependencies = [
  "serde_json",
  "tir",
  "tir-arm64",
- "tir-lit",
  "tir-riscv",
  "tir-sim",
  "tir-x86_64",
@@ -2176,7 +2201,12 @@ name = "tir-lit"
 version = "0.1.0"
 dependencies = [
  "filecheck",
+ "globset",
  "libtest-mimic",
+ "regex",
+ "serde",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -2224,9 +2254,7 @@ dependencies = [
 name = "tir-riscv"
 version = "0.1.0"
 dependencies = [
- "criterion",
  "tir",
- "tir-lit",
  "tmdl",
 ]
 
@@ -2235,9 +2263,6 @@ name = "tir-sim"
 version = "0.1.0"
 dependencies = [
  "tir",
- "tir-arm64",
- "tir-riscv",
- "tir-x86_64",
 ]
 
 [[package]]
@@ -2260,10 +2285,36 @@ dependencies = [
  "tir",
  "tir-arm64",
  "tir-gpu",
+ "tir-llvm",
+ "tir-riscv",
+ "tir-sim",
+ "tir-x86_64",
+ "tmdl",
+]
+
+[[package]]
+name = "tir-unit-tests"
+version = "0.1.0"
+dependencies = [
+ "fcc",
+ "jsonschema",
+ "logos",
+ "serde_json",
+ "tempfile",
+ "tir",
+ "tir-adt",
+ "tir-arm64",
+ "tir-capi",
+ "tir-fuzz",
+ "tir-graph",
+ "tir-jit",
  "tir-lit",
  "tir-llvm",
  "tir-riscv",
  "tir-sim",
+ "tir-symbolic",
+ "tir-tools",
+ "tir-verify",
  "tir-x86_64",
  "tmdl",
 ]
@@ -2284,7 +2335,6 @@ name = "tir-x86_64"
 version = "0.1.0"
 dependencies = [
  "tir",
- "tir-lit",
  "tmdl",
 ]
 
@@ -2296,7 +2346,6 @@ dependencies = [
  "chumsky",
  "clap",
  "criterion",
- "jsonschema",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -2307,7 +2356,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tir-adt",
  "tir-graph",
- "tir-lit",
  "tir-symbolic",
  "typed-arena",
 ]
@@ -2328,9 +2376,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
 dependencies = [
  "serde",
- "serde_spanned",
- "toml_datetime",
+ "serde_spanned 0.6.9",
+ "toml_datetime 0.6.11",
  "toml_edit",
+]
+
+[[package]]
+name = "toml"
+version = "0.9.12+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
+dependencies = [
+ "indexmap 2.14.0",
+ "serde_core",
+ "serde_spanned 1.1.1",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 0.7.15",
 ]
 
 [[package]]
@@ -2343,6 +2406,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml_datetime"
+version = "0.7.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "toml_edit"
 version = "0.22.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2350,10 +2422,19 @@ checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
 dependencies = [
  "indexmap 2.14.0",
  "serde",
- "serde_spanned",
- "toml_datetime",
+ "serde_spanned 0.6.9",
+ "toml_datetime 0.6.11",
  "toml_write",
- "winnow",
+ "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.1.3+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+dependencies = [
+ "winnow 1.0.4",
 ]
 
 [[package]]
@@ -2361,6 +2442,12 @@ name = "toml_write"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
+
+[[package]]
+name = "toml_writer"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "typed-arena"
@@ -2598,6 +2685,12 @@ checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "winnow"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
 name = "wit-bindgen"

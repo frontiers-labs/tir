@@ -1,0 +1,76 @@
+// Positive type-checking coverage for the functional vector pipeline:
+// split/map/zip/reduce/iota/concat, unary/binary/ternary lambdas, lambda
+// captures of outer operands, and iota zipped with split.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+isa RV32I { param XLEN: Integer = 32; }
+isa RVV requires [RV32I] {
+    param VLEN: Integer = 128;
+    param SEW: Integer = 32;
+}
+
+register_class VR for [RVV] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.VLEN;
+    registers { v0..v31 => {}, }
+}
+
+template VArithVV for [RVV] {
+    param MNEMONIC: String;
+    operands { vd: VR, vs2: VR, vs1: VR, }
+    asm { "{self.MNEMONIC} {vd}, {vs2}, {vs1}" }
+}
+
+instruction VAdd for [RVV] : VArithVV {
+    param MNEMONIC: String = "vadd.vv";
+    behavior {
+        vd = concat(map(zip(split(vs2, 4), split(vs1, 4)), |a, b| a + b));
+    }
+}
+
+instruction VRedSum for [RVV] : VArithVV {
+    param MNEMONIC: String = "vredsum.vs";
+    behavior {
+        vd = reduce(split(vs2, 4), |acc, x| acc + x);
+    }
+}
+
+instruction VId for [RVV] : VArithVV {
+    param MNEMONIC: String = "vid.v";
+    behavior {
+        vd = concat(iota(4, 32));
+    }
+}
+
+instruction VSlideUp for [RVV] : VArithVV {
+    param MNEMONIC: String = "vslideup.vx";
+    behavior {
+        vd = concat(map(zip(iota(4, 32), split(vs2, 4)), |i, x| x + i));
+    }
+}
+
+// The masked-op shape: computed lanes, old destination lanes, and the mask
+// register's bits combined by a ternary lambda.
+instruction VAddMasked for [RVV] : VArithVV {
+    param MNEMONIC: String = "vadd.vv.masked";
+    behavior {
+        vd = concat(map(zip(split(vs2, 4), split(vs1, 4), split(vd, 4)), |a, b, old| if a == b { a } else { old }));
+    }
+}
+
+// The scalar-broadcast shape (RVV .vx form): the lambda captures an outer
+// operand alongside its lane parameter.
+instruction VAddVX for [RVV] : VArithVV {
+    param MNEMONIC: String = "vadd.vx";
+    behavior {
+        vd = concat(map(split(vs2, 4), |a| a + vs1));
+    }
+}
+
+// CHECK-DAG: VAddOp
+// CHECK-DAG: VRedSumOp
+// CHECK-DAG: VIdOp
+// CHECK-DAG: VSlideUpOp
+// CHECK-DAG: VAddMaskedOp
+// CHECK-DAG: VAddVXOp

@@ -337,24 +337,3 @@ impl<'a> fmt::Display for Token<'a> {
         }
     }
 }
-
-#[cfg(test)]
-mod test {
-    use chumsky::Parser;
-
-    use super::lexer;
-
-    #[test]
-    fn smoke_lexer() {
-        let input = "
-          isa RV32I {
-              XLEN = 32
-          }
-       ";
-
-        let parser = lexer();
-        let result = parser.parse(input);
-
-        println!("{:#?}", result);
-    }
-}

@@ -1,0 +1,5 @@
+// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
+
+rule large: builtin.addi(x: int<64>, 18446744073709551615) => x;
+
+// CHECK: integer literal is out of range

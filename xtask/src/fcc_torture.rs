@@ -364,9 +364,7 @@ mod tests {
 
     #[cfg(unix)]
     use super::run_with_timeout;
-    use super::{
-        classify_results, pair_libraries, parse_allowlist, should_report_progress, COMPILE_TIMEOUT,
-    };
+    use super::{classify_results, pair_libraries, parse_allowlist, should_report_progress};
 
     #[test]
     fn library_companion_is_linked_with_its_test() {
@@ -433,11 +431,6 @@ mod tests {
         let expected = BTreeSet::from(["compile/removed.c".to_string()]);
         let result = classify_results(&expected, &[], &[]);
         assert_eq!(result.missing_entries, ["compile/removed.c"]);
-    }
-
-    #[test]
-    fn compile_timeout_covers_slow_codegen_cases() {
-        assert!(COMPILE_TIMEOUT >= Duration::from_secs(300));
     }
 
     #[cfg(unix)]

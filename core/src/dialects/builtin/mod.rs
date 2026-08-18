@@ -388,31 +388,3 @@ impl<const N: usize> TypeConstraint for Integer<N> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn token_type_roundtrip() {
-        let context = Context::with_default_dialects();
-
-        let token = TokenType::new(&context);
-        assert_eq!(context.type_to_string(token), "!token");
-
-        // Tokens are opaque and interned: every `!token` is the same type.
-        assert_eq!(TokenType::new(&context), token);
-        assert_eq!(context.parse_type_spec("token").unwrap(), token);
-
-        // A token is distinct from the unit type despite both being empty.
-        assert_ne!(UnitType::new(&context), token);
-    }
-
-    #[test]
-    fn token_is_not_an_arbitrary_data_type() {
-        let context = Context::with_default_dialects();
-        let token = context.get_type_data(TokenType::new(&context));
-
-        assert!(!crate::Any::satisfies(token.as_ref()));
-    }
-}

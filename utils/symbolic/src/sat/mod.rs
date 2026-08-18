@@ -1,9 +1,6 @@
 //! Textbook MiniSat-style CDCL SAT solver backing bit-blasted QF_BV queries:
 //! two-watched-literal propagation, 1-UIP learning, VSIDS, Luby restarts.
 
-#[cfg(test)]
-mod tests;
-
 /// A boolean variable, indexing the solver's per-variable tables.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Var(u32);

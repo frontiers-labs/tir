@@ -1,0 +1,19 @@
+// Fusion declarations must name mnemonics of known instructions.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+sched_class W;
+
+instruction Cmp {
+    param MNEMONIC: String = "cmp";
+    behavior { rd = rs1; }
+    schedule { units = [W]; }
+}
+
+machine M for [RV64I] {
+    unit P0 { count = 1; }
+    bind W { latency = 1; uop(P0); }
+    fusion { first = [cmp]; second = [jne]; }
+}
+
+// CHECK: fusion mnemonic 'jne' matches no instruction

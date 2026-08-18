@@ -1,0 +1,647 @@
+// This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
+
+// RUN: tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+
+// Operator parsing inside behaviors: `<=`, `!=`, unary `~` and the unsigned
+// comparison `~<=` each map to their AST operator.
+
+isa Test { param XLEN: Integer = 32; }
+
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+
+instruction LessEqual for [Test] {
+    param MNEMONIC: String = "le";
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+    behavior { rd = if rs1 <= rs2 { rs1 } else { rs2 }; }
+}
+
+instruction NotEqual for [Test] {
+    param MNEMONIC: String = "ne";
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+    behavior { rd = if rs1 != rs2 { rs1 } else { rs2 }; }
+}
+
+instruction BitwiseNot for [Test] {
+    param MNEMONIC: String = "bnot";
+    operands { rd: GPR, rs1: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}" }
+    behavior { rd = rs1 & ~1; }
+}
+
+instruction UnsignedLessEqual for [Test] {
+    param MNEMONIC: String = "uleu";
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+    behavior { rd = if rs1 ~<= rs2 { rs1 } else { rs2 }; }
+}
+
+// CHECK: File {
+// CHECK-NEXT:     doc: None,
+// CHECK-NEXT:     items: [
+// CHECK-NEXT:         Isa(
+// CHECK-NEXT:             Isa {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "Test",
+// CHECK-NEXT:                 requires: None,
+// CHECK-NEXT:                 parameters: {
+// CHECK-NEXT:                     "XLEN": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "32",
+// CHECK-NEXT:                                         span: 335..337,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 trap_handler: None,
+// CHECK-NEXT:                 span: 0..342,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         RegisterClass(
+// CHECK-NEXT:             RegisterClass {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "GPR",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Test",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 base: None,
+// CHECK-NEXT:                 file: None,
+// CHECK-NEXT:                 parameters: {
+// CHECK-NEXT:                     "ENCODING_LEN": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "5",
+// CHECK-NEXT:                                         span: 408..409,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     "WIDTH": (
+// CHECK-NEXT:                         Integer,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Field(
+// CHECK-NEXT:                                 Field {
+// CHECK-NEXT:                                     base: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "self",
+// CHECK-NEXT:                                             span: 438..442,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     member: "XLEN",
+// CHECK-NEXT:                                     span: 442..447,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 registers: [
+// CHECK-NEXT:                     Range(
+// CHECK-NEXT:                         RegisterRange {
+// CHECK-NEXT:                             start: "r0",
+// CHECK-NEXT:                             end: "r31",
+// CHECK-NEXT:                             alias_pattern: None,
+// CHECK-NEXT:                             traits: [],
+// CHECK-NEXT:                             span: 465..478,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 span: 342..485,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         Instruction(
+// CHECK-NEXT:             Instruction {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "LessEqual",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Test",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 parent_template: None,
+// CHECK-NEXT:                 params: {
+// CHECK-NEXT:                     "MNEMONIC": (
+// CHECK-NEXT:                         String,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Str(
+// CHECK-NEXT:                                     LitStr {
+// CHECK-NEXT:                                         value: "le",
+// CHECK-NEXT:                                         span: 549..553,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 operands: [
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rd",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rs1",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rs2",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 asm: Some(
+// CHECK-NEXT:                     Block(
+// CHECK-NEXT:                         Block {
+// CHECK-NEXT:                             stmts: [
+// CHECK-NEXT:                                 Lit(
+// CHECK-NEXT:                                     Str(
+// CHECK-NEXT:                                         LitStr {
+// CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}, {rs2}",
+// CHECK-NEXT:                                             span: 611..648,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ],
+// CHECK-NEXT:                             last_expr_return: true,
+// CHECK-NEXT:                             span: 609..654,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 behavior: Block(
+// CHECK-NEXT:                     Block {
+// CHECK-NEXT:                         stmts: [
+// CHECK-NEXT:                             Assign(
+// CHECK-NEXT:                                 Assign {
+// CHECK-NEXT:                                     dest: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "rd",
+// CHECK-NEXT:                                             span: 665..668,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     value: If(
+// CHECK-NEXT:                                         If {
+// CHECK-NEXT:                                             cond: Binary(
+// CHECK-NEXT:                                                 Binary {
+// CHECK-NEXT:                                                     lhs: Ident(
+// CHECK-NEXT:                                                         Ident {
+// CHECK-NEXT:                                                             name: "rs1",
+// CHECK-NEXT:                                                             span: 673..677,
+// CHECK-NEXT:                                                         },
+// CHECK-NEXT:                                                     ),
+// CHECK-NEXT:                                                     rhs: Ident(
+// CHECK-NEXT:                                                         Ident {
+// CHECK-NEXT:                                                             name: "rs2",
+// CHECK-NEXT:                                                             span: 680..684,
+// CHECK-NEXT:                                                         },
+// CHECK-NEXT:                                                     ),
+// CHECK-NEXT:                                                     op: LessThenEqual,
+// CHECK-NEXT:                                                     span: 673..684,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             then: Block(
+// CHECK-NEXT:                                                 Block {
+// CHECK-NEXT:                                                     stmts: [
+// CHECK-NEXT:                                                         Ident(
+// CHECK-NEXT:                                                             Ident {
+// CHECK-NEXT:                                                                 name: "rs1",
+// CHECK-NEXT:                                                                 span: 686..690,
+// CHECK-NEXT:                                                             },
+// CHECK-NEXT:                                                         ),
+// CHECK-NEXT:                                                     ],
+// CHECK-NEXT:                                                     last_expr_return: true,
+// CHECK-NEXT:                                                     span: 684..692,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             else_: Some(
+// CHECK-NEXT:                                                 Block(
+// CHECK-NEXT:                                                     Block {
+// CHECK-NEXT:                                                         stmts: [
+// CHECK-NEXT:                                                             Ident(
+// CHECK-NEXT:                                                                 Ident {
+// CHECK-NEXT:                                                                     name: "rs2",
+// CHECK-NEXT:                                                                     span: 699..703,
+// CHECK-NEXT:                                                                 },
+// CHECK-NEXT:                                                             ),
+// CHECK-NEXT:                                                         ],
+// CHECK-NEXT:                                                         last_expr_return: true,
+// CHECK-NEXT:                                                         span: 697..704,
+// CHECK-NEXT:                                                     },
+// CHECK-NEXT:                                                 ),
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             span: 670..704,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     span: 665..704,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ],
+// CHECK-NEXT:                         last_expr_return: false,
+// CHECK-NEXT:                         span: 663..708,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 schedule: None,
+// CHECK-NEXT:                 span: 485..711,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         Instruction(
+// CHECK-NEXT:             Instruction {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "NotEqual",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Test",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 parent_template: None,
+// CHECK-NEXT:                 params: {
+// CHECK-NEXT:                     "MNEMONIC": (
+// CHECK-NEXT:                         String,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Str(
+// CHECK-NEXT:                                     LitStr {
+// CHECK-NEXT:                                         value: "ne",
+// CHECK-NEXT:                                         span: 774..778,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 operands: [
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rd",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rs1",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rs2",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 asm: Some(
+// CHECK-NEXT:                     Block(
+// CHECK-NEXT:                         Block {
+// CHECK-NEXT:                             stmts: [
+// CHECK-NEXT:                                 Lit(
+// CHECK-NEXT:                                     Str(
+// CHECK-NEXT:                                         LitStr {
+// CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}, {rs2}",
+// CHECK-NEXT:                                             span: 836..873,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ],
+// CHECK-NEXT:                             last_expr_return: true,
+// CHECK-NEXT:                             span: 834..879,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 behavior: Block(
+// CHECK-NEXT:                     Block {
+// CHECK-NEXT:                         stmts: [
+// CHECK-NEXT:                             Assign(
+// CHECK-NEXT:                                 Assign {
+// CHECK-NEXT:                                     dest: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "rd",
+// CHECK-NEXT:                                             span: 890..893,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     value: If(
+// CHECK-NEXT:                                         If {
+// CHECK-NEXT:                                             cond: Binary(
+// CHECK-NEXT:                                                 Binary {
+// CHECK-NEXT:                                                     lhs: Ident(
+// CHECK-NEXT:                                                         Ident {
+// CHECK-NEXT:                                                             name: "rs1",
+// CHECK-NEXT:                                                             span: 898..902,
+// CHECK-NEXT:                                                         },
+// CHECK-NEXT:                                                     ),
+// CHECK-NEXT:                                                     rhs: Ident(
+// CHECK-NEXT:                                                         Ident {
+// CHECK-NEXT:                                                             name: "rs2",
+// CHECK-NEXT:                                                             span: 905..909,
+// CHECK-NEXT:                                                         },
+// CHECK-NEXT:                                                     ),
+// CHECK-NEXT:                                                     op: NotEqual,
+// CHECK-NEXT:                                                     span: 898..909,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             then: Block(
+// CHECK-NEXT:                                                 Block {
+// CHECK-NEXT:                                                     stmts: [
+// CHECK-NEXT:                                                         Ident(
+// CHECK-NEXT:                                                             Ident {
+// CHECK-NEXT:                                                                 name: "rs1",
+// CHECK-NEXT:                                                                 span: 911..915,
+// CHECK-NEXT:                                                             },
+// CHECK-NEXT:                                                         ),
+// CHECK-NEXT:                                                     ],
+// CHECK-NEXT:                                                     last_expr_return: true,
+// CHECK-NEXT:                                                     span: 909..917,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             else_: Some(
+// CHECK-NEXT:                                                 Block(
+// CHECK-NEXT:                                                     Block {
+// CHECK-NEXT:                                                         stmts: [
+// CHECK-NEXT:                                                             Ident(
+// CHECK-NEXT:                                                                 Ident {
+// CHECK-NEXT:                                                                     name: "rs2",
+// CHECK-NEXT:                                                                     span: 924..928,
+// CHECK-NEXT:                                                                 },
+// CHECK-NEXT:                                                             ),
+// CHECK-NEXT:                                                         ],
+// CHECK-NEXT:                                                         last_expr_return: true,
+// CHECK-NEXT:                                                         span: 922..929,
+// CHECK-NEXT:                                                     },
+// CHECK-NEXT:                                                 ),
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             span: 895..929,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     span: 890..929,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ],
+// CHECK-NEXT:                         last_expr_return: false,
+// CHECK-NEXT:                         span: 888..933,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 schedule: None,
+// CHECK-NEXT:                 span: 711..936,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         Instruction(
+// CHECK-NEXT:             Instruction {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "BitwiseNot",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Test",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 parent_template: None,
+// CHECK-NEXT:                 params: {
+// CHECK-NEXT:                     "MNEMONIC": (
+// CHECK-NEXT:                         String,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Str(
+// CHECK-NEXT:                                     LitStr {
+// CHECK-NEXT:                                         value: "bnot",
+// CHECK-NEXT:                                         span: 1001..1007,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 operands: [
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rd",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rs1",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 asm: Some(
+// CHECK-NEXT:                     Block(
+// CHECK-NEXT:                         Block {
+// CHECK-NEXT:                             stmts: [
+// CHECK-NEXT:                                 Lit(
+// CHECK-NEXT:                                     Str(
+// CHECK-NEXT:                                         LitStr {
+// CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}",
+// CHECK-NEXT:                                             span: 1055..1085,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ],
+// CHECK-NEXT:                             last_expr_return: true,
+// CHECK-NEXT:                             span: 1053..1091,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 behavior: Block(
+// CHECK-NEXT:                     Block {
+// CHECK-NEXT:                         stmts: [
+// CHECK-NEXT:                             Assign(
+// CHECK-NEXT:                                 Assign {
+// CHECK-NEXT:                                     dest: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "rd",
+// CHECK-NEXT:                                             span: 1102..1105,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     value: Binary(
+// CHECK-NEXT:                                         Binary {
+// CHECK-NEXT:                                             lhs: Ident(
+// CHECK-NEXT:                                                 Ident {
+// CHECK-NEXT:                                                     name: "rs1",
+// CHECK-NEXT:                                                     span: 1107..1111,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             rhs: Unary(
+// CHECK-NEXT:                                                 Unary {
+// CHECK-NEXT:                                                     x: Lit(
+// CHECK-NEXT:                                                         Int(
+// CHECK-NEXT:                                                             LitInt {
+// CHECK-NEXT:                                                                 value: "1",
+// CHECK-NEXT:                                                                 span: 1114..1115,
+// CHECK-NEXT:                                                             },
+// CHECK-NEXT:                                                         ),
+// CHECK-NEXT:                                                     ),
+// CHECK-NEXT:                                                     op: BitwiseNot,
+// CHECK-NEXT:                                                     span: 1113..1115,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             op: BitwiseAnd,
+// CHECK-NEXT:                                             span: 1107..1115,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     span: 1102..1115,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ],
+// CHECK-NEXT:                         last_expr_return: false,
+// CHECK-NEXT:                         span: 1100..1119,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 schedule: None,
+// CHECK-NEXT:                 span: 936..1122,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         Instruction(
+// CHECK-NEXT:             Instruction {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "UnsignedLessEqual",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "Test",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 parent_template: None,
+// CHECK-NEXT:                 params: {
+// CHECK-NEXT:                     "MNEMONIC": (
+// CHECK-NEXT:                         String,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Str(
+// CHECK-NEXT:                                     LitStr {
+// CHECK-NEXT:                                         value: "uleu",
+// CHECK-NEXT:                                         span: 1194..1200,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 operands: [
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rd",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rs1",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     (
+// CHECK-NEXT:                         "rs2",
+// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                             "GPR",
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 asm: Some(
+// CHECK-NEXT:                     Block(
+// CHECK-NEXT:                         Block {
+// CHECK-NEXT:                             stmts: [
+// CHECK-NEXT:                                 Lit(
+// CHECK-NEXT:                                     Str(
+// CHECK-NEXT:                                         LitStr {
+// CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}, {rs2}",
+// CHECK-NEXT:                                             span: 1258..1295,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ],
+// CHECK-NEXT:                             last_expr_return: true,
+// CHECK-NEXT:                             span: 1256..1301,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 behavior: Block(
+// CHECK-NEXT:                     Block {
+// CHECK-NEXT:                         stmts: [
+// CHECK-NEXT:                             Assign(
+// CHECK-NEXT:                                 Assign {
+// CHECK-NEXT:                                     dest: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "rd",
+// CHECK-NEXT:                                             span: 1312..1315,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     value: If(
+// CHECK-NEXT:                                         If {
+// CHECK-NEXT:                                             cond: Binary(
+// CHECK-NEXT:                                                 Binary {
+// CHECK-NEXT:                                                     lhs: Ident(
+// CHECK-NEXT:                                                         Ident {
+// CHECK-NEXT:                                                             name: "rs1",
+// CHECK-NEXT:                                                             span: 1320..1324,
+// CHECK-NEXT:                                                         },
+// CHECK-NEXT:                                                     ),
+// CHECK-NEXT:                                                     rhs: Ident(
+// CHECK-NEXT:                                                         Ident {
+// CHECK-NEXT:                                                             name: "rs2",
+// CHECK-NEXT:                                                             span: 1328..1332,
+// CHECK-NEXT:                                                         },
+// CHECK-NEXT:                                                     ),
+// CHECK-NEXT:                                                     op: UnsignedLessThenEqual,
+// CHECK-NEXT:                                                     span: 1320..1332,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             then: Block(
+// CHECK-NEXT:                                                 Block {
+// CHECK-NEXT:                                                     stmts: [
+// CHECK-NEXT:                                                         Ident(
+// CHECK-NEXT:                                                             Ident {
+// CHECK-NEXT:                                                                 name: "rs1",
+// CHECK-NEXT:                                                                 span: 1334..1338,
+// CHECK-NEXT:                                                             },
+// CHECK-NEXT:                                                         ),
+// CHECK-NEXT:                                                     ],
+// CHECK-NEXT:                                                     last_expr_return: true,
+// CHECK-NEXT:                                                     span: 1332..1340,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             else_: Some(
+// CHECK-NEXT:                                                 Block(
+// CHECK-NEXT:                                                     Block {
+// CHECK-NEXT:                                                         stmts: [
+// CHECK-NEXT:                                                             Ident(
+// CHECK-NEXT:                                                                 Ident {
+// CHECK-NEXT:                                                                     name: "rs2",
+// CHECK-NEXT:                                                                     span: 1347..1351,
+// CHECK-NEXT:                                                                 },
+// CHECK-NEXT:                                                             ),
+// CHECK-NEXT:                                                         ],
+// CHECK-NEXT:                                                         last_expr_return: true,
+// CHECK-NEXT:                                                         span: 1345..1352,
+// CHECK-NEXT:                                                     },
+// CHECK-NEXT:                                                 ),
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             span: 1317..1352,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     span: 1312..1352,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ],
+// CHECK-NEXT:                         last_expr_return: false,
+// CHECK-NEXT:                         span: 1310..1356,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 schedule: None,
+// CHECK-NEXT:                 span: 1122..35887,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:     ],
+// CHECK-NEXT:     file_name: "{{.*}}/tmdl/checks/Parser/operators.tmdl",
+// CHECK-NEXT: }

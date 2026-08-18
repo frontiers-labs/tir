@@ -1,0 +1,5 @@
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+rule bad: builtin.muli(x: int<W>, c: const) => const<W>(!c);
+
+// CHECK: boolean expression cannot be used as a number

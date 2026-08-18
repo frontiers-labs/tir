@@ -6,37 +6,125 @@ macro list {
     ( $( $x:ident ),* ) => { $( $x ; )* };
 }
 
+macro nosep {
+    ( $( $x:tt )* ) => { $( $x )* };
+}
+
+macro nested {
+    ( $( ( $( $x:ident )* ) ),* ) => { $( g $( $x )* )* };
+}
+
+macro empty {
+    ( $( $( $x:tt )* )* ) => { ok };
+}
+
 list!(a, b, c)
+
+// Repetition without a separator.
+nosep!(a b c)
+
+// Nested repetitions expand inner groups per outer element.
+nested!((a b), (c d e))
+
+// A repetition whose sub-matcher can match zero tokens must not loop forever
+// at the same position.
+empty!()
 
 // CHECK: [
 // CHECK-NEXT:     (
 // CHECK-NEXT:         Identifier(
 // CHECK-NEXT:             "a",
 // CHECK-NEXT:         ),
-// CHECK-NEXT:         231..1119,
+// CHECK-NEXT:         416..467,
 // CHECK-NEXT:     ),
 // CHECK-NEXT:     (
 // CHECK-NEXT:         Semicolon,
-// CHECK-NEXT:         231..1119,
+// CHECK-NEXT:         416..467,
 // CHECK-NEXT:     ),
 // CHECK-NEXT:     (
 // CHECK-NEXT:         Identifier(
 // CHECK-NEXT:             "b",
 // CHECK-NEXT:         ),
-// CHECK-NEXT:         231..1119,
+// CHECK-NEXT:         416..467,
 // CHECK-NEXT:     ),
 // CHECK-NEXT:     (
 // CHECK-NEXT:         Semicolon,
-// CHECK-NEXT:         231..1119,
+// CHECK-NEXT:         416..467,
 // CHECK-NEXT:     ),
 // CHECK-NEXT:     (
 // CHECK-NEXT:         Identifier(
 // CHECK-NEXT:             "c",
 // CHECK-NEXT:         ),
-// CHECK-NEXT:         231..1119,
+// CHECK-NEXT:         416..467,
 // CHECK-NEXT:     ),
 // CHECK-NEXT:     (
 // CHECK-NEXT:         Semicolon,
-// CHECK-NEXT:         231..1119,
+// CHECK-NEXT:         416..467,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "a",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         467..543,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "b",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         467..543,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "c",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         467..543,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "g",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         543..671,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "a",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         543..671,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "b",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         543..671,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "g",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         543..671,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "c",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         543..671,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "d",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         543..671,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "e",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         543..671,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "ok",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         671..3408,
 // CHECK-NEXT:     ),
 // CHECK-NEXT: ]

@@ -1,0 +1,12 @@
+// RUN: tir opt %s | filecheck %s
+
+// An alias defined up front stands in for an attribute value.
+
+#dl = {endianness = "little"}
+
+module {data_layout = #dl} {
+  module_end
+}
+
+// CHECK: #data_layout = {endianness = "little"}
+// CHECK: module {data_layout = #data_layout} {

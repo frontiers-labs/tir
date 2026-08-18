@@ -1,0 +1,102 @@
+// RUN: tir mc --march=rv64ifd --stage=regalloc %s | filecheck %s
+// RUN: tir mc --march=rv64ifd --stage=regalloc %s | filecheck %s --check-prefix=ABSENT
+
+// Forty simultaneously-live f32 values overflow the FPR32 file: FP values
+// spill through the FP file (fsw stores, flw reloads), never through the
+// integer sd/ld path, behind an sp frame prologue.
+
+module {
+  func.func @fspill(%0: !f32, %1: !f32) -> !f32 {
+    %2 = addf %0, %1 : !f32
+    %3 = addf %2, %0 : !f32
+    %4 = addf %3, %1 : !f32
+    %5 = addf %4, %0 : !f32
+    %6 = addf %5, %1 : !f32
+    %7 = addf %6, %0 : !f32
+    %8 = addf %7, %1 : !f32
+    %9 = addf %8, %0 : !f32
+    %10 = addf %9, %1 : !f32
+    %11 = addf %10, %0 : !f32
+    %12 = addf %11, %1 : !f32
+    %13 = addf %12, %0 : !f32
+    %14 = addf %13, %1 : !f32
+    %15 = addf %14, %0 : !f32
+    %16 = addf %15, %1 : !f32
+    %17 = addf %16, %0 : !f32
+    %18 = addf %17, %1 : !f32
+    %19 = addf %18, %0 : !f32
+    %20 = addf %19, %1 : !f32
+    %21 = addf %20, %0 : !f32
+    %22 = addf %21, %1 : !f32
+    %23 = addf %22, %0 : !f32
+    %24 = addf %23, %1 : !f32
+    %25 = addf %24, %0 : !f32
+    %26 = addf %25, %1 : !f32
+    %27 = addf %26, %0 : !f32
+    %28 = addf %27, %1 : !f32
+    %29 = addf %28, %0 : !f32
+    %30 = addf %29, %1 : !f32
+    %31 = addf %30, %0 : !f32
+    %32 = addf %31, %1 : !f32
+    %33 = addf %32, %0 : !f32
+    %34 = addf %33, %1 : !f32
+    %35 = addf %34, %0 : !f32
+    %36 = addf %35, %1 : !f32
+    %37 = addf %36, %0 : !f32
+    %38 = addf %37, %1 : !f32
+    %39 = addf %38, %0 : !f32
+    %40 = addf %39, %1 : !f32
+    %41 = addf %40, %0 : !f32
+    %42 = addf %2, %3 : !f32
+    %43 = addf %42, %4 : !f32
+    %44 = addf %43, %5 : !f32
+    %45 = addf %44, %6 : !f32
+    %46 = addf %45, %7 : !f32
+    %47 = addf %46, %8 : !f32
+    %48 = addf %47, %9 : !f32
+    %49 = addf %48, %10 : !f32
+    %50 = addf %49, %11 : !f32
+    %51 = addf %50, %12 : !f32
+    %52 = addf %51, %13 : !f32
+    %53 = addf %52, %14 : !f32
+    %54 = addf %53, %15 : !f32
+    %55 = addf %54, %16 : !f32
+    %56 = addf %55, %17 : !f32
+    %57 = addf %56, %18 : !f32
+    %58 = addf %57, %19 : !f32
+    %59 = addf %58, %20 : !f32
+    %60 = addf %59, %21 : !f32
+    %61 = addf %60, %22 : !f32
+    %62 = addf %61, %23 : !f32
+    %63 = addf %62, %24 : !f32
+    %64 = addf %63, %25 : !f32
+    %65 = addf %64, %26 : !f32
+    %66 = addf %65, %27 : !f32
+    %67 = addf %66, %28 : !f32
+    %68 = addf %67, %29 : !f32
+    %69 = addf %68, %30 : !f32
+    %70 = addf %69, %31 : !f32
+    %71 = addf %70, %32 : !f32
+    %72 = addf %71, %33 : !f32
+    %73 = addf %72, %34 : !f32
+    %74 = addf %73, %35 : !f32
+    %75 = addf %74, %36 : !f32
+    %76 = addf %75, %37 : !f32
+    %77 = addf %76, %38 : !f32
+    %78 = addf %77, %39 : !f32
+    %79 = addf %78, %40 : !f32
+    %80 = addf %79, %41 : !f32
+    func.return %80
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "fspill"
+// The frame prologue (addi sp, sp, -N) leads the block.
+// CHECK-NEXT: riscv.addi {rd = x2, rs1 = x2, imm = -{{[0-9]+}}}
+// FP spill stores and reloads go through the stack pointer.
+// CHECK: riscv.fsw {rs1 = x2,
+// CHECK: riscv.flw {fd = {{f[0-9]+}}, rs1 = x2,
+// CHECK: asm.vret
+// ABSENT-NOT: riscv.sd
+// ABSENT-NOT: riscv.ld {

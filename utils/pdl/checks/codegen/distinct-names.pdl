@@ -1,0 +1,8 @@
+// Rules whose names differ only by separator still get distinct functions.
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule a-b: builtin.addi(x: int<W>, 0) => x;
+rule a_b: builtin.addi(x: int<W>, 0) => x;
+
+// CHECK: fn pdl_rule_0
+// CHECK: fn pdl_rule_1

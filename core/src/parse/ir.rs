@@ -397,37 +397,3 @@ impl<'src> TextParser<'src> {
         Ok(block)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::parse_ir;
-    use crate::builtin::ModuleOp;
-    use crate::{Context, DataLayout, Endianness, Error, Operation};
-
-    #[test]
-    fn an_alias_stands_in_for_an_attribute_value() {
-        let context = Context::with_default_dialects();
-        let src = r#"#dl = {endianness = "little"}
-
-module {data_layout = #dl} {
-  module_end
-}"#;
-
-        let module = parse_ir::<ModuleOp>(&context, src).expect("parse module");
-
-        let layout = DataLayout::for_op(&context, module.id()).expect("layout in scope");
-        assert_eq!(layout.endianness(), Some(Endianness::Little));
-    }
-
-    #[test]
-    fn an_undefined_alias_is_rejected() {
-        let context = Context::with_default_dialects();
-        let src = "module {data_layout = #missing} {\n  module_end\n}";
-
-        let Err((_, error)) = parse_ir::<ModuleOp>(&context, src) else {
-            panic!("an undefined alias must be rejected");
-        };
-
-        assert!(matches!(error, Error::UnknownAttributeAlias(name) if name == "missing"));
-    }
-}

@@ -1,0 +1,36 @@
+// Positive type-checking coverage for behavior-local bindings and for
+// log2Ceil of a bitvector value mixing with bits arithmetic.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+isa Test { param XLEN: Integer = 32; }
+
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+
+// An assignment to a fresh name introduces a behavior-local binding visible
+// to later statements in the same block.
+instruction LocalBinding for [Test] {
+    param MNEMONIC: String = "localbinding";
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+    behavior {
+        tmp = rs1 + rs2;
+        rd = tmp + rs1;
+    }
+}
+
+// log2Ceil of a bitvector value is a small count usable in bits arithmetic
+// (e.g. recovering an exponent from a power-of-two width).
+instruction Log2OfRegister for [Test] {
+    param MNEMONIC: String = "log2reg";
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+    behavior { rd = rs1 - log2Ceil(rs2); }
+}
+
+// CHECK-DAG: LocalBindingOp
+// CHECK-DAG: Log2OfRegisterOp

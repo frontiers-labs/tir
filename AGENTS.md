@@ -30,7 +30,7 @@ desired transformations. This applies to optimizations and instruction selection
    prefer snapshot testing via LIT checks. If a test can be expressed as a LIT
    check, do not add a unit test that does the same thing. After writing all of your
    code, do a refactor pass: remove all duplication, improve names, extract helpers.
-   Do not add new behavior during refactor phase.
+   Follow testing guidelines in docs/dev_guide.md.
 5. Keep code tidy. Remove imports/variables/functions that YOUR changes made
    unused. Don't remove pre-existing dead code unless asked. Every changed line
    should trace directly to the user's request. After all changes are done and

@@ -363,39 +363,3 @@ pub(super) fn parse_source(
         std::process::exit(1);
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::add_default_defines;
-    use crate::lang_options::{LangOptions, StdVersion};
-
-    #[test]
-    fn c89_omits_stdc_version() {
-        let mut defines = HashMap::new();
-        add_default_defines(
-            &mut defines,
-            LangOptions {
-                std_version: StdVersion::C89,
-                gnu_extensions: false,
-            },
-            None,
-        );
-        assert!(!defines.contains_key("__STDC_VERSION__"));
-    }
-
-    #[test]
-    fn c99_sets_stdc_version() {
-        let mut defines = HashMap::new();
-        add_default_defines(
-            &mut defines,
-            LangOptions {
-                std_version: StdVersion::C99,
-                gnu_extensions: false,
-            },
-            None,
-        );
-        assert_eq!(defines["__STDC_VERSION__"].to_string(), "199901L");
-    }
-}

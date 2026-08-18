@@ -1,0 +1,34 @@
+// Move-elimination constraints: an eliminated bind or override cannot
+// reserve resources and must have zero latency.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+sched_class W;
+
+instruction I {
+    behavior { rd = rs1; }
+    schedule { units = [W]; }
+}
+
+machine EliminatedUop for [RV64I] {
+    unit P0 { count = 1; }
+    bind W { latency = 0; eliminated = true; uop(P0); }
+}
+
+machine EliminatedUses for [RV64I] {
+    unit P0 { count = 1; }
+    bind W { latency = 0; eliminated = true; uses = [P0]; }
+}
+
+machine EliminatedLatency for [RV64I] {
+    bind W { latency = 1; eliminated = true; }
+}
+
+machine EliminatedOverride for [RV64I] {
+    unit P0 { count = 1; }
+    bind W { latency = 1; uses = [P0]; }
+    override I { eliminated = true; uses = [P0]; }
+}
+
+// CHECK-DAG: eliminated instruction cannot reserve resources
+// CHECK-DAG: eliminated instruction must have latency = 0

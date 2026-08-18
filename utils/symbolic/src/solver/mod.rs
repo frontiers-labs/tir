@@ -2,8 +2,6 @@
 //! stack, bit-blasts it and runs the CDCL backend (non-incremental).
 
 mod driver;
-#[cfg(test)]
-mod tests;
 
 pub use driver::run_script;
 

@@ -1,0 +1,8 @@
+// Generated bindings must not shadow the rewrite locals (`root`).
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule shadow-root: builtin.subi(root: int<W>, root) => const<W>(0);
+
+// CHECK-NOT: let root = operand
+// CHECK: let binding_0 = operand
+// CHECK-NOT: let root = operand

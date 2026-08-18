@@ -1,0 +1,6 @@
+// Constants with a dynamic width guard the APInt width range at runtime.
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule zero: builtin.subi(x: int<W>, x) => const<W>(0);
+
+// CHECK: if !(1..=64).contains(&replacement_width)

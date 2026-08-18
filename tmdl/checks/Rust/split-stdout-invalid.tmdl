@@ -1,0 +1,6 @@
+// Split Rust output writes sibling module files, so it is rejected up front
+// when the root output is stdout (the input is never read).
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- --split-input %s %s 2>&1 | filecheck %s
+
+// CHECK: split Rust output cannot be written to stdout

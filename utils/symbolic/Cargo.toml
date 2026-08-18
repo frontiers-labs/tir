@@ -3,6 +3,10 @@ name = "tir-symbolic"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+test = false
+doctest = false
+
 [dependencies]
 tir-graph.workspace = true
 tir-adt.workspace = true

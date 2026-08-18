@@ -1,0 +1,47 @@
+// ISA requirement chains gate which instructions a target includes: `C`
+// requires any of RV32/RV64, `C64` requires all of C and RV64, so the C64
+// instruction exists only when targeting RV64.
+
+// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=RV64 --output=- %s | filecheck %s --check-prefix=RV64
+// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=RV32 --output=- %s | filecheck %s --check-prefix=RV32
+
+isa RV32 { param XLEN: Integer = 32; }
+isa RV64 { param XLEN: Integer = 64; }
+isa C requires [RV32 | RV64] {}
+isa C64 requires [C, RV64] {}
+
+register_class GPR for [RV32, RV64] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        x0("zero") => { traits = [hardwired_zero] },
+        x1..x31("r{}") => {                         },
+    }
+}
+
+instruction CAdd for [C] {
+    param MNEMONIC: String = "cadd";
+    param OPCODE: bits<2> = 0b10;
+
+    operands { rd: GPR, rs2: GPR, }
+    encoding { 0..1 => OPCODE, 2..6 => rs2, 7..11 => rd, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}" }
+    behavior { rd = rd + rs2; }
+}
+
+instruction C64Add for [C64] {
+    param MNEMONIC: String = "c64add";
+    param OPCODE: bits<2> = 0b01;
+
+    operands { rd: GPR, rs2: GPR, }
+    encoding { 0..1 => OPCODE, 2..6 => rs2, 7..11 => rd, }
+    asm { "{self.MNEMONIC} {rd}, {rs2}" }
+    behavior { rd = rd + rs2; }
+}
+
+// RV64: execute_cadd
+// RV64: execute_c64add
+
+// RV32: execute_cadd
+// RV32-NOT: execute_c64add

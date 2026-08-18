@@ -1,0 +1,42 @@
+// Encoding-arm errors rejected by semantic analysis: slices out of the
+// operand's range, slice/arm width mismatches, single bits out of range and
+// whole-operand width mismatches.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+instruction SliceOutOfRange {
+    param MNEMONIC: String = "sliceoor";
+    param OPCODE: bits<7> = 0b0010011;
+    operands { imm: bits<13> }
+    behavior { imm = imm; }
+    encoding { 0..6 => OPCODE, 8..11 => imm[10..13] }
+}
+
+instruction SliceWidthMismatch {
+    param MNEMONIC: String = "slicewidth";
+    param OPCODE: bits<7> = 0b0010011;
+    operands { imm: bits<13> }
+    behavior { imm = imm; }
+    encoding { 0..6 => OPCODE, 8..11 => imm[1..5] }
+}
+
+instruction BitOutOfRange {
+    param MNEMONIC: String = "bitoor";
+    param OPCODE: bits<7> = 0b0010011;
+    operands { imm: bits<13> }
+    behavior { imm = imm; }
+    encoding { 0..6 => OPCODE, 7 => imm[13] }
+}
+
+instruction WholeOperandMismatch {
+    param MNEMONIC: String = "wholeoperand";
+    param OPCODE: bits<7> = 0b0010011;
+    operands { imm: bits<13> }
+    behavior { imm = imm; }
+    encoding { 0..6 => OPCODE, 12..31 => imm }
+}
+
+// CHECK-DAG: slice 'imm[10..13]' exceeds bits<13>
+// CHECK-DAG: slice 'imm[1..5]' is 5 bits but the arm covers 4
+// CHECK-DAG: bit 'imm[13]' exceeds bits<13>
+// CHECK-DAG: 'imm' is bits<13> but the arm covers 20 bits

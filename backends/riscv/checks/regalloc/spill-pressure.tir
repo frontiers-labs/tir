@@ -1,0 +1,98 @@
+// RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
+
+// Forty simultaneously-live i64 values overflow the GPR file: the allocator
+// must reserve a frame and spill through sp-relative sd/ld.
+
+module {
+  func.func @spill(%0: !i64, %1: !i64) -> !i64 {
+    %2 = addi %0, %1 : !i64
+    %3 = addi %2, %0 : !i64
+    %4 = addi %3, %1 : !i64
+    %5 = addi %4, %0 : !i64
+    %6 = addi %5, %1 : !i64
+    %7 = addi %6, %0 : !i64
+    %8 = addi %7, %1 : !i64
+    %9 = addi %8, %0 : !i64
+    %10 = addi %9, %1 : !i64
+    %11 = addi %10, %0 : !i64
+    %12 = addi %11, %1 : !i64
+    %13 = addi %12, %0 : !i64
+    %14 = addi %13, %1 : !i64
+    %15 = addi %14, %0 : !i64
+    %16 = addi %15, %1 : !i64
+    %17 = addi %16, %0 : !i64
+    %18 = addi %17, %1 : !i64
+    %19 = addi %18, %0 : !i64
+    %20 = addi %19, %1 : !i64
+    %21 = addi %20, %0 : !i64
+    %22 = addi %21, %1 : !i64
+    %23 = addi %22, %0 : !i64
+    %24 = addi %23, %1 : !i64
+    %25 = addi %24, %0 : !i64
+    %26 = addi %25, %1 : !i64
+    %27 = addi %26, %0 : !i64
+    %28 = addi %27, %1 : !i64
+    %29 = addi %28, %0 : !i64
+    %30 = addi %29, %1 : !i64
+    %31 = addi %30, %0 : !i64
+    %32 = addi %31, %1 : !i64
+    %33 = addi %32, %0 : !i64
+    %34 = addi %33, %1 : !i64
+    %35 = addi %34, %0 : !i64
+    %36 = addi %35, %1 : !i64
+    %37 = addi %36, %0 : !i64
+    %38 = addi %37, %1 : !i64
+    %39 = addi %38, %0 : !i64
+    %40 = addi %39, %1 : !i64
+    %41 = addi %40, %0 : !i64
+    %42 = addi %2, %3 : !i64
+    %43 = addi %42, %4 : !i64
+    %44 = addi %43, %5 : !i64
+    %45 = addi %44, %6 : !i64
+    %46 = addi %45, %7 : !i64
+    %47 = addi %46, %8 : !i64
+    %48 = addi %47, %9 : !i64
+    %49 = addi %48, %10 : !i64
+    %50 = addi %49, %11 : !i64
+    %51 = addi %50, %12 : !i64
+    %52 = addi %51, %13 : !i64
+    %53 = addi %52, %14 : !i64
+    %54 = addi %53, %15 : !i64
+    %55 = addi %54, %16 : !i64
+    %56 = addi %55, %17 : !i64
+    %57 = addi %56, %18 : !i64
+    %58 = addi %57, %19 : !i64
+    %59 = addi %58, %20 : !i64
+    %60 = addi %59, %21 : !i64
+    %61 = addi %60, %22 : !i64
+    %62 = addi %61, %23 : !i64
+    %63 = addi %62, %24 : !i64
+    %64 = addi %63, %25 : !i64
+    %65 = addi %64, %26 : !i64
+    %66 = addi %65, %27 : !i64
+    %67 = addi %66, %28 : !i64
+    %68 = addi %67, %29 : !i64
+    %69 = addi %68, %30 : !i64
+    %70 = addi %69, %31 : !i64
+    %71 = addi %70, %32 : !i64
+    %72 = addi %71, %33 : !i64
+    %73 = addi %72, %34 : !i64
+    %74 = addi %73, %35 : !i64
+    %75 = addi %74, %36 : !i64
+    %76 = addi %75, %37 : !i64
+    %77 = addi %76, %38 : !i64
+    %78 = addi %77, %39 : !i64
+    %79 = addi %78, %40 : !i64
+    %80 = addi %79, %41 : !i64
+    func.return %80
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "spill"
+// The frame prologue (addi sp, sp, -N) leads the block.
+// CHECK-NEXT: riscv.addi {rd = x2, rs1 = x2, imm = -{{[0-9]+}}}
+// Spill stores and reloads go through the stack pointer.
+// CHECK: riscv.sd {rs1 = x2,
+// CHECK: riscv.ld {rd = {{x[0-9]+}}, rs1 = x2,
+// CHECK: asm.vret

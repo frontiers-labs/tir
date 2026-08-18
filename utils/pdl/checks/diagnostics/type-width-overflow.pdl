@@ -1,0 +1,5 @@
+// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
+
+rule bad: builtin.addi(x: int<4294967296>, 0) => x;
+
+// CHECK: integer type width is out of range

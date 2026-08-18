@@ -1,0 +1,9 @@
+// A self-invoking macro must hit the recursion limit instead of looping.
+
+// RUN: not tmdlc --action=emit-expanded-tokens --output=- %s | filecheck %s
+
+macro m { () => { m!() }; }
+
+m!()
+
+// CHECK: macro recursion limit exceeded

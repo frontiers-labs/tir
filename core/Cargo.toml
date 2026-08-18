@@ -3,6 +3,12 @@ name = "tir"
 version = "0.1.0"
 edition = "2024"
 
+# Unit tests live in utils/unit-tests (crate tir-unit-tests); FileCheck tests
+# in checks/ run through the workspace lit driver.
+[lib]
+test = false
+doctest = false
+
 [dependencies]
 tir-macros.workspace = true
 tir-graph.workspace = true
@@ -20,12 +26,7 @@ ariadne.workspace = true
 tir-pdl = { path = "../utils/pdl", default-features = false }
 
 [dev-dependencies]
-tir-lit = { path = "../utils/lit" }
 criterion = { workspace = true }
-
-[[test]]
-name = "lit"
-harness = false
 
 [[bench]]
 name = "lexer"

@@ -3,6 +3,10 @@ name = "tir-pdl"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+test = false
+doctest = false
+
 [features]
 default = ["cli"]
 cli = ["dep:clap"]

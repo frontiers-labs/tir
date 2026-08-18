@@ -1,4 +1,4 @@
-; RUN: tir llvm-import %s | filecheck %s
+; RUN: tir llvm-import %s | tir opt --verify | filecheck %s
 
 ; CHECK: module {
 ; CHECK: func.func @sum

@@ -292,18 +292,3 @@ pub(crate) fn parse_hex(text: &str) -> Result<i64, ()> {
     let value = if neg { -value } else { value };
     i64::try_from(value).map_err(|_| ())
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::AsmParser;
-
-    #[test]
-    fn rejects_unknown_mnemonic() {
-        let context = tir::Context::with_default_dialects();
-        let parser = AsmParser::new(HashMap::new());
-
-        assert!(parser.parse_asm(&context, "foobar r0, r1").is_err());
-    }
-}

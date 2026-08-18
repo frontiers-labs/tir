@@ -1,0 +1,36 @@
+// Well-formed encodings pass semantic analysis: immediate bit splices
+// (single bits and ranges) and register-operand splices over an indexed
+// register file.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa Arch { param XLEN: Integer = 64; }
+
+register_class GPR for [Arch] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers {
+        rax => { index = 0 },
+        r8 => { index = 8 },
+    }
+}
+
+instruction ImmSplice for [Arch] {
+    param MNEMONIC: String = "immsplice";
+    param OPCODE: bits<7> = 0b0010011;
+    operands { imm: bits<13> }
+    encoding { 0..6 => OPCODE, 7 => imm[12], 8..11 => imm[1..4], 12..19 => imm[5..12] }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { imm = imm; }
+}
+
+instruction RegSplice for [Arch] {
+    param MNEMONIC: String = "regsplice";
+    operands { dst: GPR }
+    encoding { 0 => dst[3], 1..7 => 0b0100100, 8..10 => dst[0..2] }
+    asm { "{self.MNEMONIC} {dst}" }
+    behavior { dst = dst; }
+}
+
+// CHECK-DAG: ImmSpliceOp
+// CHECK-DAG: RegSpliceOp

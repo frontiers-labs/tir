@@ -20,14 +20,16 @@ tir-graph.workspace = true
 tir-symbolic.workspace = true
 typed-arena.workspace = true
 
+[lib]
+test = false
+doctest = false
+
 [[bin]]
 name = "tmdlc"
 path = "bin.rs"
 
 [dev-dependencies]
 criterion = { workspace = true }
-jsonschema.workspace = true
-tir-lit.workspace = true
 
 [[bench]]
 name = "lexer"
@@ -39,8 +41,4 @@ harness = false
 
 [[bench]]
 name = "expander"
-harness = false
-
-[[test]]
-name = "lit"
 harness = false

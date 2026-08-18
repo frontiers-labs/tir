@@ -3,15 +3,12 @@ name = "tir-gpu"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+test = false
+doctest = false
+
 [dependencies]
 tir.workspace = true
 
 [build-dependencies]
 tmdl.workspace = true
-
-[dev-dependencies]
-tir-lit.workspace = true
-
-[[test]]
-name = "lit"
-harness = false

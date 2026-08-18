@@ -1,0 +1,3 @@
+[suite]
+name = "TIR SMT solver checks"
+glob = ["**/*.smt2", "!**/Inputs/**/*"]

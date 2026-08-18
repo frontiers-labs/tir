@@ -1,0 +1,21 @@
+// A bitcast preserves its operand type: casting a String into a register
+// destination is a type mismatch, not an escape hatch.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+isa Test { param XLEN: Integer = 32; }
+
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+
+instruction Bad for [Test] {
+    param MNEMONIC: String = "bad";
+    operands { rd: GPR, text: String, }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior { rd = bitcast(text); }
+}
+
+// CHECK: type mismatch

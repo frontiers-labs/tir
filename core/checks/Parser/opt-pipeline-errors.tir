@@ -1,0 +1,14 @@
+// RUN: not tir opt --pass definitely-not-a-pass %s 2>&1 | filecheck %s --check-prefix=UNKNOWN
+// RUN: not tir opt --pass func.func(instcombine %s 2>&1 | filecheck %s --check-prefix=UNCLOSED
+// RUN: not tir opt --pass instcombine) %s 2>&1 | filecheck %s --check-prefix=STRAY
+
+// A malformed pass pipeline spec is rejected with a message naming the
+// problem, not silently ignored.
+
+module {
+  module_end
+}
+
+// UNKNOWN: unknown pass 'definitely-not-a-pass'
+// UNCLOSED: missing ')' in pass pipeline
+// STRAY: unexpected ')' in pass pipeline

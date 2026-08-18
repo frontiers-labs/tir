@@ -1,10 +1,34 @@
 // RUN: not tmdlc --action=emit-expanded-tokens --output=- %s | filecheck %s
 
-macro one {
-    ($x:ident) => { $x };
-}
+macro one { ($x:ident) => { $x }; }
+macro meta { ($x:ident) => { $y }; }
+macro rep { ( $( $a:ident )* ; $( $b:ident )* ) => { $( $a $b )* }; }
+macro back { ( $( b )* $( b )* $( b )* $( b )* z ) => { ok }; }
+macro bc { ($x:tt) => { ${concat($x, a)} }; }
 
 // Wrong fragment kind: literal passed where ident required -> no arm matches.
 one!(42)
 
-// CHECK: no matching macro arm
+// The transcriber names a metavariable no arm bound.
+meta!(a)
+
+// Two repetitions transcribed in lockstep must have equal lengths.
+rep!(x y ; z)
+
+// An invocation of a macro nobody defined.
+nope!(q)
+
+// Several `tt` repetitions with an unsatisfiable trailing token force the
+// matcher to explore combinatorially many split points; the step budget must
+// abort quickly instead of running for a long time.
+back!(b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b b)
+
+// `${concat}` only accepts identifiers, numbers and strings.
+bc!((nested))
+
+// CHECK-DAG: no matching macro arm
+// CHECK-DAG: unknown metavariable
+// CHECK-DAG: length mismatch
+// CHECK-DAG: unknown macro `nope`
+// CHECK-DAG: macro match step budget exceeded
+// CHECK-DAG: invalid `${concat}` argument (expected identifier, number or string)

@@ -1,20 +1,34 @@
 //! A minimal LIT-style test driver.
 //!
-//! This crate discovers FileCheck-style test files under a directory, extracts
-//! their `RUN:` lines, executes the resulting command pipelines and reports
-//! each file as an individual test case through [`libtest_mimic`]. It is meant
-//! to be used from a crate's integration test with `harness = false`:
+//! [`workspace_harness_main`] walks up from `CARGO_MANIFEST_DIR` to the
+//! workspace root, then discovers every test suite below it. A suite is any
+//! directory holding a `test_suite.toml`:
+//!
+//! ```toml
+//! [suite]
+//! name = "TIR RISC-V backend checks"
+//! glob = ["**/*.S", "**/*.tir", "!**/Inputs/**/*"]
+//! ```
+//!
+//! The `glob` patterns are relative to the suite directory and select its test
+//! files; a leading `!` excludes. The driver extracts the `RUN:` lines of each
+//! selected file, executes the resulting command pipelines and reports the file
+//! as an individual test case through [`libtest_mimic`], named by its path
+//! relative to the workspace root (e.g. `backends/riscv/checks/GISel/add.tir`).
+//! It is meant to be used from a single integration test with `harness = false`:
 //!
 //! ```ignore
 //! // tests/lit.rs
 //! fn main() {
-//!     tir_lit::harness_main(
-//!         env!("CARGO_MANIFEST_DIR"),
-//!         "checks",
-//!         &[("tmdlc", env!("CARGO_BIN_EXE_tmdlc"))],
-//!     );
+//!     tir_lit::workspace_harness_main(&[
+//!         ("tmdlc", tir_lit::Tool::cargo_test_bin("tmdl", "tmdlc")),
+//!     ]);
 //! }
 //! ```
+//!
+//! Following LLVM LIT, the `LIT_FILTER` environment variable (a regex) runs
+//! only the tests whose full name matches it, and `LIT_FILTER_OUT` excludes
+//! matching tests. An invalid regex aborts with exit status 2.
 //!
 //! The driver understands a small but practical subset of LIT/lit substitution:
 //! `%s` (the test file), `%S` (its directory), the `not` prefix (invert the
@@ -35,13 +49,21 @@
 //! Both `//` and `#` comment styles are recognized for all directives.
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
 
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use libtest_mimic::{Arguments, Failed, Trial};
+use regex::Regex;
+use serde::Deserialize;
+
+/// Whether a test with the given display name should run under the
+/// `LIT_FILTER`/`LIT_FILTER_OUT` regexes.
+fn filter_decision(name: &str, filter: Option<&Regex>, filter_out: Option<&Regex>) -> bool {
+    filter.is_none_or(|re| re.is_match(name)) && !filter_out.is_some_and(|re| re.is_match(name))
+}
 
 /// A discovered test together with the commands it should run.
 struct TestCase {
@@ -202,22 +224,125 @@ impl Tool {
     }
 }
 
-/// Collect tests, run them through libtest-mimic and exit the process.
-///
-/// `manifest_dir` is typically `env!("CARGO_MANIFEST_DIR")`, `checks_subdir`
-/// the directory (relative to it) that holds the tests, and `tools` a mapping
-/// from the tool name used in `RUN:` lines to its built executable path.
-pub fn harness_main(manifest_dir: &str, checks_subdir: &str, tools: &[(&str, &str)]) {
-    let tools: Vec<(&str, Tool)> = tools
-        .iter()
-        .map(|(name, path)| (*name, Tool::path(*path)))
-        .collect();
-    harness_main_with_tools(manifest_dir, checks_subdir, &tools);
+/// Walk up from `start` to the first directory whose `Cargo.toml` contains a
+/// `[workspace]` section.
+fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+    start.ancestors().find_map(|dir| {
+        let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).ok()?;
+        manifest.contains("[workspace]").then(|| dir.to_path_buf())
+    })
 }
 
-pub fn harness_main_with_tools(manifest_dir: &str, checks_subdir: &str, tools: &[(&str, Tool)]) {
+/// A test suite declared by a `test_suite.toml` file.
+struct Suite {
+    /// Directory holding the `test_suite.toml`.
+    root: PathBuf,
+    /// Human-readable suite name, used in diagnostics.
+    name: String,
+    include: GlobSet,
+    exclude: GlobSet,
+}
+
+#[derive(Deserialize)]
+struct SuiteFile {
+    suite: SuiteConfig,
+}
+
+#[derive(Deserialize)]
+struct SuiteConfig {
+    name: String,
+    /// Glob patterns relative to the suite root; a leading `!` excludes.
+    glob: Vec<String>,
+}
+
+const SUITE_FILE: &str = "test_suite.toml";
+
+/// Parse a `test_suite.toml`, splitting its globs into include and exclude sets.
+fn load_suite(manifest: &Path) -> Result<Suite, String> {
+    let contents = std::fs::read_to_string(manifest).map_err(|e| e.to_string())?;
+    let parsed: SuiteFile = toml::from_str(&contents).map_err(|e| e.to_string())?;
+    let mut include = GlobSetBuilder::new();
+    let mut exclude = GlobSetBuilder::new();
+    for pattern in &parsed.suite.glob {
+        let (builder, pattern) = match pattern.strip_prefix('!') {
+            Some(rest) => (&mut exclude, rest),
+            None => (&mut include, pattern.as_str()),
+        };
+        builder.add(Glob::new(pattern).map_err(|e| e.to_string())?);
+    }
+    Ok(Suite {
+        root: manifest.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        name: parsed.suite.name,
+        include: include.build().map_err(|e| e.to_string())?,
+        exclude: exclude.build().map_err(|e| e.to_string())?,
+    })
+}
+
+/// Recursively find every `test_suite.toml` below `root`, sorted by path.
+/// Skips `target`, `node_modules` and hidden directories.
+fn discover_suites(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut manifests = Vec::new();
+    visit_suites(root, &mut manifests)?;
+    manifests.sort();
+    Ok(manifests)
+}
+
+fn visit_suites(dir: &Path, manifests: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    let manifest = dir.join(SUITE_FILE);
+    if manifest.is_file() {
+        manifests.push(manifest);
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || name == "target" || name == "node_modules" {
+            continue;
+        }
+        visit_suites(&entry.path(), manifests)?;
+    }
+    Ok(())
+}
+
+/// Read an environment variable as a regex, exiting with status 2 on an
+/// invalid pattern.
+fn env_regex(var: &str) -> Option<Regex> {
+    let pattern = std::env::var(var).ok()?;
+    match Regex::new(&pattern) {
+        Ok(re) => Some(re),
+        Err(e) => {
+            eprintln!("tir-lit: invalid {var} regex: {e}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Collect every check in the workspace, run the tests through libtest-mimic
+/// and exit the process.
+///
+/// The workspace root is found by walking up from `CARGO_MANIFEST_DIR`;
+/// every `checks` directory with a sibling `Cargo.toml` below it contributes
+/// tests named `<crate dir>/<path under checks>`. `tools` maps the tool names
+/// used in `RUN:` lines to executables. `LIT_FILTER` and `LIT_FILTER_OUT`
+/// restrict which tests run (see the crate docs).
+pub fn workspace_harness_main(tools: &[(&str, Tool)]) {
     let args = Arguments::from_args();
-    let checks_dir = Path::new(manifest_dir).join(checks_subdir);
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let root = find_workspace_root(Path::new(&manifest_dir)).unwrap_or_else(|| {
+        eprintln!("tir-lit: no [workspace] Cargo.toml above {manifest_dir}");
+        std::process::exit(2);
+    });
+    let manifests = discover_suites(&root).unwrap_or_else(|e| {
+        eprintln!("tir-lit: failed to discover {SUITE_FILE} files in {root:?}: {e}");
+        std::process::exit(2);
+    });
+
+    let filter = env_regex("LIT_FILTER");
+    let filter_out = env_regex("LIT_FILTER_OUT");
 
     let tool_map: HashMap<String, Tool> = tools
         .iter()
@@ -225,56 +350,73 @@ pub fn harness_main_with_tools(manifest_dir: &str, checks_subdir: &str, tools: &
         .collect();
 
     let features = host_features();
-    let cases = match discover(&checks_dir, &features) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("tir-lit: failed to discover tests in {checks_dir:?}: {e}");
+    let mut trials = Vec::new();
+    for manifest in manifests {
+        let suite = load_suite(&manifest).unwrap_or_else(|e| {
+            eprintln!("tir-lit: invalid {}: {e}", manifest.display());
             std::process::exit(2);
-        }
-    };
-
-    let trials = cases
-        .into_iter()
-        .map(|case| {
+        });
+        let cases = match discover(&suite, &root, &features) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("tir-lit: failed to discover tests of {}: {e}", suite.name);
+                std::process::exit(2);
+            }
+        };
+        for case in cases {
+            if !filter_decision(&case.name, filter.as_ref(), filter_out.as_ref()) {
+                continue;
+            }
             let tool_map = tool_map.clone();
             let ignored = case.ignored;
-            Trial::test(case.name.clone(), move || run_case(&case, &tool_map))
-                .with_ignored_flag(ignored)
-        })
-        .collect();
+            trials.push(
+                Trial::test(case.name.clone(), move || run_case(&case, &tool_map))
+                    .with_ignored_flag(ignored),
+            );
+        }
+    }
 
     libtest_mimic::run(&args, trials).exit();
 }
 
-/// Recursively find test files that contain at least one `RUN:` line.
-fn discover(dir: &Path, features: &HashSet<String>) -> std::io::Result<Vec<TestCase>> {
+impl Suite {
+    /// Whether a path relative to the suite root is one of its tests.
+    fn matches(&self, relative: &Path) -> bool {
+        self.include.is_match(relative) && !self.exclude.is_match(relative)
+    }
+}
+
+/// Collect the suite's test files: those matching its globs that hold at least
+/// one `RUN:` line. Test names are relative to `workspace_root`.
+fn discover(
+    suite: &Suite,
+    workspace_root: &Path,
+    features: &HashSet<String>,
+) -> std::io::Result<Vec<TestCase>> {
     let mut cases = Vec::new();
-    visit(dir, dir, features, &mut cases)?;
+    visit(suite, workspace_root, &suite.root, features, &mut cases)?;
     cases.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(cases)
 }
 
 fn visit(
-    root: &Path,
+    suite: &Suite,
+    workspace_root: &Path,
     dir: &Path,
     features: &HashSet<String>,
     cases: &mut Vec<TestCase>,
 ) -> std::io::Result<()> {
-    if !dir.exists() {
-        return Ok(());
-    }
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            // `Inputs` directories hold fixtures, not tests.
-            if path.file_name() == Some(OsStr::new("Inputs")) {
-                continue;
-            }
-            visit(root, &path, features, cases)?;
-        } else if file_type.is_file() {
-            if let Some(case) = load_case(root, &path, features)? {
+            visit(suite, workspace_root, &path, features, cases)?;
+        } else if file_type.is_file() && suite.matches(relative(&path, &suite.root)) {
+            let name = relative(&path, workspace_root)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if let Some(case) = load_case(name, &path, features)? {
                 cases.push(case);
             }
         }
@@ -282,8 +424,12 @@ fn visit(
     Ok(())
 }
 
+fn relative<'a>(path: &'a Path, base: &Path) -> &'a Path {
+    path.strip_prefix(base).unwrap_or(path)
+}
+
 fn load_case(
-    root: &Path,
+    name: String,
     path: &Path,
     features: &HashSet<String>,
 ) -> std::io::Result<Option<TestCase>> {
@@ -292,19 +438,12 @@ fn load_case(
     if run_lines.is_empty() {
         return Ok(None);
     }
-    let xfail = has_unconditional_xfail(&contents);
-    let ignored = gating_decision(features, &contents) == Gate::Ignore;
-    let name = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
     Ok(Some(TestCase {
         name,
         path: path.to_path_buf(),
         run_lines,
-        xfail,
-        ignored,
+        xfail: has_unconditional_xfail(&contents),
+        ignored: gating_decision(features, &contents) == Gate::Ignore,
     }))
 }
 
@@ -567,6 +706,133 @@ fn split_csv(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn re(pattern: &str) -> Regex {
+        Regex::new(pattern).unwrap()
+    }
+
+    fn suite(globs: &str) -> (tempfile::TempDir, Suite) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(SUITE_FILE),
+            format!("[suite]\nname = \"demo\"\nglob = {globs}\n"),
+        )
+        .unwrap();
+        let suite = load_suite(&tmp.path().join(SUITE_FILE)).unwrap();
+        (tmp, suite)
+    }
+
+    #[test]
+    fn suite_globs_select_tests_and_exclusions_win() {
+        let (_tmp, suite) = suite(r#"["**/*.tir", "**/*.S", "!**/Inputs/**/*"]"#);
+        assert_eq!(suite.name, "demo");
+        assert!(suite.matches(Path::new("Restructure/loop.tir")));
+        assert!(suite.matches(Path::new("obj/golden.S")));
+        assert!(!suite.matches(Path::new("README.md")));
+        assert!(!suite.matches(Path::new("Diagnostics/Inputs/decl.tir")));
+    }
+
+    #[test]
+    fn suite_root_relative_exclusion() {
+        let (_tmp, suite) = suite(r#"["**/*.tmdl", "!Inputs/**/*"]"#);
+        assert!(suite.matches(Path::new("Rust/split.tmdl")));
+        assert!(!suite.matches(Path::new("Inputs/simple.tmdl")));
+    }
+
+    #[test]
+    fn discovers_every_suite_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for dir in [
+            "core/checks",
+            "backends/riscv/checks",
+            "no-suite/checks",
+            "target/debug/checks",
+            ".hidden/checks",
+            "node_modules/pkg/checks",
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for dir in [
+            "core/checks",
+            "target/debug/checks",
+            ".hidden/checks",
+            "node_modules/pkg/checks",
+        ] {
+            std::fs::write(
+                root.join(dir).join(SUITE_FILE),
+                "[suite]\nname = \"s\"\nglob = []",
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            root.join("backends/riscv/checks").join(SUITE_FILE),
+            "[suite]\nname = \"s\"\nglob = []",
+        )
+        .unwrap();
+
+        let manifests = discover_suites(root).unwrap();
+        assert_eq!(
+            manifests,
+            [
+                root.join("backends/riscv/checks").join(SUITE_FILE),
+                root.join("core/checks").join(SUITE_FILE),
+            ]
+        );
+    }
+
+    #[test]
+    fn invalid_suite_manifest_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = tmp.path().join(SUITE_FILE);
+        std::fs::write(&manifest, "[suite]\nname = \"s\"\n").unwrap();
+        assert!(load_suite(&manifest).is_err());
+    }
+
+    #[test]
+    fn workspace_root_is_first_manifest_with_workspace_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("utils/lit")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []").unwrap();
+        std::fs::write(root.join("utils/lit/Cargo.toml"), "[package]").unwrap();
+
+        assert_eq!(
+            find_workspace_root(&root.join("utils/lit")),
+            Some(root.to_path_buf())
+        );
+    }
+
+    #[test]
+    fn no_filters_runs_everything() {
+        assert!(filter_decision("core/Restructure/loop.tir", None, None));
+    }
+
+    #[test]
+    fn filter_keeps_only_matching_names() {
+        let f = re("Restructure");
+        assert!(filter_decision("core/Restructure/loop.tir", Some(&f), None));
+        assert!(!filter_decision("fcc/Codegen/add.c", Some(&f), None));
+    }
+
+    #[test]
+    fn filter_out_excludes_matching_names() {
+        let f = re("Codegen");
+        assert!(!filter_decision("fcc/Codegen/add.c", None, Some(&f)));
+        assert!(filter_decision("core/Restructure/loop.tir", None, Some(&f)));
+    }
+
+    #[test]
+    fn filter_out_wins_over_filter() {
+        let keep = re("fcc");
+        let drop = re("Codegen");
+        assert!(!filter_decision(
+            "fcc/Codegen/add.c",
+            Some(&keep),
+            Some(&drop)
+        ));
+        assert!(filter_decision("fcc/Lexer/id.c", Some(&keep), Some(&drop)));
+    }
 
     #[test]
     fn detects_unconditional_xfail() {

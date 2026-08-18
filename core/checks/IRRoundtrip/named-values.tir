@@ -1,0 +1,16 @@
+// RUN: tir opt %s | filecheck %s
+
+// Value names are neither contiguous nor numeric; they resolve to the actual
+// values rather than being read as literal ids.
+
+module {
+  func.func @nc(%100: !i32) -> !i32 {
+    %sum = addi %100, %100 : !i32
+    func.return %sum
+  }
+  module_end
+}
+
+// CHECK: func.func @nc(%[[ARG:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[ARG]], %[[ARG]] : !i32
+// CHECK-NEXT: func.return %[[SUM]]

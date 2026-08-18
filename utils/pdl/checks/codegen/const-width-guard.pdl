@@ -1,0 +1,6 @@
+// A `const<8>` binder generates a width check on the matched constant.
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule width: builtin.muli(x: int<W>, c: const<8>) => x;
+
+// CHECK: binding_1_value.width() != 8u32

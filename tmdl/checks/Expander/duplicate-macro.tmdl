@@ -1,0 +1,8 @@
+// Defining the same macro twice is rejected while collecting definitions.
+
+// RUN: not tmdlc --action=emit-expanded-tokens --output=- %s | filecheck %s
+
+macro m { () => {}; }
+macro m { () => {}; }
+
+// CHECK: duplicate macro `m`

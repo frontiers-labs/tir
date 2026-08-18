@@ -8,12 +8,29 @@ module {
     %5 = ori %4, %1 : !i32
     func.return %5
   }
+
+  func.func @chain64(%0: !i64, %1: !i64, %2: !i64) -> !i64 {
+    %3 = addi %0, %1 : !i64
+    %4 = subi %3, %2 : !i64
+    %5 = andi %4, %0 : !i64
+    %6 = ori %5, %1 : !i64
+    func.return %6
+  }
   module_end
 }
 
+// i32 arithmetic selects the w-register forms.
 // CHECK: asm.symbol {name = "chain", arg_regs = [%virt0:GPR, %virt1:GPR]}
 // CHECK: arm64.add_w {rd = %virt2:GPR32, rn = %virt0:GPR32, rm = %virt1:GPR32}
 // CHECK: arm64.sub_w {rd = %virt3:GPR32, rn = %virt2:GPR32, rm = %virt1:GPR32}
 // CHECK: arm64.and_w {rd = %virt4:GPR32, rn = %virt0:GPR32, rm = %virt3:GPR32}
 // CHECK: arm64.orr_w {rd = %virt5:GPR32, rn = %virt1:GPR32, rm = %virt4:GPR32}
+// CHECK: asm.vret
+
+// i64 arithmetic selects the x-register forms.
+// CHECK: asm.symbol {name = "chain64", arg_regs = [%virt6:GPR, %virt7:GPR, %virt8:GPR]}
+// CHECK: arm64.add {rd = %virt9:GPR, rn = %virt6:GPR, rm = %virt7:GPR}
+// CHECK: arm64.sub {rd = %virt10:GPR, rn = %virt9:GPR, rm = %virt8:GPR}
+// CHECK: arm64.and {rd = %virt11:GPR, rn = %virt6:GPR, rm = %virt10:GPR}
+// CHECK: arm64.orr {rd = %virt12:GPR, rn = %virt7:GPR, rm = %virt11:GPR}
 // CHECK: asm.vret

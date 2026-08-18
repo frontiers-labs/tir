@@ -25,9 +25,13 @@ pub enum Commands {
     Compile(CompileArgs),
 }
 
-/// Subcommand names routed to the native clap CLI. Kept in sync with `Commands`
-/// by `known_subcommands_match_clap`.
-pub(super) const KNOWN_SUBCOMMANDS: &[&str] = &["compile"];
+/// Whether `name` is a subcommand of the native clap CLI.
+pub(super) fn is_known_subcommand(name: &str) -> bool {
+    use clap::CommandFactory;
+    Cli::command()
+        .get_subcommands()
+        .any(|command| command.get_name() == name)
+}
 
 #[derive(Debug, Args)]
 pub struct CompileArgs {
@@ -132,63 +136,5 @@ pub(super) fn lower(args: CompileArgs) -> DriverOptions {
         lib_dirs: Vec::new(),
         libs: Vec::new(),
         dry_run: false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::actions::StopPhase;
-    use super::{Commands, lower, parse_cli};
-    use crate::lang_options::{LangOptions, StdVersion};
-
-    #[test]
-    fn lowers_obj_stage_to_object_phase() {
-        let cli = parse_cli(["fcc", "compile", "--stage", "obj", "-o", "-", "x.c"]).unwrap();
-        let Some(Commands::Compile(args)) = cli.command else {
-            panic!("compile command was not parsed");
-        };
-        let opts = lower(args);
-        assert_eq!(opts.stop, StopPhase::Object);
-        assert_eq!(opts.inputs.len(), 1);
-    }
-
-    #[test]
-    fn accepts_gcc_attached_std_option() {
-        let cli = parse_cli(["fcc", "compile", "-std=c99", "input.c"]).unwrap();
-        let Some(Commands::Compile(args)) = cli.command else {
-            panic!("compile command was not parsed");
-        };
-        assert_eq!(
-            args.lang_options,
-            LangOptions {
-                std_version: StdVersion::C99,
-                gnu_extensions: false,
-            }
-        );
-    }
-
-    #[test]
-    fn accepts_gcc_separate_std_option() {
-        assert!(parse_cli(["fcc", "compile", "-std", "c99", "input.c"]).is_ok());
-    }
-
-    #[test]
-    fn known_subcommands_match_clap() {
-        use clap::CommandFactory;
-        let names: Vec<String> = super::Cli::command()
-            .get_subcommands()
-            .map(|c| c.get_name().to_string())
-            .collect();
-        assert_eq!(names, super::KNOWN_SUBCOMMANDS);
-    }
-
-    #[test]
-    fn accepts_long_attached_std_option() {
-        assert!(parse_cli(["fcc", "compile", "--std=c99", "input.c"]).is_ok());
-    }
-
-    #[test]
-    fn accepts_long_separate_std_option() {
-        assert!(parse_cli(["fcc", "compile", "--std", "c99", "input.c"]).is_ok());
     }
 }

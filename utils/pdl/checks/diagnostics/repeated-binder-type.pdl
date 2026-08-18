@@ -1,0 +1,6 @@
+// A type annotation on a repeated binder is ambiguous.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+rule bad: builtin.subi(x: int<8>, x: int<16>) => x;
+
+// CHECK: repeated binder 'x'

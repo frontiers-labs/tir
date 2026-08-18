@@ -4,6 +4,8 @@
 // CHECK-NEXT:         "name": "WriteALU",
 // CHECK-NEXT:         "default_latency": 1,
 // CHECK-NEXT:         "default_throughput": 2
+// CHECK:              "kind": "sched_class",
+// CHECK-NEXT:         "name": "WriteBare"
 // CHECK:              "kind": "instruction",
 // CHECK:              "schedule": [
 // CHECK-NEXT:           "WriteALU"
@@ -16,6 +18,8 @@
 // CHECK-NEXT:             "count": 8
 // CHECK:              "pipeline": [
 // CHECK:                  "protection": "protected"
+// CHECK:                  "name": "MEM",
+// CHECK-NEXT:             "protection": "unprotected"
 // CHECK:              "resources": [
 // CHECK:                  "name": "ALU",
 // CHECK-NEXT:             "units": 2
@@ -33,6 +37,7 @@
 isa TestIsa {}
 
 sched_class WriteALU { latency = 1; throughput = 2; }
+sched_class WriteBare;
 
 instruction Nop for [TestIsa] {
     param MNEMONIC: String = "nop";
@@ -44,7 +49,7 @@ instruction Nop for [TestIsa] {
 machine TestCore ("test-core") for [TestIsa] {
     issue_width = 2;
     buffers { rob = 8; }
-    pipeline { IF; EX: protected; }
+    pipeline { IF; EX: protected; MEM: unprotected; }
     unit ALU { count = 2; }
     bind WriteALU { reads = IF; writes = EX; uses = [ALU]; }
     override Nop { latency = 2; uses = [ALU]; }

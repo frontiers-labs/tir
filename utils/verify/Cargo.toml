@@ -3,6 +3,10 @@ name = "tir-verify"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+test = false
+doctest = false
+
 [dependencies]
 anyhow.workspace = true
 crossbeam = "0.8.4"

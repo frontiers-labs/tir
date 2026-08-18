@@ -1,0 +1,9 @@
+// RUN: not tir opt %s 2>&1 | filecheck %s
+
+// Referencing an alias that was never defined is a parse error.
+
+module {data_layout = #missing} {
+  module_end
+}
+
+// CHECK: UnknownAttributeAlias(\"missing\")

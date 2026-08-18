@@ -7,7 +7,7 @@ mod gcc;
 use std::ffi::OsString;
 use std::path::Path;
 
-use cli::{Commands, KNOWN_SUBCOMMANDS, parse_cli, run_compile};
+use cli::{Commands, is_known_subcommand, parse_cli, run_compile};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Route {
@@ -41,7 +41,7 @@ fn route(argv0_base: &str, first: Option<&str>) -> Route {
         None => Route::Native,
         Some("cc") => Route::Gcc { skip: 1 },
         Some(a)
-            if KNOWN_SUBCOMMANDS.contains(&a)
+            if is_known_subcommand(a)
                 || matches!(a, "--explain" | "--help" | "-h" | "--version") =>
         {
             Route::Native
@@ -72,45 +72,5 @@ fn run_native(argv: Vec<OsString>) {
             );
             std::process::exit(1);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Route, route};
-
-    #[test]
-    fn argv0_gcc_routes_to_gcc_mode() {
-        assert_eq!(route("gcc", Some("-c")), Route::Gcc { skip: 0 });
-    }
-
-    #[test]
-    fn argv0_cc_routes_to_gcc_mode() {
-        assert_eq!(route("cc", None), Route::Gcc { skip: 0 });
-    }
-
-    #[test]
-    fn cc_subcommand_skips_the_cc_arg() {
-        assert_eq!(route("fcc", Some("cc")), Route::Gcc { skip: 1 });
-    }
-
-    #[test]
-    fn known_subcommand_routes_native() {
-        assert_eq!(route("fcc", Some("compile")), Route::Native);
-    }
-
-    #[test]
-    fn explain_routes_native() {
-        assert_eq!(route("fcc", Some("--explain")), Route::Native);
-    }
-
-    #[test]
-    fn no_args_routes_native() {
-        assert_eq!(route("fcc", None), Route::Native);
-    }
-
-    #[test]
-    fn bare_gcc_flag_falls_through_to_gcc_mode() {
-        assert_eq!(route("fcc", Some("-c")), Route::Gcc { skip: 0 });
     }
 }

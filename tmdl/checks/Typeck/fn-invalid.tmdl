@@ -1,0 +1,31 @@
+// `fn` misuse rejected during inlining: recursion and arity mismatches.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+isa Test { param XLEN: Integer = 32; }
+
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+
+fn f(x) { f(x) }
+fn g(x) { x }
+
+instruction Recursive for [Test] {
+    param MNEMONIC: String = "recursive";
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+    behavior { rd = f(rs1); }
+}
+
+instruction ArityMismatch for [Test] {
+    param MNEMONIC: String = "arity";
+    operands { rd: GPR, rs1: GPR, rs2: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
+    behavior { rd = g(rs1, rs2); }
+}
+
+// CHECK-DAG: recursive
+// CHECK-DAG: takes 1 arguments

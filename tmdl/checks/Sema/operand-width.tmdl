@@ -1,0 +1,15 @@
+// An ISA-dependent operand width (bits<log2Ceil(self.XLEN)>) resolves to a
+// constant during semantic analysis.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+isa TestIsa { param XLEN: Integer = 32; }
+
+instruction Foo for [TestIsa] {
+    param MNEMONIC: String = "foo";
+    operands { imm: bits<log2Ceil(self.XLEN)>, }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { tmp = imm; }
+}
+
+// CHECK: FooOp

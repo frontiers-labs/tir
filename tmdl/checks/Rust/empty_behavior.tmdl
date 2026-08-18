@@ -1,0 +1,20 @@
+// An empty behavior block lowers to an empty state root instead of failing
+// code generation.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+isa Test { param XLEN: Integer = 32; }
+
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+
+instruction Nop for [Test] {
+    param MNEMONIC: String = "nop";
+    asm { "{self.MNEMONIC}" }
+    behavior { }
+}
+
+// CHECK: NopOp

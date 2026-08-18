@@ -1,0 +1,36 @@
+[package]
+name = "tir-unit-tests"
+version = "0.1.0"
+edition = "2021"
+
+# The workspace's single home for unit tests of heavy crates (which build with
+# `test = false`); their unit tests live here instead, one `#[cfg(test)]`
+# module per crate, so the whole suite is one test binary. Tests in
+# this crate exercise public APIs only. FileCheck-style tests belong in a
+# crate's `checks/` directory, not here.
+
+[lib]
+doctest = false
+
+[dev-dependencies]
+tir.workspace = true
+tir-adt.workspace = true
+tir-graph.workspace = true
+tir-symbolic.workspace = true
+tir-verify = { path = "../verify" }
+tir-riscv.workspace = true
+tir-arm64.workspace = true
+tir-x86_64.workspace = true
+tir-sim.workspace = true
+tir-jit.workspace = true
+tir-llvm.workspace = true
+tir-capi = { path = "../capi" }
+tir-fuzz = { path = "../fuzz" }
+tir-tools = { path = "../../tools" }
+fcc = { path = "../../fcc" }
+tmdl = { path = "../../tmdl" }
+jsonschema.workspace = true
+serde_json.workspace = true
+tir-lit.workspace = true
+logos.workspace = true
+tempfile = "3.27.0"

@@ -1,4 +1,4 @@
-; RUN: tir llvm-import %s | filecheck %s
+; RUN: tir llvm-import %s | tir opt --verify | filecheck %s
 
 ; CHECK: func.func @choose
 ; CHECK: alloca

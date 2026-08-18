@@ -47,8 +47,23 @@ macro alu {
     };
 }
 
+// `${concat}` follows its first argument's kind: an ident first argument
+// yields an identifier (the instruction name), a string first argument a
+// string literal (the mnemonic), a number first argument a number token
+// (the opcode: 1 ++ 6 -> 16).
+macro alu2 {
+    ($name:ident, $mn:literal, $hi:literal, $lo:literal) => {
+        instruction ${concat($name, 64)} for [TestIsa32] : Base {
+            param MNEMONIC: String = ${concat($mn, 64)};
+            param OPCODE: bits<7> = ${concat($hi, $lo)};
+            behavior { rd = rs1 + rs2; }
+        }
+    };
+}
+
 alu!(Add, "add", 0b0000001)
 alu!(Sub, "sub", 0b0000010)
+alu2!(Mul, "mul", 1, 6)
 
 // CHECK: File {
 // CHECK-NEXT:     doc: None,
@@ -283,7 +298,7 @@ alu!(Sub, "sub", 0b0000010)
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "add",
-// CHECK-NEXT:                                         span: 1027..1055,
+// CHECK-NEXT:                                         span: 1595..1623,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -298,7 +313,7 @@ alu!(Sub, "sub", 0b0000010)
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "0b0000001",
-// CHECK-NEXT:                                         span: 1027..1055,
+// CHECK-NEXT:                                         span: 1595..1623,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -316,7 +331,7 @@ alu!(Sub, "sub", 0b0000010)
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1027..1055,
+// CHECK-NEXT:                                             span: 1595..1623,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Binary(
@@ -324,29 +339,29 @@ alu!(Sub, "sub", 0b0000010)
 // CHECK-NEXT:                                             lhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs1",
-// CHECK-NEXT:                                                     span: 1027..1055,
+// CHECK-NEXT:                                                     span: 1595..1623,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             rhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs2",
-// CHECK-NEXT:                                                     span: 1027..1055,
+// CHECK-NEXT:                                                     span: 1595..1623,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             op: Add,
-// CHECK-NEXT:                                             span: 1027..1055,
+// CHECK-NEXT:                                             span: 1595..1623,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1027..1055,
+// CHECK-NEXT:                                     span: 1595..1623,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1027..1055,
+// CHECK-NEXT:                         span: 1595..1623,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1027..1055,
+// CHECK-NEXT:                 span: 1595..1623,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -367,7 +382,7 @@ alu!(Sub, "sub", 0b0000010)
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "sub",
-// CHECK-NEXT:                                         span: 1055..20482,
+// CHECK-NEXT:                                         span: 1623..1651,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -382,7 +397,7 @@ alu!(Sub, "sub", 0b0000010)
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "0b0000010",
-// CHECK-NEXT:                                         span: 1055..20482,
+// CHECK-NEXT:                                         span: 1623..1651,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -400,7 +415,7 @@ alu!(Sub, "sub", 0b0000010)
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1055..20482,
+// CHECK-NEXT:                                             span: 1623..1651,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Binary(
@@ -408,29 +423,113 @@ alu!(Sub, "sub", 0b0000010)
 // CHECK-NEXT:                                             lhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs1",
-// CHECK-NEXT:                                                     span: 1055..20482,
+// CHECK-NEXT:                                                     span: 1623..1651,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             rhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs2",
-// CHECK-NEXT:                                                     span: 1055..20482,
+// CHECK-NEXT:                                                     span: 1623..1651,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             op: Add,
-// CHECK-NEXT:                                             span: 1055..20482,
+// CHECK-NEXT:                                             span: 1623..1651,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1055..20482,
+// CHECK-NEXT:                                     span: 1623..1651,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1055..20482,
+// CHECK-NEXT:                         span: 1623..1651,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1055..20482,
+// CHECK-NEXT:                 span: 1623..1651,
+// CHECK-NEXT:             },
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         Instruction(
+// CHECK-NEXT:             Instruction {
+// CHECK-NEXT:                 doc: None,
+// CHECK-NEXT:                 name: "Mul64",
+// CHECK-NEXT:                 for_isas: [
+// CHECK-NEXT:                     "TestIsa32",
+// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 parent_template: Some(
+// CHECK-NEXT:                     "Base",
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 params: {
+// CHECK-NEXT:                     "MNEMONIC": (
+// CHECK-NEXT:                         String,
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Str(
+// CHECK-NEXT:                                     LitStr {
+// CHECK-NEXT:                                         value: "mul64",
+// CHECK-NEXT:                                         span: 1651..25575,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                     "OPCODE": (
+// CHECK-NEXT:                         Bits(
+// CHECK-NEXT:                             7,
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                         Some(
+// CHECK-NEXT:                             Lit(
+// CHECK-NEXT:                                 Int(
+// CHECK-NEXT:                                     LitInt {
+// CHECK-NEXT:                                         value: "16",
+// CHECK-NEXT:                                         span: 1651..25575,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 },
+// CHECK-NEXT:                 operands: [],
+// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 asm: None,
+// CHECK-NEXT:                 behavior: Block(
+// CHECK-NEXT:                     Block {
+// CHECK-NEXT:                         stmts: [
+// CHECK-NEXT:                             Assign(
+// CHECK-NEXT:                                 Assign {
+// CHECK-NEXT:                                     dest: Ident(
+// CHECK-NEXT:                                         Ident {
+// CHECK-NEXT:                                             name: "rd",
+// CHECK-NEXT:                                             span: 1651..25575,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     value: Binary(
+// CHECK-NEXT:                                         Binary {
+// CHECK-NEXT:                                             lhs: Ident(
+// CHECK-NEXT:                                                 Ident {
+// CHECK-NEXT:                                                     name: "rs1",
+// CHECK-NEXT:                                                     span: 1651..25575,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             rhs: Ident(
+// CHECK-NEXT:                                                 Ident {
+// CHECK-NEXT:                                                     name: "rs2",
+// CHECK-NEXT:                                                     span: 1651..25575,
+// CHECK-NEXT:                                                 },
+// CHECK-NEXT:                                             ),
+// CHECK-NEXT:                                             op: Add,
+// CHECK-NEXT:                                             span: 1651..25575,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                     span: 1651..25575,
+// CHECK-NEXT:                                 },
+// CHECK-NEXT:                             ),
+// CHECK-NEXT:                         ],
+// CHECK-NEXT:                         last_expr_return: false,
+// CHECK-NEXT:                         span: 1651..25575,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                 ),
+// CHECK-NEXT:                 schedule: None,
+// CHECK-NEXT:                 span: 1651..25575,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

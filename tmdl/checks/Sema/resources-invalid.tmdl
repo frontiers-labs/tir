@@ -1,0 +1,39 @@
+// Resource-model errors rejected by semantic analysis: unknown resources in
+// groups and micro-ops, non-positive counts and occupancies, and cyclic
+// groups.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+sched_class W;
+
+machine BadGroup for [RV64I] {
+    unit P0 { count = 1; }
+    group Int = P0 | P9;
+}
+
+machine BadUop for [RV64I] {
+    unit P0 { count = 1; }
+    bind W { uop(P9); }
+}
+
+machine BadUopCount for [RV64I] {
+    unit P0 { count = 1; }
+    bind W { uop(P0, count = 0); }
+}
+
+machine BadOccupancy for [RV64I] {
+    unit P0 { count = 1; }
+    bind W { uop(P0<0>); }
+}
+
+machine CyclicGroups for [RV64I] {
+    unit P0 { count = 1; }
+    group A = B | P0;
+    group B = A;
+}
+
+// CHECK-DAG: group 'Int' references unknown resource 'P9'
+// CHECK-DAG: micro-op references unknown resource 'P9'
+// CHECK-DAG: micro-op count must be positive
+// CHECK-DAG: resource occupancy must be positive
+// CHECK-DAG: cyclic resource group 'A'

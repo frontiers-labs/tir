@@ -1,0 +1,12 @@
+// An operand width that does not evaluate to a constant is rejected.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa TestIsa { param XLEN: Integer = 32; }
+
+instruction Foo for [TestIsa] {
+    operands { imm: bits<log2Ceil(self.UNDEFINED)>, }
+    behavior { rd = imm; }
+}
+
+// CHECK: width of operand 'imm' in instruction 'Foo' does not evaluate to a constant

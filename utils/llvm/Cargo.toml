@@ -3,6 +3,10 @@ name = "tir-llvm"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+test = false
+doctest = false
+
 [dependencies]
 tir.workspace = true
 thiserror.workspace = true

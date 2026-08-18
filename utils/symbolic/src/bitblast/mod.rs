@@ -3,8 +3,6 @@
 
 mod arith;
 mod fp;
-#[cfg(test)]
-mod tests;
 
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};

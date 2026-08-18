@@ -1,0 +1,20 @@
+// RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
+// RUN: tir mc --march=arm64 --filetype=obj-ascii %s | filecheck %s --check-prefix=OBJ
+
+// An indirect call detaches the callee address into a register distinct from
+// the x0 argument and finalizes to `blr`.
+
+module {
+  func.func @caller(%0: !i64, %1: !i32) -> !i32 {
+    %2 = func.indirect_call %0(%1 : !i32) -> !i32
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "caller"
+// CHECK: asm.vcall_indirect {callee_reg = GPR[2],
+
+// blr x2: the call goes through the detached callee register.
+// OBJ: caller:
+// OBJ: [0x40, 0x00, 0x3F, 0xD6]

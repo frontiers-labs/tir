@@ -18,6 +18,8 @@ tir-jit.workspace = true
 
 [lib]
 path = "src/lib.rs"
+test = false
+doctest = false
 
 [[bin]]
 name = "tmdl-fuzz"

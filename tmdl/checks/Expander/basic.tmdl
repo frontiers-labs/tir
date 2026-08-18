@@ -6,19 +6,158 @@ macro greet {
     ($who:ident) => { hello $who };
 }
 
+macro sub {
+    ($a:ident, $b:literal, $c:tt) => { $a $b $c };
+}
+
+macro pick {
+    () => { zero };
+    ($x:ident) => { one };
+}
+
+macro inner {
+    ($x:ident) => { got $x };
+}
+
+macro outer {
+    ($x:ident) => { inner!($x) };
+}
+
+macro stmt {
+    () => { x = 1 ; };
+}
+
 greet!(world)
+
+// ident, literal and tt fragments substitute into the transcription.
+sub!(foo, 42, (x))
+
+// Arms are tried in order; the first match wins.
+pick!()
+pick!(a)
+
+// A macro may emit another macro invocation; expansion re-runs.
+outer!(hi)
+
+// Invocation in statement position inside a block.
+behavior { stmt!() }
+
+// `a` is not a macro; `a != b` must pass through untouched.
+a != b
 
 // CHECK: [
 // CHECK-NEXT:     (
 // CHECK-NEXT:         Identifier(
 // CHECK-NEXT:             "hello",
 // CHECK-NEXT:         ),
-// CHECK-NEXT:         225..615,
+// CHECK-NEXT:         491..576,
 // CHECK-NEXT:     ),
 // CHECK-NEXT:     (
 // CHECK-NEXT:         Identifier(
 // CHECK-NEXT:             "world",
 // CHECK-NEXT:         ),
-// CHECK-NEXT:         225..615,
+// CHECK-NEXT:         491..576,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "foo",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         576..646,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Number(
+// CHECK-NEXT:             "42",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         576..646,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         LParen,
+// CHECK-NEXT:         576..646,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "x",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         576..646,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         RParen,
+// CHECK-NEXT:         576..646,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "zero",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         646..654,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "one",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         654..729,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "got",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         729..793,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "hi",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         729..793,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         KwBehavior,
+// CHECK-NEXT:         793..802,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         LBrace,
+// CHECK-NEXT:         802..804,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "x",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         804..812,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Equals,
+// CHECK-NEXT:         804..812,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Number(
+// CHECK-NEXT:             "1",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         804..812,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Semicolon,
+// CHECK-NEXT:         804..812,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         RBrace,
+// CHECK-NEXT:         812..876,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "a",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         876..878,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Bang,
+// CHECK-NEXT:         878..879,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Equals,
+// CHECK-NEXT:         879..881,
+// CHECK-NEXT:     ),
+// CHECK-NEXT:     (
+// CHECK-NEXT:         Identifier(
+// CHECK-NEXT:             "b",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         881..4090,
 // CHECK-NEXT:     ),
 // CHECK-NEXT: ]

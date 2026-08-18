@@ -1,0 +1,27 @@
+// With --custom-assembly the target supplies its own parser and printer: the
+// generated Rust exposes the assembly syntax and parser registry but omits
+// the flat per-instruction parse/print functions.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --custom-assembly --output=- %s | filecheck %s --implicit-check-not=parse_add_inst --implicit-check-not=print_add_inst
+
+isa TestIsa {}
+
+register_class GPR for [TestIsa] {
+    param ENCODING_LEN: Integer = 1;
+    param WIDTH: Integer = 32;
+    registers { r0..r1 => { traits = [] } }
+}
+
+template Unary for [TestIsa] {
+    param MNEMONIC: String;
+    operands { d: GPR }
+    asm { "{self.MNEMONIC} {d}" }
+}
+
+instruction Add for [TestIsa] : Unary {
+    param MNEMONIC: String = "add";
+    behavior { todo(); }
+}
+
+// CHECK-DAG: fn get_instruction_parsers(
+// CHECK-DAG: pub fn asm_syntax()

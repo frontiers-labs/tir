@@ -1,0 +1,147 @@
+# RUN: tir mc --march=arm64 --filetype=obj-ascii %s | filecheck %s
+
+# Encoder golden words, byte-for-byte against clang/llvm-mc for aarch64.
+# Branch immediates hold word offsets (the pc-relative byte delta >> 2), so
+# `4` reads as +16 bytes. The unsigned-offset x-width ldr/str forms are not
+# reachable from assembly (see limits/asm-load-offset.S); their encodings are
+# pinned by the decoder round-trip unit test.
+
+.global f
+f:
+    add x0, x1, x2
+    lslv x0, x1, x2
+    rorv x0, x1, x2
+    cmp x1, x2
+    cmn x1, x2
+    tst x1, x2
+    cmp x1, 5
+    cmn x1, 5
+    bic x0, x1, x2
+    orn x0, x1, x2
+    eon x0, x1, x2
+    sdiv x0, x1, x2
+    udiv x0, x1, x2
+    sdiv w0, w1, w2
+    udiv w0, w1, w2
+    madd x0, x1, x2, x3
+    msub x0, x1, x2, x3
+    msub w0, w1, w2, w3
+    mul x0, x1, x2
+    mneg x0, x1, x2
+    smulh x0, x1, x2
+    lsr x0, x1, 4
+    asr x0, x1, 4
+    sxtb x0, w1
+    sxth x0, w1
+    sxtw x0, w1
+    movz x0, 42
+    movn x0, 42
+    movk x0, 42
+    adr x0, 16
+    adrp x1, 5
+    cset x0, eq
+    csel x0, x1, x2, eq
+    b.gt 4
+    cbz x1, 4
+    cbnz x1, 4
+    tbz x1, 3, 4
+    tbz x1, 35, 4
+    tbnz x1, 3, 4
+    ldur x0, [x1, -8]
+    stur x2, [x3, -8]
+    ldursw x0, [x1, -4]
+    ldp x0, x1, [x2, 16]
+    stp x0, x1, [x2, 16]
+    ret x30
+
+# CHECK: f:
+# add x0, x1, x2 -> 0x8B020020
+# CHECK-NEXT: [0x20, 0x00, 0x02, 0x8B]
+# lslv x0, x1, x2 -> 0x9AC22020
+# CHECK-NEXT: [0x20, 0x20, 0xC2, 0x9A]
+# rorv x0, x1, x2 -> 0x9AC22C20
+# CHECK-NEXT: [0x20, 0x2C, 0xC2, 0x9A]
+# cmp x1, x2 -> 0xEB02003F
+# CHECK-NEXT: [0x3F, 0x00, 0x02, 0xEB]
+# cmn x1, x2 -> 0xAB02003F
+# CHECK-NEXT: [0x3F, 0x00, 0x02, 0xAB]
+# tst x1, x2 -> 0xEA02003F
+# CHECK-NEXT: [0x3F, 0x00, 0x02, 0xEA]
+# cmp x1, #5 -> 0xF100143F
+# CHECK-NEXT: [0x3F, 0x14, 0x00, 0xF1]
+# cmn x1, #5 -> 0xB100143F
+# CHECK-NEXT: [0x3F, 0x14, 0x00, 0xB1]
+# bic x0, x1, x2 -> 0x8A220020
+# CHECK-NEXT: [0x20, 0x00, 0x22, 0x8A]
+# orn x0, x1, x2 -> 0xAA220020
+# CHECK-NEXT: [0x20, 0x00, 0x22, 0xAA]
+# eon x0, x1, x2 -> 0xCA220020
+# CHECK-NEXT: [0x20, 0x00, 0x22, 0xCA]
+# sdiv x0, x1, x2 -> 0x9AC20C20
+# CHECK-NEXT: [0x20, 0x0C, 0xC2, 0x9A]
+# udiv x0, x1, x2 -> 0x9AC20820
+# CHECK-NEXT: [0x20, 0x08, 0xC2, 0x9A]
+# sdiv w0, w1, w2 -> 0x1AC20C20
+# CHECK-NEXT: [0x20, 0x0C, 0xC2, 0x1A]
+# udiv w0, w1, w2 -> 0x1AC20820
+# CHECK-NEXT: [0x20, 0x08, 0xC2, 0x1A]
+# madd x0, x1, x2, x3 -> 0x9B020C20
+# CHECK-NEXT: [0x20, 0x0C, 0x02, 0x9B]
+# msub x0, x1, x2, x3 -> 0x9B028C20
+# CHECK-NEXT: [0x20, 0x8C, 0x02, 0x9B]
+# msub w0, w1, w2, w3 -> 0x1B028C20
+# CHECK-NEXT: [0x20, 0x8C, 0x02, 0x1B]
+# mul x0, x1, x2 -> 0x9B027C20
+# CHECK-NEXT: [0x20, 0x7C, 0x02, 0x9B]
+# mneg x0, x1, x2 -> 0x9B02FC20
+# CHECK-NEXT: [0x20, 0xFC, 0x02, 0x9B]
+# smulh x0, x1, x2 -> 0x9B427C20
+# CHECK-NEXT: [0x20, 0x7C, 0x42, 0x9B]
+# lsr x0, x1, #4 -> 0xD344FC20
+# CHECK-NEXT: [0x20, 0xFC, 0x44, 0xD3]
+# asr x0, x1, #4 -> 0x9344FC20
+# CHECK-NEXT: [0x20, 0xFC, 0x44, 0x93]
+# sxtb x0, w1 -> 0x93401C20
+# CHECK-NEXT: [0x20, 0x1C, 0x40, 0x93]
+# sxth x0, w1 -> 0x93403C20
+# CHECK-NEXT: [0x20, 0x3C, 0x40, 0x93]
+# sxtw x0, w1 -> 0x93407C20
+# CHECK-NEXT: [0x20, 0x7C, 0x40, 0x93]
+# movz x0, #42 -> 0xD2800540
+# CHECK-NEXT: [0x40, 0x05, 0x80, 0xD2]
+# movn x0, #42 -> 0x92800540
+# CHECK-NEXT: [0x40, 0x05, 0x80, 0x92]
+# movk x0, #42 -> 0xF2800540
+# CHECK-NEXT: [0x40, 0x05, 0x80, 0xF2]
+# adr x0, #16 -> 0x10000080
+# CHECK-NEXT: [0x80, 0x00, 0x00, 0x10]
+# adrp x1, #0x5000 -> 0xB0000021
+# CHECK-NEXT: [0x21, 0x00, 0x00, 0xB0]
+# cset x0, eq -> 0x9A9F17E0
+# CHECK-NEXT: [0xE0, 0x17, 0x9F, 0x9A]
+# csel x0, x1, x2, eq -> 0x9A820020
+# CHECK-NEXT: [0x20, 0x00, 0x82, 0x9A]
+# b.gt +16 -> 0x5400008C
+# CHECK-NEXT: [0x8C, 0x00, 0x00, 0x54]
+# cbz x1, +16 -> 0xB4000081
+# CHECK-NEXT: [0x81, 0x00, 0x00, 0xB4]
+# cbnz x1, +16 -> 0xB5000081
+# CHECK-NEXT: [0x81, 0x00, 0x00, 0xB5]
+# tbz x1, #3, +16 -> 0x36180081
+# CHECK-NEXT: [0x81, 0x00, 0x18, 0x36]
+# tbz x1, #35, +16 (the bit number's high bit lands in word bit 31) -> 0xB6180081
+# CHECK-NEXT: [0x81, 0x00, 0x18, 0xB6]
+# tbnz x1, #3, +16 -> 0x37180081
+# CHECK-NEXT: [0x81, 0x00, 0x18, 0x37]
+# ldur x0, [x1, #-8] -> 0xF85F8020
+# CHECK-NEXT: [0x20, 0x80, 0x5F, 0xF8]
+# stur x2, [x3, #-8] -> 0xF81F8062
+# CHECK-NEXT: [0x62, 0x80, 0x1F, 0xF8]
+# ldursw x0, [x1, #-4] -> 0xB89FC020
+# CHECK-NEXT: [0x20, 0xC0, 0x9F, 0xB8]
+# ldp x0, x1, [x2, #16] -> 0xA9410440
+# CHECK-NEXT: [0x40, 0x04, 0x41, 0xA9]
+# stp x0, x1, [x2, #16] -> 0xA9010440
+# CHECK-NEXT: [0x40, 0x04, 0x01, 0xA9]
+# ret -> 0xD65F03C0
+# CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]

@@ -1,0 +1,8 @@
+// A mismatched closing delimiter fails token-tree building with a
+// diagnostic instead of a panic.
+
+// RUN: not tmdlc --action=emit-expanded-tokens --output=- %s | filecheck %s
+
+a ( b ]
+
+// CHECK: unbalanced delimiter

@@ -5,6 +5,7 @@
 #   add ecx,edx  -> 01 d1          add ecx,r8d -> 44 01 c1
 #   add al,bl    -> 00 d8          add sil,dil -> 40 00 fe   (empty REX required)
 #   add rcx,42   -> 48 83 c1 2a    add ecx,42  -> 83 c1 2a
+#   add rcx,300  -> 48 81 c1 2c 01 00 00
 #   add ecx,300  -> 81 c1 2c 01 00 00
 #   push rbx     -> 53             push r12    -> 41 54
 #   jmp rsi      -> ff e6          sete al     -> 0f 94 c0
@@ -21,6 +22,7 @@ canon:
 	add al, bl
 	add sil, dil
 	add rcx, 42
+	add rcx, 300
 	add ecx, 42
 	add ecx, 300
 	push rbx
@@ -47,8 +49,10 @@ canon:
 # al/bl need no REX; spl/bpl/sil/dil require an empty 0x40.
 # CHECK-NEXT: [0x00, 0xD8]
 # CHECK-NEXT: [0x40, 0x00, 0xFE]
-# imm8 0x83 short form; REX.W stays for the 64-bit form.
+# imm8 0x83 short form; REX.W stays for the 64-bit form. A 64-bit immediate
+# beyond i8 falls back to the imm32 0x81 form (add rcx,300 -> 48 81 c1 2c 01 00 00).
 # CHECK-NEXT: [0x48, 0x83, 0xC1, 0x2A]
+# CHECK-NEXT: [0x48, 0x81, 0xC1, 0x2C, 0x01, 0x00, 0x00]
 # CHECK-NEXT: [0x83, 0xC1, 0x2A]
 # 300 exceeds i8, so the imm32 0x81 form (still REX-free) is used.
 # CHECK-NEXT: [0x81, 0xC1, 0x2C, 0x01, 0x00, 0x00]

@@ -1,0 +1,103 @@
+// Frontend-model errors rejected by semantic analysis: non-positive
+// capacities, decode slots naming unknown decoders, binds naming unknown or
+// incapable decoders, and inferred micro-op counts exceeding every slot.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+sched_class W;
+
+machine ZeroFetch for [RV64I] {
+    frontend {
+        fetch {
+            bytes_per_cycle = 0;
+            window_bytes = 32;
+            alignment = 16;
+            queue_bytes = 64;
+        }
+        decode {
+            slots = [simple];
+            uops_per_cycle = 4;
+            queue_uops = 32;
+            decoder simple { max_uops_per_instruction = 1; }
+        }
+    }
+}
+
+machine UnknownSlot for [RV64I] {
+    frontend {
+        fetch {
+            bytes_per_cycle = 16;
+            window_bytes = 32;
+            alignment = 16;
+            queue_bytes = 64;
+        }
+        decode {
+            slots = [simple, complex];
+            uops_per_cycle = 4;
+            queue_uops = 32;
+            decoder simple { max_uops_per_instruction = 1; }
+        }
+    }
+}
+
+machine UnknownBindDecoder for [RV64I] {
+    frontend {
+        fetch {
+            bytes_per_cycle = 16;
+            window_bytes = 32;
+            alignment = 16;
+            queue_bytes = 64;
+        }
+        decode {
+            slots = [simple];
+            uops_per_cycle = 4;
+            queue_uops = 32;
+            decoder simple { max_uops_per_instruction = 1; }
+        }
+    }
+    bind W { decode_uops = 2; decoder = complex; }
+}
+
+machine NoCapableSlot for [RV64I] {
+    frontend {
+        fetch {
+            bytes_per_cycle = 16;
+            window_bytes = 32;
+            alignment = 16;
+            queue_bytes = 64;
+        }
+        decode {
+            slots = [simple];
+            uops_per_cycle = 4;
+            queue_uops = 32;
+            decoder simple { max_uops_per_instruction = 1; }
+            decoder complex { max_uops_per_instruction = 4; }
+        }
+    }
+    bind W { decode_uops = 3; decoder = complex; }
+}
+
+machine InferredTooWide for [RV64I] {
+    unit P0 { count = 1; }
+    frontend {
+        fetch {
+            bytes_per_cycle = 16;
+            window_bytes = 32;
+            alignment = 16;
+            queue_bytes = 64;
+        }
+        decode {
+            slots = [complex];
+            uops_per_cycle = 6;
+            queue_uops = 32;
+            decoder complex { max_uops_per_instruction = 4; }
+        }
+    }
+    bind W { uop(P0, count = 5); }
+}
+
+// CHECK-DAG: frontend fetch bytes_per_cycle must be positive
+// CHECK-DAG: decode slot references unknown decoder 'complex'
+// CHECK-DAG: references unknown frontend decoder 'complex'
+// CHECK-DAG: frontend has no capable 'complex' decoder slot
+// CHECK-DAG: frontend has no decoder slot capable of 5 micro-ops

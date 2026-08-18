@@ -1,0 +1,3 @@
+[suite]
+name = "TIR ISA simulator checks"
+glob = ["**/*.S", "**/*.s", "!**/Inputs/**/*"]

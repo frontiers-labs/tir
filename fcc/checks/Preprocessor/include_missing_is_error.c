@@ -1,4 +1,6 @@
-// A missing include is a hard error. The message goes to stderr, which the LIT
-// harness cannot pipe into filecheck; the failing exit status is the observable
-// contract here. The message wording is covered by a preprocessor unit test.
-// RUN: not fcc cc -E %S/Inputs/missing_main.c
+// A missing include is a hard error naming the requested path.
+// RUN: not fcc cc -E %S/Inputs/missing_main.c 2>&1 | filecheck %s
+
+// CHECK: [E0301] Error: 'does_not_exist.h' file not found
+// CHECK: file not found
+// CHECK: C17 6.10.2

@@ -237,36 +237,3 @@ pub fn declare_op(context: &Context, name: &str, ret: TypeId, args: &[TypeId]) -
         .attr("arg_types", arg_types_attr(args))
         .build()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Operation;
-    use crate::builtin::IntegerType;
-
-    /// A half-signature declare is neither a function nor a data declaration,
-    /// and the text form cannot express it: only a builder can build one.
-    #[test]
-    fn declare_carrying_a_return_type_without_arguments_is_rejected() {
-        let context = Context::with_default_dialects();
-        let declaration = DeclareOpBuilder::new(&context)
-            .attr(
-                "sym_name",
-                AttributeValue::Str("counter".to_string().into()),
-            )
-            .attr(
-                "ret_type",
-                AttributeValue::Type(IntegerType::new(&context, 32)),
-            )
-            .build();
-
-        let error = declaration
-            .verify(&context)
-            .expect_err("a data declaration must not carry a return type");
-
-        assert!(
-            format!("{error:?}").contains("carries 'ret_type' without 'arg_types'"),
-            "{error:?}"
-        );
-    }
-}

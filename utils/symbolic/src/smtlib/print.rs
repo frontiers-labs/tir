@@ -283,37 +283,3 @@ impl Display for Script {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::super::parser::{parse_script, parse_term};
-
-    fn term_roundtrips(src: &str) {
-        let a = parse_term(src).unwrap();
-        let printed = a.to_string();
-        let b = parse_term(&printed).unwrap();
-        assert_eq!(a, b, "printed as `{printed}`");
-    }
-
-    #[test]
-    fn roundtrips_terms() {
-        term_roundtrips("(_ bv13 8)");
-        term_roundtrips("(bvadd #x0f #b1010)");
-        term_roundtrips("(let ((x #x0f)) ((_ extract 3 0) x))");
-        term_roundtrips("(forall ((x (_ BitVec 8))) (= x x))");
-        term_roundtrips("(! (= x y) :named foo)");
-        term_roundtrips("(as nil (List Int))");
-    }
-
-    #[test]
-    fn roundtrips_script() {
-        let src = "(set-logic QF_BV)\n\
-                   (declare-const x (_ BitVec 32))\n\
-                   (assert (= (bvadd x #x00000001) x))\n\
-                   (check-sat)\n\
-                   (exit)";
-        let a = parse_script(src).unwrap();
-        let b = parse_script(&a.to_string()).unwrap();
-        assert_eq!(a, b);
-    }
-}
