@@ -1,0 +1,17 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i32 {
+    %state0 = state.entry_state : !state
+    %slot = ptr.alloca {size = 8, align = 4} : !ptr.p<!i32> state(-> %state1)
+    %forty = constant {value = 40} : !i32
+    ptr.store %forty, %slot state(%state1 -> %state2)
+    %two = constant {value = 2} : !i32
+    %loaded = ptr.load %slot : !i32 state(%state2 -> %state3)
+    %doubled = muli %loaded, %two : !i32
+    func.return %doubled
+  }
+  module_end
+}
+
+// CHECK: i32 80

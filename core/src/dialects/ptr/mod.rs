@@ -163,7 +163,7 @@ operation! {
         results: R {
             result: "crate::ptr::PtrType",
         },
-        interfaces: [PromotableAllocation],
+        interfaces: [PromotableAllocation, crate::interp::Interp],
         state: "out",
     }
 }
@@ -363,7 +363,7 @@ operation! {
         results: R {
             result: "AnyConstraint",
         },
-        interfaces: [MemoryRead],
+        interfaces: [MemoryRead, crate::interp::Interp],
         state: "in_out",
     }
 }
@@ -376,7 +376,7 @@ operation! {
             value: "AnyConstraint",
             ptr: "crate::ptr::PtrType",
         },
-        interfaces: [MemoryWrite],
+        interfaces: [MemoryWrite, crate::interp::Interp],
         state: "in_out",
     }
 }
@@ -391,6 +391,7 @@ operation! {
             source: "crate::ptr::PtrType",
             size: "crate::builtin::IntegerType",
         },
+        interfaces: [crate::interp::Interp],
         state: "in_out",
     }
 }
@@ -424,7 +425,7 @@ operation! {
             value: "crate::builtin::IntegerType",
             size: "crate::builtin::IntegerType",
         },
-        interfaces: [MemoryWrite],
+        interfaces: [MemoryWrite, crate::interp::Interp],
         state: "in_out",
     }
 }

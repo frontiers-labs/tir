@@ -1,0 +1,17 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i1 {
+    %0 = constantf {value = 1.5} : !f32
+    %1 = constantf {value = 2.5} : !f32
+    %2 = mulf %0, %1 : !f32
+    // 3.75 as f32, truncated toward zero.
+    %3 = fptosi %2 : !i32
+    %4 = constant {value = 3} : !i32
+    %5 = cmpi %3, %4 {predicate = "eq"} : !i1
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK: i1 1

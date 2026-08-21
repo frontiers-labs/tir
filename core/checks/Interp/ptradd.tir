@@ -1,0 +1,16 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i32 {
+    %0 = ptr.alloca {size = 16, align = 4} : !ptr.p<!i32>
+    %1 = constant {value = 7} : !i32
+    %2 = ptr.ptradd %0, %1 : !ptr.p<!i32>
+    %3 = constant {value = 9} : !i64
+    ptr.store %3, %2
+    %4 = ptr.load %2 : !i32
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK: i32 9

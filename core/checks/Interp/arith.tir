@@ -1,0 +1,13 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i32 {
+    %0 = constant {value = 40} : !i32
+    %1 = constant {value = 2} : !i32
+    %2 = addi %0, %1 : !i32
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: i32 42

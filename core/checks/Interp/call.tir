@@ -1,0 +1,25 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i64 {
+    %0 = constant {value = 10} : !i64
+    %1 = func.call @fact(%0 : !i64) -> !i64
+    func.return %1
+  }
+  func.func @fact(%n: !i64) -> !i64 {
+    %one = constant {value = 1} : !i64
+    %base = cmpi %n, %one {predicate = "sle"} : !i1
+    %r = scf.if %base -> !i64 {
+      scf.yield %one
+    } else {
+      %nm1 = subi %n, %one : !i64
+      %sub = func.call @fact(%nm1 : !i64) -> !i64
+      %prod = muli %n, %sub : !i64
+      scf.yield %prod
+    }
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: i64 3628800

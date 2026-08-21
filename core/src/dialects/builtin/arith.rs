@@ -16,7 +16,7 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
-        interfaces: [ConstantLike],
+        interfaces: [ConstantLike, crate::interp::Interp],
     }
 }
 

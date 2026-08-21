@@ -117,6 +117,7 @@ operation! {
         results: R {
             result: "crate::builtin::TupleType",
         },
+        interfaces: [crate::interp::Interp],
     }
 }
 
@@ -215,6 +216,7 @@ operation! {
         results: R {
             result: "AnyConstraint",
         },
+        interfaces: [crate::interp::Interp],
     }
 }
 

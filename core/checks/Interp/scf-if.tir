@@ -1,0 +1,20 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i32 {
+    %0 = constant {value = 3} : !i32
+    %1 = constant {value = 5} : !i32
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    %3 = scf.if %2 -> !i32 {
+      %4 = constant {value = 10} : !i32
+      scf.yield %4
+    } else {
+      %5 = constant {value = 20} : !i32
+      scf.yield %5
+    }
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK: i32 10

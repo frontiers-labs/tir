@@ -1,0 +1,12 @@
+// RUN: not tir interp %s 2>&1 | filecheck %s
+
+module {
+  func.func @main() -> !i32 {
+    %0 = ptr.alloca {size = 8, align = 4} : !ptr.p<!i32>
+    %1 = ptr.load %0 : !i32
+    func.return %1
+  }
+  module_end
+}
+
+// CHECK: interpretation failed: access of [{{0x[0-9a-f]+}}..{{0x[0-9a-f]+}}) hits uninitialized bytes

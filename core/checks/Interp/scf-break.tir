@@ -1,0 +1,28 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i32 {
+    %lb = constant {value = 0} : !index
+    %ub = constant {value = 100} : !index
+    %step = constant {value = 1} : !index
+    %init = constant {value = 0} : !i32
+    // First counter whose square exceeds 20.
+    %r = scf.for %lb, %ub, %step iter_args(%i = %init) -> !i32 {
+      %sq = muli %i, %i : !i32
+      %twenty = constant {value = 20} : !i32
+      %over = cmpi %sq, %twenty {predicate = "sgt"} : !i1
+      %one = constant {value = 1} : !i32
+      %next = addi %i, %one : !i32
+      %out = scf.if %over -> !i32 {
+        scf.break %i
+      } else {
+        scf.yield %next
+      }
+      scf.yield %out
+    }
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: i32 5

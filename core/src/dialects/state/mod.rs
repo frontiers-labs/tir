@@ -21,5 +21,6 @@ operation! {
         results: R {
             result: "crate::builtin::StateType",
         },
+        interfaces: [crate::interp::Interp],
     }
 }

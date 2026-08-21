@@ -1,0 +1,19 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i32 {
+    %init = constant {value = 2} : !i32
+    %r = scf.while iter_args(%acc = %init) -> !i32 {
+      %doubled = muli %acc, %acc : !i32
+      %limit = constant {value = 100} : !i32
+      %again = cmpi %doubled, %limit {predicate = "slt"} : !i1
+      scf.condition %again, %doubled
+    } do (%acc) {
+      scf.yield %acc
+    }
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: i32 256

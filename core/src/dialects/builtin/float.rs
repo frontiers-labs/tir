@@ -135,6 +135,7 @@ operation! {
         results: R {
             result: "crate::builtin::FloatType",
         },
+        interfaces: [crate::interp::Interp],
     }
 }
 

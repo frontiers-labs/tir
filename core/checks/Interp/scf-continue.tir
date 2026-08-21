@@ -1,0 +1,29 @@
+// RUN: tir interp %s | filecheck %s
+
+module {
+  func.func @main() -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %ten = constant {value = 10} : !i32
+    %one = constant {value = 1} : !i32
+    %three = constant {value = 3} : !i32
+    // Sum 0..9, skipping 3.
+    %i_out, %sum_out = scf.while iter_args(%i = %zero, %sum = %zero) -> !i32, !i32 {
+      %again = cmpi %i, %ten {predicate = "slt"} : !i1
+      scf.condition %again, %i, %sum
+    } do (%i, %sum) {
+      %skip = cmpi %i, %three {predicate = "eq"} : !i1
+      %next = addi %i, %one : !i32
+      scf.if %skip {
+        scf.continue %next, %sum
+      } else {
+        %added = addi %sum, %i : !i32
+        scf.continue %next, %added
+      }
+      scf.yield %sum
+    }
+    func.return %sum_out
+  }
+  module_end
+}
+
+// CHECK: i32 42
