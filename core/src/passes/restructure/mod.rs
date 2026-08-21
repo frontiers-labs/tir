@@ -22,7 +22,7 @@ mod loops;
 
 use crate::analysis::AnalysisManager;
 use crate::func::FuncOp;
-use crate::{Context, Form, OperationRef, Pass, PassError, PassTarget, Rewriter};
+use crate::{Context, OperationRef, Pass, PassError, PassTarget, Rewriter};
 
 pub struct RestructurePass;
 
@@ -47,14 +47,6 @@ impl Pass for RestructurePass {
 
     fn target(&self) -> PassTarget {
         PassTarget::operation::<FuncOp>()
-    }
-
-    fn required_form(&self) -> Option<Form> {
-        Some(Form::cfg())
-    }
-
-    fn target_form(&self) -> Option<Form> {
-        Some(Form::rvsdg())
     }
 
     fn run(
