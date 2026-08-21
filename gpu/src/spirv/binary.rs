@@ -29,8 +29,10 @@ pub fn read_binary(context: &Context, bytes: &[u8]) -> Result<BuiltinModuleOp> {
         return Err("SPIR-V binary length is not a multiple of four".into());
     }
     let words = bytes
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
         .collect::<Vec<_>>();
     Reader::new(context, &words)?.read()
 }
@@ -1001,7 +1003,9 @@ fn phi_edge_values(phis: &HashMap<u32, Vec<RawInst>>, target: u32, predecessor: 
         .flatten()
         .filter_map(|phi| {
             phi.operands[2..]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .find(|pair| pair[1] == predecessor)
                 .map(|pair| pair[0])
         })
@@ -1017,8 +1021,10 @@ fn encode_string(value: &str) -> Vec<u32> {
     bytes.push(0);
     bytes.resize(bytes.len().div_ceil(4) * 4, 0);
     bytes
-        .chunks_exact(4)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
         .collect()
 }
 fn decode_string(words: &[u32]) -> Result<String> {
