@@ -485,7 +485,7 @@ impl Executor {
         self.capturing_mem = true;
         let result = machine_inst.execute(self);
         self.capturing_mem = false;
-        let accesses: Vec<MemAccess> = self.mem_stage.get_mut().drain(..).collect();
+        let accesses = std::mem::take(self.mem_stage.get_mut());
         if self.record_trace {
             self.mem_trace.push(accesses);
         }
