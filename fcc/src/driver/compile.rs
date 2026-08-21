@@ -189,12 +189,19 @@ pub(super) fn emit_machine_code(
     );
 
     let mut pm = tir::PassManager::new();
-    let function_pipeline = pm.nest::<tir::func::FuncOp>();
-    function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
-    function_pipeline.add_pass(tir::passes::InstCombinePass::new());
-    // Memory state describes the structured mid-end only; codegen takes the
-    // implicit order back.
-    function_pipeline.add_pass(tir::passes::EraseStatePass::new());
+    if let Some(spec) = &opts.pipeline {
+        pm = tir::parse_pipeline(spec).unwrap_or_else(|e| {
+            eprintln!("fcc: error: {e}");
+            std::process::exit(1);
+        });
+    } else {
+        let function_pipeline = pm.nest::<tir::func::FuncOp>();
+        function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
+        function_pipeline.add_pass(tir::passes::InstCombinePass::new());
+        // Memory state describes the structured mid-end only; codegen takes the
+        // implicit order back.
+        function_pipeline.add_pass(tir::passes::EraseStatePass::new());
+    }
     pm.run(&context, context.get_op(module.id()))
         .unwrap_or_else(|e| {
             eprintln!("fcc: error: control-flow lowering failed: {e}");

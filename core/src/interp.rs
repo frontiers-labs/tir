@@ -14,8 +14,8 @@ use crate::{
     BlockId, Conditional, ConstantLike, Context, CountedLoop, DataLayout, LoopLike, OpId,
     Operation, RegionId, Symbol, ValueId,
     builtin::{
-        ConstantFOp, ConstantOp, FloatType, IntegerType, MakeTupleOp, TokenType, TupleGetOp,
-        UnitType,
+        ConstantFOp, ConstantOp, FloatType, IntegerType, MakeTupleOp, StateType, TokenType,
+        TupleGetOp, UnitType,
     },
     func::{CallOp, FuncOp, IndirectCallOp, ReturnOp},
     ptr::{AllocaOp, LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp},
@@ -286,13 +286,32 @@ impl Interpreter<'_> {
     /// bind their own results here, and leaves are evaluated here too.
     fn exec_control(&mut self, op_id: OpId) -> Result<Option<Flow>> {
         let instance = self.context.get_op(op_id);
+        if std::env::var_os("TIR_INTERP_TRACE").is_some() {
+            eprintln!(
+                "interp: {}.{} %{}",
+                instance.dialect(),
+                instance.name(),
+                op_id.number()
+            );
+        }
         if instance.is::<YieldOp>() || instance.is::<ConditionOp>() {
             // A structured join yields its operands; `scf.condition` forwards
             // [decision, carried ports..] to the while driver the same way.
             return Ok(Some(Flow::Values(self.operand_values(&instance)?)));
         }
         if instance.is::<ReturnOp>() {
-            return Ok(Some(Flow::Return(self.operand_values(&instance)?)));
+            let mut values = self.operand_values(&instance)?;
+            // A threaded `!state` operand names memory flowing out of the
+            // function; it is not part of the returned tuple.
+            let state = StateType::new(self.context);
+            if instance
+                .operands()
+                .last()
+                .is_some_and(|&last| self.context.get_value(last).ty() == state)
+            {
+                values.pop();
+            }
+            return Ok(Some(Flow::Return(values)));
         }
         if instance.is::<BreakOp>() || instance.is::<ContinueOp>() {
             let mut carried = self.operand_values(&instance)?;
@@ -516,7 +535,12 @@ impl Interpreter<'_> {
             .iter()
             .map(|&arg| self.value_of(arg))
             .collect::<Result<_>>()?;
-        let returned = self.call_function(entry.op, arguments)?;
+        let mut returned = self.call_function(entry.op, arguments)?;
+        // The call's own `!state` result, when present, is the callee's
+        // outgoing memory chain.
+        if op.state_result().is_some() {
+            returned.push(Value::State);
+        }
         Ok(Flow::Values(returned))
     }
 

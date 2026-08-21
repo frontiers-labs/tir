@@ -62,6 +62,11 @@ pub struct CompileArgs {
     /// Report memory statistics on stderr, as `TIR_MEM_STATS=1` does.
     #[arg(long = "mem-report")]
     mem_report: bool,
+    /// Mid-end pass pipeline in MLIR-style syntax, e.g.
+    /// `func.func(thread-state,instcombine)`. Replaces the default function
+    /// pipeline; frontend lowering and the backend are unaffected.
+    #[arg(long = "pipeline", value_name = "PIPELINE")]
+    pipeline: Option<String>,
     /// C source files, or `-` for stdin.
     inputs: Vec<OsString>,
 }
@@ -135,6 +140,7 @@ pub(super) fn lower(args: CompileArgs) -> DriverOptions {
         mabi: args.mabi,
         lib_dirs: Vec::new(),
         libs: Vec::new(),
+        pipeline: args.pipeline,
         dry_run: false,
     }
 }

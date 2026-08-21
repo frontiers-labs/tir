@@ -1,4 +1,5 @@
 mod fcc_corpus;
+mod fcc_fuzz;
 mod fcc_torture;
 pub mod utils;
 mod verify_smt;
@@ -34,6 +35,13 @@ fn main() -> anyhow::Result<()> {
         Some("fcc-corpus") => {
             fcc_corpus::run(&sh, &project_root(), fcc_corpus_mode(env::args().skip(2))?)?;
         }
+        Some("fcc-fuzz") => {
+            fcc_fuzz::run(
+                &sh,
+                &project_root(),
+                &fcc_fuzz_options(env::args().skip(2))?,
+            )?;
+        }
         Some("capi-smoke") => capi_smoke(&sh)?,
         Some("python-smoke") => python_smoke(&sh)?,
         Some("haskell-smoke") => haskell_smoke(&sh)?,
@@ -57,6 +65,35 @@ fn fcc_corpus_mode(mut args: impl Iterator<Item = String>) -> anyhow::Result<fcc
         "--determinism" => Ok(fcc_corpus::Mode::Determinism),
         other => anyhow::bail!("unknown fcc-corpus flag: {other}"),
     }
+}
+
+fn fcc_fuzz_options(mut args: impl Iterator<Item = String>) -> anyhow::Result<fcc_fuzz::Options> {
+    let mut options = fcc_fuzz::Options {
+        seed: 0,
+        iterations: 100,
+        corpus: false,
+        self_test: false,
+    };
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--seed" => {
+                options.seed = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--seed needs a value"))?
+                    .parse()?
+            }
+            "--iterations" => {
+                options.iterations = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--iterations needs a value"))?
+                    .parse()?
+            }
+            "--corpus" => options.corpus = true,
+            "--self-test" => options.self_test = true,
+            other => anyhow::bail!("unknown fcc-fuzz flag: {other}"),
+        }
+    }
+    Ok(options)
 }
 
 fn build(sh: &Shell) -> anyhow::Result<()> {
@@ -295,6 +332,10 @@ fcc-torture [--bless]
 fcc-corpus [--baseline <dir> | --diff <dir> | --determinism]
                  compile the fcc .c corpus to x86_64 asm and capture, diff or
                  double-compile it
+fcc-fuzz [--seed N] [--iterations N] [--corpus] [--self-test]
+                 generate random UB-free C programs, compile them under
+                 different pass pipelines and reference compilers, run the
+                 binaries and compare observable behavior
 capi-smoke       check the C ABI header is current and run the C smoke test
 python-smoke     build the C ABI and run the Python test suite
 haskell-smoke    build the C ABI and run the Haskell bindings smoke test (needs ghc)

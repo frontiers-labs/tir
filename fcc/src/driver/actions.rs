@@ -36,6 +36,7 @@ pub struct DriverOptions {
     pub mabi: Option<String>,
     pub lib_dirs: Vec<PathBuf>,
     pub libs: Vec<String>,
+    pub pipeline: Option<String>,
     pub dry_run: bool,
 }
 

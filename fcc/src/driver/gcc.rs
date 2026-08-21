@@ -136,6 +136,7 @@ where
         mabi,
         lib_dirs,
         libs,
+        pipeline: None,
         dry_run,
     })
 }
