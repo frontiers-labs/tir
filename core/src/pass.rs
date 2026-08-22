@@ -353,6 +353,15 @@ impl Rewriter {
         }
     }
 
+    /// Detach `block` from the region holding it. The caller has already erased
+    /// the operations it held; nothing may name it as a successor.
+    pub fn erase_block(&mut self, block: crate::BlockId) -> bool {
+        match self.context.parent_region(block) {
+            Some(region) => self.context.get_region(region).remove_block(block),
+            None => false,
+        }
+    }
+
     pub fn replace_op(
         &mut self,
         target: &OperationRef,

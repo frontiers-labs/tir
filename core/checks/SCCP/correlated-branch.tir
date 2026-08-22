@@ -1,0 +1,25 @@
+// RUN: tir opt --pass func.func(sccp) %s | filecheck %s
+
+// ^bb1 is entered only through the edge that holds `%0`, so the same condition
+// re-tested there decides its own branch: the merge is reached on one edge
+// alone and takes the literal that edge carries.
+
+module {
+  %fn_f = func.func @f(%a: !i32, %b: !i32) -> !i32 {
+    %0 = cmpi %a, %b {predicate = "eq"} : !i1
+    %1 = constant {value = 1} : !i32
+    %2 = constant {value = 2} : !i32
+    cfg.cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    cfg.cond_br %0, ^bb3(%1 : !i32), ^bb3(%2 : !i32)
+  ^bb2:
+    func.return %a
+  ^bb3(%3: !i32):
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK: ^bb3(%{{[0-9]+}}: !i32):
+// CHECK-NEXT: %[[C:[0-9]+]] = constant {value = 1} : !i32
+// CHECK-NEXT: func.return %[[C]]

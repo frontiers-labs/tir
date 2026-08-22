@@ -1,0 +1,21 @@
+// RUN: tir opt --pass func.func(sccp) %s | filecheck %s --implicit-check-not "constant {value = 3}"
+
+// The two edges into the merge carry different literals and both are taken, so
+// the merged value is no literal at all and nothing is folded onto it.
+
+module {
+  %fn_f = func.func @f(%c: !i1) -> !i32 {
+    %0 = constant {value = 1} : !i32
+    %1 = constant {value = 2} : !i32
+    cfg.cond_br %c, ^bb1(%0 : !i32), ^bb1(%1 : !i32)
+  ^bb1(%2: !i32):
+    %3 = constant {value = 1} : !i32
+    %4 = addi %2, %3 : !i32
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK: ^bb1(%[[M:[0-9]+]]: !i32):
+// CHECK: %[[SUM:[0-9]+]] = addi %[[M]], %{{[0-9]+}} : !i32
+// CHECK-NEXT: func.return %[[SUM]]

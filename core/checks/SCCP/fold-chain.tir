@@ -1,0 +1,18 @@
+// RUN: tir opt --pass func.func(sccp) %s | filecheck %s
+
+// Every operand of `addi` is a constant on every path, so its result is one too:
+// sccp materializes the folded literal and rewires the return to it.
+
+module {
+  %fn_f = func.func @f() -> !i32 {
+    %0 = constant {value = 3} : !i32
+    %1 = constant {value = 4} : !i32
+    %2 = addi %0, %1 : !i32
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: %[[C:[0-9]+]] = constant {value = 7} : !i32
+// CHECK: func.return %[[C]]

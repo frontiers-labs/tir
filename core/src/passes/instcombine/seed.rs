@@ -10,14 +10,14 @@ use std::collections::{HashMap, HashSet};
 
 use tir_symbolic::egraph::{EGraph, Id};
 
-use crate::analysis::scopes::{carried_operands, port_edges, region_exit};
+use crate::analysis::scopes::{carried_operands, port_edges, region_exit, tested_ports};
 use crate::analysis::slots::{collect_slots, values_agree_on_type};
 use crate::builtin::StateType;
 use crate::sem::egraph::{minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
 use crate::{
-    BlockId, Commutative, Conditional, ConstantLike, Context, EntryGuard, GuardedLoop, LoopLike,
-    MemoryRead, MemoryWrite, OpHandle, OpId, RegionId, TokenScope, TypeId, ValueId,
+    BlockId, Commutative, Conditional, ConstantLike, Context, LoopLike, MemoryRead, MemoryWrite,
+    OpHandle, OpId, RegionId, TokenScope, TypeId, ValueId,
 };
 
 /// The operands a store term names: the location, the value it writes, and the
@@ -274,7 +274,7 @@ impl Seeder<'_> {
             .filter(|&(_, &argument)| self.context.get_value(argument).ty() == self.state_ty)
             .map(|(index, _)| index)
             .collect();
-        let tested = self.tested_values(instance, carried.len());
+        let tested = tested_ports(self.context, instance, carried.len());
         let heads = match &tested {
             Some((_, arguments, _)) => arguments.clone(),
             None => carried.clone(),
@@ -352,36 +352,6 @@ impl Seeder<'_> {
                 carried.get(first + slot).copied()
             })
             .collect()
-    }
-
-    /// The region a loop evaluates before each iteration, the arguments it reads
-    /// the carried values as, and the values it forwards into the body — its
-    /// terminator's trailing operands, one per port. `None` for a loop that
-    /// tests nothing it carries.
-    fn tested_values(
-        &self,
-        instance: &OpHandle,
-        ports: usize,
-    ) -> Option<(RegionId, Vec<ValueId>, Vec<ValueId>)> {
-        let guard = instance.clone().as_interface::<dyn GuardedLoop>()?;
-        let EntryGuard::Region {
-            region, arguments, ..
-        } = guard.entry_guard()
-        else {
-            return None;
-        };
-        if arguments.len() != ports {
-            return None;
-        }
-        let block = self
-            .context
-            .get_region(region)
-            .iter(self.context.clone())
-            .next()?;
-        let op = self.context.get_op(*block.op_ids().last()?);
-        let operands = op.operands();
-        let first = operands.len().checked_sub(ports)?;
-        Some((region, arguments, operands[first..].to_vec()))
     }
 
     /// Record the states `instance` observes as exported. The term graph models a

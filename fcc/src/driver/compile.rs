@@ -198,6 +198,11 @@ pub(super) fn emit_machine_code(
         let function_pipeline = pm.nest::<tir::func::FuncOp>();
         function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
         function_pipeline.add_pass(tir::passes::InstCombinePass::new());
+        // Promotion has already turned the memory the frontend emitted into
+        // values, so the constants worth propagating exist by now; `dce` erases
+        // what the propagation left behind.
+        function_pipeline.add_pass(tir::passes::SccpPass::new());
+        function_pipeline.add_pass(tir::passes::DeadCodeEliminationPass::new());
         // Memory state describes the structured mid-end only; codegen takes the
         // implicit order back.
         function_pipeline.add_pass(tir::passes::EraseStatePass::new());

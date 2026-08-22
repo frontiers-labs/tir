@@ -1,0 +1,23 @@
+// RUN: tir opt --pass func.func(dce) --verify %s | filecheck %s
+
+// The branch on a literal never enters ^bb2, but nothing here rewrites that
+// branch, so ^bb2 stays — and so must ^bb3, which ^bb2 still names.
+
+module {
+  %fn_f = func.func @f(%a: !i32) -> !i32 {
+    %0 = constant {value = 1} : !i1
+    cfg.cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    func.return %a
+  ^bb2:
+    cfg.br ^bb3
+  ^bb3:
+    func.return %a
+  }
+  module_end
+}
+
+// CHECK: ^bb2:
+// CHECK-NEXT: cfg.br ^bb3
+// CHECK-NEXT: ^bb3:
+// CHECK-NEXT: func.return

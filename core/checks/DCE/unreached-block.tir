@@ -1,0 +1,22 @@
+// RUN: tir opt --pass func.func(dce) %s | filecheck %s
+
+// Nothing branches to ^bb1, so no execution reaches it: the block and
+// everything it held are dead.
+
+module {
+  %fn_f = func.func @f(%a: !i32) -> !i32 {
+    cfg.br ^bb2
+  ^bb1:
+    %0 = constant {value = 3} : !i32
+    func.return %0
+  ^bb2:
+    func.return %a
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NOT: constant
+// CHECK: ^bb1:
+// CHECK-NEXT: func.return
+// CHECK-NOT: ^bb2

@@ -120,3 +120,29 @@ pub fn nested_exit_scopes(context: &Context, op: &OpHandle) -> Vec<ValueId> {
     }
     scopes
 }
+
+/// The region a loop evaluates before each iteration, the arguments it reads the
+/// carried values as, and the values it forwards into the body — its terminator's
+/// trailing operands, one per port. `None` for a loop that tests nothing it carries,
+/// whose body reads the carried values directly.
+pub fn tested_ports(
+    context: &Context,
+    op: &OpHandle,
+    ports: usize,
+) -> Option<(RegionId, Vec<ValueId>, Vec<ValueId>)> {
+    let guard = op.clone().as_interface::<dyn crate::GuardedLoop>()?;
+    let crate::EntryGuard::Region {
+        region, arguments, ..
+    } = guard.entry_guard()
+    else {
+        return None;
+    };
+    if arguments.len() != ports {
+        return None;
+    }
+    let block = context.get_region(region).iter(context.clone()).next()?;
+    let terminator = context.get_op(*block.op_ids().last()?);
+    let operands = terminator.operands();
+    let first = operands.len().checked_sub(ports)?;
+    Some((region, arguments, operands[first..].to_vec()))
+}

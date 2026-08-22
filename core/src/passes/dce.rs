@@ -3,17 +3,21 @@
 //! (SSA result or Def-role register attribute) is unused, retiring the erased
 //! op's reads so newly dead producers are revisited without rescanning.
 //!
+//! A block no execution reaches is dead the same way: `sccp` leaves its
+//! executability in [`ConstantFacts`], and the blocks it never reached go with
+//! everything they held.
+//!
 //! In backend pipelines it must run before register allocation — a
 //! physical-register write counts as a side effect, so nothing is eligible
 //! after allocation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::analysis::{DefUse, RegRef, op_regs};
+use crate::analysis::{ConstantFacts, DefUse, RegRef, op_regs};
 use crate::backend::SymbolOp;
 use crate::{
-    AnalysisManager, ConstantLike, Context, MemoryWrite, OpHandle, OperationRef, Pass, PassError,
-    PassTarget, Pure, Rewriter, Terminator, func::FuncOp,
+    AnalysisManager, BlockId, ConstantLike, Context, MemoryWrite, OpHandle, OpId, OperationRef,
+    Pass, PassError, PassTarget, Pure, RegionId, Rewriter, Terminator, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -82,8 +86,88 @@ impl Pass for DeadCodeEliminationPass {
             }
         }
 
+        if op.as_op::<FuncOp>().is_some() {
+            erase_unreached_blocks(context, rewriter, analyses, op.op().id)?;
+        }
         Ok(())
     }
+}
+
+/// Erase every block no execution reaches, along with the operations it held. A
+/// block a surviving branch still names stays put: rewriting that branch is not
+/// this pass's business.
+fn erase_unreached_blocks(
+    context: &Context,
+    rewriter: &mut Rewriter,
+    analyses: &AnalysisManager,
+    root: OpId,
+) -> Result<(), PassError> {
+    let facts = analyses.get::<ConstantFacts>(context, root);
+    for region in regions(context, root) {
+        if !context.has_region(region) {
+            continue;
+        }
+        let blocks = context.get_region(region).block_ids();
+        // What survives: the blocks control reaches, and — since no branch is
+        // rewritten here — whatever a surviving branch still names, transitively.
+        let mut kept: HashSet<BlockId> = blocks
+            .iter()
+            .copied()
+            .filter(|&block| facts.is_executable(block))
+            .collect();
+        let mut queue: Vec<BlockId> = blocks
+            .iter()
+            .copied()
+            .filter(|block| kept.contains(block))
+            .collect();
+        while let Some(block) = queue.pop() {
+            for successor in successors(context, block) {
+                if kept.insert(successor) {
+                    queue.push(successor);
+                }
+            }
+        }
+        // The entry block is where control arrives; it is reached by definition.
+        for &block in blocks.iter().skip(1) {
+            if kept.contains(&block) {
+                continue;
+            }
+            let handle = context.get_block(block);
+            for op_id in handle.op_ids().into_iter().rev() {
+                let target = OperationRef::new(context.get_op(op_id), Some(handle.clone()), None);
+                rewriter.erase_op(&target)?;
+            }
+            rewriter.erase_block(block);
+        }
+    }
+    Ok(())
+}
+
+/// The blocks `block`'s terminator branches to.
+fn successors(context: &Context, block: BlockId) -> Vec<BlockId> {
+    context
+        .get_block(block)
+        .op_ids()
+        .last()
+        .map(|&terminator| context.get_op(terminator))
+        .and_then(|terminator| terminator.as_interface::<dyn Terminator>())
+        .map(|terminator| terminator.successors())
+        .unwrap_or_default()
+}
+
+/// Every region under `root`, outermost first.
+fn regions(context: &Context, root: OpId) -> Vec<RegionId> {
+    let mut found = Vec::new();
+    let mut pending = context.get_op(root).regions().to_vec();
+    while let Some(region) = pending.pop() {
+        found.push(region);
+        for block in context.get_region(region).iter(context.clone()) {
+            for op in block.op_ids() {
+                pending.extend(context.get_op(op).regions().iter().copied());
+            }
+        }
+    }
+    found
 }
 
 /// A pure value-producing op whose every virtual def is unused. Nested regions,
