@@ -5,14 +5,14 @@
 // grows, the exit carries no value, and the loop keeps reading memory.
 
 module {
-  func.declare @sink(!ptr.p<!i32>) -> !i32
-  func.func @escapes(%0: !i1, %1: !i32) -> !i32 {
+  %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !i32
+  %fn_escapes = func.func @escapes(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.while {
       scf.condition %0
     } do scope(%3) {
-      %4 = func.call @sink(%2 : !ptr.p<!i32>) -> !i32
+      %4 = func.call %fn_sink(%2 : !ptr.p<!i32>) -> !i32
       ptr.store %4, %2
       scf.if %0 {
         scf.break %3
@@ -27,7 +27,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @escapes
+// CHECK-LABEL: %{{[0-9]+}} = func.func @escapes
 // CHECK: ptr.alloca
 // CHECK: ptr.store
 // CHECK: scf.while {

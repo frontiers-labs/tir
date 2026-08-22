@@ -4,7 +4,7 @@
 // one region however many `continue`s reach it.
 
 module {
-  func.func @cont(%0: !i1, %1: !i32) -> !i32 {
+  %fn_cont = func.func @cont(%0: !i1, %1: !i32) -> !i32 {
     cfg.br ^bb1(%1 : !i32)
   ^bb1(%2: !i32):
     %3 = addi %2, %2 : !i32
@@ -20,7 +20,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @cont
+// CHECK-LABEL: %{{[0-9]+}} = func.func @cont
 // CHECK-NOT: br
 // CHECK: scf.while iter_args
 // CHECK: addi

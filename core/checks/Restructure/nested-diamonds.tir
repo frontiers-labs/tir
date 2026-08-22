@@ -4,7 +4,7 @@
 // conditional, the outer join the continuation of the outer one.
 
 module {
-  func.func @nest(%0: !i1, %1: !i1, %2: !i32) -> !i32 {
+  %fn_nest = func.func @nest(%0: !i1, %1: !i1, %2: !i32) -> !i32 {
     cfg.cond_br %0, ^bb1, ^bb4(%2 : !i32)
   ^bb1:
     cfg.cond_br %1, ^bb2, ^bb3
@@ -20,7 +20,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @nest
+// CHECK-LABEL: %{{[0-9]+}} = func.func @nest
 // CHECK-NOT: br
 // CHECK: %[[OUTER:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {
 // CHECK-NEXT: %[[INNER:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {

@@ -3,7 +3,7 @@
 // A private function is not visible outside its module, so it lowers to a local
 // object symbol rather than a `.global` one.
 module {
-  func.func private @helper(%0: !i32) -> !i32 {
+  %fn_helper = func.func private @helper(%0: !i32) -> !i32 {
     func.return %0
   }
   module_end

@@ -3,7 +3,7 @@
 // A cfg.cond_br condition must be i1; an i32 condition fails verification.
 
 module {
-  func.func @select(%0: !i32) {
+  %fn_select = func.func @select(%0: !i32) {
     cfg.cond_br %0, ^bb1, ^bb2
   ^bb1:
     func.return

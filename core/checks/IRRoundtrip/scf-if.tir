@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @cond(%0: !i1) {
+  %fn_cond = func.func @cond(%0: !i1) {
     scf.if %0 {
       scf.yield
     } else {
@@ -13,7 +13,7 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @cond(%{{[0-9]+}}: !i1) {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @cond(%{{[0-9]+}}: !i1) {
 // CHECK-NEXT: scf.if %{{[0-9]+}} {
 // CHECK-NEXT: scf.yield
 // CHECK-NEXT: }

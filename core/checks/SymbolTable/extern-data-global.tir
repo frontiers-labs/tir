@@ -1,0 +1,15 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+// A δ declaration is the symbol a reference to an object defined elsewhere
+// resolves to.
+
+module {
+  %counter = global external @counter
+  %fn_counter_address = func.func @counter_address() -> !ptr.p {
+    func.return %counter
+  }
+  module_end
+}
+
+// CHECK: %[[G:[0-9]+]] = global external @counter
+// CHECK: func.return %[[G]]

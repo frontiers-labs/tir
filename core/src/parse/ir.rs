@@ -19,6 +19,7 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
 
     parse_attribute_aliases(&mut parser, context)?;
     let op = parse_single_op(&mut parser, context)?;
+    bind_forward_references(&mut parser, context, op.id())?;
     let any: Box<dyn Any> = op.into_any();
     any.downcast::<T>()
         .map(|t| *t)
@@ -31,8 +32,27 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
 /// context; its results receive fresh value ids.
 pub fn parse_op(context: &Context, src: &str) -> Result<Box<dyn Operation>, (Span, Error)> {
     let mut parser = TextParser::new(src);
+    parser.forbid_forward_references();
     parse_attribute_aliases(&mut parser, context)?;
-    parse_single_op(&mut parser, context)
+    let op = parse_single_op(&mut parser, context)?;
+    bind_forward_references(&mut parser, context, op.id())?;
+    Ok(op)
+}
+
+/// Point every use of a placeholder at the value its name turned out to name.
+fn bind_forward_references(
+    parser: &mut TextParser<'_>,
+    context: &Context,
+    root: crate::OpId,
+) -> ParseResult<()> {
+    let bindings = parser
+        .forward_bindings()
+        .map_err(|error| (parser.span(), error))?;
+    if bindings.is_empty() {
+        return Ok(());
+    }
+    context.rebind_operands(root, &bindings.into_iter().collect());
+    Ok(())
 }
 
 /// Consume the file preamble of `#name = value` attribute aliases, binding each

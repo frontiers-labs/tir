@@ -1,8 +1,8 @@
 // RUN: not tir opt --pass lower-memory-intrinsics %s
 
 module {
-  func.declare @memcpy(!ptr.p, !ptr.p, !i32) -> !ptr.p
-  func.func @copy(%0: !ptr.p, %1: !ptr.p, %2: !i64) {
+  %fn_memcpy = func.declare @memcpy(!ptr.p, !ptr.p, !i32) -> !ptr.p
+  %fn_copy = func.func @copy(%0: !ptr.p, %1: !ptr.p, %2: !i64) {
     ptr.memcpy %0, %1, %2
     func.return
   }

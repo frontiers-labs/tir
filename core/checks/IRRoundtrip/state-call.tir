@@ -1,18 +1,22 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
+  %fn_foo = func.declare @foo(!i32) -> !i32
+  %fn_log = func.declare @log() -> !unit
+  %fn_caller = func.func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
     %2 = state.entry_state : !state
-    %3 = func.call @foo(%1 : !i32) -> !i32 state(%2 -> %4)
-    func.call @log() state(%4 -> %5)
-    %6 = func.indirect_call %0(%3 : !i32) -> !i32 state(%5 -> %7)
+    %3 = func.call %fn_foo(%1 : !i32) -> !i32 state(%2 -> %4)
+    func.call %fn_log() state(%4 -> %5)
+    %8 = ptr_to_fn %0 : !fn<(!i32) -> !i32>
+    %6 = func.call %8(%3 : !i32) -> !i32 state(%5 -> %7)
     func.return %6 state(%7)
   }
   module_end
 }
 
 // CHECK: %[[S0:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %{{[0-9]+}} = func.call @foo(%{{[0-9]+}} : !i32) -> !i32 state(%[[S0]] -> %[[S1:[0-9]+]])
-// CHECK-NEXT: func.call @log() state(%[[S1]] -> %[[S2:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = func.indirect_call %{{[0-9]+}}(%{{[0-9]+}} : !i32) -> !i32 state(%[[S2]] -> %[[S3:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = func.call %{{[0-9]+}}(%{{[0-9]+}} : !i32) -> !i32 state(%[[S0]] -> %[[S1:[0-9]+]])
+// CHECK-NEXT: func.call %{{[0-9]+}}() state(%[[S1]] -> %[[S2:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = ptr_to_fn %{{[0-9]+}} : !fn<(!i32) -> !i32>
+// CHECK-NEXT: %{{[0-9]+}} = func.call %{{[0-9]+}}(%{{[0-9]+}} : !i32) -> !i32 state(%[[S2]] -> %[[S3:[0-9]+]])
 // CHECK-NEXT: func.return %{{[0-9]+}} state(%[[S3]])

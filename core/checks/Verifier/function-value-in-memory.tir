@@ -1,0 +1,15 @@
+// RUN: not tir opt --verify %s
+
+// A λ value names a function, not a machine word: taking its address is
+// `fn_to_ptr`, and memory holds the pointer.
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    func.return %0
+  }
+  %fn_g = func.func @g(%1: !ptr.p) {
+    ptr.store %fn_f, %1
+    func.return
+  }
+  module_end
+}

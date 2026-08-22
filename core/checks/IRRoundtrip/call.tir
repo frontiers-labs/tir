@@ -1,22 +1,33 @@
 // RUN: tir opt %s | filecheck %s
 
+// Direct and indirect calls are one op: they differ only in where the callee
+// value came from.
+
 module {
-  func.func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
-    %2 = func.call @foo(%1 : !i32) -> !i32
-    func.call @log()
-    %3 = func.indirect_call %0(%2 : !i32) -> !i32
-    %4 = func.indirect_call %0(%0, %2 : !ptr.p, !i32) -> !i32 result_address argument_alignments [1, 2]
-    func.return %3
+  %fn_foo = func.declare @foo(!i32) -> !i32
+  %fn_log = func.declare @log() -> !unit
+  %fn_caller = func.func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
+    %2 = func.call %fn_foo(%1 : !i32) -> !i32
+    func.call %fn_log()
+    %3 = ptr_to_fn %0 : !fn<(!i32) -> !i32>
+    %4 = func.call %3(%2 : !i32) -> !i32
+    %5 = ptr_to_fn %0 : !fn<(!ptr.p, !i32) -> !i32>
+    %6 = func.call %5(%0, %2 : !ptr.p, !i32) -> !i32 result_address argument_alignments [1, 2]
+    func.return %4
   }
   module_end
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @caller(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !i32) -> !i32 {
-// CHECK-NEXT: %{{[0-9]+}} = func.call @foo(%{{[0-9]+}} : !i32) -> !i32
-// CHECK-NEXT: func.call @log()
-// CHECK-NEXT: %{{[0-9]+}} = func.indirect_call %{{[0-9]+}}(%{{[0-9]+}} : !i32) -> !i32
-// CHECK-NEXT: %{{[0-9]+}} = func.indirect_call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}} : !ptr.p, !i32) -> !i32 result_address argument_alignments [1, 2]
+// CHECK-NEXT: %{{[0-9]+}} = func.declare @foo(!i32) -> !i32
+// CHECK-NEXT: %{{[0-9]+}} = func.declare @log() -> !unit
+// CHECK-NEXT: %{{[0-9]+}} = func.func @caller(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !i32) -> !i32 {
+// CHECK-NEXT: %{{[0-9]+}} = func.call %{{[0-9]+}}(%{{[0-9]+}} : !i32) -> !i32
+// CHECK-NEXT: func.call %{{[0-9]+}}()
+// CHECK-NEXT: %{{[0-9]+}} = ptr_to_fn %{{[0-9]+}} : !fn<(!i32) -> !i32>
+// CHECK-NEXT: %{{[0-9]+}} = func.call %{{[0-9]+}}(%{{[0-9]+}} : !i32) -> !i32
+// CHECK-NEXT: %{{[0-9]+}} = ptr_to_fn %{{[0-9]+}} : !fn<(!ptr.p, !i32) -> !i32>
+// CHECK-NEXT: %{{[0-9]+}} = func.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}} : !ptr.p, !i32) -> !i32 result_address argument_alignments [1, 2]
 // CHECK-NEXT: func.return %{{[0-9]+}}
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end

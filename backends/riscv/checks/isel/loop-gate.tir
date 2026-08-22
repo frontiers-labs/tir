@@ -5,7 +5,7 @@
 // computation and loop condition normally.
 
 module {
-  func.func @count(%limit: !i64) -> !i64 {
+  %fn_count = func.func @count(%limit: !i64) -> !i64 {
     %zero = constant {value = 0} : !i64
     cfg.br ^bb1(%zero : !i64)
   ^bb1(%iv: !i64):

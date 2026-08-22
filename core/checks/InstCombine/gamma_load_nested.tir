@@ -6,7 +6,7 @@
 // it fires again and the inner gate grows a port too.
 
 module {
-  func.func @nested(%0: !i1, %1: !i1, %2: !i32, %3: !i32, %4: !i32) -> !i32 {
+  %fn_nested = func.func @nested(%0: !i1, %1: !i1, %2: !i32, %3: !i32, %4: !i32) -> !i32 {
     %5 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     scf.if %0 {
       scf.if %1 {
@@ -27,7 +27,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @nested
+// CHECK-LABEL: %{{[0-9]+}} = func.func @nested
 // CHECK-NOT: ptr.
 // CHECK: %[[OUTER:[0-9]+]] = scf.if %0 -> !i32 {
 // CHECK-NEXT: %[[INNER:[0-9]+]] = scf.if %1 -> !i32 {

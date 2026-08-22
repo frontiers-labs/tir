@@ -5,7 +5,7 @@
 // Selection forms no value rule over the merge.
 
 module {
-  func.func @pure(%c: !i64, %d: !i64, %a: !i64, %b: !i64, %z: !i64) -> !i64 {
+  %fn_pure = func.func @pure(%c: !i64, %d: !i64, %a: !i64, %b: !i64, %z: !i64) -> !i64 {
     %cond = cmpi %c, %d {predicate = "slt"} : !i1
     cfg.cond_br %cond, ^bb1, ^bb2
   ^bb1:
@@ -17,7 +17,7 @@ module {
     func.return %result
   }
 
-  func.func @trapping(%c: !i64, %d: !i64, %a: !i64, %b: !i64, %z: !i64) -> !i64 {
+  %fn_trapping = func.func @trapping(%c: !i64, %d: !i64, %a: !i64, %b: !i64, %z: !i64) -> !i64 {
     %cond = cmpi %c, %d {predicate = "slt"} : !i1
     cfg.cond_br %cond, ^bb1, ^bb2
   ^bb1:

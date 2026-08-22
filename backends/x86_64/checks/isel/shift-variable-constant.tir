@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 module {
-  func.func @shift_one(%count: !i64) -> !i64 {
+  %fn_shift_one = func.func @shift_one(%count: !i64) -> !i64 {
     %one = constant {value = 1} : !i64
     %result = shli %one, %count : !i64
     func.return %result

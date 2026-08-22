@@ -6,7 +6,7 @@
 // %y would be unsound on the path where %c is false.
 
 module {
-  func.func @join(%c: !i1, %y: !i1) -> !i1 {
+  %fn_join = func.func @join(%c: !i1, %y: !i1) -> !i1 {
     cfg.cond_br %c, ^bb1, ^bb2
   ^bb1:
     cfg.br ^bb3
@@ -19,6 +19,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @join
+// CHECK-LABEL: %{{[0-9]+}} = func.func @join
 // CHECK: ^bb3:
 // CHECK: muli

@@ -4,7 +4,7 @@
 // float as an integer.
 
 module {
-  func.func @f(%0: !ptr.p, %1: !f32) -> !i32 {
+  %fn_f = func.func @f(%0: !ptr.p, %1: !f32) -> !i32 {
     %2 = state.entry_state : !state
     ptr.store %1, %0 state(%2 -> %3)
     %4 = ptr.load %0 : !i32 state(%3)
@@ -13,5 +13,5 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: ptr.load

@@ -4,7 +4,7 @@
 // byte cannot take the byte it was handed.
 
 module {
-  func.func @f(%0: !ptr.p, %1: !i8, %2: !i64) -> !i8 {
+  %fn_f = func.func @f(%0: !ptr.p, %1: !i8, %2: !i64) -> !i8 {
     %3 = state.entry_state : !state
     ptr.memset %0, %1, %2 state(%3 -> %4)
     %5 = ptr.load %0 : !i8 state(%4)
@@ -13,5 +13,5 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: ptr.load

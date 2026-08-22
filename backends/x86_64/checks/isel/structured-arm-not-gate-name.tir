@@ -8,7 +8,7 @@
 // own parameter.
 
 module {
-  func.func @f(%0: !i64, %1: !i64) -> !i64 {
+  %fn_f = func.func @f(%0: !i64, %1: !i64) -> !i64 {
     %2 = addi %0, %1 : !i64
     %z = constant {value = 0} : !i64
     %c = cmpi %z, %2 {predicate = "sgt"} : !i1

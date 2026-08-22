@@ -4,7 +4,7 @@
 // entries, and a dispatch inside the body picks the one an iteration wants.
 
 module {
-  func.func @into(%0: !i1, %1: !i32) -> !i32 {
+  %fn_into = func.func @into(%0: !i1, %1: !i32) -> !i32 {
     cfg.cond_br %0, ^bb1(%1 : !i32), ^bb2(%1 : !i32)
   ^bb1(%2: !i32):
     %3 = addi %2, %2 : !i32
@@ -18,7 +18,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @into
+// CHECK-LABEL: %{{[0-9]+}} = func.func @into
 // CHECK-NOT: br
 // CHECK: scf.while iter_args
 // CHECK: scf.switch %{{[0-9]+}}

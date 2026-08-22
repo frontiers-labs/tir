@@ -1,12 +1,12 @@
 // RUN: tir mc --march=riscv64 --mabi=lp64d --stage=regalloc %s | filecheck %s
 
 module {
-  func.func @make_large(%0: !ptr.p, %1: !i64) result_address {
+  %fn_make_large = func.func @make_large(%0: !ptr.p, %1: !i64) result_address {
     ptr.store %1, %0
     func.return
   }
-  func.func @caller(%0: !ptr.p, %1: !i64) {
-    func.call @make_large(%0, %1 : !ptr.p, !i64) result_address
+  %fn_caller = func.func @caller(%0: !ptr.p, %1: !i64) {
+    func.call %fn_make_large(%0, %1 : !ptr.p, !i64) result_address
     func.return
   }
   module_end

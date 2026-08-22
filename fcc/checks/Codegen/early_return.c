@@ -4,7 +4,7 @@
 // after the loop picks the value that exit returns, and the function keeps a
 // single `func.return`.
 
-// CHECK: func.func @find
+// CHECK: %{{[0-9]+}} = func.func @find
 // CHECK: scf.while iter_args
 // CHECK: scf.condition
 // CHECK: scf.switch %{{[0-9]+}} case 0 {

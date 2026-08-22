@@ -4,7 +4,7 @@
 // register file selected by the ABI func.return instruction.
 
 module {
-  func.func @ninth(%0: !f64, %1: !f64, %2: !f64, %3: !f64, %4: !f64, %5: !f64, %6: !f64, %7: !f64, %8: !f64) -> !f64 {
+  %fn_ninth = func.func @ninth(%0: !f64, %1: !f64, %2: !f64, %3: !f64, %4: !f64, %5: !f64, %6: !f64, %7: !f64, %8: !f64) -> !f64 {
     func.return %8
   }
   module_end

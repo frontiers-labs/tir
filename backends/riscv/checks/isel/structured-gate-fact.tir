@@ -8,7 +8,7 @@ module {
   // The else-arm is entered because `%a < %b` is false, which proves
   // `%a >= %b`, so the recomputed opposite comparison is the constant 1 rather
   // than a materialized `slt`/`xori` pair.
-  func.func @complement_arm(%a: !i64, %b: !i64) -> !i1 {
+  %fn_complement_arm = func.func @complement_arm(%a: !i64, %b: !i64) -> !i1 {
     %c = cmpi %a, %b {predicate = "slt"} : !i1
     %r = scf.if %c -> !i1 {
       %t = constant {value = 0} : !i1
@@ -30,7 +30,7 @@ module {
 
   // An `eq` gate makes its operands congruent in the guarded arm, so the arm's
   // use of `%x` binds the constant it is proven equal to — as an immediate.
-  func.func @eq_arm_immediate(%x: !i64, %p: !i64) -> !i64 {
+  %fn_eq_arm_immediate = func.func @eq_arm_immediate(%x: !i64, %p: !i64) -> !i64 {
     %k = constant {value = 7} : !i64
     %c = cmpi %x, %k {predicate = "eq"} : !i1
     %r = scf.if %c -> !i64 {

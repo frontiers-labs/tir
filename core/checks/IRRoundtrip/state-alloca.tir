@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @f() {
+  %fn_f = func.func @f() {
     %0 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %1)
     func.return
   }

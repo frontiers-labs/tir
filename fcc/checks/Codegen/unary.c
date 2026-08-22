@@ -1,10 +1,10 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_unary.c | filecheck %s
 
-// CHECK: func.func @negate
+// CHECK: %{{[0-9]+}} = func.func @negate
 // CHECK: subi
-// CHECK: func.func @complement
+// CHECK: %{{[0-9]+}} = func.func @complement
 // CHECK: xori
-// CHECK: func.func @logical_not
+// CHECK: %{{[0-9]+}} = func.func @logical_not
 // CHECK: cmpi
 // CHECK: extui
-// CHECK: func.func @positive
+// CHECK: %{{[0-9]+}} = func.func @positive

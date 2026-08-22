@@ -5,7 +5,7 @@
 // whether the iteration that just ran was the last one.
 
 module {
-  func.func @count(%0: !i32, %1: !i32) -> !i32 {
+  %fn_count = func.func @count(%0: !i32, %1: !i32) -> !i32 {
     cfg.br ^bb1(%0 : !i32)
   ^bb1(%2: !i32):
     %3 = cmpi %2, %1 {predicate = "slt"} : !i1
@@ -19,7 +19,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @count
+// CHECK-LABEL: %{{[0-9]+}} = func.func @count
 // CHECK-NOT: br
 // CHECK: %[[R:[0-9]+]] = scf.while iter_args(%[[IV:[0-9]+]] = %{{[0-9]+}}) -> !i32 {
 // CHECK-NEXT: %[[C:[0-9]+]] = cmpi %[[IV]], %{{[0-9]+}} {predicate = "slt"} : !i1

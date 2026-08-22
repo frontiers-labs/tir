@@ -1,14 +1,14 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @nop() {
+  %fn_nop = func.func @nop() {
     func.return
   }
   module_end
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @nop() {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @nop() {
 // CHECK-NEXT: func.return
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end

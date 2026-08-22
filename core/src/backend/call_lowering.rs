@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
+use tir::Symbol;
 use tir::analysis::DefUse;
 use tir::attributes::{AttributeValue, RegisterAttr};
+use tir::builtin::PtrToFnOp;
 use tir::builtin::{
     MakeTupleOp, MakeTupleOpBuilder, TupleGetOp, TupleGetOpBuilder, TupleType, UnitType,
 };
-use tir::func::{CallOp, IndirectCallOp, ReturnOp};
+use tir::func::{CallOp, ReturnOp};
 use tir::{Context, OpId, Operand, Operation, OperationRef, PassError, Rewriter, ValueId};
 
 use crate::backend::abi::{
@@ -127,13 +129,10 @@ impl CallLowering {
                         }
                         continue;
                     }
-                    let args = if let Some(call) = instance.clone().as_op::<CallOp>() {
-                        call.args()
-                    } else if let Some(call) = instance.clone().as_op::<IndirectCallOp>() {
-                        call.args()
-                    } else {
+                    let Some(call) = instance.clone().as_op::<CallOp>() else {
                         continue;
                     };
+                    let args = call.args();
                     let call_ref =
                         OperationRef::new(instance, Some(context.get_block(block.id())), None);
                     for (argument_index, argument) in args.into_iter().enumerate() {
@@ -171,26 +170,16 @@ impl CallLowering {
         op: &OperationRef,
         rewriter: &mut Rewriter,
     ) -> Result<bool, PassError> {
-        let (callee, mut args, result, has_result_address, mut argument_alignments) =
-            if let Some(call) = op.as_op::<CallOp>() {
-                (
-                    Callee::Direct(call.callee()),
-                    call.args(),
-                    call.result(),
-                    call.has_result_address(),
-                    call.argument_alignments(),
-                )
-            } else if let Some(call) = op.as_op::<IndirectCallOp>() {
-                (
-                    Callee::Indirect(call.callee()),
-                    call.args(),
-                    call.result(),
-                    call.has_result_address(),
-                    call.argument_alignments(),
-                )
-            } else {
-                return Ok(false);
-            };
+        let Some(call) = op.as_op::<CallOp>() else {
+            return Ok(false);
+        };
+        let (callee, mut args, result, has_result_address, mut argument_alignments) = (
+            resolve_callee(context, &call),
+            call.args(),
+            call.result(),
+            call.has_result_address(),
+            call.argument_alignments(),
+        );
         if argument_alignments.is_empty() {
             argument_alignments.resize(args.len(), 1);
         } else if argument_alignments.len() != args.len() {
@@ -715,4 +704,28 @@ fn virtual_reg(id: u32, class: crate::backend::regalloc::RegClassId) -> Attribut
         id,
         class: Some(class),
     })
+}
+
+/// Where a call's target comes from: a named symbol when the callee traces back
+/// to a λ node, otherwise the machine value the address was recovered from.
+fn resolve_callee(context: &Context, call: &CallOp) -> Callee {
+    if let Some(symbol) = call.callee_symbol() {
+        return Callee::Direct(symbol);
+    }
+    let callee = call.callee();
+    let definition = context
+        .get_value(callee)
+        .defining_op()
+        .filter(|&definition| context.has_operation(definition));
+    let Some(definition) = definition else {
+        return Callee::Indirect(callee);
+    };
+    let instance = context.get_op(definition);
+    if let Some(symbol) = instance.clone().as_interface::<dyn Symbol>() {
+        return Callee::Direct(symbol.symbol_name());
+    }
+    match instance.as_op::<PtrToFnOp>() {
+        Some(recovered) => Callee::Indirect(recovered.operands()[0]),
+        None => Callee::Indirect(callee),
+    }
 }

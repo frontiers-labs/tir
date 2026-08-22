@@ -7,7 +7,7 @@
 // bare flag-less cset).
 
 module {
-  func.func @eq_val(%0: !i64, %1: !i64) -> !i1 {
+  %fn_eq_val = func.func @eq_val(%0: !i64, %1: !i64) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "eq"} : !i1
     func.return %2
   }
@@ -16,7 +16,7 @@ module {
   // CHECK-NEXT: arm64.cset_eq {rd = %virt2:GPR}
   // CHECK-NEXT: asm.vret
 
-  func.func @ne_val(%0: !i64, %1: !i64) -> !i1 {
+  %fn_ne_val = func.func @ne_val(%0: !i64, %1: !i64) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "ne"} : !i1
     func.return %2
   }
@@ -24,7 +24,7 @@ module {
   // CHECK: arm64.cmp
   // CHECK-NEXT: arm64.cset_ne {rd = %virt{{[0-9]+}}:GPR}
 
-  func.func @slt_val(%0: !i64, %1: !i64) -> !i1 {
+  %fn_slt_val = func.func @slt_val(%0: !i64, %1: !i64) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
     func.return %2
   }
@@ -32,7 +32,7 @@ module {
   // CHECK: arm64.cmp
   // CHECK-NEXT: arm64.cset_lt {rd = %virt{{[0-9]+}}:GPR}
 
-  func.func @ult_val(%0: !i64, %1: !i64) -> !i1 {
+  %fn_ult_val = func.func @ult_val(%0: !i64, %1: !i64) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "ult"} : !i1
     func.return %2
   }
@@ -40,7 +40,7 @@ module {
   // CHECK: arm64.cmp
   // CHECK-NEXT: arm64.cset_lo {rd = %virt{{[0-9]+}}:GPR}
 
-  func.func @eq_val_i32(%0: !i32, %1: !i32) -> !i1 {
+  %fn_eq_val_i32 = func.func @eq_val_i32(%0: !i32, %1: !i32) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "eq"} : !i1
     func.return %2
   }
@@ -48,7 +48,7 @@ module {
   // CHECK: arm64.cmp_w
   // CHECK-NEXT: arm64.cset_eq {rd = %virt{{[0-9]+}}:GPR}
 
-  func.func @ult_val_i32(%0: !i32, %1: !i32) -> !i1 {
+  %fn_ult_val_i32 = func.func @ult_val_i32(%0: !i32, %1: !i32) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "ult"} : !i1
     func.return %2
   }

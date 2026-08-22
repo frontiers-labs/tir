@@ -3,7 +3,7 @@
 // Two returns become one: each arm assigns the value the single exit reports.
 
 module {
-  func.func @early(%0: !i1, %1: !i32) -> !i32 {
+  %fn_early = func.func @early(%0: !i1, %1: !i32) -> !i32 {
     cfg.cond_br %0, ^bb1, ^bb2
   ^bb1:
     func.return %1
@@ -14,7 +14,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @early
+// CHECK-LABEL: %{{[0-9]+}} = func.func @early
 // CHECK-NOT: br
 // CHECK: %[[R:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {
 // CHECK-NEXT: scf.yield %{{[0-9]+}}

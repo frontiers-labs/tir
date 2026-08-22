@@ -6,7 +6,7 @@
 // register allocation lowers the tie to a `mov` ahead of the instruction.
 
 module {
-  func.func @chain(%0: !i64, %1: !i64) -> !i64 {
+  %fn_chain = func.func @chain(%0: !i64, %1: !i64) -> !i64 {
     %2 = addi %0, %1 : !i64
     %3 = subi %0, %2 : !i64
     %4 = muli %3, %1 : !i64

@@ -38,9 +38,9 @@ long consume_after_eight_longs(
     return mixed.tag;
 }
 
-// CHECK: func.func @consume_after_seven_doubles(
+// CHECK: %{{[0-9]+}} = func.func @consume_after_seven_doubles(
 // CHECK-SAME: %{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64) -> !f64
-// CHECK: func.func @consume_after_eight_longs(
+// CHECK: %{{[0-9]+}} = func.func @consume_after_eight_longs(
 // CHECK-SAME: %{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64) -> !i64
 
 // ASM-LABEL: consume_after_seven_doubles:

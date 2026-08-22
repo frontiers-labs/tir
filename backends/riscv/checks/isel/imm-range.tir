@@ -5,7 +5,7 @@
 // constant outside the range is refused instead of silently truncating.
 
 module {
-  func.func @edges(%0: !i64) -> !i64 {
+  %fn_edges = func.func @edges(%0: !i64) -> !i64 {
     %1 = constant {value = 2047} : !i64
     %2 = addi %0, %1 : !i64
     %3 = constant {value = -2048} : !i64

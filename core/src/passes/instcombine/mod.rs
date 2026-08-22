@@ -309,6 +309,9 @@ impl Driver<'_> {
     /// Whether the def of `a` dominates the def of `b`. `b` is always an op result,
     /// so it has a defining op; `a` may be a block argument, located via `arg_block`.
     fn dominates(&self, a: ValueId, b: ValueId) -> bool {
+        if self.is_module_level(a) {
+            return true;
+        }
         let (Some(ab), Some(bb)) = (self.def_block(a), self.def_block(b)) else {
             return false;
         };
@@ -329,10 +332,26 @@ impl Driver<'_> {
     /// Whether the def of `value` dominates the operation `op` — what a value an
     /// arm yields must do for the terminator that yields it.
     fn dominates_op(&self, value: ValueId, op: OpId) -> bool {
+        if self.is_module_level(value) {
+            return true;
+        }
         let Some(vb) = self.def_block(value) else {
             return false;
         };
         self.precedes(vb, self.context.get_value(value).defining_op(), op)
+    }
+
+    /// Whether `value` is a λ or δ node of the module. The module is one region:
+    /// what it defines is in scope everywhere inside it, so it dominates every
+    /// use without appearing in any function's dominator tree.
+    fn is_module_level(&self, value: ValueId) -> bool {
+        self.context
+            .get_value(value)
+            .defining_op()
+            .and_then(|op| self.context.parent_block(op))
+            .and_then(|block| self.context.parent_region(block))
+            .and_then(|region| self.context.get_region(region).parent_op())
+            .is_some_and(|parent| self.context.get_op(parent).is::<crate::builtin::ModuleOp>())
     }
 
     /// Whether what `op` defines is in scope where `target` sits — what a port

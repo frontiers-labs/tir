@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @pair(%0: !i64, %1: !i64) -> !tuple<!i64, !i64> {
+  %fn_pair = func.func @pair(%0: !i64, %1: !i64) -> !tuple<!i64, !i64> {
     %2 = make_tuple %0, %1 : !tuple<!i64, !i64>
     %3 = tuple_get %2 {index = 0} : !i64
     func.return %2
@@ -10,7 +10,7 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @pair(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64) -> !tuple<!i64, !i64> {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @pair(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64) -> !tuple<!i64, !i64> {
 // CHECK-NEXT: %{{[0-9]+}} = make_tuple %{{[0-9]+}}, %{{[0-9]+}} : !tuple<!i64, !i64>
 // CHECK-NEXT: %{{[0-9]+}} = tuple_get %{{[0-9]+}} {index = 0} : !i64
 // CHECK-NEXT: func.return %{{[0-9]+}}

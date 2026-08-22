@@ -4,19 +4,19 @@
 // call resolves to the overload matching its operand types.
 
 module {
-  func.func @f(%0: !i32) -> !i32 {
+  %fn_i = func.func @f(%0: !i32) -> !i32 {
     func.return %0
   }
-  func.func @f(%1: !f64) -> !f64 {
+  %fn_d = func.func @f(%1: !f64) -> !f64 {
     func.return %1
   }
-  func.func @caller(%2: !i32, %3: !f64) -> !f64 {
-    %4 = func.call @f(%2 : !i32) -> !i32
-    %5 = func.call @f(%3 : !f64) -> !f64
+  %fn_caller = func.func @caller(%2: !i32, %3: !f64) -> !f64 {
+    %4 = func.call %fn_i(%2 : !i32) -> !i32
+    %5 = func.call %fn_d(%3 : !f64) -> !f64
     func.return %5
   }
   module_end
 }
 
-// CHECK: func.func @f(%{{[0-9]+}}: !i32) -> !i32 {
-// CHECK: func.func @f(%{{[0-9]+}}: !f64) -> !f64 {
+// CHECK: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !i32) -> !i32 {
+// CHECK: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !f64) -> !f64 {

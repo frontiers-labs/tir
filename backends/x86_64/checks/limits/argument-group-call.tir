@@ -4,10 +4,10 @@
 // memory without consuming the register used by the following scalar.
 
 module {
-  func.declare @consume(!tuple<!i64, !i64, !i64>, !i64) -> !i64
-  func.func @forward(%0: !i64, %1: !i64, %2: !i64, %3: !i64) -> !i64 {
+  %fn_consume = func.declare @consume(!tuple<!i64, !i64, !i64>, !i64) -> !i64
+  %fn_forward = func.func @forward(%0: !i64, %1: !i64, %2: !i64, %3: !i64) -> !i64 {
     %4 = make_tuple %0, %1, %2 : !tuple<!i64, !i64, !i64>
-    %5 = func.call @consume(%4, %3 : !tuple<!i64, !i64, !i64>, !i64) -> !i64
+    %5 = func.call %fn_consume(%4, %3 : !tuple<!i64, !i64, !i64>, !i64) -> !i64
     func.return %5
   }
   module_end

@@ -1003,6 +1003,7 @@ execute/pr48197.c
 execute/pr48571-1.c
 execute/pr48717.c
 execute/pr48814-1.c
+execute/pr48814-2.c
 execute/pr48973-1.c
 execute/pr48973-2.c
 execute/pr49123.c

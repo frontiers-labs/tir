@@ -6,7 +6,7 @@
 // port takes the gate's own value instead, and both slots leave memory.
 
 module {
-  func.func @sum_to(%0: !i1) -> !i32 {
+  %fn_sum_to = func.func @sum_to(%0: !i1) -> !i32 {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = constant {value = 0} : !i32
@@ -37,7 +37,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @sum_to
+// CHECK-LABEL: %{{[0-9]+}} = func.func @sum_to
 // CHECK-NOT: ptr.
 // CHECK: %[[SUM:[0-9]+]], %{{[0-9]+}} = scf.while iter_args(%[[HS:[0-9]+]] = %3, %[[HC:[0-9]+]] = %3) -> !i32, !i32 {
 // CHECK: %{{[0-9]+}}, %[[LS:[0-9]+]], %[[LC:[0-9]+]] = scf.if %0 -> !i1, !i32, !i32 {

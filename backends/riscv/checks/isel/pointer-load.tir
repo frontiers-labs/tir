@@ -2,7 +2,7 @@
 // RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s --check-prefix=RV32
 
 module {
-  func.func @load_pointer(%0: !ptr.p<!ptr.p<!i32>>) -> !ptr.p<!i32> {
+  %fn_load_pointer = func.func @load_pointer(%0: !ptr.p<!ptr.p<!i32>>) -> !ptr.p<!i32> {
     %1 = ptr.load %0 : !ptr.p<!i32>
     func.return %1
   }

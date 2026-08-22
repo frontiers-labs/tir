@@ -4,7 +4,7 @@
 // block is named by the symbol, and each successor block prints a `.L<n>` label
 // that the branch immediates reference.
 module {
-  func.func @select(%0: !i1) -> !i32 {
+  %fn_select = func.func @select(%0: !i1) -> !i32 {
     cfg.cond_br %0, ^bb1, ^bb2
   ^bb1:
     %1 = constant {value = 1} : !i32

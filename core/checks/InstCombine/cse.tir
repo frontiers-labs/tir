@@ -5,7 +5,7 @@
 // computation is eliminated.
 
 module {
-  func.func @cse(%x: !i32) -> !i16 {
+  %fn_cse = func.func @cse(%x: !i32) -> !i16 {
     %0 = trunci %x : !i16
     %1 = trunci %x : !i16
     func.return %0
@@ -13,6 +13,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @cse
+// CHECK-LABEL: %{{[0-9]+}} = func.func @cse
 // CHECK: trunci
 // CHECK-NOT: trunci

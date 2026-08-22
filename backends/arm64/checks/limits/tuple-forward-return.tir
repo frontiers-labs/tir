@@ -1,9 +1,9 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 module {
-  func.declare @make_pair() -> !tuple<!f64, !f64>
-  func.func @forward() -> !tuple<!f64, !f64> {
-    %0 = func.call @make_pair() -> !tuple<!f64, !f64>
+  %fn_make_pair = func.declare @make_pair() -> !tuple<!f64, !f64>
+  %fn_forward = func.func @forward() -> !tuple<!f64, !f64> {
+    %0 = func.call %fn_make_pair() -> !tuple<!f64, !f64>
     func.return %0
   }
   module_end

@@ -11,5 +11,5 @@ int main(void) {
   return 0;
 }
 
-// CHECK-COUNT-1: func.declare @abort() -> !unit
-// CHECK-NOT: func.declare @abort
+// CHECK-COUNT-1: %{{[0-9]+}} = func.declare @abort() -> !unit
+// CHECK-NOT: %{{[0-9]+}} = func.declare @abort

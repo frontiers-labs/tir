@@ -2,7 +2,7 @@
 // RUN: tir interp %s -f select --args=0,10,20 | filecheck %s --check-prefix=ZERO
 
 module {
-  func.func @select(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+  %fn_select = func.func @select(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
   ^entry:
     cfg.cond_br %0, ^left(%1 : !i32), ^right(%2 : !i32)
   ^left(%3: !i32):

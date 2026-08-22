@@ -6,7 +6,7 @@
 // constant operand does not match a register).
 
 module {
-  func.func @s(%0: !i64) -> !i64 {
+  %fn_s = func.func @s(%0: !i64) -> !i64 {
     %1 = constant {value = 10} : !i64
     %2 = subi %0, %1 : !i64
     func.return %2

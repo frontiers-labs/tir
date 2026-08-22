@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @cond(%0: !i1) -> !i32 {
+  %fn_cond = func.func @cond(%0: !i1) -> !i32 {
     %2 = scf.if %0 -> !i32 {
       %3 = constant {value = 7} : !i32
       scf.yield %3
@@ -15,7 +15,7 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @cond(%{{[0-9]+}}: !i1) -> !i32 {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @cond(%{{[0-9]+}}: !i1) -> !i32 {
 // CHECK-NEXT: %{{[0-9]+}} = scf.if %{{[0-9]+}} -> !i32 {
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 7} : !i32
 // CHECK-NEXT: scf.yield %{{[0-9]+}}

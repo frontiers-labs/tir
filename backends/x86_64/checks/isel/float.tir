@@ -6,7 +6,7 @@
 // operands live in the XMM register class.
 
 module {
-  func.func @arith(%0: !f64, %1: !f64) -> !f64 {
+  %fn_arith = func.func @arith(%0: !f64, %1: !f64) -> !f64 {
     %2 = addf %0, %1 : !f64
     %3 = mulf %2, %1 : !f64
     %4 = subf %3, %0 : !f64
@@ -14,31 +14,31 @@ module {
     func.return %5
   }
 
-  func.func @convert(%0: !i32) -> !f64 {
+  %fn_convert = func.func @convert(%0: !i32) -> !f64 {
     %1 = sitofp %0 : !f64
     func.return %1
   }
-  func.func @convert_unsigned(%0: !i32) -> !f64 {
+  %fn_convert_unsigned = func.func @convert_unsigned(%0: !i32) -> !f64 {
     %1 = uitofp %0 : !f64
     func.return %1
   }
-  func.func @convert_to_signed(%0: !f64) -> !i32 {
+  %fn_convert_to_signed = func.func @convert_to_signed(%0: !f64) -> !i32 {
     %1 = fptosi %0 : !i32
     func.return %1
   }
-  func.func @convert_to_unsigned(%0: !f64) -> !i32 {
+  %fn_convert_to_unsigned = func.func @convert_to_unsigned(%0: !f64) -> !i32 {
     %1 = fptoui %0 : !i32
     func.return %1
   }
-  func.func @bits_to_double(%0: !i64) -> !f64 {
+  %fn_bits_to_double = func.func @bits_to_double(%0: !i64) -> !f64 {
     %1 = bitcast %0 : !f64
     func.return %1
   }
-  func.func @double_to_bits(%0: !f64) -> !i64 {
+  %fn_double_to_bits = func.func @double_to_bits(%0: !f64) -> !i64 {
     %1 = bitcast %0 : !i64
     func.return %1
   }
-  func.func @shared_zero(%0: !ptr.p<!i64>) -> !i64 {
+  %fn_shared_zero = func.func @shared_zero(%0: !ptr.p<!i64>) -> !i64 {
     %1 = constantf {value = 0.0} : !f64
     ptr.store %1, %0
     %2 = constant {value = 0} : !i64
@@ -46,27 +46,27 @@ module {
     %4 = ptr.load %3 : !i64
     func.return %4
   }
-  func.func @less(%0: !f64, %1: !f64) -> !i1 {
+  %fn_less = func.func @less(%0: !f64, %1: !f64) -> !i1 {
     %2 = cmpf %0, %1 {predicate = "olt"} : !i1
     func.return %2
   }
-  func.func @less_equal(%0: !f64, %1: !f64) -> !i1 {
+  %fn_less_equal = func.func @less_equal(%0: !f64, %1: !f64) -> !i1 {
     %2 = cmpf %0, %1 {predicate = "ole"} : !i1
     func.return %2
   }
-  func.func @greater(%0: !f64, %1: !f64) -> !i1 {
+  %fn_greater = func.func @greater(%0: !f64, %1: !f64) -> !i1 {
     %2 = cmpf %0, %1 {predicate = "ogt"} : !i1
     func.return %2
   }
-  func.func @greater_equal(%0: !f64, %1: !f64) -> !i1 {
+  %fn_greater_equal = func.func @greater_equal(%0: !f64, %1: !f64) -> !i1 {
     %2 = cmpf %0, %1 {predicate = "oge"} : !i1
     func.return %2
   }
-  func.func @equal(%0: !f64, %1: !f64) -> !i1 {
+  %fn_equal = func.func @equal(%0: !f64, %1: !f64) -> !i1 {
     %2 = cmpf %0, %1 {predicate = "oeq"} : !i1
     func.return %2
   }
-  func.func @not_equal(%0: !f64, %1: !f64) -> !i1 {
+  %fn_not_equal = func.func @not_equal(%0: !f64, %1: !f64) -> !i1 {
     %2 = cmpf %0, %1 {predicate = "une"} : !i1
     func.return %2
   }
@@ -78,10 +78,10 @@ module {
 // CHECK-NEXT: x86_64.subsd_norex {dst = %virt4:XMMlow, dst_tied = %virt3:XMMlow, src = %virt0:XMMlow}
 // CHECK-NEXT: x86_64.divsd_norex {dst = %virt5:XMMlow, dst_tied = %virt4:XMMlow, src = %virt1:XMMlow}
 // CHECK-NEXT: asm.vret
-// CHECK:      x86_64.cvtsi2sd32_norex {dst = %virt7:XMMlow, src = %virt6:GPR32low}
-// CHECK:      x86_64.movzxd {dst = %virt[[ZEXT:[0-9]+]]:GPR, src = %virt8:GPR32}
-// CHECK-NEXT: x86_64.cvtsi2sd64 {dst = %virt9:XMM, src = %virt[[ZEXT]]:GPR}
-// CHECK:      x86_64.cvttsd2si32_norex {dst = %virt11:GPR32low, src = %virt10:XMMlow}
+// CHECK:      x86_64.cvtsi2sd32_norex {dst = %virt8:XMMlow, src = %virt7:GPR32low}
+// CHECK:      x86_64.movzxd {dst = %virt[[ZEXT:[0-9]+]]:GPR, src = %virt10:GPR32}
+// CHECK-NEXT: x86_64.cvtsi2sd64 {dst = %virt11:XMM, src = %virt[[ZEXT]]:GPR}
+// CHECK:      x86_64.cvttsd2si32_norex {dst = %virt14:GPR32low, src = %virt13:XMMlow}
 // The i32 result is the low half of the 64-bit conversion: a zero-instruction
 // re-view, so no truncating mov follows.
 // CHECK:      x86_64.cvttsd2si64 {dst = %virt{{[0-9]+}}:GPR, src = %virt{{[0-9]+}}:XMM}

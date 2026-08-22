@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @fill(%0: !ptr.p, %1: !i8, %2: !i64) {
+  %fn_fill = func.func @fill(%0: !ptr.p, %1: !i8, %2: !i64) {
     ptr.memset %0, %1, %2
     func.return
   }
@@ -9,7 +9,7 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @fill(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !i8, %{{[0-9]+}}: !i64) {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @fill(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !i8, %{{[0-9]+}}: !i64) {
 // CHECK-NEXT: ptr.memset %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}
 // CHECK-NEXT: func.return
 // CHECK-NEXT: }

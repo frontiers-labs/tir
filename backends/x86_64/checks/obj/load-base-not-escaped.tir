@@ -8,7 +8,7 @@
 // pin the base to rsp/r12 and load from the wrong address.
 
 module {
-  func.func @loadq(%0: !ptr.p<!i64>) -> !i64 {
+  %fn_loadq = func.func @loadq(%0: !ptr.p<!i64>) -> !i64 {
     %1 = ptr.load %0 : !i64
     func.return %1
   }

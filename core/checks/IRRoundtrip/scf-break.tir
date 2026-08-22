@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @loop(%0: !i1) {
+  %fn_loop = func.func @loop(%0: !i1) {
     scf.while {
       scf.condition %0
     } do scope(%1) {

@@ -2,7 +2,7 @@
 // RUN: not tir mc --march=rv64i --stage=isel %s 2>&1 | filecheck %s
 
 module {
-  func.func @f() -> !i64 {
+  %fn_f = func.func @f() -> !i64 {
     func.return %99
   }
   module_end

@@ -1,10 +1,13 @@
 //! The symbol table of a module: every [`Symbol`] op directly inside its body,
 //! indexed by name.
 //!
-//! Calls in TIR are overloadable, so a name alone does not identify a function.
-//! Function symbols key on `(name, argument types)`; data symbols carry no
-//! signature and own their name exclusively. Resolution is by exact argument
-//! type match — no promotions, and the return type never participates.
+//! The table names symbols for linkage; it is not on the call path. A call
+//! takes its callee as a value and a δ reference is the δ's own value, so a
+//! transform that renames or duplicates a function never has to be re-resolved
+//! against this. What is left is the uniqueness the object format demands:
+//! function symbols key on `(name, argument types)` — TIR calls are
+//! overloadable — and data symbols carry no signature and own their name
+//! exclusively.
 
 use std::collections::HashMap;
 
@@ -59,18 +62,6 @@ impl SymbolTable {
         self.symbols.get(name).map_or(&[], Vec::as_slice)
     }
 
-    /// The overload of `name` matching `args`: argument types are exactly the
-    /// signature, or — when the signature ends in a variadic tail — exactly its
-    /// fixed prefix followed by any number of further arguments.
-    pub fn resolve(&self, context: &Context, name: &str, args: &[TypeId]) -> Option<&SymbolEntry> {
-        self.lookup(name).iter().find(|entry| {
-            entry
-                .signature
-                .as_deref()
-                .is_some_and(|signature| signature_accepts(context, signature, args))
-        })
-    }
-
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.symbols.keys().map(String::as_str)
     }
@@ -106,73 +97,13 @@ impl SymbolTable {
     }
 }
 
-/// Resolves `name` against the table of the module enclosing `user`, keying on
-/// `args` when the reference carries argument types. Detached IR has no
-/// enclosing table and is left unchecked.
-pub fn resolve_symbol_use(
-    context: &Context,
-    user: OpId,
-    name: &str,
-    args: Option<&[TypeId]>,
-) -> Result<Option<ResolvedSymbol>, crate::Error> {
-    let Some(module) = enclosing_symbol_table(context, user) else {
-        return Ok(None);
-    };
-    let table = SymbolTable::build(context, module);
-    let candidates = table.lookup(name);
-    if candidates.is_empty() {
-        return Err(crate::Error::VerificationError(format!(
-            "symbol '{}' is not defined in this module",
-            format_symbol(context, name, args)
-        )));
-    }
-
-    let entry = match args {
-        Some(_) if candidates.iter().all(|entry| entry.signature.is_none()) => {
-            return Err(crate::Error::VerificationError(format!(
-                "symbol '@{name}' is not a function"
-            )));
-        }
-        Some(args) => table.resolve(context, name, args).ok_or_else(|| {
-            crate::Error::VerificationError(format!(
-                "no overload matches {}; candidates: {}",
-                format_symbol(context, name, Some(args)),
-                describe_candidates(context, name, candidates)
-            ))
-        })?,
-        None if candidates.len() > 1 => {
-            return Err(crate::Error::VerificationError(format!(
-                "reference to '@{name}' is ambiguous; candidates: {}",
-                describe_candidates(context, name, candidates)
-            )));
-        }
-        None => &candidates[0],
-    };
-    Ok(Some(ResolvedSymbol {
-        result_type: entry.result_type,
-    }))
-}
-
-/// The symbol a reference resolved to.
-pub struct ResolvedSymbol {
-    pub result_type: Option<TypeId>,
-}
-
-fn signature_accepts(context: &Context, signature: &[TypeId], args: &[TypeId]) -> bool {
+pub(crate) fn signature_accepts(context: &Context, signature: &[TypeId], args: &[TypeId]) -> bool {
     match signature.split_last() {
         Some((&last, fixed)) if context.get_type_data(last).is_variadic_tail() => {
             args.len() >= fixed.len() && &args[..fixed.len()] == fixed
         }
         _ => signature == args,
     }
-}
-
-fn describe_candidates(context: &Context, name: &str, candidates: &[SymbolEntry]) -> String {
-    candidates
-        .iter()
-        .map(|entry| format_symbol(context, name, entry.signature.as_deref()))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Renders a symbol as `@name(t1, t2)`, or `@name` when it has no signature.
@@ -189,21 +120,6 @@ pub fn format_symbol(context: &Context, name: &str, signature: Option<&[TypeId]>
 impl Analysis for SymbolTable {
     fn build(_analyses: &AnalysisManager, context: &Context, op: OpId) -> Self {
         Self::build(context, op)
-    }
-}
-
-/// The nearest enclosing op that owns a symbol table, walking out through
-/// parent blocks. `None` for detached IR, which has no table to check against.
-pub fn enclosing_symbol_table(context: &Context, op: OpId) -> Option<OpId> {
-    let mut current = op;
-    loop {
-        let block = context.parent_block(current)?;
-        let region = context.parent_region(block)?;
-        let parent = context.get_region(region).parent_op()?;
-        if context.get_op(parent).is::<crate::builtin::ModuleOp>() {
-            return Some(parent);
-        }
-        current = parent;
     }
 }
 

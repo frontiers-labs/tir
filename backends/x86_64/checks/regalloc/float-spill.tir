@@ -5,10 +5,10 @@
 // live across the call must be stored and reloaded through the stack frame.
 
 module {
-  func.declare @external() -> !i64
-  func.func @pressure(%0: !f64) -> !f64 {
+  %fn_external = func.declare @external() -> !i64
+  %fn_pressure = func.func @pressure(%0: !f64) -> !f64 {
     %1 = addf %0, %0 : !f64
-    %2 = func.call @external() -> !i64
+    %2 = func.call %fn_external() -> !i64
     %3 = addf %1, %1 : !f64
     func.return %3
   }

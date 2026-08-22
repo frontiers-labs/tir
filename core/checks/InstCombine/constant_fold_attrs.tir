@@ -4,7 +4,7 @@
 // operands like any other: the search index must key on the attributes too.
 
 module {
-  func.func @f() -> !i1 {
+  %fn_f = func.func @f() -> !i1 {
     %0 = constant {value = 2} : !i32
     %1 = constant {value = 3} : !i32
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
@@ -13,6 +13,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: cmpi
 // CHECK: constant {value = 1}

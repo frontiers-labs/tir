@@ -4,7 +4,7 @@
 // of each arm, so an arm reads what enters the gate under a name of its own.
 
 module {
-  func.func @f(%0: !i1, %1: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i1, %1: !i32) -> !i32 {
     %2 = scf.if %0 args(%1) -> !i32 (%3) {
       scf.yield %3
     } else (%4) {

@@ -4,7 +4,7 @@
 // `b.lt` consumes it, and the cmpi op itself is consumed by selection.
 
 module {
-  func.func @pick(%0: !i64, %1: !i64) -> !i64 {
+  %fn_pick = func.func @pick(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:

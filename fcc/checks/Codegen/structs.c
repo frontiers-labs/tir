@@ -4,10 +4,10 @@
 // operations are gone before the mid-end sees a function body.
 
 // CHECK-NOT: cir.
-// CHECK: func.func @read(%{{[0-9]+}}: !ptr.p) -> !i32 {
+// CHECK: %{{[0-9]+}} = func.func @read(%{{[0-9]+}}: !ptr.p) -> !i32 {
 // CHECK: %[[OFF:[0-9]+]] = constant {value = 4} : !i64
 // CHECK: ptr.ptradd %{{[0-9]+}}, %[[OFF]] : !ptr.p
-// CHECK: func.func @copy() -> !i32 {
+// CHECK: %{{[0-9]+}} = func.func @copy() -> !i32 {
 // CHECK: ptr.alloca {size = 8, align = 4} : !ptr.p
 // CHECK: %[[TAG:[0-9]+]] = ptr.load %{{[0-9]+}} : !i8
 // CHECK: ptr.store %[[TAG]], %{{[0-9]+}}

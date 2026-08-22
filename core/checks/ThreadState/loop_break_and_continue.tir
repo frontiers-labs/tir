@@ -4,7 +4,7 @@
 // port on all three edges out of the body, each along the state its own path left.
 
 module {
-  func.func @spin(%0: !i1, %1: !i32) -> !i32 {
+  %fn_spin = func.func @spin(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.while {
@@ -30,7 +30,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @spin
+// CHECK-LABEL: %{{[0-9]+}} = func.func @spin
 // CHECK: do scope(%[[SCOPE:[0-9]+]])(%[[BODY:[0-9]+]]) {
 // CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[BODY]] -> %[[A:[0-9]+]])
 // CHECK-NEXT: %[[FIRST:[0-9]+]] = scf.if %0 args(%[[A]]) -> !state (%[[T:[0-9]+]]) {

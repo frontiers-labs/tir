@@ -1,19 +1,16 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use tir::attributes::AttributeValue;
 use tir::parse::common::Cursor;
-use tir::symbol_table::visibility_of;
 use tir::{
-    Context, Error, IRFormatter, Operation, Symbol, TirType, Type, TypeConstraint, TypeId,
-    Visibility, dialect, operation, parse::Span,
+    Context, Error, IRFormatter, TirType, Type, TypeConstraint, TypeId, dialect, operation,
+    parse::Span,
 };
 
 pub mod ops {
     pub use super::{
-        CopyStructOp, DefineStructOp, GetMemberOp, GlobalOp, GlobalStringOp, VaArgOp, VaEndOp,
-        VaStartOp, ZeroGlobalOp, copy_struct, define_struct, get_member, global, global_string,
-        va_arg, va_end, va_start, zero_global,
+        CopyStructOp, DefineStructOp, GetMemberOp, VaArgOp, VaEndOp, VaStartOp, copy_struct,
+        define_struct, get_member, va_arg, va_end, va_start,
     };
 }
 
@@ -21,9 +18,6 @@ dialect! {
     CirDialect {
         name: "cir",
         operations: [
-            GlobalOp,
-            GlobalStringOp,
-            ZeroGlobalOp,
             DefineStructOp,
             GetMemberOp,
             CopyStructOp,
@@ -33,174 +27,6 @@ dialect! {
         ],
         types: [StructType, VarArgsType, VaListType],
     }
-}
-
-operation! {
-    GlobalOp {
-        name: "global",
-        dialect: "cir",
-        interfaces: [Symbol],
-        attributes: A {
-            sym_name: "Str",
-            bytes: "Array",
-            relocations: "Array",
-            align: "UInt",
-        },
-    }
-}
-
-operation! {
-    GlobalStringOp {
-        name: "global_string",
-        dialect: "cir",
-        interfaces: [Symbol],
-        attributes: A {
-            sym_name: "Str",
-            value: "Str",
-        },
-    }
-}
-
-/// A named object: it owns its name outright, so it carries no signature and
-/// cannot be overloaded.
-macro_rules! data_symbol {
-    ($op:ty) => {
-        impl Symbol for $op {
-            fn symbol_name(&self) -> String {
-                self.sym_name()
-            }
-
-            fn symbol_signature(&self) -> Option<Vec<TypeId>> {
-                None
-            }
-
-            fn symbol_result_type(&self) -> Option<TypeId> {
-                None
-            }
-
-            fn symbol_visibility(&self) -> Visibility {
-                visibility_of(self)
-            }
-
-            fn is_definition(&self) -> bool {
-                true
-            }
-        }
-    };
-}
-
-data_symbol!(GlobalOp);
-data_symbol!(ZeroGlobalOp);
-data_symbol!(GlobalStringOp);
-
-impl GlobalStringOp {
-    pub fn sym_name(&self) -> String {
-        string_attribute(self, "sym_name")
-    }
-
-    pub fn value(&self) -> String {
-        string_attribute(self, "value")
-    }
-}
-
-impl GlobalOp {
-    pub fn sym_name(&self) -> String {
-        string_attribute(self, "sym_name")
-    }
-
-    pub fn bytes(&self) -> Vec<u8> {
-        self.attr("bytes")
-            .and_then(|value| match value {
-                AttributeValue::Array(bytes) => bytes
-                    .iter()
-                    .map(|byte| match byte {
-                        AttributeValue::UInt(value) => u8::try_from(*value).ok(),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => None,
-            })
-            .unwrap()
-    }
-
-    pub fn align(&self) -> u64 {
-        uint_attribute(self, "align")
-    }
-
-    pub fn relocations(&self) -> Vec<(u64, String, i64, u64)> {
-        self.attr("relocations")
-            .and_then(|value| match value {
-                AttributeValue::Array(relocations) => Some(
-                    relocations
-                        .iter()
-                        .map(|relocation| {
-                            let AttributeValue::Dict(fields) = relocation else {
-                                unreachable!("cir.global relocation is a dictionary")
-                            };
-                            let AttributeValue::UInt(offset) = fields.get("offset").unwrap() else {
-                                unreachable!("cir.global relocation has an offset")
-                            };
-                            let AttributeValue::Str(symbol) = fields.get("symbol").unwrap() else {
-                                unreachable!("cir.global relocation has a symbol")
-                            };
-                            let AttributeValue::Int(addend) = fields.get("addend").unwrap() else {
-                                unreachable!("cir.global relocation has an addend")
-                            };
-                            let AttributeValue::UInt(width) = fields.get("width").unwrap() else {
-                                unreachable!("cir.global relocation has a width")
-                            };
-                            (*offset, symbol.to_string(), *addend, *width)
-                        })
-                        .collect(),
-                ),
-                _ => None,
-            })
-            .unwrap()
-    }
-}
-
-operation! {
-    ZeroGlobalOp {
-        name: "zero_global",
-        dialect: "cir",
-        interfaces: [Symbol],
-        attributes: A {
-            sym_name: "Str",
-            size: "UInt",
-            align: "UInt",
-        },
-    }
-}
-
-impl ZeroGlobalOp {
-    pub fn sym_name(&self) -> String {
-        string_attribute(self, "sym_name")
-    }
-
-    pub fn size(&self) -> u64 {
-        uint_attribute(self, "size")
-    }
-
-    pub fn align(&self) -> u64 {
-        uint_attribute(self, "align")
-    }
-}
-
-fn string_attribute(operation: &impl Operation, name: &str) -> String {
-    match operation.attr(name) {
-        Some(AttributeValue::Str(value)) => value.to_string(),
-        _ => panic!("{name} must be a string attribute"),
-    }
-}
-
-fn uint_attribute(operation: &impl Operation, name: &str) -> u64 {
-    operation
-        .attr(name)
-        .and_then(|value| match value {
-            AttributeValue::UInt(value) => Some(value),
-            _ => None,
-        })
-        .unwrap()
 }
 
 pub struct StructType {

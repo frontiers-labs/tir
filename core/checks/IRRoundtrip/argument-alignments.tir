@@ -1,15 +1,15 @@
 // RUN: tir opt --verify %s | filecheck %s
 
 module {
-  func.declare @consume(!i64, !tuple<!i64, !i64>) -> !i64
-  func.func @forward(%0: !i64, %1: !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16] {
-    %2 = func.call @consume(%0, %1 : !i64, !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16]
+  %fn_consume = func.declare @consume(!i64, !tuple<!i64, !i64>) -> !i64
+  %fn_forward = func.func @forward(%0: !i64, %1: !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16] {
+    %2 = func.call %fn_consume(%0, %1 : !i64, !tuple<!i64, !i64>) -> !i64 argument_alignments [1, 16]
     func.return %2
   }
   module_end
 }
 
-// CHECK: func.func @forward(
+// CHECK: %{{[0-9]+}} = func.func @forward(
 // CHECK-SAME: ) -> !i64 argument_alignments [1, 16] {
-// CHECK: func.call @consume(
+// CHECK: func.call %{{[0-9]+}}(
 // CHECK-SAME: ) -> !i64 argument_alignments [1, 16]

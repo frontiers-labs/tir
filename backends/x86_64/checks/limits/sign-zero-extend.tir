@@ -3,11 +3,11 @@
 // Signed and unsigned extension use their direct instructions.
 
 module {
-  func.func @se(%0: !i32) -> !i64 {
+  %fn_se = func.func @se(%0: !i32) -> !i64 {
     %1 = extsi %0 : !i64
     func.return %1
   }
-  func.func @ze(%0: !i32) -> !i64 {
+  %fn_ze = func.func @ze(%0: !i32) -> !i64 {
     %1 = extui %0 : !i64
     func.return %1
   }

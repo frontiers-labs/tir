@@ -1,10 +1,10 @@
 use crate::analysis::AnalysisManager;
-use crate::attributes::AttributeValue;
-use crate::builtin::{IntegerType, ModuleOp, ops as b};
-use crate::func::{DeclareOp, ops as func_ops};
+use crate::builtin::{FnType, IntegerType, ModuleOp, ops as b};
+use crate::func::ops as func_ops;
 use crate::ptr::{MemcpyOp, MemsetOp, PtrType};
 use crate::{
-    Context, OpHandle, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter, TypeId,
+    Context, OpHandle, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter, Symbol,
+    TypeId, ValueId,
 };
 
 pub struct LowerMemoryIntrinsicsPass;
@@ -81,27 +81,37 @@ impl Pass for LowerMemoryIntrinsicsPass {
 
         let pointer = PtrType::opaque(context);
         let size = IntegerType::new(context, 64);
-        if !copies.is_empty() {
-            ensure_declaration(
+        let value = IntegerType::new(context, 32);
+        let memcpy = if copies.is_empty() {
+            None
+        } else {
+            Some(ensure_lambda(
                 context,
                 &module,
                 "memcpy",
                 pointer,
                 &[pointer, pointer, size],
-            )?;
-        }
-        let value = IntegerType::new(context, 32);
-        if !sets.is_empty() {
-            ensure_declaration(context, &module, "memset", pointer, &[pointer, value, size])?;
-        }
+            )?)
+        };
+        let memset = if sets.is_empty() {
+            None
+        } else {
+            Some(ensure_lambda(
+                context,
+                &module,
+                "memset",
+                pointer,
+                &[pointer, value, size],
+            )?)
+        };
 
         for operation in copies {
             let copy = operation
                 .as_op::<MemcpyOp>()
                 .expect("operation was collected as ptr.memcpy");
             let call = func_ops::CallOpBuilder::new(context)
+                .callee(memcpy.expect("a copy to lower implies a memcpy declaration"))
                 .args(copy.operands().to_vec())
-                .attr("callee", AttributeValue::Str("memcpy".to_string().into()))
                 .result_type(pointer)
                 .build();
             rewriter.replace_op(&operation, &call)?;
@@ -113,12 +123,12 @@ impl Pass for LowerMemoryIntrinsicsPass {
             let extended = b::extui(context, set.operands()[1], value).build();
             rewriter.insert_op_before(&operation, &extended)?;
             let call = func_ops::CallOpBuilder::new(context)
+                .callee(memset.expect("a set to lower implies a memset declaration"))
                 .args(vec![
                     set.operands()[0],
                     extended.result(),
                     set.operands()[2],
                 ])
-                .attr("callee", AttributeValue::Str("memset".to_string().into()))
                 .result_type(pointer)
                 .build();
             rewriter.replace_op(&operation, &call)?;
@@ -127,30 +137,33 @@ impl Pass for LowerMemoryIntrinsicsPass {
     }
 }
 
-fn ensure_declaration(
+/// The λ value of `name`, declaring it at the top of the module when nothing in
+/// it names that function yet.
+fn ensure_lambda(
     context: &Context,
     module: &ModuleOp,
     name: &str,
     return_type: TypeId,
     argument_types: &[TypeId],
-) -> Result<(), PassError> {
-    let declaration = module.body().op_ids().into_iter().find_map(|operation| {
-        context
-            .get_op(operation)
-            .as_op::<DeclareOp>()
-            .filter(|declaration| declaration.sym_name() == name)
+) -> Result<ValueId, PassError> {
+    let expected = FnType::new(context, argument_types, return_type);
+    let existing = module.body().op_ids().into_iter().find_map(|operation| {
+        let instance = context.get_op(operation);
+        let symbol = instance.clone().as_interface::<dyn Symbol>()?;
+        (symbol.symbol_name() == name)
+            .then(|| instance.results().first().copied())
+            .flatten()
     });
-    if let Some(declaration) = declaration {
-        if declaration.ret_type() != Some(return_type)
-            || declaration.arg_types().as_deref() != Some(argument_types)
-        {
+    if let Some(value) = existing {
+        if context.get_value(value).ty() != expected {
             return Err(PassError::InvalidRuleSet(format!(
                 "existing {name} declaration has an incompatible type"
             )));
         }
-    } else {
-        let declaration = func_ops::declare_op(context, name, return_type, argument_types);
-        module.body().insert(0, declaration.id());
+        return Ok(value);
     }
-    Ok(())
+    let declaration = func_ops::declare_op(context, name, return_type, argument_types);
+    let value = declaration.fn_value();
+    module.body().insert(0, declaration.id());
+    Ok(value)
 }

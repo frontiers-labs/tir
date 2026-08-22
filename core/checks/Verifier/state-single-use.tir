@@ -1,7 +1,7 @@
 // RUN: not tir opt --verify %s
 
 module {
-  func.func @bad(%0: !i32) {
+  %fn_bad = func.func @bad(%0: !i32) {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %2)
     ptr.store %0, %1 state(%2 -> %3)
     %4 = ptr.load %1 : !i32 state(%2)

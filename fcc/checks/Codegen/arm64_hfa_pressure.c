@@ -15,14 +15,14 @@ double call_pressured(double a, double b, double c, double d, double e, double f
     return pressured(a, b, c, d, e, f, quad);
 }
 
-// CHECK: func.func @pressured(
+// CHECK: %{{[0-9]+}} = func.func @pressured(
 // CHECK-SAME: !f64, %{{[0-9]+}}: !f64, %{{[0-9]+}}: !f64,
 // CHECK-SAME: !f64, %{{[0-9]+}}: !f64, %{{[0-9]+}}: !f64,
 // CHECK-SAME: !tuple<!f64, !f64, !f64, !f64>) -> !f64 {
-// CHECK: func.func @call_pressured(
+// CHECK: %{{[0-9]+}} = func.func @call_pressured(
 // CHECK-SAME: !tuple<!f64, !f64, !f64, !f64>) -> !f64 {
 // CHECK: make_tuple {{.*}} : !tuple<!f64, !f64, !f64, !f64>
-// CHECK: func.call @pressured({{.*}} : !f64, !f64, !f64, !f64, !f64, !f64, !tuple<!f64, !f64, !f64, !f64>) -> !f64
+// CHECK: func.call %{{[0-9]+}}({{.*}} : !f64, !f64, !f64, !f64, !f64, !f64, !tuple<!f64, !f64, !f64, !f64>) -> !f64
 
 // ASM-LABEL: pressured:
 // ASM: ldr {{d[0-9]+}}, [sp, 32]

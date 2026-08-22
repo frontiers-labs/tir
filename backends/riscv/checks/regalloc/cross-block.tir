@@ -5,7 +5,7 @@
 // the branch and the ^bb1 temporary: without real CFG successors in liveness it
 // looked dead at its def and could be clobbered before the cross-block use.
 module {
-  func.func @f(%a: !i64, %b: !i64, %c: !i64) -> !i64 {
+  %fn_f = func.func @f(%a: !i64, %b: !i64, %c: !i64) -> !i64 {
     %v = addi %a, %b : !i64
     %cond = cmpi %a, %c {predicate = "slt"} : !i1
     cfg.cond_br %cond, ^bb1, ^bb2

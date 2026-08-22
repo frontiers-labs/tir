@@ -13,7 +13,7 @@ use crate::analysis::{DefUse, RegRef, op_regs};
 use crate::backend::SymbolOp;
 use crate::{
     AnalysisManager, ConstantLike, Context, MemoryWrite, OpHandle, OperationRef, Pass, PassError,
-    PassTarget, Rewriter, Terminator, func::FuncOp,
+    PassTarget, Pure, Rewriter, Terminator, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -124,10 +124,11 @@ fn is_erasable(instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
 }
 
 fn is_pure_value(instance: &OpHandle) -> bool {
-    instance
-        .clone()
-        .as_interface::<dyn ConstantLike>()
-        .is_some()
+    instance.clone().as_interface::<dyn Pure>().is_some()
+        || instance
+            .clone()
+            .as_interface::<dyn ConstantLike>()
+            .is_some()
         || instance
             .clone()
             .as_dyn_op()

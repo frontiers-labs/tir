@@ -1,0 +1,32 @@
+// RUN: tir interp %s | filecheck %s
+
+// "Which function runs here" is a dataflow question: a call takes whichever λ
+// reaches it, so choosing between two of them needs no special op.
+
+module {
+  %fn_double = func.func @double(%0: !i64) -> !i64 {
+    %1 = addi %0, %0 : !i64
+    func.return %1
+  }
+  %fn_negate = func.func @negate(%2: !i64) -> !i64 {
+    %3 = constant {value = 0} : !i64
+    %4 = subi %3, %2 : !i64
+    func.return %4
+  }
+  %fn_main = func.func @main() -> !i64 {
+    %5 = constant {value = 21} : !i64
+    %6 = constant {value = 1} : !i64
+    %7 = constant {value = 0} : !i64
+    %8 = cmpi %6, %7 {predicate = "sgt"} : !i1
+    %9 = scf.if %8 -> !fn<(!i64) -> !i64> {
+      scf.yield %fn_double
+    } else {
+      scf.yield %fn_negate
+    }
+    %10 = func.call %9(%5 : !i64) -> !i64
+    func.return %10
+  }
+  module_end
+}
+
+// CHECK: i64 42

@@ -20,8 +20,8 @@ struct IntFloat make_int_float(long tag, double value) {
     return result;
 }
 
-// CHECK: func.func @consume_float_int(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !i64) -> !i64 {
-// CHECK: func.func @make_int_float(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !f64) -> !tuple<!i64, !f64> {
+// CHECK: %{{[0-9]+}} = func.func @consume_float_int(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !i64) -> !i64 {
+// CHECK: %{{[0-9]+}} = func.func @make_int_float(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !f64) -> !tuple<!i64, !f64> {
 // CHECK: make_tuple %{{[0-9]+}}, %{{[0-9]+}} : !tuple<!i64, !f64>
 
 // ASM-LABEL: consume_float_int:

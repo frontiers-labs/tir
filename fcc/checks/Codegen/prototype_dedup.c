@@ -7,5 +7,5 @@ int f(int);
 int f(int x) { return x; }
 
 // CHECK-NOT: func.declare
-// CHECK: func.func @f(
+// CHECK: %{{[0-9]+}} = func.func @f(
 // CHECK-NOT: func.declare

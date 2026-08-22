@@ -14,7 +14,7 @@ use crate::analysis::AnalysisManager;
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes};
 use crate::analysis::slots::collect_slots;
 use crate::builtin::StateType;
-use crate::func::{CallOp, FuncOp, IndirectCallOp, ReturnOp};
+use crate::func::{CallOp, FuncOp, ReturnOp};
 use crate::ptr::MemcpyOp;
 use crate::state::EntryStateOpBuilder;
 use crate::{
@@ -315,7 +315,7 @@ fn classify(op: &OpHandle, tracked: &BTreeSet<ValueId>) -> Option<Effect> {
     if let Some(write) = op.clone().as_interface::<dyn MemoryWrite>() {
         return Some(Effect::Access(chain_of(write.write_location())));
     }
-    if op.is::<MemcpyOp>() || op.is::<CallOp>() || op.is::<IndirectCallOp>() {
+    if op.is::<MemcpyOp>() || op.is::<CallOp>() {
         return Some(Effect::Access(Chain::Conservative));
     }
     op.is::<ReturnOp>().then_some(Effect::Export)

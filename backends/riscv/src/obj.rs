@@ -139,19 +139,19 @@ fn lower_constant(
     )))
 }
 
-/// Pre-RA: materialize an `addr_of` symbol address as the absolute
+/// Pre-RA: materialize a `sym_addr` symbol address as the absolute
 /// `lui rd, %hi(sym)` + `addi rd, rd, %lo(sym)` pair. Both instructions carry
 /// the symbol as their immediate; the encoder turns that into R_RISCV_HI20 and
 /// R_RISCV_LO12_I relocations (absolute addressing, so executables must link
 /// non-PIE).
-pub(crate) fn lower_addr_of(
+pub(crate) fn lower_sym_addr(
     context: &tir::Context,
     op: &tir::OperationRef,
     rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
-    use tir::func::AddressOfOp;
+    use tir::builtin::SymAddrOp;
 
-    let Some(addr_of) = op.as_op::<AddressOfOp>() else {
+    let Some(addr_of) = op.as_op::<SymAddrOp>() else {
         return Ok(false);
     };
     let sym = addr_of.sym_name();

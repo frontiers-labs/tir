@@ -7,7 +7,7 @@
 // `cset` is selected (which would drop its operands and run on stale flags).
 
 module {
-  func.func @eq_zero_branch(%0: !i64) -> !i64 {
+  %fn_eq_zero_branch = func.func @eq_zero_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i64
     %2 = cmpi %0, %1 {predicate = "eq"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
@@ -20,9 +20,9 @@ module {
   }
   // CHECK: asm.symbol {name = "eq_zero_branch"
   // CHECK-NOT: arm64.cset
-  // CHECK: arm64.cbz {rt = %virt20:GPR, imm = ^bb1}
+  // CHECK: arm64.cbz {rt = %virt24:GPR, imm = ^bb1}
 
-  func.func @ne_zero_branch(%0: !i64) -> !i64 {
+  %fn_ne_zero_branch = func.func @ne_zero_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i64
     %2 = cmpi %0, %1 {predicate = "ne"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
@@ -35,11 +35,11 @@ module {
   }
   // CHECK: asm.symbol {name = "ne_zero_branch"
   // CHECK-NOT: arm64.cset
-  // CHECK: arm64.cbnz {rt = %virt22:GPR, imm = ^bb1}
+  // CHECK: arm64.cbnz {rt = %virt26:GPR, imm = ^bb1}
 
   // A non-zero constant has no `cbz`/`cbnz` form, so it fuses through the
   // immediate flag definer instead: `cmp Xn, #imm` (imm12) + `b.<cc>`.
-  func.func @slt_imm_branch(%0: !i64) -> !i64 {
+  %fn_slt_imm_branch = func.func @slt_imm_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 5} : !i64
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
@@ -55,7 +55,7 @@ module {
   // CHECK: arm64.cmp_imm {rn = %virt{{[0-9]+}}:GPRsp, imm = 5}
   // CHECK-NEXT: arm64.b.lt {imm = ^bb1}
 
-  func.func @ult_imm_branch(%0: !i64) -> !i64 {
+  %fn_ult_imm_branch = func.func @ult_imm_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 5} : !i64
     %2 = cmpi %0, %1 {predicate = "ult"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2

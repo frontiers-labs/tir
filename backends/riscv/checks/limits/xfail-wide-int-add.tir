@@ -3,7 +3,7 @@
 // i128 is wider than the selected XLEN and is rejected before selection.
 
 module {
-  func.func @a(%0: !i128, %1: !i128) -> !i128 {
+  %fn_a = func.func @a(%0: !i128, %1: !i128) -> !i128 {
     %2 = addi %0, %1 : !i128
     func.return %2
   }

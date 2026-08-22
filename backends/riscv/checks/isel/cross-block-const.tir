@@ -6,7 +6,7 @@
 // dead-code-elimination pass that follows selection.
 
 module {
-  func.func @addc(%0: !i32) -> !i32 {
+  %fn_addc = func.func @addc(%0: !i32) -> !i32 {
     %1 = constant {value = 5} : !i32
     cfg.br ^bb1
   ^bb1:
@@ -14,7 +14,7 @@ module {
     func.return %2
   }
 
-  func.func @add_wide(%0: !i32) -> !i32 {
+  %fn_add_wide = func.func @add_wide(%0: !i32) -> !i32 {
     %1 = constant {value = 74565} : !i32
     cfg.br ^bb1
   ^bb1:
@@ -26,7 +26,7 @@ module {
 
 // CHECK-LABEL: asm.symbol {name = "addc"
 // CHECK-NOT: constant
-// CHECK: riscv.addiw {rd = %virt2:GPR, rs1 = %virt6:GPR, imm = 5}
+// CHECK: riscv.addiw {rd = %virt2:GPR, rs1 = %virt8:GPR, imm = 5}
 // CHECK-LABEL: asm.symbol {name = "add_wide"
 // CHECK-NOT: constant
 // CHECK: riscv.slliw

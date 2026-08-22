@@ -6,7 +6,7 @@
 // so the consuming add reads it from a register. Never a truncated encoding.
 
 module {
-  func.func @big(%0: !i64) -> !i64 {
+  %fn_big = func.func @big(%0: !i64) -> !i64 {
     %1 = constant {value = 2048} : !i64
     %2 = addi %0, %1 : !i64
     func.return %2

@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @loop(%0: !i1) -> !i32 {
+  %fn_loop = func.func @loop(%0: !i1) -> !i32 {
     %1 = constant {value = 0} : !i32
     %2 = scf.while iter_args(%3 = %1) -> !i32 {
       scf.condition %0, %3
@@ -16,7 +16,7 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @loop(%{{[0-9]+}}: !i1) -> !i32 {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @loop(%{{[0-9]+}}: !i1) -> !i32 {
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i32
 // CHECK-NEXT: %{{[0-9]+}} = scf.while iter_args(%{{[0-9]+}} = %{{[0-9]+}}) -> !i32 {
 // CHECK-NEXT: scf.condition %{{[0-9]+}}, %{{[0-9]+}}

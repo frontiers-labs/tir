@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 module {
-  func.func @make_pair(%0: !i64, %1: !i64) -> !tuple<!i64, !i64> {
+  %fn_make_pair = func.func @make_pair(%0: !i64, %1: !i64) -> !tuple<!i64, !i64> {
     %2 = make_tuple %0, %1 : !tuple<!i64, !i64>
     func.return %2
   }

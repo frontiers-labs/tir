@@ -1,7 +1,7 @@
 // RUN: tir interp %s | filecheck %s
 
 module {
-  func.func @main() -> !i32 {
+  %fn_main = func.func @main() -> !i32 {
     %init = constant {value = 2} : !i32
     %r = scf.while iter_args(%acc = %init) -> !i32 {
       %doubled = muli %acc, %acc : !i32

@@ -3,19 +3,19 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func.func @equal(%0: !ptr.p, %1: !ptr.p) -> !i1 {
+  %fn_equal = func.func @equal(%0: !ptr.p, %1: !ptr.p) -> !i1 {
     %2 = ptr.cmp %0, %1 {predicate = "eq"} : !i1
     func.return %2
   }
 
-  func.func @below(%0: !ptr.p, %1: !ptr.p) -> !i1 {
+  %fn_below = func.func @below(%0: !ptr.p, %1: !ptr.p) -> !i1 {
     %2 = ptr.cmp %0, %1 {predicate = "ult"} : !i1
     func.return %2
   }
   module_end
 }
 
-// CHECK: func.func @equal(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !ptr.p) -> !i1 {
+// CHECK: %{{[0-9]+}} = func.func @equal(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !ptr.p) -> !i1 {
 // CHECK-NEXT: %{{[0-9]+}} = ptr.cmp %{{[0-9]+}}, %{{[0-9]+}} {predicate = "eq"} : !i1
-// CHECK: func.func @below
+// CHECK: %{{[0-9]+}} = func.func @below
 // CHECK-NEXT: %{{[0-9]+}} = ptr.cmp %{{[0-9]+}}, %{{[0-9]+}} {predicate = "ult"} : !i1

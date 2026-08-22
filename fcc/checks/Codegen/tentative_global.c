@@ -6,5 +6,5 @@
 int x;
 int x = 5;
 
-// CHECK-COUNT-1: cir.global {sym_name = "x", bytes = [5, 0, 0, 0]
-// CHECK-NOT: sym_name = "x"
+// CHECK-COUNT-1: global @x align 4 bytes [5, 0, 0, 0]
+// CHECK-NOT: @x

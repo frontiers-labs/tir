@@ -1,7 +1,7 @@
 // RUN: tir interp %s | filecheck %s
 
 module {
-  func.func @main() -> !i32 {
+  %fn_main = func.func @main() -> !i32 {
     %0 = ptr.alloca {size = 16, align = 4} : !ptr.p<!i32>
     %1 = constant {value = 7} : !i32
     %2 = ptr.ptradd %0, %1 : !ptr.p<!i32>

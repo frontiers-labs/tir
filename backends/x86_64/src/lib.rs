@@ -157,16 +157,16 @@ mod isa {
         Ok(true)
     }
 
-    /// Pre-RA: materialize an `addr_of` symbol address as `lea rd, [rip + sym]`.
+    /// Pre-RA: materialize a `sym_addr` symbol address as `lea rd, [rip + sym]`.
     /// The encoder leaves the disp32 as a fixup emitted with R_X86_64_PC32.
-    fn lower_addr_of(
+    fn lower_sym_addr(
         context: &tir::Context,
         op: &tir::OperationRef,
         rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
-        use tir::func::AddressOfOp;
+        use tir::builtin::SymAddrOp;
 
-        let Some(addr_of) = op.as_op::<AddressOfOp>() else {
+        let Some(addr_of) = op.as_op::<SymAddrOp>() else {
             return Ok(false);
         };
         let lea = LeaRipOpBuilder::new(context)
@@ -1486,7 +1486,7 @@ mod isa {
         }
 
         fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![lower_float_constant, lower_constant, lower_addr_of]
+            vec![lower_float_constant, lower_constant, lower_sym_addr]
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {

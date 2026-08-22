@@ -7,8 +7,9 @@
 // match GNU as throughout: call rcx -> ff d1.
 
 module {
-  func.func @f(%fp: !i64) -> !i64 {
-    %r = func.indirect_call %fp() -> !i64
+  %fn_f = func.func @f(%fp: !ptr.p) -> !i64 {
+    %callee = ptr_to_fn %fp : !fn<() -> !i64>
+    %r = func.call %callee() -> !i64
     func.return %r
   }
   module_end

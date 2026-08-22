@@ -4,7 +4,7 @@
 // must reserve a frame and spill through sp-relative sd/ld.
 
 module {
-  func.func @spill(%0: !i64, %1: !i64) -> !i64 {
+  %fn_spill = func.func @spill(%0: !i64, %1: !i64) -> !i64 {
     %2 = addi %0, %1 : !i64
     %3 = addi %2, %0 : !i64
     %4 = addi %3, %1 : !i64

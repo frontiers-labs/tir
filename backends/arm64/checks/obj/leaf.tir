@@ -2,7 +2,7 @@
 // RUN: tir mc --march=arm64 --filetype=obj -o - %s | tir readobj - | filecheck %s --check-prefix=ELF
 
 module {
-  func.func @answer() -> !i32 {
+  %fn_answer = func.func @answer() -> !i32 {
     %0 = constant {value = 42} : !i32
     func.return %0
   }

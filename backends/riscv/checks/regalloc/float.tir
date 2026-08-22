@@ -8,7 +8,7 @@
 // lands in fa0.
 
 module {
-  func.func @mix(%0: !f32, %1: !i32, %2: !f64, %3: !f32) -> !f32 {
+  %fn_mix = func.func @mix(%0: !f32, %1: !i32, %2: !f64, %3: !f32) -> !f32 {
     %4 = addf %0, %3 : !f32
     %5 = mulf %4, %0 : !f32
     func.return %5

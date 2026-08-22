@@ -6,7 +6,7 @@
 // semantic kind Mul") instead of miscompiling.
 
 module {
-  func.func @m(%0: !i64, %1: !i64) -> !i64 {
+  %fn_m = func.func @m(%0: !i64, %1: !i64) -> !i64 {
     %2 = muli %0, %1 : !i64
     func.return %2
   }

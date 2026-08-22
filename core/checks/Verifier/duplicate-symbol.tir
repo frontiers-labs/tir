@@ -4,10 +4,10 @@
 // symbol: overloading keys on argument types, so this is a redefinition.
 
 module {
-  func.func @f(%0: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
     func.return %0
   }
-  func.func @f(%1: !i32) -> !i64 {
+  %fn_f = func.func @f(%1: !i32) -> !i64 {
     %2 = constant {value = 1} : !i64
     func.return %2
   }

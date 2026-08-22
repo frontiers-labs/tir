@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tir::attributes::AttributeValue;
 use tir::backend::abi::{Overflow, ValueKind, type_kind};
-use tir::builtin::{FloatType, IntegerType, ModuleOp, TupleType, UnitType, ops as b};
+use tir::builtin::{FloatType, FnType, IntegerType, ModuleOp, TupleType, UnitType, ops as b};
 use tir::cfg::ops as cb;
 use tir::func::ops as func_ops;
 use tir::graph::{Dag, NodeId};
@@ -64,8 +64,72 @@ enum LoweredExpr {
     Address { ptr: ValueId, elem: TypeId },
 }
 
+/// The λ and δ values a function body names before the module holds their
+/// definitions. Each becomes a placeholder, bound once the whole module is in.
+#[derive(Default)]
+struct Symbols {
+    order: Vec<(String, ValueId)>,
+    by_name: HashMap<String, ValueId>,
+}
+
+impl Symbols {
+    /// The address of the data object named `name`.
+    fn data(&mut self, context: &Context, name: &str) -> ValueId {
+        self.value(context, name, PtrType::opaque(context))
+    }
+
+    /// The λ value of the function named `name`.
+    fn function(&mut self, context: &Context, name: &str, signature: &Signature) -> ValueId {
+        let ty = FnType::new(
+            context,
+            &signature.argument_types(context),
+            signature.ret.ty,
+        );
+        self.value(context, name, ty)
+    }
+
+    fn value(&mut self, context: &Context, name: &str, ty: TypeId) -> ValueId {
+        if let Some(value) = self.by_name.get(name) {
+            return *value;
+        }
+        let value = context.create_value(ty, None).id();
+        self.by_name.insert(name.to_string(), value);
+        self.order.push((name.to_string(), value));
+        value
+    }
+
+    /// Point every placeholder at the definition it names, declaring whatever
+    /// this unit only references.
+    fn bind(self, context: &Context, module: &ModuleOp) {
+        let mut defined = HashMap::new();
+        for op in module.body().iter(context.clone()) {
+            let Some(symbol) = op.clone().as_interface::<dyn tir::Symbol>() else {
+                continue;
+            };
+            if let Some(&result) = op.results().first() {
+                defined.insert(symbol.symbol_name(), result);
+            }
+        }
+        let mut bindings = HashMap::new();
+        for (name, placeholder) in self.order {
+            if let Some(&value) = defined.get(&name) {
+                bindings.insert(placeholder, value);
+                continue;
+            }
+            let declaration = match FnType::signature_of(context, placeholder) {
+                Some((params, ret)) => func_ops::declare_op(context, &name, ret, &params).id(),
+                None => b::global_external(context, &name).build().id(),
+            };
+            bindings.insert(placeholder, context.get_op(declaration).results()[0]);
+            module.body().append(declaration);
+        }
+        context.rebind_operands(tir::Operation::id(module), &bindings);
+    }
+}
+
 struct FnCodegen<'a> {
     context: &'a Context,
+    symbols: &'a mut Symbols,
     typed: &'a TypedAst,
     ast: &'a Ast,
     builder: tir::BlockHandle,
@@ -279,6 +343,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
         }
     }
     let mut signatures = HashMap::new();
+    let mut symbols = Symbols::default();
     let mut globals = HashMap::new();
     let mut global_strings = BTreeMap::new();
     let mut defined_functions = HashSet::new();
@@ -366,10 +431,15 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
     }
 
     for (value, name) in &global_strings {
+        let mut bytes = decode_c_escapes(value).into_bytes();
+        bytes.push(0);
         module.body().append_op(
-            cir::GlobalStringOpBuilder::new(context)
-                .attr("sym_name", AttributeValue::Str(name.clone().into()))
-                .attr("value", AttributeValue::Str(value.clone().into()))
+            b::global_bytes(context, name, bytes, 1)
+                .attr(
+                    "sym_visibility",
+                    AttributeValue::Str("private".to_string().into()),
+                )
+                .attr("section", AttributeValue::Str(".rodata".to_string().into()))
                 .build(),
         );
     }
@@ -396,8 +466,15 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                 ));
             }
             AstKind::Function => {
-                let func_op =
-                    lower_function(context, typed, item, &signatures, &globals, &global_strings)?;
+                let func_op = lower_function(
+                    context,
+                    typed,
+                    item,
+                    &signatures,
+                    &globals,
+                    &global_strings,
+                    &mut symbols,
+                )?;
                 module.body().append_op(func_op);
             }
             AstKind::Global => {
@@ -415,23 +492,17 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                         && !defined_globals.contains(&entity)
                         && declared_globals.insert(entity)
                     {
-                        module.body().append_op(
-                            func_ops::DeclareOpBuilder::new(context)
-                                .attr("sym_name", AttributeValue::Str(global.name.clone().into()))
-                                .build(),
-                        );
+                        module
+                            .body()
+                            .append_op(b::global_external(context, &global.name).build());
                         continue;
                     }
                     // A tentative definition reserves storage only when no
                     // other declaration of the object defines it.
                     if !is_extern && reserved_globals.insert(entity) {
-                        module.body().append_op(
-                            cir::ZeroGlobalOpBuilder::new(context)
-                                .attr("sym_name", AttributeValue::Str(global.name.clone().into()))
-                                .attr("size", AttributeValue::UInt(size))
-                                .attr("align", AttributeValue::UInt(align))
-                                .build(),
-                        );
+                        module
+                            .body()
+                            .append_op(b::global_zero(context, &global.name, size, align).build());
                     }
                     continue;
                 };
@@ -448,56 +519,45 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                         "non-constant global initializer".to_string(),
                     ));
                 };
-                module.body().append_op(
-                    cir::GlobalOpBuilder::new(context)
-                        .attr("sym_name", AttributeValue::Str(global.name.clone().into()))
-                        .attr(
-                            "bytes",
-                            AttributeValue::Array(
-                                data.bytes
-                                    .into_iter()
-                                    .map(|byte| AttributeValue::UInt(u64::from(byte)))
-                                    .collect::<Vec<_>>()
-                                    .into(),
-                            ),
-                        )
-                        .attr(
-                            "relocations",
-                            AttributeValue::Array(
-                                data.relocations
-                                    .into_iter()
-                                    .map(|relocation| {
-                                        AttributeValue::Dict(Box::new(BTreeMap::from([
-                                            (
-                                                "offset".to_string(),
-                                                AttributeValue::UInt(relocation.offset),
-                                            ),
-                                            (
-                                                "symbol".to_string(),
-                                                AttributeValue::Str(relocation.symbol.into()),
-                                            ),
-                                            (
-                                                "addend".to_string(),
-                                                AttributeValue::Int(relocation.addend),
-                                            ),
-                                            (
-                                                "width".to_string(),
-                                                AttributeValue::UInt(relocation.width),
-                                            ),
-                                        ])))
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .into(),
-                            ),
-                        )
-                        .attr("align", AttributeValue::UInt(align))
-                        .build(),
-                );
+                let mut definition = b::global_bytes(context, &global.name, data.bytes, align);
+                if !data.relocations.is_empty() {
+                    definition = definition.attr(
+                        "relocations",
+                        AttributeValue::Array(
+                            data.relocations
+                                .into_iter()
+                                .map(|relocation| {
+                                    AttributeValue::Dict(Box::new(BTreeMap::from([
+                                        (
+                                            "offset".to_string(),
+                                            AttributeValue::UInt(relocation.offset),
+                                        ),
+                                        (
+                                            "symbol".to_string(),
+                                            AttributeValue::Str(relocation.symbol.into()),
+                                        ),
+                                        (
+                                            "addend".to_string(),
+                                            AttributeValue::Int(relocation.addend),
+                                        ),
+                                        (
+                                            "width".to_string(),
+                                            AttributeValue::UInt(relocation.width),
+                                        ),
+                                    ])))
+                                })
+                                .collect::<Vec<_>>()
+                                .into(),
+                        ),
+                    );
+                }
+                module.body().append_op(definition.build());
             }
             AstKind::RecordDecl | AstKind::EnumDecl | AstKind::Typedef | AstKind::Attribute => {}
             _ => unreachable!("top-level item was checked before emission"),
         }
     }
+    symbols.bind(context, &module);
     module.body().append_op(b::module_end(context).build());
     Ok(module)
 }
@@ -1276,6 +1336,7 @@ fn lower_function(
     signatures: &HashMap<EntityId, Signature>,
     globals: &HashMap<EntityId, Global>,
     strings: &BTreeMap<String, String>,
+    symbols: &mut Symbols,
 ) -> Result<impl Operation, Diagnostic> {
     let ast = typed.ast();
     let AstLeaf::Function { name, .. } = ast.get_leaf_data(func).unwrap() else {
@@ -1311,8 +1372,17 @@ fn lower_function(
     let block = context.create_block(param_values);
     region.add_block(block.id());
 
-    let mut func_builder =
-        func_ops::func(context, name.as_str(), signature.ret.ty, Some(region.id()));
+    let mut func_builder = func_ops::func(
+        context,
+        name.as_str(),
+        signature.ret.ty,
+        FnType::new(
+            context,
+            &signature.argument_types(context),
+            signature.ret.ty,
+        ),
+        Some(region.id()),
+    );
     if signature.ret.indirect {
         func_builder = func_builder.result_address();
     }
@@ -1326,6 +1396,7 @@ fn lower_function(
 
     let mut cg = FnCodegen {
         context,
+        symbols,
         typed,
         ast,
         builder: func_op.body(),
@@ -3051,13 +3122,8 @@ impl FnCodegen<'_> {
                     let AstLeaf::String(value) = ast.get_leaf_data(node).unwrap() else {
                         unreachable!("string node carries a string payload");
                     };
-                    let ptr_ty = PtrType::opaque(self.context);
-                    let label = &self.strings[value];
-                    LoweredExpr::Value(
-                        self.builder
-                            .append_op(func_ops::addr_of_op(self.context, label, ptr_ty))
-                            .result(),
-                    )
+                    let label = self.strings[value].clone();
+                    LoweredExpr::Value(self.symbols.data(self.context, &label))
                 }
                 AstKind::Var => {
                     let AstLeaf::Var(name) = ast.get_leaf_data(node).unwrap() else {
@@ -3074,14 +3140,14 @@ impl FnCodegen<'_> {
                         .get_annotation(node)
                         .is_some_and(|info| info.category == ValueCategory::Function)
                     {
-                        let ptr_ty = lower_type(
-                            self.context,
-                            self.typed,
-                            converted_node_type(self.typed, node),
-                        );
+                        // A function's address is data: the λ value itself never
+                        // lives in memory.
+                        let signature = self.signatures[&node_entity(self.typed, node)].clone();
+                        let lambda = self.symbols.function(self.context, name, &signature);
+                        let ptr_ty = PtrType::opaque(self.context);
                         LoweredExpr::Value(
                             self.builder
-                                .append_op(func_ops::addr_of_op(self.context, name, ptr_ty))
+                                .append_op(b::fn_to_ptr(self.context, lambda, ptr_ty).build())
                                 .result(),
                         )
                     } else {
@@ -3092,17 +3158,9 @@ impl FnCodegen<'_> {
                                 elem: slot.elem,
                             }
                         } else {
-                            let global = &self.globals[&entity];
-                            let ptr_ty = PtrType::opaque(self.context);
+                            let global = self.globals[&entity].clone();
                             LoweredExpr::Address {
-                                ptr: self
-                                    .builder
-                                    .append_op(func_ops::addr_of_op(
-                                        self.context,
-                                        &global.name,
-                                        ptr_ty,
-                                    ))
-                                    .result(),
+                                ptr: self.symbols.data(self.context, &global.name),
                                 elem: global.elem,
                             }
                         }
@@ -3175,16 +3233,8 @@ impl FnCodegen<'_> {
                                         elem: slot.elem,
                                     })
                                 } else {
-                                    let global = &self.globals[&entity];
-                                    let ptr_ty = PtrType::opaque(self.context);
-                                    let address = self
-                                        .builder
-                                        .append_op(func_ops::addr_of_op(
-                                            self.context,
-                                            &global.name,
-                                            ptr_ty,
-                                        ))
-                                        .result();
+                                    let global = self.globals[&entity].clone();
+                                    let address = self.symbols.data(self.context, &global.name);
                                     self.materialize(LoweredExpr::Address {
                                         ptr: address,
                                         elem: global.elem,
@@ -3236,60 +3286,47 @@ impl FnCodegen<'_> {
                     }
                     let source_ty = node_type(self.typed, node);
                     let elem = lower_type(self.context, self.typed, source_ty);
+                    // Direct and indirect calls differ only in where the callee
+                    // comes from: a λ of the module, or a loaded address.
+                    let callee = match callee {
+                        Some(address) => {
+                            let ty = FnType::new(
+                                self.context,
+                                &sig.argument_types(self.context),
+                                sig.ret.ty,
+                            );
+                            self.builder
+                                .append_op(b::ptr_to_fn(self.context, address, ty).build())
+                                .result()
+                        }
+                        None => {
+                            let name = name.clone().expect("direct call has a symbol name");
+                            self.symbols.function(self.context, &name, &sig)
+                        }
+                    };
                     if sig.ret.indirect {
                         let (size, align) = source_type_layout(self.typed, source_ty);
                         let slot = self.alloca(elem, size, align);
                         args.insert(0, slot.ptr);
                         argument_alignments.insert(0, 1);
-                        if let Some(callee) = callee {
-                            let mut call = func_ops::IndirectCallOpBuilder::new(self.context)
-                                .callee(callee)
-                                .args(args)
-                                .result_address()
-                                .result_type(sig.ret.ty);
-                            if argument_alignments.iter().any(|&alignment| alignment > 1) {
-                                call = call.argument_alignments(&argument_alignments);
-                            }
-                            self.builder.append_op(call.build());
-                        } else {
-                            let mut call = func_ops::CallOpBuilder::new(self.context)
-                                .args(args)
-                                .attr(
-                                    "callee",
-                                    AttributeValue::Str(
-                                        name.clone().expect("direct call has a symbol name").into(),
-                                    ),
-                                )
-                                .result_address()
-                                .result_type(sig.ret.ty);
-                            if argument_alignments.iter().any(|&alignment| alignment > 1) {
-                                call = call.argument_alignments(&argument_alignments);
-                            }
-                            self.builder.append_op(call.build());
+                        let mut call = func_ops::CallOpBuilder::new(self.context)
+                            .callee(callee)
+                            .args(args)
+                            .result_address()
+                            .result_type(sig.ret.ty);
+                        if argument_alignments.iter().any(|&alignment| alignment > 1) {
+                            call = call.argument_alignments(&argument_alignments);
                         }
+                        self.builder.append_op(call.build());
                         LoweredExpr::Address {
                             ptr: slot.ptr,
                             elem,
                         }
                     } else {
-                        let result = if let Some(callee) = callee {
-                            let mut call = func_ops::IndirectCallOpBuilder::new(self.context)
+                        let result = {
+                            let mut call = func_ops::CallOpBuilder::new(self.context)
                                 .callee(callee)
                                 .args(args)
-                                .result_type(sig.ret.ty);
-                            if argument_alignments.iter().any(|&alignment| alignment > 1) {
-                                call = call.argument_alignments(&argument_alignments);
-                            }
-                            self.builder.append_op(call.build()).result()
-                        } else {
-                            let mut call = func_ops::CallOpBuilder::new(self.context)
-                                .args(args)
-                                .attr(
-                                    "callee",
-                                    AttributeValue::Str(
-                                        name.clone().expect("direct call has a symbol name").into(),
-                                    ),
-                                )
                                 .result_type(sig.ret.ty);
                             if argument_alignments.iter().any(|&alignment| alignment > 1) {
                                 call = call.argument_alignments(&argument_alignments);
@@ -3774,94 +3811,67 @@ impl FnCodegen<'_> {
 pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassError> {
     use tir::attributes::AttributeValue;
     use tir::backend::{
-        DataRelocOpBuilder, LiteralOpBuilder, SectionEndOpBuilder, SectionOpBuilder,
-        SymbolEndOpBuilder, SymbolOpBuilder,
+        LiteralOpBuilder, SectionEndOpBuilder, SectionOpBuilder, SymbolEndOpBuilder,
+        SymbolOpBuilder,
     };
 
     let mut rewriter = tir::Rewriter::new(context.clone());
-    let mut strings: Vec<(String, String)> = Vec::new();
     let mut globals = Vec::new();
+    let mut read_only = Vec::new();
     let mut zero_globals = Vec::new();
 
     let module_body = module.body();
     for op_id in module_body.op_ids() {
         let op = context.get_op(op_id);
-        if let Some(global) = op.clone().as_op::<cir::GlobalOp>() {
-            globals.push((
-                global.sym_name(),
-                global.bytes(),
-                global.relocations(),
-                global.align(),
-            ));
-            rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
-        } else if let Some(string) = op.clone().as_op::<cir::GlobalStringOp>() {
-            strings.push((string.sym_name(), decode_c_escapes(&string.value())));
-            rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
-        } else if let Some(global) = op.clone().as_op::<cir::ZeroGlobalOp>() {
-            zero_globals.push((global.sym_name(), global.size(), global.align()));
-            rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
+        let Some(global) = op.clone().as_op::<b::GlobalOp>() else {
+            continue;
+        };
+        if global.is_external() {
+            continue;
         }
+        let align = global
+            .align()
+            .expect("a global definition carries an alignment");
+        let binding = match tir::symbol_table::visibility_of(&global) {
+            tir::Visibility::Private => "local",
+            tir::Visibility::Public => "global",
+        };
+        match global.bytes() {
+            Some(bytes) => {
+                let entry = (
+                    global.sym_name(),
+                    bytes,
+                    global.relocations(),
+                    align,
+                    binding,
+                );
+                if global.section().as_deref() == Some(".rodata") {
+                    read_only.push(entry);
+                } else {
+                    globals.push(entry);
+                }
+            }
+            None => zero_globals.push((
+                global.sym_name(),
+                global.size().expect("a zero-filled global carries a size"),
+                align,
+                binding,
+            )),
+        }
+        rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
     }
 
-    if !globals.is_empty() {
-        let section = SectionOpBuilder::new(context)
-            .attr("name", AttributeValue::Str(".data".to_string().into()))
-            .build();
-        for (name, bytes, mut relocations, align) in globals {
-            let symbol = SymbolOpBuilder::new(context)
-                .attr("name", AttributeValue::Str(name.into()))
-                .attr("binding", AttributeValue::Str("global".to_string().into()))
-                .attr("kind", AttributeValue::Str("object".to_string().into()))
-                .attr("align", AttributeValue::UInt(align))
-                .build();
-            relocations.sort_by_key(|relocation| relocation.0);
-            let mut cursor = 0;
-            for (offset, target, addend, width) in relocations {
-                for &byte in &bytes[cursor..offset as usize] {
-                    symbol.body().append_op(
-                        LiteralOpBuilder::new(context)
-                            .attr("kind", AttributeValue::Str("byte".to_string().into()))
-                            .attr("value", AttributeValue::Int(i64::from(byte)))
-                            .build(),
-                    );
-                }
-                symbol.body().append_op(
-                    DataRelocOpBuilder::new(context)
-                        .attr("symbol", AttributeValue::Str(target.into()))
-                        .attr("width", AttributeValue::UInt(width))
-                        .attr("addend", AttributeValue::Int(addend))
-                        .build(),
-                );
-                cursor = (offset + width) as usize;
-            }
-            for &byte in &bytes[cursor..] {
-                symbol.body().append_op(
-                    LiteralOpBuilder::new(context)
-                        .attr("kind", AttributeValue::Str("byte".to_string().into()))
-                        .attr("value", AttributeValue::Int(i64::from(byte)))
-                        .build(),
-                );
-            }
-            symbol
-                .body()
-                .append_op(SymbolEndOpBuilder::new(context).build());
-            section.body().append_op(symbol);
-        }
-        section
-            .body()
-            .append_op(SectionEndOpBuilder::new(context).build());
-        let end = context.get_block(module_body.id()).len().saturating_sub(1);
-        module_body.insert(end, section.id());
-    }
+    emit_data_section(context, &module_body, ".data", globals);
+    emit_data_section(context, &module_body, ".rodata", read_only);
 
     if !zero_globals.is_empty() {
         let section = SectionOpBuilder::new(context)
             .attr("name", AttributeValue::Str(".bss".to_string().into()))
             .build();
-        for (name, size, align) in zero_globals {
+        for (name, size, align, binding) in zero_globals {
             let symbol = SymbolOpBuilder::new(context)
                 .attr("name", AttributeValue::Str(name.into()))
-                .attr("binding", AttributeValue::Str("global".to_string().into()))
+                .attr("binding", AttributeValue::Str(binding.to_string().into()))
                 .attr("kind", AttributeValue::Str("object".to_string().into()))
                 .attr("align", AttributeValue::UInt(align))
                 .build();
@@ -3882,26 +3892,73 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
         let end = context.get_block(module_body.id()).len().saturating_sub(1);
         module_body.insert(end, section.id());
     }
+    Ok(())
+}
 
-    if strings.is_empty() {
-        return Ok(());
+/// One object per δ definition, its initializer spelled out byte by byte with a
+/// relocation wherever it holds an address.
+fn emit_data_section(
+    context: &Context,
+    module_body: &tir::BlockHandle,
+    name: &str,
+    definitions: Vec<DataSymbol>,
+) {
+    use tir::attributes::AttributeValue;
+    use tir::backend::{
+        DataRelocOpBuilder, LiteralOpBuilder, SectionEndOpBuilder, SectionOpBuilder,
+        SymbolEndOpBuilder, SymbolOpBuilder,
+    };
+
+    if definitions.is_empty() {
+        return;
     }
-
+    let byte = |value: u8| {
+        LiteralOpBuilder::new(context)
+            .attr("kind", AttributeValue::Str("byte".to_string().into()))
+            .attr("value", AttributeValue::Int(i64::from(value)))
+            .build()
+    };
     let section = SectionOpBuilder::new(context)
-        .attr("name", AttributeValue::Str(".rodata".to_string().into()))
+        .attr("name", AttributeValue::Str(name.to_string().into()))
         .build();
-    for (label, value) in strings {
+    for (name, bytes, mut relocations, align, binding) in definitions {
         let symbol = SymbolOpBuilder::new(context)
-            .attr("name", AttributeValue::Str(label.into()))
-            .attr("binding", AttributeValue::Str("local".to_string().into()))
+            .attr("name", AttributeValue::Str(name.into()))
+            .attr("binding", AttributeValue::Str(binding.to_string().into()))
             .attr("kind", AttributeValue::Str("object".to_string().into()))
+            .attr("align", AttributeValue::UInt(align))
             .build();
-        symbol.body().append_op(
-            LiteralOpBuilder::new(context)
-                .attr("kind", AttributeValue::Str("asciz".to_string().into()))
-                .attr("value", AttributeValue::Str(value.into()))
-                .build(),
-        );
+        if let (true, Some(text)) = (relocations.is_empty(), c_string(&bytes)) {
+            symbol.body().append_op(
+                LiteralOpBuilder::new(context)
+                    .attr("kind", AttributeValue::Str("asciz".to_string().into()))
+                    .attr("value", AttributeValue::Str(text.into()))
+                    .build(),
+            );
+            symbol
+                .body()
+                .append_op(SymbolEndOpBuilder::new(context).build());
+            section.body().append_op(symbol);
+            continue;
+        }
+        relocations.sort_by_key(|relocation| relocation.0);
+        let mut cursor = 0;
+        for (offset, target, addend, width) in relocations {
+            for &value in &bytes[cursor..offset as usize] {
+                symbol.body().append_op(byte(value));
+            }
+            symbol.body().append_op(
+                DataRelocOpBuilder::new(context)
+                    .attr("symbol", AttributeValue::Str(target.into()))
+                    .attr("width", AttributeValue::UInt(width))
+                    .attr("addend", AttributeValue::Int(addend))
+                    .build(),
+            );
+            cursor = (offset + width) as usize;
+        }
+        for &value in &bytes[cursor..] {
+            symbol.body().append_op(byte(value));
+        }
         symbol
             .body()
             .append_op(SymbolEndOpBuilder::new(context).build());
@@ -3910,9 +3967,28 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
     section
         .body()
         .append_op(SectionEndOpBuilder::new(context).build());
-
-    // Splice the section in ahead of the module terminator.
     let end = context.get_block(module_body.id()).len().saturating_sub(1);
     module_body.insert(end, section.id());
-    Ok(())
 }
+
+/// The text of an initializer that is exactly one NUL-terminated string, which
+/// the assembler spells `.asciz` rather than byte by byte.
+fn c_string(bytes: &[u8]) -> Option<String> {
+    let (&0, text) = bytes.split_last()? else {
+        return None;
+    };
+    if text.contains(&0) {
+        return None;
+    }
+    String::from_utf8(text.to_vec()).ok()
+}
+
+/// A data object as the machine layer takes it: name, initializer image, the
+/// addresses patched into it, alignment and ELF binding.
+type DataSymbol = (
+    String,
+    Vec<u8>,
+    Vec<(u64, String, i64, u64)>,
+    u64,
+    &'static str,
+);

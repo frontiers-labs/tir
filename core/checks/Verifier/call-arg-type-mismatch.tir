@@ -4,9 +4,9 @@
 // the i32 overload.
 
 module {
-  func.declare @f(!i32) -> !i32
-  func.func @caller(%0: !i64) -> !i32 {
-    %1 = func.call @f(%0 : !i64) -> !i32
+  %fn_f = func.declare @f(!i32) -> !i32
+  %fn_caller = func.func @caller(%0: !i64) -> !i32 {
+    %1 = func.call %fn_f(%0 : !i64) -> !i32
     func.return %1
   }
   module_end

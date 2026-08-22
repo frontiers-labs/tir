@@ -4,7 +4,7 @@
 
 module {
   func.declare @counter
-  func.func @counter() -> !i32 {
+  %fn_counter = func.func @counter() -> !i32 {
     %0 = constant {value = 0} : !i32
     func.return %0
   }

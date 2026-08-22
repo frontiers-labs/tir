@@ -4,7 +4,7 @@
 // object emission.
 
 module {
-  func.func @f(%0: !i64) -> !i64 {
+  %fn_f = func.func @f(%0: !i64) -> !i64 {
     %p = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
     ptr.store %0, %p
     %v = ptr.load %p : !i64

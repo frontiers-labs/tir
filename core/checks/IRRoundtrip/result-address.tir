@@ -1,23 +1,23 @@
 // RUN: tir opt --verify %s | filecheck %s
 
 module {
-  func.declare @make_large(!ptr.p, !i64) -> !unit
-  func.func @make_large_impl(%0: !ptr.p, %1: !i64) result_address {
+  %fn_make_large = func.declare @make_large(!ptr.p, !i64) -> !unit
+  %fn_make_large_impl = func.func @make_large_impl(%0: !ptr.p, %1: !i64) result_address {
     ptr.store %1, %0
     func.return
   }
-  func.func @caller(%0: !ptr.p, %1: !i64) {
-    func.call @make_large(%0, %1 : !ptr.p, !i64) result_address
+  %fn_caller = func.func @caller(%0: !ptr.p, %1: !i64) {
+    func.call %fn_make_large(%0, %1 : !ptr.p, !i64) result_address
     func.return
   }
   module_end
 }
 
-// CHECK: func.declare @make_large(!ptr.p, !i64) -> !unit
-// CHECK: func.func @make_large_impl(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !i64) result_address {
+// CHECK: %{{[0-9]+}} = func.declare @make_large(!ptr.p, !i64) -> !unit
+// CHECK: %{{[0-9]+}} = func.func @make_large_impl(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !i64) result_address {
 // CHECK-NEXT: ptr.store
 // CHECK-NEXT: func.return
 // CHECK-NEXT: }
-// CHECK: func.func @caller(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !i64) {
-// CHECK-NEXT: func.call @make_large(%{{[0-9]+}}, %{{[0-9]+}} : !ptr.p, !i64) result_address
+// CHECK: %{{[0-9]+}} = func.func @caller(%{{[0-9]+}}: !ptr.p, %{{[0-9]+}}: !i64) {
+// CHECK-NEXT: func.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}} : !ptr.p, !i64) result_address
 // CHECK-NEXT: func.return

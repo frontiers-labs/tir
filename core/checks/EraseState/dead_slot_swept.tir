@@ -4,7 +4,7 @@
 // so one that is never read is dead: its stores go with its allocation.
 
 module {
-  func.func @f(%0: !i32) {
+  %fn_f = func.func @f(%0: !i32) {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %1
     func.return
@@ -12,6 +12,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: ptr.
 // CHECK: func.return

@@ -5,7 +5,7 @@
 // for the pre-RA materialization hook.
 
 module {
-  func.func @five() -> !i64 {
+  %fn_five = func.func @five() -> !i64 {
     %0 = constant {value = 5} : !i64
     func.return %0
   }
@@ -14,33 +14,33 @@ module {
   // CHECK: riscv.addi {rd = %virt0:GPR, rs1 = x0, imm = 5}
   // CHECK: asm.vret
 
-  func.func @neg_one() -> !i64 {
+  %fn_neg_one = func.func @neg_one() -> !i64 {
     %0 = constant {value = -1} : !i64
     func.return %0
   }
   // CHECK: asm.symbol {name = "neg_one"
   // CHECK-NOT: constant
-  // CHECK: riscv.addi {rd = %virt1:GPR, rs1 = x0, imm = -1}
+  // CHECK: riscv.addi {rd = %virt2:GPR, rs1 = x0, imm = -1}
 
-  func.func @imm_max() -> !i64 {
+  %fn_imm_max = func.func @imm_max() -> !i64 {
     %0 = constant {value = 2047} : !i64
     func.return %0
   }
   // CHECK: asm.symbol {name = "imm_max"
   // CHECK-NOT: constant
-  // CHECK: riscv.addi {rd = %virt2:GPR, rs1 = x0, imm = 2047}
+  // CHECK: riscv.addi {rd = %virt4:GPR, rs1 = x0, imm = 2047}
 
-  func.func @imm_min() -> !i64 {
+  %fn_imm_min = func.func @imm_min() -> !i64 {
     %0 = constant {value = -2048} : !i64
     func.return %0
   }
   // CHECK: asm.symbol {name = "imm_min"
   // CHECK-NOT: constant
-  // CHECK: riscv.addi {rd = %virt3:GPR, rs1 = x0, imm = -2048}
+  // CHECK: riscv.addi {rd = %virt6:GPR, rs1 = x0, imm = -2048}
 
   // A constant consumed only as another instruction's immediate keeps folding:
   // no li is materialized for it.
-  func.func @fold_only(%0: !i64) -> !i64 {
+  %fn_fold_only = func.func @fold_only(%0: !i64) -> !i64 {
     %1 = constant {value = 7} : !i64
     %2 = addi %0, %1 : !i64
     func.return %2
@@ -48,12 +48,12 @@ module {
   // CHECK: asm.symbol {name = "fold_only"
   // CHECK-NOT: constant
   // CHECK-NOT: rs1 = x0
-  // CHECK: riscv.addi {rd = %virt6:GPR, rs1 = %virt4:GPR, imm = 7}
+  // CHECK: riscv.addi {rd = %virt10:GPR, rs1 = %virt8:GPR, imm = 7}
 
   // A constant both folded into a live consumer and returned by value: the
   // consumer keeps the folded immediate while one li materializes the
   // escaping use.
-  func.func @fold_and_escape(%0: !i64) -> !i64 {
+  %fn_fold_and_escape = func.func @fold_and_escape(%0: !i64) -> !i64 {
     %1 = constant {value = 9} : !i64
     %2 = addi %0, %1 : !i64
     %3 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
@@ -62,8 +62,8 @@ module {
   }
   // CHECK: asm.symbol {name = "fold_and_escape"
   // CHECK-NOT: constant
-  // CHECK: riscv.addi {rd = %virt8:GPR, rs1 = x0, imm = 9}
-  // CHECK: riscv.addi {rd = %virt9:GPR, rs1 = %virt7:GPR, imm = 9}
+  // CHECK: riscv.addi {rd = %virt13:GPR, rs1 = x0, imm = 9}
+  // CHECK: riscv.addi {rd = %virt14:GPR, rs1 = %virt12:GPR, imm = 9}
   // CHECK: riscv.sd
   module_end
 }

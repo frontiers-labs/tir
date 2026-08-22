@@ -289,13 +289,13 @@ IR itself. No pass recomputes chains; no seeder invents serial numbers.
 | `ptr.alloca` | *produces* the initial state of its slot's chain (alongside the pointer) |
 | `ptr.load` | *takes* a state operand; produces no state — a read leaves the chain |
 | `ptr.store`, `ptr.memset`, `ptr.memcpy` | take state, produce state |
-| `func.call` / `func.indirect_call` | take and produce the conservative chain, as a trailing operand/result **excluded from callee signature resolution** |
+| `func.call` | takes and produces the conservative chain, as a trailing operand/result **excluded from the callee signature** |
 | `func.return` | optional trailing state operand: the function's final conservative state |
 | entry-state op (nullary) | produces the conservative chain's initial state at region entry |
 
-The conservative chain never enters function *signatures*: call resolution is
-signature-exact, extern declarations carry type lists, and ABI lowering maps
-region arguments to registers — a state argument would break all three.
+The conservative chain never enters function *signatures*: a call's arguments
+must be exactly what the callee's `!fn` type takes, and ABI lowering maps
+region arguments to registers — a state argument would break both.
 Hence the entry-state op / trailing-return-operand design. State is erased
 before anything ABI-relevant happens; it never survives into machine IR.
 

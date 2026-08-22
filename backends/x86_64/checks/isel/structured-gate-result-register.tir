@@ -5,7 +5,7 @@
 // tile after the gate names is the one the arms leave their value in.
 
 module {
-  func.func @gate_result(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
+  %fn_gate_result = func.func @gate_result(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
     %r = scf.if %c args(%a, %b) -> !i64 (%p, %q) {
       %x = addi %p, %q : !i64
       scf.yield %x

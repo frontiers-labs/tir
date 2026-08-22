@@ -5,7 +5,7 @@
 // The out-of-range boundary is covered by wide-const-toobig.tir.
 
 module {
-  func.func @in_range() -> !i64 {
+  %fn_in_range = func.func @in_range() -> !i64 {
     %0 = constant {value = 2147483647} : !i64
     func.return %0
   }

@@ -8,10 +8,10 @@
 // before the func.return.
 
 module {
-  func.declare @ext(!i64) -> !i64
-  func.func @f(%0: !i64) -> !i64 {
+  %fn_ext = func.declare @ext(!i64) -> !i64
+  %fn_f = func.func @f(%0: !i64) -> !i64 {
     %a = addi %0, %0 : !i64
-    %1 = func.call @ext(%a : !i64) -> !i64
+    %1 = func.call %fn_ext(%a : !i64) -> !i64
     %2 = addi %a, %1 : !i64
     func.return %2
   }

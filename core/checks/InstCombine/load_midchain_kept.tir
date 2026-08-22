@@ -4,7 +4,7 @@
 // value and the read stays — with the state edge the store after it observes.
 
 module {
-  func.func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
     %2 = state.entry_state : !state
     %3 = ptr.load %0 : !i32 state(%2 -> %4)
     ptr.store %1, %0 state(%4 -> %5)
@@ -13,7 +13,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[V:[0-9]+]] = ptr.load %[[P:[0-9]+]] : !i32 state(%{{[0-9]+}} -> %[[S:[0-9]+]])
 // CHECK: ptr.store %{{[0-9]+}}, %[[P]] state(%[[S]] -> %{{[0-9]+}})
 // CHECK: func.return %[[V]]

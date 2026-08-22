@@ -350,7 +350,7 @@ impl Program {
             );
         }
 
-        let func = func_ops::func(context, "f", integer, Some(region.id())).build();
+        let func = func_ops::lambda(context, "f", integer, &region).build();
         let module = b::module(context, None).build();
         module.body().append(func.id());
         module.body().append(b::module_end(context).build().id());

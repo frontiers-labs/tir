@@ -5,9 +5,9 @@
 // outside that area and already contributes to call-site alignment.
 
 module {
-  func.declare @g(!i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
-  func.func @f(%0:!i64) -> !i64 {
-    %r = func.call @g(%0, %0, %0, %0, %0, %0, %0 : !i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
+  %fn_g = func.declare @g(!i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
+  %fn_f = func.func @f(%0:!i64) -> !i64 {
+    %r = func.call %fn_g(%0, %0, %0, %0, %0, %0, %0 : !i64, !i64, !i64, !i64, !i64, !i64, !i64) -> !i64
     func.return %r
   }
   module_end

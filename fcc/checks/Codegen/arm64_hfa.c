@@ -23,11 +23,11 @@ struct Quad make_quad(double a, double b, double c, double d) {
     return result;
 }
 
-// CHECK: func.func @consume_pair(%{{[0-9]+}}: !tuple<!f64, !f64>) -> !f64 {
-// CHECK: func.func @call_consume_pair(%{{[0-9]+}}: !tuple<!f64, !f64>) -> !f64 {
+// CHECK: %{{[0-9]+}} = func.func @consume_pair(%{{[0-9]+}}: !tuple<!f64, !f64>) -> !f64 {
+// CHECK: %{{[0-9]+}} = func.func @call_consume_pair(%{{[0-9]+}}: !tuple<!f64, !f64>) -> !f64 {
 // CHECK: make_tuple {{.*}} : !tuple<!f64, !f64>
-// CHECK: func.call @consume_pair({{.*}} : !tuple<!f64, !f64>) -> !f64
-// CHECK: func.func @make_quad(
+// CHECK: func.call %{{[0-9]+}}({{.*}} : !tuple<!f64, !f64>) -> !f64
+// CHECK: %{{[0-9]+}} = func.func @make_quad(
 // CHECK-SAME: ) -> !tuple<!f64, !f64, !f64, !f64> {
 // CHECK: make_tuple {{.*}} : !tuple<!f64, !f64, !f64, !f64>
 

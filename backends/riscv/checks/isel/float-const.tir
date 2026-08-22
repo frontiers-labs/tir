@@ -2,7 +2,7 @@
 // RUN: tir mc --march=rv32if --stage=isel %s | filecheck %s --check-prefix=RV32
 
 module {
-  func.func @scale(%0: !f32) -> !f32 {
+  %fn_scale = func.func @scale(%0: !f32) -> !f32 {
     %1 = constantf {value = 2.5} : !f32
     %2 = mulf %0, %1 : !f32
     func.return %2

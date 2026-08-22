@@ -312,9 +312,9 @@ fn external_host_call() {
     // The call is the tail expression: nothing is live across it.
     let ir = r#"
         module {
-          func.declare @host_triple(!i64) -> !i64
+          %fn_host_triple = func.declare @host_triple(!i64) -> !i64
           func.func @via_host(%0: !i64) -> !i64 {
-            %1 = func.call @host_triple(%0 : !i64) -> !i64
+            %1 = func.call %fn_host_triple(%0 : !i64) -> !i64
             func.return %1
           }
           module_end
@@ -339,10 +339,10 @@ fn value_live_across_host_call() {
     // address saved across the call rides the same mechanism).
     let ir = r#"
         module {
-          func.declare @host_triple(!i64) -> !i64
+          %fn_host_triple = func.declare @host_triple(!i64) -> !i64
           func.func @f(%0: !i64) -> !i64 {
             %a = addi %0, %0 : !i64
-            %1 = func.call @host_triple(%a : !i64) -> !i64
+            %1 = func.call %fn_host_triple(%a : !i64) -> !i64
             %2 = addi %a, %1 : !i64
             func.return %2
           }
@@ -385,9 +385,9 @@ fn aarch64_cross_load() {
 
     let external = r#"
         module {
-          func.declare @host_triple(!i64) -> !i64
+          %fn_host_triple = func.declare @host_triple(!i64) -> !i64
           func.func @via_host(%0: !i64) -> !i64 {
-            %1 = func.call @host_triple(%0 : !i64) -> !i64
+            %1 = func.call %fn_host_triple(%0 : !i64) -> !i64
             func.return %1
           }
           module_end

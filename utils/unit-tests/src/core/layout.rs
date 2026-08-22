@@ -302,12 +302,18 @@ fn an_inner_scope_overrides_one_nested_entry() {
         )
         .build();
     let func = module.body().append_op(
-        func_ops::func(&context, "f", UnitType::new(&context), None)
-            .attr(
-                "data_layout",
-                dict([("types", dict([("i32", dict([("abi", 8.into())]))]))]),
-            )
-            .build(),
+        func_ops::func(
+            &context,
+            "f",
+            UnitType::new(&context),
+            tir::builtin::FnType::new(&context, &[], UnitType::new(&context)),
+            None,
+        )
+        .attr(
+            "data_layout",
+            dict([("types", dict([("i32", dict([("abi", 8.into())]))]))]),
+        )
+        .build(),
     );
 
     let resolved = scoped_dict(&context, func.id(), "data_layout").expect("module scope");

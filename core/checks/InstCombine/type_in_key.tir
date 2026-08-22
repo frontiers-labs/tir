@@ -6,7 +6,7 @@
 // would substitute a wrong-typed value.
 
 module {
-  func.func @typed(%x: !i32) -> !i16 {
+  %fn_typed = func.func @typed(%x: !i32) -> !i16 {
     %0 = trunci %x : !i16
     %1 = trunci %x : !i8
     func.return %0
@@ -14,6 +14,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @typed
+// CHECK-LABEL: %{{[0-9]+}} = func.func @typed
 // CHECK: trunci %{{[0-9]+}} : !i16
 // CHECK: trunci %{{[0-9]+}} : !i8

@@ -6,11 +6,11 @@
 // Branch fusion of these predicates already worked; this is value materialization.
 
 module {
-  func.func @eq(%0: !i64, %1: !i64) -> !i1 {
+  %fn_eq = func.func @eq(%0: !i64, %1: !i64) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "eq"} : !i1
     func.return %2
   }
-  func.func @sge(%0: !i64, %1: !i64) -> !i1 {
+  %fn_sge = func.func @sge(%0: !i64, %1: !i64) -> !i1 {
     %2 = cmpi %0, %1 {predicate = "sge"} : !i1
     func.return %2
   }

@@ -7,7 +7,7 @@
 // the add, so the tie's ends coalesce and the copy is gone.
 
 module {
-  func.func @add(%0: !f64, %1: !f64) -> !f64 {
+  %fn_add = func.func @add(%0: !f64, %1: !f64) -> !f64 {
     %2 = addf %0, %1 : !f64
     func.return %2
   }

@@ -754,6 +754,30 @@ impl Context {
         }
     }
 
+    /// Point every operand use under `root` at the value `bindings` maps it to.
+    ///
+    /// Frontends and the text parser name a module-level λ or δ before its
+    /// definition exists, then bind the placeholders they used once the whole
+    /// module is in.
+    pub fn rebind_operands(&self, root: OpId, bindings: &HashMap<ValueId, ValueId>) {
+        let instance = self.get_op(root);
+        let operands = instance.operands();
+        if operands.iter().any(|value| bindings.contains_key(value)) {
+            let rebound = operands
+                .iter()
+                .map(|value| bindings.get(value).copied().unwrap_or(*value))
+                .collect();
+            self.set_op_operands(root, rebound);
+        }
+        for region in instance.regions() {
+            for block in self.get_region(region).block_ids() {
+                for child in self.get_block(block).op_ids() {
+                    self.rebind_operands(child, bindings);
+                }
+            }
+        }
+    }
+
     /// The operation whose subtree holds every use of `value`: the one enclosing
     /// its definition, since SSA confines a use to the region tree the definition
     /// sits in. `None` for a value whose def-site left the tree, which forces a

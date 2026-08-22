@@ -4,7 +4,7 @@
 // the latch values that iteration observes.
 
 module {
-  func.func @loop(%0: !i1, %1: !i32, %2: !i64) -> !i32 {
+  %fn_loop = func.func @loop(%0: !i1, %1: !i32, %2: !i64) -> !i32 {
     %3, %4 = scf.while iter_args(%5 = %1, %6 = %2) -> !i32, !i64 {
       scf.condition %0, %5, %6
     } do scope(%7)(%8, %9) {

@@ -56,7 +56,7 @@ fn fixture(context: &Context) -> Fixture {
     entry.append(if_op.id());
     entry.append(func::ops::r#return(context, Operand::none()).build().id());
 
-    let func = func::ops::func(context, "demo", unit, Some(body.id())).build();
+    let func = func::ops::lambda(context, "demo", unit, &body).build();
     let module = builtin::ops::module(context, None).build();
     module.body().append(func.id());
 
@@ -235,7 +235,7 @@ fn a_commit_keeps_analyses_of_untouched_functions() {
     let sibling_entry = context.create_block(vec![]);
     sibling_body.add_block(sibling_entry.id());
     sibling_entry.append(func::ops::r#return(&context, Operand::none()).build().id());
-    let sibling = func::ops::func(&context, "sib", unit, Some(sibling_body.id())).build();
+    let sibling = func::ops::lambda(&context, "sib", unit, &sibling_body).build();
     f.module_body.append(sibling.id());
 
     let analyses = AnalysisManager::new();
@@ -446,7 +446,7 @@ fn module_with_function(context: &Context) -> (OpId, OpId, BlockHandle) {
     let region = context.create_region();
     let block = context.create_block(vec![]);
     region.add_block(block.id());
-    let func = func::ops::func(context, "demo", i32, Some(region.id())).build();
+    let func = func::ops::lambda(context, "demo", i32, &region).build();
     let module = builtin::ops::module(context, None).build();
     module.body().append(func.id());
     (module.id(), func.id(), context.get_block(block.id()))
@@ -685,7 +685,7 @@ fn replacing_uses_of_a_block_argument_rewrites_its_readers() {
     let argument = context.create_value(i32, None);
     let block = context.create_block(vec![argument.clone()]);
     region.add_block(block.id());
-    let func = func::ops::func(&context, "demo", i32, Some(region.id())).build();
+    let func = func::ops::lambda(&context, "demo", i32, &region).build();
     let module = builtin::ops::module(&context, None).build();
     module.body().append(func.id());
     let reader = builtin::ops::addi(&context, argument.id(), argument.id(), i32).build();

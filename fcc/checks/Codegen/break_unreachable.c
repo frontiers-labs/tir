@@ -3,7 +3,7 @@
 // The body leaves on its first statement, so the loop is not a loop and what
 // follows the `break` is emitted nowhere.
 
-// CHECK: func.func @stop
+// CHECK: %{{[0-9]+}} = func.func @stop
 // CHECK-NOT: scf.while
 // CHECK: scf.if %{{[0-9]+}} {
 // CHECK-NEXT: scf.yield

@@ -15,8 +15,8 @@ struct Mixed make_mixed(double fp, long integer) {
     return result;
 }
 
-// CHECK: func.func @consume_mixed(%{{[0-9]+}}: !tuple<!i64, !i64>) -> !i64 {
-// CHECK: func.func @make_mixed(
+// CHECK: %{{[0-9]+}} = func.func @consume_mixed(%{{[0-9]+}}: !tuple<!i64, !i64>) -> !i64 {
+// CHECK: %{{[0-9]+}} = func.func @make_mixed(
 // CHECK-SAME: ) -> !tuple<!i64, !i64> {
 // CHECK: make_tuple {{.*}} : !tuple<!i64, !i64>
 

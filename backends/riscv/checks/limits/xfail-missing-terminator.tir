@@ -3,7 +3,7 @@
 // The mc pipeline verifies TIR before lowering and rejects missing terminators.
 
 module {
-  func.func @a(%0: !i64) -> !i64 {
+  %fn_a = func.func @a(%0: !i64) -> !i64 {
     %1 = addi %0, %0 : !i64
   }
   module_end

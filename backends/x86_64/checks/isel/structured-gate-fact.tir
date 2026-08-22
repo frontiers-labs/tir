@@ -6,7 +6,7 @@
 // twice.
 
 module {
-  func.func @equal_arm(%a: !i64, %b: !i64) -> !i64 {
+  %fn_equal_arm = func.func @equal_arm(%a: !i64, %b: !i64) -> !i64 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
     %r = scf.if %c -> !i64 {
       %s = subi %a, %b : !i64

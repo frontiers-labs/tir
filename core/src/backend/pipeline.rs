@@ -16,7 +16,8 @@ use tir::{
 use crate::backend::TargetMachine;
 use crate::backend::lower::OpLoweringPass;
 use crate::passes::{
-    CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass, RestructurePass,
+    CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass,
+    MaterializeSymbolAddressesPass, RestructurePass,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +115,10 @@ fn module_prologue() -> PassManager {
     // Object symbols are unique by name, so overloads must already be mangled.
     pm.add_pass(CheckUniqueSymbolsPass::new());
     pm.add_pass(LowerMemoryIntrinsicsPass::new());
+    // Machine code cannot reach a value defined outside the function it runs in,
+    // and functions are lowered one at a time: uses of module-level λ and δ
+    // values become symbol addresses while the whole module is still here.
+    pm.add_pass(MaterializeSymbolAddressesPass::new());
     pm
 }
 

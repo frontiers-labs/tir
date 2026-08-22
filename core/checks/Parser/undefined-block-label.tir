@@ -4,7 +4,7 @@
 // created empty block.
 
 module {
-  func.func @jump(%0: !i1) -> !i32 {
+  %fn_jump = func.func @jump(%0: !i1) -> !i32 {
     cfg.cond_br %0, ^gone, ^here
   ^here:
     %1 = constant {value = 1} : !i32

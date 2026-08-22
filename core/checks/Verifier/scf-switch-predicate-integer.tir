@@ -3,7 +3,7 @@
 // An scf.switch selects on an integer predicate; a float predicate fails verification.
 
 module {
-  func.func @dispatch(%0: !f32) {
+  %fn_dispatch = func.func @dispatch(%0: !f32) {
     scf.switch %0 case 1 {
       scf.yield
     }

@@ -2,11 +2,11 @@
 // RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s --check-prefixes=CHECK,RV32
 
 module {
-  func.func @a(%0: !i32, %1: !i32) -> !i32 {
+  %fn_a = func.func @a(%0: !i32, %1: !i32) -> !i32 {
     %2 = addi %0, %1 : !i32
     func.return %2
   }
-  func.func @b(%0: !i32, %1: !i32) -> !i32 {
+  %fn_b = func.func @b(%0: !i32, %1: !i32) -> !i32 {
     %2 = subi %0, %1 : !i32
     func.return %2
   }

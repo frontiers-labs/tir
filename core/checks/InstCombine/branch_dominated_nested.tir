@@ -7,7 +7,7 @@
 // levels below the guard.
 
 module {
-  func.func @nested(%a: !i32, %b: !i32) -> !i1 {
+  %fn_nested = func.func @nested(%a: !i32, %b: !i32) -> !i1 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
     cfg.cond_br %c, ^bb1, ^bb2
   ^bb1:
@@ -21,7 +21,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @nested
+// CHECK-LABEL: %{{[0-9]+}} = func.func @nested
 // CHECK: cmpi
 // CHECK: ^bb3:
 // CHECK-NEXT: constant {value = 1}

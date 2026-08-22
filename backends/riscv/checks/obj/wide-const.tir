@@ -1,7 +1,7 @@
 // RUN: tir mc --march=rv64i --filetype=obj-ascii %s | filecheck %s
 
 module {
-  func.func @big() -> !i32 {
+  %fn_big = func.func @big() -> !i32 {
     %0 = constant {value = 74565} : !i32
     func.return %0
   }

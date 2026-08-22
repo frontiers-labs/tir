@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 module {
-  func.func @f() -> !f64 {
+  %fn_f = func.func @f() -> !f64 {
     %0 = constantf {value = 1.5} : !f64
     func.return %0
   }

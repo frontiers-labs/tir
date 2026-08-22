@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fmt::{self, Display};
 
 use tir::attributes::AttributeValue;
+use tir::builtin::GlobalOp;
 use tir::builtin::{ModuleEndOp, ModuleOp};
 use tir::func::DeclareOp;
 use tir::{BlockId, Context, Operation};
@@ -153,6 +154,7 @@ impl BinaryWriter {
             // External declarations contribute nothing to the object; their
             // symbols materialize as undefined entries via relocations.
             || op.is::<DeclareOp>()
+            || op.clone().as_op::<GlobalOp>().is_some_and(|global| global.is_external())
         {
             return Ok(());
         }

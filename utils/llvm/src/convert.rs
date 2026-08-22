@@ -6,11 +6,11 @@
 use std::collections::HashMap;
 use tir::BlockHandle;
 
-use tir::builtin::{self, IntegerType, UnitType, ops as bops};
+use tir::builtin::{self, FnType, IntegerType, UnitType, ops as bops};
 use tir::cfg::ops as cbops;
 use tir::func::ops as func_ops;
 use tir::ptr::{PtrType, ops as pops};
-use tir::{Context, Operand, TypeId, ValueId};
+use tir::{Context, Operand, Symbol, TypeId, ValueId};
 
 use crate::ast::{self, BinOp, CastOp, Inst, Type};
 use crate::error::Error;
@@ -18,46 +18,72 @@ use crate::error::Error;
 pub fn import(context: &Context, module: &ast::Module) -> Result<builtin::ModuleOp, Error> {
     let m = bops::module(context, None).build();
     let builder = m.body();
+    let mut callees = Callees::default();
     for func in &module.functions {
-        builder.append_op(lower_function(context, func)?);
+        builder.append_op(lower_function(context, func, &mut callees)?);
     }
-    declare_external_callees(context, &m, &builder);
+    let bindings = callees.bind(context, &m, &builder);
     builder.append_op(bops::module_end(context).build());
+    context.rebind_operands(tir::Operation::id(&m), &bindings);
     Ok(m)
 }
 
-/// LLVM `declare` lines carry no body and are not parsed, so a call to a
-/// function this module does not define is reconstructed as a declaration from
-/// the call site's types.
-fn declare_external_callees(context: &Context, module: &builtin::ModuleOp, body: &BlockHandle) {
-    let table = tir::SymbolTable::build(context, tir::Operation::id(module));
-    let mut declarations = Vec::new();
-    for op in module.body().iter(context.clone()) {
-        let Some(func) = op.as_op::<tir::func::FuncOp>() else {
-            continue;
-        };
-        for op in func.body().iter(context.clone()) {
-            let Some(call) = op.as_op::<tir::func::CallOp>() else {
-                continue;
-            };
-            let args: Vec<_> = call
-                .args()
-                .iter()
-                .map(|arg| context.get_value(*arg).ty())
-                .collect();
-            let callee = call.callee();
-            if table.resolve(context, &callee, &args).is_some()
-                || declarations
-                    .iter()
-                    .any(|(name, types, _)| name == &callee && types == &args)
-            {
-                continue;
-            }
-            declarations.push((callee, args, context.get_value(call.result()).ty()));
+/// The λ values calls name before their definitions are in the module. LLVM has
+/// no overloads, so a name identifies a function outright.
+#[derive(Default)]
+struct Callees {
+    placeholders: Vec<(String, ValueId)>,
+    by_name: HashMap<String, ValueId>,
+}
+
+impl Callees {
+    fn value(&mut self, context: &Context, name: &str, args: &[TypeId], ret: TypeId) -> ValueId {
+        if let Some(value) = self.by_name.get(name) {
+            return *value;
         }
+        let value = context
+            .create_value(FnType::new(context, args, ret), None)
+            .id();
+        self.by_name.insert(name.to_string(), value);
+        self.placeholders.push((name.to_string(), value));
+        value
     }
-    for (name, args, ret) in declarations {
-        body.append_op(tir::func::declare_op(context, &name, ret, &args));
+
+    /// Pair every placeholder with the λ it names, declaring the functions this
+    /// module only calls: LLVM `declare` lines carry no body and are not parsed.
+    fn bind(
+        self,
+        context: &Context,
+        module: &builtin::ModuleOp,
+        body: &BlockHandle,
+    ) -> HashMap<ValueId, ValueId> {
+        let mut defined = HashMap::new();
+        for op in module.body().iter(context.clone()) {
+            if let Some(func) = op.as_op::<tir::func::FuncOp>() {
+                defined.insert(func.symbol_name(), func.fn_value());
+            }
+        }
+        self.placeholders
+            .into_iter()
+            .map(|(name, placeholder)| {
+                if let Some(value) = defined.get(&name) {
+                    return (placeholder, *value);
+                }
+                let signature = context.get_type_data(context.get_value(placeholder).ty());
+                let signature = (signature.as_ref() as &dyn std::any::Any)
+                    .downcast_ref::<FnType>()
+                    .expect("a callee placeholder has a function type");
+                let declaration = tir::func::declare_op(
+                    context,
+                    &name,
+                    signature.ret(context),
+                    &signature.params(context),
+                );
+                let value = declaration.fn_value();
+                body.append_op(declaration);
+                (placeholder, value)
+            })
+            .collect()
     }
 }
 
@@ -70,7 +96,11 @@ fn lower_type(context: &Context, ty: &Type) -> TypeId {
     }
 }
 
-fn lower_function(context: &Context, func: &ast::Function) -> Result<tir::func::FuncOp, Error> {
+fn lower_function(
+    context: &Context,
+    func: &ast::Function,
+    callees: &mut Callees,
+) -> Result<tir::func::FuncOp, Error> {
     let region = context.create_region();
     let mut values: HashMap<String, ValueId> = HashMap::new();
 
@@ -100,12 +130,24 @@ fn lower_function(context: &Context, func: &ast::Function) -> Result<tir::func::
     }
 
     let ret_ty = lower_type(context, &func.ret);
-    let op = func_ops::func(context, func.name.as_str(), ret_ty, Some(region.id())).build();
+    let parameters: Vec<_> = func
+        .params
+        .iter()
+        .map(|param| lower_type(context, &param.ty))
+        .collect();
+    let op = func_ops::func(
+        context,
+        func.name.as_str(),
+        ret_ty,
+        FnType::new(context, &parameters, ret_ty),
+        Some(region.id()),
+    )
+    .build();
 
     for (block, created) in func.blocks.iter().zip(blocks.iter()) {
         let builder = created.clone();
         for inst in &block.insts {
-            lower_inst(context, inst, &builder, &mut values, &by_label)?;
+            lower_inst(context, inst, &builder, &mut values, &by_label, callees)?;
         }
     }
 
@@ -118,6 +160,7 @@ fn lower_inst(
     body: &BlockHandle,
     values: &mut HashMap<String, ValueId>,
     by_label: &HashMap<String, BlockHandle>,
+    callees: &mut Callees,
 ) -> Result<(), Error> {
     // Resolve an operand to a value, materialising a `builtin.constant` for
     // inline integer literals (TIR has no inline constants).
@@ -279,7 +322,12 @@ fn lower_inst(
                 arg_ids.push(val!(op, ty));
             }
             let ret_ty = lower_type(context, ret);
-            let o = func_ops::call(context, arg_ids, callee.as_str(), ret_ty).build();
+            let arg_types: Vec<_> = arg_ids
+                .iter()
+                .map(|&arg| context.get_value(arg).ty())
+                .collect();
+            let callee = callees.value(context, callee.as_str(), &arg_types, ret_ty);
+            let o = func_ops::call(context, callee, arg_ids, ret_ty).build();
             if let Some(name) = result {
                 values.insert(name.clone(), o.result());
             }

@@ -1,13 +1,13 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @f() {
+  %fn_f = func.func @f() {
     %0 = state.entry_state : !state
     func.return
   }
   module_end
 }
 
-// CHECK: func.func @f() {
+// CHECK: %{{[0-9]+}} = func.func @f() {
 // CHECK-NEXT: %{{[0-9]+}} = state.entry_state : !state
 // CHECK-NEXT: func.return

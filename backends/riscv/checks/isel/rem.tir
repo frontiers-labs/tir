@@ -1,19 +1,19 @@
 // RUN: tir mc --march=rv64im --stage=isel %s | filecheck %s
 
 module {
-  func.func @rem32(%0: !i32, %1: !i32) -> !i32 {
+  %fn_rem32 = func.func @rem32(%0: !i32, %1: !i32) -> !i32 {
     %2 = remsi %0, %1 : !i32
     func.return %2
   }
-  func.func @rem64(%0: !i64, %1: !i64) -> !i64 {
+  %fn_rem64 = func.func @rem64(%0: !i64, %1: !i64) -> !i64 {
     %2 = remsi %0, %1 : !i64
     func.return %2
   }
-  func.func @remu32(%0: !i32, %1: !i32) -> !i32 {
+  %fn_remu32 = func.func @remu32(%0: !i32, %1: !i32) -> !i32 {
     %2 = remui %0, %1 : !i32
     func.return %2
   }
-  func.func @remu64(%0: !i64, %1: !i64) -> !i64 {
+  %fn_remu64 = func.func @remu64(%0: !i64, %1: !i64) -> !i64 {
     %2 = remui %0, %1 : !i64
     func.return %2
   }

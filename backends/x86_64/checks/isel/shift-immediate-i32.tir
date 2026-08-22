@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 module {
-  func.func @shl(%value: !i32) -> !i32 {
+  %fn_shl = func.func @shl(%value: !i32) -> !i32 {
     %count = constant {value = 2} : !i32
     %result = shli %value, %count : !i32
     func.return %result

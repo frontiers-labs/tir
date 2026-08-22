@@ -2,13 +2,13 @@
 // RUN: tir mc --march=rv64id --mabi=lp64d --stage=isel %s | filecheck %s --check-prefix=LP64D
 
 module {
-  func.declare @sink(!f64) -> !f64
-  func.func @caller(%0: !f64) -> !f64 {
-    %1 = func.call @sink(%0 : !f64) -> !f64
+  %fn_sink = func.declare @sink(!f64) -> !f64
+  %fn_caller = func.func @caller(%0: !f64) -> !f64 {
+    %1 = func.call %fn_sink(%0 : !f64) -> !f64
     func.return %1
   }
   module_end
 }
 
-// LP64: riscv.addi {rd = %virt{{[0-9]+}}:GPR, rs1 = %virt0:GPR
-// LP64D: riscv.fsgnj.d {fd = %virt{{[0-9]+}}:FPR64, fs = %virt0:FPR64
+// LP64: riscv.addi {rd = %virt{{[0-9]+}}:GPR, rs1 = %virt1:GPR
+// LP64D: riscv.fsgnj.d {fd = %virt{{[0-9]+}}:FPR64, fs = %virt1:FPR64

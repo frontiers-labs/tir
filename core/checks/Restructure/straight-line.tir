@@ -3,13 +3,13 @@
 // A region that is already one block has no control flow to restructure.
 
 module {
-  func.func @f(%0: !i32, %1: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32, %1: !i32) -> !i32 {
     %2 = addi %0, %1 : !i32
     func.return %2
   }
   module_end
 }
 
-// CHECK: func.func @f(%[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
+// CHECK: %{{[0-9]+}} = func.func @f(%[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK-NEXT: %[[S:[0-9]+]] = addi %[[A]], %[[B]] : !i32
 // CHECK-NEXT: func.return %[[S]]

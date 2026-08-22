@@ -4,6 +4,6 @@
 // chain the switch lowers to, which `restructure` turns back into nested
 // conditionals: the arm jumped into is emitted once and still falls through.
 
-// CHECK: func.func @dispatch
+// CHECK: %{{[0-9]+}} = func.func @dispatch
 // CHECK: scf.if
 // CHECK: func.return

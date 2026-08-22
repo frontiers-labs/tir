@@ -4,4 +4,4 @@
 
 int check(void);
 int check() { return 1; }
-// CHECK: func.func @check
+// CHECK: %{{[0-9]+}} = func.func @check

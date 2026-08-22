@@ -15,9 +15,9 @@ fn verify(module: &str) -> Result<(), tir::Error> {
 fn variadic_call_accepts_arguments_beyond_the_fixed_prefix() {
     verify(
         r#"module {
-  func.declare @printf(!ptr.p, !cir.varargs) -> !i32
-  func.func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
-    %2 = func.call @printf(%0, %1 : !ptr.p, !i32) -> !i32
+  %fn_printf = func.declare @printf(!ptr.p, !cir.varargs) -> !i32
+  %fn_caller = func.func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
+    %2 = func.call %fn_printf(%0, %1 : !ptr.p, !i32) -> !i32
     func.return %2
   }
   module_end
@@ -30,9 +30,9 @@ fn variadic_call_accepts_arguments_beyond_the_fixed_prefix() {
 fn variadic_call_accepts_an_empty_tail() {
     verify(
         r#"module {
-  func.declare @printf(!ptr.p, !cir.varargs) -> !i32
-  func.func @caller(%0: !ptr.p) -> !i32 {
-    %1 = func.call @printf(%0 : !ptr.p) -> !i32
+  %fn_printf = func.declare @printf(!ptr.p, !cir.varargs) -> !i32
+  %fn_caller = func.func @caller(%0: !ptr.p) -> !i32 {
+    %1 = func.call %fn_printf(%0 : !ptr.p) -> !i32
     func.return %1
   }
   module_end
@@ -45,9 +45,9 @@ fn variadic_call_accepts_an_empty_tail() {
 fn variadic_call_rejects_a_mismatched_fixed_prefix() {
     verify(
         r#"module {
-  func.declare @printf(!ptr.p, !cir.varargs) -> !i32
-  func.func @caller(%0: !i64, %1: !i32) -> !i32 {
-    %2 = func.call @printf(%0, %1 : !i64, !i32) -> !i32
+  %fn_printf = func.declare @printf(!ptr.p, !cir.varargs) -> !i32
+  %fn_caller = func.func @caller(%0: !i64, %1: !i32) -> !i32 {
+    %2 = func.call %fn_printf(%0, %1 : !i64, !i32) -> !i32
     func.return %2
   }
   module_end

@@ -733,6 +733,7 @@ impl<'a> Reader<'a> {
             self.values.insert(inst.operands[1], value.id());
             args.push(value);
         }
+        let parameter_types: Vec<_> = args.iter().map(tir::Value::ty).collect();
         let region = self.context.create_region();
         let labels = instructions
             .iter()
@@ -910,7 +911,14 @@ impl<'a> Reader<'a> {
                 self.values.insert(spirv_id, value);
             }
         }
-        Ok(func_ops::func(self.context, name.as_str(), return_type, Some(region.id())).build())
+        Ok(func_ops::func(
+            self.context,
+            name.as_str(),
+            return_type,
+            tir::builtin::FnType::new(self.context, &parameter_types, return_type),
+            Some(region.id()),
+        )
+        .build())
     }
 
     fn type_ref(&self, id: u32) -> Result<TypeId> {

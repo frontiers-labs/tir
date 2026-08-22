@@ -3,9 +3,9 @@
 // The call result type must match the func.return type of the resolved overload.
 
 module {
-  func.declare @f(!i32) -> !i32
-  func.func @caller(%0: !i32) -> !i64 {
-    %1 = func.call @f(%0 : !i32) -> !i64
+  %fn_f = func.declare @f(!i32) -> !i32
+  %fn_caller = func.func @caller(%0: !i32) -> !i64 {
+    %1 = func.call %fn_f(%0 : !i32) -> !i64
     func.return %1
   }
   module_end

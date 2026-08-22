@@ -5,14 +5,14 @@
 // and the loop keeps reading memory.
 
 module {
-  func.declare @sink(!ptr.p<!i32>) -> !i32
-  func.func @escapes(%0: !i1, %1: !i32) -> !i32 {
+  %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !i32
+  %fn_escapes = func.func @escapes(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     %3 = scf.while {
       %4 = scf.if %0 -> !i1 {
         %5 = ptr.load %2 : !i32
-        %6 = func.call @sink(%2 : !ptr.p<!i32>) -> !i32
+        %6 = func.call %fn_sink(%2 : !ptr.p<!i32>) -> !i32
         %7 = addi %5, %6 : !i32
         ptr.store %7, %2
         %8 = constant {value = 1} : !i1
@@ -31,7 +31,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @escapes
+// CHECK-LABEL: %{{[0-9]+}} = func.func @escapes
 // CHECK: ptr.alloca
 // CHECK: ptr.store
 // CHECK: scf.while

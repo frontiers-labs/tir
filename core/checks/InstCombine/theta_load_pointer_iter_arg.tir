@@ -7,7 +7,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func.func @advance(%0: !index, %1: !index, %2: !index, %3: !ptr.p, %4: !i64) -> !ptr.p {
+  %fn_advance = func.func @advance(%0: !index, %1: !index, %2: !index, %3: !ptr.p, %4: !i64) -> !ptr.p {
     %5 = ptr.alloca {size = 8, align = 8} : !ptr.p
     ptr.store %3, %5
     scf.for %0, %1, %2 {
@@ -22,7 +22,7 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: func.func @advance
+// CHECK-LABEL: %{{[0-9]+}} = func.func @advance
 // CHECK-NOT: ptr.alloca
 // CHECK-NOT: ptr.store
 // CHECK-NOT: ptr.load

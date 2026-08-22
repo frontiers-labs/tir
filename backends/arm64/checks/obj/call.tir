@@ -2,9 +2,9 @@
 // RUN: tir mc --march=arm64 --filetype=obj -o - %s | tir readobj - | filecheck %s
 
 module {
-  func.declare @foo(!i64) -> !i64
-  func.func @caller(%0: !i64) -> !i64 {
-    %1 = func.call @foo(%0 : !i64) -> !i64
+  %fn_foo = func.declare @foo(!i64) -> !i64
+  %fn_caller = func.func @caller(%0: !i64) -> !i64 {
+    %1 = func.call %fn_foo(%0 : !i64) -> !i64
     func.return %1
   }
   module_end

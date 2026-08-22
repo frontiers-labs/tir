@@ -1,7 +1,7 @@
 // RUN: tir mc --march=armv8 --stage=isel %s | filecheck %s
 
 module {
-  func.func @roundtrip(%0: !f64) -> !f64 {
+  %fn_roundtrip = func.func @roundtrip(%0: !f64) -> !f64 {
     %1 = ptr.alloca {size = 8, align = 8} : !ptr.p<!f64>
     ptr.store %0, %1
     %2 = ptr.load %1 : !f64

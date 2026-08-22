@@ -88,6 +88,7 @@ pub fn print_state_clause(
 /// Parse the clause printed by [`print_state_clause`].
 pub fn parse_state_clause(
     parser: &mut tir::parse::text::Parser<'_>,
+    context: &Context,
 ) -> Result<StateClause, (Span, Error)> {
     use tir::parse::common::Cursor;
     let mark = parser.pos();
@@ -100,11 +101,7 @@ pub fn parse_state_clause(
     }
     let mut clause = StateClause::default();
     if let Some(name) = parser.parse_value_ref() {
-        clause.operand = Some(
-            parser
-                .resolve_value(name)
-                .ok_or_else(|| (parser.span(), Error::UnknownValueRef(name.to_string())))?,
-        );
+        clause.operand = Some(parser.resolve_value(context, name));
     }
     if parser.parse_token("->") {
         clause.result_name = Some(

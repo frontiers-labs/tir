@@ -5,7 +5,7 @@
 // into the region's instruction as an immediate.
 
 module {
-  func.func @choose(%0: !i1, %1: !i64) -> !i64 {
+  %fn_choose = func.func @choose(%0: !i1, %1: !i64) -> !i64 {
     %c = constant {value = 7} : !i64
     %r = scf.if %0 -> !i64 {
       %a = addi %1, %c : !i64
@@ -17,7 +17,7 @@ module {
     func.return %r
   }
 
-  func.func @accumulate(%0: !i1, %1: !i64) -> !i64 {
+  %fn_accumulate = func.func @accumulate(%0: !i1, %1: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
     %r = scf.while iter_args(%acc = %1) -> !i64 {
       scf.condition %0, %acc

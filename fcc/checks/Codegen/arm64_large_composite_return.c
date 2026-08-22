@@ -14,14 +14,14 @@ struct Large forward_large(long a, long b, long c) {
     return make_large(a, b, c);
 }
 
-// CHECK-LABEL: func.func @make_large(%[[MAKE_DEST:[0-9]+]]: !ptr.p,
+// CHECK-LABEL: %{{[0-9]+}} = func.func @make_large(%[[MAKE_DEST:[0-9]+]]: !ptr.p,
 // CHECK-SAME: ) result_address {
 // CHECK: ptr.memcpy %[[MAKE_DEST]]
 // CHECK: func.return
-// CHECK-LABEL: func.func @forward_large(%[[FORWARD_DEST:[0-9]+]]: !ptr.p,
+// CHECK-LABEL: %{{[0-9]+}} = func.func @forward_large(%[[FORWARD_DEST:[0-9]+]]: !ptr.p,
 // CHECK-SAME: ) result_address {
 // CHECK: %[[TEMP:[0-9]+]] = ptr.alloca {size = 24, align = 8}
-// CHECK: func.call @make_large(%[[TEMP]]
+// CHECK: func.call %{{[0-9]+}}(%[[TEMP]]
 // CHECK-SAME: ) result_address
 // CHECK: ptr.memcpy %[[FORWARD_DEST]], %[[TEMP]]
 // CHECK: func.return

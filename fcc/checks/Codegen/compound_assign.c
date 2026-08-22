@@ -1,6 +1,6 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_compound_assign.c | filecheck %s
 
-// CHECK: func.func @compound_assign
+// CHECK: %{{[0-9]+}} = func.func @compound_assign
 // CHECK: addi
 // CHECK: muli
 // CHECK: subi

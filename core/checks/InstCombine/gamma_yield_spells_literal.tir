@@ -8,7 +8,7 @@
 // spells its own, rather than the one before the gate.
 
 module {
-  func.func @spell(%0: !i1, %1: !i32) -> !i32 {
+  %fn_spell = func.func @spell(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = constant {value = 0} : !i32
     ptr.store %3, %2
@@ -25,7 +25,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @spell
+// CHECK-LABEL: %{{[0-9]+}} = func.func @spell
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.if %0 -> !i32 {
 // CHECK-NEXT: scf.yield %1

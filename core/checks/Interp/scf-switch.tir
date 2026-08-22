@@ -1,7 +1,7 @@
 // RUN: tir interp %s | filecheck %s
 
 module {
-  func.func @main() -> !i32 {
+  %fn_main = func.func @main() -> !i32 {
     %0 = constant {value = 2} : !i32
     %1 = constant {value = 0} : !i32
     %2 = constant {value = 30} : !i32

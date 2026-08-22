@@ -5,7 +5,7 @@
 // branch targets. Register allocation lowers each forwarded value to a copy.
 
 module {
-  func.func @f(%0:!i64, %1:!i64, %c:!i1) -> !i64 {
+  %fn_f = func.func @f(%0:!i64, %1:!i64, %c:!i1) -> !i64 {
     cfg.cond_br %c, ^bb1(%0 : !i64), ^bb2(%1 : !i64)
   ^bb1(%a: !i64):
     func.return %a

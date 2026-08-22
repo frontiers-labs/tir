@@ -6,7 +6,7 @@ module {
   spirv.module {version = "1.3", addressing_model = "Physical64", memory_model = "OpenCL"} {
     spirv.Capability {name = "Kernel"}
     %0 = spirv.GlobalVariable {sym_name = "counter", storage_class = "CrossWorkgroup", decorations = {}} : !spirv.ptr<!i32, CrossWorkgroup>
-    func.func @atomic_add() {
+    %fn_atomic_add = func.func @atomic_add() {
       %1 = spirv.Constant {value = 1} : !i32
       %2 = spirv.Constant {value = 2} : !i32
       %3 = spirv.Constant {value = 264} : !i32

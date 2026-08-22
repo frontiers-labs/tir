@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 module {
-  func.func @divide_by_four(%0: !i64) -> !i64 {
+  %fn_divide_by_four = func.func @divide_by_four(%0: !i64) -> !i64 {
     %1 = constant {value = 4} : !i64
     %2 = divsi %0, %1 : !i64
     func.return %2

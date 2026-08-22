@@ -15,11 +15,11 @@ int tagged_record_calls(void) {
     check_mixed(mixed);
     return 0;
 }
-// CHECK: func.func @tagged_record_calls
+// CHECK: %{{[0-9]+}} = func.func @tagged_record_calls
 
 int entry(int argc, char **argv);
 int entry(int argc, char *argv[]) { return argc; }
-// CHECK: func.func @entry
+// CHECK: %{{[0-9]+}} = func.func @entry
 
 enum Limits { NUM_CORE_STATES = 7, TOTAL_DATA_SIZE = 2000, MULTITHREAD = 1 };
 int constant_bounds(void) {
@@ -27,7 +27,7 @@ int constant_bounds(void) {
     char data[TOTAL_DATA_SIZE * MULTITHREAD];
     return sizeof(counts) + sizeof(data);
 }
-// CHECK: func.func @constant_bounds
+// CHECK: %{{[0-9]+}} = func.func @constant_bounds
 
 enum State { FIRST };
 int enum_subscript(void) {
@@ -36,7 +36,7 @@ int enum_subscript(void) {
     counts[state]++;
     return counts[state];
 }
-// CHECK: func.func @enum_subscript
+// CHECK: %{{[0-9]+}} = func.func @enum_subscript
 
 int consume(char *value);
 char *global_values[1] = {(char *)"global"};
@@ -47,4 +47,4 @@ int array_decay(void) {
     consume(local);
     return (char *)local == pointer;
 }
-// CHECK: func.func @array_decay
+// CHECK: %{{[0-9]+}} = func.func @array_decay

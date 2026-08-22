@@ -357,6 +357,7 @@ operation! {
     LoadOp {
         name: "load",
         dialect: "ptr",
+        verifier: "true",
         operands: O {
             ptr: "crate::ptr::PtrType",
         },
@@ -372,12 +373,38 @@ operation! {
     StoreOp {
         name: "store",
         dialect: "ptr",
+        verifier: "true",
         operands: O {
             value: "AnyConstraint",
             ptr: "crate::ptr::PtrType",
         },
         interfaces: [MemoryWrite, crate::interp::Interp],
         state: "in_out",
+    }
+}
+
+impl tir::Verifiable for LoadOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        reject_function_value(context, self.result(), "load")
+    }
+}
+
+impl tir::Verifiable for StoreOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        reject_function_value(context, self.operands()[0], "store")
+    }
+}
+
+/// A λ value names a function, not a machine word: it never lives in memory.
+/// A language that stores function pointers converts to and from `!ptr.p`
+/// around the store.
+fn reject_function_value(context: &Context, value: crate::ValueId, op: &str) -> Result<(), Error> {
+    let ty = context.get_type_data(context.get_value(value).ty());
+    match (ty.as_ref() as &dyn Any).downcast_ref::<crate::builtin::FnType>() {
+        Some(_) => Err(Error::VerificationError(format!(
+            "{op} moves a function value through memory"
+        ))),
+        None => Ok(()),
     }
 }
 

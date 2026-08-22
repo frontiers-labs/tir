@@ -5,7 +5,7 @@
 // and the dead constant op is swept.
 
 module {
-  func.func @addc(%0: !i32) -> !i32 {
+  %fn_addc = func.func @addc(%0: !i32) -> !i32 {
     %1 = constant {value = 5} : !i32
     %2 = addi %0, %1 : !i32
     func.return %2

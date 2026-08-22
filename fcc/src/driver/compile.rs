@@ -202,6 +202,9 @@ pub(super) fn emit_machine_code(
         // implicit order back.
         function_pipeline.add_pass(tir::passes::EraseStatePass::new());
     }
+    // Data lowering consumes the δ ops, so the functions that name them must
+    // hold symbol addresses of their own by then.
+    pm.add_pass(tir::passes::MaterializeSymbolAddressesPass::new());
     pm.run(&context, context.get_op(module.id()))
         .unwrap_or_else(|e| {
             eprintln!("fcc: error: control-flow lowering failed: {e}");

@@ -14,8 +14,8 @@ double consume_nested(struct Nested value) {
 }
 struct Nested produce_nested(void);
 
-// CHECK: func.func @consume_nested(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !f64) -> !f64 {
-// CHECK: func.declare @produce_nested() -> !tuple<!f64, !f64>
+// CHECK: %{{[0-9]+}} = func.func @consume_nested(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !f64) -> !f64 {
+// CHECK: %{{[0-9]+}} = func.declare @produce_nested() -> !tuple<!f64, !f64>
 
 // ASM-LABEL: consume_nested:
 // ASM: fsd f10, 0({{.*}})

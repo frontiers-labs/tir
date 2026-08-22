@@ -5,7 +5,7 @@
 module {
   spirv.module {version = "1.3", addressing_model = "Physical64", memory_model = "OpenCL"} {
     spirv.Capability {name = "Kernel"}
-    func.func @choose(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+    %fn_choose = func.func @choose(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
       cfg.cond_br %0, ^bb1, ^bb2
     ^bb1:
       cfg.br ^bb3(%1 : !i32)
@@ -19,14 +19,14 @@ module {
   module_end
 }
 
-// TEXT: func.func @choose(%[[COND:[0-9]+]]: !i1, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32) -> !i32 {
+// TEXT: %{{[0-9]+}} = func.func @choose(%[[COND:[0-9]+]]: !i1, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32) -> !i32 {
 // TEXT: cfg.cond_br %[[COND]], ^bb1, ^bb2
 // TEXT: cfg.br ^bb3(%[[A]] : !i32)
 // TEXT: cfg.br ^bb3(%[[B]] : !i32)
 // TEXT: ^bb3(%[[VALUE:[0-9]+]]: !i32):
 // TEXT: spirv.Return %[[VALUE]]
 
-// IMPORT: func.func @choose(%[[COND:[0-9]+]]: !i1, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32) -> !i32 {
+// IMPORT: %{{[0-9]+}} = func.func @choose(%[[COND:[0-9]+]]: !i1, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32) -> !i32 {
 // IMPORT: cfg.cond_br %[[COND]], ^bb1, ^bb2
 // IMPORT: cfg.br ^bb3(%[[A]] : !i32)
 // IMPORT: cfg.br ^bb3(%[[B]] : !i32)

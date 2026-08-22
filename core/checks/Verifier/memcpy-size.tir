@@ -1,7 +1,7 @@
 // RUN: not tir opt --verify %s
 
 module {
-  func.func @bad(%0: !ptr.p, %1: !ptr.p, %2: !i32) {
+  %fn_bad = func.func @bad(%0: !ptr.p, %1: !ptr.p, %2: !i32) {
     ptr.memcpy %0, %1, %2
     func.return
   }

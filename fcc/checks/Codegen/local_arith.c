@@ -3,7 +3,7 @@
 // Two parameters plus one local variable produce three stack slots, and the
 // multiplication, constant and addition all appear.
 
-// CHECK: func.func @f(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
+// CHECK: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
 // CHECK-COUNT-3: ptr.alloca
 // CHECK: muli
 // CHECK: constant {value = 1}

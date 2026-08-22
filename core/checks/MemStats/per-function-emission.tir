@@ -8,12 +8,12 @@
 // RUN: env TIR_MEM_STATS=1 tir mc --march=riscv64 --filetype=asm %s 2>&1 | filecheck %s
 
 module {
-  func.func @f(%0: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
     %1 = addi %0, %0 : !i32
     %2 = addi %1, %0 : !i32
     func.return %2
   }
-  func.func @g(%0: !i32) -> !i32 {
+  %fn_g = func.func @g(%0: !i32) -> !i32 {
     %1 = addi %0, %0 : !i32
     %2 = addi %1, %0 : !i32
     func.return %2

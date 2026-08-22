@@ -44,6 +44,6 @@ int f(int n) {
 }
 
 // CHECK-NOT: cfg.
-// CHECK: func.func @f(
+// CHECK: %{{[0-9]+}} = func.func @f(
 // CHECK: scf.while
 // CHECK-NOT: cfg.

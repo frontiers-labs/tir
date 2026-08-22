@@ -1,7 +1,7 @@
 // RUN: tir opt --verify %s | filecheck %s
 
 module {
-  func.func @arithmetic(%0: !i32, %1: !i32, %2: !f32) -> !i32 {
+  %fn_arithmetic = func.func @arithmetic(%0: !i32, %1: !i32, %2: !f32) -> !i32 {
     %3 = spirv.IAdd %0, %1 : !i32
     %4 = spirv.BitwiseXor %3, %1 : !i32
     %5 = spirv.FNegate %2 : !f32
@@ -13,7 +13,7 @@ module {
   module_end
 }
 
-// CHECK: func.func @arithmetic(%[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32, %[[F:[0-9]+]]: !f32) -> !i32 {
+// CHECK: %{{[0-9]+}} = func.func @arithmetic(%[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32, %[[F:[0-9]+]]: !f32) -> !i32 {
 // CHECK-NEXT: %[[SUM:[0-9]+]] = spirv.IAdd %[[A]], %[[B]] : !i32
 // CHECK-NEXT: %[[XOR:[0-9]+]] = spirv.BitwiseXor %[[SUM]], %[[B]] : !i32
 // CHECK-NEXT: %[[NEG:[0-9]+]] = spirv.FNegate %[[F]] : !f32

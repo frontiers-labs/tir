@@ -8,7 +8,7 @@
 // capture would leave the func.return reading an erased intermediate).
 
 module {
-  func.func @t(%0: !i64) -> !i16 {
+  %fn_t = func.func @t(%0: !i64) -> !i16 {
     %1 = trunci %0 : !i32
     cfg.br ^bb1
   ^bb1:
@@ -19,4 +19,4 @@ module {
 }
 
 // CHECK: asm.symbol {name = "t"
-// CHECK: asm.vret %3
+// CHECK: asm.vret %4

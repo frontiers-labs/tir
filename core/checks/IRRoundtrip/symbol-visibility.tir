@@ -1,14 +1,14 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func private @helper(%0: !i32) -> !i32 {
+  %fn_helper = func.func private @helper(%0: !i32) -> !i32 {
     func.return %0
   }
   module_end
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func private @helper(%{{[0-9]+}}: !i32) -> !i32 {
+// CHECK-NEXT: %{{[0-9]+}} = func.func private @helper(%{{[0-9]+}}: !i32) -> !i32 {
 // CHECK-NEXT: func.return %{{[0-9]+}}
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end

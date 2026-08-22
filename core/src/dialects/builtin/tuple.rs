@@ -145,11 +145,7 @@ impl MakeTupleOp {
         let mut elements = vec![];
         let mut next = parser.parse_value_ref();
         while let Some(reference) = next {
-            elements.push(
-                parser.resolve_value(reference).ok_or_else(|| {
-                    (parser.span(), Error::UnknownValueRef(reference.to_string()))
-                })?,
-            );
+            elements.push(parser.resolve_value(context, reference));
             if !parser.parse_token(",") {
                 break;
             }

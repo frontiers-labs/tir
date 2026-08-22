@@ -4,7 +4,7 @@
 // the `scf.if` the arms turned into.
 
 module {
-  func.func @pick(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+  %fn_pick = func.func @pick(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
     cfg.cond_br %0, ^bb1, ^bb2
   ^bb1:
     %3 = addi %1, %2 : !i32
@@ -18,7 +18,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @pick
+// CHECK-LABEL: %{{[0-9]+}} = func.func @pick
 // CHECK-NOT: br
 // CHECK: %[[R:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {
 // CHECK-NEXT: %[[T:[0-9]+]] = addi

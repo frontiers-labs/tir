@@ -4,7 +4,7 @@
 // already reached the branch.
 
 module {
-  func.func @maybe_double(%0: !i1, %1: !i32) -> !i32 {
+  %fn_maybe_double = func.func @maybe_double(%0: !i1, %1: !i32) -> !i32 {
     cfg.cond_br %0, ^bb1, ^bb2(%1 : !i32)
   ^bb1:
     %2 = addi %1, %1 : !i32
@@ -15,7 +15,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @maybe_double
+// CHECK-LABEL: %{{[0-9]+}} = func.func @maybe_double
 // CHECK-NOT: br
 // CHECK: %[[R:[0-9]+]] = scf.if %[[C:[0-9]+]] -> !i32 {
 // CHECK-NEXT: %[[T:[0-9]+]] = addi

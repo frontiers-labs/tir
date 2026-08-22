@@ -5,4 +5,4 @@
 
 // CHECK: Global "deep" extern=false: Ptr(Ptr(Ptr({{.*}}Int{{\)+}}
 
-// IR: cir.zero_global {sym_name = "deep", size = 8, align = 8}
+// IR: %{{[0-9]+}} = global @deep size 8 align 8

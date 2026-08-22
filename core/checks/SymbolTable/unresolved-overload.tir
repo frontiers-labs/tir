@@ -4,10 +4,10 @@
 // mangled away before lowering.
 
 module {
-  func.func @f(%0: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
     func.return %0
   }
-  func.func @f(%1: !f64) -> !f64 {
+  %fn_f = func.func @f(%1: !f64) -> !f64 {
     func.return %1
   }
   module_end

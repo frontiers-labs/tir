@@ -5,7 +5,7 @@
 // The shift only becomes visible after the fold produces a power-of-two constant.
 
 module {
-  func.func @f(%0: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
     %1 = constant {value = 1} : !i32
     %2 = constant {value = 4} : !i32
     %3 = muli %1, %2 : !i32
@@ -15,6 +15,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: muli
 // CHECK: shli

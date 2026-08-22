@@ -1,19 +1,19 @@
 // RUN: tir mc --march=rv64im --stage=isel %s | filecheck %s
 
 module {
-  func.func @div32(%0: !i32, %1: !i32) -> !i32 {
+  %fn_div32 = func.func @div32(%0: !i32, %1: !i32) -> !i32 {
     %2 = divsi %0, %1 : !i32
     func.return %2
   }
-  func.func @div64(%0: !i64, %1: !i64) -> !i64 {
+  %fn_div64 = func.func @div64(%0: !i64, %1: !i64) -> !i64 {
     %2 = divsi %0, %1 : !i64
     func.return %2
   }
-  func.func @divu32(%0: !i32, %1: !i32) -> !i32 {
+  %fn_divu32 = func.func @divu32(%0: !i32, %1: !i32) -> !i32 {
     %2 = divui %0, %1 : !i32
     func.return %2
   }
-  func.func @divu64(%0: !i64, %1: !i64) -> !i64 {
+  %fn_divu64 = func.func @divu64(%0: !i64, %1: !i64) -> !i64 {
     %2 = divui %0, %1 : !i64
     func.return %2
   }

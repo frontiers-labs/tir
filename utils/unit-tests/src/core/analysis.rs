@@ -134,7 +134,7 @@ fn chains_over_ssa_ops() {
     let arg_id = arg.id();
     let block = context.create_block(vec![arg]);
     region.add_block(block.id());
-    let func = func_ops::func(&context, "f", UnitType::new(&context), Some(region.id())).build();
+    let func = func_ops::lambda(&context, "f", UnitType::new(&context), &region).build();
 
     let b = block;
     let dead = b.append_op(ops::constant(&context, 7, i32).build());

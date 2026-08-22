@@ -24,6 +24,15 @@ pub struct Parser<'src> {
     /// contiguous. Stays flat across nested regions: the printer emits globally
     /// unique value numbers, so a single namespace is enough.
     value_names: HashMap<String, ValueId>,
+    /// Placeholder values standing in for names not yet defined when they were
+    /// first used. Module-level λ and δ values are usable before their
+    /// definition appears, so a reference creates a placeholder and the parse
+    /// rewrites it once the whole operation is in.
+    forward: HashMap<String, ValueId>,
+    /// Whether a name this parse has not bound yet may still be defined later.
+    /// A detached single-op parse says no: there, an unbound numeric name is a
+    /// value the caller already owns.
+    forward_references: bool,
     /// Attribute values bound to `#name` in the file preamble, so a long spec
     /// (a data layout, say) is written once and referenced where it applies.
     aliases: HashMap<String, AttributeValue>,
@@ -36,6 +45,8 @@ impl<'src> Parser<'src> {
             position: 0,
             region_parse: None,
             value_names: HashMap::new(),
+            forward: HashMap::new(),
+            forward_references: true,
             aliases: HashMap::new(),
         }
     }
@@ -50,14 +61,54 @@ impl<'src> Parser<'src> {
         self.value_names.insert(name.to_string(), id);
     }
 
-    /// Resolve a textual SSA name to its value id. Names bound during this parse
-    /// win; a purely numeric name otherwise falls back to its literal id, so
-    /// single-op parses can still wire operands to pre-existing values.
-    pub fn resolve_value(&self, name: &str) -> Option<ValueId> {
-        self.value_names
-            .get(name)
-            .copied()
-            .or_else(|| name.parse::<u32>().ok().map(ValueId::from_number))
+    /// Resolve a textual SSA name to its value id, creating a placeholder for a
+    /// name this parse has not bound yet. [`Parser::forward_bindings`] pairs
+    /// each placeholder with the value its name ends up naming.
+    pub fn resolve_value(&mut self, context: &crate::Context, name: &str) -> ValueId {
+        if let Some(id) = self.value_names.get(name) {
+            return *id;
+        }
+        if let Some(id) = self.forward.get(name) {
+            return *id;
+        }
+        if !self.forward_references {
+            return name
+                .parse::<u32>()
+                .map_or_else(|_| self.placeholder(context, name), ValueId::from_number);
+        }
+        self.placeholder(context, name)
+    }
+
+    /// Bar a name from naming anything defined later: a detached parse resolves
+    /// unbound numeric names to the ids the caller already owns.
+    pub(crate) fn forbid_forward_references(&mut self) {
+        self.forward_references = false;
+    }
+
+    fn placeholder(&mut self, context: &crate::Context, name: &str) -> ValueId {
+        let placeholder = context
+            .create_value(crate::builtin::UnitType::new(context), None)
+            .id();
+        self.forward.insert(name.to_string(), placeholder);
+        placeholder
+    }
+
+    /// Every placeholder this parse created, paired with the value its name
+    /// names. A name never bound falls back to its literal id when it is purely
+    /// numeric, so single-op parses still wire operands to existing values.
+    pub(crate) fn forward_bindings(&mut self) -> Result<Vec<(ValueId, ValueId)>, crate::Error> {
+        std::mem::take(&mut self.forward)
+            .into_iter()
+            .map(|(name, placeholder)| {
+                let defined = self
+                    .value_names
+                    .get(&name)
+                    .copied()
+                    .or_else(|| name.parse::<u32>().ok().map(ValueId::from_number))
+                    .ok_or_else(|| crate::Error::UnknownValueRef(name.clone()))?;
+                Ok((placeholder, defined))
+            })
+            .collect()
     }
 
     // `position` is a byte offset; every scan below works on the byte-indexed
@@ -328,18 +379,21 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Parse `@name`. A symbol name is an identifier widened by the `.` and `$`
+    /// object formats allow, so compiler-generated names like `.L.str0` are
+    /// spelled the same in the IR as in the object.
     pub fn parse_symbol_name(&mut self) -> Option<&'src str> {
-        if self
-            .src
-            .get(self.position as usize..)
-            .map(|s| s.starts_with('@'))
-            .unwrap_or(false)
-        {
-            self.position += 1;
-            self.parse_ident()
-        } else {
-            None
+        let start = self.position as usize;
+        let rest = self.src.get(start..)?.strip_prefix('@')?;
+        let len = rest
+            .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '$')
+            .unwrap_or(rest.len());
+        if len == 0 {
+            return None;
         }
+        self.position = (start + 1 + len) as u32;
+        self.skip_trivia();
+        Some(&self.src[start + 1..start + 1 + len])
     }
 
     pub fn pos(&self) -> u32 {

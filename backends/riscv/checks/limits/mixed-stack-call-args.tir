@@ -1,9 +1,9 @@
 // RUN: tir mc --march=rv64id --stage=regalloc %s | filecheck %s
 
 module {
-  func.declare @ext(!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64) -> !i64
-  func.func @caller(%i: !i64, %f: !f64) -> !i64 {
-    %r = func.call @ext(%i,%i,%i,%i,%i,%i,%i,%i,%i,%f,%f,%f,%f,%f,%f,%f,%f,%f : !i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64) -> !i64
+  %fn_ext = func.declare @ext(!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64) -> !i64
+  %fn_caller = func.func @caller(%i: !i64, %f: !f64) -> !i64 {
+    %r = func.call %fn_ext(%i,%i,%i,%i,%i,%i,%i,%i,%i,%f,%f,%f,%f,%f,%f,%f,%f,%f : !i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64) -> !i64
     func.return %r
   }
   module_end

@@ -5,7 +5,7 @@
 // want one register, and the copy must disappear once they get it.
 
 module {
-  func.func @fwd(%c: !i1, %0: !i64, %1: !i64) -> !i64 {
+  %fn_fwd = func.func @fwd(%c: !i1, %0: !i64, %1: !i64) -> !i64 {
     %2 = addi %0, %1 : !i64
     cfg.cond_br %c, ^bb1(%1 : !i64), ^bb2
   ^bb2:

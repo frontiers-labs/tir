@@ -1,7 +1,7 @@
 // RUN: not tir opt --verify %s
 
 module {
-  func.func @bad(%0: !i64, %1: !i64) argument_alignments [16] {
+  %fn_bad = func.func @bad(%0: !i64, %1: !i64) argument_alignments [16] {
     func.return
   }
   module_end

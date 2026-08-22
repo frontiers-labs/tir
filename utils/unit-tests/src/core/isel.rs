@@ -34,7 +34,7 @@ fn function(
     let region = context.create_region();
     let block = context.create_block(values);
     region.add_block(block.id());
-    let func = func_ops::func(context, "demo", ret, Some(region.id())).build();
+    let func = func_ops::lambda(context, "demo", ret, &region).build();
     (module, func, region.id(), ids)
 }
 
@@ -1135,7 +1135,7 @@ fn refuses_cross_block_binding_to_non_escaping_value() {
         region.add_block(block.id());
     }
 
-    let func = func_ops::func(&context, "demo", i64_ty, Some(region.id())).build();
+    let func = func_ops::lambda(&context, "demo", i64_ty, &region).build();
 
     // %d = a - b is used only within the entry block, so it never escapes.
     let d = ops::subi(&context, a_id, b_id, i64_ty).build();

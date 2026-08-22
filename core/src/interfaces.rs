@@ -120,6 +120,19 @@ pub trait ConstantFold {
     }
 }
 
+/// An operation that produces its results and does nothing else: no memory
+/// effect, no control flow, no machine state. Dead code elimination may erase
+/// one whose results go unread, whether or not it declares semantics.
+pub trait Pure {
+    fn verify_interface(
+        &self,
+        _this: &dyn Operation,
+        _context: &Context,
+    ) -> Result<(), crate::Error> {
+        Ok(())
+    }
+}
+
 pub trait Commutative {
     fn is_commutative(&self) -> bool {
         true

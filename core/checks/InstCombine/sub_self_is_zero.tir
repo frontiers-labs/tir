@@ -2,13 +2,13 @@
 // RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 module {
-  func.func @f(%0: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
     %1 = subi %0, %0 : !i32
     func.return %1
   }
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: subi
 // CHECK: constant {value = 0}

@@ -1,0 +1,14 @@
+// RUN: not tir opt --verify %s
+
+// A call's arguments must be exactly what the callee's `!fn` type takes.
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    func.return %0
+  }
+  %fn_g = func.func @g(%1: !i64) -> !i32 {
+    %2 = func.call %fn_f(%1 : !i64) -> !i32
+    func.return %2
+  }
+  module_end
+}

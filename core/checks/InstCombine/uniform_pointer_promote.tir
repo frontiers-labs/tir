@@ -8,7 +8,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func.func @uniform(%0: !i1, %1: !ptr.p, %2: !ptr.p) -> !ptr.p {
+  %fn_uniform = func.func @uniform(%0: !i1, %1: !ptr.p, %2: !ptr.p) -> !ptr.p {
     %3 = ptr.alloca {size = 8, align = 8} : !ptr.p
     scf.if %0 {
       ptr.store %1, %3
@@ -23,7 +23,7 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: func.func @uniform
+// CHECK-LABEL: %{{[0-9]+}} = func.func @uniform
 // CHECK-NOT: ptr.alloca
 // CHECK-NOT: ptr.store
 // CHECK-NOT: ptr.load

@@ -6,7 +6,7 @@
 // once the condition fails.
 
 module {
-  func.func @g(%0: !i1, %1: !i32) -> !i32 {
+  %fn_g = func.func @g(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     scf.while {
@@ -22,7 +22,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @g
+// CHECK-LABEL: %{{[0-9]+}} = func.func @g
 // CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[A:[0-9]+]])
 // CHECK-NEXT: ptr.store %1, %{{[0-9]+}} state(%[[A]] -> %[[A1:[0-9]+]])

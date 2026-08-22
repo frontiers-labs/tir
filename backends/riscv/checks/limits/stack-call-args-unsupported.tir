@@ -4,9 +4,9 @@
 // a0..a7. The area remains 16-byte aligned across the call.
 
 module {
-  func.declare @ext(!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64) -> !i64
-  func.func @a(%0: !i64) -> !i64 {
-    %r = func.call @ext(%0,%0,%0,%0,%0,%0,%0,%0,%0,%0 : !i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64) -> !i64
+  %fn_ext = func.declare @ext(!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64) -> !i64
+  %fn_a = func.func @a(%0: !i64) -> !i64 {
+    %r = func.call %fn_ext(%0,%0,%0,%0,%0,%0,%0,%0,%0,%0 : !i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64,!i64) -> !i64
     func.return %r
   }
   module_end

@@ -8,7 +8,7 @@
 // nobody's reckoning and both stores go.
 
 module {
-  func.func @stand_in(%0: !i1, %1: !i1, %2: !i32, %3: !i32) -> !i32 {
+  %fn_stand_in = func.func @stand_in(%0: !i1, %1: !i1, %2: !i32, %3: !i32) -> !i32 {
     %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     scf.if %0 {
       ptr.store %2, %4
@@ -28,7 +28,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @stand_in
+// CHECK-LABEL: %{{[0-9]+}} = func.func @stand_in
 // CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
 // CHECK-NEXT: %[[UNINIT:[0-9]+]] = ptr.load %[[SLOT]]
 // CHECK-NEXT: %[[FIRST:[0-9]+]] = scf.if %0 -> !i32 {

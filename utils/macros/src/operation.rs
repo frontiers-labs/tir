@@ -1507,7 +1507,7 @@ fn make_parser(
     };
     let state_clause_parser = if state.input || state.output {
         quote! {
-            let state_clause = tir::builtin::parse_state_clause(parser)?;
+            let state_clause = tir::builtin::parse_state_clause(parser, context)?;
             #state_operand_setter
             #state_result_setter
         }
@@ -1560,9 +1560,7 @@ fn make_parser(
             quote! {
                 #comma
                 if let Some(ref_name) = parser.parse_value_ref() {
-                    if let Some(id) = parser.resolve_value(ref_name) {
-                        builder = builder.#field(id);
-                    }
+                    builder = builder.#field(parser.resolve_value(context, ref_name));
                 }
             }
         })

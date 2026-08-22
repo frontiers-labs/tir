@@ -4,7 +4,7 @@
 // `restructure` pass raises back to structured control flow before the IR is
 // handed on: the backward `goto` becomes a loop, and nothing branches.
 
-// CHECK: func.func @sum_to
+// CHECK: %{{[0-9]+}} = func.func @sum_to
 // CHECK: scf.while
 // CHECK: scf.condition
 // CHECK: func.return

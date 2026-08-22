@@ -146,11 +146,11 @@ impl ForOp {
         parser: &mut tir::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let lower_bound = parse_value_id(parser)?;
+        let lower_bound = parse_value_id(parser, context)?;
         expect_token(parser, ",")?;
-        let upper_bound = parse_value_id(parser)?;
+        let upper_bound = parse_value_id(parser, context)?;
         expect_token(parser, ",")?;
-        let step = parse_value_id(parser)?;
+        let step = parse_value_id(parser, context)?;
         let scope = parse_scope(parser, context)?;
         let carried = parse_iter_args(parser, context)?;
         let body_carried = carried.iter().map(|c| c.acc.clone()).collect();
@@ -333,11 +333,11 @@ impl ConditionOp {
         parser: &mut tir::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let condition = parse_value_id(parser)?;
+        let condition = parse_value_id(parser, context)?;
         Ok(Box::new(
             ConditionOpBuilder::new(context)
                 .condition(condition)
-                .values(parse_trailing_values(parser)?)
+                .values(parse_trailing_values(parser, context)?)
                 .build(),
         ))
     }
@@ -448,8 +448,8 @@ impl IfOp {
         parser: &mut tir::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let condition = parse_value_id(parser)?;
-        let inputs = parse_gamma_inputs(parser)?;
+        let condition = parse_value_id(parser, context)?;
+        let inputs = parse_gamma_inputs(parser, context)?;
         let result_types = parse_result_types(parser, context)?;
         let then_body = parse_arm(parser, context, &inputs)?;
         expect_token(parser, "else")?;
@@ -634,8 +634,8 @@ impl SwitchOp {
         parser: &mut tir::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let predicate = parse_value_id(parser)?;
-        let inputs = parse_gamma_inputs(parser)?;
+        let predicate = parse_value_id(parser, context)?;
+        let inputs = parse_gamma_inputs(parser, context)?;
         let result_types = parse_result_types(parser, context)?;
         let mut cases = vec![];
         let mut arms = vec![];
@@ -685,11 +685,11 @@ impl BreakOp {
         parser: &mut tir::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let scope = parse_value_id(parser)?;
+        let scope = parse_value_id(parser, context)?;
         Ok(Box::new(
             BreakOpBuilder::new(context)
                 .scope(scope)
-                .values(parse_trailing_values(parser)?)
+                .values(parse_trailing_values(parser, context)?)
                 .build(),
         ))
     }
@@ -719,11 +719,11 @@ impl ContinueOp {
         parser: &mut tir::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let scope = parse_value_id(parser)?;
+        let scope = parse_value_id(parser, context)?;
         Ok(Box::new(
             ContinueOpBuilder::new(context)
                 .scope(scope)
-                .values(parse_trailing_values(parser)?)
+                .values(parse_trailing_values(parser, context)?)
                 .build(),
         ))
     }
@@ -770,10 +770,7 @@ impl YieldOp {
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let mut values = vec![];
         while let Some(name) = parser.parse_value_ref() {
-            let value = parser
-                .resolve_value(name)
-                .ok_or_else(|| (parser.span(), Error::UnknownValueRef(name.to_string())))?;
-            values.push(value);
+            values.push(parser.resolve_value(context, name));
             if !parser.parse_token(",") {
                 break;
             }
@@ -786,13 +783,12 @@ impl YieldOp {
 
 fn parse_value_id(
     parser: &mut tir::parse::text::Parser,
+    context: &Context,
 ) -> Result<ValueId, (tir::parse::Span, Error)> {
     let value_ref = parser
         .parse_value_ref()
         .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
-    parser
-        .resolve_value(value_ref)
-        .ok_or_else(|| (parser.span(), Error::UnknownValueRef(value_ref.to_string())))
+    Ok(parser.resolve_value(context, value_ref))
 }
 
 fn expect_token(
@@ -981,14 +977,15 @@ fn arm_block(context: &Context, arm: tir::RegionId) -> tir::BlockHandle {
 /// Parse an optional `args(%a, %b)` clause.
 fn parse_gamma_inputs(
     parser: &mut tir::parse::text::Parser,
+    context: &Context,
 ) -> Result<Vec<ValueId>, (tir::parse::Span, Error)> {
     if !parser.parse_token("args") {
         return Ok(vec![]);
     }
     expect_token(parser, "(")?;
-    let mut inputs = vec![parse_value_id(parser)?];
+    let mut inputs = vec![parse_value_id(parser, context)?];
     while parser.parse_token(",") {
-        inputs.push(parse_value_id(parser)?);
+        inputs.push(parse_value_id(parser, context)?);
     }
     expect_token(parser, ")")?;
     Ok(inputs)
@@ -1067,7 +1064,7 @@ fn parse_iter_args(
             .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
             .to_string();
         expect_token(parser, "=")?;
-        ports.push((acc_name, parse_value_id(parser)?));
+        ports.push((acc_name, parse_value_id(parser, context)?));
         if !parser.parse_token(",") {
             break;
         }
@@ -1091,10 +1088,11 @@ fn parse_iter_args(
 /// Parse an optional `, %a, %b` trailing operand list.
 fn parse_trailing_values(
     parser: &mut tir::parse::text::Parser,
+    context: &Context,
 ) -> Result<Vec<ValueId>, (tir::parse::Span, Error)> {
     let mut values = vec![];
     while parser.parse_token(",") {
-        values.push(parse_value_id(parser)?);
+        values.push(parse_value_id(parser, context)?);
     }
     Ok(values)
 }

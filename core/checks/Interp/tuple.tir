@@ -1,7 +1,7 @@
 // RUN: tir interp %s | filecheck %s
 
 module {
-  func.func @main() -> !i32 {
+  %fn_main = func.func @main() -> !i32 {
     %0 = constant {value = 11} : !i32
     %1 = constant {value = 22} : !i32
     %2 = make_tuple %0, %1 : !tuple<!i32, !i32>

@@ -1,8 +1,8 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 module {
-  func.declare @ext(!i64) -> !i64
-  func.func @f(%0: !i64) -> !i64 {
+  %fn_ext = func.declare @ext(!i64) -> !i64
+  %fn_f = func.func @f(%0: !i64) -> !i64 {
     %1 = addi %0, %0 : !i64
     %2 = addi %1, %0 : !i64
     %3 = addi %2, %0 : !i64
@@ -14,7 +14,7 @@ module {
     %9 = addi %8, %0 : !i64
     %10 = addi %9, %0 : !i64
     %11 = addi %10, %0 : !i64
-    %12 = func.call @ext(%0 : !i64) -> !i64
+    %12 = func.call %fn_ext(%0 : !i64) -> !i64
     %13 = addi %12, %1 : !i64
     %14 = addi %13, %2 : !i64
     %15 = addi %14, %3 : !i64

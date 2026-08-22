@@ -1,0 +1,21 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+// One δ node, one object: every function that touches it uses the same value,
+// so an analysis can see they share an underlying object.
+
+module {
+  %counter = global @counter align 4 bytes [0, 0, 0, 0]
+  %fn_read = func.func @read() -> !i32 {
+    %0 = ptr.load %counter : !i32
+    func.return %0
+  }
+  %fn_write = func.func @write(%1: !i32) {
+    ptr.store %1, %counter
+    func.return
+  }
+  module_end
+}
+
+// CHECK: %[[COUNTER:[0-9]+]] = global @counter align 4 bytes [0, 0, 0, 0]
+// CHECK: %{{[0-9]+}} = ptr.load %[[COUNTER]] : !i32
+// CHECK: ptr.store %{{[0-9]+}}, %[[COUNTER]]

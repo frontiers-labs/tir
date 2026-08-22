@@ -6,7 +6,7 @@
 // and the law has nothing to distribute. The slot stays in memory.
 
 module {
-  func.func @opaque(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+  %fn_opaque = func.func @opaque(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %3
     scf.if %0 {
@@ -24,7 +24,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @opaque
+// CHECK-LABEL: %{{[0-9]+}} = func.func @opaque
 // CHECK: ptr.store %1, %[[SLOT:[0-9]+]]
 // CHECK: scf.if %0 {
 // CHECK: ptr.store %2, %[[SLOT]]

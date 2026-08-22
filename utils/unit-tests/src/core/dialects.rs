@@ -1,7 +1,6 @@
 //! Dialect behavior: cfg, scf, ptr, func.declare and custom op interfaces.
 
 use tir::{
-    attributes::AttributeValue,
     builtin::{ops as builtin_ops, IndexType, IntegerType, UnitType},
     cfg::ops as cfg_ops,
     func::ops as func_ops,
@@ -26,7 +25,7 @@ fn branch_terminates_function_block() {
     region.add_block(entry.id());
     let target = context.create_block(vec![]);
 
-    let func = func_ops::func(&context, "jump", UnitType::new(&context), Some(region.id())).build();
+    let func = func_ops::lambda(&context, "jump", UnitType::new(&context), &region).build();
 
     func.body()
         .append_op(cfg_ops::br(&context, vec![], target.id()).build());
@@ -41,13 +40,7 @@ fn scf_ops_nest_in_function() {
     let region = context.create_region();
     let block = context.create_block(vec![condition.clone()]);
     region.add_block(block.id());
-    let func = func_ops::func(
-        &context,
-        "control",
-        UnitType::new(&context),
-        Some(region.id()),
-    )
-    .build();
+    let func = func_ops::lambda(&context, "control", UnitType::new(&context), &region).build();
 
     let if_op = scf_ops::r#if(
         &context,
@@ -154,7 +147,7 @@ fn an_arm_takes_one_argument_per_forwarded_input() {
     let region = context.create_region();
     let block = context.create_block(vec![condition.clone(), input.clone()]);
     region.add_block(block.id());
-    let func = func_ops::func(&context, "gate", UnitType::new(&context), Some(region.id())).build();
+    let func = func_ops::lambda(&context, "gate", UnitType::new(&context), &region).build();
 
     // The arms take no arguments, so neither names the forwarded input.
     let if_op = IfOpBuilder::new(&context)
@@ -270,32 +263,6 @@ fn state_ports_are_absent_until_threaded() {
 
     assert_eq!(allocation.state_result(), None);
     assert_eq!(load.state_operand(), None);
-}
-
-/// A half-signature declare is neither a function nor a data declaration,
-/// and the text form cannot express it: only a builder can build one.
-#[test]
-fn declare_carrying_a_return_type_without_arguments_is_rejected() {
-    let context = Context::with_default_dialects();
-    let declaration = tir::func::DeclareOpBuilder::new(&context)
-        .attr(
-            "sym_name",
-            AttributeValue::Str("counter".to_string().into()),
-        )
-        .attr(
-            "ret_type",
-            AttributeValue::Type(IntegerType::new(&context, 32)),
-        )
-        .build();
-
-    let error = declaration
-        .verify(&context)
-        .expect_err("a data declaration must not carry a return type");
-
-    assert!(
-        format!("{error:?}").contains("carries 'ret_type' without 'arg_types'"),
-        "{error:?}"
-    );
 }
 
 tir::helpers::operation! {

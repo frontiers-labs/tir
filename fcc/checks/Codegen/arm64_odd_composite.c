@@ -17,17 +17,17 @@ struct Three make_three(struct Three *value) {
     return *value;
 }
 
-// CHECK-LABEL: func.func @consume_three(%{{[0-9]+}}: !i64) -> !i64 {
+// CHECK-LABEL: %{{[0-9]+}} = func.func @consume_three(%{{[0-9]+}}: !i64) -> !i64 {
 // CHECK: ptr.alloca {size = 8, align = 8}
-// CHECK-LABEL: func.func @call_three(
+// CHECK-LABEL: %{{[0-9]+}} = func.func @call_three(
 // CHECK: ptr.alloca {size = 8, align = 8}
 // CHECK: constant {value = 0} : !i64
 // CHECK: ptr.store
 // CHECK: constant {value = 3} : !i64
 // CHECK: ptr.memcpy
 // CHECK: ptr.load {{.*}} : !i64
-// CHECK: func.call @consume_three({{.*}} : !i64) -> !i64
-// CHECK-LABEL: func.func @make_three(
+// CHECK: func.call %{{[0-9]+}}({{.*}} : !i64) -> !i64
+// CHECK-LABEL: %{{[0-9]+}} = func.func @make_three(
 // CHECK-SAME: ) -> !i64 {
 // CHECK: ptr.alloca {size = 8, align = 8}
 // CHECK: ptr.memcpy

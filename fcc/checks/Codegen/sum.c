@@ -4,7 +4,7 @@
 // stored then loaded before the addition.
 
 // CHECK: module {
-// CHECK: func.func @sum(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
+// CHECK: %{{[0-9]+}} = func.func @sum(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
 // CHECK-COUNT-2: ptr.alloca
 // CHECK: ptr.store
 // CHECK: addi

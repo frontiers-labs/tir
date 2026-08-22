@@ -5,7 +5,7 @@
 // the allocation without passing a write loses its stores.
 
 module {
-  func.func @f(%0: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %1
     %2 = ptr.load %1 : !i32
@@ -14,7 +14,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
 // CHECK-NEXT: ptr.store %0, %[[SLOT]]
 // CHECK-NEXT: %[[VALUE:[0-9]+]] = ptr.load %[[SLOT]]

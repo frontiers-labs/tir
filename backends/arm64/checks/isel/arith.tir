@@ -1,7 +1,7 @@
 // RUN: tir mc --march=armv8 --stage=isel %s | filecheck %s
 
 module {
-  func.func @chain(%0: !i32, %1: !i32) -> !i32 {
+  %fn_chain = func.func @chain(%0: !i32, %1: !i32) -> !i32 {
     %2 = addi %0, %1 : !i32
     %3 = subi %2, %1 : !i32
     %4 = andi %3, %0 : !i32
@@ -9,7 +9,7 @@ module {
     func.return %5
   }
 
-  func.func @chain64(%0: !i64, %1: !i64, %2: !i64) -> !i64 {
+  %fn_chain64 = func.func @chain64(%0: !i64, %1: !i64, %2: !i64) -> !i64 {
     %3 = addi %0, %1 : !i64
     %4 = subi %3, %2 : !i64
     %5 = andi %4, %0 : !i64
@@ -28,9 +28,9 @@ module {
 // CHECK: asm.vret
 
 // i64 arithmetic selects the x-register forms.
-// CHECK: asm.symbol {name = "chain64", arg_regs = [%virt6:GPR, %virt7:GPR, %virt8:GPR]}
-// CHECK: arm64.add {rd = %virt9:GPR, rn = %virt6:GPR, rm = %virt7:GPR}
-// CHECK: arm64.sub {rd = %virt10:GPR, rn = %virt9:GPR, rm = %virt8:GPR}
-// CHECK: arm64.and {rd = %virt11:GPR, rn = %virt6:GPR, rm = %virt10:GPR}
-// CHECK: arm64.orr {rd = %virt12:GPR, rn = %virt7:GPR, rm = %virt11:GPR}
+// CHECK: asm.symbol {name = "chain64", arg_regs = [%virt7:GPR, %virt8:GPR, %virt9:GPR]}
+// CHECK: arm64.add {rd = %virt10:GPR, rn = %virt7:GPR, rm = %virt8:GPR}
+// CHECK: arm64.sub {rd = %virt11:GPR, rn = %virt10:GPR, rm = %virt9:GPR}
+// CHECK: arm64.and {rd = %virt12:GPR, rn = %virt7:GPR, rm = %virt11:GPR}
+// CHECK: arm64.orr {rd = %virt13:GPR, rn = %virt8:GPR, rm = %virt12:GPR}
 // CHECK: asm.vret

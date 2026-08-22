@@ -6,7 +6,7 @@
 // and takes those loads with it.
 
 module {
-  func.func @f(%0: !i32) {
+  %fn_f = func.func @f(%0: !i32) {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p
     ptr.store %0, %1
     %2 = ptr.load %1 : !i32
@@ -16,6 +16,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: ptr.
 // CHECK: func.return

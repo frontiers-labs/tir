@@ -6,7 +6,7 @@
 // rv32 and eight on rv64.
 
 module {
-  func.func @deref(%0: !ptr.p<!ptr.p>) -> !ptr.p {
+  %fn_deref = func.func @deref(%0: !ptr.p<!ptr.p>) -> !ptr.p {
     %1 = ptr.load %0 : !ptr.p
     func.return %1
   }

@@ -4,7 +4,7 @@
 // holds it, so the load reads it like any other stored value.
 
 module {
-  func.func @f(%0: !ptr.p<!i32>) -> !i32 {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>) -> !i32 {
     %1 = state.entry_state : !state
     %2 = constant {value = 7} : !i32
     ptr.store %2, %0 state(%1 -> %3)
@@ -14,7 +14,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[V:[0-9]+]] = constant {value = 7}
 // CHECK-NOT: ptr.load
 // CHECK: func.return %[[V]]

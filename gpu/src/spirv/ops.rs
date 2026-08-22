@@ -154,10 +154,10 @@ impl AccessChainOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         use tir::parse::common::Cursor;
-        let base = parse_value(parser)?;
+        let base = parse_value(parser, context)?;
         let mut indices = Vec::new();
         while parser.parse_token(",") {
-            indices.push(parse_value(parser)?);
+            indices.push(parse_value(parser, context)?);
         }
         if !parser.parse_token(":") {
             return Err((parser.span(), Error::ExpectedToken(":")));
@@ -196,12 +196,11 @@ impl Terminator for ReturnOp {}
 
 fn parse_value(
     parser: &mut tir::parse::text::Parser<'_>,
+    context: &Context,
 ) -> Result<ValueId, (tir::parse::Span, Error)> {
     use tir::parse::common::Cursor;
     let name = parser
         .parse_value_ref()
         .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
-    parser
-        .resolve_value(name)
-        .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))
+    Ok(parser.resolve_value(context, name))
 }

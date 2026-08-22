@@ -5,7 +5,7 @@
 // (cmp defines n/z/c/v, b.cond guards on them), and the cmpi op is consumed.
 
 module {
-  func.func @slt_branch(%0: !i64, %1: !i64) -> !i64 {
+  %fn_slt_branch = func.func @slt_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
@@ -16,11 +16,11 @@ module {
     func.return %4
   }
   // CHECK: asm.symbol {name = "slt_branch"
-  // CHECK: arm64.cmp {rn = %virt23:GPR, rm = %virt24:GPR}
+  // CHECK: arm64.cmp {rn = %virt28:GPR, rm = %virt29:GPR}
   // CHECK-NEXT: arm64.b.lt {imm = ^bb1}
   // CHECK-NEXT: asm.vbr ^bb2
 
-  func.func @sle_branch(%0: !i64, %1: !i64) -> !i64 {
+  %fn_sle_branch = func.func @sle_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "sle"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
@@ -32,10 +32,10 @@ module {
   }
   // a <= b canonicalizes to b >= a: cmp with swapped operands, then b.ge.
   // CHECK: asm.symbol {name = "sle_branch"
-  // CHECK: arm64.cmp {rn = %virt27:GPR, rm = %virt26:GPR}
+  // CHECK: arm64.cmp {rn = %virt32:GPR, rm = %virt31:GPR}
   // CHECK-NEXT: arm64.b.ge {imm = ^bb1}
 
-  func.func @ult_branch(%0: !i64, %1: !i64) -> !i64 {
+  %fn_ult_branch = func.func @ult_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "ult"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
@@ -50,7 +50,7 @@ module {
   // CHECK: arm64.cmp
   // CHECK-NEXT: arm64.b.lo {imm = ^bb1}
 
-  func.func @eq_branch(%0: !i64, %1: !i64) -> !i64 {
+  %fn_eq_branch = func.func @eq_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "eq"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
@@ -64,7 +64,7 @@ module {
   // CHECK: arm64.cmp
   // CHECK-NEXT: arm64.b.eq {imm = ^bb1}
 
-  func.func @fallback(%0: !i1) -> !i64 {
+  %fn_fallback = func.func @fallback(%0: !i1) -> !i64 {
     cfg.cond_br %0, ^bb1, ^bb2
   ^bb1:
     %1 = constant {value = 1} : !i64

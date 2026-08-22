@@ -6,7 +6,7 @@
 // constant rather than taking over the later, identical one.
 
 module {
-  func.func @f(%0: !i1, %1: !i8) -> !i8 {
+  %fn_f = func.func @f(%0: !i1, %1: !i8) -> !i8 {
     %2 = scf.if %0 -> !i8 {
       %3 = constant {value = 1} : !i32
       %4 = trunci %3 : !i8
@@ -23,7 +23,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: scf.if
 // CHECK: %[[CONST:[0-9]+]] = constant {value = 1} : !i32
 // CHECK: %[[NARROW:[0-9]+]] = trunci %[[CONST]] : !i8

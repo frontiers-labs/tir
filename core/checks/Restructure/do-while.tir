@@ -5,7 +5,7 @@
 // reads it.
 
 module {
-  func.func @dowhile(%0: !i32) -> !i32 {
+  %fn_dowhile = func.func @dowhile(%0: !i32) -> !i32 {
     cfg.br ^bb1(%0 : !i32)
   ^bb1(%1: !i32):
     %2 = addi %1, %1 : !i32
@@ -17,7 +17,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @dowhile
+// CHECK-LABEL: %{{[0-9]+}} = func.func @dowhile
 // CHECK-NOT: br
 // CHECK: scf.while iter_args
 // CHECK: %[[SUM:[0-9]+]] = addi

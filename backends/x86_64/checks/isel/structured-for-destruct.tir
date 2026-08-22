@@ -9,7 +9,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func.func @count(%lb: !index, %ub: !index, %st: !index, %init: !i64) -> !i64 {
+  %fn_count = func.func @count(%lb: !index, %ub: !index, %st: !index, %init: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
     %r = scf.for %lb, %ub, %st iter_args(%acc = %init) -> !i64 {
       %n = addi %acc, %c : !i64

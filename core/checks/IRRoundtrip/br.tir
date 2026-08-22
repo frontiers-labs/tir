@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @jump() -> !i32 {
+  %fn_jump = func.func @jump() -> !i32 {
     cfg.br ^bb1
   ^bb1:
     %0 = constant {value = 42} : !i32
@@ -11,7 +11,7 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @jump() -> !i32 {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @jump() -> !i32 {
 // CHECK-NEXT: cfg.br ^bb1
 // CHECK-NEXT: ^bb1:
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 42} : !i32

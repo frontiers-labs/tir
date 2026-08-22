@@ -1,7 +1,7 @@
 // RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s
 
 module {
-  func.func @count() -> !i32 {
+  %fn_count = func.func @count() -> !i32 {
     %0 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %1 = constant {value = 0} : !i32
     ptr.store %1, %0

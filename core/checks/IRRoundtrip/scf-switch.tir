@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @dispatch(%0: !i32) {
+  %fn_dispatch = func.func @dispatch(%0: !i32) {
     scf.switch %0 case 1 {
       scf.yield
     }

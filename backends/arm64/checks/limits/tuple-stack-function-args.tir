@@ -1,7 +1,7 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 module {
-  func.func @callee(%0: !f64, %1: !f64, %2: !f64, %3: !f64, %4: !f64, %5: !f64,
+  %fn_callee = func.func @callee(%0: !f64, %1: !f64, %2: !f64, %3: !f64, %4: !f64, %5: !f64,
                %6: !tuple<!f64, !f64, !f64, !f64>) -> !f64 {
     %7 = tuple_get %6 {index = 0} : !f64
     %8 = tuple_get %6 {index = 1} : !f64

@@ -17,12 +17,36 @@ operation! {
             sym_name: "Str",
             ret_type: "Type",
         },
+        results: R {
+            result: "crate::builtin::FnType",
+        },
         regions: R {
             body: Region {
                 single_block: true,
             }
         }
     }
+}
+
+/// A λ definition named `name`, its `!fn` type read off the entry block of
+/// `body` so the signature can never disagree with the parameters.
+pub fn lambda(
+    context: &Context,
+    name: &str,
+    ret_type: tir::TypeId,
+    body: &tir::RegionHandle,
+) -> FuncOpBuilder {
+    let parameters: Vec<_> = context
+        .get_block(body.block_ids()[0])
+        .arguments()
+        .iter()
+        .map(tir::Value::ty)
+        .collect();
+    FuncOpBuilder::new(context)
+        .sym_name(name)
+        .ret_type(ret_type)
+        .result_type(tir::builtin::FnType::new(context, &parameters, ret_type))
+        .body(body.id())
 }
 
 impl FuncOpBuilder {
@@ -60,6 +84,11 @@ impl FuncOpBuilder {
 }
 
 impl FuncOp {
+    /// The λ value this definition produces: what a call to it takes as callee.
+    pub fn fn_value(&self) -> tir::ValueId {
+        self.result()
+    }
+
     pub fn has_result_address(&self) -> bool {
         self.attr("result_address") == Some(tir::attributes::AttributeValue::Bool(true))
     }
@@ -102,8 +131,8 @@ impl FuncOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         use tir::Operation;
 
-        // func.func @name(%0: i32, %1: i32) -> i32 {
-        fmt.write("func.func")?;
+        // %2 = func.func @name(%0: i32, %1: i32) -> i32 {
+        fmt.write(format!("%{} = func.func", self.fn_value().number()))?;
         if self.symbol_visibility() == Visibility::Private {
             fmt.write(" private")?;
         }
@@ -211,11 +240,14 @@ impl FuncOp {
         let argument_alignments = super::parse_argument_alignments(parser, context)?;
 
         // Parse body region { ... }
+        let block_arg_types: Vec<tir::TypeId> = block_args.iter().map(tir::Value::ty).collect();
         let body_region = parser.parse_region_with_entry_args(context, block_args)?;
 
+        let parameters: Vec<_> = block_arg_types;
         let mut builder = FuncOpBuilder::new(context)
             .sym_name(&sym_name)
             .ret_type(ret_type)
+            .result_type(tir::builtin::FnType::new(context, &parameters, ret_type))
             .body(body_region.id());
         if result_address {
             builder = builder.result_address();
@@ -237,6 +269,16 @@ impl FuncOp {
 impl tir::Verifiable for FuncOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         super::verify_argument_alignments(self, self.body().arguments().len(), "function")?;
+        let parameters: Vec<_> = self.body().arguments().iter().map(tir::Value::ty).collect();
+        let expected = tir::builtin::FnType::new(context, &parameters, self.ret_type());
+        if context.get_value(self.fn_value()).ty() != expected {
+            return Err(Error::VerificationError(format!(
+                "function '@{}' produces {}, but its signature is {}",
+                self.symbol_name(),
+                context.type_to_string(context.get_value(self.fn_value()).ty()),
+                context.type_to_string(expected)
+            )));
+        }
         if !self.has_result_address() {
             return Ok(());
         }

@@ -11,9 +11,14 @@ use tir::{
 };
 
 fn analyze(context: &Context, region: RegionId) -> Rc<DominatingEdgeFacts> {
-    let root = func_ops::func(context, "f", UnitType::new(context), Some(region))
-        .build()
-        .id();
+    let root = func_ops::lambda(
+        context,
+        "f",
+        UnitType::new(context),
+        &context.get_region(region),
+    )
+    .build()
+    .id();
     AnalysisManager::new().get::<DominatingEdgeFacts>(context, root)
 }
 

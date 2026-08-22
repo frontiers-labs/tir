@@ -4,17 +4,17 @@
 // stores left behind is observable and the slot stays even with no read of its own.
 
 module {
-  func.declare @sink(!ptr.p<!i32>) -> !unit
-  func.func @f(%0: !i32) {
+  %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !unit
+  %fn_f = func.func @f(%0: !i32) {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %1
-    func.call @sink(%1 : !ptr.p<!i32>)
+    func.call %fn_sink(%1 : !ptr.p<!i32>)
     func.return
   }
   module_end
 }
 
-// CHECK-LABEL: func.func @f
-// CHECK-NEXT: %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: ptr.store %0, %1
-// CHECK-NEXT: func.call @sink(%1 : !ptr.p<!i32>)
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NEXT: %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+// CHECK-NEXT: ptr.store %1, %2
+// CHECK-NEXT: func.call %{{[0-9]+}}(%2 : !ptr.p<!i32>)

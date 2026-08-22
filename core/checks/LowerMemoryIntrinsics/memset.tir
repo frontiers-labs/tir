@@ -1,7 +1,7 @@
 // RUN: tir opt --pass lower-memory-intrinsics %s | filecheck %s
 
 module {
-  func.func @fill(%0: !ptr.p, %1: !i8, %2: !i64) {
+  %fn_fill = func.func @fill(%0: !ptr.p, %1: !i8, %2: !i64) {
     ptr.memset %0, %1, %2
     func.return
   }
@@ -9,10 +9,10 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.declare @memset(!ptr.p, !i32, !i64) -> !ptr.p
-// CHECK-NEXT: func.func @fill(%[[DEST:[0-9]+]]: !ptr.p, %[[VALUE:[0-9]+]]: !i8, %[[SIZE:[0-9]+]]: !i64) {
+// CHECK-NEXT: %{{[0-9]+}} = func.declare @memset(!ptr.p, !i32, !i64) -> !ptr.p
+// CHECK-NEXT: %{{[0-9]+}} = func.func @fill(%[[DEST:[0-9]+]]: !ptr.p, %[[VALUE:[0-9]+]]: !i8, %[[SIZE:[0-9]+]]: !i64) {
 // CHECK-NEXT: %[[EXTENDED:[0-9]+]] = extui %[[VALUE]] : !i32
-// CHECK-NEXT: %{{[0-9]+}} = func.call @memset(%[[DEST]], %[[EXTENDED]], %[[SIZE]] : !ptr.p, !i32, !i64) -> !ptr.p
+// CHECK-NEXT: %{{[0-9]+}} = func.call %{{[0-9]+}}(%[[DEST]], %[[EXTENDED]], %[[SIZE]] : !ptr.p, !i32, !i64) -> !ptr.p
 // CHECK-NEXT: func.return
 // CHECK-NEXT: }
 // CHECK-NEXT: module_end

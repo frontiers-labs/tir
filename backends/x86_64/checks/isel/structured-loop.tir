@@ -6,7 +6,7 @@
 // why it has no RUN line of its own here.
 
 module {
-  func.func @accumulate(%0: !i1, %1: !i64) -> !i64 {
+  %fn_accumulate = func.func @accumulate(%0: !i1, %1: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
     %r = scf.while iter_args(%acc = %1) -> !i64 {
       scf.condition %0, %acc

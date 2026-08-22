@@ -5,7 +5,7 @@
 // and forwards its operand. The same target-independent rule covers all targets.
 
 module {
-  func.func @tr(%0: !i64) -> !i32 {
+  %fn_tr = func.func @tr(%0: !i64) -> !i32 {
     %1 = trunci %0 : !i32
     func.return %1
   }

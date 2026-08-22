@@ -6,7 +6,7 @@
 // the read after the loop takes the port's result.
 
 module {
-  func.func @twice(%0: !i1, %1: !i32) -> !i32 {
+  %fn_twice = func.func @twice(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
     %3 = scf.while {
@@ -23,7 +23,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @twice
+// CHECK-LABEL: %{{[0-9]+}} = func.func @twice
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%[[HEAD:[0-9]+]] = %1) -> !i32 {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[HEAD]], %[[HEAD]] : !i32

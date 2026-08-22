@@ -8,7 +8,7 @@
 // the loads pick flw/fld typed by the loaded float format.
 
 module {
-  func.func @roundtrip(%0: !f32, %1: !f64, %2: !i32) -> !f64 {
+  %fn_roundtrip = func.func @roundtrip(%0: !f32, %1: !f64, %2: !i32) -> !f64 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!f32>
     ptr.store %0, %3
     %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>

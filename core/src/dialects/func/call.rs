@@ -1,6 +1,6 @@
 use crate::Any;
 use crate::attributes::AttributeValue;
-use crate::builtin::UnitType;
+use crate::builtin::{FnType, UnitType};
 use crate::{Context, Error, Operation, ValueId, operation};
 
 use crate as tir;
@@ -12,10 +12,8 @@ operation! {
         format: "custom",
         verifier: "true",
         operands: O {
+            callee: "crate::builtin::FnType",
             args: "*Any",
-        },
-        attributes: A {
-            callee: "Str",
         },
         results: R {
             result: "Any",
@@ -26,28 +24,32 @@ operation! {
 
 impl tir::Verifiable for CallOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_call_metadata(self, context, &self.args(), "call")?;
-        let arg_types: Vec<_> = self
-            .args()
+        let args = self.args();
+        super::verify_argument_alignments(self, args.len(), "call")?;
+        verify_result_address(self, context, &args)?;
+
+        let Some((parameters, ret_type)) = FnType::signature_of(context, self.callee()) else {
+            return Err(Error::VerificationError(
+                "call callee must be a function value".to_string(),
+            ));
+        };
+        let arg_types: Vec<_> = args
             .iter()
             .map(|arg| context.get_value(*arg).ty())
             .collect();
-        let callee = self.callee();
-        let Some(resolved) =
-            tir::symbol_table::resolve_symbol_use(context, self.id(), &callee, Some(&arg_types))?
-        else {
-            return Ok(());
-        };
-
-        let result_type = context.get_value(self.result()).ty();
-        if resolved.result_type != Some(result_type) {
+        if !tir::symbol_table::signature_accepts(context, &parameters, &arg_types) {
             return Err(Error::VerificationError(format!(
-                "call to '{}' produces {}, but the callee returns {}",
-                tir::symbol_table::format_symbol(context, &callee, Some(&arg_types)),
+                "call passes ({}), but the callee takes ({})",
+                type_list(context, &arg_types),
+                type_list(context, &parameters)
+            )));
+        }
+        let result_type = context.get_value(self.result()).ty();
+        if result_type != ret_type {
+            return Err(Error::VerificationError(format!(
+                "call produces {}, but the callee returns {}",
                 context.type_to_string(result_type),
-                resolved
-                    .result_type
-                    .map_or_else(|| "nothing".to_string(), |ty| context.type_to_string(ty))
+                context.type_to_string(ret_type)
             )));
         }
         Ok(())
@@ -55,12 +57,12 @@ impl tir::Verifiable for CallOp {
 }
 
 impl CallOp {
-    pub fn callee(&self) -> String {
-        callee_attr(self)
+    pub fn callee(&self) -> ValueId {
+        self.operands()[0]
     }
 
     pub fn args(&self) -> Vec<ValueId> {
-        self.operands()[..self.operands().len() - self.state_operand().is_some() as usize].to_vec()
+        self.operands()[1..self.operands().len() - self.state_operand().is_some() as usize].to_vec()
     }
 
     pub fn has_result_address(&self) -> bool {
@@ -71,20 +73,57 @@ impl CallOp {
         super::argument_alignments(self)
     }
 
+    /// The symbol this call was bound to for machine lowering, once the callee
+    /// has been resolved to a λ of the module.
+    pub fn callee_symbol(&self) -> Option<String> {
+        match self.attr("callee")? {
+            AttributeValue::Str(name) => Some(name.to_string()),
+            _ => None,
+        }
+    }
+
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        let header = format!("func.call @{}", self.callee());
-        print_call(
-            &context,
-            fmt,
-            &header,
-            self.result(),
-            &self.args(),
-            self.has_result_address(),
-            &self.argument_alignments(),
-            self.state_operand(),
-            self.state_result(),
-        )
+        let ret_type = context.get_value(self.result()).ty();
+        let is_unit = ret_type == UnitType::new(&context);
+
+        if !is_unit {
+            fmt.write(format!("%{} = ", self.result().number()))?;
+        }
+        fmt.write(format!("func.call %{}", self.callee().number()))?;
+
+        let args = self.args();
+        fmt.write("(")?;
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                fmt.write(", ")?;
+            }
+            fmt.write(format!("%{}", arg.number()))?;
+        }
+        if !args.is_empty() {
+            fmt.write(" : ")?;
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    fmt.write(", ")?;
+                }
+                context.print_type(context.get_value(*arg).ty(), fmt)?;
+            }
+        }
+        fmt.write(")")?;
+
+        if !is_unit {
+            fmt.write(" -> ")?;
+            context.print_type(ret_type, fmt)?;
+        }
+        if self.has_result_address() {
+            fmt.write(" result_address")?;
+        }
+        if let Some(symbol) = self.callee_symbol() {
+            fmt.write(format!(" callee @{symbol}"))?;
+        }
+        super::print_argument_alignments(fmt, &self.argument_alignments())?;
+        crate::builtin::print_state_clause(fmt, self.state_operand(), self.state_result())?;
+        fmt.write("\n")
     }
 
     fn custom_parse(
@@ -92,20 +131,30 @@ impl CallOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         use tir::parse::common::Cursor;
-        let callee = parser
-            .parse_symbol_name()
-            .ok_or_else(|| (parser.span(), Error::ExpectedSymbolName))?
+        let callee_ref = parser
+            .parse_value_ref()
+            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
             .to_string();
+        let callee = parser.resolve_value(context, &callee_ref);
         let args = parse_arg_list(parser, context)?;
         let ret_type = parse_ret_type(parser, context)?;
         let result_address = parser.parse_token("result_address");
+        let callee_symbol = parser
+            .parse_token("callee")
+            .then(|| {
+                parser
+                    .parse_symbol_name()
+                    .map(str::to_string)
+                    .ok_or_else(|| (parser.span(), Error::ExpectedSymbolName))
+            })
+            .transpose()?;
         let argument_alignments = super::parse_argument_alignments(parser, context)?;
 
-        let state = crate::builtin::parse_state_clause(parser)?;
+        let state = crate::builtin::parse_state_clause(parser, context)?;
 
         let mut builder = CallOpBuilder::new(context)
+            .callee(callee)
             .args(args)
-            .attr("callee", AttributeValue::Str(callee.into()))
             .result_type(ret_type);
         if let Some(operand) = state.operand {
             builder = builder.state(operand);
@@ -115,6 +164,9 @@ impl CallOp {
         }
         if result_address {
             builder = builder.result_address();
+        }
+        if let Some(symbol) = callee_symbol {
+            builder = builder.attr("callee", AttributeValue::Str(symbol.into()));
         }
         if let Some(argument_alignments) = argument_alignments {
             builder = builder.attr("argument_alignments", argument_alignments);
@@ -145,202 +197,37 @@ impl CallOpBuilder {
     }
 }
 
-operation! {
-    IndirectCallOp {
-        name: "indirect_call",
-        dialect: "func",
-        format: "custom",
-        verifier: "true",
-        operands: O {
-            callee: "Any",
-            args: "*Any",
-        },
-        results: R {
-            result: "Any",
-        },
-        state: "in_out",
-    }
+fn type_list(context: &Context, types: &[tir::TypeId]) -> String {
+    types
+        .iter()
+        .map(|ty| context.type_to_string(*ty))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
-impl IndirectCallOp {
-    pub fn callee(&self) -> ValueId {
-        self.operands()[0]
-    }
-
-    pub fn args(&self) -> Vec<ValueId> {
-        self.operands()[1..self.operands().len() - self.state_operand().is_some() as usize].to_vec()
-    }
-
-    pub fn has_result_address(&self) -> bool {
-        has_result_address(self)
-    }
-
-    pub fn argument_alignments(&self) -> Vec<u64> {
-        super::argument_alignments(self)
-    }
-
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
-        let header = format!("func.indirect_call %{}", self.callee().number());
-        print_call(
-            &context,
-            fmt,
-            &header,
-            self.result(),
-            &self.args(),
-            self.has_result_address(),
-            &self.argument_alignments(),
-            self.state_operand(),
-            self.state_result(),
-        )
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        context: &Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        use tir::parse::common::Cursor;
-        let callee_ref = parser
-            .parse_value_ref()
-            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
-        let callee = parser.resolve_value(callee_ref).ok_or_else(|| {
-            (
-                parser.span(),
-                Error::UnknownValueRef(callee_ref.to_string()),
-            )
-        })?;
-        let args = parse_arg_list(parser, context)?;
-        let ret_type = parse_ret_type(parser, context)?;
-        let result_address = parser.parse_token("result_address");
-        let argument_alignments = super::parse_argument_alignments(parser, context)?;
-
-        let state = crate::builtin::parse_state_clause(parser)?;
-
-        let mut builder = IndirectCallOpBuilder::new(context)
-            .callee(callee)
-            .args(args)
-            .result_type(ret_type);
-        if let Some(operand) = state.operand {
-            builder = builder.state(operand);
-        }
-        if state.result_name.is_some() {
-            builder = builder.state_result();
-        }
-        if result_address {
-            builder = builder.result_address();
-        }
-        if let Some(argument_alignments) = argument_alignments {
-            builder = builder.attr("argument_alignments", argument_alignments);
-        }
-        let op = builder.build();
-        bind_state_result(parser, &state, op.state_result());
-        Ok(Box::new(op))
-    }
-}
-
-impl IndirectCallOpBuilder {
-    pub fn result_address(self) -> Self {
-        self.attr("result_address", AttributeValue::Bool(true))
-    }
-
-    pub fn argument_alignments(self, alignments: &[u64]) -> Self {
-        self.attr(
-            "argument_alignments",
-            AttributeValue::Array(
-                alignments
-                    .iter()
-                    .copied()
-                    .map(AttributeValue::UInt)
-                    .collect::<Vec<_>>()
-                    .into(),
-            ),
-        )
-    }
-}
-
-impl tir::Verifiable for IndirectCallOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_call_metadata(self, context, &self.args(), "indirect_call")
-    }
-}
-
-fn verify_call_metadata(
+fn verify_result_address(
     op: &impl Operation,
     context: &Context,
     args: &[ValueId],
-    name: &str,
 ) -> Result<(), Error> {
-    super::verify_argument_alignments(op, args.len(), name)?;
     if !has_result_address(op) {
         return Ok(());
     }
     let Some(destination) = args.first().copied() else {
-        return Err(Error::VerificationError(format!(
-            "result-address {name} requires a destination argument"
-        )));
+        return Err(Error::VerificationError(
+            "result-address call requires a destination argument".to_string(),
+        ));
     };
     let ty = context.get_type_data(context.get_value(destination).ty());
     if (ty.as_ref() as &dyn std::any::Any)
         .downcast_ref::<crate::ptr::PtrType>()
         .is_none()
     {
-        return Err(Error::VerificationError(format!(
-            "result-address {name} destination must have pointer type"
-        )));
+        return Err(Error::VerificationError(
+            "result-address call destination must have pointer type".to_string(),
+        ));
     }
     Ok(())
-}
-
-/// Print a call as `%r = <header>(%a, %b : t1, t2) -> ret`, omitting the result
-/// binding and arrow for unit-returning calls.
-#[allow(clippy::too_many_arguments)]
-fn print_call(
-    context: &Context,
-    fmt: &mut tir::IRFormatter,
-    header: &str,
-    result: ValueId,
-    args: &[ValueId],
-    result_address: bool,
-    argument_alignments: &[u64],
-    state_operand: Option<ValueId>,
-    state_result: Option<ValueId>,
-) -> Result<(), std::fmt::Error> {
-    let ret_type = context.get_value(result).ty();
-    let is_unit = ret_type == UnitType::new(context);
-
-    if !is_unit {
-        fmt.write(format!("%{} = ", result.number()))?;
-    }
-    fmt.write(header)?;
-
-    fmt.write("(")?;
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
-            fmt.write(", ")?;
-        }
-        fmt.write(format!("%{}", arg.number()))?;
-    }
-    if !args.is_empty() {
-        fmt.write(" : ")?;
-        for (i, arg) in args.iter().enumerate() {
-            if i > 0 {
-                fmt.write(", ")?;
-            }
-            context.print_type(context.get_value(*arg).ty(), fmt)?;
-        }
-    }
-    fmt.write(")")?;
-
-    if !is_unit {
-        fmt.write(" -> ")?;
-        context.print_type(ret_type, fmt)?;
-    }
-    if result_address {
-        fmt.write(" result_address")?;
-    }
-    super::print_argument_alignments(fmt, argument_alignments)?;
-    crate::builtin::print_state_clause(fmt, state_operand, state_result)?;
-    fmt.write("\n")
 }
 
 /// Parse `(%a, %b : t1, t2)` (types are informational; values resolve by number).
@@ -359,11 +246,9 @@ fn parse_arg_list(
     loop {
         let arg_ref = parser
             .parse_value_ref()
-            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
-        let arg = parser
-            .resolve_value(arg_ref)
-            .ok_or_else(|| (parser.span(), Error::UnknownValueRef(arg_ref.to_string())))?;
-        args.push(arg);
+            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
+            .to_string();
+        args.push(parser.resolve_value(context, &arg_ref));
         if !parser.parse_token(",") {
             break;
         }
@@ -407,13 +292,6 @@ fn bind_state_result(
 ) {
     if let (Some(name), Some(result)) = (state.result_name.as_deref(), result) {
         parser.define_value(name, result);
-    }
-}
-
-fn callee_attr(op: &impl Operation) -> String {
-    match op.attr("callee") {
-        Some(AttributeValue::Str(s)) => s.to_string(),
-        _ => panic!("call must carry a 'callee' symbol name"),
     }
 }
 

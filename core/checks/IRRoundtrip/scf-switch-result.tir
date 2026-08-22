@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @select(%0: !i32) -> !i32 {
+  %fn_select = func.func @select(%0: !i32) -> !i32 {
     %1 = scf.switch %0 -> !i32 case 1 {
       %2 = constant {value = 10} : !i32
       scf.yield %2

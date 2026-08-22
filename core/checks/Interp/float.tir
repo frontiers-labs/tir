@@ -1,7 +1,7 @@
 // RUN: tir interp %s | filecheck %s
 
 module {
-  func.func @main() -> !f32 {
+  %fn_main = func.func @main() -> !f32 {
     %0 = constantf {value = 2.5} : !f32
     %1 = constantf {value = 0.5} : !f32
     %2 = addf %0, %1 : !f32

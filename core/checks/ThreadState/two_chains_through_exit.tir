@@ -4,7 +4,7 @@
 // in the order the loop carries them.
 
 module {
-  func.func @f(%0: !i1, %1: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
@@ -27,7 +27,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: do scope(%[[SCOPE:[0-9]+]])(%[[X:[0-9]+]], %[[Y:[0-9]+]]) {
 // CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[X]] -> %[[X1:[0-9]+]])
 // CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[Y]] -> %[[Y1:[0-9]+]])

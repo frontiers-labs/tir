@@ -6,7 +6,7 @@
 // Nothing structured survives.
 
 module {
-  func.func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
+  %fn_pick = func.func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
     %r = scf.if %c -> !i64 {
       %x = addi %a, %b : !i64
       scf.yield %x

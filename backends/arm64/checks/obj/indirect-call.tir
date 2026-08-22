@@ -5,8 +5,9 @@
 // the x0 argument and finalizes to `blr`.
 
 module {
-  func.func @caller(%0: !i64, %1: !i32) -> !i32 {
-    %2 = func.indirect_call %0(%1 : !i32) -> !i32
+  %fn_caller = func.func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
+    %3 = ptr_to_fn %0 : !fn<(!i32) -> !i32>
+    %2 = func.call %3(%1 : !i32) -> !i32
     func.return %2
   }
   module_end

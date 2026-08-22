@@ -1,8 +1,8 @@
 // RUN: not tir opt --pass lower-memory-intrinsics %s
 
 module {
-  func.declare @memset(!ptr.p, !i8, !i64) -> !ptr.p
-  func.func @fill(%0: !ptr.p, %1: !i8, %2: !i64) {
+  %fn_memset = func.declare @memset(!ptr.p, !i8, !i64) -> !ptr.p
+  %fn_fill = func.func @fill(%0: !ptr.p, %1: !i8, %2: !i64) {
     ptr.memset %0, %1, %2
     func.return
   }

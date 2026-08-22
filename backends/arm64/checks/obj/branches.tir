@@ -1,7 +1,7 @@
 // RUN: tir mc --march=arm64 --filetype=obj-ascii %s | filecheck %s
 
 module {
-  func.func @select(%0: !i1) -> !i32 {
+  %fn_select = func.func @select(%0: !i1) -> !i32 {
     cfg.cond_br %0, ^bb1, ^bb2
   ^bb1:
     %1 = constant {value = 1} : !i32

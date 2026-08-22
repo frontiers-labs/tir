@@ -7,7 +7,7 @@
 // loop its result, and the slot leaves memory.
 
 module {
-  func.func @count(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
+  %fn_count = func.func @count(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
     %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %4
     scf.for %0, %1, %2 {
@@ -22,7 +22,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @count
+// CHECK-LABEL: %{{[0-9]+}} = func.func @count
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.for %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %3) -> !i32 {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[CARRIED]], %[[CARRIED]] : !i32

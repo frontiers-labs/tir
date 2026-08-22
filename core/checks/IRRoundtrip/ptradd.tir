@@ -1,7 +1,7 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.func @field(%0: !ptr.p<!i32>, %1: !i64) -> !ptr.p<!i8> {
+  %fn_field = func.func @field(%0: !ptr.p<!i32>, %1: !i64) -> !ptr.p<!i8> {
     %2 = ptr.ptradd %0, %1 : !ptr.p<!i8>
     func.return %2
   }
@@ -9,7 +9,7 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.func @field(%{{[0-9]+}}: !ptr.p<!i32>, %{{[0-9]+}}: !i64) -> !ptr.p<!i8> {
+// CHECK-NEXT: %{{[0-9]+}} = func.func @field(%{{[0-9]+}}: !ptr.p<!i32>, %{{[0-9]+}}: !i64) -> !ptr.p<!i8> {
 // CHECK-NEXT: %{{[0-9]+}} = ptr.ptradd %{{[0-9]+}}, %{{[0-9]+}} : !ptr.p<!i8>
 // CHECK-NEXT: func.return %{{[0-9]+}}
 // CHECK-NEXT: }

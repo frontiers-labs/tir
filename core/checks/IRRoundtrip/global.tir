@@ -1,0 +1,23 @@
+// RUN: tir opt %s | filecheck %s
+
+// A δ node produces the address of its object: an initialized definition, a
+// zero-filled one, and a declaration of storage another module owns.
+
+module {
+  %counter = global @counter align 4 bytes [1, 0, 0, 0]
+  %scratch = global private @scratch size 8 align 8 section ".bss"
+  %errno = global external @errno
+  %fn_main = func.func @main() -> !ptr.p {
+    ptr.store %counter, %scratch
+    func.return %errno
+  }
+  module_end
+}
+
+// CHECK: module {
+// CHECK-NEXT: %[[COUNTER:[0-9]+]] = global @counter align 4 bytes [1, 0, 0, 0]
+// CHECK-NEXT: %[[SCRATCH:[0-9]+]] = global private @scratch size 8 align 8 section ".bss"
+// CHECK-NEXT: %[[ERRNO:[0-9]+]] = global external @errno
+// CHECK-NEXT: %{{[0-9]+}} = func.func @main() -> !ptr.p {
+// CHECK-NEXT: ptr.store %[[COUNTER]], %[[SCRATCH]]
+// CHECK-NEXT: func.return %[[ERRNO]]

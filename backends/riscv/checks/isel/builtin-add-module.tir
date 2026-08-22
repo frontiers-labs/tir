@@ -4,7 +4,7 @@
 // carrying the function's argument registers and terminated by a vret.
 
 module {
-  func.func @demo(%0: !i32, %1: !i32) -> !i32 {
+  %fn_demo = func.func @demo(%0: !i32, %1: !i32) -> !i32 {
     %2 = addi %0, %1 : !i32
     func.return %2
   }

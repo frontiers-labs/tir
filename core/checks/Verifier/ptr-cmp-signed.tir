@@ -4,7 +4,7 @@
 // verifier names the predicates that do.
 
 module {
-  func.func @signed(%0: !ptr.p, %1: !ptr.p) -> !i1 {
+  %fn_signed = func.func @signed(%0: !ptr.p, %1: !ptr.p) -> !i1 {
     %2 = ptr.cmp %0, %1 {predicate = "slt"} : !i1
     func.return %2
   }

@@ -17,12 +17,11 @@ use crate::{
         ConstantFOp, ConstantOp, FloatType, IntegerType, MakeTupleOp, StateType, TokenType,
         TupleGetOp, UnitType,
     },
-    func::{CallOp, FuncOp, IndirectCallOp, ReturnOp},
+    func::{CallOp, FuncOp, ReturnOp},
     ptr::{AllocaOp, LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp},
     scf::{BreakOp, ConditionOp, ContinueOp, ForOp, IfOp, SwitchOp, WhileOp, YieldOp},
     sem,
     state::EntryStateOp,
-    symbol_table::SymbolTable,
 };
 
 /// A concrete interpreter value: integers of explicit width, floats, tuples,
@@ -34,6 +33,8 @@ pub enum Value {
     Float(APFloat),
     Tuple(Vec<Value>),
     Ptr(u64),
+    /// A λ node: what a call takes as its callee.
+    Function(OpId),
     State,
     Token,
     Unit,
@@ -193,17 +194,15 @@ pub trait Interp {
     }
 }
 
-/// Interpret `function` (a `func.func` under `module`) over `arguments` and
-/// return the values its `func.return` carries.
+/// Interpret `function` (a `func.func`) over `arguments` and return the values
+/// its `func.return` carries.
 pub fn run_function(
     context: &Context,
-    module: OpId,
     function: OpId,
     arguments: Vec<Value>,
 ) -> Result<Vec<Value>> {
     let mut interp = Interpreter {
         context,
-        symbols: SymbolTable::build(context, module),
         memory: Memory::default(),
         env: HashMap::new(),
     };
@@ -221,7 +220,6 @@ fn region_arguments(context: &Context, region: RegionId) -> Vec<ValueId> {
 
 struct Interpreter<'c> {
     context: &'c Context,
-    symbols: SymbolTable,
     memory: Memory,
     env: HashMap<ValueId, Value>,
 }
@@ -346,9 +344,6 @@ impl Interpreter<'_> {
         if instance.is::<CallOp>() {
             let flow = self.exec_call(op_id)?;
             return self.exec_value_flow(op_id, flow);
-        }
-        if instance.is::<IndirectCallOp>() {
-            return Err(InterpError::Unsupported("func.indirect_call".into()));
         }
         if instance.is::<crate::cfg::BranchOp>() || instance.is::<crate::cfg::CondBranchOp>() {
             return Ok(Some(self.exec_branch(&instance)?));
@@ -518,24 +513,17 @@ impl Interpreter<'_> {
 
     fn exec_call(&mut self, op_id: OpId) -> Result<Flow> {
         let op = CallOp::from_op_instance(self.context.get_op(op_id));
-        let callee = op.callee();
-        let argument_types: Vec<crate::TypeId> = op
-            .args()
-            .iter()
-            .map(|&arg| self.context.get_value(arg).ty())
-            .collect();
-        let entry = self
-            .symbols
-            .resolve(self.context, &callee, &argument_types)
-            .ok_or_else(|| {
-                InterpError::Message(format!("no definition of @{callee} to interpret"))
-            })?;
+        let Value::Function(definition) = self.value_of(op.callee())? else {
+            return Err(InterpError::Unsupported(
+                "a call whose callee is not a definition".into(),
+            ));
+        };
         let arguments = op
             .args()
             .iter()
             .map(|&arg| self.value_of(arg))
             .collect::<Result<_>>()?;
-        let mut returned = self.call_function(entry.op, arguments)?;
+        let mut returned = self.call_function(definition, arguments)?;
         // The call's own `!state` result, when present, is the callee's
         // outgoing memory chain.
         if op.state_result().is_some() {
@@ -585,11 +573,21 @@ impl Interpreter<'_> {
             .collect()
     }
 
+    /// A λ of the module is a constant of the program: it needs no binding, so
+    /// a value the environment does not hold may still be one.
     fn value_of(&self, value: ValueId) -> Result<Value> {
-        self.env
-            .get(&value)
-            .cloned()
-            .ok_or_else(|| missing_value_id(value))
+        if let Some(bound) = self.env.get(&value) {
+            return Ok(bound.clone());
+        }
+        self.lambda(value).ok_or_else(|| missing_value_id(value))
+    }
+
+    fn lambda(&self, value: ValueId) -> Option<Value> {
+        let definition = self.context.get_value(value).defining_op()?;
+        self.context
+            .get_op(definition)
+            .is::<FuncOp>()
+            .then_some(Value::Function(definition))
     }
 
     /// Evaluate a leaf op: through its [`Interp`] impl when it has one, else
@@ -662,7 +660,7 @@ fn to_sem_value(value: &Value, pointer_width: u32) -> Result<sem::Value> {
         Value::Int(int) => sem::Value::Int(int.clone()),
         Value::Float(float) => sem::Value::Float(float.clone()),
         Value::Ptr(address) => sem::Value::Int(APInt::new(pointer_width, *address)),
-        Value::Tuple(_) | Value::State | Value::Token | Value::Unit => {
+        Value::Tuple(_) | Value::Function(_) | Value::State | Value::Token | Value::Unit => {
             return Err(InterpError::Message(
                 "value kind has no semantic-expression form".into(),
             ));

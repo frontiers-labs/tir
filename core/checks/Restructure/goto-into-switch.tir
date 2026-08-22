@@ -5,7 +5,7 @@
 // variable says which, and the block jumped into is emitted once.
 
 module {
-  func.func @gis(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+  %fn_gis = func.func @gis(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
     cfg.cond_br %0, ^bb3, ^bb1
   ^bb1:
     %3 = constant {value = 1} : !i32
@@ -23,7 +23,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @gis
+// CHECK-LABEL: %{{[0-9]+}} = func.func @gis
 // CHECK-NOT: br
 // CHECK: scf.if
 // CHECK: cmpi

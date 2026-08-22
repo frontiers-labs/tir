@@ -5,7 +5,7 @@
 // instruction, and both arms jump on to the single exit block that rets.
 
 module {
-  func.func @pick(%0: !i64, %1: !i64) -> !i64 {
+  %fn_pick = func.func @pick(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:

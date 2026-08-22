@@ -1,0 +1,12 @@
+// RUN: not tir opt %s
+
+// A call names its callee by value, so a name nothing defines is a parse error
+// rather than a failed symbol lookup.
+
+module {
+  %fn_caller = func.func @caller(%0: !i32) -> !i32 {
+    %1 = func.call %fn_missing(%0 : !i32) -> !i32
+    func.return %1
+  }
+  module_end
+}

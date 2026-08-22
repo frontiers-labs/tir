@@ -111,7 +111,7 @@ fn run_on_broken_candidate(pass: Box<dyn Pass>) -> Result<(), PassError> {
     let arg = context.create_value(i32, None);
     let block = context.create_block(vec![arg]);
     region.add_block(block.id());
-    let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
+    let func = func_ops::lambda(&context, "demo", i32, &region).build();
     let body = func.body();
 
     let add = ops::addi(
@@ -209,7 +209,7 @@ fn function_with_one_argument(context: &Context) -> FuncOp {
     region.add_block(block.id());
     let add = block.append_op(ops::addi(context, argument.id(), argument.id(), i32).build());
     block.append_op(func_ops::r#return(context, add.result()).build());
-    func_ops::func(context, "demo", i32, Some(region.id())).build()
+    func_ops::lambda(context, "demo", i32, &region).build()
 }
 
 #[test]
@@ -370,13 +370,7 @@ fn nested_pass_manager_rewrites_ops() {
     let block = context.create_block(vec![param0, param1]);
     region.add_block(block.id());
 
-    let func = func_ops::func(
-        &context,
-        "demo",
-        IntegerType::new(&context, 32),
-        Some(region.id()),
-    )
-    .build();
+    let func = func_ops::lambda(&context, "demo", IntegerType::new(&context, 32), &region).build();
     let func_body = func.body();
     let func_id = func.id();
 
@@ -434,7 +428,7 @@ fn erasing_an_op_drops_its_operand_uses() {
     let arg = context.create_value(i32, None);
     let block = context.create_block(vec![arg.clone()]);
     region.add_block(block.id());
-    let func = func_ops::func(&context, "demo", i32, Some(region.id())).build();
+    let func = func_ops::lambda(&context, "demo", i32, &region).build();
     let body = func.body();
 
     let neg = ops::subi(

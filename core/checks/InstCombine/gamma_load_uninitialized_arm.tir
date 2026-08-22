@@ -8,7 +8,7 @@
 // what the other arm writes, so that store does not.
 
 module {
-  func.func @guarded(%0: !i1, %1: !i32) -> !i32 {
+  %fn_guarded = func.func @guarded(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     scf.if %0 {
       ptr.store %1, %2
@@ -22,7 +22,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @guarded
+// CHECK-LABEL: %{{[0-9]+}} = func.func @guarded
 // CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
 // CHECK-NEXT: %[[UNINIT:[0-9]+]] = ptr.load %[[SLOT]]
 // CHECK-NEXT: %[[RESULT:[0-9]+]] = scf.if %0 -> !i32 {

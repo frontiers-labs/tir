@@ -2,7 +2,7 @@
 // RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
 module {
-  func.func @f() -> !i32 {
+  %fn_f = func.func @f() -> !i32 {
     %0 = constant {value = 2} : !i32
     %1 = constant {value = 3} : !i32
     %2 = addi %0, %1 : !i32
@@ -11,6 +11,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: addi
 // CHECK: constant {value = 5}

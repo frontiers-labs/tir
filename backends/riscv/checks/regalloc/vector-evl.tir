@@ -5,7 +5,7 @@
 // same SSA value, so one `vsetvli x0, <avl>` configures the unit for both.
 
 module {
-  func.func @dyn(%0: !vector.vec<i32>, %1: !vector.vec<i32>, %2: !index) -> !vector.vec<i32> {
+  %fn_dyn = func.func @dyn(%0: !vector.vec<i32>, %1: !vector.vec<i32>, %2: !index) -> !vector.vec<i32> {
     %3 = vector.add %0, %1, %2 : !vector.vec<i32>
     %4 = vector.mul %3, %1, %2 : !vector.vec<i32>
     func.return %4

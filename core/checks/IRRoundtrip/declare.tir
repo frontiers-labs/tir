@@ -1,8 +1,8 @@
 // RUN: tir opt %s | filecheck %s
 
 module {
-  func.declare @puts(!ptr.p<!i8>) -> !i32
-  func.func @main() -> !i32 {
+  %fn_puts = func.declare @puts(!ptr.p<!i8>) -> !i32
+  %fn_main = func.func @main() -> !i32 {
     %0 = constant {value = 0} : !i32
     func.return %0
   }
@@ -10,8 +10,8 @@ module {
 }
 
 // CHECK: module {
-// CHECK-NEXT: func.declare @puts(!ptr.p<!i8>) -> !i32
-// CHECK-NEXT: func.func @main() -> !i32 {
+// CHECK-NEXT: %{{[0-9]+}} = func.declare @puts(!ptr.p<!i8>) -> !i32
+// CHECK-NEXT: %{{[0-9]+}} = func.func @main() -> !i32 {
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i32
 // CHECK-NEXT: func.return %{{[0-9]+}}
 // CHECK-NEXT: }

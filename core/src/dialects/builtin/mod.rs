@@ -1,5 +1,7 @@
 mod arith;
 mod float;
+mod fn_type;
+mod global;
 mod module;
 mod state;
 mod tuple;
@@ -14,6 +16,8 @@ use crate as tir;
 
 pub use arith::*;
 pub use float::*;
+pub use fn_type::*;
+pub use global::*;
 pub use module::*;
 pub use state::*;
 pub use tuple::*;
@@ -21,6 +25,8 @@ pub use tuple::*;
 pub mod ops {
     pub use super::arith::*;
     pub use super::float::*;
+    pub use super::fn_type::*;
+    pub use super::global::*;
     pub use super::module::*;
     pub use super::state::*;
     pub use super::tuple::*;
@@ -63,8 +69,12 @@ dialect! {
             CmpFOp,
             MakeTupleOp,
             TupleGetOp,
+            GlobalOp,
+            SymAddrOp,
+            FnToPtrOp,
+            PtrToFnOp,
         ],
-        types: [IntegerType, FloatType, IndexType, UnitType, TokenType, TupleType, StateType],
+        types: [IntegerType, FloatType, IndexType, UnitType, TokenType, TupleType, StateType, FnType],
     }
 }
 

@@ -4,7 +4,7 @@
 // label names the entry block.
 
 module {
-  func.func @select(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+  %fn_select = func.func @select(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
   ^entry:
     cfg.cond_br %0, ^left(%1 : !i32), ^right(%2 : !i32)
   ^left(%3: !i32):
@@ -17,7 +17,7 @@ module {
   module_end
 }
 
-// CHECK: func.func @select(%{{[0-9]+}}: !i1, %{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
+// CHECK: %{{[0-9]+}} = func.func @select(%{{[0-9]+}}: !i1, %{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
 // CHECK-NEXT: cfg.cond_br %{{[0-9]+}}, ^bb1(%{{[0-9]+}} : !i32), ^bb2(%{{[0-9]+}} : !i32)
 // CHECK-NEXT: ^bb1(%{{[0-9]+}}: !i32):
 // CHECK-NEXT: cfg.br ^bb3(%{{[0-9]+}} : !i32)

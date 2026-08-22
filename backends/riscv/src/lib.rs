@@ -1119,9 +1119,9 @@ impl tir::backend::TargetMachine for RiscvTarget {
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         if self.config.xlen == 64 {
-            vec![obj::lower_constant_rv64, obj::lower_addr_of]
+            vec![obj::lower_constant_rv64, obj::lower_sym_addr]
         } else {
-            vec![obj::lower_constant_rv32, obj::lower_addr_of]
+            vec![obj::lower_constant_rv32, obj::lower_sym_addr]
         }
     }
 

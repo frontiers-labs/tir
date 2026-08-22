@@ -6,7 +6,7 @@
 // one yields the carry, which inside the body is the port argument.
 
 module {
-  func.func @dispatch(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+  %fn_dispatch = func.func @dispatch(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %2, %3
     scf.while {
@@ -33,7 +33,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @dispatch
+// CHECK-LABEL: %{{[0-9]+}} = func.func @dispatch
 // CHECK-NOT: ptr.
 // CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%[[COND:[0-9]+]] = %2) -> !i32 {
 // CHECK-NEXT: scf.condition %0, %[[COND]]

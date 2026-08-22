@@ -56,7 +56,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         .map(|(&ty, text)| parse_argument(&context, ty, text))
         .collect::<Result<Vec<_>, String>>()?;
 
-    let results = interp::run_function(&context, module.id(), function, arguments)
+    let results = interp::run_function(&context, function, arguments)
         .map_err(|err| format!("interpretation failed: {err}"))?;
 
     let ret_types = return_types(&context, function);
@@ -130,7 +130,7 @@ fn format_value(context: &Context, value: &Value, ty: Option<tir::TypeId>) -> St
                 .collect();
             format!("({})", inner.join(", "))
         }
-        Value::State | Value::Token | Value::Unit => spelled.clone(),
+        Value::Function(_) | Value::State | Value::Token | Value::Unit => spelled.clone(),
     };
     format!("{spelled} {rendered}")
 }

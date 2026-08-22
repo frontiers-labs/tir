@@ -7,7 +7,7 @@
 // defining compare in the entry block (where %c is unknown) stays.
 
 module {
-  func.func @f(%a: !i32, %b: !i32) -> !i1 {
+  %fn_f = func.func @f(%a: !i32, %b: !i32) -> !i1 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
     cfg.cond_br %c, ^bb1, ^bb2
   ^bb1:
@@ -19,7 +19,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: cmpi
 // CHECK: cfg.cond_br
 // CHECK: ^bb1:

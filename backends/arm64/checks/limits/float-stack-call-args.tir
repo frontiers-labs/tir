@@ -1,9 +1,9 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 
 module {
-  func.declare @ext(!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64) -> !f64
-  func.func @caller(%0: !f64) -> !f64 {
-    %1 = func.call @ext(%0,%0,%0,%0,%0,%0,%0,%0,%0 : !f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64) -> !f64
+  %fn_ext = func.declare @ext(!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64) -> !f64
+  %fn_caller = func.func @caller(%0: !f64) -> !f64 {
+    %1 = func.call %fn_ext(%0,%0,%0,%0,%0,%0,%0,%0,%0 : !f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64,!f64) -> !f64
     func.return %1
   }
   module_end

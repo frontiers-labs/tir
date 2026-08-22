@@ -5,7 +5,7 @@
 // that value regardless of the condition. The side-effecting if is left in place.
 
 module {
-  func.func @f(%c: !i1, %k: !i32) -> !i32 {
+  %fn_f = func.func @f(%c: !i1, %k: !i32) -> !i32 {
     %r = scf.if %c -> !i32 {
       scf.yield %k
     } else {
@@ -16,6 +16,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f(%{{[0-9]+}}: !i1, %[[K:[0-9]+]]: !i32)
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !i1, %[[K:[0-9]+]]: !i32)
 // CHECK: scf.if
 // CHECK: func.return %[[K]]

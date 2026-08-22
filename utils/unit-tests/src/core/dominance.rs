@@ -27,9 +27,14 @@ fn yield_region(context: &Context) -> RegionId {
 }
 
 fn func_with_region(context: &Context, region: RegionId) -> OpId {
-    func_ops::func(context, "f", UnitType::new(context), Some(region))
-        .build()
-        .id()
+    func_ops::lambda(
+        context,
+        "f",
+        UnitType::new(context),
+        &context.get_region(region),
+    )
+    .build()
+    .id()
 }
 
 fn terminate(block: &BlockHandle, op: impl Operation) {

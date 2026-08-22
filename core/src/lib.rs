@@ -50,7 +50,7 @@ pub use error::Error;
 pub use interfaces::{
     BranchGuard, BranchTerminator, Commutative, Conditional, ConstantFold, ConstantLike,
     CountedLoop, EntryGuard, GuardOrdering, GuardedLoop, IntegerArithmetic, LoopLike, MemoryRead,
-    MemoryWrite, OpCost, PromotableAllocation, SameOperandAndResultType, Symbol, Terminator,
+    MemoryWrite, OpCost, PromotableAllocation, Pure, SameOperandAndResultType, Symbol, Terminator,
     TokenScope, Visibility,
 };
 pub use interp::{Interp, InterpError, Memory as InterpMemory, Value as InterpValue};

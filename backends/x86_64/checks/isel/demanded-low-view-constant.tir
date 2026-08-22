@@ -9,7 +9,7 @@
 // with no instruction and the func.return reading an undefined value.
 
 module {
-  func.func @demanded_low_view_constant(%0: !i64) -> !i32 {
+  %fn_demanded_low_view_constant = func.func @demanded_low_view_constant(%0: !i64) -> !i32 {
     %1 = constant {value = 32} : !i64
     %2 = shrui %0, %1 : !i64
     %3 = trunci %2 : !i32

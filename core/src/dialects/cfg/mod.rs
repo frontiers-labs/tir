@@ -172,7 +172,7 @@ impl CondBranchOp {
         parser: &mut tir::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
-        let condition = parse_value_id(parser)?;
+        let condition = parse_value_id(parser, context)?;
         expect_token(parser, ",")?;
         let (true_dest, true_args) = parse_successor(parser, context)?;
         expect_token(parser, ",")?;
@@ -258,7 +258,7 @@ fn parse_successor(
     let mut arg_types = vec![];
     if parser.parse_token("(") {
         loop {
-            args.push(parse_value_id(parser)?);
+            args.push(parse_value_id(parser, context)?);
             if parser.parse_token(",") {
                 continue;
             }
@@ -281,14 +281,13 @@ fn parse_successor(
 
 fn parse_value_id(
     parser: &mut tir::parse::text::Parser,
+    context: &Context,
 ) -> Result<ValueId, (tir::parse::Span, Error)> {
     use tir::parse::common::Cursor;
     let value_ref = parser
         .parse_value_ref()
         .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
-    parser
-        .resolve_value(value_ref)
-        .ok_or_else(|| (parser.span(), Error::UnknownValueRef(value_ref.to_string())))
+    Ok(parser.resolve_value(context, value_ref))
 }
 
 fn parse_arg_type(

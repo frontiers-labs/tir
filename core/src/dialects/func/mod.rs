@@ -20,7 +20,7 @@ pub mod ops {
 dialect! {
     FuncDialect {
         name: "func",
-        operations: [FuncOp, ReturnOp, CallOp, IndirectCallOp, DeclareOp, AddressOfOp],
+        operations: [FuncOp, ReturnOp, CallOp, DeclareOp],
         types: [],
     }
 }

@@ -7,7 +7,7 @@
 // func.return register, since the merge value is returned).
 
 module {
-  func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
+  %fn_sel = func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
     %cond = cmpi %c, %d {predicate = "slt"} : !i1
     cfg.cond_br %cond, ^bb1, ^bb2
   ^bb1:

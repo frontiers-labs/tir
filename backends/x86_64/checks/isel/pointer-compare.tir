@@ -7,7 +7,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func.func @below(%0: !ptr.p, %1: !ptr.p) -> !i64 {
+  %fn_below = func.func @below(%0: !ptr.p, %1: !ptr.p) -> !i64 {
     %2 = ptr.cmp %0, %1 {predicate = "ult"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2
   ^bb1:
@@ -18,10 +18,10 @@ module {data_layout = #data_layout} {
     func.return %4
   }
   // CHECK: asm.symbol {name = "below"
-  // CHECK: x86_64.cmp {dst = %virt10:GPR, src = %virt11:GPR}
+  // CHECK: x86_64.cmp {dst = %virt12:GPR, src = %virt13:GPR}
   // CHECK-NEXT: x86_64.jb {imm = ^bb1}
 
-  func.func @is_null(%0: !ptr.p) -> !i64 {
+  %fn_is_null = func.func @is_null(%0: !ptr.p) -> !i64 {
     %1 = ptr.null : !ptr.p
     %2 = ptr.cmp %0, %1 {predicate = "eq"} : !i1
     cfg.cond_br %2, ^bb1, ^bb2

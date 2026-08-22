@@ -6,7 +6,7 @@
 // way of the stores of a slot with no read at all.
 
 module {
-  func.func @f(%0: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %2 = ptr.load %1 : !i32
     ptr.store %0, %1
@@ -15,7 +15,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
 // CHECK-NEXT: %[[VALUE:[0-9]+]] = ptr.load %[[SLOT]]
 // CHECK-NEXT: func.return %[[VALUE]]

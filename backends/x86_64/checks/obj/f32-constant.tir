@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
 
 module {
-  func.func @constant() -> !f32 {
+  %fn_constant = func.func @constant() -> !f32 {
     %0 = constantf {value = 1.5} : !f32
     func.return %0
   }

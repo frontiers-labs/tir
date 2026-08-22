@@ -7,7 +7,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  func.func @two(%lb: !index, %ub: !index, %st: !index, %a: !i64, %b: !i64) -> !i64 {
+  %fn_two = func.func @two(%lb: !index, %ub: !index, %st: !index, %a: !i64, %b: !i64) -> !i64 {
     %r0, %r1 = scf.for %lb, %ub, %st iter_args(%x = %a, %y = %b) -> !i64, !i64 {
       %nx = addi %x, %y : !i64
       %ny = subi %y, %x : !i64

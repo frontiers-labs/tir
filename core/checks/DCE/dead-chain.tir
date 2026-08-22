@@ -4,19 +4,19 @@
 // result survives.
 
 module {
-  func.func @g(%0: !i32) -> !i32 {
+  %fn_g = func.func @g(%0: !i32) -> !i32 {
     func.return %0
   }
-  func.func @f(%1: !i32) -> !i32 {
+  %fn_f = func.func @f(%1: !i32) -> !i32 {
     %2 = constant {value = 3} : !i32
     %3 = addi %1, %2 : !i32
-    %4 = func.call @g(%1 : !i32) -> !i32
+    %4 = func.call %fn_g(%1 : !i32) -> !i32
     func.return %1
   }
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: constant
-// CHECK: %{{[0-9]+}} = func.call @g(%{{[0-9]+}} : !i32) -> !i32
+// CHECK: %{{[0-9]+}} = func.call %{{[0-9]+}}(%{{[0-9]+}} : !i32) -> !i32
 // CHECK: func.return

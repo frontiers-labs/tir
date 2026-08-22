@@ -8,7 +8,7 @@
 // both slots leave memory.
 
 module {
-  func.func @cross(%0: !i1) -> !i32 {
+  %fn_cross = func.func @cross(%0: !i1) -> !i32 {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p
     %3 = constant {value = 0} : !i32
@@ -35,7 +35,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @cross
+// CHECK-LABEL: %{{[0-9]+}} = func.func @cross
 // CHECK-NOT: ptr.
 // CHECK: %[[LEFT:[0-9]+]], %[[RIGHT:[0-9]+]] = scf.if %0 -> !i32, !i32 {
 // CHECK: %[[THEN_ZERO:[0-9]+]] = constant {value = 0} : !i32

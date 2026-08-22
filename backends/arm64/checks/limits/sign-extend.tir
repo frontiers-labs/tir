@@ -1,11 +1,11 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
 
 module {
-  func.func @f(%0: !i32) -> !i64 {
+  %fn_f = func.func @f(%0: !i32) -> !i64 {
     %1 = extsi %0 : !i64
     func.return %1
   }
-  func.func @g() -> !i64 {
+  %fn_g = func.func @g() -> !i64 {
     %0 = constant {value = 16} : !i32
     %1 = extsi %0 : !i64
     func.return %1

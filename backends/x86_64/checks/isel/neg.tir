@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 module {
-  func.func @neg(%value: !i32) -> !i32 {
+  %fn_neg = func.func @neg(%value: !i32) -> !i32 {
     %zero = constant {value = 0} : !i32
     %result = subi %zero, %value : !i32
     func.return %result

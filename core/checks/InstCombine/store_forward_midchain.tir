@@ -5,7 +5,7 @@
 // value is the value the store wrote the load has nothing left to do.
 
 module {
-  func.func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) -> !i32 {
     %3 = state.entry_state : !state
     ptr.store %1, %0 state(%3 -> %4)
     %5 = ptr.load %0 : !i32 state(%4 -> %6)
@@ -15,7 +15,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: ptr.store %[[V:[0-9]+]], %[[P:[0-9]+]] state(%[[S0:[0-9]+]] -> %[[S1:[0-9]+]])
 // CHECK-NOT: ptr.load
 // CHECK: ptr.store %{{[0-9]+}}, %[[P]] state(%[[S1]] -> %{{[0-9]+}})

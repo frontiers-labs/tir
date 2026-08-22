@@ -7,7 +7,7 @@
 // available because the gate names it later.
 
 module {
-  func.func @adopt(%p: !ptr.p, %c: !i1) -> !i32 {
+  %fn_adopt = func.func @adopt(%p: !ptr.p, %c: !i1) -> !i32 {
     %v = ptr.load %p : !i8
     %z = extui %v : !i32
     %g = scf.if %c -> !i8 {

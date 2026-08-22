@@ -57,9 +57,16 @@ fn fast_math_flags_parse_and_print() {
 fn fp_math_flags_inherited_from_region_owner() {
     let context = Context::with_default_dialects();
     let f32_ty = FloatType::f32(&context);
-    let func = func_ops::func(&context, "fma_candidate", UnitType::new(&context), None)
-        .attr(FPMATH_ATTR, AttributeValue::Str("contract".into()))
-        .build();
+    let unit = UnitType::new(&context);
+    let func = func_ops::func(
+        &context,
+        "fma_candidate",
+        unit,
+        tir::builtin::FnType::new(&context, &[], unit),
+        None,
+    )
+    .attr(FPMATH_ATTR, AttributeValue::Str("contract".into()))
+    .build();
     let a = context.create_value(f32_ty, None);
     let b = context.create_value(f32_ty, None);
     let add = ops::addf(&context, a.id(), b.id(), f32_ty).build();
@@ -78,9 +85,16 @@ fn fp_math_flags_inherited_from_region_owner() {
 fn fp_math_flags_block_overrides_owner() {
     let context = Context::with_default_dialects();
     let f32_ty = FloatType::f32(&context);
-    let func = func_ops::func(&context, "scoped", UnitType::new(&context), None)
-        .attr(FPMATH_ATTR, AttributeValue::Str("fast".into()))
-        .build();
+    let unit = UnitType::new(&context);
+    let func = func_ops::func(
+        &context,
+        "scoped",
+        unit,
+        tir::builtin::FnType::new(&context, &[], unit),
+        None,
+    )
+    .attr(FPMATH_ATTR, AttributeValue::Str("fast".into()))
+    .build();
     let a = context.create_value(f32_ty, None);
     let b = context.create_value(f32_ty, None);
 

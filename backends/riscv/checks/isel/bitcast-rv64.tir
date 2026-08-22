@@ -1,11 +1,11 @@
 // RUN: tir mc --march=rv64ifd --stage=isel %s | filecheck %s
 
 module {
-  func.func @bits_to_double(%0: !i64) -> !f64 {
+  %fn_bits_to_double = func.func @bits_to_double(%0: !i64) -> !f64 {
     %1 = bitcast %0 : !f64
     func.return %1
   }
-  func.func @double_to_bits(%0: !f64) -> !i64 {
+  %fn_double_to_bits = func.func @double_to_bits(%0: !f64) -> !i64 {
     %1 = bitcast %0 : !i64
     func.return %1
   }

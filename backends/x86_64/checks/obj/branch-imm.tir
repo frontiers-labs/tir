@@ -6,7 +6,7 @@
 // imm32.
 
 module {
-  func.func @small(%0: !i64) -> !i64 {
+  %fn_small = func.func @small(%0: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
     %1 = cmpi %0, %c {predicate = "slt"} : !i1
     cfg.cond_br %1, ^bb1, ^bb2
@@ -21,7 +21,7 @@ module {
   // CHECK-NEXT: [0x48, 0x83, 0xFF, 0x05]
   // CHECK-NEXT: [0x0F, 0x8C, 0x05, 0x00, 0x00, 0x00]
 
-  func.func @big(%0: !i64) -> !i64 {
+  %fn_big = func.func @big(%0: !i64) -> !i64 {
     %c = constant {value = 5000} : !i64
     %1 = cmpi %0, %c {predicate = "slt"} : !i1
     cfg.cond_br %1, ^bb1, ^bb2

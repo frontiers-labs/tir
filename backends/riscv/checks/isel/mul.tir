@@ -1,11 +1,11 @@
 // RUN: tir mc --march=rv64im --stage=isel %s | filecheck %s --check-prefixes=CHECK,RV64
 
 module {
-  func.func @mul32(%0: !i32, %1: !i32) -> !i32 {
+  %fn_mul32 = func.func @mul32(%0: !i32, %1: !i32) -> !i32 {
     %2 = muli %0, %1 : !i32
     func.return %2
   }
-  func.func @mul64(%0: !i64, %1: !i64) -> !i64 {
+  %fn_mul64 = func.func @mul64(%0: !i64, %1: !i64) -> !i64 {
     %2 = muli %0, %1 : !i64
     func.return %2
   }
@@ -15,5 +15,5 @@ module {
 // On RV64 an i32 multiply selects the word op and an i64 multiply the full mul.
 // CHECK: asm.symbol {name = "mul32", arg_regs = [%virt0:GPR, %virt1:GPR]}
 // RV64: riscv.mulw {rd = %virt2:GPR, rs1 = %virt0:GPR, rs2 = %virt1:GPR}
-// CHECK: asm.symbol {name = "mul64", arg_regs = [%virt3:GPR, %virt4:GPR]}
-// CHECK: riscv.mul {rd = %virt5:GPR, rs1 = %virt3:GPR, rs2 = %virt4:GPR}
+// CHECK: asm.symbol {name = "mul64", arg_regs = [%virt4:GPR, %virt5:GPR]}
+// CHECK: riscv.mul {rd = %virt6:GPR, rs1 = %virt4:GPR, rs2 = %virt5:GPR}
