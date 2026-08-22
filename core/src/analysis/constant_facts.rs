@@ -158,8 +158,9 @@ impl FactDomain for Propagation<'_> {
                 for &user in self.defuse.users_of(value.number()) {
                     self.visit_op(user, facts);
                     // Only a terminator carries a value out of the region it
-                    // sits in, and the op holding that region is what reads it.
-                    // Anything further out reads that op's results instead.
+                    // sits in. A yield hands it to the op holding that region,
+                    // but a `break`/`continue` hands it to a loop any number of
+                    // regions further out, so every enclosing op reads it again.
                     if self
                         .context
                         .get_op(user)
@@ -168,9 +169,10 @@ impl FactDomain for Propagation<'_> {
                     {
                         continue;
                     }
-                    if let Some(parent) = self.context.parent_op(user).filter(|&op| op != self.root)
-                    {
-                        self.visit_op(parent, facts);
+                    let mut enclosing = self.context.parent_op(user);
+                    while let Some(op) = enclosing.filter(|&op| op != self.root) {
+                        self.visit_op(op, facts);
+                        enclosing = self.context.parent_op(op);
                     }
                 }
             }

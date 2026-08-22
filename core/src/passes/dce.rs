@@ -17,7 +17,7 @@ use crate::analysis::{ConstantFacts, DefUse, RegRef, op_regs};
 use crate::backend::SymbolOp;
 use crate::{
     AnalysisManager, BlockId, ConstantLike, Context, MemoryWrite, OpHandle, OpId, OperationRef,
-    Pass, PassError, PassTarget, Pure, RegionId, Rewriter, Terminator, func::FuncOp,
+    Pass, PassError, PassTarget, Pure, Rewriter, Terminator, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -103,11 +103,17 @@ fn erase_unreached_blocks(
     root: OpId,
 ) -> Result<(), PassError> {
     let facts = analyses.get::<ConstantFacts>(context, root);
-    for region in regions(context, root) {
+    for region in super::regions_under(context, root) {
         if !context.has_region(region) {
             continue;
         }
         let blocks = context.get_region(region).block_ids();
+        // A region control never entered says nothing about what is dead inside
+        // it: the solver only reasons about blocks it reached the entry of.
+        match blocks.first() {
+            Some(&entry) if facts.is_executable(entry) => {}
+            _ => continue,
+        }
         // What survives: the blocks control reaches, and — since no branch is
         // rewritten here — whatever a surviving branch still names, transitively.
         let mut kept: HashSet<BlockId> = blocks
@@ -127,8 +133,7 @@ fn erase_unreached_blocks(
                 }
             }
         }
-        // The entry block is where control arrives; it is reached by definition.
-        for &block in blocks.iter().skip(1) {
+        for &block in &blocks {
             if kept.contains(&block) {
                 continue;
             }
@@ -153,21 +158,6 @@ fn successors(context: &Context, block: BlockId) -> Vec<BlockId> {
         .and_then(|terminator| terminator.as_interface::<dyn Terminator>())
         .map(|terminator| terminator.successors())
         .unwrap_or_default()
-}
-
-/// Every region under `root`, outermost first.
-fn regions(context: &Context, root: OpId) -> Vec<RegionId> {
-    let mut found = Vec::new();
-    let mut pending = context.get_op(root).regions().to_vec();
-    while let Some(region) = pending.pop() {
-        found.push(region);
-        for block in context.get_region(region).iter(context.clone()) {
-            for op in block.op_ids() {
-                pending.extend(context.get_op(op).regions().iter().copied());
-            }
-        }
-    }
-    found
 }
 
 /// A pure value-producing op whose every virtual def is unused. Nested regions,

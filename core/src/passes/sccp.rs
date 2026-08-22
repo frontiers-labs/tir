@@ -53,7 +53,10 @@ impl Pass for SccpPass {
         // value it replaces, so an earlier one dominates every later read.
         let mut built: HashMap<(BlockId, TypeId, i64), ValueId> = HashMap::new();
 
-        for block in blocks(context, root) {
+        for block in super::regions_under(context, root)
+            .into_iter()
+            .flat_map(|region| context.get_region(region).block_ids())
+        {
             if !facts.is_executable(block) {
                 continue;
             }
@@ -123,19 +126,4 @@ fn materialize(
     };
     context.replace_value_uses(value, literal);
     Ok(())
-}
-
-/// Every block under `root`, outermost region first.
-fn blocks(context: &Context, root: OpId) -> Vec<BlockId> {
-    let mut blocks = Vec::new();
-    let mut regions = context.get_op(root).regions().to_vec();
-    while let Some(region) = regions.pop() {
-        for block in context.get_region(region).iter(context.clone()) {
-            blocks.push(block.id());
-            for op in block.op_ids() {
-                regions.extend(context.get_op(op).regions().iter().copied());
-            }
-        }
-    }
-    blocks
 }
