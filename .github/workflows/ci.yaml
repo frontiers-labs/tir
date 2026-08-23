@@ -45,8 +45,9 @@ jobs:
           save-if: "false"
       - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
-  # One build of the workspace, one test run over it. The `lit` FileCheck
-  # suites are ordinary integration tests, so nextest covers them too.
+  # One build of the workspace, one test run over it, one artifact out of it.
+  # The `lit` FileCheck suites are ordinary integration tests, so nextest covers
+  # them too. Everything downstream runs the exact binary the tests ran.
   build:
     needs: formatting
     runs-on: blacksmith-2vcpu-ubuntu-2404
@@ -66,39 +67,15 @@ jobs:
         with:
           shared-key: build
           save-if: "false"
-      - run: cargo nextest run --workspace --locked
-
-  # Builds the compiler every downstream suite runs, once, and stores it. Free
-  # runners have twice the cores of the paid ones and this job holds the
-  # critical path for `torture`, so it does not belong on blacksmith.
-  package:
-    needs: formatting
-    runs-on: ubuntu-latest
-    env:
-      CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: READ_ONLY
-      SCCACHE_GHA_VERSION: precommit-v1
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.10
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: package
-          save-if: "false"
-      # `xtask` only drives the suites, so a debug build of it is plenty.
-      - run: |
-          cargo build --release --locked -p fcc --bin fcc
-          cargo build --locked -p xtask
+      - run: cargo nextest run --workspace --locked --cargo-profile ci
+      # Reuses everything nextest just compiled, so this only links two binaries.
+      - run: cargo build --locked --profile ci -p fcc --bin fcc -p xtask
       - uses: actions/upload-artifact@v7
         with:
           name: fcc-package
           path: |
-            target/release/fcc
-            target/debug/xtask
+            target/ci/fcc
+            target/ci/xtask
           retention-days: 1
 
   changes:
@@ -122,7 +99,7 @@ jobs:
   # selection failure is a test failure. The execute half of the suite is a
   # nightly differential-fuzz corpus, not a gate.
   torture:
-    needs: [package, changes]
+    needs: [build, changes]
     if: needs.changes.outputs.fcc == 'true'
     runs-on: ubuntu-latest
     env:
@@ -136,7 +113,7 @@ jobs:
         with:
           path: target/test-suites/gcc
           key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
-      - run: target/debug/xtask fcc-torture --fcc "$PWD/target/release/fcc"
+      - run: target/ci/xtask fcc-torture --fcc "$PWD/target/ci/fcc"
 
   # Tracks peak RSS of compiling the CoreMark corpus, the memory ratchet of the
   # "one IR" plan. Free runners give 4 vCPU / 16 GB, so the compile runs under a
@@ -145,7 +122,7 @@ jobs:
   # backend still allocates hundreds of MB per e-graph cover; drop it once the
   # Stage 1 entity diet lands and the ratchet becomes enforceable.
   peak-rss:
-    needs: package
+    needs: build
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -163,7 +140,7 @@ jobs:
             log=/tmp/mem-stats/${src%.c}.log
             ( ulimit -v 14680064
               TIR_MEM_STATS=1 /usr/bin/time -v \
-                "$GITHUB_WORKSPACE/target/release/fcc" -O2 -Ilinux -Iposix -I. \
+                "$GITHUB_WORKSPACE/target/ci/fcc" -O2 -Ilinux -Iposix -I. \
                 -DFLAGS_STR='"-O2"' -DITERATIONS=0 -c "$src" -o "/tmp/mem-stats/${src%.c}.o" \
             ) > "$log" 2>&1 || status=1
             grep -E "Maximum resident set size" "$log" | sed "s|^|$src |"

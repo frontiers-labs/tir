@@ -177,13 +177,15 @@ fn run_corpus(
     Ok(())
 }
 
-/// Resolves the compiler under test, building a debug one when none was given.
+/// Resolves the compiler under test. Builds the `ci` profile when none was
+/// given: the corpus spends its time running fcc, not compiling it, and this is
+/// the profile CI hands over.
 fn build_fcc(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<PathBuf> {
     if let Some(fcc) = fcc {
         return Ok(fcc.to_path_buf());
     }
-    cmd!(sh, "cargo build -j4 -p fcc --bin fcc").run()?;
-    Ok(root.join("target/debug/fcc"))
+    cmd!(sh, "cargo build -j4 --profile ci -p fcc --bin fcc").run()?;
+    Ok(root.join("target/ci/fcc"))
 }
 
 /// Prove the harness catches divergences: run it against a stubbed `gcc` whose

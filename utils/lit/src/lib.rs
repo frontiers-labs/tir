@@ -134,6 +134,16 @@ fn gating_decision(features: &HashSet<String>, contents: &str) -> Gate {
     Gate::Run
 }
 
+/// The profile a target directory belongs to. Every profile builds into a
+/// directory of the same name except `dev`, whose name is reserved on the
+/// command line and whose directory is `debug`.
+fn profile_name(profile_dir_name: &str) -> &str {
+    match profile_dir_name {
+        "debug" => "dev",
+        other => other,
+    }
+}
+
 /// Build a workspace binary and snapshot it beside the current test executable
 /// under a stable name.
 ///
@@ -147,16 +157,15 @@ pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
     let test_exe = std::env::current_exe().expect("current test executable path");
     let deps_dir = test_exe.parent().expect("test executable directory");
     let profile_dir = deps_dir.parent().expect("test profile directory");
-    let profile = profile_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .expect("test profile name");
+    let profile = profile_name(
+        profile_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("test profile name"),
+    );
 
     let mut cargo = Command::new("cargo");
-    cargo.args(["build", "-q", "-p", package]);
-    if profile == "release" {
-        cargo.arg("--release");
-    }
+    cargo.args(["build", "-q", "-p", package, "--profile", profile]);
     let status = cargo.status().expect("spawn cargo build");
     assert!(
         status.success(),
@@ -705,6 +714,15 @@ fn split_csv(s: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::profile_name;
+
+    #[test]
+    fn dev_is_the_only_profile_whose_directory_differs_from_its_name() {
+        assert_eq!(profile_name("debug"), "dev");
+        assert_eq!(profile_name("release"), "release");
+        assert_eq!(profile_name("ci"), "ci");
+    }
+
     use super::*;
 
     fn re(pattern: &str) -> Regex {

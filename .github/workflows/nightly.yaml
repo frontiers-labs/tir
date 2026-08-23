@@ -12,11 +12,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Post-commit only deploys docs, so these three jobs are the only writers of
-  # the caches every pull request restores from: they run on master, which is
-  # the one scope GitHub shares with all branches. Keep their steps in step
-  # with the ci.yaml jobs holding the same `shared-key`, or the caches diverge.
-  workspace-tests:
+  # Post-commit only deploys docs, so these two jobs are the only writers of the
+  # caches every pull request restores from: they run on master, which is the one
+  # scope GitHub shares with all branches. Keep their steps in step with the
+  # ci.yaml jobs holding the same `shared-key`, or the caches diverge.
+  build-and-package:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
@@ -33,7 +33,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
-      - run: cargo nextest run --workspace --locked
+      - run: cargo nextest run --workspace --locked --cargo-profile ci
+      - run: cargo build --locked --profile ci -p fcc --bin fcc -p xtask
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fcc-package
+          path: |
+            target/ci/fcc
+            target/ci/xtask
+          retention-days: 1
 
   lints:
     runs-on: ubuntu-latest
@@ -50,38 +58,11 @@ jobs:
           shared-key: clippy
       - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
-  package:
-    runs-on: ubuntu-latest
-    env:
-      CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: READ_WRITE
-      SCCACHE_GHA_VERSION: precommit-v1
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.10
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: package
-      - run: |
-          cargo build --release --locked -p fcc --bin fcc
-          cargo build --locked -p xtask
-      - uses: actions/upload-artifact@v7
-        with:
-          name: fcc-package
-          path: |
-            target/release/fcc
-            target/debug/xtask
-          retention-days: 1
-
   # The GCC torture execute suite is corpus, not a gate: pre-commit already
   # proves fcc compiles it, so what is left to check is that the programs
   # behave identically under every pipeline and against gcc and clang.
   corpus:
-    needs: package
+    needs: build-and-package
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
@@ -93,10 +74,10 @@ jobs:
         with:
           path: target/test-suites/gcc
           key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
-      - run: target/debug/xtask fcc-fuzz --corpus --fcc "$PWD/target/release/fcc"
+      - run: target/ci/xtask fcc-fuzz --corpus --fcc "$PWD/target/ci/fcc"
 
   differential-fuzz:
-    needs: package
+    needs: build-and-package
     runs-on: ubuntu-latest
     env:
       CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
@@ -105,12 +86,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/fcc-package
       - name: Self-test the harness
-        run: target/debug/xtask fcc-fuzz --self-test --fcc "$PWD/target/release/fcc"
+        run: target/ci/xtask fcc-fuzz --self-test --fcc "$PWD/target/ci/fcc"
       # The seed is the run id: it moves coverage every night and it is what
       # the failure report quotes back as the reproduce command.
       - name: Fuzz
         run: |
-          target/debug/xtask fcc-fuzz --fcc "$PWD/target/release/fcc" \
+          target/ci/xtask fcc-fuzz --fcc "$PWD/target/ci/fcc" \
             --seed "$SEED" --iterations 500
 
   libfuzzer:
@@ -142,7 +123,7 @@ jobs:
   # green again, so a persistent failure never piles up duplicates.
   report:
     if: always()
-    needs: [workspace-tests, lints, package, corpus, differential-fuzz, libfuzzer]
+    needs: [build-and-package, lints, corpus, differential-fuzz, libfuzzer]
     runs-on: ubuntu-latest
     permissions:
       contents: read

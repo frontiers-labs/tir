@@ -79,6 +79,21 @@ typed-arena = "2"
 debug = true
 lto = "thin"
 
+# What CI builds, tests with, and ships to the downstream suites, so the
+# compiler the GCC torture corpus runs against is the binary the test suite ran.
+# Inheriting dev keeps the per-package tuning below, the line tables that make a
+# CI backtrace readable, and `debug-assertions` -- which is what turns the IR
+# verifier on (see `ir_verification_enabled`). That last point is the whole
+# argument for testing at opt-level 2 rather than shipping a release build: the
+# verifier catches 54 torture cases where fcc emits invalid IR and a release
+# build carries on regardless. Building fcc this way also costs less than
+# release (3m30s vs 12m50s wall on 8 cores), because dev's 256 codegen units
+# parallelize where release's 16 do not.
+[profile.ci]
+inherits = "dev"
+opt-level = 2
+incremental = false
+
 # Full debug info makes a clean `cargo test --no-run` produce a ~22 GB target
 # dir (40+ statically linked binaries, ~97% DWARF). Line tables keep file:line
 # in backtraces, which is enough outside an interactive debugger session.

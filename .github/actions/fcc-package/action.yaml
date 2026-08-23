@@ -1,11 +1,11 @@
 name: fcc package
-description: Restore the fcc and xtask binaries built by the `package` job.
+description: Restore the fcc and xtask binaries built by the `build` job.
 runs:
   using: composite
   steps:
     - uses: actions/download-artifact@v8
       with:
         name: fcc-package
-        path: target
+        path: target/ci
     - shell: bash
-      run: chmod +x target/release/fcc target/debug/xtask
+      run: chmod +x target/ci/fcc target/ci/xtask

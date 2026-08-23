@@ -28,14 +28,15 @@ const TIMEOUT_MARGINAL: &[&str] = &["execute/pr35800.c", "execute/pr48809.c"];
 
 /// Compiles every torture case through codegen and compares the failures
 /// against the recorded baseline. `fcc` reuses an already built compiler
-/// instead of building one.
+/// instead of building one. The baseline is recorded against the `ci` profile,
+/// so building anything else here would report the difference as a regression.
 pub fn run(sh: &Shell, root: &Path, bless: bool, fcc: Option<&Path>) -> anyhow::Result<()> {
     let corpus = fetch_corpus(sh, root)?;
     let fcc = match fcc {
         Some(fcc) => fcc.to_path_buf(),
         None => {
-            cmd!(sh, "cargo build --release -p fcc --bin fcc").run()?;
-            root.join("target/release/fcc")
+            cmd!(sh, "cargo build --profile ci -p fcc --bin fcc").run()?;
+            root.join("target/ci/fcc")
         }
     };
 
@@ -133,7 +134,8 @@ fn collect_c_files(directory: &Path, files: &mut Vec<PathBuf>) -> anyhow::Result
 
 /// Runs each case all the way through codegen: a case passes only when fcc
 /// emits assembly for it, so an instruction selection failure is a test
-/// failure.
+/// failure. CI builds fcc with debug assertions, which also runs the IR
+/// verifier after every pass, so invalid IR fails here too.
 fn run_compile(
     fcc: &Path,
     corpus: &Path,
