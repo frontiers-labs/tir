@@ -125,10 +125,8 @@ grcov . --binary-path target/debug/ -s . -t coveralls+ --branch --llvm \
     --ignore '**/tests/**' -o target/coverage/html
 ```
 
-Open `target/coverage/html/index.html` to see the report.
-
-Also `master` branch reports are available at
-https://coveralls.io/github/frontiers-labs/tir.
+Open `target/coverage/html/index.html` to see the report. Coverage is a local
+tool only; CI does not collect it.
 
 ## Test policy
 

@@ -29,8 +29,8 @@ fn main() -> anyhow::Result<()> {
         }
         Some("isa-test-suite") => isa_test_suite(&sh)?,
         Some("fcc-torture") => {
-            let bless = env::args().skip(2).any(|arg| arg == "--bless");
-            fcc_torture::run(&sh, &project_root(), bless)?;
+            let options = fcc_torture_options(env::args().skip(2))?;
+            fcc_torture::run(&sh, &project_root(), options.bless, options.fcc.as_deref())?;
         }
         Some("fcc-corpus") => {
             fcc_corpus::run(&sh, &project_root(), fcc_corpus_mode(env::args().skip(2))?)?;
@@ -48,6 +48,31 @@ fn main() -> anyhow::Result<()> {
         _ => print_help(),
     }
     Ok(())
+}
+
+struct TortureOptions {
+    bless: bool,
+    fcc: Option<PathBuf>,
+}
+
+fn fcc_torture_options(mut args: impl Iterator<Item = String>) -> anyhow::Result<TortureOptions> {
+    let mut options = TortureOptions {
+        bless: false,
+        fcc: None,
+    };
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--bless" => options.bless = true,
+            "--fcc" => options.fcc = Some(PathBuf::from(take_value(&mut args, "--fcc")?)),
+            other => anyhow::bail!("unknown fcc-torture flag: {other}"),
+        }
+    }
+    Ok(options)
+}
+
+fn take_value(args: &mut impl Iterator<Item = String>, flag: &str) -> anyhow::Result<String> {
+    args.next()
+        .ok_or_else(|| anyhow::anyhow!("{flag} needs a value"))
 }
 
 fn fcc_corpus_mode(mut args: impl Iterator<Item = String>) -> anyhow::Result<fcc_corpus::Mode> {
@@ -73,21 +98,15 @@ fn fcc_fuzz_options(mut args: impl Iterator<Item = String>) -> anyhow::Result<fc
         iterations: 100,
         corpus: false,
         self_test: false,
+        fcc: None,
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--seed" => {
-                options.seed = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--seed needs a value"))?
-                    .parse()?
-            }
+            "--seed" => options.seed = take_value(&mut args, "--seed")?.parse()?,
             "--iterations" => {
-                options.iterations = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--iterations needs a value"))?
-                    .parse()?
+                options.iterations = take_value(&mut args, "--iterations")?.parse()?
             }
+            "--fcc" => options.fcc = Some(PathBuf::from(take_value(&mut args, "--fcc")?)),
             "--corpus" => options.corpus = true,
             "--self-test" => options.self_test = true,
             other => anyhow::bail!("unknown fcc-fuzz flag: {other}"),
@@ -327,12 +346,13 @@ check-only       only runs check tests without building the project
 verify <isa> [--shard k/N]
                  run formal ISA verification. Available ISAs: riscv64, riscv32, armv8, x86_64
 isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
-fcc-torture [--bless]
-                 run the pinned GCC C torture corpus through the fcc parser
+fcc-torture [--bless] [--fcc <path>]
+                 compile the pinned GCC C torture corpus through codegen and
+                 compare the failures against the recorded baseline
 fcc-corpus [--baseline <dir> | --diff <dir> | --determinism]
                  compile the fcc .c corpus to x86_64 asm and capture, diff or
                  double-compile it
-fcc-fuzz [--seed N] [--iterations N] [--corpus] [--self-test]
+fcc-fuzz [--seed N] [--iterations N] [--corpus] [--self-test] [--fcc <path>]
                  generate random UB-free C programs, compile them under
                  different pass pipelines and reference compilers, run the
                  binaries and compare observable behavior

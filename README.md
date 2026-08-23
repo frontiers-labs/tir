@@ -1,5 +1,3 @@
-[![Coverage Status](https://coveralls.io/repos/github/frontiers-labs/tir/badge.svg?branch=master)](https://coveralls.io/github/frontiers-labs/tir?branch=master)
-
 # Target Intermediate Representation
 
 TIR project aims to provide a flexible compiler and binary analysis toolchain,

@@ -29,21 +29,22 @@ pub struct Options {
     pub iterations: usize,
     pub corpus: bool,
     pub self_test: bool,
+    /// An already built compiler to test, instead of building a debug one.
+    pub fcc: Option<PathBuf>,
 }
 
 pub fn run(sh: &Shell, root: &Path, options: &Options) -> anyhow::Result<()> {
     if options.self_test {
-        return self_test(sh, root);
+        return self_test(sh, root, options.fcc.as_deref());
     }
-    cmd!(sh, "cargo build -j4 -p fcc --bin fcc").run()?;
-    let fcc = root.join("target/debug/fcc");
+    let fcc = build_fcc(sh, root, options.fcc.as_deref())?;
     let work_dir = root.join("target/fuzz");
     let failures_dir = work_dir.join("failures");
     std::fs::create_dir_all(&failures_dir)?;
 
     let variants = variants(options.seed);
     if options.corpus {
-        return run_corpus(root, &fcc, &variants, &work_dir);
+        return run_corpus(sh, root, &fcc, &variants, &work_dir);
     }
 
     println!(
@@ -112,7 +113,11 @@ fn variants(seed: u64) -> Vec<harness::Variant> {
     variants
 }
 
+/// Cross-checks the checked-in C corpus and the GCC torture execute suite:
+/// every program that all variants can build must behave identically. Programs
+/// fcc cannot build yet are reported by the torture baseline, not here.
 fn run_corpus(
+    sh: &Shell,
     root: &Path,
     fcc: &Path,
     variants: &[harness::Variant],
@@ -122,33 +127,47 @@ fn run_corpus(
     for dir in CORPUS_DIRS {
         collect_c_files(&root.join(dir), &mut files)?;
     }
+    files.extend(crate::fcc_torture::execute_corpus(sh, root)?);
     files.sort();
     println!("fcc-fuzz corpus: {} files", files.len());
 
-    let mut compared = 0;
-    let mut divergences = 0;
-    for file in &files {
-        let program_dir = work_dir.join("corpus");
-        std::fs::create_dir_all(&program_dir)?;
-        for (_, outcome) in harness::run_variants(fcc, file, variants, &program_dir) {
-            match outcome {
-                Outcome::Agree => compared += 1,
-                Outcome::Errored { .. } => {}
-                Outcome::Diverged {
-                    variant,
-                    expected,
-                    actual,
-                    ..
-                } => {
-                    divergences += 1;
-                    println!("DIVERGENCE {} variant={variant}", file.display());
-                    if let Some(line) = harness::first_difference(&expected, &actual) {
-                        println!("  {line}");
+    let corpus_dir = work_dir.join("corpus");
+    let reports = crate::utils::run_parallel("fcc-fuzz corpus", files, |index, file| {
+        // Variants name their artifacts after the source stem, which repeats
+        // across the corpus, so every case gets its own directory.
+        let program_dir = corpus_dir.join(index.to_string());
+        let mut agreements = 0;
+        let mut report = String::new();
+        if std::fs::create_dir_all(&program_dir).is_ok() {
+            for (_, outcome) in harness::run_variants(fcc, file, variants, &program_dir) {
+                match outcome {
+                    Outcome::Agree => agreements += 1,
+                    Outcome::Errored { .. } => {}
+                    Outcome::Diverged {
+                        variant,
+                        expected,
+                        actual,
+                    } => {
+                        report += &format!("DIVERGENCE {} variant={variant}\n", file.display());
+                        if let Some(line) = harness::first_difference(&expected, &actual) {
+                            report += &format!("  {line}\n");
+                        }
+                        report += &format!("  expected: {}\n", expected.describe());
+                        report += &format!("  actual:   {}\n", actual.describe());
                     }
-                    println!("  expected: {}", expected.describe());
-                    println!("  actual:   {}", actual.describe());
                 }
             }
+            let _ = std::fs::remove_dir_all(&program_dir);
+        }
+        (file.display().to_string(), (agreements, report))
+    });
+
+    let compared: usize = reports.iter().map(|(_, (agreements, _))| agreements).sum();
+    let mut divergences = 0;
+    for (_, (_, report)) in &reports {
+        if !report.is_empty() {
+            divergences += 1;
+            print!("{report}");
         }
     }
     println!("fcc-fuzz corpus: {compared} variant agreements, {divergences} divergences");
@@ -158,12 +177,20 @@ fn run_corpus(
     Ok(())
 }
 
+/// Resolves the compiler under test, building a debug one when none was given.
+fn build_fcc(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<PathBuf> {
+    if let Some(fcc) = fcc {
+        return Ok(fcc.to_path_buf());
+    }
+    cmd!(sh, "cargo build -j4 -p fcc --bin fcc").run()?;
+    Ok(root.join("target/debug/fcc"))
+}
+
 /// Prove the harness catches divergences: run it against a stubbed `gcc` whose
 /// "binaries" always print a wrong value, and require the divergence to be
 /// detected.
-fn self_test(sh: &Shell, root: &Path) -> anyhow::Result<()> {
-    cmd!(sh, "cargo build -j4 -p fcc --bin fcc").run()?;
-    let fcc = root.join("target/debug/fcc");
+fn self_test(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<()> {
+    let fcc = build_fcc(sh, root, fcc)?;
     let work_dir = root.join("target/fuzz/self-test");
     std::fs::create_dir_all(&work_dir)?;
 

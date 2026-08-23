@@ -1,0 +1,157 @@
+name: Nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Post-commit only deploys docs, so these three jobs are the only writers of
+  # the caches every pull request restores from: they run on master, which is
+  # the one scope GitHub shares with all branches. Keep their steps in step
+  # with the ci.yaml jobs holding the same `shared-key`, or the caches diverge.
+  workspace-tests:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_WRITE
+      SCCACHE_GHA_VERSION: precommit-v1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: taiki-e/install-action@nextest
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+      - run: cargo nextest run --workspace --locked
+
+  lints:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+      - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+  package:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_WRITE
+      SCCACHE_GHA_VERSION: precommit-v1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: package
+      - run: |
+          cargo build --release --locked -p fcc --bin fcc
+          cargo build --locked -p xtask
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fcc-package
+          path: |
+            target/release/fcc
+            target/debug/xtask
+          retention-days: 1
+
+  # The GCC torture execute suite is corpus, not a gate: pre-commit already
+  # proves fcc compiles it, so what is left to check is that the programs
+  # behave identically under every pipeline and against gcc and clang.
+  corpus:
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/fcc-package
+      - uses: actions/cache@v6
+        with:
+          path: target/test-suites/gcc
+          key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
+      - run: target/debug/xtask fcc-fuzz --corpus --fcc "$PWD/target/release/fcc"
+
+  differential-fuzz:
+    needs: package
+    runs-on: ubuntu-latest
+    env:
+      CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
+      SEED: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/fcc-package
+      - name: Self-test the harness
+        run: target/debug/xtask fcc-fuzz --self-test --fcc "$PWD/target/release/fcc"
+      # The seed is the run id: it moves coverage every night and it is what
+      # the failure report quotes back as the reproduce command.
+      - name: Fuzz
+        run: |
+          target/debug/xtask fcc-fuzz --fcc "$PWD/target/release/fcc" \
+            --seed "$SEED" --iterations 500
+
+  libfuzzer:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - tmdl-fuzz
+          - riscv-assembly-fuzz
+          - arm64-assembly-fuzz
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: libfuzzer
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz@0.13.1
+      - name: Fuzz
+        run: cargo +nightly fuzz run --fuzz-dir utils/fuzz ${{ matrix.target }} -- -max_total_time=60 -max_len=16384
+
+  # One issue per failing job, reused across nights and closed when the job goes
+  # green again, so a persistent failure never piles up duplicates.
+  report:
+    if: always()
+    needs: [workspace-tests, lints, package, corpus, differential-fuzz, libfuzzer]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ toJSON(needs) }}
+          SEED: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: .github/scripts/report-nightly-failures.sh

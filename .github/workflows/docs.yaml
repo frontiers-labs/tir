@@ -1,9 +1,7 @@
 name: Deploy docs
 
 on:
-  merge_group:
-  pull_request:
-    branches: ["master"]
+  workflow_call:
   push:
     branches: ["master"]
   workflow_dispatch:
@@ -11,16 +9,20 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+  build-docs:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
       - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docs
+          save-if: ${{ github.event_name == 'push' }}
       - uses: taiki-e/install-action@v2
         with:
           tool: mdbook,mdbook-mermaid
@@ -30,9 +32,10 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         with:
           path: book
-  deploy:
+
+  deploy-docs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    needs: build
+    needs: build-docs
     permissions:
       contents: read
       pages: write
@@ -40,7 +43,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

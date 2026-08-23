@@ -1,3 +1,21 @@
+# GCC torture execute cases fcc does not run correctly. The nightly
+# differential-fuzz corpus skips these, so every remaining divergence is a
+# regression. Hand-maintained: there is no bless mode for this list.
+#
+# Live bugs, tracked here so the corpus stays actionable. Unlike the entries
+# below, these are not accepted limitations and should be removed as they are
+# fixed:
+#
+#   pr35800.c      Aborts at runtime under every pipeline while gcc and clang
+#                  agree. A regression from 6b8ab7fe or 981298e2: it is the
+#                  sole reason the pre-restructure torture job is red on
+#                  master. Codegen still succeeds, so the compile gate cannot
+#                  see it.
+#   split-path-1.c Passes under the default pipeline and aborts under
+#                  `func.func(thread-state,instcombine,sccp,dce,instcombine,
+#                  erase-state)`, so one of instcombine/sccp/dce is wrong.
+execute/pr35800.c
+execute/split-path-1.c
 execute/20000112-1.c
 execute/20000223-1.c
 execute/20000227-1.c

@@ -1,0 +1,186 @@
+name: CI
+
+on:
+  merge_group:
+  pull_request:
+    branches: ["master"]
+
+# A superseded push to a pull request is dead work; the merge queue is not.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Everything expensive hangs off `formatting`: it costs seconds, so nothing
+  # else gets scheduled behind a diff that has not been run through rustfmt.
+  formatting:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    needs: formatting
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+          save-if: "false"
+      - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+  # One build of the workspace, one test run over it. The `lit` FileCheck
+  # suites are ordinary integration tests, so nextest covers them too.
+  build:
+    needs: formatting
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      SCCACHE_GHA_VERSION: precommit-v1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: taiki-e/install-action@nextest
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+          save-if: "false"
+      - run: cargo nextest run --workspace --locked
+
+  # Builds the compiler every downstream suite runs, once, and stores it. Free
+  # runners have twice the cores of the paid ones and this job holds the
+  # critical path for `torture`, so it does not belong on blacksmith.
+  package:
+    needs: formatting
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      SCCACHE_GHA_VERSION: precommit-v1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: package
+          save-if: "false"
+      # `xtask` only drives the suites, so a debug build of it is plenty.
+      - run: |
+          cargo build --release --locked -p fcc --bin fcc
+          cargo build --locked -p xtask
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fcc-package
+          path: |
+            target/release/fcc
+            target/debug/xtask
+          retention-days: 1
+
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      fcc: ${{ steps.filter.outputs.fcc }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: filter
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          git fetch --depth 1 origin "$BASE"
+          if git diff --quiet "$BASE" HEAD -- fcc/ xtask/src/fcc_torture.rs; then
+            echo "fcc=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "fcc=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Compiles the pinned GCC C torture corpus through codegen: an instruction
+  # selection failure is a test failure. The execute half of the suite is a
+  # nightly differential-fuzz corpus, not a gate.
+  torture:
+    needs: [package, changes]
+    if: needs.changes.outputs.fcc == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # The packaged `xtask` was built elsewhere, so point it at this checkout
+      # instead of the path baked in at compile time.
+      CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/fcc-package
+      - uses: actions/cache@v6
+        with:
+          path: target/test-suites/gcc
+          key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
+      - run: target/debug/xtask fcc-torture --fcc "$PWD/target/release/fcc"
+
+  # Tracks peak RSS of compiling the CoreMark corpus, the memory ratchet of the
+  # "one IR" plan. Free runners give 4 vCPU / 16 GB, so the compile runs under a
+  # 14 GB `ulimit -v`: a regression aborts in seconds instead of dragging the
+  # runner into swap. `continue-on-error` keeps the job advisory while the
+  # backend still allocates hundreds of MB per e-graph cover; drop it once the
+  # Stage 1 entity diet lands and the ratchet becomes enforceable.
+  peak-rss:
+    needs: package
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/fcc-package
+      - name: Fetch CoreMark
+        run: git clone --depth 1 https://github.com/eembc/coremark.git /tmp/coremark
+      - name: Compile CoreMark under a memory cap
+        run: |
+          mkdir -p /tmp/mem-stats
+          cd /tmp/coremark
+          status=0
+          # Strictly serial: the numbers are per translation unit peaks.
+          for src in core_list_join.c core_main.c core_matrix.c core_state.c core_util.c; do
+            log=/tmp/mem-stats/${src%.c}.log
+            ( ulimit -v 14680064
+              TIR_MEM_STATS=1 /usr/bin/time -v \
+                "$GITHUB_WORKSPACE/target/release/fcc" -O2 -Ilinux -Iposix -I. \
+                -DFLAGS_STR='"-O2"' -DITERATIONS=0 -c "$src" -o "/tmp/mem-stats/${src%.c}.o" \
+            ) > "$log" 2>&1 || status=1
+            grep -E "Maximum resident set size" "$log" | sed "s|^|$src |"
+          done
+          exit $status
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mem-stats
+          path: /tmp/mem-stats/*.log
+
+  docs:
+    needs: formatting
+    # Granted so the shared workflow's deploy job resolves; it is skipped on
+    # everything but a push to master.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/docs.yaml
