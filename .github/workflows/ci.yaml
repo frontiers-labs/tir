@@ -69,7 +69,7 @@ jobs:
           save-if: "false"
       - run: cargo nextest run --workspace --locked --cargo-profile ci
       # Reuses everything nextest just compiled, so this only links two binaries.
-      - run: cargo build --locked --profile ci -p fcc --bin fcc -p xtask
+      - run: cargo build --locked --profile ci --bin fcc --bin xtask
       - uses: actions/upload-artifact@v7
         with:
           name: fcc-package
