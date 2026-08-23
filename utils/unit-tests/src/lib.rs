@@ -104,6 +104,7 @@ mod tools {
 
 #[cfg(test)]
 mod core {
+    mod alias_facts;
     mod analysis;
     mod arith;
     mod backend;

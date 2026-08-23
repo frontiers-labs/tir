@@ -5,6 +5,11 @@
 //! are tracked through every expression so no signed operation can overflow,
 //! divisors are nonzero by shape, left-shift amounts are bounded by the
 //! operand's range, and array indices are masked to the array length.
+//!
+//! Memory is exercised through pointers: every function takes a pointer into
+//! the caller's array and owns an array of its own, reads and writes go
+//! through indexing or pointer arithmetic, and a function may hand either
+//! array on to an earlier function.
 
 const INT_MAX: i64 = 2_147_483_647;
 
@@ -13,8 +18,19 @@ const INT_MAX: i64 = 2_147_483_647;
 const PARAM_BOUND: i64 = 1 << 12;
 /// Bound on values a function returns.
 const RETURN_BOUND: i64 = 1 << 14;
+/// A call's result is masked down to this before it feeds expressions, so
+/// chains of calls cannot grow bounds past what the arithmetic tolerates.
+const CALL_BOUND: i64 = (1 << 13) - 1;
 /// Array length used throughout.
 const ARRAY_LEN: usize = 8;
+/// Bound on every array element: what any store writes and any load assumes,
+/// so a function writing through a pointer cannot break its caller's bounds.
+const ARRAY_BOUND: i64 = 10_000;
+/// How far into an array a pointer passed to a function may start, so that the
+/// callee's masked indices stay inside the array.
+const POINTER_SHIFT: i64 = 4;
+/// Mask on indices through a passed pointer: `POINTER_SHIFT + 3 < ARRAY_LEN`.
+const POINTER_MASK: usize = 3;
 
 pub fn generate(seed: u64) -> String {
     let mut generator = Generator::new(seed);
@@ -59,21 +75,23 @@ impl Expr {
     }
 }
 
-/// Variables in scope while generating one function body, plus the bound on
-/// array elements.
+/// An array in scope: its name and the mask that keeps an index inside it.
+struct Array {
+    name: String,
+    mask: usize,
+}
+
+/// Variables and arrays in scope while generating one function body.
 struct Scope {
     variables: Vec<Variable>,
-    array_bound: i64,
-    /// Only `main` declares the array; functions must not touch it.
-    has_array: bool,
+    arrays: Vec<Array>,
 }
 
 impl Scope {
     fn new() -> Self {
         Self {
             variables: Vec::new(),
-            array_bound: 0,
-            has_array: false,
+            arrays: Vec::new(),
         }
     }
 
@@ -101,6 +119,11 @@ impl Scope {
     fn pick(&self, rng: &mut Rng) -> Option<&Variable> {
         self.variables
             .get(rng.below(self.variables.len() as u64) as usize)
+    }
+
+    fn pick_array(&self, rng: &mut Rng) -> Option<&Array> {
+        self.arrays
+            .get(rng.below(self.arrays.len() as u64) as usize)
     }
 
     fn pick_assignable(&self, rng: &mut Rng) -> Option<usize> {
@@ -144,7 +167,7 @@ impl Generator {
         let mut out = String::from("#include <stdio.h>\n\n");
         for function in &self.functions {
             let name = &function.name;
-            out.push_str(&format!("int {name}(int a, int b);\n"));
+            out.push_str(&format!("int {name}(int *p, int a, int b);\n"));
         }
         out.push('\n');
         for function in &self.functions {
@@ -154,52 +177,71 @@ impl Generator {
         out
     }
 
-    /// A function of two parameters returning a bounded value. It may call
-    /// earlier functions, whose signatures it knows.
+    /// A function of a pointer and two integers returning a bounded value. It
+    /// owns an array of its own and may call earlier functions, handing them
+    /// either array.
     fn function_body(&mut self) -> String {
         let mut scope = Scope::new();
         scope.push("a".into(), PARAM_BOUND);
         scope.push("b".into(), PARAM_BOUND);
-        let mut body = String::new();
+        scope.arrays.push(Array {
+            name: "p".into(),
+            mask: POINTER_MASK,
+        });
+        let mut body = self.array_declaration("loc");
+        scope.arrays.push(Array {
+            name: "loc".into(),
+            mask: ARRAY_LEN - 1,
+        });
         self.statements(&mut scope, &mut body, 0);
 
         let result = self.expr(&scope, RETURN_BOUND, 0);
         let name = format!("f{}", self.functions.len());
         format!(
-            "int {name}(int a, int b) {{\n{body}    return {};\n}}\n\n",
+            "int {name}(int *p, int a, int b) {{\n{body}    return {};\n}}\n\n",
             result.text
         )
     }
 
+    fn array_declaration(&mut self, name: &str) -> String {
+        let elements: Vec<String> = (0..ARRAY_LEN)
+            .map(|_| self.rng.range(-1000, 1000).to_string())
+            .collect();
+        format!(
+            "    int {name}[{ARRAY_LEN}] = {{{}}};\n",
+            elements.join(", ")
+        )
+    }
+
+    /// A call to `callee`, passing one of the arrays in scope — shifted along
+    /// where it is the function's own — and two bounded integers.
+    fn call(&mut self, scope: &Scope, callee: &str) -> String {
+        let pointer = match scope.pick_array(&mut self.rng) {
+            Some(array) if array.mask == POINTER_MASK => array.name.clone(),
+            Some(array) => format!("{} + {}", array.name, self.rng.range(0, POINTER_SHIFT)),
+            None => "arr".to_string(),
+        };
+        let args: Vec<String> = (0..2)
+            .map(|_| self.expr(scope, PARAM_BOUND, 1).text)
+            .collect();
+        format!("{callee}({pointer}, {})", args.join(", "))
+    }
+
     fn main_body(&mut self) -> String {
         let mut scope = Scope::new();
-        let mut body = String::new();
-
-        let elements: Vec<String> = (0..ARRAY_LEN)
-            .map(|_| {
-                let value = self.rng.range(-1000, 1000);
-                scope.array_bound = scope.array_bound.max(value.abs());
-                value.to_string()
-            })
-            .collect();
-        body.push_str(&format!(
-            "    int arr[{ARRAY_LEN}] = {{{}}};\n",
-            elements.join(", ")
-        ));
-        scope.has_array = true;
+        let mut body = self.array_declaration("arr");
+        scope.arrays.push(Array {
+            name: "arr".into(),
+            mask: ARRAY_LEN - 1,
+        });
 
         let names: Vec<String> = self.functions.iter().map(|f| f.name.clone()).collect();
         for name in &names {
             let result = self.fresh("r");
-            let args: Vec<String> = (0..2)
-                .map(|_| self.expr_detached(PARAM_BOUND).text)
-                .collect();
-            body.push_str(&format!(
-                "    int {result} = {name}({});\n",
-                args.join(", ")
-            ));
+            let call = self.call(&scope, name);
+            body.push_str(&format!("    int {result} = {call};\n"));
             body.push_str(&format!("    printf(\"%d\\n\", {result});\n"));
-            scope.push(result, RETURN_BOUND);
+            scope.push(result, CALL_BOUND);
         }
 
         // A loop accumulating over the array, printed per trip so a divergence
@@ -217,6 +259,11 @@ impl Generator {
         ));
         body.push_str(&format!("        printf(\"%d\\n\", {acc});\n"));
         body.push_str("    }\n");
+        // Every element is printed: a store through a pointer that went wrong
+        // shows up even where the loop above never read it.
+        body.push_str(&format!(
+            "    for (int i = 0; i < {ARRAY_LEN}; i++) printf(\"%d\\n\", arr[i]);\n"
+        ));
 
         format!("int main(void) {{\n{body}    return 0;\n}}\n")
     }
@@ -224,12 +271,22 @@ impl Generator {
     fn statements(&mut self, scope: &mut Scope, body: &mut String, depth: u32) {
         let count = 1 + self.rng.below(3);
         for _ in 0..count {
-            match self.rng.below(if depth < 1 { 5 } else { 3 }) {
+            match self.rng.below(if depth < 1 { 6 } else { 3 }) {
                 0 => {
                     let expr = self.expr(scope, 10_000, depth + 1);
                     let name = self.fresh("v");
                     body.push_str(&format!("    int {name} = {};\n", expr.text));
                     scope.push(name, expr.bound);
+                }
+                5 if !self.functions.is_empty() => {
+                    let callee = self.functions
+                        [self.rng.below(self.functions.len() as u64) as usize]
+                        .name
+                        .clone();
+                    let call = self.call(scope, &callee);
+                    let name = self.fresh("v");
+                    body.push_str(&format!("    int {name} = {call} & {CALL_BOUND};\n"));
+                    scope.push(name, CALL_BOUND);
                 }
                 1 => {
                     let Some(index) = scope.pick_assignable(&mut self.rng) else {
@@ -241,15 +298,10 @@ impl Generator {
                     let name = scope.variables[index].name.clone();
                     body.push_str(&format!("    {name} = {};\n", expr.text));
                 }
-                2 if scope.has_array => {
-                    let expr = self.expr(scope, 10_000, depth + 1);
-                    let index = self.index_expr(scope);
-                    body.push_str(&format!(
-                        "    arr[({index}) & {}] = {};\n",
-                        ARRAY_LEN - 1,
-                        expr.text
-                    ));
-                    scope.array_bound = scope.array_bound.max(expr.bound);
+                2 => {
+                    let expr = self.expr(scope, ARRAY_BOUND, depth + 1);
+                    let element = self.element(scope);
+                    body.push_str(&format!("    {element} = {};\n", expr.text));
                 }
                 3 => {
                     let cond = self.comparison(scope, depth + 1);
@@ -291,6 +343,18 @@ impl Generator {
         }
     }
 
+    /// An element of an array in scope, spelled by indexing or by pointer
+    /// arithmetic; every scope has at least one array.
+    fn element(&mut self, scope: &Scope) -> String {
+        let index = self.index_expr(scope);
+        let array = scope.pick_array(&mut self.rng).expect("an array in scope");
+        if self.rng.chance(50) {
+            format!("{}[({index}) & {}]", array.name, array.mask)
+        } else {
+            format!("*({} + (({index}) & {}))", array.name, array.mask)
+        }
+    }
+
     fn comparison(&mut self, scope: &Scope, depth: u32) -> Expr {
         let op = ["<", "<=", ">", ">=", "==", "!="][self.rng.below(6) as usize];
         let lhs = self.expr(scope, 10_000, depth);
@@ -302,35 +366,25 @@ impl Generator {
     }
 
     fn expr(&mut self, scope: &Scope, bound: i64, depth: u32) -> Expr {
-        self.expr_inner(Some(scope), bound, depth)
-    }
-
-    fn expr_detached(&mut self, bound: i64) -> Expr {
-        self.expr_inner(None, bound, 0)
-    }
-
-    fn expr_inner(&mut self, scope: Option<&Scope>, bound: i64, depth: u32) -> Expr {
         if depth > 2 || self.rng.chance(30) {
-            if let Some(scope) = scope {
-                if !self.rng.chance(40) {
-                    if let Some(variable) = scope.pick(&mut self.rng) {
-                        return Expr {
-                            text: variable.name.clone(),
-                            bound: variable.bound,
-                        };
-                    }
-                }
-                if scope.has_array && self.rng.chance(25) {
+            if !self.rng.chance(40) {
+                if let Some(variable) = scope.pick(&mut self.rng) {
                     return Expr {
-                        text: format!("arr[({}) & {}]", self.index_expr(scope), ARRAY_LEN - 1),
-                        bound: scope.array_bound,
+                        text: variable.name.clone(),
+                        bound: variable.bound,
                     };
                 }
+            }
+            if self.rng.chance(25) {
+                return Expr {
+                    text: self.element(scope),
+                    bound: ARRAY_BOUND,
+                };
             }
             return Expr::constant(self.rng.range(-64, 64));
         }
 
-        let child = |generator: &mut Self| generator.expr_inner(scope, bound / 2, depth + 1);
+        let child = |generator: &mut Self| generator.expr(scope, bound / 2, depth + 1);
         match self.rng.below(9) {
             0 => {
                 let (lhs, rhs) = (child(self), child(self));
@@ -349,8 +403,8 @@ impl Generator {
             2 => {
                 // Both factors limited so their product cannot overflow.
                 let factor = INT_MAX.isqrt().min(bound.max(2));
-                let lhs = self.expr_inner(scope, factor.min(bound), depth + 1);
-                let rhs = self.expr_inner(scope, factor.min(bound), depth + 1);
+                let lhs = self.expr(scope, factor.min(bound), depth + 1);
+                let rhs = self.expr(scope, factor.min(bound), depth + 1);
                 Expr {
                     text: format!("({} * {})", lhs.text, rhs.text),
                     bound: lhs.bound.saturating_mul(rhs.bound),
@@ -359,7 +413,7 @@ impl Generator {
             3 | 4 => {
                 let numerator = child(self);
                 // Nonzero by construction: `(x & 7) + 1` lies in [1, 8].
-                let divisor = match scope.and_then(|s| s.pick(&mut self.rng)) {
+                let divisor = match scope.pick(&mut self.rng) {
                     Some(variable) if self.rng.chance(50) => {
                         format!("(({} & 7) + 1)", variable.name)
                     }
@@ -390,10 +444,9 @@ impl Generator {
                 let value = child(self);
                 // Left-shift amount capped so the result stays in range:
                 // `bound << k <= INT_MAX` iff `k <= log2(INT_MAX / bound)`.
-                let room = if value.bound <= 1 {
-                    15
-                } else {
-                    ((INT_MAX / value.bound).ilog2() as i64).min(15)
+                let room = match INT_MAX / value.bound.max(1) {
+                    0 => 0,
+                    fit => (fit.ilog2() as i64).min(15),
                 };
                 let shift = self.rng.below(room.max(0) as u64 + 1) as i64;
                 Expr {
