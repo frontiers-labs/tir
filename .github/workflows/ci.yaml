@@ -48,9 +48,13 @@ jobs:
   # One build of the workspace, one test run over it, one artifact out of it.
   # The `lit` FileCheck suites are ordinary integration tests, so nextest covers
   # them too. Everything downstream runs the exact binary the tests ran.
+  #
+  # The only job here that wants 4 vCPU: compiling the workspace at opt-level 2
+  # is the longest thing in the pipeline and it scales with cores, whereas
+  # rustfmt is single-threaded and clippy is never on the critical path.
   build:
     needs: formatting
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
       CARGO_INCREMENTAL: "0"
       RUSTC_WRAPPER: sccache
