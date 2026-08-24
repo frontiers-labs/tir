@@ -1,13 +1,18 @@
-//! Loop token scopes: the edges a structured loop is left through.
+//! The scopes an RVSDG value lives in: the edges a structured loop is left
+//! through, and where a definition is in scope.
 //!
 //! A loop body binds a token naming its iteration, and an `scf.break`/`scf.continue`
 //! names that token to leave through it. A transform growing a carried port has to
 //! feed every such edge, so it tracks the scopes it is walking inside.
+//!
+//! Region nesting is the other half: which definitions reach into a nested
+//! region, and which the module holds for everything below it.
 
 use crate::BlockHandle;
 
+use crate::analysis::DominatorTree;
 use crate::builtin::TokenType;
-use crate::{Context, OpHandle, OpId, RegionId, ValueId, ValueIds, scf};
+use crate::{BlockId, Context, OpHandle, OpId, RegionId, ValueId, ValueIds, scf};
 
 /// The loop body's token scope: the value its `scf.break`/`scf.continue` name.
 pub fn loop_scope(context: &Context, body: RegionId) -> Option<ValueId> {
@@ -145,4 +150,70 @@ pub fn tested_ports(
     let operands = terminator.operands();
     let first = operands.len().checked_sub(ports)?;
     Some((region, arguments, operands[first..].to_vec()))
+}
+
+/// Whether `value` is a λ or δ node of the module. The module is one region:
+/// what it defines is in scope everywhere inside it, so it dominates every use
+/// without appearing in any function's dominator tree.
+pub fn is_module_level(context: &Context, value: ValueId) -> bool {
+    context
+        .get_value(value)
+        .defining_op()
+        .and_then(|op| context.parent_block(op))
+        .and_then(|block| context.parent_region(block))
+        .and_then(|region| context.get_region(region).parent_op())
+        .is_some_and(|parent| context.get_op(parent).is::<crate::builtin::ModuleOp>())
+}
+
+/// Whether a definition in `block` — `def`, or a block argument where there is
+/// none — is in scope at `op`.
+pub fn precedes(
+    context: &Context,
+    dom: &DominatorTree,
+    block: BlockId,
+    def: Option<OpId>,
+    op: OpId,
+) -> bool {
+    let Some(ob) = context.get_op(op).parent_block() else {
+        return false;
+    };
+    // A block argument precedes every op in its block.
+    let Some(def) = def else {
+        return block == ob || dom.dominates(block, ob);
+    };
+    if block != ob {
+        return dom.dominates(block, ob)
+            && holder_in(context, block, ob)
+                .is_none_or(|holder| context.get_block(block).is_before(def, holder));
+    }
+    context.get_block(block).is_before(def, op)
+}
+
+/// Whether `a`, defined in `ab`, is in scope in `bb`. A block dominates the
+/// blocks of the regions its operations hold, but only the part of it that runs
+/// before the holding operation reaches inside, so `a` must precede that
+/// operation. Vacuously true when `bb` is not nested under `ab`.
+pub fn reaches_into(context: &Context, a: ValueId, ab: BlockId, bb: BlockId) -> bool {
+    let Some(holder) = holder_in(context, ab, bb) else {
+        return true;
+    };
+    match context.get_value(a).defining_op() {
+        Some(a_op) => context.get_block(ab).is_before(a_op, holder),
+        // A block argument precedes every op in its block.
+        None => true,
+    }
+}
+
+/// The operation of `block` whose regions transitively contain `inner`.
+pub fn holder_in(context: &Context, block: BlockId, inner: BlockId) -> Option<OpId> {
+    let mut current = inner;
+    loop {
+        let region = context.parent_region(current)?;
+        let holder = context.get_region(region).parent_op()?;
+        let parent = context.get_op(holder).parent_block()?;
+        if parent == block {
+            return Some(holder);
+        }
+        current = parent;
+    }
 }

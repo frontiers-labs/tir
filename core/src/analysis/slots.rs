@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::analysis::{Escape, EscapeFacts};
+use crate::ptr::PtrAddOp;
 use crate::{Context, MemoryRead, MemoryWrite, OpId, PromotableAllocation, ValueId};
 
 /// What is known about one allocated stack slot across the operations it was
@@ -16,29 +18,39 @@ use crate::{Context, MemoryRead, MemoryWrite, OpId, PromotableAllocation, ValueI
 pub struct SlotState {
     /// The allocation that opens the slot, if it was among the collected ops.
     pub alloca: Option<OpId>,
-    /// Every write naming the slot as its location.
+    /// Every write into the slot, whether it names the slot itself or a pointer
+    /// derived from it.
     pub stores: Vec<OpId>,
-    /// Every read naming the slot as its location.
+    /// Every read of the slot, named the same two ways.
     pub loads: Vec<OpId>,
-    /// The slot's pointer is used somewhere other than a load/store location, so
-    /// its contents may be observed indirectly and it cannot be promoted.
+    /// The slot's address travels somewhere the analysis cannot follow, so its
+    /// contents may be observed indirectly and it cannot be promoted.
     pub escapes: bool,
 }
 
-/// Classify every load/store/escape in `op_ids` against the slots opened by the
-/// `PromotableAllocation`s among them.
+/// Collect every load and store in `op_ids` against the slots opened by the
+/// `PromotableAllocation`s among them, reading each slot's escape verdict off
+/// `escapes`.
 ///
-/// `op_ids` bounds the classification: a slot is only correctly described when
-/// every operation that could name its pointer is included.
-pub fn collect_slots(context: &Context, op_ids: &[OpId]) -> BTreeMap<ValueId, SlotState> {
+/// `op_ids` bounds the collection: a slot is only correctly described when every
+/// operation that could name its pointer is included. The escape verdict is not
+/// bounded that way — it is a fact about the whole function.
+pub fn collect_slots(
+    context: &Context,
+    escapes: &EscapeFacts,
+    op_ids: &[OpId],
+) -> BTreeMap<ValueId, SlotState> {
     let mut slots: BTreeMap<ValueId, SlotState> = BTreeMap::new();
 
     for &op_id in op_ids {
-        if let Some(alloca) = context
+        if let Some(allocation) = context
             .get_op(op_id)
             .as_interface::<dyn PromotableAllocation>()
         {
-            slots.entry(alloca.promoted_location()).or_default().alloca = Some(op_id);
+            let pointer = allocation.promoted_location();
+            let slot = slots.entry(pointer).or_default();
+            slot.alloca = Some(op_id);
+            slot.escapes = escapes.escape(pointer) != Escape::Local;
         }
     }
 
@@ -52,40 +64,34 @@ pub fn collect_slots(context: &Context, op_ids: &[OpId]) -> BTreeMap<ValueId, Sl
             continue;
         }
 
-        let read_location = instance
-            .clone()
-            .as_interface::<dyn MemoryRead>()
-            .map(|read| read.read_location());
-        if let Some(location) = read_location
-            && let Some(slot) = slots.get_mut(&location)
+        if let Some(read) = instance.clone().as_interface::<dyn MemoryRead>()
+            && let Some(slot) = slots.get_mut(&slot_base(context, read.read_location()))
         {
             slot.loads.push(op_id);
         }
 
-        let write = instance.clone().as_interface::<dyn MemoryWrite>();
-        let write_location = write.as_ref().map(|write| write.write_location());
-        if let Some(location) = write_location
-            && let Some(slot) = slots.get_mut(&location)
+        if let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>()
+            && let Some(slot) = slots.get_mut(&slot_base(context, write.write_location()))
         {
             slot.stores.push(op_id);
-        }
-        if let Some(value) = write.map(|write| write.written_value())
-            && let Some(slot) = slots.get_mut(&value)
-        {
-            slot.escapes = true;
-        }
-
-        for operand in instance.operands() {
-            if Some(operand) == read_location || Some(operand) == write_location {
-                continue;
-            }
-            if let Some(slot) = slots.get_mut(&operand) {
-                slot.escapes = true;
-            }
         }
     }
 
     slots
+}
+
+/// The allocation a pointer names: arithmetic on a pointer points into the
+/// object it started from, so the chain of `ptradd`s reads back to it.
+pub fn slot_base(context: &Context, pointer: ValueId) -> ValueId {
+    let mut base = pointer;
+    while let Some(defining) = context.get_value(base).defining_op() {
+        let instance = context.get_op(defining);
+        if !instance.is::<PtrAddOp>() {
+            break;
+        }
+        base = instance.operands()[0];
+    }
+    base
 }
 
 /// Whether the slot's loads and stores all name one type. Promotion reconstructs

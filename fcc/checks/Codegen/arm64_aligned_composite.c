@@ -6,7 +6,7 @@ struct Aligned {
 };
 
 long consume_aligned(long head, struct Aligned value) {
-    return head + sizeof(value);
+    return head + (long) value.value;
 }
 
 long call_aligned(long head, struct Aligned *value) {

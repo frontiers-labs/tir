@@ -1,0 +1,23 @@
+// RUN: tir opt --pass dse --verify %s | filecheck %s
+
+// A one-bit write covers part of a byte, and the pass counts bytes: it cannot
+// say what of the byte before it survives, so it neither dies nor kills.
+
+#data_layout = {types = {i1 = {abi = 8, size = 1}, i8 = {abi = 8, size = 8}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_f = func.func @f() -> !i8 {
+    %0 = ptr.alloca {size = 1, align = 1} : !ptr.p<!i8>
+    %1 = constant {value = 77} : !i8
+    ptr.store %1, %0
+    %2 = constant {value = 1} : !i1
+    ptr.store %2, %0
+    %3 = ptr.load %0 : !i8
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: ptr.store %1, %0
+// CHECK: ptr.store %2, %0

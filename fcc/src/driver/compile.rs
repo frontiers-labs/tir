@@ -206,6 +206,10 @@ pub(super) fn emit_machine_code(
         // Memory state describes the structured mid-end only; codegen takes the
         // implicit order back.
         function_pipeline.add_pass(tir::passes::EraseStatePass::new());
+        // What the state chains could not relate — writes through different
+        // pointer arithmetic onto one object, writes into globals and arrays —
+        // the alias facts still can.
+        function_pipeline.add_pass(tir::passes::DeadStoreEliminationPass::new());
     }
     // Data lowering consumes the δ ops, so the functions that name them must
     // hold symbol addresses of their own by then.

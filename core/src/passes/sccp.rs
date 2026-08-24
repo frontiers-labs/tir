@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 
 use crate::analysis::{ConstantFacts, DefUse};
-use crate::builtin::ops;
 use crate::{
     AnalysisManager, BlockId, ConstantLike, Context, OpId, OperationRef, Pass, PassError,
     PassTarget, Rewriter, TypeId, ValueId, func::FuncOp,
@@ -116,12 +115,11 @@ fn materialize(
     let literal = match built.get(&key) {
         Some(&literal) => literal,
         None => {
-            let op = ops::constant(context, constant.to_i64(), ty).build();
             let target =
                 OperationRef::new(context.get_op(before), Some(context.get_block(block)), None);
-            rewriter.insert_op_before(&target, &op)?;
-            built.insert(key, op.result());
-            op.result()
+            let literal = super::literal_before(context, rewriter, constant.to_i64(), ty, &target)?;
+            built.insert(key, literal);
+            literal
         }
     };
     context.replace_value_uses(value, literal);

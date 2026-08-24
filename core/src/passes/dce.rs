@@ -16,8 +16,8 @@ use std::collections::{HashMap, HashSet};
 use crate::analysis::{ConstantFacts, DefUse, RegRef, op_regs};
 use crate::backend::SymbolOp;
 use crate::{
-    AnalysisManager, BlockId, ConstantLike, Context, MemoryWrite, OpHandle, OpId, OperationRef,
-    Pass, PassError, PassTarget, Pure, Rewriter, Terminator, func::FuncOp,
+    AnalysisManager, BlockId, Context, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
+    PassTarget, Rewriter, Terminator, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -171,7 +171,7 @@ fn is_erasable(instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
     {
         return false;
     }
-    if !instance.results().is_empty() && !is_pure_value(instance) {
+    if !instance.results().is_empty() && !super::is_pure_value(instance) {
         return false;
     }
 
@@ -195,17 +195,4 @@ fn is_erasable(instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
     }
     // Only a value-producing op is a DCE candidate; a def-less pure op is left alone.
     defines
-}
-
-fn is_pure_value(instance: &OpHandle) -> bool {
-    instance.clone().as_interface::<dyn Pure>().is_some()
-        || instance
-            .clone()
-            .as_interface::<dyn ConstantLike>()
-            .is_some()
-        || instance
-            .clone()
-            .as_dyn_op()
-            .semantic_expr(&mut crate::sem::SemGraph::new())
-            .is_some()
 }

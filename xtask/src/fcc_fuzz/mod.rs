@@ -22,9 +22,9 @@ use harness::Outcome;
 /// neutral orderings of the registered passes; a correct compiler must give
 /// identical behavior under each.
 const EXTRA_PIPELINES: [&str; 3] = [
-    "func.func(thread-state,instcombine,sccp,dce,instcombine,erase-state)",
-    "func.func(thread-state,sccp,dce,erase-state)",
-    "func.func(thread-state,instcombine,sccp,instcombine,sccp,erase-state)",
+    "func.func(thread-state,instcombine,sccp,dce,instcombine,erase-state,dse)",
+    "func.func(thread-state,sccp,dce,erase-state,dse)",
+    "func.func(thread-state,instcombine,sccp,instcombine,sccp,erase-state,dse)",
 ];
 
 const CORPUS_DIRS: [&str; 3] = ["fcc/checks", "fcc/tests", "utils/unit-tests/src/fcc/corpus"];

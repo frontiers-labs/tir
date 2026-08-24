@@ -12,6 +12,7 @@ use tir_symbolic::egraph::{EGraph, Id};
 
 use crate::analysis::scopes::{carried_operands, port_edges, region_exit, tested_ports};
 use crate::analysis::slots::{collect_slots, values_agree_on_type};
+use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::builtin::StateType;
 use crate::sem::egraph::{minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
@@ -36,9 +37,10 @@ pub struct Seeded {
 }
 
 /// Build the e-graph for the regions of `root`.
-pub fn seed(context: &Context, root: OpId) -> Seeded {
+pub fn seed(analyses: &AnalysisManager, context: &Context, root: OpId) -> Seeded {
     let mut seeder = Seeder {
         context,
+        escapes: analyses.get::<EscapeFacts>(context, root),
         eg: EGraph::new(),
         value_class: HashMap::new(),
         arg_block: HashMap::new(),
@@ -64,6 +66,7 @@ pub fn seed(context: &Context, root: OpId) -> Seeded {
 
 struct Seeder<'a> {
     context: &'a Context,
+    escapes: std::rc::Rc<EscapeFacts>,
     eg: EGraph<Node>,
     value_class: HashMap<ValueId, Id>,
     arg_block: HashMap<ValueId, BlockId>,
@@ -94,11 +97,12 @@ impl Seeder<'_> {
     }
 
     /// The classes of the addresses a slot-level law may treat as a value: an
-    /// allocation whose pointer never leaves the load/store locations, and whose
-    /// accesses agree on one type, so a value reconstructed for it has one
-    /// spelling. The reading is the one every memory transform asks for.
+    /// allocation whose address never leaves the function — pointer arithmetic on
+    /// it does not count as leaving — and whose accesses agree on one type, so a
+    /// value reconstructed for it has one spelling. The reading is the one every
+    /// memory transform asks for.
     fn promotable_addresses(&self) -> Vec<Id> {
-        collect_slots(self.context, &self.ops)
+        collect_slots(self.context, &self.escapes, &self.ops)
             .iter()
             .filter(|(_, slot)| {
                 slot.alloca.is_some() && !slot.escapes && values_agree_on_type(self.context, slot)

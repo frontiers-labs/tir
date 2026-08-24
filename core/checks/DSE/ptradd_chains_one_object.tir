@@ -1,0 +1,27 @@
+// RUN: tir opt --pass dse --verify %s | filecheck %s
+
+// Two spellings of one address: `+4` and `+2+2` land on the same byte of the
+// same object, so the first write is one nothing can read back. The state chain
+// is gone by now, so nothing but the objects the pointers name says so.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_f = func.func @f(%0: !i32, %1: !i32) {
+    %2 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i32>
+    %3 = constant {value = 4} : !i64
+    %4 = ptr.ptradd %2, %3 : !ptr.p<!i32>
+    ptr.store %0, %4
+    %5 = constant {value = 2} : !i64
+    %6 = ptr.ptradd %2, %5 : !ptr.p<!i32>
+    %7 = ptr.ptradd %6, %5 : !ptr.p<!i32>
+    ptr.store %1, %7
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NOT: ptr.store %0,
+// CHECK: ptr.store %1, %7
+// CHECK-NEXT: func.return

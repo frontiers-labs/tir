@@ -7,7 +7,7 @@ struct Mixed {
 };
 
 long consume_mixed(struct Mixed value) {
-    return value.integer;
+    return value.integer + (long) value.fp;
 }
 
 struct Mixed make_mixed(double fp, long integer) {

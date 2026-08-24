@@ -1,0 +1,20 @@
+// RUN: tir opt --pass dse --verify %s | filecheck %s
+
+// A parameter pointer is an object the analysis cannot tell apart from another
+// parameter's, so a write through one may be read back through the other and
+// nothing is dead.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !ptr.p<!i32>, %2: !i32) {
+    ptr.store %2, %0
+    ptr.store %2, %1
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: ptr.store %2, %0
+// CHECK-NEXT: ptr.store %2, %1

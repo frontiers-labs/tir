@@ -1,0 +1,21 @@
+// RUN: tir opt --pass dse --verify %s | filecheck %s
+
+// The two writes start at the same address, but the second covers four bytes of
+// the eight the first wrote: the other four are still readable, so the wider
+// write is not dead.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_f = func.func @f(%0: !i64, %1: !i32) {
+    %2 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
+    ptr.store %0, %2
+    ptr.store %1, %2
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: ptr.store %0, %2
+// CHECK-NEXT: ptr.store %1, %2

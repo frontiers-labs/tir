@@ -10,7 +10,7 @@ struct Nested {
 };
 
 double consume_nested(struct Nested value) {
-    return 0.0;
+    return value.values[0].value + value.values[1].value;
 }
 struct Nested produce_nested(void);
 

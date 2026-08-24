@@ -1,0 +1,20 @@
+// RUN: tir opt --pass thread-state --pass erase-state --verify %s | filecheck %s
+
+// The read reaches the slot through pointer arithmetic rather than by naming it,
+// and it still observes what the write left: the write is no dead store.
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %1
+    %2 = constant {value = 0} : !i64
+    %3 = ptr.ptradd %1, %2 : !ptr.p<!i32>
+    %4 = ptr.load %3 : !i32
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: ptr.store
+// CHECK: ptr.load

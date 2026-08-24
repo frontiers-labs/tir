@@ -91,6 +91,10 @@ fn passes_do_not_leak_entities() {
         ),
         ("instcombine", Box::new(tir::passes::InstCombinePass::new())),
         ("erase-state", Box::new(tir::passes::EraseStatePass::new())),
+        (
+            "dse",
+            Box::new(tir::passes::DeadStoreEliminationPass::new()),
+        ),
     ] {
         let mut pm = PassManager::new();
         pm.nest::<tir::func::FuncOp>().add_boxed_pass(pass);

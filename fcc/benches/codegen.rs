@@ -20,7 +20,9 @@ use fcc::sema::{TypedAst, analyze};
 use tir::backend::TargetMachine;
 use tir::backend::pipeline::{StopAfter, build_pipeline};
 use tir::func::FuncOp;
-use tir::passes::{EraseStatePass, InstCombinePass, RestructurePass, ThreadStatePass};
+use tir::passes::{
+    DeadStoreEliminationPass, EraseStatePass, InstCombinePass, RestructurePass, ThreadStatePass,
+};
 use tir::{Context, Operation, PassManager};
 
 const GCC_20011219_1: &str = r#"
@@ -146,6 +148,7 @@ fn lower_before_isel(ast: &TypedAst) -> (Context, tir::builtin::ModuleOp, Box<dy
     let function_pipeline = pm.nest::<FuncOp>();
     function_pipeline.add_pass(InstCombinePass::new());
     function_pipeline.add_pass(EraseStatePass::new());
+    function_pipeline.add_pass(DeadStoreEliminationPass::new());
     pm.run(&context, context.get_op(module.id())).unwrap();
     fcc::codegen::lower_data(&context, &module).unwrap();
     (context, module, target)
@@ -196,7 +199,8 @@ fn bench_promote(c: &mut Criterion) {
             },
             |(ctx, module)| {
                 let mut pm =
-                    tir::parse_pipeline("func.func(thread-state,instcombine,erase-state)").unwrap();
+                    tir::parse_pipeline("func.func(thread-state,instcombine,erase-state,dse)")
+                        .unwrap();
                 pm.run(&ctx, ctx.get_op(module.id())).unwrap();
             },
             BatchSize::SmallInput,

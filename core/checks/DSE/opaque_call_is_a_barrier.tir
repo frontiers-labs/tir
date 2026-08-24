@@ -1,0 +1,23 @@
+// RUN: tir opt --pass dse --verify %s | filecheck %s
+
+// The facts model nothing about what a call does to memory, so a call standing
+// between two writes to one slot may read the first one back.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_g = func.declare @g() -> !unit
+  %fn_f = func.func @f(%0: !i32, %1: !i32) {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %2
+    func.call %fn_g()
+    ptr.store %1, %2
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: ptr.store %1, %3
+// CHECK-NEXT: func.call
+// CHECK-NEXT: ptr.store %2, %3

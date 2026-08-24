@@ -10,9 +10,9 @@
 use crate::BlockHandle;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::AnalysisManager;
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes};
-use crate::analysis::slots::collect_slots;
+use crate::analysis::slots::{collect_slots, slot_base};
+use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::builtin::StateType;
 use crate::func::{CallOp, FuncOp, ReturnOp};
 use crate::ptr::MemcpyOp;
@@ -47,7 +47,7 @@ impl Pass for ThreadStatePass {
         op: &OperationRef,
         context: &Context,
         _rewriter: &mut Rewriter,
-        _analyses: &AnalysisManager,
+        analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         if op.as_op::<FuncOp>().is_none() {
             return Ok(());
@@ -63,7 +63,7 @@ impl Pass for ThreadStatePass {
         let ops = region_ops(context, body);
         if !ops
             .iter()
-            .any(|&op_id| touches_memory(&context.get_op(op_id)))
+            .any(|&op_id| touches_memory(context, &context.get_op(op_id)))
         {
             return Ok(());
         }
@@ -73,7 +73,8 @@ impl Pass for ThreadStatePass {
             return Ok(());
         }
 
-        let tracked = collect_slots(context, &ops)
+        let escapes = analyses.get::<EscapeFacts>(context, op.op().id);
+        let tracked = collect_slots(context, &escapes, &ops)
             .into_iter()
             .filter(|(_, slot)| slot.alloca.is_some() && !slot.escapes)
             .map(|(pointer, _)| pointer)
@@ -132,7 +133,7 @@ impl Threader<'_> {
     fn walk(&mut self, block: &BlockHandle) {
         for op_id in block.op_ids() {
             let op = self.context.get_op(op_id);
-            match classify(&op, &self.tracked) {
+            match classify(self.context, &op, &self.tracked) {
                 Some(Effect::Open(slot)) if self.tracked.contains(&slot) => {
                     let result = self.context.grow_port(op_id, self.state, None, |_, _| None);
                     self.chains.insert(Chain::Slot(slot), result);
@@ -264,7 +265,7 @@ impl Threader<'_> {
             .flat_map(|&region| region_ops(self.context, region))
             .any(|op_id| {
                 matches!(
-                    classify(&self.context.get_op(op_id), &self.tracked),
+                    classify(self.context, &self.context.get_op(op_id), &self.tracked),
                     Some(Effect::Access(accessed)) if accessed == chain
                 )
             })
@@ -298,10 +299,11 @@ impl Threader<'_> {
 
 /// How `op` relates to the chains, reading an access through an untracked pointer
 /// as one that may alias anything.
-fn classify(op: &OpHandle, tracked: &BTreeSet<ValueId>) -> Option<Effect> {
+fn classify(context: &Context, op: &OpHandle, tracked: &BTreeSet<ValueId>) -> Option<Effect> {
     let chain_of = |pointer| {
-        if tracked.contains(&pointer) {
-            Chain::Slot(pointer)
+        let base = slot_base(context, pointer);
+        if tracked.contains(&base) {
+            Chain::Slot(base)
         } else {
             Chain::Conservative
         }
@@ -323,9 +325,9 @@ fn classify(op: &OpHandle, tracked: &BTreeSet<ValueId>) -> Option<Effect> {
 
 /// Whether `op` is one of the operations that carry state. Exporting the chain is
 /// not touching memory: a `return` alone leaves a function with nothing to thread.
-fn touches_memory(op: &OpHandle) -> bool {
+fn touches_memory(context: &Context, op: &OpHandle) -> bool {
     matches!(
-        classify(op, &BTreeSet::new()),
+        classify(context, op, &BTreeSet::new()),
         Some(Effect::Open(_) | Effect::Access(_))
     )
 }
@@ -369,7 +371,7 @@ fn subtree_touches_memory(context: &Context, op: &OpHandle) -> bool {
     op.regions()
         .iter()
         .flat_map(|&region| region_ops(context, region))
-        .any(|op_id| touches_memory(&context.get_op(op_id)))
+        .any(|op_id| touches_memory(context, &context.get_op(op_id)))
 }
 
 fn block_ops(context: &Context, block: &BlockHandle) -> Vec<OpId> {

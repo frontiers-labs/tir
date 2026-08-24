@@ -12,7 +12,7 @@ struct IntFloat {
 };
 
 long consume_float_int(struct FloatInt input) {
-    return input.tag;
+    return input.value < 0 ? input.tag : -input.tag;
 }
 
 struct IntFloat make_int_float(long tag, double value) {

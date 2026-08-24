@@ -22,16 +22,14 @@ use tir_symbolic::egraph::{EGraph, ENode, Extraction, Id};
 
 use std::rc::Rc;
 
-use crate::analysis::scopes::port_edges;
+use crate::analysis::scopes::{self, port_edges};
 use crate::analysis::{DominatingEdgeFacts, DominatorTree};
 use crate::graph::Dag;
 
 use crate::{
     AnalysisManager, BlockId, Conditional, ConstantLike, Context, EntryGuard, GuardedLoop,
     LoopLike, MemoryRead, OpHandle, OpId, OpInstance, OperationRef, Pass, PassError, PassTarget,
-    RegionId, Rewriter, TokenScope, TypeId, ValueId,
-    builtin::{StateType, ops},
-    func::FuncOp,
+    RegionId, Rewriter, TokenScope, TypeId, ValueId, builtin::StateType, func::FuncOp,
     utils::APInt,
 };
 
@@ -73,7 +71,7 @@ impl Pass for InstCombinePass {
             return Ok(());
         }
         let root = op.op().id;
-        let seeded = seed::seed(context, root);
+        let seeded = seed::seed(analyses, context, root);
         let ruleset = builtin_ruleset(context, &seeded);
         let mut driver = Driver {
             context,
@@ -309,14 +307,14 @@ impl Driver<'_> {
     /// Whether the def of `a` dominates the def of `b`. `b` is always an op result,
     /// so it has a defining op; `a` may be a block argument, located via `arg_block`.
     fn dominates(&self, a: ValueId, b: ValueId) -> bool {
-        if self.is_module_level(a) {
+        if scopes::is_module_level(self.context, a) {
             return true;
         }
         let (Some(ab), Some(bb)) = (self.def_block(a), self.def_block(b)) else {
             return false;
         };
         if ab != bb {
-            return self.dom.dominates(ab, bb) && self.reaches_into(a, ab, bb);
+            return self.dom.dominates(ab, bb) && scopes::reaches_into(self.context, a, ab, bb);
         }
         match (
             self.context.get_value(a).defining_op(),
@@ -332,26 +330,19 @@ impl Driver<'_> {
     /// Whether the def of `value` dominates the operation `op` — what a value an
     /// arm yields must do for the terminator that yields it.
     fn dominates_op(&self, value: ValueId, op: OpId) -> bool {
-        if self.is_module_level(value) {
+        if scopes::is_module_level(self.context, value) {
             return true;
         }
         let Some(vb) = self.def_block(value) else {
             return false;
         };
-        self.precedes(vb, self.context.get_value(value).defining_op(), op)
-    }
-
-    /// Whether `value` is a λ or δ node of the module. The module is one region:
-    /// what it defines is in scope everywhere inside it, so it dominates every
-    /// use without appearing in any function's dominator tree.
-    fn is_module_level(&self, value: ValueId) -> bool {
-        self.context
-            .get_value(value)
-            .defining_op()
-            .and_then(|op| self.context.parent_block(op))
-            .and_then(|block| self.context.parent_region(block))
-            .and_then(|region| self.context.get_region(region).parent_op())
-            .is_some_and(|parent| self.context.get_op(parent).is::<crate::builtin::ModuleOp>())
+        scopes::precedes(
+            self.context,
+            &self.dom,
+            vb,
+            self.context.get_value(value).defining_op(),
+            op,
+        )
     }
 
     /// Whether what `op` defines is in scope where `target` sits — what a port
@@ -360,55 +351,7 @@ impl Driver<'_> {
         let Some(block) = self.context.get_op(op).parent_block() else {
             return false;
         };
-        self.precedes(block, Some(op), target.op().id)
-    }
-
-    /// Whether a definition in `block` — `def`, or a block argument where there is
-    /// none — is in scope at `op`.
-    fn precedes(&self, block: BlockId, def: Option<OpId>, op: OpId) -> bool {
-        let Some(ob) = self.context.get_op(op).parent_block() else {
-            return false;
-        };
-        // A block argument precedes every op in its block.
-        let Some(def) = def else {
-            return block == ob || self.dom.dominates(block, ob);
-        };
-        if block != ob {
-            return self.dom.dominates(block, ob)
-                && self
-                    .holder_in(block, ob)
-                    .is_none_or(|holder| self.context.get_block(block).is_before(def, holder));
-        }
-        self.context.get_block(block).is_before(def, op)
-    }
-
-    /// Whether `a`, defined in `ab`, is in scope in `bb`. A block dominates the
-    /// blocks of the regions its operations hold, but only the part of it that
-    /// runs before the holding operation reaches inside, so `a` must precede that
-    /// operation. Vacuously true when `bb` is not nested under `ab`.
-    fn reaches_into(&self, a: ValueId, ab: BlockId, bb: BlockId) -> bool {
-        let Some(holder) = self.holder_in(ab, bb) else {
-            return true;
-        };
-        match self.context.get_value(a).defining_op() {
-            Some(a_op) => self.context.get_block(ab).is_before(a_op, holder),
-            // A block argument precedes every op in its block.
-            None => true,
-        }
-    }
-
-    /// The operation of `block` whose regions transitively contain `inner`.
-    fn holder_in(&self, block: BlockId, inner: BlockId) -> Option<OpId> {
-        let mut current = inner;
-        loop {
-            let region = self.context.parent_region(current)?;
-            let holder = self.context.get_region(region).parent_op()?;
-            let parent = self.context.get_op(holder).parent_block()?;
-            if parent == block {
-                return Some(holder);
-            }
-            current = parent;
-        }
+        scopes::precedes(self.context, &self.dom, block, Some(op), target.op().id)
     }
 
     fn def_block(&self, value: ValueId) -> Option<BlockId> {
@@ -562,9 +505,13 @@ impl Driver<'_> {
                 let Some(literal) = node.int() else {
                     return Ok(None);
                 };
-                let op = ops::constant(self.context, literal.to_i64(), expected_ty).build();
-                rewriter.insert_op_before(target, &op)?;
-                op.result()
+                super::literal_before(
+                    self.context,
+                    rewriter,
+                    literal.to_i64(),
+                    expected_ty,
+                    target,
+                )?
             }
         };
         memo.insert(class, value);
@@ -645,9 +592,13 @@ impl Driver<'_> {
         let Some(literal) = self.eg.nodes(class).iter().find_map(Node::int) else {
             return Ok(None);
         };
-        let op = ops::constant(self.context, literal.to_i64(), ty).build();
-        rewriter.insert_op_before(target, &op)?;
-        Ok(Some(op.result()))
+        Ok(Some(super::literal_before(
+            self.context,
+            rewriter,
+            literal.to_i64(),
+            ty,
+            target,
+        )?))
     }
 
     /// How many regions out of `target`'s own `value` is defined — 0 where both

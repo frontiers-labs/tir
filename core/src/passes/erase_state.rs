@@ -6,7 +6,7 @@
 //! that carries none is left alone.
 
 use crate::analysis::slots::{collect_slots, load_result};
-use crate::analysis::{AnalysisManager, DefUse};
+use crate::analysis::{AnalysisManager, DefUse, EscapeFacts};
 use crate::builtin::StateType;
 use crate::func::FuncOp;
 use crate::state::EntryStateOp;
@@ -40,7 +40,7 @@ impl Pass for EraseStatePass {
         op: &OperationRef,
         context: &Context,
         rewriter: &mut Rewriter,
-        _analyses: &AnalysisManager,
+        analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         if op.as_op::<FuncOp>().is_none() {
             return Ok(());
@@ -50,8 +50,9 @@ impl Pass for EraseStatePass {
         };
         let state = StateType::new(context);
         let blocks = blocks_under(context, body);
+        let escapes = analyses.get::<EscapeFacts>(context, op.op().id);
         // Read off the threaded chain, before it is dropped.
-        let unobserved = unobserved_stores(context, &blocks);
+        let unobserved = unobserved_stores(context, &escapes, &blocks);
 
         // The states an op consumes go first, so nothing reads a definition by the
         // time the definition is dropped.
@@ -83,7 +84,7 @@ impl Pass for EraseStatePass {
             rewriter.erase_op(&OperationRef::new(context.get_op(store), block, None))?;
         }
 
-        sweep_dead_slots(context, rewriter, op.op().id, &blocks)
+        sweep_dead_slots(context, rewriter, &escapes, op.op().id, &blocks)
     }
 }
 
@@ -97,12 +98,12 @@ impl Pass for EraseStatePass {
 /// so one whose state came straight from the allocation, however many reads
 /// apart, is reading what was never written. Anything else the chain names — a
 /// write, a call, a port — is taken as an observation.
-fn unobserved_stores(context: &Context, blocks: &[BlockId]) -> Vec<OpId> {
+fn unobserved_stores(context: &Context, escapes: &EscapeFacts, blocks: &[BlockId]) -> Vec<OpId> {
     let ops = blocks
         .iter()
         .flat_map(|&block| context.get_block(block).op_ids())
         .collect::<Vec<_>>();
-    collect_slots(context, &ops)
+    collect_slots(context, escapes, &ops)
         .into_values()
         .filter(|slot| !slot.escapes)
         .filter_map(|slot| {
@@ -146,6 +147,7 @@ fn reads_the_untouched_slot(context: &Context, load: OpId, alloca: OpId) -> bool
 fn sweep_dead_slots(
     context: &Context,
     rewriter: &mut Rewriter,
+    escapes: &EscapeFacts,
     func: OpId,
     blocks: &[BlockId],
 ) -> Result<(), PassError> {
@@ -154,7 +156,7 @@ fn sweep_dead_slots(
         .flat_map(|&block| context.get_block(block).op_ids())
         .collect::<Vec<_>>();
     let mut uses: Option<DefUse> = None;
-    for slot in collect_slots(context, &ops).into_values() {
+    for (pointer, slot) in collect_slots(context, escapes, &ops) {
         let Some(alloca) = slot.alloca else { continue };
         if slot.escapes {
             continue;
@@ -165,6 +167,13 @@ fn sweep_dead_slots(
             .iter()
             .any(|&load| index.is_used(load_result(context, load).number()))
         {
+            continue;
+        }
+        // The sweep erases the slot's accesses and its allocation. Anything else
+        // still naming the address — the pointer arithmetic a derived access was
+        // reached through — would be left reading a definition that is gone.
+        let accessed = |op: &OpId| slot.loads.contains(op) || slot.stores.contains(op);
+        if !index.users_of(pointer.number()).iter().all(accessed) {
             continue;
         }
         for op_id in slot.loads.into_iter().chain(slot.stores).chain([alloca]) {
