@@ -57,16 +57,18 @@ pub fn saturate(
     saturate_impl(ctx, eg, rewrites, limits, None);
 }
 
-/// Saturate only expressions reachable from `roots`. Scoped assumptions use
-/// this after the base graph has already been saturated globally.
-pub fn saturate_roots(
+/// Saturate an open scope's assumption over `roots`, the base graph already being
+/// saturated globally. `roots` are searched verbatim — the caller has already
+/// narrowed them to the classes the scope changed, and a class it left alone is
+/// at the base fixpoint. Each round re-narrows, since applying a rewrite mints
+/// classes and those are changed by construction.
+pub fn saturate_scope(
     ctx: &Context,
     eg: &mut SemEGraph,
     rewrites: &[IselRewrite],
     limits: SaturationLimits,
-    roots: impl IntoIterator<Item = Id>,
+    roots: Vec<Id>,
 ) {
-    let roots = reachable_roots(eg, roots);
     saturate_impl(ctx, eg, rewrites, limits, Some(roots));
 }
 
@@ -77,17 +79,17 @@ fn saturate_impl(
     limits: SaturationLimits,
     mut roots: Option<Vec<Id>>,
 ) {
+    let search = |eg: &SemEGraph, rewrite: &IselRewrite, roots: &Option<Vec<Id>>| match roots {
+        Some(roots) => rewrite.searcher.search_roots(eg, roots.iter().copied()),
+        None => rewrite.searcher.search(eg),
+    };
     for _ in 0..limits.max_iterations {
         let mut matches = Vec::new();
         for (index, rw) in rewrites.iter().enumerate() {
             if rw.post_saturation {
                 continue;
             }
-            let found = match &roots {
-                Some(roots) => rw.searcher.search_roots(eg, roots.iter().copied()),
-                None => rw.searcher.search(eg),
-            };
-            for m in found {
+            for m in search(eg, rw, &roots) {
                 matches.push((index, m));
             }
         }
@@ -101,7 +103,11 @@ fn saturate_impl(
         }
         eg.rebuild();
         if let Some(roots) = &mut roots {
-            *roots = reachable_roots(eg, std::mem::take(roots));
+            let dirty: HashSet<Id> = eg.scope_dirty().into_iter().collect();
+            *roots = reachable_roots(eg, std::mem::take(roots))
+                .into_iter()
+                .filter(|class| dirty.contains(class))
+                .collect();
         }
 
         if (eg.num_classes(), eg.total_size()) == before || eg.num_classes() >= limits.max_classes {
@@ -115,11 +121,9 @@ fn saturate_impl(
         .enumerate()
         .filter(|(_, rewrite)| rewrite.post_saturation)
         .flat_map(|(index, rewrite)| {
-            let found = match &roots {
-                Some(roots) => rewrite.searcher.search_roots(eg, roots.iter().copied()),
-                None => rewrite.searcher.search(eg),
-            };
-            found.into_iter().map(move |matched| (index, matched))
+            search(eg, rewrite, &roots)
+                .into_iter()
+                .map(move |matched| (index, matched))
         })
         .collect();
     for (index, matched) in &matches {

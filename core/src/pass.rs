@@ -748,7 +748,7 @@ pub fn report_pass_timing(wall: std::time::Duration) {
     timing::summary(wall);
 }
 
-mod timing {
+pub(crate) mod timing {
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 

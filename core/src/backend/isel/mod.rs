@@ -54,6 +54,67 @@ use pattern::{CompiledIselPattern, compile_isel_pattern};
 use tir::sem::axioms::{self, verify_axioms};
 use tir::sem::rewrites::{self, discover_rewrites};
 
+/// The function-wide value search, indexed the way a block consumes it: by root
+/// class, each root's patterns in index order. A fact-free class reads its matches
+/// straight out of here however many blocks ask.
+struct FunctionMatches {
+    by_root: HashMap<Id, Vec<(usize, EMatch<u32>)>>,
+    /// Value patterns rooted on a concrete operator, by that operator's key.
+    by_op: HashMap<u64, Vec<usize>>,
+    /// Value patterns that root on anything (a bare symbol, or a copy rule).
+    anywhere: Vec<usize>,
+    specificity: Vec<usize>,
+}
+
+impl FunctionMatches {
+    /// The patterns worth searching at `class`: those rooted on an operator it
+    /// holds, plus the root-agnostic ones. Ascending index, so a class's matches
+    /// come out in the same pattern order the base search recorded them in.
+    fn patterns_rooting_at(&self, fs: &FunctionSelection, class: Id) -> Vec<usize> {
+        let mut indices = self.anywhere.clone();
+        for node in fs.egraph.nodes(class) {
+            indices.extend(self.by_op.get(&node.op_key()).into_iter().flatten());
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+    }
+}
+
+/// The classes a block reads that its dominating assumption changed. Everywhere
+/// else the scoped e-graph is the base one node for node, so those classes'
+/// matches come from the function-wide [`InstructionSelectPass::base_value_matches`]
+/// and only these are searched again. Empty for a fact-free block and — the case
+/// that pays — for a block whose scope merged nothing it reads.
+#[derive(Default)]
+struct ChangedClasses {
+    /// Saturation seed order, so what the block proves is reproducible.
+    roots: Vec<Id>,
+    members: HashSet<Id>,
+}
+
+impl ChangedClasses {
+    /// The classes of `cone` the open scope changed. `cone` being closed downward,
+    /// intersecting it with the scope's whole affected set is the same as closing
+    /// upward inside it from the merges the block actually reads.
+    fn new(egraph: &SemEGraph, cone: &[Id]) -> Self {
+        let dirty: HashSet<Id> = egraph.scope_dirty().into_iter().collect();
+        let roots: Vec<Id> = cone
+            .iter()
+            .copied()
+            .filter(|class| dirty.contains(class))
+            .collect();
+        Self {
+            members: roots.iter().copied().collect(),
+            roots,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+}
+
 /// A conditional-branch rule chosen for a destruction's test: the rule, its
 /// operand bindings (the taken target bound as a block), the boundary classes the
 /// branch reads as registers, and the operand symbols whose register the cover has
@@ -1278,6 +1339,14 @@ impl InstructionSelectPass {
             let plan = self.solve_block(context, &block, &mut fs, &dom, false, &base_matches);
             self.plans.insert(block_id, plan);
         }
+        telemetry::report(
+            &op.op()
+                .clone()
+                .as_interface::<dyn tir::Symbol>()
+                .map_or_else(|| format!("{root:?}"), |symbol| symbol.symbol_name()),
+            visited.len(),
+            fs.egraph.num_classes(),
+        );
         // The regions were solved here, so the operations carrying them must not
         // solve graphs of their own when the walk reaches them.
         for block_id in function_blocks(context, op, true) {
@@ -1298,7 +1367,7 @@ impl InstructionSelectPass {
         dom: &DominatorTree,
         node: NodeId,
         inherited_scope: bool,
-        base_matches: &[Vec<EMatch<u32>>],
+        base_matches: &FunctionMatches,
         visited: &mut HashSet<BlockId>,
     ) {
         let Some(block_id) = dom.block(node) else {
@@ -1337,30 +1406,46 @@ impl InstructionSelectPass {
     /// Search every value pattern over the base graph once, honoring the same
     /// legality a fact-free block's solve applies (boundary constraints, and
     /// interior nodes restricted to pure or function-wide op-root classes). A
-    /// block narrows this superset to its own op-roots. Non-value patterns get an
-    /// empty slot so indices line up with `compiled_patterns`.
-    fn base_value_matches(
-        &self,
-        fs: &FunctionSelection,
-        context: &Context,
-    ) -> Vec<Vec<EMatch<u32>>> {
-        self.compiled_patterns
-            .iter()
-            .map(|compiled| {
-                if self.rules[compiled.rule_index].kind != RuleKind::Value {
-                    return Vec::new();
-                }
-                let pattern_root = compiled.pattern.root();
-                compiled.search_with_legality(
-                    &fs.egraph,
-                    context,
-                    fs.pointer_width,
-                    &|node, class| {
-                        value_match_allowed(fs, context, compiled, pattern_root, node, class)
-                    },
-                )
-            })
-            .collect()
+    /// block narrows this superset to the classes its cover reaches.
+    fn base_value_matches(&self, fs: &FunctionSelection, context: &Context) -> FunctionMatches {
+        let mut base = FunctionMatches {
+            by_root: HashMap::new(),
+            by_op: HashMap::new(),
+            anywhere: Vec::new(),
+            specificity: self
+                .compiled_patterns
+                .iter()
+                .map(|pattern| pattern.specificity)
+                .collect(),
+        };
+        for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
+            if self.rules[compiled.rule_index].kind != RuleKind::Value {
+                continue;
+            }
+            let pattern_root = compiled.pattern.root();
+            match compiled.pattern.node(pattern_root) {
+                PatternNode::Node(node) if !compiled.is_copy() => base
+                    .by_op
+                    .entry(node.op_key())
+                    .or_default()
+                    .push(pattern_index),
+                _ => base.anywhere.push(pattern_index),
+            }
+            for m in compiled.search_with_legality(
+                &fs.egraph,
+                context,
+                fs.pointer_width,
+                &|node, class| {
+                    value_match_allowed(fs, context, compiled, pattern_root, node, class)
+                },
+            ) {
+                base.by_root
+                    .entry(fs.egraph.find(m.root))
+                    .or_default()
+                    .push((pattern_index, m));
+            }
+        }
+        base
     }
 
     /// Lower every block of the function into one shared, base-saturated e-graph
@@ -1639,24 +1724,28 @@ impl InstructionSelectPass {
         fs: &mut FunctionSelection,
         dom: &DominatorTree,
         scoped: bool,
-        base_matches: &[Vec<EMatch<u32>>],
+        base_matches: &FunctionMatches,
     ) -> Result<BlockPlan, String> {
-        let root_seeds = block_root_seeds(block, fs);
+        let mut changed = ChangedClasses::default();
         if scoped {
-            let egraph = &mut fs.egraph;
-            rewrites::saturate_roots(
-                context,
-                egraph,
-                &self.rewrites,
-                Default::default(),
-                root_seeds.iter().copied(),
-            );
+            let cone = rewrites::reachable_roots(&fs.egraph, block_root_seeds(block, fs));
+            changed = ChangedClasses::new(&fs.egraph, &cone);
+            if !changed.is_empty() {
+                rewrites::saturate_scope(
+                    context,
+                    &mut fs.egraph,
+                    &self.rewrites,
+                    Default::default(),
+                    changed.roots.clone(),
+                );
+                // Saturation mints classes and merges more, so what the block
+                // reads and what changed in it both have to be re-read.
+                let cone = rewrites::reachable_roots(&fs.egraph, cone);
+                changed = ChangedClasses::new(&fs.egraph, &cone);
+            }
+            telemetry::record_scoped_block(&changed);
         }
-        let match_roots = rewrites::reachable_roots(&fs.egraph, root_seeds);
-        // Under a scope the graph differs from the base, so re-search; a fact-free
-        // block reuses the cached base matches.
-        let cached = (!scoped).then_some(base_matches);
-        self.solve_block_inner(context, block, fs, dom, &match_roots, cached)
+        self.solve_block_inner(context, block, fs, dom, &changed, base_matches)
     }
 
     /// Commit every block of the function and then destruct what carries regions:
@@ -1800,8 +1889,8 @@ impl InstructionSelectPass {
         block: &BlockHandle,
         fs: &FunctionSelection,
         dom: &DominatorTree,
-        match_roots: &[Id],
-        base_matches: Option<&[Vec<EMatch<u32>>]>,
+        changed: &ChangedClasses,
+        base_matches: &FunctionMatches,
     ) -> Result<BlockPlan, String> {
         let block_id = block.id();
         let op_ids = block.op_ids();
@@ -1830,13 +1919,13 @@ impl InstructionSelectPass {
 
         let guard_classes: HashSet<Id> = fs.aux_classes(block_id).collect();
 
-        let matches = self.collect_block_matches(
+        let (matches, covered) = self.collect_block_matches(
             context,
             fs,
             &op_refs,
             &block_op_by_root,
             &guard_classes,
-            match_roots,
+            changed,
             base_matches,
         );
 
@@ -1917,10 +2006,6 @@ impl InstructionSelectPass {
                 }
             }
         }
-        // Restrict the cover to the closure of B's op-root and guard-condition
-        // classes under the surviving matches' bindings (so rewrite-introduced
-        // intermediates reached from B are covered, but nothing from other blocks).
-        let covered = closure_classes(&fs.egraph, &block_roots, &guard_classes, &matches);
         let demanded: HashSet<Id> = covered
             .iter()
             .copied()
@@ -2359,6 +2444,11 @@ impl InstructionSelectPass {
         best.map(|(_, _, guard)| guard)
     }
 
+    /// Every value match the cover can reach from what the block computes, and the
+    /// classes it reached. Demand-driven: a class is searched only once something
+    /// already covered binds it, which is the fixpoint the cover's class set is
+    /// anyway — searching the block's whole reachable cone instead generates two
+    /// orders of magnitude more matches than the cover has any use for.
     #[allow(clippy::too_many_arguments)]
     fn collect_block_matches(
         &self,
@@ -2367,227 +2457,328 @@ impl InstructionSelectPass {
         op_refs: &HashMap<OpId, OperationRef>,
         block_op_by_root: &HashMap<Id, OpId>,
         guard_classes: &HashSet<Id>,
-        match_roots: &[Id],
-        base_matches: Option<&[Vec<EMatch<u32>>]>,
-    ) -> Vec<PbqpIselMatch> {
-        let mut matches = Vec::new();
-        let local_roots = match_roots;
-        let mut local_roots_by_op: HashMap<u64, Vec<Id>> = HashMap::new();
-        if base_matches.is_none() {
-            for &root in local_roots {
-                for node in fs.egraph.nodes(root) {
-                    // Roots are appended in outer-loop order, so a repeated
-                    // op key within one root's nodes is always the last entry.
-                    let roots = local_roots_by_op.entry(node.op_key()).or_default();
-                    if roots.last() != Some(&root) {
-                        roots.push(root);
+        changed: &ChangedClasses,
+        base: &FunctionMatches,
+    ) -> (Vec<PbqpIselMatch>, Vec<Id>) {
+        let mut covered: HashSet<Id> = block_op_by_root.keys().copied().collect();
+        covered.extend(guard_classes.iter().copied());
+        let mut work: Vec<Id> = covered.iter().copied().collect();
+        work.sort_unstable();
+        let mut matches: Vec<PbqpIselMatch> = Vec::new();
+        while let Some(class) = work.pop() {
+            // Domination groups a match with the others at its own root, so
+            // pruning per class is the same verdict as pruning the whole block at
+            // once — and it keeps what feeds the closure below down to survivors.
+            let mut at_class = self.root_matches(
+                context,
+                fs,
+                op_refs,
+                block_op_by_root,
+                guard_classes,
+                changed,
+                base,
+                class,
+            );
+            prune_dominated_matches(&base.specificity, &mut at_class);
+            for matched in &at_class {
+                for binding in &matched.bindings.pattern_nodes {
+                    if binding.is_state {
+                        continue;
+                    }
+                    let bound = fs.egraph.find(binding.class);
+                    if covered.insert(bound) {
+                        work.push(bound);
                     }
                 }
             }
+            matches.append(&mut at_class);
         }
-        for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
+        let mut covered: Vec<Id> = covered.into_iter().collect();
+        covered.sort();
+        (matches, covered)
+    }
+
+    /// The value matches rooted at one class: read off the function-wide base
+    /// search where the block's assumption left the class alone, searched again
+    /// where it did not.
+    #[allow(clippy::too_many_arguments)]
+    fn root_matches(
+        &self,
+        context: &Context,
+        fs: &FunctionSelection,
+        op_refs: &HashMap<OpId, OperationRef>,
+        block_op_by_root: &HashMap<Id, OpId>,
+        guard_classes: &HashSet<Id>,
+        changed: &ChangedClasses,
+        base: &FunctionMatches,
+        class: Id,
+    ) -> Vec<PbqpIselMatch> {
+        let no_matches: &[(usize, EMatch<u32>)] = &[];
+        let mut fresh: Vec<(usize, EMatch<u32>)> = Vec::new();
+        let cached = if changed.members.contains(&class) {
+            for pattern_index in base.patterns_rooting_at(fs, class) {
+                let compiled = &self.compiled_patterns[pattern_index];
+                let pattern_root = compiled.pattern.root();
+                fresh.extend(
+                    compiled
+                        .search_roots_with_legality(
+                            &fs.egraph,
+                            context,
+                            [class],
+                            fs.pointer_width,
+                            &|node, bound| {
+                                value_match_allowed(
+                                    fs,
+                                    context,
+                                    compiled,
+                                    pattern_root,
+                                    node,
+                                    bound,
+                                )
+                            },
+                        )
+                        .into_iter()
+                        .map(|m| (pattern_index, m)),
+                );
+            }
+            no_matches
+        } else {
+            base.by_root.get(&class).map_or(no_matches, Vec::as_slice)
+        };
+        telemetry::record_root_matches(cached.len(), fresh.len());
+
+        let mut matches = Vec::new();
+        for (pattern_index, m) in cached.iter().chain(&fresh) {
+            let pattern_index = *pattern_index;
+            let compiled = &self.compiled_patterns[pattern_index];
             let rule = &self.rules[compiled.rule_index];
-            // Branch rules select terminators, not values (see `best_guard_branch`).
-            if rule.kind != RuleKind::Value {
+            let pattern_root = compiled.pattern.root();
+            let root = fs.egraph.find(m.root);
+            if compiled.is_copy() && fs.has_values(m.binding(pattern_root)) {
                 continue;
             }
-            let pattern_root = compiled.pattern.root();
-
-            // A fact-free block reuses the base search; a scoped one re-searches its
-            // own graph. Both apply the function-wide legality, then the per-block
-            // filter below narrows interior classes to B's own op-roots.
-            let fresh: Vec<EMatch<u32>>;
-            let raw: &[EMatch<u32>] = if let Some(cache) = base_matches {
-                &cache[pattern_index]
-            } else {
-                let roots = match compiled.pattern.node(pattern_root) {
-                    PatternNode::Node(node) => local_roots_by_op
-                        .get(&node.op_key())
-                        .map(Vec::as_slice)
-                        .unwrap_or(&[]),
-                    PatternNode::Var(_) => local_roots,
-                };
-                fresh = compiled.search_roots_with_legality(
-                    &fs.egraph,
-                    context,
-                    roots.iter().copied(),
-                    fs.pointer_width,
-                    &|node, class| {
-                        value_match_allowed(fs, context, compiled, pattern_root, node, class)
-                    },
-                );
-                &fresh
-            };
-            for m in raw {
-                let root = fs.egraph.find(m.root);
-                if compiled.is_copy() && fs.has_values(m.binding(pattern_root)) {
-                    continue;
-                }
-                let block_op = block_op_by_root.get(&root).copied();
-                let is_guard_class = guard_classes.contains(&root);
-                // A match roots an instruction only if it produces a value B
-                // computes: an op of B, a guard condition of B, a
-                // rewrite-introduced intermediate, or a terminal constant covered
-                // by a real target materializer instruction.
-                let is_computed = fs
-                    .egraph
-                    .nodes(root)
-                    .iter()
-                    .any(|n| !n.children().is_empty());
-                let synthetic = is_computed || compiled.constant_materializer_range().is_some();
-                if block_op.is_none() && !is_guard_class && !synthetic {
-                    continue;
-                }
-
-                // Narrow the function-wide legality to B: a non-pure interior class
-                // is legal only when its backing op is in B and it is not shared
-                // (boundary constraints were already enforced during the search).
-                let interior_ok = (0..compiled.pattern.len()).all(|index| {
-                    let node = Id::from_raw(index as u32);
-                    if node == pattern_root || compiled.node_meta[node.index()].duplicable {
-                        return true;
-                    }
-                    let class = fs.egraph.find(m.binding(node));
-                    node::class_is_pure(&fs.egraph, class)
-                        || (block_op_by_root.contains_key(&class) && !fs.is_shared(class))
-                });
-                if !interior_ok {
-                    continue;
-                }
-
-                let mut captures = CaptureBindings::new();
-                for (var, class) in m.subst.entries() {
-                    let Var::Symbol(symbol) = var else { continue };
-                    if compiled.is_state_symbol(*symbol) {
-                        continue;
-                    }
-                    captures.bind(*symbol, fs.egraph.find(class));
-                }
-
-                let mut structural_boundaries = HashSet::new();
-                let mut value_boundaries = HashSet::new();
-                for index in 0..compiled.pattern.len() {
-                    let PatternNode::Node(node) = compiled.pattern.node(Id::from_raw(index as u32))
-                    else {
-                        continue;
-                    };
-                    for (operand, &child) in node.children.iter().enumerate() {
-                        if !compiled.node_meta[child.index()].is_boundary {
-                            continue;
-                        }
-                        if matches!(node.sym(), Some(SymKind::SExt | SymKind::ZExt)) && operand == 1
-                        {
-                            structural_boundaries.insert(child);
-                        } else {
-                            value_boundaries.insert(child);
-                        }
-                    }
-                }
-                structural_boundaries.retain(|node| !value_boundaries.contains(node));
-                let pattern_nodes: Vec<PatternNodeBinding> = (0..compiled.pattern.len())
-                    .map(|index| Id::from_raw(index as u32))
-                    .map(|pattern_node| {
-                        let meta = &compiled.node_meta[pattern_node.index()];
-                        // Constants are boundary-like: pure, folded into the
-                        // encoding, never consumed by the match — so the same
-                        // constant class (e.g. the literal 0) can sit inside one
-                        // match and under a boundary of another without making
-                        // the cover infeasible.
-                        let is_boundary = meta.is_boundary || meta.is_constant;
-                        let demand = if meta.demands_register()
-                            || (meta.is_boundary
-                                && meta.constraint.is_none()
-                                && meta.register.is_none()
-                                && !structural_boundaries.contains(&pattern_node))
-                        {
-                            cover::BoundaryDemand::Register
-                        } else if meta.constraint == Some(tir::graph::OperandConstraint::Immediate)
-                            || meta.is_constant
-                        {
-                            cover::BoundaryDemand::Immediate
-                        } else {
-                            cover::BoundaryDemand::Structural
-                        };
-                        let mut class = fs.egraph.find(m.binding(pattern_node));
-                        // A register boundary on a low-extract view reads the
-                        // chased source's register, so the cover's edges, the
-                        // schedule's dependencies, and availability all target
-                        // the class a tile can actually define.
-                        if is_boundary && demand == cover::BoundaryDemand::Register {
-                            class = fs.chase_low_extract(class);
-                        }
-                        PatternNodeBinding {
-                            pattern_node,
-                            class,
-                            is_boundary,
-                            is_state: meta.is_state,
-                            demand,
-                            view_offset: meta
-                                .register
-                                .map_or(0, |requirement| requirement.view_offset()),
-                        }
-                    })
-                    .collect();
-                // Extraction is acyclic: a tile may not register-read its own
-                // root class (it would compute the value from itself). Identity
-                // members put e.g. `add(x, 0)` inside `x`'s class, so an
-                // add-with-immediate rule roots on `x` while register-binding
-                // `x` — a zero-progress tile, never selectable.
-                if pattern_nodes.iter().any(|binding| {
-                    binding.is_boundary
-                        && binding.demand == cover::BoundaryDemand::Register
-                        && binding.class == root
-                }) {
-                    continue;
-                }
-                // The virtual register a match defines for an IR value leaves
-                // selection's control: copies, spills and ABI pinning treat the
-                // registers of a file as freely interchangeable, which only holds
-                // for views of one bit offset. A rule writing a shifted view (x86
-                // `ah`) may therefore only cover a rewrite-introduced class, whose
-                // consumers are tiles this cover checks.
-                let result_view_offset = rule
-                    .result_register
-                    .map_or(0, |requirement| requirement.view_offset());
-                if result_view_offset != 0 && fs.has_values(root) {
-                    continue;
-                }
-
-                let bindings = FullMatchBindings {
-                    captures,
-                    pattern_nodes,
-                };
-
-                // Cost is op-relative when there is a backing op in B; a
-                // rewrite-introduced root has no op, so it takes the rule's
-                // target-independent base cost.
-                let rule_match = bindings
-                    .captures
-                    .to_rule_match(&fs.egraph, &fs.class_values);
-                let cost = if let Some(op_ref) = block_op.and_then(|id| op_refs.get(&id)) {
-                    self.cost_model
-                        .node_cost(context, op_ref, rule, &rule_match)
-                } else {
-                    rule.base_cost as u64
-                };
-                matches.push(PbqpIselMatch {
-                    pattern_index,
-                    rule_index: compiled.rule_index,
-                    root,
-                    pattern_root,
-                    bindings,
-                    cost,
-                    result_view_offset,
-                });
+            let block_op = block_op_by_root.get(&root).copied();
+            let is_guard_class = guard_classes.contains(&root);
+            // A match roots an instruction only if it produces a value B
+            // computes: an op of B, a guard condition of B, a
+            // rewrite-introduced intermediate, or a terminal constant covered
+            // by a real target materializer instruction.
+            let is_computed = fs
+                .egraph
+                .nodes(root)
+                .iter()
+                .any(|n| !n.children().is_empty());
+            let synthetic = is_computed || compiled.constant_materializer_range().is_some();
+            if block_op.is_none() && !is_guard_class && !synthetic {
+                continue;
             }
+
+            // Narrow the function-wide legality to B: a non-pure interior class
+            // is legal only when its backing op is in B and it is not shared
+            // (boundary constraints were already enforced during the search).
+            let interior_ok = (0..compiled.pattern.len()).all(|index| {
+                let node = Id::from_raw(index as u32);
+                if node == pattern_root || compiled.node_meta[node.index()].duplicable {
+                    return true;
+                }
+                let class = fs.egraph.find(m.binding(node));
+                node::class_is_pure(&fs.egraph, class)
+                    || (block_op_by_root.contains_key(&class) && !fs.is_shared(class))
+            });
+            if !interior_ok {
+                continue;
+            }
+
+            let mut captures = CaptureBindings::new();
+            for (var, class) in m.subst.entries() {
+                let Var::Symbol(symbol) = var else { continue };
+                if compiled.is_state_symbol(*symbol) {
+                    continue;
+                }
+                captures.bind(*symbol, fs.egraph.find(class));
+            }
+
+            let mut structural_boundaries = HashSet::new();
+            let mut value_boundaries = HashSet::new();
+            for index in 0..compiled.pattern.len() {
+                let PatternNode::Node(node) = compiled.pattern.node(Id::from_raw(index as u32))
+                else {
+                    continue;
+                };
+                for (operand, &child) in node.children.iter().enumerate() {
+                    if !compiled.node_meta[child.index()].is_boundary {
+                        continue;
+                    }
+                    if matches!(node.sym(), Some(SymKind::SExt | SymKind::ZExt)) && operand == 1 {
+                        structural_boundaries.insert(child);
+                    } else {
+                        value_boundaries.insert(child);
+                    }
+                }
+            }
+            structural_boundaries.retain(|node| !value_boundaries.contains(node));
+            let pattern_nodes: Vec<PatternNodeBinding> = (0..compiled.pattern.len())
+                .map(|index| Id::from_raw(index as u32))
+                .map(|pattern_node| {
+                    let meta = &compiled.node_meta[pattern_node.index()];
+                    // Constants are boundary-like: pure, folded into the
+                    // encoding, never consumed by the match — so the same
+                    // constant class (e.g. the literal 0) can sit inside one
+                    // match and under a boundary of another without making
+                    // the cover infeasible.
+                    let is_boundary = meta.is_boundary || meta.is_constant;
+                    let demand = if meta.demands_register()
+                        || (meta.is_boundary
+                            && meta.constraint.is_none()
+                            && meta.register.is_none()
+                            && !structural_boundaries.contains(&pattern_node))
+                    {
+                        cover::BoundaryDemand::Register
+                    } else if meta.constraint == Some(tir::graph::OperandConstraint::Immediate)
+                        || meta.is_constant
+                    {
+                        cover::BoundaryDemand::Immediate
+                    } else {
+                        cover::BoundaryDemand::Structural
+                    };
+                    let mut class = fs.egraph.find(m.binding(pattern_node));
+                    // A register boundary on a low-extract view reads the
+                    // chased source's register, so the cover's edges, the
+                    // schedule's dependencies, and availability all target
+                    // the class a tile can actually define.
+                    if is_boundary && demand == cover::BoundaryDemand::Register {
+                        class = fs.chase_low_extract(class);
+                    }
+                    PatternNodeBinding {
+                        pattern_node,
+                        class,
+                        is_boundary,
+                        is_state: meta.is_state,
+                        demand,
+                        view_offset: meta
+                            .register
+                            .map_or(0, |requirement| requirement.view_offset()),
+                    }
+                })
+                .collect();
+            // Extraction is acyclic: a tile may not register-read its own
+            // root class (it would compute the value from itself). Identity
+            // members put e.g. `add(x, 0)` inside `x`'s class, so an
+            // add-with-immediate rule roots on `x` while register-binding
+            // `x` — a zero-progress tile, never selectable.
+            if pattern_nodes.iter().any(|binding| {
+                binding.is_boundary
+                    && binding.demand == cover::BoundaryDemand::Register
+                    && binding.class == root
+            }) {
+                continue;
+            }
+            // The virtual register a match defines for an IR value leaves
+            // selection's control: copies, spills and ABI pinning treat the
+            // registers of a file as freely interchangeable, which only holds
+            // for views of one bit offset. A rule writing a shifted view (x86
+            // `ah`) may therefore only cover a rewrite-introduced class, whose
+            // consumers are tiles this cover checks.
+            let result_view_offset = rule
+                .result_register
+                .map_or(0, |requirement| requirement.view_offset());
+            if result_view_offset != 0 && fs.has_values(root) {
+                continue;
+            }
+
+            let bindings = FullMatchBindings {
+                captures,
+                pattern_nodes,
+            };
+
+            // Cost is op-relative when there is a backing op in B; a
+            // rewrite-introduced root has no op, so it takes the rule's
+            // target-independent base cost.
+            let rule_match = bindings
+                .captures
+                .to_rule_match(&fs.egraph, &fs.class_values);
+            let cost = if let Some(op_ref) = block_op.and_then(|id| op_refs.get(&id)) {
+                self.cost_model
+                    .node_cost(context, op_ref, rule, &rule_match)
+            } else {
+                rule.base_cost as u64
+            };
+            matches.push(PbqpIselMatch {
+                pattern_index,
+                rule_index: compiled.rule_index,
+                root,
+                pattern_root,
+                bindings,
+                cost,
+                result_view_offset,
+            });
         }
-        let specificity: Vec<usize> = self
-            .compiled_patterns
-            .iter()
-            .map(|pattern| pattern.specificity)
-            .collect();
-        prune_dominated_matches(&specificity, &mut matches);
         matches
+    }
+}
+
+/// Whether incremental scoped matching is paying: how much of what a block reads
+/// its assumption changed, how many classes the cover actually reached, and how
+/// much of the candidate set came from the function-wide base search instead of a
+/// re-search. Printed as `tir-isel:` lines on stderr under `TIR_TIME_PASSES`,
+/// alongside the pass-timing table.
+mod telemetry {
+    use std::cell::Cell;
+
+    use super::ChangedClasses;
+
+    const SCOPED: usize = 0;
+    const CLEAN: usize = 1;
+    const DIRTY_SUM: usize = 2;
+    const DIRTY_MAX: usize = 3;
+    const REUSED: usize = 4;
+    const RESEARCHED: usize = 5;
+    const COVERED: usize = 6;
+
+    thread_local! {
+        static COUNTS: Cell<[usize; 7]> = const { Cell::new([0; 7]) };
+    }
+
+    fn bump(update: impl Fn(&mut [usize; 7])) {
+        if !crate::pass::timing::enabled() {
+            return;
+        }
+        COUNTS.with(|counts| {
+            let mut current = counts.get();
+            update(&mut current);
+            counts.set(current);
+        });
+    }
+
+    pub(super) fn record_scoped_block(changed: &ChangedClasses) {
+        let size = changed.roots.len();
+        bump(|counts| {
+            counts[SCOPED] += 1;
+            counts[CLEAN] += usize::from(size == 0);
+            counts[DIRTY_SUM] += size;
+            counts[DIRTY_MAX] = counts[DIRTY_MAX].max(size);
+        });
+    }
+
+    pub(super) fn record_root_matches(reused: usize, researched: usize) {
+        bump(|counts| {
+            counts[COVERED] += 1;
+            counts[REUSED] += reused;
+            counts[RESEARCHED] += researched;
+        });
+    }
+
+    pub(super) fn report(function: &str, blocks: usize, classes: usize) {
+        if !crate::pass::timing::enabled() {
+            return;
+        }
+        let c = COUNTS.replace([0; 7]);
+        let dirty_avg = c[DIRTY_SUM].checked_div(c[SCOPED]).unwrap_or(0);
+        eprintln!(
+            "tir-isel: fn={function} blocks={blocks} classes={classes} scoped={} clean={} \
+             dirty_avg={dirty_avg} dirty_max={} covered={} reused={} researched={}",
+            c[SCOPED], c[CLEAN], c[DIRTY_MAX], c[COVERED], c[REUSED], c[RESEARCHED]
+        );
     }
 }
 
@@ -2729,42 +2920,6 @@ fn assert_fact(context: &Context, egraph: &mut SemEGraph, expr: &ConditionExpr, 
 }
 
 /// The closure of B's op-root and guard-condition classes under the bindings of
-/// matches rooted in that set — the classes the PBQP cover ranges over.
-fn closure_classes(
-    egraph: &SemEGraph,
-    block_roots: &HashSet<Id>,
-    guard_classes: &HashSet<Id>,
-    matches: &[PbqpIselMatch],
-) -> Vec<Id> {
-    let mut by_root: HashMap<Id, Vec<usize>> = HashMap::new();
-    for (i, m) in matches.iter().enumerate() {
-        by_root.entry(egraph.find(m.root)).or_default().push(i);
-    }
-
-    let mut covered: HashSet<Id> = block_roots.iter().copied().collect();
-    covered.extend(guard_classes.iter().copied());
-    let mut work: Vec<Id> = covered.iter().copied().collect();
-    while let Some(class) = work.pop() {
-        let Some(indices) = by_root.get(&class) else {
-            continue;
-        };
-        for &i in indices {
-            for binding in &matches[i].bindings.pattern_nodes {
-                if binding.is_state {
-                    continue;
-                }
-                let bound = egraph.find(binding.class);
-                if covered.insert(bound) {
-                    work.push(bound);
-                }
-            }
-        }
-    }
-
-    let mut classes: Vec<Id> = covered.into_iter().collect();
-    classes.sort();
-    classes
-}
 impl Pass for InstructionSelectPass {
     fn name(&self) -> &'static str {
         "instruction-select"
