@@ -102,6 +102,31 @@ cargo +nightly fuzz run riscv-assembly-fuzz -- -max_total_time=60
 cargo +nightly fuzz run arm64-assembly-fuzz -- -max_total_time=60
 ```
 
+### Nightly fuzz defects
+
+The nightly fuzzers file one issue per defect, not one per red job. A defect is
+identified by a signature over its reduced case and the passes that miscompile
+it, so the same bug found from a different seed lands on the issue that already
+tracks it instead of opening a new one.
+
+Each issue carries the case that fails, the pass the divergence was narrowed to,
+and a command that reproduces that one failure. It also embeds the record itself
+in an HTML comment at the bottom; the next nightly replays every open defect from
+that record and closes the ones that no longer reproduce. Editing or deleting the
+comment stops the issue from ever closing itself, so leave it alone.
+
+To work with a record by hand:
+
+```sh
+# Print a recorded defect as the issue it becomes.
+cargo xtask fcc-fuzz --render target/fuzz/failures/<signature>.json
+
+# Re-run every defect currently tracked on GitHub.
+gh issue list --state open --label fuzz --limit 500 --json body \
+  | cargo xtask fcc-fuzz --extract tracked
+cargo xtask fcc-fuzz --replay tracked
+```
+
 ### Collecting coverage info
 
 

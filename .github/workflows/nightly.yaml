@@ -75,10 +75,20 @@ jobs:
           path: target/test-suites/gcc
           key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
       - run: target/ci/xtask fcc-fuzz --corpus --fcc "$PWD/target/ci/fcc"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: defects-corpus
+          path: target/fuzz/failures
+          if-no-files-found: ignore
+          retention-days: 7
 
   differential-fuzz:
     needs: build-and-package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
     env:
       CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
       SEED: ${{ github.run_id }}
@@ -87,12 +97,33 @@ jobs:
       - uses: ./.github/actions/fcc-package
       - name: Self-test the harness
         run: target/ci/xtask fcc-fuzz --self-test --fcc "$PWD/target/ci/fcc"
-      # The seed is the run id: it moves coverage every night and it is what
-      # the failure report quotes back as the reproduce command.
+      # Replaying what is already filed is what lets an issue close itself: a
+      # defect is fixed when it stops reproducing, not when the job that found
+      # it happens to go green. Every C-program defect is replayed here, whether
+      # the fuzzer or the corpus found it.
+      - name: Replay tracked defects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue list --state open --label fuzz --limit 500 --json body \
+            >tracked.json || echo '[]' >tracked.json
+          target/ci/xtask fcc-fuzz --extract tracked <tracked.json
+          target/ci/xtask fcc-fuzz --replay tracked --fcc "$PWD/target/ci/fcc"
+      # The seed is the run id, so coverage moves every night. Each program is
+      # generated from that seed plus its index and compiled under a pipeline
+      # chosen by the same per-program seed, which is what makes the
+      # single-seed reproduce command in an issue land on the failure.
       - name: Fuzz
         run: |
           target/ci/xtask fcc-fuzz --fcc "$PWD/target/ci/fcc" \
             --seed "$SEED" --iterations 500
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: defects-differential-fuzz
+          path: target/fuzz/failures
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Compile-time tracking for fcc: the sum over the passing torture execute
   # cases plus coremark, against last night's numbers restored from the cache.
@@ -143,7 +174,15 @@ jobs:
           key: fcc-bench-results-${{ github.run_id }}
 
   libfuzzer:
+    # Only for the xtask binary, which reads the records embedded in open
+    # issues. A broken workspace build must not stop the fuzzing, so the job
+    # runs regardless and simply skips replay when the binary never arrived.
+    needs: build-and-package
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
     strategy:
       fail-fast: false
       matrix:
@@ -164,11 +203,41 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz@0.13.1
+      - uses: ./.github/actions/fcc-package
+        continue-on-error: true
       - name: Fuzz
-        run: cargo +nightly fuzz run --fuzz-dir utils/fuzz ${{ matrix.target }} -- -max_total_time=60 -max_len=16384
+        id: fuzz
+        continue-on-error: true
+        run: |
+          cargo +nightly fuzz run --fuzz-dir utils/fuzz ${{ matrix.target }} \
+            -- -max_total_time=60 -max_len=16384 2>&1 | tee fuzz.log
+      - name: Record the crash
+        if: steps.fuzz.outcome == 'failure'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: .github/scripts/record-libfuzzer-crash.sh ${{ matrix.target }} fuzz.log defects
+      # A raw fuzzer input is not a C program, so `xtask --replay` leaves these
+      # alone; only the fuzzer knows how to feed one back in.
+      - name: Replay tracked crashes
+        if: hashFiles('target/ci/xtask') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/replay-libfuzzer-crashes.sh ${{ matrix.target }} defects
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: defects-libfuzzer-${{ matrix.target }}
+          path: defects
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Fail now that the crash is recorded
+        if: steps.fuzz.outcome == 'failure'
+        run: exit 1
 
-  # One issue per failing job, reused across nights and closed when the job goes
-  # green again, so a persistent failure never piles up duplicates.
+  # One issue per defect, carrying the case that fails and a command that
+  # reproduces it, closed when that case stops failing. Jobs that went red
+  # without recording a defect are a broken build rather than a miscompile, and
+  # those do get one issue per job.
   report:
     if: always()
     needs: [build-and-package, lints, corpus, differential-fuzz, fcc-bench, libfuzzer]
@@ -178,9 +247,23 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v7
+      # Rendering an issue is xtask's job, so the format written into one and
+      # the format parsed back out of one cannot drift apart.
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: fcc-package
+          path: target/ci
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: defects-*
+          merge-multiple: true
+          path: defects
       - env:
           GH_TOKEN: ${{ github.token }}
           RESULTS: ${{ toJSON(needs) }}
-          SEED: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: .github/scripts/report-nightly-failures.sh
+        run: |
+          chmod +x target/ci/xtask 2>/dev/null || true
+          .github/scripts/report-nightly-failures.sh defects

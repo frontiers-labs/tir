@@ -10,11 +10,13 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long one compiler invocation may run before it is killed.
 const COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[derive(Clone)]
 pub struct Variant {
     pub name: String,
     backend: Backend,
 }
 
+#[derive(Clone)]
 enum Backend {
     /// `fcc` with an optional mid-end pipeline override.
     Fcc {

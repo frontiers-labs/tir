@@ -122,6 +122,9 @@ fn fcc_fuzz_options(mut args: impl Iterator<Item = String>) -> anyhow::Result<fc
         iterations: 100,
         corpus: false,
         self_test: false,
+        replay: None,
+        render: None,
+        extract: None,
         fcc: None,
     };
     while let Some(arg) = args.next() {
@@ -133,6 +136,9 @@ fn fcc_fuzz_options(mut args: impl Iterator<Item = String>) -> anyhow::Result<fc
             "--fcc" => options.fcc = Some(PathBuf::from(take_value(&mut args, "--fcc")?)),
             "--corpus" => options.corpus = true,
             "--self-test" => options.self_test = true,
+            "--replay" => options.replay = Some(take_value(&mut args, "--replay")?.into()),
+            "--render" => options.render = Some(take_value(&mut args, "--render")?.into()),
+            "--extract" => options.extract = Some(take_value(&mut args, "--extract")?.into()),
             other => anyhow::bail!("unknown fcc-fuzz flag: {other}"),
         }
     }
@@ -381,6 +387,7 @@ fcc-corpus [--baseline <dir> | --diff <dir> | --determinism]
                  compile the fcc .c corpus to x86_64 asm and capture, diff or
                  double-compile it
 fcc-fuzz [--seed N] [--iterations N] [--corpus] [--self-test] [--fcc <path>]
+         [--replay <dir>] [--render <file>] [--extract <dir>]
                  generate random UB-free C programs, compile them under
                  different pass pipelines and reference compilers, run the
                  binaries and compare observable behavior
