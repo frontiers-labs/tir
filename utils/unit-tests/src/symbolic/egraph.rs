@@ -445,3 +445,86 @@ fn classes_iterate_scope_roots_at_first_member_position() {
     assert_eq!(seen, vec![g.find(a), b]);
     g.pop_context();
 }
+
+#[test]
+fn scope_dirty_is_empty_without_a_scope() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    g.union(a, b);
+    g.rebuild();
+    assert!(g.scope_dirty().is_empty());
+}
+
+#[test]
+fn scope_dirty_holds_the_class_a_scoped_union_merged() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    sym(&mut g, 2);
+    g.rebuild();
+
+    g.push_context();
+    g.union(a, b);
+    g.rebuild();
+    assert_eq!(g.scope_dirty(), vec![g.find(a)]);
+    g.pop_context();
+}
+
+#[test]
+fn scope_dirty_holds_a_class_minted_under_the_scope() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    g.rebuild();
+
+    g.push_context();
+    let sum = add(&mut g, a, b);
+    assert_eq!(g.scope_dirty(), vec![g.find(sum)]);
+    g.pop_context();
+    assert!(g.scope_dirty().is_empty());
+}
+
+#[test]
+fn scope_dirty_drops_the_inner_scope_on_pop() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let c = sym(&mut g, 2);
+    let d = sym(&mut g, 3);
+    g.rebuild();
+
+    g.push_context();
+    g.union(a, b);
+    g.rebuild();
+    g.push_context();
+    g.union(c, d);
+    g.rebuild();
+    assert_eq!(g.scope_dirty(), vec![g.find(a), g.find(c)]);
+
+    g.pop_context();
+    assert_eq!(g.scope_dirty(), vec![g.find(a)]);
+    g.pop_context();
+    assert!(g.scope_dirty().is_empty());
+}
+
+#[test]
+fn scope_dirty_closes_upward_over_parents() {
+    // A parent's e-nodes re-canonicalize through the merge, so a pattern rooted
+    // there can match under the scope and not in the base graph.
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let sum = add(&mut g, a, b);
+    let outer = neg(&mut g, sum);
+    sym(&mut g, 2);
+    g.rebuild();
+
+    g.push_context();
+    g.union(a, b);
+    g.rebuild();
+    let mut expected = vec![g.find(a), g.find(sum), g.find(outer)];
+    expected.sort();
+    assert_eq!(g.scope_dirty(), expected);
+    g.pop_context();
+}

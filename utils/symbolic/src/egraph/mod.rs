@@ -296,6 +296,53 @@ impl<L: ENode> EGraph<L> {
             .unwrap_or(&[])
     }
 
+    /// Canonical classes the open scopes changed: the ones their unions merged,
+    /// the ones minted inside them, and transitively every class holding a node
+    /// with such a child — a parent's e-nodes re-canonicalize through a merge, so
+    /// a pattern rooted there can match under the scope and not in the base graph.
+    /// This is therefore the whole set a scoped re-search must revisit: outside it
+    /// the reachable sub-graph is the base one node for node. Ascending id, so a
+    /// caller's search order is reproducible. Empty with no scope open.
+    pub fn scope_dirty(&self) -> Vec<Id> {
+        let mut seen: HashSet<Id, FxBuildHasher> = HashSet::default();
+        let mut work: Vec<Id> = self
+            .scope_created
+            .iter()
+            .flatten()
+            .map(|created| self.find(created.id))
+            .chain(
+                self.scope_members
+                    .last()
+                    .into_iter()
+                    .flat_map(|frame| frame.keys().map(|&rep| self.find(rep))),
+            )
+            .filter(|&id| seen.insert(id))
+            .collect();
+        let mut dirty = work.clone();
+        while let Some(id) = work.pop() {
+            // Side tables and back-edges are keyed by base reps, so a merged
+            // group's parents are the union of its members' parents.
+            let members = match self.scope_members(id) {
+                [] => std::slice::from_ref(&id),
+                members => members,
+            };
+            for member in members {
+                let Some(class) = self.classes.get(member) else {
+                    continue;
+                };
+                for &(_, parent) in &class.parents {
+                    let parent = self.find(parent);
+                    if seen.insert(parent) {
+                        dirty.push(parent);
+                        work.push(parent);
+                    }
+                }
+            }
+        }
+        dirty.sort_unstable();
+        dirty
+    }
+
     /// Intern `node`, returning its e-class. A non-unique node equal to an existing
     /// one shares its class; otherwise (always for unique nodes) a fresh class.
     pub fn add(&mut self, mut node: L) -> Id {
