@@ -491,10 +491,16 @@ register belongs to — a low-bit truncation reads its source's register, so the
 binding chases through it (`chase_low_extract`).
 
 The function-wide legality (boundary constraints, pure-or-op-root interiors) does
-not depend on the assumption scope, so a **fact-free** block sees exactly the base
-graph: its patterns are searched once for the whole function
-(`base_value_matches`) and each such block reuses that superset, narrowing it to
-its own op-roots. A **fact-bearing** block re-searches under its scope.
+not depend on the assumption scope, so every block reads its matches out of one
+function-wide base search (`base_value_matches`, indexed by root class). Matching
+is demand-driven: starting from B's op-root and guard classes, a class is
+searched only once a surviving match at an already-covered class binds it, which
+is exactly the closure the PBQP cover ranges over. A **fact-bearing** block
+re-searches only the classes its assumption changed — `EGraph::scope_dirty`
+(the scope's merges and minted classes, closed upward over parents, since a
+parent's nodes re-canonicalize through a merge) intersected with what the block
+reads — and outside that set the scoped graph is the base one node for node, so
+the base matches stand.
 
 ### Semantic types and register storage
 
@@ -615,8 +621,9 @@ constant materializer prunes it to a handful).
 
 `build_eclass_cover` maps the tiling problem onto PBQP over a **supplied class
 list** — B's op-root classes and the classes a destruction reads there, closed under the surviving
-matches' bindings (`closure_classes`), so rewrite-introduced intermediates reached
-from B are covered but nothing from another block is. **One PBQP node per class in
+matches' bindings (the fixpoint `collect_block_matches` computes as it searches),
+so rewrite-introduced intermediates reached from B are covered but nothing from
+another block is. **One PBQP node per class in
 that closure**, each offering a set of **alternatives**:
 
 ```
