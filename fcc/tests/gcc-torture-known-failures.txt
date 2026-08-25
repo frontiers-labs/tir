@@ -381,7 +381,6 @@ compile/950612-1.c
 compile/950613-1.c
 compile/950618-1.c
 compile/950719-1.c
-compile/950816-1.c
 compile/950816-2.c
 compile/950910-1.c
 compile/950921-1.c
