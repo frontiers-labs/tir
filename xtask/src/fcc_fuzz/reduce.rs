@@ -5,7 +5,8 @@
 
 /// Delete statements from `source` for as long as `still_fails` holds of the
 /// result. A line opening a block is deleted together with the block it opens,
-/// so every candidate stays syntactically whole.
+/// so every candidate stays syntactically whole, and a `return` is never
+/// deleted, so a caller never starts reading an indeterminate value.
 pub fn reduce(source: &str, still_fails: &mut dyn FnMut(&str) -> bool) -> String {
     let mut lines: Vec<&str> = source.lines().collect();
     // Deleting a statement can make an earlier one deletable in turn — the last
@@ -16,9 +17,7 @@ pub fn reduce(source: &str, still_fails: &mut dyn FnMut(&str) -> bool) -> String
         let mut deleted = false;
         let mut start = 0;
         while start < lines.len() {
-            // A closing brace belongs to the block that opened it; deleting one
-            // on its own would unbalance the program, so it is never a candidate.
-            if lines[start].trim_start().starts_with('}') {
+            if !deletable(lines[start]) {
                 start += 1;
                 continue;
             }
@@ -41,6 +40,16 @@ pub fn reduce(source: &str, still_fails: &mut dyn FnMut(&str) -> bool) -> String
 
 /// How many times to sweep the program before settling for what is left.
 const MAX_SWEEPS: usize = 4;
+
+/// Whether a line may be dropped on its own. A closing brace belongs to the
+/// block that opened it and deleting one would unbalance the program. A
+/// `return` is worse than unbalanced: the program still builds, but its caller
+/// now reads an indeterminate value, and the divergence that survives is
+/// undefined behavior rather than a miscompile.
+fn deletable(line: &str) -> bool {
+    let line = line.trim_start();
+    !line.starts_with('}') && !line.starts_with("return")
+}
 
 /// The last line of the block `start` opens, or `start` itself when it opens
 /// none.
@@ -126,6 +135,24 @@ mod tests {
              \x20   if (a) {\n\
              \x20       MARKER;\n\
              \x20   }\n\
+             \x20   return 0;\n\
+             }\n"
+        );
+    }
+
+    #[test]
+    fn keeps_the_return_a_caller_reads() {
+        let source = "int f(void) {\n\
+                      \x20   int a = 1;\n\
+                      \x20   return a;\n\
+                      }\n";
+
+        let reduced = reduce(source, &mut |candidate| candidate.contains("int f(void)"));
+
+        assert_eq!(
+            reduced,
+            "int f(void) {\n\
+             \x20   return a;\n\
              }\n"
         );
     }

@@ -233,6 +233,16 @@ fn memory_hash_table_matches_host_compiler() {
     assert_fcc_matches_host(include_str!("corpus/memory/hash_table.c"));
 }
 
+/// A store through the caller's array from inside a branch, found by the
+/// nightly fuzzer: the store was dropped and the array kept its old value.
+#[test]
+fn memory_pointer_store_in_branch_matches_host_compiler() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_matches_host(include_str!("corpus/memory/pointer_store_in_branch.c"));
+}
+
 #[test]
 fn global_function_pointer_matches_host_compiler() {
     if !cc_available() {

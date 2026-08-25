@@ -3,8 +3,22 @@
 //! Every program is a pure function of its seed: same seed, same bytes. The
 //! generated code avoids undefined behavior by construction — integer bounds
 //! are tracked through every expression so no signed operation can overflow,
-//! divisors are nonzero by shape, left-shift amounts are bounded by the
-//! operand's range, and array indices are masked to the array length.
+//! divisors are nonzero by shape, left shifts are of a masked non-negative
+//! value by an amount its bound allows, and array indices are masked to the
+//! array length.
+//!
+//! The bound is a guarantee, not a wish: `expr(scope, b, _)` never returns an
+//! expression that can exceed `b`. That is what a caller may rely on, and it
+//! is why a leaf turns down a variable too wide for the request rather than
+//! handing it over with its own bound. Weaken it anywhere and the property
+//! stops holding everywhere downstream — an argument wider than a parameter's
+//! bound breaks the callee's proof, whose return then breaks its caller's.
+//!
+//! One bound serves everything, because a value only reaches an expression if
+//! it fits: staggered bounds would leave whole classes of value with nowhere
+//! to go — an array element too wide to be an argument, a call result too wide
+//! to be compared — and a fuzzer that cannot connect a load to a call is worth
+//! less than the tidiness costs.
 //!
 //! Memory is exercised through pointers: every function takes a pointer into
 //! the caller's array and owns an array of its own, reads and writes go
@@ -13,24 +27,22 @@
 
 const INT_MAX: i64 = 2_147_483_647;
 
-/// Bound on function arguments at call sites; parameter expressions are
-/// generated against this bound.
-const PARAM_BOUND: i64 = 1 << 12;
-/// Bound on values a function returns.
-const RETURN_BOUND: i64 = 1 << 14;
-/// A call's result is masked down to this before it feeds expressions, so
-/// chains of calls cannot grow bounds past what the arithmetic tolerates.
-const CALL_BOUND: i64 = (1 << 13) - 1;
+/// Bound on every value a generated program names: an argument, a return, an
+/// array element, a local, and every intermediate on the way to one. A store
+/// through a pointer respects it too, so a callee cannot break its caller's.
+const VALUE_BOUND: i64 = 10_000;
 /// Array length used throughout.
 const ARRAY_LEN: usize = 8;
-/// Bound on every array element: what any store writes and any load assumes,
-/// so a function writing through a pointer cannot break its caller's bounds.
-const ARRAY_BOUND: i64 = 10_000;
 /// How far into an array a pointer passed to a function may start, so that the
 /// callee's masked indices stay inside the array.
 const POINTER_SHIFT: i64 = 4;
 /// Mask on indices through a passed pointer: `POINTER_SHIFT + 3 < ARRAY_LEN`.
 const POINTER_MASK: usize = 3;
+
+/// The widest value any generated program computes is `main`'s accumulator,
+/// an array element plus a step, each within `VALUE_BOUND`. Everything else is
+/// one bounded value, so no generated arithmetic can overflow.
+const _: () = assert!(2 * VALUE_BOUND < INT_MAX);
 
 pub fn generate(seed: u64) -> String {
     let mut generator = Generator::new(seed);
@@ -121,6 +133,18 @@ impl Scope {
             .get(rng.below(self.variables.len() as u64) as usize)
     }
 
+    /// A variable narrow enough to stand in for an expression bounded by
+    /// `bound`. Wider ones are not masked down to fit: that would silently
+    /// change the value the program computes, and the point of the bound is to
+    /// describe what the program does, not to constrain it after the fact.
+    fn pick_within(&self, rng: &mut Rng, bound: i64) -> Option<&Variable> {
+        let candidates: Vec<&Variable> =
+            self.variables.iter().filter(|v| v.bound <= bound).collect();
+        candidates
+            .get(rng.below(candidates.len() as u64) as usize)
+            .copied()
+    }
+
     fn pick_array(&self, rng: &mut Rng) -> Option<&Array> {
         self.arrays
             .get(rng.below(self.arrays.len() as u64) as usize)
@@ -182,8 +206,8 @@ impl Generator {
     /// either array.
     fn function_body(&mut self) -> String {
         let mut scope = Scope::new();
-        scope.push("a".into(), PARAM_BOUND);
-        scope.push("b".into(), PARAM_BOUND);
+        scope.push("a".into(), VALUE_BOUND);
+        scope.push("b".into(), VALUE_BOUND);
         scope.arrays.push(Array {
             name: "p".into(),
             mask: POINTER_MASK,
@@ -195,7 +219,7 @@ impl Generator {
         });
         self.statements(&mut scope, &mut body, 0);
 
-        let result = self.expr(&scope, RETURN_BOUND, 0);
+        let result = self.expr(&scope, VALUE_BOUND, 0);
         let name = format!("f{}", self.functions.len());
         format!(
             "int {name}(int *p, int a, int b) {{\n{body}    return {};\n}}\n\n",
@@ -222,7 +246,7 @@ impl Generator {
             None => "arr".to_string(),
         };
         let args: Vec<String> = (0..2)
-            .map(|_| self.expr(scope, PARAM_BOUND, 1).text)
+            .map(|_| self.expr(scope, VALUE_BOUND, 1).text)
             .collect();
         format!("{callee}({pointer}, {})", args.join(", "))
     }
@@ -241,7 +265,7 @@ impl Generator {
             let call = self.call(&scope, name);
             body.push_str(&format!("    int {result} = {call};\n"));
             body.push_str(&format!("    printf(\"%d\\n\", {result});\n"));
-            scope.push(result, CALL_BOUND);
+            scope.push(result, VALUE_BOUND);
         }
 
         // A loop accumulating over the array, printed per trip so a divergence
@@ -251,7 +275,7 @@ impl Generator {
         body.push_str(&format!("    int {acc} = 0;\n"));
         body.push_str(&format!("    for (int i = 0; i < {trips}; i++) {{\n"));
         scope.push_read_only("i", trips.saturating_sub(1));
-        let step = self.expr(&scope, 10_000, 1);
+        let step = self.expr(&scope, VALUE_BOUND, 1);
         body.push_str(&format!(
             "        {acc} = {} + arr[i & {}];\n",
             step.text,
@@ -273,7 +297,7 @@ impl Generator {
         for _ in 0..count {
             match self.rng.below(if depth < 1 { 6 } else { 3 }) {
                 0 => {
-                    let expr = self.expr(scope, 10_000, depth + 1);
+                    let expr = self.expr(scope, VALUE_BOUND, depth + 1);
                     let name = self.fresh("v");
                     body.push_str(&format!("    int {name} = {};\n", expr.text));
                     scope.push(name, expr.bound);
@@ -285,21 +309,23 @@ impl Generator {
                         .clone();
                     let call = self.call(scope, &callee);
                     let name = self.fresh("v");
-                    body.push_str(&format!("    int {name} = {call} & {CALL_BOUND};\n"));
-                    scope.push(name, CALL_BOUND);
+                    body.push_str(&format!("    int {name} = {call};\n"));
+                    scope.push(name, VALUE_BOUND);
                 }
                 1 => {
                     let Some(index) = scope.pick_assignable(&mut self.rng) else {
                         continue;
                     };
-                    let bound = scope.variables[index].bound.max(2);
-                    let expr = self.expr(scope, bound, depth + 1);
-                    scope.variables[index].bound = expr.bound;
+                    let previous = scope.variables[index].bound;
+                    let expr = self.expr(scope, previous.max(2), depth + 1);
+                    // The assignment may sit in a branch that is never taken,
+                    // so afterwards the variable holds either value.
+                    scope.variables[index].bound = previous.max(expr.bound);
                     let name = scope.variables[index].name.clone();
                     body.push_str(&format!("    {name} = {};\n", expr.text));
                 }
                 2 => {
-                    let expr = self.expr(scope, ARRAY_BOUND, depth + 1);
+                    let expr = self.expr(scope, VALUE_BOUND, depth + 1);
                     let element = self.element(scope);
                     body.push_str(&format!("    {element} = {};\n", expr.text));
                 }
@@ -357,31 +383,46 @@ impl Generator {
 
     fn comparison(&mut self, scope: &Scope, depth: u32) -> Expr {
         let op = ["<", "<=", ">", ">=", "==", "!="][self.rng.below(6) as usize];
-        let lhs = self.expr(scope, 10_000, depth);
-        let rhs = self.expr(scope, 10_000, depth);
+        let lhs = self.expr(scope, VALUE_BOUND, depth);
+        let rhs = self.expr(scope, VALUE_BOUND, depth);
         Expr {
             text: format!("({} {} {})", lhs.text, op, rhs.text),
             bound: 1,
         }
     }
 
+    /// An expression whose value is provably within `bound`.
     fn expr(&mut self, scope: &Scope, bound: i64, depth: u32) -> Expr {
-        if depth > 2 || self.rng.chance(30) {
+        let expr = self.build(scope, bound, depth);
+        debug_assert!(
+            expr.bound <= bound,
+            "`{}` was asked for {bound} and claims {}",
+            expr.text,
+            expr.bound
+        );
+        expr
+    }
+
+    fn build(&mut self, scope: &Scope, bound: i64, depth: u32) -> Expr {
+        // Below two there is nothing left for an operator to divide between
+        // its operands, and every operator below assumes it has room.
+        if depth > 2 || bound < 2 || self.rng.chance(30) {
             if !self.rng.chance(40) {
-                if let Some(variable) = scope.pick(&mut self.rng) {
+                if let Some(variable) = scope.pick_within(&mut self.rng, bound) {
                     return Expr {
                         text: variable.name.clone(),
                         bound: variable.bound,
                     };
                 }
             }
-            if self.rng.chance(25) {
+            if bound >= VALUE_BOUND && self.rng.chance(25) {
                 return Expr {
                     text: self.element(scope),
-                    bound: ARRAY_BOUND,
+                    bound: VALUE_BOUND,
                 };
             }
-            return Expr::constant(self.rng.range(-64, 64));
+            let magnitude = bound.min(64);
+            return Expr::constant(self.rng.range(-magnitude, magnitude));
         }
 
         let child = |generator: &mut Self| generator.expr(scope, bound / 2, depth + 1);
@@ -401,33 +442,37 @@ impl Generator {
                 }
             }
             2 => {
-                // Both factors limited so their product cannot overflow.
-                let factor = INT_MAX.isqrt().min(bound.max(2));
-                let lhs = self.expr(scope, factor.min(bound), depth + 1);
-                let rhs = self.expr(scope, factor.min(bound), depth + 1);
+                // Each factor within the square root of the product's bound,
+                // so the product stays inside it.
+                let factor = bound.isqrt();
+                let lhs = self.expr(scope, factor, depth + 1);
+                let rhs = self.expr(scope, factor, depth + 1);
                 Expr {
                     text: format!("({} * {})", lhs.text, rhs.text),
-                    bound: lhs.bound.saturating_mul(rhs.bound),
+                    bound: lhs.bound * rhs.bound,
                 }
             }
             3 | 4 => {
                 let numerator = child(self);
-                // Nonzero by construction: `(x & 7) + 1` lies in [1, 8].
-                let divisor = match scope.pick(&mut self.rng) {
-                    Some(variable) if self.rng.chance(50) => {
-                        format!("(({} & 7) + 1)", variable.name)
-                    }
-                    _ => (2 + self.rng.below(8)).to_string(),
-                };
                 if self.rng.below(2) == 0 {
+                    // Nonzero by construction: `(x & 7) + 1` lies in [1, 8].
+                    let divisor = match scope.pick(&mut self.rng) {
+                        Some(variable) if self.rng.chance(50) => {
+                            format!("(({} & 7) + 1)", variable.name)
+                        }
+                        _ => (2 + self.rng.below(8)).to_string(),
+                    };
                     Expr {
                         text: format!("({} / ({divisor}))", numerator.text),
                         bound: numerator.bound,
                     }
                 } else {
+                    // A remainder is smaller than its divisor, so the divisor
+                    // is what the requested bound has to cap.
+                    let divisor = 2 + self.rng.below((bound + 1).min(9) as u64 - 1) as i64;
                     Expr {
                         text: format!("({} % ({divisor}))", numerator.text),
-                        bound: 8,
+                        bound: divisor - 1,
                     }
                 }
             }
@@ -437,21 +482,23 @@ impl Generator {
                 Expr {
                     text: format!("({} {op} {})", lhs.text, rhs.text),
                     // Conservative: bit patterns of either operand may appear.
-                    bound: lhs.bound.saturating_add(rhs.bound),
+                    bound: lhs.bound + rhs.bound,
                 }
             }
             6 => {
-                let value = child(self);
-                // Left-shift amount capped so the result stays in range:
-                // `bound << k <= INT_MAX` iff `k <= log2(INT_MAX / bound)`.
-                let room = match INT_MAX / value.bound.max(1) {
-                    0 => 0,
-                    fit => (fit.ilog2() as i64).min(15),
-                };
-                let shift = self.rng.below(room.max(0) as u64 + 1) as i64;
+                // Left-shifting a negative value is undefined before C23 and
+                // the reference compilers do not agree on which language they
+                // are compiling, so the operand is masked non-negative: `x &
+                // m` has only bits `m` has, hence lies in `[0, m]`. Room for
+                // the amount is made by asking for a narrower operand rather
+                // than by capping the amount against a wide one, which would
+                // leave almost every shift a shift by nothing.
+                let shift = self.rng.below(bound.ilog2() as u64 + 1) as i64;
+                let value = self.expr(scope, bound >> shift, depth + 1);
+                let mask = value.bound.max(1);
                 Expr {
-                    text: format!("({} << {shift})", value.text),
-                    bound: value.bound << shift,
+                    text: format!("(({} & {mask}) << {shift})", value.text),
+                    bound: mask << shift,
                 }
             }
             7 => {
@@ -459,7 +506,12 @@ impl Generator {
                 let shift = self.rng.below(16) as i64;
                 Expr {
                     text: format!("({} >> {shift})", value.text),
-                    bound: value.bound >> shift,
+                    // An arithmetic shift of a negative value floors towards
+                    // -1 and never reaches zero, however far it goes.
+                    bound: match value.bound {
+                        0 => 0,
+                        magnitude => (magnitude >> shift).max(1),
+                    },
                 }
             }
             _ => {
@@ -512,12 +564,38 @@ fn indent(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::generate;
+    use crate::fcc_fuzz::ub;
     use std::process::Command;
+
+    /// Seeds whose programs the nightly once filed as miscompiles, when in
+    /// truth the generator had handed the compilers undefined behavior.
+    const FILED_AS_DEFECTS: [u64; 2] = [32_806_581_369, 32_806_581_428];
 
     #[test]
     fn programs_are_a_pure_function_of_the_seed() {
         assert_eq!(generate(42), generate(42));
         assert_ne!(generate(42), generate(43));
+    }
+
+    #[test]
+    fn generated_programs_have_defined_behavior() {
+        // The whole differential method rests on this: two compilers only owe
+        // each other the same answer where the standard says what the answer
+        // is. A generated program that overflows, shifts a negative value or
+        // reads an indeterminate one turns every divergence it produces into
+        // a false report.
+        for seed in (0u64..24).chain(FILED_AS_DEFECTS) {
+            let dir = std::env::temp_dir().join(format!("fcc-fuzz-ub-seed-{seed}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            let source = dir.join("prog.c");
+            std::fs::write(&source, generate(seed)).unwrap();
+            let defined = ub::well_defined(&source, &dir);
+            std::fs::remove_dir_all(&dir).ok();
+            assert!(
+                defined,
+                "seed {seed}: the generated program has undefined behavior"
+            );
+        }
     }
 
     #[test]

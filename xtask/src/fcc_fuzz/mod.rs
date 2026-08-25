@@ -3,6 +3,13 @@
 //! compilers as ground truth), execute natively, and compare observable
 //! behavior. A divergence is a miscompile; every program is reproducible from
 //! its seed alone.
+//!
+//! "UB-free" is the load-bearing word, and it is checked rather than assumed.
+//! The generator builds programs the standard pins down and the reducer keeps
+//! them that way, but neither is trusted: `ub` re-asks the question of every
+//! program about to be blamed on fcc, because a divergence on undefined
+//! behavior is not a finding, and a reducer left to shrink towards one turns
+//! a real defect into a false report.
 
 pub mod generator;
 pub mod harness;
@@ -10,6 +17,7 @@ pub mod issues;
 pub mod reduce;
 pub mod report;
 pub mod triage;
+pub mod ub;
 
 use anyhow::Context as _;
 use std::collections::BTreeSet;
@@ -101,6 +109,14 @@ pub fn run(sh: &Shell, root: &Path, options: &Options) -> anyhow::Result<()> {
                     expected,
                     actual,
                 } => {
+                    // The generator promises programs the standard pins down.
+                    // When one slips through anyway the divergence says
+                    // nothing about fcc, and filing it would send a reader
+                    // after a bug that is in the fuzzer.
+                    if !ub::well_defined(&source, &program_dir) {
+                        eprintln!("seed {seed}: skipped, the program has undefined behavior");
+                        continue;
+                    }
                     // Only an fcc-versus-fcc divergence has a pipeline to
                     // blame; disagreeing with a reference compiler indicts the
                     // default pipeline, which bisection cannot shrink.
@@ -237,6 +253,13 @@ fn run_corpus(
                         expected,
                         actual,
                     } => {
+                        // The corpus is curated for the front end, not for
+                        // execution: some of it reads indeterminate values or
+                        // overflows on purpose. Two compilers owe each other
+                        // nothing there.
+                        if !ub::well_defined(file, &program_dir) {
+                            continue;
+                        }
                         // A corpus case is curated, so only the pipeline is
                         // shrunk: the path is what names the defect, and the
                         // file is what the reader wants to open.
@@ -331,14 +354,20 @@ fn self_test(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<()> 
     std::fs::create_dir_all(&stub_dir)?;
     let stub = stub_dir.join("gcc");
     // The scratch file goes next to the stub, not into whatever directory the
-    // self-test was started from.
+    // self-test was started from, and the output path is read off `-o` rather
+    // than off a fixed position: the harness is not the only caller of gcc.
     let scratch = stub_dir.join("stub.c");
     std::fs::write(
         &stub,
         format!(
             "#!/bin/sh\n\
+             out=a.out\n\
+             while [ $# -gt 0 ]; do\n\
+             \x20   if [ \"$1\" = -o ]; then shift; out=$1; fi\n\
+             \x20   shift\n\
+             done\n\
              printf '#include <stdio.h>\\nint main(void){{printf(\"999\\\\n\");return 0;}}\\n' > {scratch}\n\
-             cc {scratch} -o \"$3\"\n",
+             cc {scratch} -o \"$out\"\n",
             scratch = scratch.display()
         ),
     )?;

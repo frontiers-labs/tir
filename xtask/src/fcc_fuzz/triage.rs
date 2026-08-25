@@ -8,6 +8,7 @@ use std::path::Path;
 use super::harness::{self, Behavior, Outcome, Variant};
 use super::reduce::{self, STRUCTURAL_PASSES};
 use super::report::Failure;
+use super::ub;
 
 /// Ceiling on harness runs spent shrinking one failure. Reduction is worth
 /// minutes, not hours: past the budget the predicate reports failure, deletions
@@ -105,9 +106,10 @@ pub fn bisect(
     pipeline.map(|pipeline| reduce::bisect_pipeline(pipeline, still_diverges))
 }
 
-/// Does this candidate still expose the defect? Reference compilers that
-/// disagree with each other mean the candidate has undefined behavior, which
-/// makes any divergence meaningless rather than a finding.
+/// Does this candidate still expose the defect? A divergence only counts on a
+/// program the standard pins down, so one is put to `ub::well_defined` before
+/// it is believed — and to the cheaper check that the reference compilers
+/// agree with each other, which the oracles cannot all replace.
 pub fn diverges(
     fcc: &Path,
     source: &str,
@@ -130,9 +132,12 @@ pub fn diverges(
     if references_disagree(&outcomes) {
         return false;
     }
-    outcomes
+    let diverged = outcomes
         .iter()
-        .any(|(_, outcome)| matches!(outcome, Outcome::Diverged { .. }))
+        .any(|(_, outcome)| matches!(outcome, Outcome::Diverged { .. }));
+    // Asked last: it costs three more builds, and most candidates the reducer
+    // offers do not diverge at all.
+    diverged && ub::well_defined(&path, work_dir)
 }
 
 /// Whether two reference compilers produced different behavior. Both are

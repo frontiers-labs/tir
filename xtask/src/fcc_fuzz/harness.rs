@@ -6,9 +6,9 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// How long one compiled program may run before it is killed.
-const RUN_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const RUN_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long one compiler invocation may run before it is killed.
-const COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct Variant {
@@ -184,7 +184,7 @@ fn run_command(command: &mut Command, what: &str) -> Result<(), String> {
 }
 
 /// Run a command to completion, or `None` if it exceeded `timeout`.
-fn timed_output(
+pub(super) fn timed_output(
     command: &mut Command,
     timeout: Duration,
 ) -> Result<Option<std::process::Output>, String> {
