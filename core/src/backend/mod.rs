@@ -32,15 +32,16 @@ pub use linkme;
 pub use lexer::Token;
 pub use lexer::lex;
 pub use parser::{AsmCursor, AsmInstructionParser, AsmParser};
-pub use printer::{AsmInstructionPrinter, AsmPrintError, AsmPrinter};
+pub use printer::{AsmPrintError, AsmPrinter};
 use tir::attributes::{AttributeValue, RegisterAttr};
 use tir::sem::{AtomicRmwOp, MemOrdering};
 use tir::utils::APInt;
 
 /// Decodes a 32-bit little-endian machine word into a freshly-built op in the
 /// given `Context`, returning its id, or `None` if no instruction matches. The
-/// inverse of a [`binary::InstructionEncoder`], generated per backend from the
-/// same TMDL encoding tables and used to execute raw machine code (e.g. an ELF).
+/// inverse of an instruction's [`binary::EncodeSpec`], generated per backend
+/// from the same TMDL encoding tables and used to execute raw machine code
+/// (e.g. an ELF).
 pub type InstructionDecoder = fn(&tir::Context, u32) -> Option<tir::OpId>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,6 +277,80 @@ pub enum ControlFlow {
     Unconditional,
 }
 
+/// What executing an instruction does to data memory, derived from the memory
+/// builtins its TMDL behavior invokes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryEffects {
+    pub reads: bool,
+    pub writes: bool,
+}
+
+impl MemoryEffects {
+    pub const NONE: MemoryEffects = MemoryEffects {
+        reads: false,
+        writes: false,
+    };
+}
+
+/// Everything the backend knows about one opcode, as one `'static` record.
+///
+/// Every per-opcode fact is a field here, reached through
+/// [`MachineInstruction::info`] by type — printing, encoding, patching,
+/// execution, register semantics, cost and scheduling. There is no string-keyed
+/// side table to fall out of sync with; the op name is the one key, and machines
+/// are indices into [`InstrInfo::sched`].
+pub struct InstrInfo {
+    /// The op's registered name, and the one key identifying this opcode.
+    pub name: &'static str,
+    pub mnemonic: &'static str,
+    pub width_bytes: u8,
+    pub control_flow: ControlFlow,
+    pub program: exec::Program,
+    /// Fixed registers the behavior touches without naming them in an operand.
+    pub implicit_regs: &'static [tir::attributes::ImplicitReg],
+    pub effects: MemoryEffects,
+    /// Assembly syntax, or `None` for an opcode with no textual form.
+    pub asm: Option<&'static asm_desc::InstrDesc>,
+    pub encode: Option<&'static binary::EncodeSpec>,
+    pub patch: Option<&'static binary::PatchSpec>,
+    /// Machine-independent cost (a latency proxy) from the TMDL `unit` defaults.
+    pub cost: u32,
+    /// Scheduling class per machine, indexed by [`sched::MachineModel::id`].
+    /// Empty for an opcode no machine describes.
+    pub sched: &'static [sched::InstrSchedClass],
+}
+
+impl InstrInfo {
+    /// The neutral record the generated ones are written against: nothing
+    /// modeled. A generated `InstrInfo` spells only the facts that depart from
+    /// it, so an opcode with no syntax, encoding or schedule stays one line per
+    /// fact it actually has.
+    pub const BASE: InstrInfo = InstrInfo {
+        name: "",
+        mnemonic: "",
+        width_bytes: 0,
+        control_flow: ControlFlow::None,
+        program: exec::Program::Unsupported("instruction has no behavior"),
+        implicit_regs: &[],
+        effects: MemoryEffects::NONE,
+        asm: None,
+        encode: None,
+        patch: None,
+        cost: 1,
+        sched: &[],
+    };
+
+    /// This opcode's scheduling class on `machine`, or
+    /// [`sched::InstrSchedClass::DEFAULT`] when no machine describes it or
+    /// `machine` is not one of the target's (see [`sched::MachineModel::id`]).
+    pub fn sched_on(&self, machine: &sched::MachineModel) -> sched::InstrSchedClass {
+        self.sched
+            .get(machine.id)
+            .copied()
+            .unwrap_or(sched::InstrSchedClass::DEFAULT)
+    }
+}
+
 pub trait MachineInstruction {
     fn verify_interface(
         &self,
@@ -284,22 +359,19 @@ pub trait MachineInstruction {
     ) -> Result<(), tir::Error> {
         Ok(())
     }
-    fn spec(&self) -> &'static exec::InstSpec;
+    fn info(&self) -> &'static InstrInfo;
     fn instance(&self) -> &tir::OpHandle;
     fn mnemonic(&self) -> &'static str {
-        self.spec().mnemonic
-    }
-    fn scheduling_key(&self) -> &'static str {
-        self.spec().scheduling_key
+        self.info().mnemonic
     }
     fn width_bytes(&self) -> u8 {
-        self.spec().width_bytes
+        self.info().width_bytes
     }
     fn execute(&self, machine: &mut dyn MachineContext) -> Result<(), SimTrap> {
-        exec::run(self.instance(), self.spec(), machine)
+        exec::run(self.instance(), self.info(), machine)
     }
     fn control_flow(&self) -> ControlFlow {
-        self.spec().control_flow
+        self.info().control_flow
     }
 }
 

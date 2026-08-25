@@ -56,7 +56,6 @@ fn emit_flag_rules<'a>(
             ops,
             op_name,
             mnemonic,
-            encoding_bytes: encoding_width_bytes(inst, item_cache),
             isa_param_values,
         };
         if let Some(sem) = analyze_flag_definer_semantics(
@@ -263,10 +262,7 @@ fn emit_flag_branch_rules(
                 &rule_name,
                 &shared_isas,
                 &pattern_spec,
-                &[
-                    (&d.mnemonic, d.encoding_bytes as u32),
-                    (&b.mnemonic, b.encoding_bytes as u32),
-                ],
+                &[&d.inst.name, &b.inst.name],
                 quote! {
                     tir::backend::isel::RuleKind::CondBranch {
                         target_symbol: #target_symbol_lit,
@@ -577,10 +573,7 @@ fn emit_aliased_zero_branch_rules(
                 &rule_name,
                 &shared_isas,
                 &pattern_spec,
-                &[
-                    (&d.mnemonic, d.encoding_bytes as u32),
-                    (&b.mnemonic, b.encoding_bytes as u32),
-                ],
+                &[&d.inst.name, &b.inst.name],
                 quote! {
                     tir::backend::isel::RuleKind::CondBranch {
                         target_symbol: #target_symbol_lit,
@@ -913,10 +906,7 @@ fn emit_flag_reader_rules(
                 &rule_name,
                 &shared_isas,
                 &pattern_spec,
-                &[
-                    (&d.mnemonic, d.encoding_bytes as u32),
-                    (&r.mnemonic, r.encoding_bytes as u32),
-                ],
+                &[&d.inst.name, &r.inst.name],
                 quote! { tir::backend::isel::RuleKind::Value },
                 Some(&prelude_shim),
                 &emit_shim,

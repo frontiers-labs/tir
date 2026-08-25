@@ -204,7 +204,6 @@ fn emit_instruction_encoder(
         });
     }
 
-    let encode_fn_ident = format_ident!("encode_{}_inst", inst.name.to_lowercase());
     let encode_spec_ident = format_ident!("ENCODE_{}", inst.name.to_uppercase());
     let const_word_lit = proc_macro2::Literal::u128_suffixed(const_word);
     let wb_lit = proc_macro2::Literal::usize_unsuffixed(width_bytes as usize);
@@ -215,12 +214,6 @@ fn emit_instruction_encoder(
                 width_bytes: #wb_lit,
                 fields: &[#(#spec_fields),*],
             };
-
-        fn #encode_fn_ident(
-            op: &tir::OpHandle,
-        ) -> Option<tir::backend::binary::EncodedInst> {
-            tir::backend::binary::encode_with(op, &#encode_spec_ident)
-        }
     };
 
     // A patcher is only meaningful when the encoding has exactly one immediate
@@ -229,7 +222,6 @@ fn emit_instruction_encoder(
     let patcher = if let [(name, fields)] = &int_fields[..]
         && let Some(Type::Bits(n)) = ops_map.get(name.as_str())
     {
-        let patch_fn_ident = format_ident!("patch_{}_inst", inst.name.to_lowercase());
         let patch_spec_ident = format_ident!("PATCH_{}", inst.name.to_uppercase());
         // A full-width field admits any i64 (and the literals would overflow).
         let range = if *n < 64 {
@@ -257,10 +249,6 @@ fn emit_instruction_encoder(
                     width_bytes: #wb_lit,
                     runs: #runs,
                 };
-
-            fn #patch_fn_ident(bytes: &mut [u8], value: i64) -> Option<()> {
-                tir::backend::binary::patch_with(bytes, value, &#patch_spec_ident)
-            }
         })
     } else {
         None

@@ -190,6 +190,11 @@ impl InstrSchedClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MachineModel {
     pub name: &'static str,
+    /// This machine's index into [`crate::backend::InstrInfo::sched`].
+    /// `usize::MAX` for a model that is not one of a target's machines (the
+    /// generic fallback), whose instructions all cost
+    /// [`InstrSchedClass::DEFAULT`].
+    pub id: usize,
     pub issue_width: u16,
     pub frontend: Option<Frontend>,
     pub resources: &'static [ProcUnit],
@@ -203,9 +208,6 @@ pub struct MachineModel {
     /// Physical register-file sizes for renaming, keyed by physical-file name. A
     /// file absent here defaults to its architectural register count.
     pub reg_files: &'static [RegFile],
-    /// Per-instruction scheduling classes keyed by stable operation identity,
-    /// sorted for binary search. Resolved at TMDL-compile time.
-    pub sched: &'static [(&'static str, InstrSchedClass)],
     /// Macro-fusion rules: an instruction whose key is in a group's `first`,
     /// immediately followed by one whose key is in its `second`, decodes and
     /// executes as a single micro-op.
@@ -220,18 +222,6 @@ pub struct FusionGroup {
 }
 
 impl MachineModel {
-    /// The scheduling class for an operation identity, or
-    /// [`InstrSchedClass::DEFAULT`] if this machine has no specific entry for it.
-    pub fn sched_class(&self, operation: &str) -> InstrSchedClass {
-        match self
-            .sched
-            .binary_search_by_key(&operation, |(name, _)| name)
-        {
-            Ok(i) => self.sched[i].1,
-            Err(_) => InstrSchedClass::DEFAULT,
-        }
-    }
-
     pub fn resource(&self, name: &str) -> Option<&ProcUnit> {
         self.resources.iter().find(|r| r.name == name)
     }

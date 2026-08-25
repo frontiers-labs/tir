@@ -11,16 +11,19 @@
 // store with an explicit ordering packs the ordering code into its inert
 // metadata operand; both live in the sem blob (tmdl/tests/sem_blob.rs).
 
-// Behaviors execute against the shared adapter inside the exec engine (its
-// forwarding to the MachineContext reservation methods is covered in core), so
-// the executor's reservation state is consulted.
-// CHECK: tir::backend::exec::Program::Effects
-
 // A discarded atomic RMW remains an executed stateful memory operation.
 // CHECK: impl tir::backend::MachineInstruction for AmoXorWDiscardOp
 
 // An ordered plain store keeps its selection rule.
 // CHECK: impl tir::sem::AsSemExpr for StRelOp
+
+// Behaviors execute against the shared adapter inside the exec engine (its
+// forwarding to the MachineContext reservation methods is covered in core), so
+// the executor's reservation state is consulted.
+// CHECK: tir::backend::exec::Program::Effects
+
+// The memory the behavior touches is a field of the opcode's record.
+// CHECK: effects: tir::backend::MemoryEffects
 
 // Atomic instructions get neither an op-sem pattern nor a selection rule.
 // CHECK-NOT: AsSemExpr for LrWOp

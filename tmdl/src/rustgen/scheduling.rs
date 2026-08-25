@@ -1,13 +1,14 @@
 /// Emit one `static <MACHINE>_MODEL` (plus the `fn <machine>_model()` accessor that
-/// returns it) per TMDL `machine` block. Each instruction's `unit` membership is
-/// resolved against the machine's `bind`s at compile time into a concrete
-/// per-operation scheduling class, so the runtime lookup is a binary search. This is
-/// the static half of the performance model: the same table feeds the compiler cost
-/// model and the cycle-approximate simulator, so they cannot disagree.
+/// returns it) per TMDL `machine` block, and resolve every instruction's `unit`
+/// membership against each machine's `bind`s into a concrete scheduling class.
+/// Machines are numbered, so an instruction reaches its class by indexing rather
+/// than by looking its own name up in a per-machine table. This is the static
+/// half of the performance model: the same classes feed the compiler cost model
+/// and the cycle-approximate simulator, so they cannot disagree.
 fn emit_machine_models<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
-) -> Result<proc_macro2::TokenStream, TMDLError> {
+) -> Result<(proc_macro2::TokenStream, SchedTables), TMDLError> {
     let unit_defaults = collect_unit_defaults(files);
     let scheduled = collect_scheduled(files, item_cache);
 
@@ -15,7 +16,9 @@ fn emit_machine_models<'a>(
     let mut lookup_arms = Vec::new();
     let mut machine_names = Vec::new();
     let mut class_pool = SchedClassPool::default();
-    for machine in files.iter().flat_map(|f| f.machines()) {
+    // Per scheduled instruction, its class on each machine, in machine-id order.
+    let mut per_instruction: Vec<Vec<proc_macro2::Ident>> = vec![Vec::new(); scheduled.len()];
+    for (machine_id, machine) in files.iter().flat_map(|f| f.machines()).enumerate() {
         let binds: HashMap<&str, &ast::UnitBind> =
             machine.binds.iter().map(|b| (b.unit.as_str(), b)).collect();
         let overrides: HashMap<&str, &ast::MachineOverride> = machine
@@ -31,10 +34,10 @@ fn emit_machine_models<'a>(
 
         // Resolve each scheduled instruction to a concrete class on this machine. A
         // per-instruction `override` supersedes the `unit`-based resolution.
-        let mut entries: Vec<(String, ResolvedClass)> = scheduled
+        let entries: Vec<ResolvedClass> = scheduled
             .iter()
-            .map(|(name, operation, _mnemonic, units)| {
-                let resolved = match overrides.get(name.as_str()) {
+            .map(|(name, _operation, _mnemonic, units)| {
+                match overrides.get(name.as_str()) {
                     Some(ov) => resolve_spec(
                         ExplicitTimingSpec {
                             reads: ov.reads.as_deref(),
@@ -59,22 +62,13 @@ fn emit_machine_models<'a>(
                         &resource_groups,
                         &machine.pipeline,
                     ),
-                };
-                (operation.clone(), resolved)
+                }
             })
             .collect();
-        // Sorted + deduplicated by stable operation identity for runtime lookup.
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
-        entries.dedup_by(|a, b| a.0 == b.0);
-
-        let sched_lits: Vec<_> = entries
-            .iter()
-            .map(|(mnem, class)| {
-                let mnem_lit = proc_macro2::Literal::string(mnem);
-                let ident = sched_class_ident(class, &mut class_pool);
-                quote! { (#mnem_lit, #ident) }
-            })
-            .collect();
+        for (index, class) in entries.iter().enumerate() {
+            per_instruction[index].push(sched_class_ident(class, &mut class_pool));
+        }
+        let id_lit = proc_macro2::Literal::usize_unsuffixed(machine_id);
 
         let pipeline_lits = machine.pipeline.iter().map(|p| {
             let name_lit = proc_macro2::Literal::string(&p.name);
@@ -143,15 +137,12 @@ fn emit_machine_models<'a>(
             .collect();
 
         let screaming = to_snake_case(&machine.name).to_uppercase();
-        let sched_ident = format_ident!("{screaming}_SCHED");
         let model_ident = format_ident!("{screaming}_MODEL");
         model_fns.push(quote! {
-            static #sched_ident: &[(&str, tir::backend::sched::InstrSchedClass)] =
-                &[#(#sched_lits),*];
-
             static #model_ident: tir::backend::sched::MachineModel =
                 tir::backend::sched::MachineModel {
                     name: #name_lit,
+                    id: #id_lit,
                     issue_width: #issue_width_lit,
                     frontend: #frontend,
                     resources: &[#(#resource_lits),*],
@@ -159,7 +150,6 @@ fn emit_machine_models<'a>(
                     pipeline: &[#(#pipeline_lits),*],
                     forwards: &[#(#forward_lits),*],
                     reg_files: &[#(#reg_file_lits),*],
-                    sched: #sched_ident,
                     fusions: &[#(#fusion_lits),*],
                 };
 
@@ -187,10 +177,19 @@ fn emit_machine_models<'a>(
         });
     }
 
+    let tables = SchedTables {
+        costs: instruction_costs(files, item_cache),
+        classes: scheduled
+            .iter()
+            .map(|(name, ..)| name.clone())
+            .zip(per_instruction)
+            .collect(),
+    };
+
     // A target with no `machine` models (e.g. a text-only pseudo-ISA) gets
     // trivial accessors so `features` and `names` are not spuriously unused.
     if machine_names.is_empty() {
-        return Ok(quote! {
+        return Ok((quote! {
             /// No machine models are declared for this target.
             pub fn machine_model(_name: &str, _features: &[Feature]) -> Option<tir::backend::sched::MachineModel> {
                 None
@@ -200,7 +199,7 @@ fn emit_machine_models<'a>(
             pub fn machines(_features: &[Feature]) -> Vec<&'static str> {
                 Vec::new()
             }
-        });
+        }, tables));
     }
 
     let class_defs = class_pool.classes.iter().enumerate().map(|(i, class)| {
@@ -209,7 +208,7 @@ fn emit_machine_models<'a>(
         quote! { const #ident: tir::backend::sched::InstrSchedClass = #body; }
     });
 
-    Ok(quote! {
+    Ok((quote! {
         #(#class_defs)*
 
         #(#model_fns)*
@@ -229,7 +228,7 @@ fn emit_machine_models<'a>(
             #(#machine_names)*
             names
         }
-    })
+    }, tables))
 }
 
 /// Distinct scheduling classes across all machines, each emitted once as a
@@ -311,7 +310,7 @@ fn sched_class_ts(c: &ResolvedClass) -> proc_macro2::TokenStream {
 }
 
 /// Resource-agnostic `unit` defaults, keyed by name. Used both when a machine
-/// does not bind a unit and to drive the machine-independent [`instruction_cost`].
+/// does not bind a unit and to drive the machine-independent [`instruction_costs`].
 fn collect_unit_defaults(files: &[ast::File]) -> HashMap<&str, &ast::SchedClassDecl> {
     files
         .iter()
@@ -364,55 +363,51 @@ fn collect_scheduled<'a>(
     scheduled
 }
 
-/// Emit a machine-independent `instruction_cost(mnemonic) -> u32` derived from
-/// each instruction's `unit` defaults (latency, falling back to 1). This is the
-/// single source of truth the compiler cost model consults — most importantly the
-/// instruction-selection `base_cost` (see `emit_instructions`) — so selection and
-/// the simulator agree on relative instruction cost.
-fn emit_instruction_cost<'a>(
-    files: &'a [ast::File],
-    item_cache: &HashMap<&'a str, &'a ast::Item>,
-) -> Result<proc_macro2::TokenStream, TMDLError> {
-    let unit_defaults = collect_unit_defaults(files);
-    let scheduled = collect_scheduled(files, item_cache);
-    let empty_binds: HashMap<&str, &ast::UnitBind> = HashMap::new();
-    let empty_groups: HashMap<&str, &ast::ResourceExpr> = HashMap::new();
+/// Per-instruction scheduling facts resolved once from the TMDL `machine` blocks,
+/// for the `InstrInfo` records [`emit_instructions`] emits. Keyed by instruction
+/// declaration name.
+struct SchedTables {
+    costs: HashMap<String, u32>,
+    /// The `SCHED_C*` class of each instruction on each machine, in machine-id
+    /// order. Absent for an instruction no machine describes.
+    classes: HashMap<String, Vec<proc_macro2::Ident>>,
+}
 
-    let mut arms = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for (_name, _operation, mnemonic, units) in &scheduled {
-        if !seen.insert(mnemonic.clone()) {
-            continue;
-        }
-        // Machine-independent: no machine binds and no pipeline, so this resolves
-        // through the unit defaults to a scalar latency.
-        let resolved =
-            resolve_sched_class(units, &empty_binds, &unit_defaults, &empty_groups, &[]);
-        let m_lit = proc_macro2::Literal::string(mnemonic);
-        let c_lit = proc_macro2::Literal::u32_unsuffixed(u32::from(resolved.latency));
-        arms.push(quote! { #m_lit => #c_lit, });
+impl SchedTables {
+    fn cost(&self, inst: &str) -> u32 {
+        self.costs.get(inst).copied().unwrap_or(1)
     }
 
-    let cost_body = if arms.is_empty() {
-        quote! { 1 }
-    } else {
-        quote! {
-            match mnemonic {
-                #(#arms)*
-                _ => 1,
-            }
-        }
-    };
+    /// The `InstrInfo::sched` initializer for one instruction: its class on every
+    /// machine. `None` when no machine describes it, leaving the empty table
+    /// `InstrInfo::BASE` carries.
+    fn sched(&self, inst: &str) -> Option<proc_macro2::TokenStream> {
+        let classes = self.classes.get(inst)?;
+        Some(quote! { &[#(#classes),*] })
+    }
+}
 
-    Ok(quote! {
-        /// Machine-independent instruction cost (a latency proxy) derived from TMDL
-        /// `unit` defaults. The instruction-selection cost model consults this so it
-        /// shares one source of truth with the simulator's per-machine model.
-        pub fn instruction_cost(mnemonic: &str) -> u32 {
-            let _ = mnemonic;
-            #cost_body
-        }
-    })
+/// Machine-independent cost per instruction declaration, derived from its `unit`
+/// defaults (latency, falling back to 1). This is the single source of truth the
+/// compiler cost model consults — most importantly the instruction-selection
+/// `base_cost` — so selection and the simulator agree on relative cost.
+fn instruction_costs<'a>(
+    files: &'a [ast::File],
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> HashMap<String, u32> {
+    let unit_defaults = collect_unit_defaults(files);
+    let empty_binds: HashMap<&str, &ast::UnitBind> = HashMap::new();
+    let empty_groups: HashMap<&str, &ast::ResourceExpr> = HashMap::new();
+    collect_scheduled(files, item_cache)
+        .into_iter()
+        .map(|(name, _, _, units)| {
+            // Machine-independent: no machine binds and no pipeline, so this
+            // resolves through the unit defaults to a scalar latency.
+            let resolved =
+                resolve_sched_class(&units, &empty_binds, &unit_defaults, &empty_groups, &[]);
+            (name, u32::from(resolved.latency))
+        })
+        .collect()
 }
 
 fn phase_cycle(pipeline: &[ast::PipelinePhase], name: &str) -> Option<u16> {

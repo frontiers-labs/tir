@@ -33,8 +33,8 @@ pub enum AttributeRole {
 
 /// A fixed register an operation reads or writes without naming it in an
 /// operand — the register paths its TMDL behavior mentions (x86 `EFLAGS::zf`,
-/// `GPR::rax`). Which registers those are is a property of the opcode, declared
-/// through [`RegisterSemantics`].
+/// `GPR::rax`). Which registers those are is a property of the opcode, so they
+/// live in its `InstrInfo`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImplicitReg {
     pub class: RegClassId,
@@ -43,8 +43,7 @@ pub struct ImplicitReg {
 }
 
 /// Per-opcode register semantics the generic IR cannot see from an instance
-/// alone: the def/use role of each register-valued attribute, and the fixed
-/// registers the behavior touches without naming them in an operand.
+/// alone: the def/use role of each register-valued attribute.
 ///
 /// An ordinary op interface: ops that have register semantics (machine
 /// instructions; TMDL rustgen derives the tables from the instruction
@@ -60,9 +59,6 @@ pub trait RegisterSemantics {
         Ok(())
     }
     fn attribute_roles(&self) -> &'static [(&'static str, AttributeRole)] {
-        &[]
-    }
-    fn implicit_regs(&self) -> &'static [ImplicitReg] {
         &[]
     }
 }

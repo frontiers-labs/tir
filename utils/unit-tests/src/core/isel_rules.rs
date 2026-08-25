@@ -111,6 +111,17 @@ fn nop_emit(
     unreachable!()
 }
 
+/// A three-cycle, four-byte instruction the rule under test emits.
+static EMITTED: tir::backend::InstrInfo = tir::backend::InstrInfo {
+    name: "add",
+    mnemonic: "add",
+    width_bytes: 4,
+    cost: 3,
+    ..tir::backend::InstrInfo::BASE
+};
+
+static EMITS: &[&tir::backend::InstrInfo] = &[&EMITTED];
+
 fn rule_spec(offset: u32, features: &'static [u16]) -> RuleSpec {
     RuleSpec {
         name: "inst",
@@ -120,7 +131,7 @@ fn rule_spec(offset: u32, features: &'static [u16]) -> RuleSpec {
             typed: false,
             float_width: None,
         },
-        cost_terms: &[("add", 4)],
+        emits: EMITS,
         kind: RuleKind::Value,
         prelude_emit: None,
         emit_fn: nop_emit,
@@ -139,12 +150,11 @@ fn build_rules_gates_on_any_feature() {
     static BOTH: &[u16] = &[1, 2];
     let gated = rule_spec(offset, BOTH);
     let open = rule_spec(offset, &[]);
-    let cost: fn(&str) -> u32 = |_| 3u32;
     let specs: &[&RuleSpec] = &[&gated, &open];
 
-    let rules = build_rules(&context, &[2], &kinds, &blob, &[], cost, specs);
+    let rules = build_rules(&context, &[2], &kinds, &blob, &[], specs);
     assert_eq!(rules.len(), 2);
-    let rules = build_rules(&context, &[9], &kinds, &blob, &[], cost, specs);
+    let rules = build_rules(&context, &[9], &kinds, &blob, &[], specs);
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].base_cost, 3 * LATENCY_COST_SCALE + 4);
 }
@@ -175,7 +185,7 @@ fn build_rules_resolves_register_widths() {
         class: RegClassId::new(&WIDE),
         capability: CapabilityKind::Any,
     });
-    let rules = build_rules(&context, &[], &kinds, &blob, &[("R", 32)], |_| 0, &[&spec]);
+    let rules = build_rules(&context, &[], &kinds, &blob, &[("R", 32)], &[&spec]);
     assert_eq!(rules.len(), 1);
     // `W` has no width under the enabled features: the result register
     // requirement drops out, the known-class operand keeps its width.

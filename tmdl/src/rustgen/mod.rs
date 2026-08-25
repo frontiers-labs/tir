@@ -8,9 +8,10 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    behavior_uses_todo, encoding_width_bytes, get_encoding_arms, inline_let_bindings,
-    parse_literal_value, resolve_effective_asm_for_instruction, resolve_isa_param_values,
-    resolve_operand_widths, resolve_operands_for_instruction, resolve_params_for_instruction,
+    behavior_memory_effects, behavior_uses_todo, encoding_width_bytes, get_encoding_arms,
+    inline_let_bindings, parse_literal_value, resolve_effective_asm_for_instruction,
+    resolve_isa_param_values, resolve_operand_widths, resolve_operands_for_instruction,
+    resolve_params_for_instruction,
 };
 
 pub struct GeneratedRust {
@@ -35,8 +36,7 @@ pub fn generate_rust_modules<'a>(
     let registers = emit_register_parsers_and_printers(files)?;
     let register_info = emit_register_info(files)?;
     let abi_info = emit_abi_info(files, item_cache)?;
-    let machine_models = emit_machine_models(files, item_cache)?;
-    let instruction_cost = emit_instruction_cost(files, item_cache)?;
+    let (machine_models, sched_tables) = emit_machine_models(files, item_cache)?;
     let split_files: Vec<&ast::File> = split_inputs
         .iter()
         .map(|input| {
@@ -60,6 +60,7 @@ pub fn generate_rust_modules<'a>(
         files,
         &root_files,
         item_cache,
+        &sched_tables,
         InstructionOptions {
             dialect,
             text_only,
@@ -108,6 +109,7 @@ pub fn generate_rust_modules<'a>(
             files,
             &[file],
             item_cache,
+            &sched_tables,
             InstructionOptions {
                 dialect,
                 text_only,
@@ -167,8 +169,6 @@ pub fn generate_rust_modules<'a>(
 
         #machine_models
 
-        #instruction_cost
-
         #instruction_section
         #module_aggregation
     };
@@ -219,20 +219,6 @@ fn emit_module_aggregation(
             }
         }
     });
-    let binary = (!text_only).then(|| quote! {
-        fn get_instruction_encoders() -> std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> {
-            let mut map = std::collections::HashMap::new();
-            #(map.extend(#modules::get_instruction_encoders());)*
-            map
-        }
-
-        fn get_instruction_patchers() -> std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> {
-            let mut map = std::collections::HashMap::new();
-            #(map.extend(#modules::get_instruction_patchers());)*
-            map
-        }
-    });
-
     quote! {
         fn get_instruction_parsers(
             features: &[Feature],
@@ -253,14 +239,19 @@ fn emit_module_aggregation(
             (map, disabled)
         }
 
-        fn get_instruction_printers() -> std::collections::HashMap<String, tir::backend::AsmInstructionPrinter> {
-            let mut map = std::collections::HashMap::new();
-            #(map.extend(#modules::get_instruction_printers());)*
-            map
-        }
-
         #syntax
-        #binary
+
+        /// Every opcode this target describes, as the one record per opcode the
+        /// backend interface reads.
+        pub fn instruction_infos() -> &'static [&'static tir::backend::InstrInfo] {
+            static INFOS: std::sync::LazyLock<Vec<&'static tir::backend::InstrInfo>> =
+                std::sync::LazyLock::new(|| {
+                    let mut infos = Vec::new();
+                    #(infos.extend_from_slice(#modules::instruction_infos());)*
+                    infos
+                });
+            &INFOS
+        }
 
         pub fn decode_instruction(context: &tir::Context, word: u32) -> Option<tir::OpId> {
             #(if let Some(op) = #modules::decode_instruction(context, word) {

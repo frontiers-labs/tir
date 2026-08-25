@@ -303,7 +303,7 @@ fn emit_rule_spec(
     rule_name: &str,
     for_isas: &[String],
     pattern: &SpecPattern,
-    cost_terms: &[(&str, u32)],
+    emits: &[&str],
     kind: proc_macro2::TokenStream,
     prelude_shim: Option<&proc_macro2::Ident>,
     emit_shim: &proc_macro2::Ident,
@@ -317,14 +317,7 @@ fn emit_rule_spec(
     let rule_name_lit = proc_macro2::Literal::string(rule_name);
     let features = feature_id_slice(for_isas);
     let pattern_ts = pattern_ref_tokens(pattern);
-    let cost_entries: Vec<proc_macro2::TokenStream> = cost_terms
-        .iter()
-        .map(|(mnemonic, bytes)| {
-            let mnemonic_lit = proc_macro2::Literal::string(mnemonic);
-            let bytes_lit = proc_macro2::Literal::u32_unsuffixed(*bytes);
-            quote! { (#mnemonic_lit, #bytes_lit) }
-        })
-        .collect();
+    let emit_infos: Vec<proc_macro2::Ident> = emits.iter().map(|inst| info_ident(inst)).collect();
     let prelude_ts = match prelude_shim {
         Some(ident) => quote! { Some(#ident) },
         None => quote! { None },
@@ -345,7 +338,7 @@ fn emit_rule_spec(
             name: #rule_name_lit,
             features: #features,
             pattern: #pattern_ts,
-            cost_terms: &[#(#cost_entries),*],
+            emits: &[#(&#emit_infos),*],
             kind: #kind,
             prelude_emit: #prelude_ts,
             emit_fn: #emit_shim,

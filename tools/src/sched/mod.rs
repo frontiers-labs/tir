@@ -25,10 +25,11 @@ use crate::sched::event::View;
 mod event;
 
 /// The scheduling fallback when no `--model` is selected: a generic single-issue
-/// core with no functional units, so every instruction resolves to the
-/// single-cycle [`InstrSchedClass::DEFAULT`].
+/// core with no functional units. It is no target's machine, so every
+/// instruction resolves to the single-cycle [`InstrSchedClass::DEFAULT`].
 const GENERIC_MODEL: tir::backend::sched::MachineModel = tir::backend::sched::MachineModel {
     name: "generic",
+    id: usize::MAX,
     issue_width: 1,
     frontend: None,
     resources: &[],
@@ -36,7 +37,6 @@ const GENERIC_MODEL: tir::backend::sched::MachineModel = tir::backend::sched::Ma
     pipeline: &[],
     forwards: &[],
     reg_files: &[],
-    sched: &[],
     fusions: &[],
 };
 
@@ -114,19 +114,19 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() else {
             continue;
         };
-        let scheduling_key = mi.scheduling_key();
+        let info = mi.info();
         let regs = execution_regs(&op);
         let text = asm_printer
             .print_instruction(&context, &op)?
-            .ok_or_else(|| format!("no assembly printer registered for '{}'", op.name()))?;
+            .ok_or_else(|| format!("'{}' has no assembly syntax", op.name()))?;
         let (pc, width_bytes) = layout
             .as_ref()
             .and_then(|layout| layout.get(index).copied())
-            .unwrap_or((0, u16::from(mi.width_bytes().max(1))));
+            .unwrap_or((0, u16::from(info.width_bytes.max(1))));
         base.push(ScoreboardInstr {
             text,
-            key: scheduling_key.to_string(),
-            class: model.sched_class(scheduling_key),
+            key: info.name.to_string(),
+            class: info.sched_on(&model),
             defs: phys_regs(&regs.defs, Some(&prf)),
             uses: phys_regs(&regs.uses, Some(&prf)),
             branch: None,

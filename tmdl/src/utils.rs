@@ -404,6 +404,69 @@ pub fn behavior_uses_todo(expr: &ast::Expr) -> bool {
     }
 }
 
+/// The data memory an instruction's behavior touches, as `(reads, writes)`,
+/// from the memory builtins it invokes anywhere in its body.
+pub fn behavior_memory_effects(expr: &ast::Expr) -> (bool, bool) {
+    let mut effects = (false, false);
+    visit_exprs(expr, &mut |e| {
+        let ast::Expr::Call(call) = e else { return };
+        let ast::Expr::BuiltinFunction(builtin) = call.callee.as_ref() else {
+            return;
+        };
+        match builtin {
+            ast::BuiltinFunction::Load | ast::BuiltinFunction::LoadReserved => effects.0 = true,
+            ast::BuiltinFunction::Store | ast::BuiltinFunction::StoreConditional => {
+                effects.1 = true
+            }
+            ast::BuiltinFunction::AtomicRmw => effects = (true, true),
+            _ => {}
+        }
+    });
+    effects
+}
+
+/// Apply `f` to `expr` and every sub-expression of it, outermost first.
+fn visit_exprs(expr: &ast::Expr, f: &mut impl FnMut(&ast::Expr)) {
+    f(expr);
+    match expr {
+        ast::Expr::Ident(_)
+        | ast::Expr::Lit(_)
+        | ast::Expr::BuiltinFunction(_)
+        | ast::Expr::Path(_)
+        | ast::Expr::Invalid => {}
+        ast::Expr::Assign(a) => {
+            visit_exprs(&a.dest, f);
+            visit_exprs(&a.value, f);
+        }
+        ast::Expr::Let(l) => visit_exprs(&l.value, f),
+        ast::Expr::Binary(b) => {
+            visit_exprs(&b.lhs, f);
+            visit_exprs(&b.rhs, f);
+        }
+        ast::Expr::Unary(u) => visit_exprs(&u.x, f),
+        ast::Expr::Block(b) => b.stmts.iter().for_each(|stmt| visit_exprs(stmt, f)),
+        ast::Expr::Call(c) => {
+            visit_exprs(&c.callee, f);
+            c.arguments.iter().for_each(|arg| visit_exprs(arg, f));
+        }
+        ast::Expr::Field(field) => visit_exprs(&field.base, f),
+        ast::Expr::If(i) => {
+            visit_exprs(&i.cond, f);
+            visit_exprs(&i.then, f);
+            if let Some(els) = &i.else_ {
+                visit_exprs(els, f);
+            }
+        }
+        ast::Expr::IndexAccess(i) => visit_exprs(&i.base, f),
+        ast::Expr::Slice(s) => visit_exprs(&s.base, f),
+        ast::Expr::Try(t) => {
+            visit_exprs(&t.body, f);
+            t.handlers.iter().for_each(|h| visit_exprs(&h.body, f));
+        }
+        ast::Expr::Lambda(l) => visit_exprs(&l.body, f),
+    }
+}
+
 /// Substitute every `let` binding into its uses and drop the `let` statements.
 /// Selection patterns are matched against the expression a binding stands for,
 /// so they must not see the name; execution keeps the bindings, which is where

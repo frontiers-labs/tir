@@ -45,6 +45,6 @@ instruction OpImm8 for [ImmIsa] {
 
 // The immediate's accepted range is a field of the instruction's parse
 // descriptor, which the shared runtime parser enforces for every literal form.
-// CHECK: op_name: "opi",
+// CHECK: static DESC_OPIMM8: InstrDesc = InstrDesc {
 // CHECK: ParseStep::Immediate("imm", false, Some((-128i64, 256i64))),
 // CHECK: fn parse_opimm8_inst

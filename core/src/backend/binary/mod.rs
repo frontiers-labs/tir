@@ -1,9 +1,10 @@
 //! Format-neutral building blocks for object-file emission.
 //!
-//! TMDL-generated encoders turn a machine instruction into bytes plus a list
-//! of fixups for operands whose value is not known at encode time (branch
-//! targets, external symbols). Patchers re-scatter a resolved value into the
-//! instruction's immediate bits once layout is known. The laid-out result is
+//! An instruction's TMDL-generated [`EncodeSpec`] turns it into bytes plus a
+//! list of fixups for operands whose value is not known at encode time (branch
+//! targets, external symbols); its [`PatchSpec`] re-scatters a resolved value
+//! into the immediate bits once layout is known. Both are fields of the
+//! instruction's [`crate::backend::InstrInfo`]. The laid-out result is
 //! an [`ObjectFile`], which a format backend (ELF today) serializes to bytes.
 
 mod ascii;
@@ -23,7 +24,7 @@ pub use encodings::{
 pub use format::{ElfClass, ObjectFormatInfo, RelocKind};
 pub use writer::{BinaryEmitError, BinaryWriter, ObjectEmission};
 
-use tir::{BlockId, OpHandle};
+use tir::BlockId;
 
 /// What an unresolved instruction operand points at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,14 +51,6 @@ pub struct EncodedInst {
     pub bytes: Vec<u8>,
     pub fixups: Vec<InstFixup>,
 }
-
-/// Encodes one operation. `None` means the operation cannot be encoded
-/// (e.g. a virtual register survived register allocation).
-pub type InstructionEncoder = fn(&OpHandle) -> Option<EncodedInst>;
-
-/// Scatters a resolved fixup value into the instruction bytes. `None` means
-/// the value does not fit the operand's encoding (out of range or misaligned).
-pub type InstructionPatcher = fn(&mut [u8], i64) -> Option<()>;
 
 /// A relocatable object in format-neutral form.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -1,3 +1,9 @@
+/// The `static INFO_*` holding one instruction's [`tir::backend::InstrInfo`],
+/// named after its TMDL declaration (unique by construction, unlike a mnemonic).
+fn info_ident(inst_name: &str) -> proc_macro2::Ident {
+    format_ident!("INFO_{}", inst_name.to_uppercase())
+}
+
 /// A parse step matching one punctuation token of an instruction's syntax.
 fn asm_symbol_step(symbol: &str) -> proc_macro2::TokenStream {
     let symbol_ident = format_ident!("{}", symbol);
@@ -16,6 +22,7 @@ fn emit_instructions<'a>(
     files: &'a [ast::File],
     instruction_files: &[&'a ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
+    sched_tables: &SchedTables,
     options: InstructionOptions<'_>,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let InstructionOptions {
@@ -43,18 +50,20 @@ fn emit_instructions<'a>(
         usize,
         proc_macro2::TokenStream,
     )> = vec![];
-    // One descriptor per assembled instruction, in source order: the shared
-    // runtime parser and printer interpret these instead of a generated
-    // function body per instruction.
+    // One descriptor per assembled instruction: the shared runtime parser and
+    // printer interpret these instead of a generated function body per
+    // instruction. Reached through `InstrInfo::asm`.
     let mut instruction_descs: Vec<proc_macro2::TokenStream> = vec![];
+    // One `InstrInfo` per instruction — the single per-opcode record — plus the
+    // table of every one of them.
+    let mut instruction_infos: Vec<proc_macro2::TokenStream> = vec![];
+    let mut instruction_info_idents: Vec<proc_macro2::Ident> = vec![];
     let mut isel_rule_emitters: Vec<proc_macro2::TokenStream> = vec![];
     let mut rule_spec_idents: Vec<proc_macro2::Ident> = vec![];
     let mut machine_instruction_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_custom_format_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut as_sem_expr_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_encoder_impls: Vec<proc_macro2::TokenStream> = vec![];
-    let mut instruction_encoder_map_inits: Vec<proc_macro2::TokenStream> = vec![];
-    let mut instruction_patcher_map_inits: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_dispatch: Vec<(u128, proc_macro2::Ident)> = vec![];
     // Data-driven assembly syntax (text-only targets): one entry per instruction,
@@ -373,8 +382,9 @@ fn emit_instructions<'a>(
         };
 
         // The op's register semantics: the def/use role of each register
-        // attribute, plus the fixed registers the behavior names by path
-        // (`EFLAGS::zf`, `GPR::rax`) which no operand records.
+        // attribute. The fixed registers the behavior names by path
+        // (`EFLAGS::zf`, `GPR::rax`) are a per-opcode fact, so they live in the
+        // instruction's `InstrInfo` instead.
         let implicit_items = implicit_register_items(inst, &register_index_map, &pc_classes);
         let role_entries = attribute_roles.iter().map(|(name, role)| {
             let name_lit = proc_macro2::Literal::string(name);
@@ -386,11 +396,6 @@ fn emit_instructions<'a>(
                     &self,
                 ) -> &'static [(&'static str, tir::attributes::AttributeRole)] {
                     &[ #(#role_entries),* ]
-                }
-
-                fn implicit_regs(&self) -> &'static [tir::attributes::ImplicitReg] {
-                    static IMPLICIT: &[tir::attributes::ImplicitReg] = &[ #(#implicit_items),* ];
-                    IMPLICIT
                 }
             }
         };
@@ -760,7 +765,7 @@ fn emit_instructions<'a>(
                 &rule_key,
                 &inst.for_isas,
                 &pattern_spec,
-                &[(mnemonic_name, width_bytes as u32)],
+                &[&inst.name],
                 quote! { tir::backend::isel::RuleKind::Value },
                 None,
                 &emit_shim,
@@ -890,7 +895,7 @@ fn emit_instructions<'a>(
                     &zero_rule_key,
                     &inst.for_isas,
                     &zero_pattern_spec,
-                    &[(mnemonic_name, width_bytes as u32)],
+                    &[&inst.name],
                     quote! { tir::backend::isel::RuleKind::Value },
                     None,
                     &zero_emit_shim,
@@ -929,8 +934,7 @@ fn emit_instructions<'a>(
                 dialect,
                 op_name,
                 &name_ident,
-                mnemonic_name,
-                width_bytes,
+                &inst.name,
                 &inst.for_isas,
                 &ops,
                 &branch.pattern,
@@ -1022,8 +1026,7 @@ fn emit_instructions<'a>(
                         dialect,
                         op_name,
                         &name_ident,
-                        mnemonic_name,
-                        width_bytes,
+                        &inst.name,
                         &inst.for_isas,
                         &ops,
                         &zero_pattern,
@@ -1125,22 +1128,21 @@ fn emit_instructions<'a>(
             (false, false) => quote! { tir::backend::ControlFlow::None },
         };
 
+        let info_ident = info_ident(&inst.name);
+        // Filled in below when this instruction has an assembly syntax, a binary
+        // encoding, or a patchable immediate; each becomes a field of its
+        // `InstrInfo` rather than an entry in a string-keyed side table.
+        let mut desc_ident: Option<proc_macro2::Ident> = None;
+        let mut encode_ident: Option<proc_macro2::Ident> = None;
+        let mut patch_ident: Option<proc_macro2::Ident> = None;
         machine_instruction_impls.push(quote! {
             impl tir::backend::MachineInstruction for #name_ident {
                 fn instance(&self) -> &tir::OpHandle {
                     &self.0
                 }
 
-                fn spec(&self) -> &'static tir::backend::exec::InstSpec {
-                    static SPEC: tir::backend::exec::InstSpec = tir::backend::exec::InstSpec {
-                        mnemonic: #mnemonic_lit,
-                        scheduling_key: #op_name_lit,
-                        width_bytes: #width_bytes_lit,
-                        control_flow: #control_flow,
-                        env: &EXEC_ENV,
-                        program: #program,
-                    };
-                    &SPEC
+                fn info(&self) -> &'static tir::backend::InstrInfo {
+                    &#info_ident
                 }
             }
         });
@@ -1286,10 +1288,6 @@ fn emit_instructions<'a>(
                 });
             }
 
-            if custom_assembly {
-                continue;
-            }
-
             // Adjacent literal text (the mnemonic and the space after it, an
             // operand separator and a sigil) prints as one string.
             let print_parts = print_parts.into_iter().fold(
@@ -1346,14 +1344,12 @@ fn emit_instructions<'a>(
 
             let parse_fn_ident = format_ident!("parse_{}_inst", &inst.name.to_lowercase());
             if !custom_assembly {
-                let desc_index = proc_macro2::Literal::usize_unsuffixed(instruction_descs.len());
-                let desc_op_name_lit = proc_macro2::Literal::string(op_name);
+                let ident = format_ident!("DESC_{}", inst.name.to_uppercase());
                 instruction_descs.push(quote! {
-                    InstrDesc {
-                        op_name: #desc_op_name_lit,
+                    static #ident: InstrDesc = InstrDesc {
                         parse: &[#(#parse_steps),*],
                         print: &[#(#print_steps),*],
-                    }
+                    };
                 });
 
                 instruction_parsers_impls.push(quote! {
@@ -1364,7 +1360,7 @@ fn emit_instructions<'a>(
                     ) -> Result<(), ()> {
                         asm_desc::parse_and_insert(
                             context,
-                            &INSTRUCTION_DESCS[#desc_index],
+                            &#ident,
                             parser,
                             builder,
                             |attributes| {
@@ -1377,6 +1373,7 @@ fn emit_instructions<'a>(
                         )
                     }
                 });
+                desc_ident = Some(ident);
             }
 
             if let Some(mn) = mnemonic.as_deref().or(Some(op_name)) {
@@ -1436,19 +1433,11 @@ fn emit_instructions<'a>(
             .transpose()?
             .flatten()
         {
-            let encode_fn_ident = format_ident!("encode_{}_inst", inst.name.to_lowercase());
             instruction_encoder_impls.push(encoder);
-            instruction_encoder_map_inits.push(quote! {
-                let f: tir::backend::binary::InstructionEncoder = #encode_fn_ident;
-                map.insert(#op_name_lit.to_string(), f);
-            });
+            encode_ident = Some(format_ident!("ENCODE_{}", inst.name.to_uppercase()));
             if let Some(patcher) = patcher {
-                let patch_fn_ident = format_ident!("patch_{}_inst", inst.name.to_lowercase());
                 instruction_encoder_impls.push(patcher);
-                instruction_patcher_map_inits.push(quote! {
-                    let f: tir::backend::binary::InstructionPatcher = #patch_fn_ident;
-                    map.insert(#op_name_lit.to_string(), f);
-                });
+                patch_ident = Some(format_ident!("PATCH_{}", inst.name.to_uppercase()));
             }
         }
 
@@ -1464,6 +1453,57 @@ fn emit_instructions<'a>(
             instruction_decoder_impls.push(decoder);
             instruction_decoder_dispatch.push((fixed_mask, decode_spec_ident));
         }
+
+        // One record per opcode, spelling only what departs from
+        // `InstrInfo::BASE`.
+        let mut info_fields = vec![
+            quote! { name: #op_name_lit },
+            quote! { mnemonic: #mnemonic_lit },
+            quote! { program: #program },
+        ];
+        if width_bytes != 0 {
+            info_fields.push(quote! { width_bytes: #width_bytes_lit });
+        }
+        if uncond_pc || cond_pc {
+            info_fields.push(quote! { control_flow: #control_flow });
+        }
+        if !implicit_items.is_empty() {
+            info_fields.push(quote! { implicit_regs: &[ #(#implicit_items),* ] });
+        }
+        let (reads_memory, writes_memory) = behavior_memory_effects(&inst.behavior);
+        if reads_memory || writes_memory {
+            info_fields.push(quote! {
+                effects: tir::backend::MemoryEffects {
+                    reads: #reads_memory,
+                    writes: #writes_memory,
+                }
+            });
+        }
+        if let Some(desc_ident) = &desc_ident {
+            info_fields.push(quote! { asm: Some(&#desc_ident) });
+        }
+        if let Some(encode_ident) = &encode_ident {
+            info_fields.push(quote! { encode: Some(&#encode_ident) });
+        }
+        if let Some(patch_ident) = &patch_ident {
+            info_fields.push(quote! { patch: Some(&#patch_ident) });
+        }
+        // `InstrInfo::BASE` already costs one cycle.
+        let cost = sched_tables.cost(&inst.name);
+        if cost != 1 {
+            let cost_lit = proc_macro2::Literal::u32_unsuffixed(cost);
+            info_fields.push(quote! { cost: #cost_lit });
+        }
+        if let Some(sched_ts) = sched_tables.sched(&inst.name) {
+            info_fields.push(quote! { sched: #sched_ts });
+        }
+        instruction_infos.push(quote! {
+            static #info_ident: tir::backend::InstrInfo = tir::backend::InstrInfo {
+                #(#info_fields,)*
+                ..tir::backend::InstrInfo::BASE
+            };
+        });
+        instruction_info_idents.push(info_ident);
     }
 
     // Flag-mediated rules: definer + branch pairs composed into conditional
@@ -1604,29 +1644,12 @@ fn emit_instructions<'a>(
         quote! {}
     };
 
-    // The object-file emission interface (per-instruction encoders/patchers and
-    // their lookup maps) is emitted only for targets with a binary encoding.
+    // The `ENCODE_*`/`PATCH_*` specs object emission interprets, reached through
+    // `InstrInfo`. Only targets with a binary encoding have any.
     let encoder_section = if text_only {
         quote! {}
     } else {
-        quote! {
-            #(#instruction_encoder_impls)*
-
-            // Consumed by object-file emission.
-            #registry_visibility fn get_instruction_encoders() -> std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> {
-                let mut map: std::collections::HashMap<String, tir::backend::binary::InstructionEncoder> = std::collections::HashMap::new();
-                #(#instruction_encoder_map_inits)*
-
-                map
-            }
-
-            #registry_visibility fn get_instruction_patchers() -> std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> {
-                let mut map: std::collections::HashMap<String, tir::backend::binary::InstructionPatcher> = std::collections::HashMap::new();
-                #(#instruction_patcher_map_inits)*
-
-                map
-            }
-        }
+        quote! { #(#instruction_encoder_impls)* }
     };
 
     let assembly_registry_section = if custom_assembly {
@@ -1639,29 +1662,15 @@ fn emit_instructions<'a>(
             ) {
                 (std::collections::HashMap::new(), std::collections::HashSet::new())
             }
-
-            #registry_visibility fn get_instruction_printers() -> std::collections::HashMap<String, tir::backend::AsmInstructionPrinter> {
-                std::collections::HashMap::new()
-            }
         }
     } else {
         quote! {
             use tir::backend::asm_desc::{self, AsmSymbol, InstrDesc, ParseStep, PrintPart};
 
-            /// The assembly syntax of every instruction this target assembles,
-            /// interpreted by the shared descriptor-driven parser and printer.
-            static INSTRUCTION_DESCS: &[InstrDesc] = &[#(#instruction_descs),*];
+            #(#instruction_descs)*
 
-            static INSTRUCTION_DESC_INDEX: asm_desc::DescIndex =
-                asm_desc::DescIndex::new(INSTRUCTION_DESCS);
-
-            fn print_instruction_asm(
-                context: &tir::Context,
-                op: &tir::OpHandle,
-            ) -> Option<String> {
-                INSTRUCTION_DESC_INDEX.print(context, op)
-            }
-
+            /// Text to op is a genuine reverse lookup, so the parser keeps a
+            /// mnemonic index; printing goes straight through `InstrInfo::asm`.
             #registry_visibility fn get_instruction_parsers(
                 features: &[Feature],
             ) -> (
@@ -1675,15 +1684,6 @@ fn emit_instructions<'a>(
                 disabled.retain(|mnemonic| !map.contains_key(mnemonic));
                 (map, disabled)
             }
-
-            #registry_visibility fn get_instruction_printers() -> std::collections::HashMap<String, tir::backend::AsmInstructionPrinter> {
-                let mut map: std::collections::HashMap<String, tir::backend::AsmInstructionPrinter> = std::collections::HashMap::new();
-                for desc in INSTRUCTION_DESCS {
-                    let f: tir::backend::AsmInstructionPrinter = print_instruction_asm;
-                    map.insert(desc.op_name.to_string(), f);
-                }
-                map
-            }
         }
     };
 
@@ -1696,6 +1696,17 @@ fn emit_instructions<'a>(
         #(#as_sem_expr_impls)*
 
         #assembly_registry_section
+
+        #(#instruction_infos)*
+
+        /// Every opcode this module describes, as the one record per opcode the
+        /// backend interface reads.
+        static INSTRUCTION_INFOS: &[&tir::backend::InstrInfo] =
+            &[#(&#instruction_info_idents),*];
+
+        #public_visibility fn instruction_infos() -> &'static [&'static tir::backend::InstrInfo] {
+            INSTRUCTION_INFOS
+        }
 
         #syntax_section
 
@@ -1731,7 +1742,6 @@ fn emit_instructions<'a>(
                 SEM_KINDS,
                 SEM_BLOB,
                 &register_widths,
-                instruction_cost,
                 RULE_SPECS,
             )
         }

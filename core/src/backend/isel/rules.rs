@@ -218,10 +218,10 @@ pub struct RuleSpec {
     /// enabled.
     pub features: &'static [u16],
     pub pattern: PatternRef,
-    /// `(mnemonic, encoding_bytes)` terms; the rule's cost is the sum of each
-    /// term's latency times [`crate::backend::isel::LATENCY_COST_SCALE`] plus
-    /// its encoding size.
-    pub cost_terms: &'static [(&'static str, u32)],
+    /// The instructions this rule emits; its cost is the sum over them of
+    /// [`crate::backend::InstrInfo::cost`] times
+    /// [`crate::backend::isel::LATENCY_COST_SCALE`] plus the encoding size.
+    pub emits: &'static [&'static crate::backend::InstrInfo],
     pub kind: RuleKind,
     /// Emitter for the prelude instruction, when the rule emits a flag-setting
     /// companion first. Generated as a shim over [`emit_with`].
@@ -289,7 +289,6 @@ pub fn build_rules(
     kinds: &[SymKind],
     blob: &[u8],
     register_widths: &[(&str, u32)],
-    instruction_cost: fn(&str) -> u32,
     specs: &[&RuleSpec],
 ) -> Vec<Rule> {
     let mut rules = Vec::new();
@@ -299,10 +298,10 @@ pub fn build_rules(
             continue;
         }
         let base_cost = spec
-            .cost_terms
+            .emits
             .iter()
-            .map(|(mnemonic, bytes)| {
-                instruction_cost(mnemonic) * crate::backend::isel::LATENCY_COST_SCALE + bytes
+            .map(|info| {
+                info.cost * crate::backend::isel::LATENCY_COST_SCALE + u32::from(info.width_bytes)
             })
             .sum();
         let operand_registers = spec

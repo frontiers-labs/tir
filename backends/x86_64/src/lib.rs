@@ -12,7 +12,9 @@ const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
     ("perf.tmdl", include_str!("../defs/perf.tmdl")),
 ];
 
-pub use isa::{Feature, get_isel_rules, register_info, register_views, register_widths};
+pub use isa::{
+    Feature, get_isel_rules, instruction_infos, register_info, register_views, register_widths,
+};
 pub use isa::{TargetConfig, X86_64Dialect};
 
 mod isa {
@@ -51,12 +53,6 @@ mod isa {
                 },
             )
         })
-    }
-
-    impl X86_64Dialect {
-        pub fn get_asm_printer(&self) -> tir::backend::AsmPrinter {
-            tir::backend::AsmPrinter::new(get_instruction_printers())
-        }
     }
 
     fn virt(value: u32, class: tir::backend::regalloc::RegClassId) -> AttributeValue {
@@ -1363,15 +1359,12 @@ mod isa {
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct TargetConfig {
         features: Vec<Feature>,
+        machine: Option<String>,
     }
 
     impl TargetConfig {
         /// Parse an x86-64 architecture name.
-        pub fn parse(
-            march: &str,
-            _mcpu: Option<&str>,
-            mattr: Option<&str>,
-        ) -> Result<Self, String> {
+        pub fn parse(march: &str, mcpu: Option<&str>, mattr: Option<&str>) -> Result<Self, String> {
             match march.trim().to_ascii_lowercase().replace('-', "_").as_str() {
                 "x86_64" | "amd64" | "x64" => {}
                 other => return Err(format!("unknown x86-64 architecture '{other}'")),
@@ -1384,13 +1377,33 @@ mod isa {
             if !features.contains(&Feature::X86_64) {
                 return Err("--mattr must not disable the base ISA 'X86_64'".to_string());
             }
-            Ok(Self { features })
+            let machine = match mcpu {
+                None => None,
+                Some(mcpu) => resolve_machine(mcpu, &features)?,
+            };
+            Ok(Self { features, machine })
         }
 
         /// The enabled ISA set.
         pub fn features(&self) -> &[Feature] {
             &self.features
         }
+    }
+
+    /// Resolve `--mcpu` to the machine model the compiler and the instrument
+    /// both schedule against. `generic` selects no machine.
+    fn resolve_machine(mcpu: &str, features: &[Feature]) -> Result<Option<String>, String> {
+        let name = mcpu.trim().to_ascii_lowercase();
+        if name == "generic" {
+            return Ok(None);
+        }
+        if machine_model(&name, features).is_some() {
+            return Ok(Some(name));
+        }
+        Err(format!(
+            "unknown x86-64 cpu '{mcpu}' (expected 'generic' or one of: {})",
+            machines(Feature::ALL).join(", ")
+        ))
     }
 
     fn apply_mattr(features: &mut Vec<Feature>, mattr: &str) -> Result<(), String> {
@@ -1510,15 +1523,12 @@ mod isa {
             tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
         }
 
-        fn asm_printer(&self, context: &tir::Context) -> tir::backend::AsmPrinter {
-            context
-                .find_dialect::<X86_64Dialect>()
-                .expect("x86_64 dialect must be registered before building an asm printer")
-                .get_asm_printer()
-        }
-
         fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {
             machine_model(name, self.config.features())
+        }
+
+        fn default_machine(&self) -> Option<&str> {
+            self.config.machine.as_deref()
         }
 
         fn machines(&self) -> Vec<&'static str> {
@@ -1549,10 +1559,7 @@ mod isa {
             &self,
             _context: &tir::Context,
         ) -> Option<tir::backend::binary::BinaryWriter> {
-            Some(tir::backend::binary::BinaryWriter::new(
-                get_instruction_encoders(),
-                get_instruction_patchers(),
-            ))
+            Some(tir::backend::binary::BinaryWriter::new())
         }
     }
 

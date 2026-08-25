@@ -5,15 +5,14 @@
 //! in the operand names, register classes and immediate ranges. Emitting that
 //! walk as Rust code once per instruction made the generated backend sources
 //! tens of thousands of lines of near-identical function bodies and dominated
-//! the backend crates' compile time, so TMDL rustgen emits a static
-//! [`InstrDesc`] table instead and these helpers interpret it at run time.
+//! the backend crates' compile time, so TMDL rustgen emits one static
+//! [`InstrDesc`] per instruction instead — reached through its
+//! [`InstrInfo::asm`](crate::backend::InstrInfo::asm) — and these helpers
+//! interpret it at run time.
 //!
 //! An instruction whose syntax this table cannot express keeps a generated
 //! parser/printer of its own; nothing here silently accepts a syntax the
 //! descriptor does not describe.
-
-use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr, find_attribute};
 use tir::parse::tokens::Parser;
@@ -77,7 +76,6 @@ pub enum PrintPart {
 /// printer consume it.
 #[derive(Debug)]
 pub struct InstrDesc {
-    pub op_name: &'static str,
     pub parse: &'static [ParseStep],
     pub print: &'static [PrintPart],
 }
@@ -252,30 +250,4 @@ pub fn print(desc: &InstrDesc, context: &Context, op: &OpHandle) -> Option<Strin
         }
     }
     Some(out)
-}
-
-/// A target's instruction descriptors, indexed by op name on first use so the
-/// single generated printer can dispatch on the op it is handed.
-pub struct DescIndex {
-    table: &'static [InstrDesc],
-    by_op_name: OnceLock<HashMap<&'static str, &'static InstrDesc>>,
-}
-
-impl DescIndex {
-    pub const fn new(table: &'static [InstrDesc]) -> Self {
-        DescIndex {
-            table,
-            by_op_name: OnceLock::new(),
-        }
-    }
-
-    /// Render `op`'s assembly from its descriptor, or `None` if the table has
-    /// no entry for it.
-    pub fn print(&self, context: &Context, op: &OpHandle) -> Option<String> {
-        let desc = self
-            .by_op_name
-            .get_or_init(|| self.table.iter().map(|desc| (desc.op_name, desc)).collect())
-            .get(op.name().as_str())?;
-        print(desc, context, op)
-    }
 }

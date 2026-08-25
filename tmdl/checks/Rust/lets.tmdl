@@ -5,26 +5,26 @@
 
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/lets.tmdl | filecheck %s
 
-// CHECK: impl tir::backend::MachineInstruction for AddDoubleOp
+// Selection patterns see through a binding: the op semantics is the underlying
+// expression over the operands, not an opaque binding symbol.
+// CHECK: impl tir::sem::AsSemExpr for AddDoubleOp
+
+// CHECK: static INFO_ADDDOUBLE: tir::backend::InstrInfo
 // CHECK: tir::backend::exec::Effect::Bind
 // CHECK: sym: 2
 // CHECK: tir::backend::exec::Dest::Reg(
 
-// CHECK: impl tir::backend::MachineInstruction for AmoAddWLetOp
+// CHECK: static INFO_AMOADDWLET: tir::backend::InstrInfo
 // CHECK: tir::backend::exec::Effect::Bind
 // CHECK: sym: 2
 // CHECK: tir::backend::exec::Dest::Reg(
 
-// CHECK: impl tir::backend::MachineInstruction for LoadTwiceOp
+// CHECK: static INFO_LOADTWICE: tir::backend::InstrInfo
 // CHECK: tir::backend::exec::Effect::Bind
 // CHECK: sym: 1
 // CHECK: tir::backend::exec::Dest::Reg(
 
-// CHECK: impl tir::backend::MachineInstruction for AmoAddDBareOp
+// CHECK: static INFO_AMOADDDBARE: tir::backend::InstrInfo
 // CHECK: tir::backend::exec::Effect::Bind
 // CHECK: sym: 2
 // CHECK: tir::backend::exec::Dest::Reg(
-
-// Selection patterns see through a binding: the op semantics is the underlying
-// expression over the operands, not an opaque binding symbol.
-// CHECK: impl tir::sem::AsSemExpr for AddDoubleOp

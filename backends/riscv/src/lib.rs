@@ -433,10 +433,6 @@ impl RiscvDialect {
     pub fn get_asm_parser(&self) -> tir::backend::AsmParser {
         tir::backend::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
     }
-
-    pub fn get_asm_printer(&self) -> tir::backend::AsmPrinter {
-        tir::backend::AsmPrinter::new(get_instruction_printers())
-    }
 }
 
 fn lower_func_and_return_to_asm_symbol(
@@ -1054,13 +1050,6 @@ impl tir::backend::TargetMachine for RiscvTarget {
         tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
     }
 
-    fn asm_printer(&self, context: &tir::Context) -> tir::backend::AsmPrinter {
-        context
-            .find_dialect::<RiscvDialect>()
-            .expect("riscv dialect must be registered before building an asm printer")
-            .get_asm_printer()
-    }
-
     fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {
         crate::machine_model(name, &self.config.features)
     }
@@ -1146,10 +1135,7 @@ impl tir::backend::TargetMachine for RiscvTarget {
     }
 
     fn binary_writer(&self, _context: &tir::Context) -> Option<tir::backend::binary::BinaryWriter> {
-        Some(tir::backend::binary::BinaryWriter::new(
-            get_instruction_encoders(),
-            get_instruction_patchers(),
-        ))
+        Some(tir::backend::binary::BinaryWriter::new())
     }
 }
 

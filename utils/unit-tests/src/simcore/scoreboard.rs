@@ -254,6 +254,7 @@ fn model(issue_width: u16) -> MachineModel {
     );
     MachineModel {
         name: "diff-test",
+        id: usize::MAX,
         issue_width,
         frontend: None,
         resources,
@@ -265,7 +266,6 @@ fn model(issue_width: u16) -> MachineModel {
             latency: 1,
         }],
         reg_files: &[],
-        sched: &[],
         fusions: &[],
     }
 }
@@ -445,6 +445,7 @@ const TEST_P1: ResourceUse = ResourceUse {
 fn resource_test_model(resources: &'static [ProcUnit]) -> MachineModel {
     MachineModel {
         name: "resource-test",
+        id: usize::MAX,
         issue_width: 2,
         frontend: None,
         resources,
@@ -452,7 +453,6 @@ fn resource_test_model(resources: &'static [ProcUnit]) -> MachineModel {
         pipeline: &[],
         forwards: &[],
         reg_files: &[],
-        sched: &[],
         fusions: &[],
     }
 }

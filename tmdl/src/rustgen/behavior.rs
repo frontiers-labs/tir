@@ -171,6 +171,7 @@ fn emit_behavior_exec(
     let effects = emit_behavior_effect(&behavior, behavior.root, ctx)?;
     Some(quote! {
         tir::backend::exec::Program::Effects {
+            env: &EXEC_ENV,
             sym_count: #sym_count_lit,
             sources: &[#(#sym_inits),*],
             effects: &[#(#effects),*],
@@ -431,8 +432,7 @@ fn emit_cond_branch_rule(
     dialect: &str,
     op_name: &str,
     op_ty_ident: &proc_macro2::Ident,
-    mnemonic_name: &str,
-    encoding_bytes: u64,
+    inst_name: &str,
     for_isas: &[String],
     ops: &[(String, Type)],
     pattern: &tir_symbolic::sem::SemGraph,
@@ -515,7 +515,7 @@ fn emit_cond_branch_rule(
         rule_name,
         for_isas,
         &pattern_spec,
-        &[(mnemonic_name, encoding_bytes as u32)],
+        &[inst_name],
         quote! {
             tir::backend::isel::RuleKind::CondBranch {
                 target_symbol: #target_symbol_lit,

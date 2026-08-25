@@ -395,7 +395,9 @@ tir sched --march rv64i --model rv64-ooo --iterations 100 region.s
 ```
 
 The `--model` name is the globally unique machine name (e.g. `rv64-ooo`,
-`arm64-in-order`). `--view` selects how results are presented — `resource` (the
+`arm64-in-order`). Omitted, it falls back to the machine `--mcpu` implies, so
+`tir sched --mcpu tiger-lake` and `fcc --mcpu tiger-lake` schedule against the
+same machine. `--view` selects how results are presented — `resource` (the
 default: totals/IPC, a per-instruction latency/reciprocal-throughput table, and
 resource pressure per iteration and by instruction) or `timeline` (a per-cycle
 trace of each instruction through dispatch/execute/retire). Both views are driven

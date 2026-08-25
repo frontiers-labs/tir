@@ -90,10 +90,6 @@ impl tir::backend::TargetMachine for PtxTarget {
         tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
     }
 
-    fn asm_printer(&self, _context: &tir::Context) -> tir::backend::AsmPrinter {
-        tir::backend::AsmPrinter::new(get_instruction_printers())
-    }
-
     fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {
         machine_model(name, Feature::ALL)
     }

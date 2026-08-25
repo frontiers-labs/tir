@@ -149,8 +149,8 @@ pub fn execution_regs(op: &OpHandle) -> OpRegs {
 
     let implicit_regs = op
         .clone()
-        .as_interface::<dyn RegisterSemantics>()
-        .map(|semantics| semantics.implicit_regs())
+        .as_interface::<dyn crate::backend::MachineInstruction>()
+        .map(|mi| mi.info().implicit_regs)
         .unwrap_or_default();
     for implicit in implicit_regs {
         let reg_ref = RegRef::Physical {

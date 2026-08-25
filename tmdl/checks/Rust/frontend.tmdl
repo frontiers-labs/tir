@@ -4,7 +4,6 @@
 // CHECK: decode_uops: 3,
 // CHECK: decoder: Some("complex"),
 // CHECK: decode_cycles: 3,
-// CHECK: ("complex-op", [[CLS]]),
 // CHECK: frontend: Some(tir::backend::sched::Frontend {
 // CHECK: bytes_per_cycle: 16,
 // CHECK: window_bytes: 32,
@@ -21,6 +20,10 @@
 // CHECK: line_bytes: 32,
 // CHECK: line_uops: 6,
 // CHECK: deliver_uops_per_cycle: 6,
+
+// The instruction indexes its class by machine id.
+// CHECK: sched: &[
+// CHECK-SAME: [[CLS]]
 
 isa TestIsa {}
 

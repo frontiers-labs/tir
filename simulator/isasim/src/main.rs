@@ -470,7 +470,7 @@ fn build_speculation(
             let Some(mi) = context.get_op(id).as_interface::<dyn MachineInstruction>() else {
                 break;
             };
-            let class = model.sched_class(mi.mnemonic());
+            let class = mi.info().sched_on(model);
             instrs.push(konata::SpecInstr {
                 label: disasm(id, pc),
                 is_memory: konata::is_memory_class(class.resources),

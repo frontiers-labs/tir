@@ -1,7 +1,8 @@
 // RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
-// Instructions resolving to the same class share one emitted constant, and the
-// per-machine table is static data rather than an imperative constructor.
+// Instructions resolving to the same class share one emitted constant, and each
+// instruction indexes its class by machine id rather than being looked up by
+// name in a per-machine table.
 
 // CHECK: const [[ALU:SCHED_C[0-9]+]]: tir::backend::sched::InstrSchedClass = tir::backend::sched::InstrSchedClass {
 // CHECK: latency: 1,
@@ -9,15 +10,22 @@
 // CHECK: const [[MUL:SCHED_C[0-9]+]]: tir::backend::sched::InstrSchedClass = tir::backend::sched::InstrSchedClass {
 // CHECK: latency: 3,
 // CHECK: resources: &["P1"],
-// CHECK: static TEST_CORE_SCHED: &[(&str, tir::backend::sched::InstrSchedClass)] = &[
-// CHECK-NEXT: ("add", [[ALU]]),
-// CHECK-NEXT: ("mul", [[MUL]]),
-// CHECK-NEXT: ("sub", [[ALU]]),
 // CHECK: static TEST_CORE_MODEL: tir::backend::sched::MachineModel = tir::backend::sched::MachineModel {
-// CHECK: sched: TEST_CORE_SCHED,
+// CHECK: id: 0,
 // CHECK: pub fn test_core_model() -> tir::backend::sched::MachineModel {
 // CHECK-NEXT: TEST_CORE_MODEL
 // CHECK-NEXT: }
+
+// `Add` and `Sub` resolve to the same class, so both index the same constant.
+// CHECK: static INFO_ADD: tir::backend::InstrInfo = tir::backend::InstrInfo {
+// CHECK: sched: &[
+// CHECK-SAME: [[ALU]]
+// CHECK: static INFO_SUB: tir::backend::InstrInfo = tir::backend::InstrInfo {
+// CHECK: sched: &[
+// CHECK-SAME: [[ALU]]
+// CHECK: static INFO_MUL: tir::backend::InstrInfo = tir::backend::InstrInfo {
+// CHECK: sched: &[
+// CHECK-SAME: [[MUL]]
 
 isa TestIsa {}
 

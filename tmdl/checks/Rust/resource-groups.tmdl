@@ -12,7 +12,8 @@
 // CHECK: cycles: 1,
 // CHECK: resource: "Multiply",
 // CHECK: cycles: 3,
-// CHECK: ("mul", [[CLS]]),
+// CHECK: sched: &[
+// CHECK-SAME: [[CLS]]
 
 isa TestIsa {}
 

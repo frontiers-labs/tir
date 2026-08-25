@@ -3,6 +3,28 @@
 use tir::Context;
 use tir_arm64::{Feature, RegClass, TargetConfig};
 
+/// The one per-opcode record the backend describes `name` with.
+fn info(name: &str) -> &'static tir::backend::InstrInfo {
+    tir_arm64::instruction_infos()
+        .iter()
+        .copied()
+        .find(|info| info.name == name)
+        .unwrap_or_else(|| panic!("arm64 declares no instruction '{name}'"))
+}
+
+#[test]
+fn instruction_info_carries_every_per_opcode_fact() {
+    // One record per opcode: `add` prints, encodes and schedules through the
+    // fields of its own `InstrInfo`, with no side table keyed by its name.
+    let add = info("add");
+    assert_eq!(add.mnemonic, "add");
+    assert_eq!(add.width_bytes, 4);
+    assert!(add.asm.is_some());
+    assert!(add.encode.is_some());
+    assert_eq!(add.sched.len(), tir_arm64::machines(Feature::ALL).len());
+    assert_eq!(add.effects, tir::backend::MemoryEffects::NONE);
+}
+
 #[test]
 fn guarded_relaxations_hold_for_all_rules() {
     let context = Context::with_default_dialects();

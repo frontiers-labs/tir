@@ -58,12 +58,15 @@ pub fn simulate(
         let op = context.get_op(*id);
         let mi = op.clone().as_interface::<dyn MachineInstruction>();
         let (key, class, width, is_branch) = match &mi {
-            Some(mi) => (
-                mi.scheduling_key(),
-                model.sched_class(mi.mnemonic()),
-                u64::from(mi.width_bytes()),
-                mi.control_flow() == ControlFlow::Conditional,
-            ),
+            Some(mi) => {
+                let info = mi.info();
+                (
+                    info.name,
+                    info.sched_on(model),
+                    u64::from(info.width_bytes),
+                    info.control_flow == ControlFlow::Conditional,
+                )
+            }
             None => ("", InstrSchedClass::DEFAULT, 4, false),
         };
         let regs = execution_regs(&op);

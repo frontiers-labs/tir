@@ -2,6 +2,31 @@
 
 use tir_x86_64::{Feature, TargetConfig};
 
+/// The one per-opcode record the backend describes `name` with.
+fn info(name: &str) -> &'static tir::backend::InstrInfo {
+    tir_x86_64::instruction_infos()
+        .iter()
+        .copied()
+        .find(|info| info.name == name)
+        .unwrap_or_else(|| panic!("x86-64 declares no instruction '{name}'"))
+}
+
+#[test]
+fn instruction_info_carries_every_per_opcode_fact() {
+    // One record per opcode, keyed by op name — `add32_norex` and `add` share a
+    // mnemonic but not a record, so neither can reach the other's facts.
+    let norex = info("add32_norex");
+    assert_eq!(norex.mnemonic, "add");
+    assert!(norex.asm.is_some());
+    assert!(norex.encode.is_some());
+    assert_eq!(norex.sched.len(), 1);
+    assert_ne!(
+        norex.sched[0],
+        tir::backend::sched::InstrSchedClass::DEFAULT
+    );
+    assert_eq!(norex.effects, tir::backend::MemoryEffects::NONE);
+}
+
 #[test]
 fn guarded_relaxations_hold_for_all_rules() {
     let context = tir::Context::with_default_dialects();

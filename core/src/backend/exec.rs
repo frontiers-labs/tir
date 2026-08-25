@@ -8,7 +8,7 @@
 
 use crate::attributes::{AttributeValue, RegisterAttr};
 use crate::backend::regalloc::RegClassId;
-use crate::backend::{MachineContext, MachineMemory, RegisterValue, SimTrap};
+use crate::backend::{InstrInfo, MachineContext, MachineMemory, RegisterValue, SimTrap};
 
 /// How one slot of an instruction's entry symbol table is bound before its
 /// behavior evaluates: the operand/ISA-parameter sources a TMDL behavior reads.
@@ -206,6 +206,8 @@ pub enum Effect {
 /// What executing an instruction does.
 pub enum Program {
     Effects {
+        /// The environment the effects' value terms are evaluated against.
+        env: &'static ExecEnv,
         sym_count: usize,
         sources: &'static [(usize, SymSource)],
         effects: &'static [Effect],
@@ -214,48 +216,39 @@ pub enum Program {
     Unsupported(&'static str),
 }
 
-/// Everything [`crate::backend::MachineInstruction`] reports about one opcode.
-pub struct InstSpec {
-    pub mnemonic: &'static str,
-    pub scheduling_key: &'static str,
-    pub width_bytes: u8,
-    pub control_flow: crate::backend::ControlFlow,
-    pub env: &'static ExecEnv,
-    pub program: Program,
-}
-
-/// Executes one instruction against `machine`, driven by its static spec.
+/// Executes one instruction against `machine`, driven by its static info.
 pub fn run(
     instance: &crate::OpHandle,
-    spec: &InstSpec,
+    info: &InstrInfo,
     machine: &mut dyn MachineContext,
 ) -> Result<(), SimTrap> {
-    match &spec.program {
+    match &info.program {
         Program::Unsupported(reason) => Err(SimTrap::InvalidInstruction {
-            op: spec.mnemonic,
+            op: info.mnemonic,
             reason: reason.to_string(),
         }),
         Program::Effects {
+            env,
             sym_count,
             sources,
             effects,
         } => {
-            let mut syms = init_syms(instance, machine, spec.mnemonic, *sym_count, sources)?;
-            run_effects(instance, spec, machine, &mut syms, effects)
+            let mut syms = init_syms(instance, machine, info.mnemonic, *sym_count, sources)?;
+            run_effects(instance, info.mnemonic, env, machine, &mut syms, effects)
         }
     }
 }
 
 fn run_effects(
     instance: &crate::OpHandle,
-    spec: &InstSpec,
+    mnemonic: &'static str,
+    env: &'static ExecEnv,
     machine: &mut dyn MachineContext,
     syms: &mut [tir::sem::Value],
     effects: &[Effect],
 ) -> Result<(), SimTrap> {
-    let env = spec.env;
     let evaluate = |offset: u32, syms: &[tir::sem::Value], machine: &mut dyn MachineContext| {
-        eval(env.kinds, env.blob, offset, syms, machine, spec.mnemonic)
+        eval(env.kinds, env.blob, offset, syms, machine, mnemonic)
     };
     for effect in effects {
         match effect {
@@ -266,7 +259,7 @@ fn run_effects(
                     Dest::Reg(name) => writeback_attr(
                         instance,
                         machine,
-                        spec.mnemonic,
+                        mnemonic,
                         name,
                         value,
                         env.is_hardwired_zero,
@@ -288,7 +281,7 @@ fn run_effects(
             Effect::If { cond, then, els } => {
                 let value = evaluate(*cond, syms, machine)?;
                 let taken = if value.to_u64() != 0 { then } else { els };
-                run_effects(instance, spec, machine, syms, taken)?;
+                run_effects(instance, mnemonic, env, machine, syms, taken)?;
             }
         }
     }

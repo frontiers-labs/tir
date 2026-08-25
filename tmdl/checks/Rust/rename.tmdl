@@ -6,8 +6,10 @@
 // CHECK: const [[XOR:SCHED_C[0-9]+]]: tir::backend::sched::InstrSchedClass = tir::backend::sched::InstrSchedClass {
 // CHECK: eliminated: false,
 // CHECK: zero_idiom: true,
-// CHECK: ("a-move", [[MOVE]]),
-// CHECK-NEXT: ("b-xor", [[XOR]]),
+// CHECK: sched: &[
+// CHECK-SAME: [[MOVE]]
+// CHECK: sched: &[
+// CHECK-SAME: [[XOR]]
 
 isa TestIsa {}
 

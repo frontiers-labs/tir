@@ -903,7 +903,6 @@ struct FlagInst<'a> {
     /// The op's registered name (`OPNAME`, falling back to `MNEMONIC`).
     op_name: String,
     mnemonic: String,
-    encoding_bytes: u64,
     isa_param_values: HashMap<String, i64>,
 }
 

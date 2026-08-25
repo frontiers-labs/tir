@@ -15,12 +15,11 @@ use tir::{BlockId, Context, Operation};
 
 use super::format::ObjectFormatInfo;
 use super::{
-    FixupTarget, InstructionEncoder, InstructionPatcher, ObjReloc, ObjSection, ObjSymbol,
-    ObjectFile, SectionKind, SymBinding, SymKind,
+    FixupTarget, ObjReloc, ObjSection, ObjSymbol, ObjectFile, SectionKind, SymBinding, SymKind,
 };
 use crate::backend::{
-    BlockEndOp, DataRelocOp, LiteralOp, MachineInstruction, SectionEndOp, SectionOp, SymbolEndOp,
-    SymbolOp,
+    BlockEndOp, DataRelocOp, InstrInfo, LiteralOp, MachineInstruction, SectionEndOp, SectionOp,
+    SymbolEndOp, SymbolOp,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,14 +74,14 @@ struct PendingFixup {
     section: usize,
     offset: u64,
     len: u8,
-    op: String,
+    info: &'static InstrInfo,
     target: FixupTarget,
 }
 
-pub struct BinaryWriter {
-    encoders: HashMap<String, InstructionEncoder>,
-    patchers: HashMap<String, InstructionPatcher>,
-}
+/// Lays out and encodes machine IR into an object file. Stateless: an
+/// instruction's encoder and patcher are fields of its [`InstrInfo`].
+#[derive(Default)]
+pub struct BinaryWriter;
 
 /// Object emission in progress. A driver that emits the module symbol by
 /// symbol threads one of these through [`BinaryWriter::write_op`] and closes it
@@ -97,11 +96,8 @@ pub struct ObjectEmission {
 }
 
 impl BinaryWriter {
-    pub fn new(
-        encoders: HashMap<String, InstructionEncoder>,
-        patchers: HashMap<String, InstructionPatcher>,
-    ) -> Self {
-        Self { encoders, patchers }
+    pub fn new() -> Self {
+        BinaryWriter
     }
 
     pub fn write_module(
@@ -239,23 +235,21 @@ impl BinaryWriter {
         op: &tir::OpHandle,
         state: &mut ObjectEmission,
     ) -> Result<(), BinaryEmitError> {
-        let Some(encoder) = self.encoders.get(op.name().as_str()) else {
-            if op
-                .clone()
-                .as_interface::<dyn MachineInstruction>()
-                .is_some()
-            {
-                return Err(BinaryEmitError::MissingEncoder {
-                    op: op.name().to_string(),
-                });
-            }
+        let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() else {
             return Err(BinaryEmitError::UnsupportedOp {
                 op: op.name().to_string(),
             });
         };
-        let encoded = encoder(op).ok_or_else(|| BinaryEmitError::CannotEncode {
-            op: op.name().to_string(),
-        })?;
+        let info = mi.info();
+        let Some(spec) = info.encode else {
+            return Err(BinaryEmitError::MissingEncoder {
+                op: op.name().to_string(),
+            });
+        };
+        let encoded =
+            super::encode_with(op, spec).ok_or_else(|| BinaryEmitError::CannotEncode {
+                op: op.name().to_string(),
+            })?;
 
         let section = state
             .current_section
@@ -272,7 +266,7 @@ impl BinaryWriter {
                 section,
                 offset,
                 len,
-                op: op.name().to_string(),
+                info,
                 target: fixup.target,
             });
         }
@@ -287,41 +281,45 @@ impl BinaryWriter {
         for fixup in &state.fixups {
             match &fixup.target {
                 FixupTarget::Block(block) => {
+                    let name = fixup.info.name;
                     let target = *state.block_starts.get(block).ok_or_else(|| {
                         BinaryEmitError::UnknownBlockTarget {
-                            op: fixup.op.clone(),
+                            op: name.to_string(),
                         }
                     })?;
-                    let base = if (fmt.pc_rel_from_end)(&fixup.op) {
+                    let base = if (fmt.pc_rel_from_end)(name) {
                         fixup.offset + u64::from(fixup.len)
                     } else {
                         fixup.offset
                     };
                     let delta = target as i64 - base as i64;
-                    let scale = (fmt.pc_rel_scale)(&fixup.op);
+                    let scale = (fmt.pc_rel_scale)(name);
                     if delta & ((1 << scale) - 1) != 0 {
                         return Err(BinaryEmitError::MisalignedTarget {
-                            op: fixup.op.clone(),
+                            op: name.to_string(),
                             delta,
                         });
                     }
                     let value = delta >> scale;
-                    let patcher = self.patchers.get(&fixup.op).ok_or_else(|| {
-                        BinaryEmitError::MissingPatcher {
-                            op: fixup.op.clone(),
-                        }
-                    })?;
+                    let spec = fixup
+                        .info
+                        .patch
+                        .ok_or_else(|| BinaryEmitError::MissingPatcher {
+                            op: name.to_string(),
+                        })?;
                     let data = &mut state.obj.sections[fixup.section].data;
                     let range = fixup.offset as usize..(fixup.offset + fixup.len as u64) as usize;
-                    patcher(&mut data[range], value).ok_or(BinaryEmitError::FixupOutOfRange {
-                        op: fixup.op.clone(),
-                        value,
-                    })?;
+                    super::patch_with(&mut data[range], value, spec).ok_or(
+                        BinaryEmitError::FixupOutOfRange {
+                            op: name.to_string(),
+                            value,
+                        },
+                    )?;
                 }
                 FixupTarget::Symbol(symbol) => {
-                    let kind = (fmt.reloc_for)(&fixup.op).ok_or_else(|| {
+                    let kind = (fmt.reloc_for)(fixup.info.name).ok_or_else(|| {
                         BinaryEmitError::SymbolOperandUnsupported {
-                            op: fixup.op.clone(),
+                            op: fixup.info.name.to_string(),
                         }
                     })?;
                     state.obj.sections[fixup.section].relocs.push(ObjReloc {

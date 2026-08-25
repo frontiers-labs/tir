@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display};
 
@@ -13,12 +12,10 @@ use crate::backend::{
     SymbolOp,
 };
 
-pub type AsmInstructionPrinter = fn(&Context, &OpHandle) -> Option<String>;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AsmPrintError {
     MissingSymbolName,
-    MissingInstructionPrinter { op: &'static str },
+    NoAssemblySyntax { op: &'static str },
     InvalidInstruction { op: &'static str },
     UnsupportedOp { op: &'static str },
 }
@@ -27,8 +24,8 @@ impl Display for AsmPrintError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AsmPrintError::MissingSymbolName => write!(f, "asm symbol is missing name"),
-            AsmPrintError::MissingInstructionPrinter { op } => {
-                write!(f, "no assembly printer registered for '{op}'")
+            AsmPrintError::NoAssemblySyntax { op } => {
+                write!(f, "'{op}' has no assembly syntax")
             }
             AsmPrintError::InvalidInstruction { op } => {
                 write!(f, "assembly printer rejected '{op}'")
@@ -42,26 +39,31 @@ impl Display for AsmPrintError {
 
 impl Error for AsmPrintError {}
 
-pub struct AsmPrinter {
-    instruction_printers: HashMap<String, AsmInstructionPrinter>,
-}
+/// Renders lowered machine IR as this target's textual assembly. Stateless: an
+/// instruction's syntax is a field of its [`crate::backend::InstrInfo`].
+#[derive(Default)]
+pub struct AsmPrinter;
 
 impl AsmPrinter {
-    pub fn new(instruction_printers: HashMap<String, AsmInstructionPrinter>) -> Self {
-        Self {
-            instruction_printers,
-        }
+    pub fn new() -> Self {
+        AsmPrinter
     }
 
+    /// Render one instruction, or `None` if `op` is not a machine instruction.
     pub fn print_instruction(
         &self,
         context: &Context,
         op: &OpHandle,
     ) -> Result<Option<String>, AsmPrintError> {
-        let Some(printer) = self.instruction_printers.get(op.name().as_str()) else {
+        let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() else {
             return Ok(None);
         };
-        printer(context, op)
+        let Some(desc) = mi.info().asm else {
+            return Err(AsmPrintError::NoAssemblySyntax {
+                op: op.name().as_str(),
+            });
+        };
+        crate::backend::asm_desc::print(desc, context, op)
             .map(Some)
             .ok_or(AsmPrintError::InvalidInstruction {
                 op: op.name().as_str(),
@@ -215,16 +217,6 @@ impl AsmPrinter {
             out.push_str(&text);
             out.push('\n');
             return Ok(());
-        }
-
-        if op
-            .clone()
-            .as_interface::<dyn MachineInstruction>()
-            .is_some()
-        {
-            return Err(AsmPrintError::MissingInstructionPrinter {
-                op: op.name().as_str(),
-            });
         }
 
         Err(AsmPrintError::UnsupportedOp {

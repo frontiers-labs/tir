@@ -1,6 +1,21 @@
 use tir::helpers::operation;
 use tir::{Any, Operation, Terminator};
 
+use super::{ControlFlow, InstrInfo, MachineInstruction};
+
+/// The `InstrInfo` of a virtual op: it names itself and how it transfers
+/// control, and nothing else. A virtual op has no encoding, no assembly syntax
+/// and no schedule — it is replaced before any of those are consulted.
+const fn virtual_info(name: &'static str, control_flow: ControlFlow) -> InstrInfo {
+    InstrInfo {
+        name,
+        mnemonic: name,
+        control_flow,
+        program: tir::backend::exec::Program::Unsupported("virtual operation"),
+        ..InstrInfo::BASE
+    }
+}
+
 operation! {
     SectionOp {
         name: "section",
@@ -83,7 +98,7 @@ operation! {
         operands: O {
             values: "*Any",
         },
-        interfaces: [Terminator],
+        interfaces: [Terminator, tir::backend::MachineInstruction],
     }
 }
 
@@ -108,6 +123,17 @@ impl VirtualReturnOpBuilder {
 
 impl Terminator for VirtualReturnOp {}
 
+impl MachineInstruction for VirtualReturnOp {
+    fn info(&self) -> &'static InstrInfo {
+        static INFO: InstrInfo = virtual_info("vret", ControlFlow::Unconditional);
+        &INFO
+    }
+
+    fn instance(&self) -> &tir::OpHandle {
+        &self.0
+    }
+}
+
 operation! {
     VirtualBranchOp {
         name: "vbr",
@@ -119,7 +145,18 @@ operation! {
         attributes: A {
             dest: "Block",
         },
-        interfaces: [Terminator],
+        interfaces: [Terminator, tir::backend::MachineInstruction],
+    }
+}
+
+impl MachineInstruction for VirtualBranchOp {
+    fn info(&self) -> &'static InstrInfo {
+        static INFO: InstrInfo = virtual_info("vbr", ControlFlow::Unconditional);
+        &INFO
+    }
+
+    fn instance(&self) -> &tir::OpHandle {
+        &self.0
     }
 }
 
@@ -150,7 +187,18 @@ operation! {
             callee: "Str",
             outgoing_stack_size: "UInt",
         },
-        interfaces: [tir::attributes::RegisterSemantics],
+        interfaces: [tir::attributes::RegisterSemantics, tir::backend::MachineInstruction],
+    }
+}
+
+impl MachineInstruction for VirtualCallOp {
+    fn info(&self) -> &'static InstrInfo {
+        static INFO: InstrInfo = virtual_info("vcall", ControlFlow::Unconditional);
+        &INFO
+    }
+
+    fn instance(&self) -> &tir::OpHandle {
+        &self.0
     }
 }
 
@@ -168,7 +216,18 @@ operation! {
             callee_reg: "Register",
             outgoing_stack_size: "UInt",
         },
-        interfaces: [tir::attributes::RegisterSemantics],
+        interfaces: [tir::attributes::RegisterSemantics, tir::backend::MachineInstruction],
+    }
+}
+
+impl MachineInstruction for VirtualIndirectCallOp {
+    fn info(&self) -> &'static InstrInfo {
+        static INFO: InstrInfo = virtual_info("vcall_indirect", ControlFlow::Unconditional);
+        &INFO
+    }
+
+    fn instance(&self) -> &tir::OpHandle {
+        &self.0
     }
 }
 

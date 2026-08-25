@@ -213,10 +213,6 @@ impl Arm64Dialect {
     pub fn get_asm_parser(&self) -> tir::backend::AsmParser {
         tir::backend::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
     }
-
-    pub fn get_asm_printer(&self) -> tir::backend::AsmPrinter {
-        tir::backend::AsmPrinter::new(get_instruction_printers())
-    }
 }
 
 /// Emit the deferred unconditional branch (`vbr`, finalized to `b` after
@@ -629,13 +625,6 @@ impl tir::backend::TargetMachine for Arm64Target {
         tir::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
     }
 
-    fn asm_printer(&self, context: &tir::Context) -> tir::backend::AsmPrinter {
-        context
-            .find_dialect::<Arm64Dialect>()
-            .expect("arm64 dialect must be registered before building an asm printer")
-            .get_asm_printer()
-    }
-
     fn machine_model(&self, name: &str) -> Option<tir::backend::sched::MachineModel> {
         crate::machine_model(name, &self.config.features)
     }
@@ -673,10 +662,7 @@ impl tir::backend::TargetMachine for Arm64Target {
     }
 
     fn binary_writer(&self, _context: &tir::Context) -> Option<tir::backend::binary::BinaryWriter> {
-        Some(tir::backend::binary::BinaryWriter::new(
-            get_instruction_encoders(),
-            get_instruction_patchers(),
-        ))
+        Some(tir::backend::binary::BinaryWriter::new())
     }
 
     fn instruction_decoder(&self) -> Option<tir::backend::InstructionDecoder> {

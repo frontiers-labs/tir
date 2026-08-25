@@ -94,8 +94,12 @@ pub trait TargetMachine {
     /// An assembly parser for this target's textual `.s`/`.S` syntax.
     fn asm_parser(&self, context: &Context) -> AsmParser;
 
-    /// An assembly printer for this target's textual `.s`/`.S` syntax.
-    fn asm_printer(&self, context: &Context) -> AsmPrinter;
+    /// An assembly printer for this target's textual `.s`/`.S` syntax. Every
+    /// instruction's syntax is a field of its `InstrInfo`, so the printer is the
+    /// same for every target.
+    fn asm_printer(&self, _context: &Context) -> AsmPrinter {
+        AsmPrinter::new()
+    }
 
     /// A cycle-approximate machine model by name, or `None` if this target has no
     /// model under that name compatible with the selected features. Names are

@@ -7,6 +7,22 @@ use tir::sem::Memory;
 use tir_adt::APInt;
 
 #[test]
+fn a_virtual_op_reports_itself_and_nothing_else() {
+    // `vret` is replaced before printing, encoding or scheduling ever ask, so
+    // its record carries only its identity and its control transfer.
+    let context = tir::Context::with_default_dialects();
+    let vret = tir::backend::VirtualReturnOpBuilder::new(&context).build();
+    let info = tir::backend::MachineInstruction::info(&vret);
+
+    assert_eq!(info.name, "vret");
+    assert_eq!(info.control_flow, tir::backend::ControlFlow::Unconditional);
+    assert!(info.asm.is_none());
+    assert!(info.encode.is_none());
+    assert!(info.patch.is_none());
+    assert!(info.sched.is_empty());
+}
+
+#[test]
 fn asm_rejects_unknown_punctuation_without_panicking() {
     assert_eq!(lex(".0"), Err(()));
 }

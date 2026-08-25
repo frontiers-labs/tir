@@ -1,8 +1,12 @@
-// An isel rule's cost is encoding-size-aware: the mnemonic's latency scaled by
-// `LATENCY_COST_SCALE` plus the instruction's encoding size in bytes, so a
-// shorter encoding wins a latency tie.
+// An isel rule costs what the instructions it emits cost: each one's latency
+// scaled by `LATENCY_COST_SCALE` plus its encoding size in bytes, so a shorter
+// encoding wins a latency tie. Both terms are fields of the emitted
+// instruction's record, so the rule names the record and nothing else.
 
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/simple.tmdl | filecheck %s
 
 // `add` is a 32-bit encoding, so its rule pays 4 bytes on top of the latency.
-// CHECK: cost_terms: &[("add", 4)]
+// CHECK: static INFO_ADD: tir::backend::InstrInfo = tir::backend::InstrInfo {
+// CHECK: width_bytes: 4,
+
+// CHECK: emits: &[&INFO_ADD]

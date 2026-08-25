@@ -23,7 +23,6 @@ struct Definer<'a> {
     mnemonic: String,
     /// Declared attribute names (operand names), for builder parity.
     op_attrs: Vec<String>,
-    encoding_bytes: u64,
     written: FixedReg,
     /// The right-hand side of the single fixed-register write.
     write_rhs: &'a ast::Expr,
@@ -37,7 +36,6 @@ struct Reader<'a> {
     /// The op's registered name (`OPNAME`, falling back to `MNEMONIC`).
     op_name: String,
     mnemonic: String,
-    encoding_bytes: u64,
     ops: Vec<(String, Type)>,
     cond: &'a ast::Expr,
     /// The then-arm's fixed-register writes, `(written register, rhs)`.
@@ -93,12 +91,10 @@ fn emit_fixed_register_rules<'a>(
             &isa_param_values,
         );
 
-        let encoding_bytes = encoding_width_bytes(inst, item_cache);
         if let Some(definer) = classify_definer(
             inst,
             &op_name,
             &mnemonic,
-            encoding_bytes,
             &ops,
             register_index_map,
         ) {
@@ -107,7 +103,6 @@ fn emit_fixed_register_rules<'a>(
             inst,
             &op_name,
             &mnemonic,
-            encoding_bytes,
             &ops,
             register_index_map,
             &isa_param_values,
@@ -611,10 +606,7 @@ fn emit_one_division_rule(
         &rule_name,
         &shared_isas,
         &pattern_spec,
-        &[
-            (&definer.mnemonic, definer.encoding_bytes as u32),
-            (&reader.mnemonic, reader.encoding_bytes as u32),
-        ],
+        &[&definer.inst.name, &reader.inst.name],
         quote! { tir::backend::isel::RuleKind::Value },
         Some(&prelude_shim),
         &emit_shim,
@@ -754,7 +746,6 @@ fn classify_definer<'a>(
     inst: &'a ast::Instruction,
     op_name: &str,
     mnemonic: &str,
-    encoding_bytes: u64,
     ops: &[(String, Type)],
     register_index_map: &HashMap<(String, String), u32>,
 ) -> Option<Definer<'a>> {
@@ -778,7 +769,6 @@ fn classify_definer<'a>(
         op_name: op_name.to_string(),
         mnemonic: mnemonic.to_string(),
         op_attrs: ops.iter().map(|(name, _)| name.clone()).collect(),
-        encoding_bytes,
         written,
         write_rhs: rhs,
     })
@@ -790,7 +780,6 @@ fn classify_reader<'a>(
     inst: &'a ast::Instruction,
     op_name: &str,
     mnemonic: &str,
-    encoding_bytes: u64,
     ops: &[(String, Type)],
     register_index_map: &HashMap<(String, String), u32>,
     isa_param_values: &HashMap<String, i64>,
@@ -827,7 +816,6 @@ fn classify_reader<'a>(
         inst,
         op_name: op_name.to_string(),
         mnemonic: mnemonic.to_string(),
-        encoding_bytes,
         ops: ops.to_vec(),
         cond: &if_expr.cond,
         then_writes,

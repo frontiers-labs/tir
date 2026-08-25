@@ -8,6 +8,15 @@ fn target(march: &str) -> Box<dyn TargetMachine> {
     tir::backend::select_target(march, None, None).expect("march should select")
 }
 
+/// The one per-opcode record the backend describes `name` with.
+fn info(name: &str) -> &'static tir::backend::InstrInfo {
+    tir_riscv::instruction_infos()
+        .iter()
+        .copied()
+        .find(|info| info.name == name)
+        .unwrap_or_else(|| panic!("riscv declares no instruction '{name}'"))
+}
+
 #[test]
 fn guarded_relaxations_hold_for_all_rules() {
     let context = Context::with_default_dialects();
@@ -101,6 +110,26 @@ fn target_selection_accepts_and_validates_mabi() {
 }
 
 #[test]
+fn instruction_info_carries_every_per_opcode_fact() {
+    // One record per opcode: `add` prints, encodes and schedules through the
+    // fields of its own `InstrInfo`, with no side table keyed by its name.
+    let add = info("add");
+    assert_eq!(add.mnemonic, "add");
+    assert_eq!(add.width_bytes, 4);
+    assert!(add.asm.is_some());
+    assert!(add.encode.is_some());
+    assert_eq!(add.sched.len(), tir_riscv::machines(Feature::ALL).len());
+    assert_eq!(add.effects, tir::backend::MemoryEffects::NONE);
+
+    // A load's behavior reads memory and its branch-offset immediate is
+    // patchable once layout is known; `add` needs neither.
+    assert!(info("lw").effects.reads);
+    assert!(info("sw").effects.writes);
+    assert!(info("beq").patch.is_some());
+    assert!(add.patch.is_none());
+}
+
+#[test]
 fn machine_models_resolve_scheduling_classes() {
     // ALU ops resolve to the ALU unit (via the WriteIALU schedule on their
     // template), loads/stores to the LSU, and an instruction with no schedule
@@ -109,12 +138,12 @@ fn machine_models_resolve_scheduling_classes() {
         tir_riscv::in_order_core_model(),
         tir_riscv::out_of_order_core_model(),
     ] {
-        assert_eq!(model.sched_class("add").resources, &["ALU"]);
-        assert_eq!(model.sched_class("sub").resources, &["ALU"]);
-        assert_eq!(model.sched_class("lw").resources, &["LSU"]);
-        assert_eq!(model.sched_class("sw").resources, &["LSU"]);
+        assert_eq!(info("add").sched_on(&model).resources, &["ALU"]);
+        assert_eq!(info("sub").sched_on(&model).resources, &["ALU"]);
+        assert_eq!(info("lw").sched_on(&model).resources, &["LSU"]);
+        assert_eq!(info("sw").sched_on(&model).resources, &["LSU"]);
         assert_eq!(
-            model.sched_class("mul"),
+            info("mul").sched_on(&model),
             tir::backend::sched::InstrSchedClass::DEFAULT
         );
     }
@@ -133,16 +162,16 @@ fn phase_based_timing_resolves_from_pipeline() {
     );
 
     // add: read@ID(1) → write@EX(2) ⇒ latency 1, read_cycle 1, write_cycle 2.
-    let add = in_order.sched_class("add");
+    let add = info("add").sched_on(&in_order);
     assert_eq!((add.read_cycle, add.latency, add.write_cycle()), (1, 1, 2));
     // lw: read@ID(1) → write@MEM(3) ⇒ latency 2, read_cycle 1, write_cycle 3.
-    let lw = in_order.sched_class("lw");
+    let lw = info("lw").sched_on(&in_order);
     assert_eq!((lw.read_cycle, lw.latency, lw.write_cycle()), (1, 2, 3));
 
     // OutOfOrderCore is scalar (`latency = N`): read at cycle 0, no pipeline.
     let ooo = tir_riscv::out_of_order_core_model();
     assert!(ooo.pipeline.is_empty());
-    let ooo_lw = ooo.sched_class("lw");
+    let ooo_lw = info("lw").sched_on(&ooo);
     assert_eq!((ooo_lw.read_cycle, ooo_lw.latency), (0, 4));
 }
 
@@ -150,17 +179,17 @@ fn phase_based_timing_resolves_from_pipeline() {
 fn instruction_cost_reflects_unit_defaults() {
     // Machine-independent cost comes from the `unit` defaults, not a machine's
     // `bind`: WriteIALU defaults latency 1, WriteLoad defaults latency 3.
-    assert_eq!(tir_riscv::instruction_cost("add"), 1);
-    assert_eq!(tir_riscv::instruction_cost("lw"), 3);
+    assert_eq!(info("add").cost, 1);
+    assert_eq!(info("lw").cost, 3);
     // Instructions with no `schedule` block fall back to the default cost.
-    assert_eq!(tir_riscv::instruction_cost("sub"), 1);
-    assert_eq!(tir_riscv::instruction_cost("nonexistent"), 1);
+    assert_eq!(info("sub").cost, 1);
+    assert_eq!(info("mul").cost, 1);
 
     // The per-machine model may refine the generic default for that silicon:
     // both demo cores bind WriteLoad to latency 4, independent of the default 3.
     assert_eq!(
-        tir_riscv::out_of_order_core_model()
-            .sched_class("lw")
+        info("lw")
+            .sched_on(&tir_riscv::out_of_order_core_model())
             .latency,
         4
     );
@@ -170,14 +199,16 @@ fn instruction_cost_reflects_unit_defaults() {
 fn override_supersedes_unit_bind() {
     // OutOfOrderCore overrides `Add` to latency 2, beating WriteIALU's bind (1).
     assert_eq!(
-        tir_riscv::out_of_order_core_model()
-            .sched_class("add")
+        info("add")
+            .sched_on(&tir_riscv::out_of_order_core_model())
             .latency,
         2
     );
     // InOrderCore has no override → `add` resolves from its WriteIALU bind.
     assert_eq!(
-        tir_riscv::in_order_core_model().sched_class("add").latency,
+        info("add")
+            .sched_on(&tir_riscv::in_order_core_model())
+            .latency,
         1
     );
 }
