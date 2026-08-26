@@ -1,0 +1,11 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+module {
+  %fn_f = func.func @f(%0: !ptr.p, %1: !ptr.p, %2: !i64) -> !i1 {
+    %3 = ptr.disjoint %0, %2, %1, %2 : !i1
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = ptr.disjoint %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} : !i1

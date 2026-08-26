@@ -20,10 +20,13 @@
 //! to be compared — and a fuzzer that cannot connect a load to a call is worth
 //! less than the tidiness costs.
 //!
-//! Memory is exercised through pointers: every function takes a pointer into
-//! the caller's array and owns an array of its own, reads and writes go
-//! through indexing or pointer arithmetic, and a function may hand either
-//! array on to an earlier function.
+//! Memory is exercised through pointers: every function takes two pointers
+//! into the caller's arrays and owns an array of its own, reads and writes go
+//! through indexing or pointer arithmetic, and a function may hand any of them
+//! on to an earlier function. The two arguments are slices of one array as
+//! often as not, at any shift the array allows, so a callee sees every
+//! relation a no-alias fact has to tell apart: the same range, a partial
+//! overlap, and disjoint ranges.
 
 const INT_MAX: i64 = 2_147_483_647;
 
@@ -34,7 +37,8 @@ const VALUE_BOUND: i64 = 10_000;
 /// Array length used throughout.
 const ARRAY_LEN: usize = 8;
 /// How far into an array a pointer passed to a function may start, so that the
-/// callee's masked indices stay inside the array.
+/// callee's masked indices stay inside the array. At the far end the range the
+/// callee reaches is disjoint from the one at the near end.
 const POINTER_SHIFT: i64 = 4;
 /// Mask on indices through a passed pointer: `POINTER_SHIFT + 3 < ARRAY_LEN`.
 const POINTER_MASK: usize = 3;
@@ -191,7 +195,7 @@ impl Generator {
         let mut out = String::from("#include <stdio.h>\n\n");
         for function in &self.functions {
             let name = &function.name;
-            out.push_str(&format!("int {name}(int *p, int a, int b);\n"));
+            out.push_str(&format!("int {name}(int *p, int *q, int a, int b);\n"));
         }
         out.push('\n');
         for function in &self.functions {
@@ -201,17 +205,19 @@ impl Generator {
         out
     }
 
-    /// A function of a pointer and two integers returning a bounded value. It
-    /// owns an array of its own and may call earlier functions, handing them
-    /// either array.
+    /// A function of two pointers and two integers returning a bounded value.
+    /// It owns an array of its own and may call earlier functions, handing them
+    /// any array in scope.
     fn function_body(&mut self) -> String {
         let mut scope = Scope::new();
         scope.push("a".into(), VALUE_BOUND);
         scope.push("b".into(), VALUE_BOUND);
-        scope.arrays.push(Array {
-            name: "p".into(),
-            mask: POINTER_MASK,
-        });
+        for name in ["p", "q"] {
+            scope.arrays.push(Array {
+                name: name.into(),
+                mask: POINTER_MASK,
+            });
+        }
         let mut body = self.array_declaration("loc");
         scope.arrays.push(Array {
             name: "loc".into(),
@@ -222,7 +228,7 @@ impl Generator {
         let result = self.expr(&scope, VALUE_BOUND, 0);
         let name = format!("f{}", self.functions.len());
         format!(
-            "int {name}(int *p, int a, int b) {{\n{body}    return {};\n}}\n\n",
+            "int {name}(int *p, int *q, int a, int b) {{\n{body}    return {};\n}}\n\n",
             result.text
         )
     }
@@ -237,18 +243,27 @@ impl Generator {
         )
     }
 
-    /// A call to `callee`, passing one of the arrays in scope — shifted along
-    /// where it is the function's own — and two bounded integers.
+    /// A call to `callee`, passing two of the arrays in scope and two bounded
+    /// integers.
     fn call(&mut self, scope: &Scope, callee: &str) -> String {
-        let pointer = match scope.pick_array(&mut self.rng) {
-            Some(array) if array.mask == POINTER_MASK => array.name.clone(),
-            Some(array) => format!("{} + {}", array.name, self.rng.range(0, POINTER_SHIFT)),
-            None => "arr".to_string(),
-        };
+        let first = self.pointer_argument(scope);
+        let second = self.pointer_argument(scope);
         let args: Vec<String> = (0..2)
             .map(|_| self.expr(scope, VALUE_BOUND, 1).text)
             .collect();
-        format!("{callee}({pointer}, {})", args.join(", "))
+        format!("{callee}({first}, {second}, {})", args.join(", "))
+    }
+
+    /// One pointer argument: an array in scope, shifted along where it is the
+    /// function's own. An array the caller was handed is passed as it stands —
+    /// shifting it further would take the callee past the end of the array it
+    /// came from.
+    fn pointer_argument(&mut self, scope: &Scope) -> String {
+        match scope.pick_array(&mut self.rng) {
+            Some(array) if array.mask == POINTER_MASK => array.name.clone(),
+            Some(array) => format!("{} + {}", array.name, self.rng.range(0, POINTER_SHIFT)),
+            None => "arr".to_string(),
+        }
     }
 
     fn main_body(&mut self) -> String {

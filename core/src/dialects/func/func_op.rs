@@ -68,6 +68,19 @@ impl FuncOpBuilder {
         )
     }
 
+    pub fn noalias(self, arguments: &[usize]) -> Self {
+        self.attr(
+            "noalias",
+            tir::attributes::AttributeValue::Array(
+                arguments
+                    .iter()
+                    .map(|&argument| tir::attributes::AttributeValue::UInt(argument as u64))
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        )
+    }
+
     pub fn argument_alignments(self, alignments: &[u64]) -> Self {
         self.attr(
             "argument_alignments",
@@ -102,6 +115,12 @@ impl FuncOp {
 
     pub fn argument_alignments(&self) -> Vec<u64> {
         super::argument_alignments(self)
+    }
+
+    /// The parameters the caller guarantees name memory nothing else the
+    /// function reaches names: a `restrict`-qualified pointer, by index.
+    pub fn noalias_arguments(&self) -> Vec<usize> {
+        super::noalias_arguments(self)
     }
 }
 
@@ -172,6 +191,7 @@ impl FuncOp {
             fmt.write(" result_address")?;
         }
         super::print_argument_alignments(fmt, &self.argument_alignments())?;
+        super::print_noalias_arguments(fmt, &self.noalias_arguments())?;
 
         tir::region_format::print_op_region(fmt, &context, self, 0)?;
 
@@ -238,6 +258,7 @@ impl FuncOp {
         };
         let result_address = parser.parse_token("result_address");
         let argument_alignments = super::parse_argument_alignments(parser, context)?;
+        let noalias = super::parse_noalias_arguments(parser, context)?;
 
         // Parse body region { ... }
         let block_arg_types: Vec<tir::TypeId> = block_args.iter().map(tir::Value::ty).collect();
@@ -255,6 +276,9 @@ impl FuncOp {
         if let Some(argument_alignments) = argument_alignments {
             builder = builder.attr("argument_alignments", argument_alignments);
         }
+        if let Some(noalias) = noalias {
+            builder = builder.attr("noalias", noalias);
+        }
         if is_private {
             builder = builder.attr(
                 "sym_visibility",
@@ -270,6 +294,7 @@ impl tir::Verifiable for FuncOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         super::verify_argument_alignments(self, self.body().arguments().len(), "function")?;
         let parameters: Vec<_> = self.body().arguments().iter().map(tir::Value::ty).collect();
+        super::verify_noalias_arguments(self, context, &parameters)?;
         let expected = tir::builtin::FnType::new(context, &parameters, self.ret_type());
         if context.get_value(self.fn_value()).ty() != expected {
             return Err(Error::VerificationError(format!(

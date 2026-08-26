@@ -1,0 +1,25 @@
+// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+
+// The `restrict` counterpart of `may_alias_parameter_kept`: the qualifier says
+// the write through the other parameter cannot be a read of this one, so the
+// two parameters are two memories and the first write is overwritten by the
+// third with nothing observing it in between.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) noalias [0, 1] {
+    ptr.store %2, %0
+    ptr.store %2, %1
+    ptr.store %3, %0
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NEXT: state.entry_state
+// CHECK-NEXT: state.entry_state
+// CHECK-NEXT: state.entry_state
+// CHECK-NEXT: ptr.store %2, %1
+// CHECK-NEXT: ptr.store %3, %0

@@ -1,0 +1,20 @@
+// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+
+// Without the qualifier two parameters may name the same memory, so both
+// accesses sit on the one conservative chain and the store is ordered after the
+// load that observes it.
+
+module {
+  %fn_axpy = func.func @axpy(%0: !ptr.p, %1: !ptr.p) {
+    %2 = ptr.load %1 : !i32
+    ptr.store %2, %0
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @axpy
+// CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[ENTRY]] -> %[[READ:[0-9]+]])
+// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[READ]] -> %[[WRITE:[0-9]+]])
+// CHECK-NEXT: func.return state(%[[WRITE]])

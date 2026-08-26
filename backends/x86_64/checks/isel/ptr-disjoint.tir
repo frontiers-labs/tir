@@ -1,0 +1,24 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// The no-alias fact is mid-end vocabulary: the backend prologue turns it into
+// the range check it stands for, and that selects like any other compare.
+
+#data_layout = {types = {i1 = {abi = 8, size = 1}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %f = func.func @f(%0: !ptr.p, %1: !ptr.p, %2: !i64) -> !i64 {
+    %3 = ptr.disjoint %0, %2, %1, %2 : !i1
+    %4 = extui %3 : !i64
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "f"
+// CHECK-NEXT: .add
+// CHECK-NEXT: .cmp
+// CHECK-NEXT: .setae{{.*}} {dst = %[[BEFORE:[0-9]+]]
+// CHECK-NEXT: .add
+// CHECK-NEXT: .cmp
+// CHECK-NEXT: .setae{{.*}} {dst = %[[AFTER:[0-9]+]]
+// CHECK-NEXT: .or {dst = %{{[0-9]+}}:GPR, dst_tied = %[[BEFORE]]{{.*}}src = %[[AFTER]]

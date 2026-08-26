@@ -1,0 +1,20 @@
+// RUN: tir opt --pass lower-ptr-disjoint --verify %s | filecheck %s
+
+// The backend has no instruction for the fact, so at the boundary the op
+// becomes the unsigned range check it stands for.
+
+module {
+  %fn_f = func.func @f(%0: !ptr.p, %1: !ptr.p, %2: !i64) -> !i1 {
+    %3 = ptr.disjoint %0, %2, %1, %2 : !i1
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[A:[0-9]+]]: !ptr.p, %[[B:[0-9]+]]: !ptr.p, %[[N:[0-9]+]]: !i64)
+// CHECK-NEXT: %[[AEND:[0-9]+]] = ptr.ptradd %[[A]], %[[N]] : !ptr.p
+// CHECK-NEXT: %[[BEFORE:[0-9]+]] = ptr.cmp %[[AEND]], %[[B]] {predicate = "ule"} : !i1
+// CHECK-NEXT: %[[BEND:[0-9]+]] = ptr.ptradd %[[B]], %[[N]] : !ptr.p
+// CHECK-NEXT: %[[AFTER:[0-9]+]] = ptr.cmp %[[BEND]], %[[A]] {predicate = "ule"} : !i1
+// CHECK-NEXT: %[[R:[0-9]+]] = ori %[[BEFORE]], %[[AFTER]] : !i1
+// CHECK-NEXT: func.return %[[R]]

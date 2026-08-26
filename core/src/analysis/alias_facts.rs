@@ -18,6 +18,7 @@ use crate::analysis::escape_facts::is_pointer;
 use crate::analysis::solver::{FactDomain, Facts, Lattice, solve};
 use crate::analysis::{Analysis, AnalysisManager, ConstantFacts, DefUse, Escape, EscapeFacts};
 use crate::builtin::GlobalOp;
+use crate::func::FuncOp;
 use crate::ptr::PtrAddOp;
 use crate::{Context, OpId, PromotableAllocation, ValueId};
 
@@ -28,19 +29,27 @@ pub enum Base {
     Alloca(ValueId),
     /// A global, named by the module-level value declaring it.
     Global(ValueId),
-    /// A pointer the function was entered with.
-    Param(ValueId),
+    /// A pointer the function was entered with. `noalias` where the caller
+    /// guarantees nothing else the function reaches names that memory —
+    /// `restrict` in C.
+    Param { pointer: ValueId, noalias: bool },
 }
 
 impl Base {
     /// Whether two objects are known to be different memory. Two parameters, or
     /// a parameter and a global, may name the same memory; a stack allocation
-    /// is fresh, so nothing else is it.
+    /// is fresh and a `noalias` parameter is guaranteed unaliased, so nothing
+    /// else is either.
     pub fn distinct(self, other: Base) -> bool {
         self != other
-            && (matches!(self, Base::Alloca(_))
-                || matches!(other, Base::Alloca(_))
+            && (self.unshared()
+                || other.unshared()
                 || matches!((self, other), (Base::Global(_), Base::Global(_))))
+    }
+
+    /// Whether the object is nothing else the function names.
+    fn unshared(self) -> bool {
+        matches!(self, Base::Alloca(_) | Base::Param { noalias: true, .. })
     }
 }
 
@@ -204,6 +213,7 @@ impl FactDomain for Derivation<'_> {
             .regions()
             .first()
             .map(|&body| self.context.get_region(body).block_ids()[0]);
+        let noalias = self.noalias_parameters();
         for region in crate::passes::regions_under(self.context, self.root) {
             for block in self.context.get_region(region).iter(self.context.clone()) {
                 let parameters = Some(block.id()) == entry;
@@ -213,7 +223,10 @@ impl FactDomain for Derivation<'_> {
                         continue;
                     }
                     let fact = if parameters {
-                        object(Base::Param(pointer))
+                        object(Base::Param {
+                            pointer,
+                            noalias: noalias.contains(&pointer),
+                        })
                     } else {
                         PointerFact::Overdefined
                     };
@@ -266,6 +279,19 @@ impl FactDomain for Derivation<'_> {
 }
 
 impl Derivation<'_> {
+    /// The entry arguments the λ declares free of aliases.
+    fn noalias_parameters(&self) -> Vec<ValueId> {
+        let Some(function) = self.context.get_op(self.root).as_op::<FuncOp>() else {
+            return Vec::new();
+        };
+        let arguments = function.body().arguments();
+        function
+            .noalias_arguments()
+            .into_iter()
+            .filter_map(|index| arguments.get(index).map(|argument| argument.id()))
+            .collect()
+    }
+
     fn is_global(&self, value: ValueId) -> bool {
         self.context
             .get_value(value)

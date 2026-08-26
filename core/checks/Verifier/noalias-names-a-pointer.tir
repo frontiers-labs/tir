@@ -1,0 +1,10 @@
+// RUN: not tir opt --verify %s
+
+// Only a pointer can be free of aliases.
+
+module {
+  %fn_f = func.func @f(%0: !i32) noalias [0] {
+    func.return
+  }
+  module_end
+}

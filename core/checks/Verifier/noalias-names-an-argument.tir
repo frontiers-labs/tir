@@ -1,0 +1,10 @@
+// RUN: not tir opt --verify %s
+
+// A noalias entry names an argument by index; there is no argument 1 here.
+
+module {
+  %fn_f = func.func @f(%0: !ptr.p) noalias [1] {
+    func.return
+  }
+  module_end
+}

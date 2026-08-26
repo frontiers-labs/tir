@@ -189,6 +189,9 @@ struct AbiParameter {
     grouped: bool,
     indirect: bool,
     alignment: u64,
+    /// The source declared it `restrict`: nothing else the function reaches
+    /// names the memory it points at.
+    noalias: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -325,6 +328,24 @@ impl Signature {
             args.push(VarArgsType::new(context));
         }
         args
+    }
+
+    /// The indices of the arguments a `restrict` parameter became, matching
+    /// [`Signature::argument_types`] slot for slot.
+    fn noalias_arguments(&self) -> Vec<usize> {
+        let mut arguments = Vec::new();
+        let mut index = usize::from(self.ret.indirect);
+        for parameter in &self.params {
+            if parameter.noalias {
+                arguments.push(index);
+            }
+            index += if parameter.grouped {
+                1
+            } else {
+                parameter.pieces.len()
+            };
+        }
+        arguments
     }
 
     fn argument_alignments(&self) -> Vec<u64> {
@@ -915,6 +936,7 @@ fn classify_abi_parameter(
             grouped: true,
             indirect: false,
             alignment: 1,
+            noalias: false,
         };
     }
     if riscv_pieces.is_none()
@@ -933,6 +955,7 @@ fn classify_abi_parameter(
             grouped: false,
             indirect: true,
             alignment: 1,
+            noalias: false,
         };
     }
     let composite_pieces = hfa_pieces
@@ -999,6 +1022,9 @@ fn classify_abi_parameter(
         grouped,
         indirect: false,
         alignment,
+        // Only a pointer can be qualified `restrict`, and a pointer is one
+        // ungrouped piece, so the guarantee lands on one argument.
+        noalias: ty.qualifiers.is_restrict(),
     }
 }
 
@@ -1420,6 +1446,10 @@ fn lower_function(
     let argument_alignments = signature.argument_alignments();
     if argument_alignments.iter().any(|&alignment| alignment > 1) {
         func_builder = func_builder.argument_alignments(&argument_alignments);
+    }
+    let noalias = signature.noalias_arguments();
+    if !noalias.is_empty() {
+        func_builder = func_builder.noalias(&noalias);
     }
     let func_op = func_builder.build();
     let indirect_return = signature.ret.indirect.then(|| param_ids[0]);

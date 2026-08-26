@@ -17,7 +17,7 @@ use crate::backend::TargetMachine;
 use crate::backend::lower::OpLoweringPass;
 use crate::passes::{
     CheckUniqueSymbolsPass, DeadCodeEliminationPass, EraseStatePass, LowerMemoryIntrinsicsPass,
-    MaterializeSymbolAddressesPass, RestructurePass,
+    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, RestructurePass,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +118,13 @@ fn module_prologue() -> PassManager {
     // already be a machine symbol, which is not IR erasure can be checked
     // against. It goes ahead of the intrinsic lowering, which expands a `memcpy`
     // into accesses no chain would reach.
-    pm.nest::<FuncOp>().add_pass(EraseStatePass::new());
+    {
+        let functions = pm.nest::<FuncOp>();
+        functions.add_pass(EraseStatePass::new());
+        // A no-alias fact is mid-end vocabulary too: no machine has an
+        // instruction for it, so it becomes the range check it stands for.
+        functions.add_pass(LowerPtrDisjointPass::new());
+    }
     // Object symbols are unique by name, so overloads must already be mangled.
     pm.add_pass(CheckUniqueSymbolsPass::new());
     pm.add_pass(LowerMemoryIntrinsicsPass::new());

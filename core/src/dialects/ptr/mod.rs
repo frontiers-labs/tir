@@ -18,8 +18,9 @@ use crate::Any as AnyConstraint;
 
 pub mod ops {
     pub use super::{
-        AllocaOp, CmpOp, CmpOpBuilder, LoadOp, MemcpyOp, MemsetOp, NullOp, PtrAddOp, PtrDiffOp,
-        StoreOp, alloca, cmp, load, memcpy, memset, null, ptradd, ptrdiff, store,
+        AllocaOp, CmpOp, CmpOpBuilder, DisjointOp, LoadOp, MemcpyOp, MemsetOp, NullOp, PtrAddOp,
+        PtrDiffOp, StoreOp, alloca, cmp, disjoint, load, memcpy, memset, null, ptradd, ptrdiff,
+        store,
     };
 }
 
@@ -32,6 +33,7 @@ dialect! {
             NullOp,
             PtrAddOp,
             PtrDiffOp,
+            DisjointOp,
             LoadOp,
             StoreOp,
             MemcpyOp,
@@ -350,6 +352,50 @@ operation! {
             result: "crate::builtin::IntegerType",
         },
         sem: "(set result (sub lhs rhs))",
+    }
+}
+
+// `lhs + lhs_size <= rhs || rhs + rhs_size <= lhs`, the addresses unsigned: the
+// two ranges share no byte, provided neither wraps past the end of the address
+// space, which is what the producer of the op has to know. Where a range is
+// empty the answer is the formula's, not emptiness's — an empty range inside
+// another is not reported disjoint.
+//
+// The no-alias fact in IR form: whoever proves it — a `restrict` qualifier, a
+// runtime range check guarding a copy of a loop — emits this op, and the alias
+// analysis reads it by name rather than pattern-matching a tree of compares.
+// It reads addresses, not memory, so it is pure and takes no state.
+operation! {
+    DisjointOp {
+        name: "disjoint",
+        dialect: "ptr",
+        verifier: "true",
+        operands: O {
+            lhs: "crate::ptr::PtrType",
+            lhs_size: "crate::builtin::IntegerType",
+            rhs: "crate::ptr::PtrType",
+            rhs_size: "crate::builtin::IntegerType",
+        },
+        results: R {
+            result: "crate::Integer<1>",
+        },
+        sem: "(set result (or (ule (add lhs lhs_size) rhs) (ule (add rhs rhs_size) lhs)))",
+    }
+}
+
+impl tir::Verifiable for DisjointOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        let [_, lhs_size, _, rhs_size] = self.operands()[..] else {
+            return Err(Error::VerificationError(
+                "ptr.disjoint takes two addresses and their sizes".to_string(),
+            ));
+        };
+        if context.get_value(lhs_size).ty() != context.get_value(rhs_size).ty() {
+            return Err(Error::VerificationError(
+                "ptr.disjoint sizes must have one type".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 

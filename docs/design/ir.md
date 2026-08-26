@@ -320,6 +320,16 @@ promotion rewrites §7.2):
   out of. Where a function holds such an access, only the slots no such pointer
   can reach keep chains of their own; every other object shares the
   **conservative chain**, and so does the unresolved access.
+- Two parameters may name one memory, so both sit on the conservative chain —
+  unless the λ declares one free of aliases: `func.func @f(…) noalias [0]`, what
+  C's `restrict` becomes. Nothing else the function names is that object, so it
+  keeps a chain of its own. `ptr.disjoint %a, %na, %b, %nb : !i1` is the same
+  fact where the proof is a runtime check rather than a qualifier: it is
+  `a+na <= b || b+nb <= a` over unsigned addresses, which says `[a, a+na)` and
+  `[b, b+nb)` share no byte as long as neither range wraps past the end of the
+  address space — the producer's obligation, not the op's. It reads addresses,
+  not memory, so it is pure and takes no state, and the backend prologue lowers
+  it to the compares it stands for.
 - An object that would be the whole of *exposed* memory as far as the order goes
   keeps no chain of its own: it would be named twice, once as itself and once as
   the conservative chain a call and a return still name, for no ordering gained.
