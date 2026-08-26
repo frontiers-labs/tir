@@ -9,7 +9,7 @@ use crate::analysis::slots::{collect_slots, load_result};
 use crate::analysis::{AnalysisManager, DefUse, EscapeFacts};
 use crate::builtin::StateType;
 use crate::func::FuncOp;
-use crate::state::EntryStateOp;
+use crate::state::{EntryStateOp, JoinOp, SplitOp};
 use crate::{
     BlockId, Context, MemoryRead, OpId, OperationRef, Pass, PassError, PassTarget, RegionId,
     Rewriter, TypeId,
@@ -50,6 +50,12 @@ impl Pass for EraseStatePass {
         };
         let state = StateType::new(context);
         let blocks = blocks_under(context, body);
+        // State exists only between threading and here, so a function that carries
+        // none is left alone: what the chain says about a slot is not something to
+        // guess at from the operations alone.
+        if !carries_state(context, &blocks, state) {
+            return Ok(());
+        }
         let escapes = analyses.get::<EscapeFacts>(context, op.op().id);
         // Read off the threaded chain, before it is dropped.
         let unobserved = unobserved_stores(context, &escapes, &blocks);
@@ -65,7 +71,12 @@ impl Pass for EraseStatePass {
         let mut roots = Vec::new();
         for &block in &blocks {
             for op_id in context.get_block(block).op_ids() {
-                if context.get_op(op_id).is::<EntryStateOp>() {
+                // The ops that exist only to name a state go with it.
+                let instance = context.get_op(op_id);
+                if instance.is::<EntryStateOp>()
+                    || instance.is::<JoinOp>()
+                    || instance.is::<SplitOp>()
+                {
                     roots.push((block, op_id));
                     continue;
                 }
@@ -86,6 +97,21 @@ impl Pass for EraseStatePass {
 
         sweep_dead_slots(context, rewriter, &escapes, op.op().id, &blocks)
     }
+}
+
+/// Whether any operation names a memory state.
+fn carries_state(context: &Context, blocks: &[BlockId], state: TypeId) -> bool {
+    blocks.iter().any(|&block| {
+        context.get_block(block).op_ids().iter().any(|&op_id| {
+            let instance = context.get_op(op_id);
+            let names = |values: &[crate::ValueId]| {
+                values
+                    .iter()
+                    .any(|&value| context.get_value(value).ty() == state)
+            };
+            names(&instance.operands()) || names(&instance.results())
+        })
+    })
 }
 
 /// The stores no read of their slot can observe. A slot whose address never

@@ -24,7 +24,7 @@ use tir::{
     AnalysisManager, BlockId, Conditional, Context, EntryGuard, GuardedLoop, OpHandle, OpId,
     Operation, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, Terminator, TypeId,
     ValueId,
-    analysis::{DefUse, DominatorTree},
+    analysis::{DefUse, DominatorTree, scopes},
     graph::{Dag, MutDag, NodeId, OperandConstraint},
     sem::{
         EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
@@ -734,13 +734,19 @@ impl FunctionSelection {
     /// placed after that operation spells the class only for what follows the
     /// region, never for the region itself — the arms of a gate cannot read the
     /// name the gate publishes.
-    fn region_ask(&self, block: BlockId, class: Id) -> Option<OpId> {
+    fn region_ask(&self, context: &Context, block: BlockId, class: Id) -> Option<OpId> {
         self.base_members(class)
             .filter_map(|member| self.class_values.get(&member))
             .flatten()
-            .filter(|value| self.value_block.get(value) == Some(&Some(block)))
-            .filter_map(|value| self.region_use.get(value).copied())
-            .min_by_key(|op| self.op_position[op])
+            .filter_map(|value| match self.value_block.get(value) {
+                Some(&Some(held)) if held == block => self.region_use.get(value).copied(),
+                // A member of the class inside a region hanging off this block is
+                // read where the operation holding that region is: a name that
+                // operation publishes cannot answer it, so the ask goes ahead of it.
+                Some(&Some(held)) => scopes::holder_in(context, block, held),
+                _ => None,
+            })
+            .min_by_key(|op| self.op_position.get(op).copied().unwrap_or(usize::MAX))
     }
 
     /// Whether a definition of `def` in `def_block` has run wherever `block` runs.
@@ -2204,7 +2210,7 @@ impl InstructionSelectPass {
             if destinations.contains_key(&class) {
                 continue;
             }
-            let ask = fs.region_ask(block_id, class).unwrap_or(consumer);
+            let ask = fs.region_ask(context, block_id, class).unwrap_or(consumer);
             if let Some(destination) = fs
                 .resolve_binding(dom, context, class, block_id, ask, false)
                 .value

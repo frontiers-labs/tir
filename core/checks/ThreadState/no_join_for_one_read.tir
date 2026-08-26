@@ -1,0 +1,22 @@
+// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+
+// A join of one state is that state, so a single read between two writes is a
+// plain edge and no join is emitted.
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %1
+    %2 = ptr.load %1 : !i32
+    ptr.store %2, %1
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NOT: state.join
+// CHECK: ptr.store %0, %{{[0-9]+}} state(%{{[0-9]+}} -> %[[A1:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %[[R:[0-9]+]])
+// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[R]] -> %{{[0-9]+}})
+// CHECK-NOT: state.join

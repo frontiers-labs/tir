@@ -1,0 +1,30 @@
+// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+
+// The dead write observed a read's state, so erasing it leaves the reads that
+// forked off what it published forking off that read's state instead. Reads
+// observe, so any number of them may.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_f = func.func @f(%0: !i64, %1: !i32, %2: !i32) -> !i64 {
+    %3 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
+    ptr.store %0, %3
+    %4 = ptr.load %3 : !i64
+    ptr.store %1, %3
+    %5 = constant {value = 4} : !i64
+    %6 = ptr.ptradd %3, %5 : !ptr.p<!i64>
+    %7 = ptr.load %6 : !i32
+    %8 = ptr.load %6 : !i32
+    ptr.store %2, %3
+    %9 = addi %7, %8 : !i32
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NOT: ptr.store %1,
+// CHECK: %[[R:[0-9]+]] = ptr.load %3 : !i64 state(%{{[0-9]+}} -> %[[RS:[0-9]+]])
+// CHECK: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[RS]] -> %{{[0-9]+}})
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[RS]] -> %{{[0-9]+}})

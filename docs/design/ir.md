@@ -283,55 +283,88 @@ versus original CFGs through the JIT.
 ## 6. Memory: explicit state
 
 Memory identity and ordering are def-use edges over `!state` values, in the
-IR itself. No pass recomputes chains; no seeder invents serial numbers.
+IR itself. No pass recomputes chains; no seeder invents serial numbers. The
+edges are the *whole* memory dependence relation of the middle-end: order is
+derived from them, not the other way round (§6.3).
 
 ### 6.1 Ports
 
 | Op | State ports |
 |---|---|
 | `ptr.alloca` | *produces* the initial state of its slot's chain (alongside the pointer) |
-| `ptr.load` | *takes* a state operand; produces no state — a read leaves the chain |
-| `ptr.store`, `ptr.memset`, `ptr.memcpy` | take state, produce state |
-| `func.call` | takes and produces the conservative chain, as a trailing operand/result **excluded from the callee signature** |
-| `func.return` | optional trailing state operand: the function's final conservative state |
-| entry-state op (nullary) | produces the conservative chain's initial state at region entry |
+| `ptr.load` | *takes* a state operand and produces one: the memory it observed, which the join closing its fork names |
+| `ptr.store`, `ptr.memset` | take state, produce state |
+| `ptr.memcpy`, `func.call` | take and produce the one state every chain they may touch was merged into |
+| `func.return` | optional trailing state operand: every chain the caller can reach, merged |
+| `state.entry_state` (nullary) | produces one chain's initial state at region entry, one op per chain |
+| `state.join` | takes any number of states, produces the memory they merge into |
+| `state.split` | takes one state, produces one name per chain carrying on from it |
 
-The conservative chain never enters function *signatures*: a call's arguments
-must be exactly what the callee's `!fn` type takes, and ABI lowering maps
-region arguments to registers — a state argument would break both.
-Hence the entry-state op / trailing-return-operand design. State is erased
-before anything ABI-relevant happens; it never survives into machine IR.
+No chain enters a function *signature*: a call's arguments must be exactly what
+the callee's `!fn` type takes, and ABI lowering maps region arguments to
+registers — a state argument would break both. Hence the entry-state op and the
+trailing return operand. State is erased at the backend boundary, before
+anything ABI-relevant happens; it never survives into machine IR.
 
 ### 6.2 Chains
 
-The `thread-state` pass materializes chains, using the shared escape
-classifier (one implementation, also the gate for promotion rewrites §7.2):
+The `thread-state` pass materializes chains, using `AliasFacts` for object
+identity and the shared escape classifier (one implementation, also the gate for
+promotion rewrites §7.2):
 
-- Each non-escaping allocation gets **its own chain**, threaded through
-  every access to that slot, flowing through structured ops as ordinary
-  carried/yielded `!state` values.
-- Everything else — escaping slots, globals, unknown pointers, calls —
-  shares the **conservative chain**.
+- **One chain per object.** Every base object the facts tell apart from all the
+  others the function names — a global, a parameter, a stack slot — is a memory
+  of its own, threaded through every access to it and flowing through structured
+  ops as ordinary carried/yielded `!state` values.
+- A pointer the facts cannot read back may name any object they cannot rule it
+  out of. Where a function holds such an access, only the slots no such pointer
+  can reach keep chains of their own; every other object shares the
+  **conservative chain**, and so does the unresolved access.
+- An object that would be the whole of *exposed* memory as far as the order goes
+  keeps no chain of its own: it would be named twice, once as itself and once as
+  the conservative chain a call and a return still name, for no ordering gained.
+- A call, a `memcpy` and a `return` touch every object the outside can reach.
+  Those chains cross such an op through its single port: `state.join` merges them
+  into the state it observes, `state.split` names each of them again in the state
+  it leaves. A slot whose address never left the function is not among them.
 - Disjoint chains never appear in each other's terms; their independence is
-  structural (law S3), not something an alias analysis rediscovers.
+  structural (law S3), not something an alias analysis rediscovers downstream.
 
 ### 6.3 Ordering semantics
 
-The schedule is the region's op order. The state DAG orders writes against
-reads of the *same chain* and deliberately does **not** order a load against
-a later store (a read leaves the chain it read). Destruction and emission
-preserve region order for memory ops; state edges add constraints, they do
-not replace the schedule.
+Memory order **is** the state DAG. A region's op order is one linearization of
+it: SSA already forces def-before-use, so any order the edges admit is the same
+program, and a pass may re-linearize under them.
+
+Reads do not serialize. After a write — or an entry state, an allocation, a join,
+a carried argument — any number of reads observe the state it left. That is a
+*fork*: the reads are ordered against the write and against nothing else,
+including each other. The next write, call, export or carried port on that chain
+takes `state.join` of what the fork left, and that join edge is the WAR
+dependence. RAW and WAW are the chain edge.
+
+That the edges are complete is checked rather than argued: the `shuffle-state`
+pass re-linearizes every block by a seeded random topological order of the value
+and state DAG, and the differential fuzzer runs a pipeline containing it. A
+missing edge is a divergence with a reproducer.
 
 ### 6.4 Discipline (verified)
 
-- Every memory-touching op's state operand must be a `!state` value of the
-  chain discipline above; the verifier checks well-formedness (single use
-  per state value along a chain, chains never cross).
-- A store is *live* iff its state result reaches an exported state (a region
-  result, the return operand, or an op the analysis does not model).
-  Dead-store elimination acts on this definition inside the e-graph view
-  (law S2) — the standalone DCE pass keeps stores conservative.
+- A `!state` value names the memory at one point, so at most one operation may
+  *change* it: a second would describe two futures for one memory. Everything
+  else naming it observes it — a read, or a `state.join`, which names the memory
+  its inputs merge into — and any number of those may. One operation naming a
+  state twice observes it once: joining a memory with itself is that memory.
+- The check is structural, so it cannot see chains. That every access of a chain
+  is in the cone of the state its next write takes is what `shuffle-state` is
+  for; the verifier is not that net.
+- A state crossing a region boundary does so as a carried argument, which is a
+  fresh value, so the check is one walk of the whole tree.
+- A read's published state *is* the state it observed, so a transform erasing a
+  read hands its readers — joins included — the state it took.
+- A store is *dead* iff the state it published reaches only writes covering its
+  extent: the chain is the barrier, and `dse` asks `AliasFacts` only what two
+  addresses are. Law S2 is the same statement inside the e-graph view.
 
 ### 6.5 The state laws
 

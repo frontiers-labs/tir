@@ -224,28 +224,40 @@ pub trait Operation: 'static + Send + Sync + Any + Verifiable + OpDefVerifiable 
 
 pub fn verify_op_tree(context: &Context, op_id: OpId) -> Result<(), Error> {
     verify_op_tree_ops(context, op_id)?;
-    verify_state_linearity(context, op_id)
+    verify_state_forks(context, op_id)
 }
 
-/// Checks that memory state stays a linear chain: a `!state` value names the memory
-/// at one point in the program, so consuming it twice would describe two futures for
-/// the same memory. Loop-carried state crosses a region boundary as a carried
-/// argument, which is a fresh value, so a single walk of the whole tree suffices.
-fn verify_state_linearity(context: &Context, op_id: OpId) -> Result<(), Error> {
+/// Checks the fork/join discipline memory state follows.
+///
+/// A `!state` value names the memory at one point in the program, so at most one
+/// operation may *change* it: a second would describe two futures for one memory.
+/// Everything else naming it observes it — a read, which leaves memory as it found
+/// it, or a [`crate::state::JoinOp`], which names the memory its inputs merge into
+/// — and any number of those may, unordered against each other. One operation
+/// naming a state twice observes it once: joining a memory with itself is that
+/// memory.
+///
+/// The check is structural, so it cannot see chains: that every access of a chain
+/// is in the cone of the state its next write takes is what the `shuffle-state`
+/// fuzzer variant is for, not this.
+///
+/// State crossing a region boundary does so as a carried argument, which is a
+/// fresh value, so a single walk of the whole tree suffices.
+fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), Error> {
     let state = crate::builtin::StateType::new(context);
-    let mut consumed = std::collections::HashSet::new();
+    let mut consumers: std::collections::HashMap<crate::ValueId, Vec<(OpId, bool)>> =
+        std::collections::HashMap::new();
     let mut worklist = vec![op_id];
     while let Some(op_id) = worklist.pop() {
         let instance = context.get_op(op_id);
+        let observes = observes_only(&instance);
         for operand in instance.operands() {
             if !context.has_value(operand) || context.get_value(operand).ty() != state {
                 continue;
             }
-            if !consumed.insert(operand) {
-                return Err(Error::VerificationError(format!(
-                    "state value %{} is used more than once",
-                    operand.number()
-                )));
+            let taken = consumers.entry(operand).or_default();
+            if !taken.iter().any(|(taker, _)| *taker == op_id) {
+                taken.push((op_id, observes));
             }
         }
         for region_id in instance.regions().iter().rev() {
@@ -254,7 +266,24 @@ fn verify_state_linearity(context: &Context, op_id: OpId) -> Result<(), Error> {
             }
         }
     }
+    for (value, taken) in &consumers {
+        if taken.len() > 1 && !taken.iter().all(|(_, observes)| *observes) {
+            return Err(Error::VerificationError(format!(
+                "state value %{} is both observed and changed",
+                value.number()
+            )));
+        }
+    }
     Ok(())
+}
+
+/// Whether `op` leaves the memory it names as it found it. An operation declaring
+/// both memory interfaces writes the extent it reads, so it is no observer.
+fn observes_only(op: &OpHandle) -> bool {
+    if op.is::<crate::state::JoinOp>() {
+        return true;
+    }
+    op.has_interface::<dyn crate::MemoryRead>() && !op.has_interface::<dyn crate::MemoryWrite>()
 }
 
 /// Checks that an op wires memory state through ports read off its end: the

@@ -1281,3 +1281,40 @@ int main(void) {
 "#,
     );
 }
+
+/// A `switch` whose arms all leave one value: the e-graph folds the gate to that
+/// value, so the class holding it also holds the gate's own result. Selection must
+/// not answer the class with that result where the class is read inside the gate —
+/// an arm would then yield the name the gate publishes, which is its own future.
+/// This is the shape CoreMark's `core_init_state` dispatch has, and it decided the
+/// wrong case.
+#[test]
+fn switch_fallthrough_dispatch_matches_host_compiler() {
+    if !cc_available() {
+        return;
+    }
+    assert_fcc_matches_host(
+        r#"void run(unsigned n, short seed, int *out) {
+    unsigned next = 0;
+    int k = 0;
+    while (k < (int)n) {
+        out[k++] = (int)next;
+        seed++;
+        switch (seed & 3) {
+            case 0:
+            case 1: next = 4; break;
+            case 2: next = 8; break;
+            case 3: next = 888; break;
+        }
+    }
+}
+int main(void) {
+    int out[16];
+    run(12, 3, out);
+    int sum = 0;
+    for (int i = 0; i < 12; i++) sum = sum * 3 + out[i];
+    return sum & 0x7f;
+}
+"#,
+    );
+}

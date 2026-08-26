@@ -103,9 +103,10 @@ pub fn bisect_pipeline(pipeline: &str, still_diverges: &mut dyn FnMut(&str) -> b
     render(prefix, &passes)
 }
 
-/// Passes that set up and tear down the state threading every pipeline runs
-/// under. Dropping one makes the pipeline invalid rather than smaller.
-pub const STRUCTURAL_PASSES: [&str; 2] = ["thread-state", "erase-state"];
+/// The pass that sets up the state threading every pipeline runs under; the
+/// backend tears it down. Dropping it makes the pipeline invalid rather than
+/// smaller.
+pub const STRUCTURAL_PASSES: [&str; 1] = ["thread-state"];
 
 fn render(prefix: &str, passes: &[&str]) -> String {
     format!("{prefix}({})", passes.join(","))
@@ -159,10 +160,10 @@ mod tests {
 
     #[test]
     fn drops_every_pass_the_divergence_does_not_need() {
-        let pipeline = "func.func(thread-state,instcombine,sccp,dce,instcombine,erase-state)";
+        let pipeline = "func.func(thread-state,instcombine,sccp,dce,instcombine)";
 
         let minimal = bisect_pipeline(pipeline, &mut |candidate| candidate.contains("sccp"));
 
-        assert_eq!(minimal, "func.func(thread-state,sccp,erase-state)");
+        assert_eq!(minimal, "func.func(thread-state,sccp)");
     }
 }

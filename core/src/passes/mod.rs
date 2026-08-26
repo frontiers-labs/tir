@@ -8,6 +8,7 @@ pub mod lower_memory_intrinsics;
 pub mod materialize_symbol_addresses;
 pub mod restructure;
 pub mod sccp;
+pub mod shuffle_state;
 pub mod symbol_uniqueness;
 pub mod thread_state;
 
@@ -19,6 +20,7 @@ pub use lower_memory_intrinsics::LowerMemoryIntrinsicsPass;
 pub use materialize_symbol_addresses::MaterializeSymbolAddressesPass;
 pub use restructure::RestructurePass;
 pub use sccp::SccpPass;
+pub use shuffle_state::ShuffleStatePass;
 pub use symbol_uniqueness::CheckUniqueSymbolsPass;
 pub use thread_state::ThreadStatePass;
 

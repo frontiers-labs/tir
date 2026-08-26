@@ -1,7 +1,8 @@
-// RUN: tir opt --pass dse --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
 
-// A fresh allocation is nothing else, so the write to the second slot is no
-// barrier: the scan walks past it and finds the write that overwrites the first.
+// A fresh allocation is nothing else, so the two slots are two memories: the
+// write to the second is not on the first's chain at all, and the write that
+// overwrites the first is what names the state it published.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
@@ -20,5 +21,5 @@ module {data_layout = #data_layout} {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: ptr.store %0,
-// CHECK: ptr.store %1, %4
-// CHECK-NEXT: ptr.store %2, %3
+// CHECK: ptr.store %1, %4 state(%{{[0-9]+}} -> %{{[0-9]+}})
+// CHECK-NEXT: ptr.store %2, %3 state(%{{[0-9]+}} -> %{{[0-9]+}})

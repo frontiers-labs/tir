@@ -22,7 +22,7 @@ use crate::ptr::PtrAddOp;
 use crate::{Context, OpId, PromotableAllocation, ValueId};
 
 /// The object a pointer was derived from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Base {
     /// A stack allocation, named by the pointer it opens.
     Alloca(ValueId),
@@ -36,7 +36,7 @@ impl Base {
     /// Whether two objects are known to be different memory. Two parameters, or
     /// a parameter and a global, may name the same memory; a stack allocation
     /// is fresh, so nothing else is it.
-    fn distinct(self, other: Base) -> bool {
+    pub fn distinct(self, other: Base) -> bool {
         self != other
             && (matches!(self, Base::Alloca(_))
                 || matches!(other, Base::Alloca(_))
@@ -146,8 +146,10 @@ impl AliasFacts {
         }
     }
 
-    /// A stack allocation nothing but the pointers derived from it can reach.
-    fn is_private(&self, base: Base) -> bool {
+    /// A stack allocation nothing but the pointers derived from it can reach:
+    /// no pointer the analysis cannot read back, and nothing outside the
+    /// function — a call, the caller after a return.
+    pub fn is_private(&self, base: Base) -> bool {
         match base {
             Base::Alloca(slot) => self.escapes.escape(slot) == Escape::Local,
             _ => false,

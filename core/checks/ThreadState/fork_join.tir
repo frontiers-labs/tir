@@ -1,0 +1,31 @@
+// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+
+// Reads do not serialize. Both loads observe the state the first store left, so
+// nothing orders them against each other; the next write on the chain takes the
+// join of what they leave, which is the only edge that orders it after them.
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %1
+    %2 = ptr.load %1 : !i32
+    %3 = ptr.load %1 : !i32
+    %4 = addi %2, %3 : !i32
+    ptr.store %4, %1
+    %5 = ptr.load %1 : !i32
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
+// CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[A:[0-9]+]])
+// CHECK-NEXT: ptr.store %0, %{{[0-9]+}} state(%[[A]] -> %[[A1:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %[[R1:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %[[R2:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
+// CHECK-NEXT: %[[J:[0-9]+]] = state.join %[[R1]], %[[R2]] : !state
+// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[J]] -> %[[A2:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A2]] -> %{{[0-9]+}})
+// CHECK-NEXT: func.return %{{[0-9]+}} state(%[[ENTRY]])

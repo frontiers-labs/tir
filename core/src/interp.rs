@@ -21,7 +21,7 @@ use crate::{
     ptr::{AllocaOp, LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp},
     scf::{BreakOp, ConditionOp, ContinueOp, ForOp, IfOp, SwitchOp, WhileOp, YieldOp},
     sem,
-    state::EntryStateOp,
+    state::{EntryStateOp, JoinOp, SplitOp},
 };
 
 /// A concrete interpreter value: integers of explicit width, floats, tuples,
@@ -805,6 +805,18 @@ impl Interp for TupleGetOp {
 impl Interp for EntryStateOp {
     fn evaluate(&self, _operands: &[Value], _memory: &mut Memory) -> Result<Vec<Value>> {
         Ok(vec![Value::State])
+    }
+}
+
+impl Interp for JoinOp {
+    fn evaluate(&self, _operands: &[Value], _memory: &mut Memory) -> Result<Vec<Value>> {
+        Ok(vec![Value::State])
+    }
+}
+
+impl Interp for SplitOp {
+    fn evaluate(&self, _operands: &[Value], _memory: &mut Memory) -> Result<Vec<Value>> {
+        Ok(vec![Value::State; self.states().len()])
     }
 }
 

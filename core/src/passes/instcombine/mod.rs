@@ -28,8 +28,8 @@ use crate::graph::Dag;
 
 use crate::{
     AnalysisManager, BlockId, Conditional, ConstantLike, Context, EntryGuard, GuardedLoop,
-    LoopLike, MemoryRead, OpHandle, OpId, OpInstance, OperationRef, Pass, PassError, PassTarget,
-    RegionId, Rewriter, TokenScope, TypeId, ValueId, builtin::StateType, func::FuncOp,
+    LoopLike, MemoryRead, MemoryWrite, OpHandle, OpId, OpInstance, OperationRef, Pass, PassError,
+    PassTarget, RegionId, Rewriter, TokenScope, TypeId, ValueId, builtin::StateType, func::FuncOp,
     utils::APInt,
 };
 
@@ -278,12 +278,18 @@ impl Driver<'_> {
         else {
             return Ok(());
         };
-        // A state chain is linear, so handing this op's readers another state is
-        // only sound when the op is erased and the state it consumed is the very
-        // one handed on — its use then moves rather than doubles. A gate keeping
-        // its regions, or a chain named anywhere else, would be consumed twice.
+        // Handing this op's readers another state is only sound when the op is
+        // erased, changes memory, and the state handed on is the very one it
+        // consumed — its use then moves rather than doubles. A gate keeping its
+        // regions, or a chain named anywhere else, would be consumed twice. A
+        // `state.join` is the case that looks sound and is not: it names the memory
+        // after every read of a fork, and the reads it stands for are still there
+        // naming the state before it, so handing that state on would leave the
+        // write taking it unordered against them.
         if ty == StateType::new(self.context)
-            && !(instance.regions().is_empty() && instance.operands().contains(&new_value))
+            && !(instance.regions().is_empty()
+                && instance.has_interface::<dyn MemoryWrite>()
+                && instance.operands().contains(&new_value))
         {
             return Ok(());
         }
@@ -293,6 +299,9 @@ impl Driver<'_> {
         if new_value != value && self.dominates(new_value, value) {
             self.context.replace_value_uses(value, new_value);
             if let Some((_, operand, result)) = state_edge {
+                // A read leaves memory as it found it, so the state it published
+                // *is* the state it observed: whoever named the one names the
+                // other, joins included.
                 self.context.replace_value_uses(result, operand);
             }
             // Only erase a pure value op; an op with regions may have side effects

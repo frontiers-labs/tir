@@ -253,6 +253,12 @@ with no declared semantics or with effectful ones. Inside such a straight-line r
 the lowering order *is* the execution order, so a read reaches the writes that
 happened on it and nothing else.
 
+These are selection's own chains, not the IR's. The middle-end carries its state
+edges to the backend boundary and `erase-state` drops them in the backend
+prologue, ahead of restructure and selection, so what selection sees is the
+implicit order (`ir.md` §6). Selection consuming the IR's chains instead of
+rebuilding its own is a separate change.
+
 Rules say nothing about state: a TMDL memory pattern is arity 3/4, and
 `compile_isel_pattern` appends the state operand to every memory node it compiles
 (`PatternNodeMeta::is_state`). That operand is matched and ignored — not a

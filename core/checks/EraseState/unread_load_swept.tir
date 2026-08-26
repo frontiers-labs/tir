@@ -1,4 +1,4 @@
-// RUN: tir opt --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(thread-state,erase-state) --verify %s | filecheck %s
 
 // A load nothing reads is not a read: forwarding answers a slot's loads by their
 // values and leaves the operations behind, so a slot whose every load has become

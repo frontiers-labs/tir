@@ -1,19 +1,25 @@
 //! Dead store elimination: a write nothing can read back before another
 //! overwrites it never happened.
 //!
-//! The reasoning is [`AliasFacts`]: two writes kill each other when they start
-//! at the same address of the same object and the later one covers at least the
-//! extent of the earlier. Between them nothing may read that extent, and nothing
-//! whose effect on memory the facts do not model may run at all — a call, an
-//! operation holding regions the scan does not enter. The facts are
-//! flow-insensitive and say nothing about what a call does, so that barrier rule
-//! carries the whole soundness argument.
+//! The reasoning is the state chain. A write publishes the memory it left, so
+//! whatever names that state is what may tell the write happened, and the walk is
+//! forward along those edges: a write covering at least the extent leaves nothing
+//! of it, an access the facts place elsewhere in the same memory is walked past,
+//! and anything else — an access that may be of those bytes, a call, a port
+//! carrying the chain out of a region, the export handing it to the caller — can
+//! observe it.
 //!
-//! The scan is block-local: crossing a block boundary needs a post-dominance
-//! view over regions, which no consumer asks for yet.
+//! Nothing here is a barrier rule over the order operations are written in: two
+//! objects the facts tell apart are two chains, so the walk never meets the other
+//! object at all, and an operation whose effect on memory nothing models names a
+//! chain the walk stops at. [`AliasFacts`] is asked only what the addresses of two
+//! accesses are.
 
-use crate::analysis::{AliasFacts, AliasResult};
+use std::collections::HashSet;
+
+use crate::analysis::{AliasFacts, AliasResult, DefUse};
 use crate::func::FuncOp;
+use crate::state::JoinOp;
 use crate::{
     AnalysisManager, Context, DataLayout, MemoryRead, MemoryWrite, OpHandle, OpId, OperationRef,
     Pass, PassError, PassTarget, Rewriter, ValueId,
@@ -50,30 +56,25 @@ impl Pass for DeadStoreEliminationPass {
             return Ok(());
         }
         let root = op.op().id;
-        let facts = analyses.get::<AliasFacts>(context, root);
         let layout = DataLayout::for_op(context, root);
-        let scan = Scan {
+        let walk = Walk {
             context,
-            facts: &facts,
+            facts: analyses.get::<AliasFacts>(context, root),
+            uses: analyses.get::<DefUse>(context, root),
             layout: layout.as_ref(),
         };
 
         let mut dead = Vec::new();
-        for region in super::regions_under(context, root) {
-            for block in context.get_region(region).block_ids() {
-                let op_ids = context.get_block(block).op_ids();
-                for index in 0..op_ids.len() {
-                    if scan.overwritten(&op_ids, index) {
-                        dead.push(op_ids[index]);
-                    }
-                }
+        for &op_id in walk.uses.ops() {
+            if walk.overwritten(op_id) {
+                dead.push(op_id);
             }
         }
 
         for op_id in dead {
             let instance = context.get_op(op_id);
-            // A write still on a threaded chain publishes the state its readers
-            // name; erasing it hands them the state it observed instead.
+            // The write published the state its readers name; erasing it hands
+            // them the state it observed instead.
             if let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>()
                 && let (Some(published), Some(observed)) =
                     (write.state_result(), write.state_operand())
@@ -95,60 +96,98 @@ struct Write {
     extent: Option<u64>,
 }
 
-struct Scan<'a> {
+/// What one operation naming a state does to the write that published it.
+enum Step {
+    /// Leaves nothing of the write to read back.
+    Overwrites,
+    /// Cannot be of those bytes, so the walk carries on down the chain.
+    Elsewhere(ValueId),
+    /// May tell the write happened.
+    Observes,
+}
+
+struct Walk<'a> {
     context: &'a Context,
-    facts: &'a AliasFacts,
+    facts: std::rc::Rc<AliasFacts>,
+    uses: std::rc::Rc<DefUse>,
     layout: Option<&'a DataLayout>,
 }
 
-impl Scan<'_> {
-    /// Whether a later write in the block covers everything the operation at
-    /// `index` wrote, with nothing in between able to observe it.
-    fn overwritten(&self, op_ids: &[OpId], index: usize) -> bool {
-        let instance = self.context.get_op(op_ids[index]);
-        let Some(store) = self.write(&instance) else {
+impl Walk<'_> {
+    /// Whether the memory `op` left is overwritten before anything can read it
+    /// back. A write off the chain publishes no state, and one whose extent the
+    /// IR does not spell covers bytes the walk cannot compare.
+    fn overwritten(&self, op: OpId) -> bool {
+        let instance = self.context.get_op(op);
+        let Some(published) = instance
+            .clone()
+            .as_interface::<dyn MemoryWrite>()
+            .and_then(|write| write.state_result())
+        else {
             return false;
         };
-        let Some(extent) = store.extent else {
+        let store = self.write(&instance).expect("the op is a write");
+        if store.extent.is_none() {
             return false;
-        };
-        for &later in &op_ids[index + 1..] {
-            let instance = self.context.get_op(later);
-            // Both interfaces are asked: an operation declaring the two reads
-            // the extent it also writes.
-            let read = instance.clone().as_interface::<dyn MemoryRead>();
-            let write = self.write(&instance);
-            if let Some(read) = &read
-                && self
-                    .facts
-                    .alias(store.location, Some(extent), read.read_location(), None)
-                    != AliasResult::NoAlias
-            {
+        }
+
+        let mut pending = vec![published];
+        let mut seen = HashSet::new();
+        while let Some(state) = pending.pop() {
+            if !seen.insert(state) {
+                continue;
+            }
+            let naming = self.uses.users_of(state.number());
+            // A state nothing names ends the chain the walk was following, which
+            // says nothing about what the memory it leaves is read back as.
+            if naming.is_empty() {
                 return false;
             }
-            if let Some(other) = &write {
-                let alias =
-                    self.facts
-                        .alias(store.location, Some(extent), other.location, other.extent);
-                if alias == AliasResult::MustAlias
-                    && other.extent.is_some_and(|covered| covered >= extent)
-                {
-                    return true;
+            for &op in naming {
+                match self.step(&store, op) {
+                    Step::Overwrites => {}
+                    Step::Elsewhere(next) => pending.push(next),
+                    Step::Observes => return false,
                 }
-                if alias != AliasResult::NoAlias {
-                    return false;
-                }
-            }
-            // An op touching no memory it declares still may through a region the
-            // scan does not enter, or through effects nothing here models.
-            if read.is_none()
-                && write.is_none()
-                && (!instance.regions().is_empty() || !super::is_pure_value(&instance))
-            {
-                return false;
             }
         }
-        false
+        true
+    }
+
+    fn step(&self, store: &Write, op: OpId) -> Step {
+        let instance = self.context.get_op(op);
+        // A join names the memory after every read of one fork, so what may
+        // observe the write is what names the join.
+        if instance.is::<JoinOp>() {
+            return Step::Elsewhere(instance.results()[0]);
+        }
+        if let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>() {
+            let other = self.write(&instance).expect("the op is a write");
+            let alias =
+                self.facts
+                    .alias(store.location, store.extent, other.location, other.extent);
+            let covers = other
+                .extent
+                .is_some_and(|covered| store.extent.is_some_and(|written| covered >= written));
+            return match alias {
+                AliasResult::MustAlias if covers => Step::Overwrites,
+                AliasResult::NoAlias => match write.state_result() {
+                    Some(next) => Step::Elsewhere(next),
+                    None => Step::Observes,
+                },
+                _ => Step::Observes,
+            };
+        }
+        if let Some(read) = instance.clone().as_interface::<dyn MemoryRead>() {
+            let alias = self
+                .facts
+                .alias(store.location, store.extent, read.read_location(), None);
+            return match (alias, read.state_result()) {
+                (AliasResult::NoAlias, Some(next)) => Step::Elsewhere(next),
+                _ => Step::Observes,
+            };
+        }
+        Step::Observes
     }
 
     fn write(&self, instance: &OpHandle) -> Option<Write> {

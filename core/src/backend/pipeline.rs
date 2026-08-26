@@ -16,7 +16,7 @@ use tir::{
 use crate::backend::TargetMachine;
 use crate::backend::lower::OpLoweringPass;
 use crate::passes::{
-    CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass,
+    CheckUniqueSymbolsPass, DeadCodeEliminationPass, EraseStatePass, LowerMemoryIntrinsicsPass,
     MaterializeSymbolAddressesPass, RestructurePass,
 };
 
@@ -112,6 +112,13 @@ pub fn build_pipeline(
 /// function's lowering.
 fn module_prologue() -> PassManager {
     let mut pm = PassManager::new();
+    // Memory state is the mid-end's order and codegen takes the implicit one
+    // back, so the chains are dropped at the boundary — here, because a function
+    // is lowered and erased one at a time and by then the λ its calls name may
+    // already be a machine symbol, which is not IR erasure can be checked
+    // against. It goes ahead of the intrinsic lowering, which expands a `memcpy`
+    // into accesses no chain would reach.
+    pm.nest::<FuncOp>().add_pass(EraseStatePass::new());
     // Object symbols are unique by name, so overloads must already be mangled.
     pm.add_pass(CheckUniqueSymbolsPass::new());
     pm.add_pass(LowerMemoryIntrinsicsPass::new());

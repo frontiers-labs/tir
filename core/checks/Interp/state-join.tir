@@ -1,0 +1,23 @@
+// RUN: tir interp %s --args=6 | filecheck %s
+
+// The interpreter reads a split as one memory named once per chain and a join as
+// the memory its inputs name: reads leave memory as they found it, so the state
+// after a fork of them is the state before it.
+
+module {
+  %fn_main = func.func @main(%0: !i32) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %13)
+    %14, %2 = state.split %13 : !state, !state
+    ptr.store %0, %1 state(%2 -> %3)
+    %4 = ptr.load %1 : !i32 state(%3 -> %5)
+    %6 = ptr.load %1 : !i32 state(%3 -> %7)
+    %8 = state.join %14, %5, %7 : !state
+    %9 = addi %4, %6 : !i32
+    ptr.store %9, %1 state(%8 -> %10)
+    %11 = ptr.load %1 : !i32 state(%10 -> %12)
+    func.return %11
+  }
+  module_end
+}
+
+// CHECK: i32 12

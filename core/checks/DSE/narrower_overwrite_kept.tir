@@ -1,4 +1,4 @@
-// RUN: tir opt --pass dse --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
 
 // The two writes start at the same address, but the second covers four bytes of
 // the eight the first wrote: the other four are still readable, so the wider
@@ -17,5 +17,5 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.store %0, %2
-// CHECK-NEXT: ptr.store %1, %2
+// CHECK: ptr.store %0, %2 state(%{{[0-9]+}} -> %[[S:[0-9]+]])
+// CHECK-NEXT: ptr.store %1, %2 state(%[[S]] -> %{{[0-9]+}})

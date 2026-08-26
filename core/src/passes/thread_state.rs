@@ -2,21 +2,38 @@
 //!
 //! Memory order becomes an explicit def-use edge: the function's memory at entry
 //! is named by `state.entry_state`, and every operation that touches memory
-//! consumes the state it observes and produces the state it leaves behind. A slot
-//! whose address never escapes is a memory of its own, so it gets a chain rooted
-//! at its allocation; everything else — escaping slots, unknown pointers, calls —
-//! shares one conservative chain, which the function's `return` exports.
+//! consumes the state it observes and produces the state it leaves behind.
+//!
+//! One chain per object. Every base object [`AliasFacts`] tells apart from all the
+//! others the function names — a global, a parameter, a stack slot — is a memory
+//! of its own, so accesses to it are ordered against each other and against
+//! nothing else. A pointer the facts cannot read back may name any object they
+//! cannot rule it out of, so where the function holds one every object but the
+//! private slots shares the conservative chain, and so does every access through
+//! such a pointer.
+//!
+//! A call and a `memcpy` touch every object the outside can reach, and a `return`
+//! hands them all to the caller. Those chains cross such an operation through one
+//! port: `state.join` merges them into the state it observes and `state.split`
+//! names each of them again in the state it leaves. A slot whose address never
+//! leaves the function is not among them.
+//!
+//! The edges are the whole order and no more than it. A read leaves memory as it
+//! found it, so any number of reads observe the state one write left — a fork,
+//! unordered among themselves — and the next write, call, export or carried port
+//! on that chain takes `state.join` of what the fork left. RAW and WAW are the
+//! chain edge, WAR is the join edge, and two reads of one state are ordered by
+//! nothing.
 
 use crate::BlockHandle;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes};
-use crate::analysis::slots::{collect_slots, slot_base};
-use crate::analysis::{AnalysisManager, EscapeFacts};
+use crate::analysis::{AliasFacts, AnalysisManager, Base, PointerFact};
 use crate::builtin::StateType;
 use crate::func::{CallOp, FuncOp, ReturnOp};
 use crate::ptr::MemcpyOp;
-use crate::state::EntryStateOpBuilder;
+use crate::state::{EntryStateOpBuilder, JoinOpBuilder, SplitOpBuilder};
 use crate::{
     Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation, OperationRef, Pass, PassError,
     PassTarget, PromotableAllocation, RegionId, Rewriter, TypeId, ValueId, scf,
@@ -63,7 +80,7 @@ impl Pass for ThreadStatePass {
         let ops = region_ops(context, body);
         if !ops
             .iter()
-            .any(|&op_id| touches_memory(context, &context.get_op(op_id)))
+            .any(|&op_id| touches_memory(&context.get_op(op_id)))
         {
             return Ok(());
         }
@@ -73,22 +90,35 @@ impl Pass for ThreadStatePass {
             return Ok(());
         }
 
-        let escapes = analyses.get::<EscapeFacts>(context, op.op().id);
-        let tracked = collect_slots(context, &escapes, &ops)
-            .into_iter()
-            .filter(|(_, slot)| slot.alloca.is_some() && !slot.escapes)
-            .map(|(pointer, _)| pointer)
-            .collect();
+        let facts = analyses.get::<AliasFacts>(context, op.op().id);
+        let objects = Objects {
+            distinguished: distinguished(context, &facts, &ops),
+            facts: &facts,
+        };
 
+        // Every chain but a slot's starts at the memory the function was entered
+        // with; a slot's starts where it is allocated.
         let state = StateType::new(context);
-        let root = EntryStateOpBuilder::new(context).result_type(state).build();
-        entry_block.insert(0, root.id());
+        let mut chains = BTreeMap::new();
+        let rooted_at_entry = std::iter::once(Chain::Conservative).chain(
+            objects
+                .distinguished
+                .iter()
+                .copied()
+                .filter(|base| !matches!(base, Base::Alloca(_)))
+                .map(Chain::Object),
+        );
+        for (index, chain) in rooted_at_entry.enumerate() {
+            let root = EntryStateOpBuilder::new(context).result_type(state).build();
+            entry_block.insert(index, root.id());
+            chains.insert(chain, ChainState::opened(root.result()));
+        }
 
         Threader {
             context,
             state,
-            tracked,
-            chains: BTreeMap::from([(Chain::Conservative, root.result())]),
+            objects,
+            chains,
             scopes: Vec::new(),
         }
         .walk(&entry_block);
@@ -100,30 +130,72 @@ impl Pass for ThreadStatePass {
 /// The memory a chain of state values describes.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Chain {
-    /// Everything that may alias: escaping slots, unknown pointers, and whatever a
-    /// call touches.
+    /// Everything the facts cannot tell apart: objects that may alias one
+    /// another, and whatever a pointer they cannot read back names.
     Conservative,
-    /// One slot whose address never leaves the function, named by its allocation.
-    Slot(ValueId),
+    /// One object no other object of the function is.
+    Object(Base),
 }
 
-/// How one operation relates to the state chains.
-enum Effect {
-    /// Opens a chain of its own.
+/// What one operation does to memory, before the objects it names are read.
+enum Kind {
+    /// Opens the memory of a slot.
     Open(ValueId),
-    /// Observes a chain and leaves a new state behind.
-    Access(Chain),
-    /// Hands the conservative chain to the function's caller.
+    /// Observes the memory an address names and leaves it as it found it.
+    Read(ValueId),
+    /// Leaves a memory at an address that the reads after it see.
+    Write(ValueId),
+    /// Touches every object the outside can reach.
+    Clobber,
+    /// Hands every object the outside can reach to the function's caller.
     Export,
+}
+
+/// Where one chain has got to: the memory the last write left, and the states the
+/// reads observing it have left behind since.
+struct ChainState {
+    written: ValueId,
+    reads: Vec<ValueId>,
+}
+
+impl ChainState {
+    fn opened(written: ValueId) -> Self {
+        Self {
+            written,
+            reads: Vec::new(),
+        }
+    }
+}
+
+/// The objects the facts tell apart, and the chain an address falls on.
+struct Objects<'a> {
+    facts: &'a AliasFacts,
+    distinguished: BTreeSet<Base>,
+}
+
+impl Objects<'_> {
+    fn chain_of(&self, address: ValueId) -> Chain {
+        match self.facts.fact(address) {
+            PointerFact::Object { base, .. } if self.distinguished.contains(&base) => {
+                Chain::Object(base)
+            }
+            _ => Chain::Conservative,
+        }
+    }
+
+    /// Whether nothing outside the function can reach `chain`, so neither a call
+    /// nor the caller after a return observes it.
+    fn is_private(&self, chain: Chain) -> bool {
+        matches!(chain, Chain::Object(base) if self.facts.is_private(base))
+    }
 }
 
 struct Threader<'a> {
     context: &'a Context,
     state: TypeId,
-    /// The slots that get a chain of their own.
-    tracked: BTreeSet<ValueId>,
+    objects: Objects<'a>,
     /// The state each chain has reached at the point being walked.
-    chains: BTreeMap<Chain, ValueId>,
+    chains: BTreeMap<Chain, ChainState>,
     /// The token scopes of the loops whose ports are being grown, innermost last,
     /// each with the chains its exits carry, in port order.
     scopes: Vec<(ValueId, Vec<Chain>)>,
@@ -133,30 +205,55 @@ impl Threader<'_> {
     fn walk(&mut self, block: &BlockHandle) {
         for op_id in block.op_ids() {
             let op = self.context.get_op(op_id);
-            match classify(self.context, &op, &self.tracked) {
-                Some(Effect::Open(slot)) if self.tracked.contains(&slot) => {
+            match classify(&op) {
+                Some(Kind::Open(slot)) if self.opens(slot) => {
                     let result = self.context.grow_port(op_id, self.state, None, |_, _| None);
-                    self.chains.insert(Chain::Slot(slot), result);
+                    self.chains.insert(
+                        Chain::Object(Base::Alloca(slot)),
+                        ChainState::opened(result),
+                    );
                 }
-                Some(Effect::Access(chain)) => {
-                    let observed = self.chain(chain);
+                Some(Kind::Read(address)) => {
+                    let chain = self.chain(address);
+                    let observed = self.chains[&chain].written;
                     let result =
                         self.context
                             .grow_port(op_id, self.state, Some(observed), |_, _| None);
-                    self.chains.insert(chain, result);
+                    self.chain_mut(chain).reads.push(result);
                 }
-                Some(Effect::Export) => {
-                    let exported = self.chain(Chain::Conservative);
+                Some(Kind::Write(address)) => {
+                    let chain = self.chain(address);
+                    let observed = self.settle(chain, op_id);
+                    let result =
+                        self.context
+                            .grow_port(op_id, self.state, Some(observed), |_, _| None);
+                    self.chains.insert(chain, ChainState::opened(result));
+                }
+                Some(Kind::Clobber) => {
+                    let exposed = self.exposed();
+                    let observed = self.merge(&exposed, op_id);
+                    let result =
+                        self.context
+                            .grow_port(op_id, self.state, Some(observed), |_, _| None);
+                    self.spread(&exposed, result, op_id);
+                }
+                Some(Kind::Export) => {
+                    let exposed = self.exposed();
+                    let exported = self.merge(&exposed, op_id);
                     self.context.append_operand(op_id, exported);
                 }
-                // An escaping slot is observable from anywhere, so it opens no
-                // chain of its own: its accesses join the conservative one.
-                Some(Effect::Open(_)) => {}
+                // A slot the facts cannot tell from another object opens no chain
+                // of its own: its accesses join the conservative one.
+                Some(Kind::Open(_)) => {}
                 // An exit leaves the loop through its carried ports, so it takes
                 // the state each chain reached along that edge with it.
                 None if self.exit_chains(&op).is_some() => {
-                    for &chain in self.exit_chains(&op).expect("an exit of a walked loop") {
-                        let leaving = self.chain(chain);
+                    let chains = self
+                        .exit_chains(&op)
+                        .expect("an exit of a walked loop")
+                        .to_vec();
+                    for chain in chains {
+                        let leaving = self.settle(chain, op_id);
                         self.context.append_operand(op_id, leaving);
                     }
                 }
@@ -185,11 +282,12 @@ impl Threader<'_> {
         // the exit takes the state its own copy reached, not the one the code
         // after the op observes.
         let exiting = self.nested_exit_chains(op);
+        let inside = self.chains_touched_under(op);
         let carried = self
             .chains
             .keys()
             .copied()
-            .filter(|&chain| self.touches_chain(op, chain) || exiting.contains(&chain))
+            .filter(|chain| inside.contains(chain) || exiting.contains(chain))
             .collect::<Vec<_>>();
 
         let entries = op
@@ -222,22 +320,21 @@ impl Threader<'_> {
                 carried
                     .iter()
                     .copied()
-                    .zip(arguments.iter().copied())
+                    .zip(arguments.iter().copied().map(ChainState::opened))
                     .collect(),
             );
             self.walk(entry);
+            let terminator = *entry.op_ids().last().expect("a region is terminated");
             let leaving = carried
                 .iter()
-                .map(|&chain| self.chain(chain))
+                .map(|&chain| self.settle(chain, terminator))
                 .collect::<Vec<_>>();
             self.chains = outer;
 
             // A region that leaves through an exit fed the ports along that edge.
-            let terminator =
-                context.get_op(*entry.op_ids().last().expect("a region is terminated"));
-            if self.exit_chains(&terminator).is_none() {
+            if self.exit_chains(&context.get_op(terminator)).is_none() {
                 for value in leaving {
-                    context.append_operand(terminator.id, value);
+                    context.append_operand(terminator, value);
                 }
             }
         }
@@ -247,28 +344,56 @@ impl Threader<'_> {
         }
 
         for &chain in &carried {
-            let init = self.chain(chain);
+            let init = self.settle(chain, op.id);
             context.append_operand(op.id, init);
         }
         for &chain in &carried {
             // The ports the op already carries are wired up; all that is left is
             // the result naming the state it leaves behind.
             let result = context.grow_port(op.id, self.state, None, |_, _| None);
-            self.chains.insert(chain, result);
+            self.chains.insert(chain, ChainState::opened(result));
         }
     }
 
-    /// Whether anything inside `op`'s regions accesses `chain`.
-    fn touches_chain(&self, op: &OpHandle, chain: Chain) -> bool {
+    /// Every chain something inside `op`'s regions touches, read the way the walk
+    /// of those regions will read it.
+    fn chains_touched_under(&self, op: &OpHandle) -> BTreeSet<Chain> {
         op.regions()
             .iter()
             .flat_map(|&region| region_ops(self.context, region))
-            .any(|op_id| {
-                matches!(
-                    classify(self.context, &self.context.get_op(op_id), &self.tracked),
-                    Some(Effect::Access(accessed)) if accessed == chain
-                )
+            .flat_map(|op_id| match classify(&self.context.get_op(op_id)) {
+                Some(Kind::Read(address) | Kind::Write(address)) => vec![self.chain(address)],
+                Some(Kind::Clobber | Kind::Export) => self.exposed(),
+                _ => Vec::new(),
             })
+            .collect()
+    }
+
+    /// The chains the outside can reach, in port order.
+    fn exposed(&self) -> Vec<Chain> {
+        self.chains
+            .keys()
+            .copied()
+            .filter(|&chain| !self.objects.is_private(chain))
+            .collect()
+    }
+
+    /// Whether `slot`'s allocation opens a chain of its own here.
+    fn opens(&self, slot: ValueId) -> bool {
+        self.objects.distinguished.contains(&Base::Alloca(slot))
+    }
+
+    /// The chain an access at `address` sits on. A chain the walk has not opened
+    /// yet — a slot allocated inside a region the accesses of which are read from
+    /// outside it — is no chain at all, and the access falls back on the
+    /// conservative one, which every scope carries.
+    fn chain(&self, address: ValueId) -> Chain {
+        let chain = self.objects.chain_of(address);
+        if self.chains.contains_key(&chain) {
+            chain
+        } else {
+            Chain::Conservative
+        }
     }
 
     /// The chains `op` carries out of a loop being walked, if it is such an exit.
@@ -289,46 +414,168 @@ impl Threader<'_> {
             .collect()
     }
 
-    fn chain(&self, chain: Chain) -> ValueId {
-        *self
-            .chains
-            .get(&chain)
+    /// The state naming `chain`'s memory after every read of the fork open on it,
+    /// which is what an operation that does not merely observe it has to take: the
+    /// state the last write left where no read has forked off it, that one read's
+    /// where a single one has, and their `state.join` otherwise. The join goes
+    /// where the operation taking it is, so it is defined before it is read.
+    fn settle(&mut self, chain: Chain, before: OpId) -> ValueId {
+        let reads = std::mem::take(&mut self.chain_mut(chain).reads);
+        let settled = match reads.len() {
+            0 => self.chain_mut(chain).written,
+            1 => reads[0],
+            _ => self.join(reads, before),
+        };
+        self.chain_mut(chain).written = settled;
+        settled
+    }
+
+    /// The one state every chain in `chains` reached, which is what an operation
+    /// touching them all observes.
+    fn merge(&mut self, chains: &[Chain], before: OpId) -> ValueId {
+        let states = chains
+            .iter()
+            .map(|&chain| self.settle(chain, before))
+            .collect::<Vec<_>>();
+        match states.as_slice() {
+            [only] => *only,
+            _ => self.join(states, before),
+        }
+    }
+
+    /// Name each chain again in the state an operation touching them all left, so
+    /// what each carries on from is ordered after it.
+    fn spread(&mut self, chains: &[Chain], state: ValueId, after: OpId) {
+        if let [only] = chains {
+            self.chains.insert(*only, ChainState::opened(state));
+            return;
+        }
+        let op = SplitOpBuilder::new(self.context)
+            .state(state)
+            .result_types(vec![self.state; chains.len()])
+            .build();
+        let block = self.block_of(after);
+        block.insert(self.position_of(after) + 1, op.id());
+        for (&chain, &named) in chains.iter().zip(op.states().iter()) {
+            self.chains.insert(chain, ChainState::opened(named));
+        }
+    }
+
+    fn join(&mut self, states: Vec<ValueId>, before: OpId) -> ValueId {
+        let op = JoinOpBuilder::new(self.context)
+            .states(states)
+            .result_type(self.state)
+            .build();
+        self.block_of(before)
+            .insert(self.position_of(before), op.id());
+        op.result()
+    }
+
+    fn block_of(&self, op: OpId) -> BlockHandle {
+        self.context
+            .get_block(self.context.parent_block(op).expect("an op in a block"))
+    }
+
+    fn position_of(&self, op: OpId) -> usize {
+        self.block_of(op)
+            .op_ids()
+            .iter()
+            .position(|&id| id == op)
+            .expect("the op is in its own block")
+    }
+
+    fn chain_mut(&mut self, chain: Chain) -> &mut ChainState {
+        self.chains
+            .get_mut(&chain)
             .expect("the chain reaches this point")
     }
 }
 
-/// How `op` relates to the chains, reading an access through an untracked pointer
-/// as one that may alias anything.
-fn classify(context: &Context, op: &OpHandle, tracked: &BTreeSet<ValueId>) -> Option<Effect> {
-    let chain_of = |pointer| {
-        let base = slot_base(context, pointer);
-        if tracked.contains(&base) {
-            Chain::Slot(base)
-        } else {
-            Chain::Conservative
+/// The objects that get a chain of their own.
+///
+/// An object qualifies when the facts tell it apart from every other object the
+/// function's accesses name, and when no access reads an address they cannot
+/// resolve — such an address may be any object they cannot rule it out of, which
+/// leaves only the private slots no address can reach.
+///
+/// A chain the outside can reach pays for itself only where another such chain
+/// carries accesses too: an object that is the whole of exposed memory as far as
+/// the order goes is named twice for nothing — once as itself, once as the
+/// conservative chain a call and a return still name — and every call in between
+/// spends a join and a split putting the two back together.
+fn distinguished(context: &Context, facts: &AliasFacts, ops: &[OpId]) -> BTreeSet<Base> {
+    let mut named = BTreeSet::new();
+    let mut opaque = false;
+    for &op_id in ops {
+        for address in accessed_addresses(&context.get_op(op_id)) {
+            match facts.fact(address) {
+                PointerFact::Object { base, .. } => {
+                    named.insert(base);
+                }
+                _ => opaque = true,
+            }
         }
-    };
-    if let Some(allocation) = op.clone().as_interface::<dyn PromotableAllocation>() {
-        return Some(Effect::Open(allocation.promoted_location()));
     }
-    if let Some(read) = op.clone().as_interface::<dyn MemoryRead>() {
-        return Some(Effect::Access(chain_of(read.read_location())));
+    let told_apart = named
+        .iter()
+        .copied()
+        .filter(|base| {
+            named
+                .iter()
+                .all(|other| other == base || base.distinct(*other))
+        })
+        .filter(|&base| !opaque || facts.is_private(base))
+        .collect::<BTreeSet<_>>();
+
+    let exposed = told_apart
+        .iter()
+        .filter(|&&base| !facts.is_private(base))
+        .count();
+    let conservative_accessed = opaque || named.iter().any(|base| !told_apart.contains(base));
+    if exposed + usize::from(conservative_accessed) > 1 {
+        return told_apart;
     }
-    if let Some(write) = op.clone().as_interface::<dyn MemoryWrite>() {
-        return Some(Effect::Access(chain_of(write.write_location())));
-    }
-    if op.is::<MemcpyOp>() || op.is::<CallOp>() {
-        return Some(Effect::Access(Chain::Conservative));
-    }
-    op.is::<ReturnOp>().then_some(Effect::Export)
+    told_apart
+        .into_iter()
+        .filter(|&base| facts.is_private(base))
+        .collect()
 }
 
-/// Whether `op` is one of the operations that carry state. Exporting the chain is
+/// The addresses `op` names an access of. A call or a `memcpy` names none: it is
+/// ordered against every object the outside can reach, whichever those are.
+fn accessed_addresses(op: &OpHandle) -> Vec<ValueId> {
+    match classify(op) {
+        Some(Kind::Read(address) | Kind::Write(address)) => vec![address],
+        Some(Kind::Open(slot)) => vec![slot],
+        _ => Vec::new(),
+    }
+}
+
+/// What `op` does to memory.
+fn classify(op: &OpHandle) -> Option<Kind> {
+    if let Some(allocation) = op.clone().as_interface::<dyn PromotableAllocation>() {
+        return Some(Kind::Open(allocation.promoted_location()));
+    }
+    // Both interfaces are asked before either answers: an operation declaring
+    // the two writes the extent it reads, and is no observer.
+    if let Some(write) = op.clone().as_interface::<dyn MemoryWrite>() {
+        return Some(Kind::Write(write.write_location()));
+    }
+    if let Some(read) = op.clone().as_interface::<dyn MemoryRead>() {
+        return Some(Kind::Read(read.read_location()));
+    }
+    if op.is::<MemcpyOp>() || op.is::<CallOp>() {
+        return Some(Kind::Clobber);
+    }
+    op.is::<ReturnOp>().then_some(Kind::Export)
+}
+
+/// Whether `op` is one of the operations that carry state. Exporting the chains is
 /// not touching memory: a `return` alone leaves a function with nothing to thread.
-fn touches_memory(context: &Context, op: &OpHandle) -> bool {
+fn touches_memory(op: &OpHandle) -> bool {
     matches!(
-        classify(context, op, &BTreeSet::new()),
-        Some(Effect::Open(_) | Effect::Access(_))
+        classify(op),
+        Some(Kind::Open(_) | Kind::Read(_) | Kind::Write(_) | Kind::Clobber)
     )
 }
 
@@ -371,7 +618,7 @@ fn subtree_touches_memory(context: &Context, op: &OpHandle) -> bool {
     op.regions()
         .iter()
         .flat_map(|&region| region_ops(context, region))
-        .any(|op_id| touches_memory(context, &context.get_op(op_id)))
+        .any(|op_id| touches_memory(&context.get_op(op_id)))
 }
 
 fn block_ops(context: &Context, block: &BlockHandle) -> Vec<OpId> {

@@ -16,6 +16,7 @@ use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::builtin::StateType;
 use crate::sem::egraph::{minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
+use crate::state::JoinOp;
 use crate::{
     BlockId, Commutative, Conditional, ConstantLike, Context, LoopLike, MemoryRead, MemoryWrite,
     OpHandle, OpId, RegionId, TokenScope, TypeId, ValueId,
@@ -167,6 +168,9 @@ impl Seeder<'_> {
                 .eg
                 .add(Node::constant(constant.constant_value(), Prov::Op(op)).typed(ty));
             self.value_class.insert(*result, id);
+            return;
+        } else if instance.is::<JoinOp>() {
+            self.seed_join(&instance);
             return;
         } else if self.seed_memory(&instance) {
             return;
@@ -369,6 +373,27 @@ impl Seeder<'_> {
                 self.exported_states.push(id);
             }
         }
+    }
+
+    /// A join names the memory its inputs merge into, so its identity is the tuple
+    /// of them: a read after a join has observed the writes before every input and
+    /// is the read of no single one. Where the inputs are one state — the fork of
+    /// reads a single write left, since a read publishes the state it took — the
+    /// merge is that state.
+    fn seed_join(&mut self, instance: &OpHandle) {
+        let args: Vec<Id> = instance
+            .operands()
+            .to_vec()
+            .iter()
+            .map(|&state| self.class_of(state))
+            .collect();
+        let result = instance.results()[0];
+        let ty = self.context.get_value(result).ty();
+        let id = match args.split_first() {
+            Some((&first, rest)) if rest.iter().all(|&other| other == first) => first,
+            _ => self.eg.add(Node::seeded(instance, ty, true, args)),
+        };
+        self.value_class.insert(result, id);
     }
 
     /// Seed a memory access over the state it reads, if it is one that names a state.

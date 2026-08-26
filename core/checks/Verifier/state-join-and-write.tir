@@ -1,0 +1,16 @@
+// RUN: not tir opt --verify %s
+
+// A join observes the memory its inputs name, so it may sit beside reads of one
+// state — but not beside a write, which leaves a memory the join would never have
+// named.
+
+module {
+  %fn_bad = func.func @bad(%0: !i32) {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %2)
+    %3 = ptr.load %1 : !i32 state(%2 -> %4)
+    %5 = state.join %2, %4 : !state
+    ptr.store %0, %1 state(%2 -> %6)
+    func.return
+  }
+  module_end
+}

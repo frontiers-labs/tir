@@ -1,0 +1,31 @@
+// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+
+// A gate is a consumer of the chain like any other, so the fork of reads open
+// where it sits is joined before the port: the state each arm is entered with
+// names the memory after both reads.
+
+module {
+  %fn_h = func.func @h(%0: !i1, %1: !i32) -> !i32 {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %1, %2
+    %3 = ptr.load %2 : !i32
+    %4 = ptr.load %2 : !i32
+    scf.if %0 {
+      ptr.store %3, %2
+      scf.yield
+    } else {
+      ptr.store %4, %2
+      scf.yield
+    }
+    %5 = ptr.load %2 : !i32
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @h
+// CHECK: ptr.store %1, %{{[0-9]+}} state(%{{[0-9]+}} -> %[[A1:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %[[R1:[0-9]+]])
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %[[R2:[0-9]+]])
+// CHECK-NEXT: %[[J:[0-9]+]] = state.join %[[R1]], %[[R2]] : !state
+// CHECK-NEXT: %{{[0-9]+}} = scf.if %0 args(%[[J]]) -> !state (%{{[0-9]+}}) {

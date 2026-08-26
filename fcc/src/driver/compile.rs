@@ -220,12 +220,8 @@ pub(super) fn emit_machine_code(
         // what the propagation left behind.
         function_pipeline.add_pass(tir::passes::SccpPass::new());
         function_pipeline.add_pass(tir::passes::DeadCodeEliminationPass::new());
-        // Memory state describes the structured mid-end only; codegen takes the
-        // implicit order back.
-        function_pipeline.add_pass(tir::passes::EraseStatePass::new());
-        // What the state chains could not relate — writes through different
-        // pointer arithmetic onto one object, writes into globals and arrays —
-        // the alias facts still can.
+        // The chains reach the backend, which drops them; `dse` reads them here,
+        // where a write's readers are the operations naming the state it left.
         function_pipeline.add_pass(tir::passes::DeadStoreEliminationPass::new());
     }
     // Data lowering consumes the δ ops, so the functions that name them must

@@ -30,10 +30,17 @@ use harness::Outcome;
 /// neutral orderings of the registered passes; a correct compiler must give
 /// identical behavior under each.
 const EXTRA_PIPELINES: [&str; 3] = [
-    "func.func(thread-state,instcombine,sccp,dce,instcombine,erase-state,dse)",
-    "func.func(thread-state,sccp,dce,erase-state,dse)",
-    "func.func(thread-state,instcombine,sccp,instcombine,sccp,erase-state,dse)",
+    "func.func(thread-state,instcombine,sccp,dce,instcombine,dse)",
+    "func.func(thread-state,sccp,dce,dse)",
+    "func.func(thread-state,instcombine,sccp,instcombine,sccp,dse)",
 ];
+
+/// The pipeline that proves the state edges are the whole memory order: every
+/// block is re-linearized by another topological order of the value and state
+/// DAG, once on the threaded IR and once more on what the optimizers left. A
+/// divergence under it is an edge the threader did not draw.
+const SHUFFLE_PIPELINE: &str = "func.func(thread-state,shuffle-state,instcombine,\
+                                sccp,dce,shuffle-state,dse)";
 
 const CORPUS_DIRS: [&str; 3] = ["fcc/checks", "fcc/tests", "utils/unit-tests/src/fcc/corpus"];
 
@@ -190,6 +197,7 @@ fn variants(seed: u64) -> Vec<harness::Variant> {
     let mut variants = vec![
         harness::Variant::fcc(None),
         harness::Variant::fcc(Some(extra_pipeline(seed).to_string())),
+        harness::Variant::fcc(Some(SHUFFLE_PIPELINE.to_string())),
     ];
     variants.extend(reference_variants());
     variants

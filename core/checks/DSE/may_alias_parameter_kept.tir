@@ -1,4 +1,4 @@
-// RUN: tir opt --pass dse --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
 
 // A parameter pointer is an object the analysis cannot tell apart from another
 // parameter's, so a write through one may be read back through the other and
@@ -16,5 +16,5 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.store %2, %0
-// CHECK-NEXT: ptr.store %2, %1
+// CHECK: ptr.store %2, %0 state(%{{[0-9]+}} -> %[[S:[0-9]+]])
+// CHECK-NEXT: ptr.store %2, %1 state(%[[S]] -> %{{[0-9]+}})

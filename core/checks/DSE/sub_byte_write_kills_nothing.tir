@@ -1,4 +1,4 @@
-// RUN: tir opt --pass dse --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
 
 // A one-bit write covers part of a byte, and the pass counts bytes: it cannot
 // say what of the byte before it survives, so it neither dies nor kills.
@@ -19,5 +19,5 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.store %1, %0
-// CHECK: ptr.store %2, %0
+// CHECK: ptr.store %1, %0 state(%{{[0-9]+}} -> %[[S:[0-9]+]])
+// CHECK: ptr.store %2, %0 state(%[[S]] -> %{{[0-9]+}})

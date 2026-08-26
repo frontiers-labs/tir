@@ -1,0 +1,21 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %2)
+    %3, %4 = state.split %2 : !state, !state
+    ptr.store %0, %1 state(%3 -> %5)
+    %6 = ptr.load %1 : !i32 state(%5 -> %7)
+    %8 = ptr.load %1 : !i32 state(%5 -> %9)
+    %10 = state.join %4, %7, %9 : !state
+    %11 = addi %6, %8 : !i32
+    ptr.store %11, %1 state(%10 -> %12)
+    func.return %11
+  }
+  module_end
+}
+
+// CHECK: %[[A:[0-9]+]], %[[B:[0-9]+]] = state.split %{{[0-9]+}} : !state, !state
+// CHECK: ptr.store %0, %{{[0-9]+}} state(%[[A]] -> %{{[0-9]+}})
+// CHECK: %[[J:[0-9]+]] = state.join %[[B]], %{{[0-9]+}}, %{{[0-9]+}} : !state
+// CHECK: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[J]] -> %{{[0-9]+}})

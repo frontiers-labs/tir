@@ -1,0 +1,30 @@
+// RUN: env TIR_SHUFFLE_SEED=41 tir opt --pass func.func(thread-state,shuffle-state) --verify %s | filecheck %s
+
+// One seed, one order: the two independent chains come out interleaved
+// differently than they went in, and each chain's own accesses stay in the order
+// its edges spell.
+
+module {
+  %fn_main = func.func @main(%0: !i32, %1: !i32) -> !i32 {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %2
+    ptr.store %1, %3
+    %4 = ptr.load %2 : !i32
+    %5 = ptr.load %3 : !i32
+    %6 = subi %4, %5 : !i32
+    func.return %6
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @main
+// CHECK-NEXT: %{{[0-9]+}} = state.entry_state : !state
+// CHECK-NEXT: %[[B:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[BS:[0-9]+]])
+// CHECK-NEXT: ptr.store %1, %[[B]] state(%[[BS]] -> %[[BS1:[0-9]+]])
+// CHECK-NEXT: %[[BV:[0-9]+]] = ptr.load %[[B]] : !i32 state(%[[BS1]] -> %{{[0-9]+}})
+// CHECK-NEXT: %[[A:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[AS:[0-9]+]])
+// CHECK-NEXT: ptr.store %0, %[[A]] state(%[[AS]] -> %[[AS1:[0-9]+]])
+// CHECK-NEXT: %[[AV:[0-9]+]] = ptr.load %[[A]] : !i32 state(%[[AS1]] -> %{{[0-9]+}})
+// CHECK-NEXT: %{{[0-9]+}} = subi %[[AV]], %[[BV]] : !i32
+// CHECK-NEXT: func.return

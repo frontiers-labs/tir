@@ -11,9 +11,10 @@ use crate as tir;
 /// A `!state` value names the state of memory at a point in the program. Ops
 /// that touch memory consume the state they observe and produce the state they
 /// leave behind, so memory dependences are explicit def-use edges rather than an
-/// implicit side channel. State chains are linear: a state value has at most one
-/// use, and a rewrite that drops or duplicates one changes the program's memory
-/// order.
+/// implicit side channel. A state is read by any number of operations that leave
+/// memory as they found it, or changed by exactly one that does not: a rewrite
+/// that drops one, or hands it to a second operation that changes memory, changes
+/// the program's memory order.
 pub struct StateType;
 
 impl StateType {
