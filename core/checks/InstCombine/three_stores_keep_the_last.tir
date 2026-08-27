@@ -1,0 +1,27 @@
+// RUN: tir opt --pass func.func(thread-state,instcombine) --verify %s | filecheck %s
+
+// Three writes to one address, alternating values. Law S2 may take the first
+// pair; taking the next one as well would make the surviving stores congruent to
+// the ones it already retired, and the chain would fold back to the memory the
+// function was entered with — every write gone. The state the function returns
+// must still be the one the last write left.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @thrice(%1: !ptr.p) {
+    %2 = constant {value = 0} : !i32
+    %3 = constant {value = 1} : !i32
+    ptr.store %2, %1
+    ptr.store %3, %1
+    ptr.store %2, %1
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @thrice
+// CHECK: %[[ONE:[0-9]+]] = constant {value = 1}
+// CHECK: ptr.store %[[ONE]], %{{[0-9]+}} state(%{{[0-9]+}} -> %[[MID:[0-9]+]])
+// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[MID]] -> %[[LAST:[0-9]+]])
+// CHECK-NEXT: func.return state(%[[LAST]])

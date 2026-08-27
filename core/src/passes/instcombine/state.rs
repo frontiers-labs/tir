@@ -23,7 +23,13 @@
 //!   recorded no operation outside the term graph observing it, and the state the
 //!   inner store was handed is not a loop's carried port — a class read both at
 //!   the head of an iteration and where the loop was left, so a store landing in
-//!   it would answer a read after the loop with what the body overwrote.
+//!   it would answer a read after the loop with what the body overwrote — and the
+//!   two stores differ somewhere other than the state they take. Two stores of one
+//!   value to one address are one node apart from that state, so unioning the
+//!   inner one's result with the state before it makes the survivor congruent to
+//!   the store it replaced, and the whole chain collapses into the state it
+//!   started from: both writes gone, not one. Full unrolling is what makes that
+//!   shape ordinary, and `dse` removes the earlier write on the chain anyway.
 
 use tir_symbolic::egraph::{EGraph, ENode, Id, Pattern, Rewrite, Rhs, Var};
 
@@ -67,15 +73,34 @@ pub(crate) fn eliminate_dead_store(exported: Vec<Id>) -> Rule {
         STORE_ARITY,
         move |eg, written, root| {
             let state = written[STORE_STATE];
-            if exported.iter().any(|&class| eg.find(class) == state) {
-                return;
-            }
             if observers(eg, state) != [eg.find(root)] {
                 return;
             }
             let Some(before) = overwritten_state(eg, state, written) else {
                 return;
             };
+            if exported
+                .iter()
+                .any(|&class| eg.find(class) == state || eg.find(class) == before)
+            {
+                return;
+            }
+            // The union runs both ways. Whatever reads the state the overwritten
+            // store was handed is handed the memory that store left instead, so a
+            // load before the pair would answer with the value written after it.
+            // Nothing but the overwritten store may read it.
+            if observers(eg, before) != [state] {
+                return;
+            }
+            // A third write to the address would collapse the same way: the union
+            // below makes the overwriting store name `before`, and the store that
+            // left `before` names the state before *it*, so the two become
+            // congruent one round later and the chain folds back to where it
+            // started. One elimination per address per round is what the law can
+            // carry; `dse` reads the chain itself and needs no such care.
+            if writes_to(eg, before, written[ADDRESS]) {
+                return;
+            }
             // A loop's carried port is one class read at more than one point of the
             // program — the head of an iteration, and where the loop was left. A
             // store node landing in it answers for both, so a read after the loop
@@ -276,9 +301,18 @@ fn overwritten_state(eg: &EGraph<Node>, state: Id, written: &[Id]) -> Option<Id>
         .filter(|node| node.sym() == Some(SymKind::StoreMemory))
         .find_map(|node| {
             let dead = canonical(eg, node);
-            (dead[ADDRESS] == written[ADDRESS] && dead[BYTES] == written[BYTES])
+            (dead[ADDRESS] == written[ADDRESS]
+                && dead[BYTES] == written[BYTES]
+                && dead[..STORE_STATE] != written[..STORE_STATE])
                 .then_some(dead[STORE_STATE])
         })
+}
+
+/// Whether `state` is the memory a store to `address` left.
+fn writes_to(eg: &EGraph<Node>, state: Id, address: Id) -> bool {
+    eg.nodes(state).iter().any(|node| {
+        node.sym() == Some(SymKind::StoreMemory) && canonical(eg, node)[ADDRESS] == address
+    })
 }
 
 /// The classes of the accesses reading `state`, in the graph's own order.

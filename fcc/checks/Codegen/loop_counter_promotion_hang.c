@@ -7,8 +7,8 @@
 // never advances and the loop never exits. Counted loops no longer reach that
 // shape — they are raised to `scf.for` instead of restructured into a rotated
 // `scf.while` — so this program now terminates and must keep doing so. The
-// instcombine defect itself is still open: `loop_counter_promotion_hang_flat.c`
-// is the same reduction forced down the flat path, and still hangs.
+// instcombine defect itself is fixed too: `loop_counter_promotion_hang_flat.c`
+// is the same reduction forced down the flat path, and terminates.
 
 int f0(int a, int b) {
     for (int i = 0; i < 6; i++) {
