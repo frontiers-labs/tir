@@ -1094,5 +1094,14 @@ advsimd_modified_immediate!(
     (MoveInverseImmediate4H, "mvni", "mvni_v4h", VPR4H, 4, 16, 0b0, 0b1, 0b1000, (~zext(imm, 16))),
     (MoveInverseImmediate8H, "mvni", "mvni_v8h", VPR8H, 8, 16, 0b1, 0b1, 0b1000, (~zext(imm, 16))),
     (MoveInverseImmediate2S, "mvni", "mvni_v2s", VPR2S, 2, 32, 0b0, 0b1, 0b0000, (~zext(imm, 32))),
-    (MoveInverseImmediate4S, "mvni", "mvni_v4s", VPR4S, 4, 32, 0b1, 0b1, 0b0000, (~zext(imm, 32)))
+    (MoveInverseImmediate4S, "mvni", "mvni_v4s", VPR4S, 4, 32, 0b1, 0b1, 0b0000, (~zext(imm, 32))),
+    // FMOV (vector, immediate) is `cmode = 1111`, where the byte is not a lane
+    // pattern but VFPExpandImm's `abcdefgh`: `a` is the sign, `b` and its
+    // complement build the exponent, and `cdefgh` its leading significand bits.
+    (FMoveImmediate2D, "fmov", "fmov_v2d", VPR2D, 2, 64, 0b1, 0b1, 0b1111,
+        ((zext(extract(imm, 7, 7), 64) << 63)
+            | ((zext(0b1, 64) - zext(extract(imm, 6, 6), 64)) << 62)
+            | (((zext(0b0, 64) - zext(extract(imm, 6, 6), 64)) & zext(0b11111111, 64)) << 54)
+            | (zext(extract(imm, 5, 4), 64) << 52)
+            | (zext(extract(imm, 3, 0), 64) << 48)))
 )
