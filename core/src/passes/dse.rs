@@ -14,10 +14,19 @@
 //! object at all, and an operation whose effect on memory nothing models names a
 //! chain the walk stops at. [`AliasFacts`] is asked only what the addresses of two
 //! accesses are.
+//!
+//! One deadness the walk cannot see is a slot the function never reads. Its
+//! chain leaves every region it is written in through a carried port, and a port
+//! is where the walk stops, so the writes stay however far it is followed. What
+//! makes them dead is not the chain but the slot: nothing outside the function
+//! holds its address and nothing inside loads it, so no read of those bytes
+//! exists to be ordered against. That is the counter traffic `raise-loops`
+//! leaves behind once folding has replaced the loads with the carried port.
 
 use std::collections::HashSet;
 
-use crate::analysis::{AliasFacts, AliasResult, DefUse};
+use crate::analysis::slots::collect_slots;
+use crate::analysis::{AliasFacts, AliasResult, DefUse, EscapeFacts};
 use crate::func::FuncOp;
 use crate::state::JoinOp;
 use crate::{
@@ -64,9 +73,10 @@ impl Pass for DeadStoreEliminationPass {
             layout: layout.as_ref(),
         };
 
-        let mut dead = Vec::new();
+        let mut dead =
+            unread_slot_writes(context, &analyses.get::<EscapeFacts>(context, root), &walk);
         for &op_id in walk.uses.ops() {
-            if walk.overwritten(op_id) {
+            if !dead.contains(&op_id) && walk.overwritten(op_id) {
                 dead.push(op_id);
             }
         }
@@ -86,6 +96,16 @@ impl Pass for DeadStoreEliminationPass {
         }
         Ok(())
     }
+}
+
+/// Every write into a slot the function allocates, never lets out of its frame,
+/// and never reads: those bytes have no reader to be ordered against.
+fn unread_slot_writes(context: &Context, escapes: &EscapeFacts, walk: &Walk<'_>) -> Vec<OpId> {
+    collect_slots(context, escapes, walk.uses.ops())
+        .into_values()
+        .filter(|slot| slot.alloca.is_some() && !slot.escapes && slot.loads.is_empty())
+        .flat_map(|slot| slot.stores)
+        .collect()
 }
 
 /// One write, as far as the alias facts can spell it.

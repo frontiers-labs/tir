@@ -14,7 +14,9 @@ module {data_layout = #data_layout} {
     ptr.store %1, %4
     ptr.store %2, %3
     %5 = ptr.load %3 : !i32
-    func.return %5
+    %6 = ptr.load %4 : !i32
+    %7 = addi %5, %6 : !i32
+    func.return %7
   }
   module_end
 }

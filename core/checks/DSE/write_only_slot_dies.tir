@@ -1,0 +1,25 @@
+// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+
+// The counter `raise-loops` leaves behind: a private slot whose loads folding
+// removed, still written once per iteration. Nothing can read those bytes back,
+// so the writes never happened — and the walk down the chain cannot say so,
+// because the chain leaves the loop through a carried port.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_f = func.func @f(%0: !i32, %1: !i32) {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = constant {value = 1} : !i32
+    %4 = scf.for %0, %1, %3 iter_args(%5 = %0) -> !i32 {
+      ptr.store %5, %2
+      %6 = addi %5, %3 : !i32
+      scf.yield %6
+    }
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NOT: ptr.store

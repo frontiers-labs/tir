@@ -7,7 +7,7 @@
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  %fn_f = func.func @f(%0: !i32, %1: !i32) {
+  %fn_f = func.func @f(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i32>
     %3 = constant {value = 4} : !i64
     %4 = ptr.ptradd %2, %3 : !ptr.p<!i32>
@@ -16,7 +16,8 @@ module {data_layout = #data_layout} {
     %6 = ptr.ptradd %2, %5 : !ptr.p<!i32>
     %7 = ptr.ptradd %6, %5 : !ptr.p<!i32>
     ptr.store %1, %7
-    func.return
+    %8 = ptr.load %4 : !i32
+    func.return %8
   }
   module_end
 }
@@ -24,4 +25,4 @@ module {data_layout = #data_layout} {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: ptr.store %0,
 // CHECK: ptr.store %1, %7 state(%{{[0-9]+}} -> %{{[0-9]+}})
-// CHECK-NEXT: func.return
+// CHECK-NEXT: ptr.load %4

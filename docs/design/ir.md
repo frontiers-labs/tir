@@ -374,7 +374,10 @@ missing edge is a divergence with a reproducer.
   read hands its readers — joins included — the state it took.
 - A store is *dead* iff the state it published reaches only writes covering its
   extent: the chain is the barrier, and `dse` asks `AliasFacts` only what two
-  addresses are. Law S2 is the same statement inside the e-graph view.
+  addresses are. Law S2 is the same statement inside the e-graph view. It is
+  also dead where the slot it writes has no reader at all — an allocation the
+  function never lets out of its frame and never loads, whose chain the walk
+  cannot follow past the ports it crosses.
 
 ### 6.5 The state laws
 

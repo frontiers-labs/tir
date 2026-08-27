@@ -7,11 +7,12 @@
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  %fn_f = func.func @f(%0: !i64, %1: !i32) {
+  %fn_f = func.func @f(%0: !i64, %1: !i32) -> !i64 {
     %2 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
     ptr.store %0, %2
     ptr.store %1, %2
-    func.return
+    %3 = ptr.load %2 : !i64
+    func.return %3
   }
   module_end
 }
