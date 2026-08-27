@@ -244,7 +244,7 @@ impl APFloat {
 
     /// Convert to f32 (may lose precision or be inaccurate for non-standard formats)
     pub fn to_f32(&self) -> f32 {
-        if self.exp_width == 8 && self.mant_width == 23 && !self.explicit_leading_bit {
+        if self.is_binary32() {
             return f32::from_bits(self.to_bits() as u32);
         }
         self.to_f64() as f32
@@ -289,43 +289,118 @@ impl APFloat {
         if self.is_infinity() {
             return Self::infinity(new_exp_width, new_mant_width, new_explicit, self.sign);
         }
-        if self.is_zero() {
+
+        let (significand, exp2) = self.decompose();
+        if significand == 0 {
             return Self::zero(new_exp_width, new_mant_width, new_explicit, self.sign);
         }
 
-        let source_bias = self.exponent_bias();
-        let target_bias = (1i32 << (new_exp_width - 1)) - 1;
+        Self::compose(
+            new_exp_width,
+            new_mant_width,
+            new_explicit,
+            self.sign,
+            significand,
+            exp2,
+        )
+    }
 
-        let unbiased_exp = (self.exponent as i32) - source_bias;
-        let new_biased_exp = unbiased_exp + target_bias;
+    /// The magnitude as an integer significand and a power of two, so that the
+    /// value is `significand * 2^exp2`. A subnormal's exponent field reads as
+    /// zero but its true exponent is the format's minimum, and it carries no
+    /// implicit leading one -- conflating the two is what makes a subnormal
+    /// come out scaled by the whole exponent range.
+    fn decompose(&self) -> (u128, i32) {
+        let mantissa = self.mantissa();
+        let fraction_bits = self.fraction_bits() as i32;
+        let bias = self.exponent_bias();
 
-        let target_exp_max = (1i32 << new_exp_width) - 1;
-        let new_exponent = if new_biased_exp <= 0 {
-            0 // underflow to zero/denormal
-        } else if new_biased_exp >= target_exp_max {
-            return Self::infinity(new_exp_width, new_mant_width, new_explicit, self.sign);
+        if self.exponent == 0 {
+            (mantissa, 1 - bias - fraction_bits)
+        } else if self.explicit_leading_bit {
+            (mantissa, self.exponent as i32 - bias - fraction_bits)
         } else {
-            new_biased_exp as u32
+            (
+                mantissa | (1u128 << self.mant_width),
+                self.exponent as i32 - bias - fraction_bits,
+            )
+        }
+    }
+
+    /// Encode `significand * 2^exp2` into the given format, rounding to nearest
+    /// with ties to even. A value below the format's smallest normal keeps that
+    /// exponent and denormalizes the significand instead, which is what makes
+    /// the subnormal range representable rather than a hole at zero.
+    fn compose(
+        exp_width: u32,
+        mant_width: u32,
+        explicit: bool,
+        sign: bool,
+        significand: u128,
+        exp2: i32,
+    ) -> Self {
+        let bias = (1i32 << (exp_width - 1)) - 1;
+        let fraction_bits = (if explicit { mant_width - 1 } else { mant_width }) as i32;
+        let msb = (127 - significand.leading_zeros()) as i32;
+
+        let min_normal = 1 - bias;
+        let mut exponent = (exp2 + msb).max(min_normal);
+        let shift = exp2 - exponent + fraction_bits;
+
+        let mut mantissa = if shift >= 0 {
+            significand << shift
+        } else {
+            shift_right_round(significand, (-shift) as u32)
         };
 
-        let (new_mant_high, new_mant_low) = if new_mant_width > self.mant_width {
-            let shift = new_mant_width - self.mant_width;
-            self.shift_mantissa_left(shift)
-        } else if new_mant_width < self.mant_width {
-            let shift = self.mant_width - new_mant_width;
-            self.shift_mantissa_right(shift)
+        // Rounding can carry the significand into the next binade.
+        if mantissa >> (fraction_bits + 1) != 0 {
+            mantissa >>= 1;
+            exponent += 1;
+        }
+
+        let exp_max = (1u32 << exp_width) - 1;
+        if mantissa == 0 {
+            return Self::zero(exp_width, mant_width, explicit, sign);
+        }
+        if exponent + bias >= exp_max as i32 {
+            return Self::infinity(exp_width, mant_width, explicit, sign);
+        }
+
+        let (biased, stored) = if mantissa >> fraction_bits == 0 {
+            (0, mantissa)
+        } else if explicit {
+            ((exponent + bias) as u32, mantissa)
         } else {
-            (self.mantissa_high, self.mantissa_low)
+            (
+                (exponent + bias) as u32,
+                mantissa & ((1u128 << mant_width) - 1),
+            )
         };
 
         APFloat {
-            exp_width: new_exp_width,
-            mant_width: new_mant_width,
-            explicit_leading_bit: new_explicit,
-            sign: self.sign,
-            exponent: new_exponent,
-            mantissa_high: new_mant_high,
-            mantissa_low: new_mant_low,
+            exp_width,
+            mant_width,
+            explicit_leading_bit: explicit,
+            sign,
+            exponent: biased,
+            mantissa_high: (stored >> 64) as u64,
+            mantissa_low: stored as u64,
+        }
+    }
+
+    /// The mantissa field as a single integer.
+    fn mantissa(&self) -> u128 {
+        ((self.mantissa_high as u128) << 64) | (self.mantissa_low as u128)
+    }
+
+    /// Bits of the mantissa field that sit below the leading one, which the
+    /// explicit-leading-bit formats store rather than imply.
+    fn fraction_bits(&self) -> u32 {
+        if self.explicit_leading_bit {
+            self.mant_width - 1
+        } else {
+            self.mant_width
         }
     }
 
@@ -385,28 +460,44 @@ impl APFloat {
     /// Add via native f64 arithmetic; may lose precision for non-f64 formats.
     pub fn add(&self, other: &APFloat) -> Self {
         self.assert_same_format(other);
+        if self.is_binary32() {
+            return self.with_native((self.to_f32() + other.to_f32()) as f64);
+        }
         self.with_native(self.to_f64() + other.to_f64())
     }
 
     /// Subtract two floating-point numbers
     pub fn sub(&self, other: &APFloat) -> Self {
-        self.add(&other.neg())
+        self.assert_same_format(other);
+        if self.is_binary32() {
+            return self.with_native((self.to_f32() - other.to_f32()) as f64);
+        }
+        self.with_native(self.to_f64() - other.to_f64())
     }
 
     /// Multiply two floating-point numbers
     pub fn mul(&self, other: &APFloat) -> Self {
         self.assert_same_format(other);
+        if self.is_binary32() {
+            return self.with_native((self.to_f32() * other.to_f32()) as f64);
+        }
         self.with_native(self.to_f64() * other.to_f64())
     }
 
     /// Divide two floating-point numbers
     pub fn div(&self, other: &APFloat) -> Self {
         self.assert_same_format(other);
+        if self.is_binary32() {
+            return self.with_native((self.to_f32() / other.to_f32()) as f64);
+        }
         self.with_native(self.to_f64() / other.to_f64())
     }
 
     /// Square root
     pub fn sqrt(&self) -> Self {
+        if self.is_binary32() {
+            return self.with_native(self.to_f32().sqrt() as f64);
+        }
         self.with_native(self.to_f64().sqrt())
     }
 
@@ -414,6 +505,9 @@ impl APFloat {
     pub fn fma(&self, b: &APFloat, c: &APFloat) -> Self {
         self.assert_same_format(b);
         self.assert_same_format(c);
+        if self.is_binary32() {
+            return self.with_native(self.to_f32().mul_add(b.to_f32(), c.to_f32()) as f64);
+        }
         self.with_native(self.to_f64().mul_add(b.to_f64(), c.to_f64()))
     }
 
@@ -501,45 +595,31 @@ impl APFloat {
             other.clone()
         }
     }
+}
 
-    fn shift_mantissa_left(&self, shift: u32) -> (u64, u64) {
-        if shift == 0 {
-            return (self.mantissa_high, self.mantissa_low);
-        }
-
-        if shift >= 128 {
-            return (0, 0);
-        }
-
-        if shift < 64 {
-            let new_low = self.mantissa_low << shift;
-            let new_high = (self.mantissa_high << shift) | (self.mantissa_low >> (64 - shift));
-            (new_high, new_low)
-        } else {
-            let new_high = self.mantissa_low << (shift - 64);
-            (new_high, 0)
-        }
+/// Shift right by `shift`, rounding to nearest with ties to even.
+fn shift_right_round(value: u128, shift: u32) -> u128 {
+    if shift == 0 {
+        return value;
+    }
+    if shift >= 128 {
+        // Everything shifts out, so the result can only be the tie-break: a
+        // discarded part above half of the last place, which needs the shift
+        // to be exactly the width.
+        return u128::from(shift == 128 && value > (1u128 << 127));
     }
 
-    fn shift_mantissa_right(&self, shift: u32) -> (u64, u64) {
-        if shift == 0 {
-            return (self.mantissa_high, self.mantissa_low);
-        }
-
-        if shift >= 128 {
-            return (0, 0);
-        }
-
-        if shift < 64 {
-            let new_low = (self.mantissa_low >> shift) | (self.mantissa_high << (64 - shift));
-            let new_high = self.mantissa_high >> shift;
-            (new_high, new_low)
-        } else {
-            let new_low = self.mantissa_high >> (shift - 64);
-            (0, new_low)
-        }
+    let kept = value >> shift;
+    let discarded = value & ((1u128 << shift) - 1);
+    let half = 1u128 << (shift - 1);
+    if discarded > half || (discarded == half && kept & 1 == 1) {
+        kept + 1
+    } else {
+        kept
     }
+}
 
+impl APFloat {
     /// Assert two values share exponent and mantissa widths.
     fn assert_same_format(&self, other: &APFloat) {
         assert_eq!(
@@ -550,6 +630,13 @@ impl APFloat {
             self.mant_width, other.mant_width,
             "Mantissa widths must match"
         );
+    }
+
+    /// The IEEE binary32 interchange format. Arithmetic on it has to be done in
+    /// `f32`: computing in `f64` and narrowing the result afterwards rounds
+    /// twice, which lands one ulp off for about one product in two thousand.
+    fn is_binary32(&self) -> bool {
+        self.exp_width == 8 && self.mant_width == 23 && !self.explicit_leading_bit
     }
 
     /// Wrap a native-f64 result back into this value's format.
@@ -599,8 +686,154 @@ impl fmt::Display for APFloat {
 
 #[cfg(test)]
 mod tests {
+
+    // Arithmetic done in `f64` and narrowed afterwards rounds twice, which shows
+    // up as a one-ulp error. Each operation must round exactly once, into the
+    // format the operands are in.
+    #[test]
+    fn binary32_arithmetic_rounds_once() {
+        let cases = [
+            (0x7f7f7f7fu32, 0x81818181u32),
+            (0x3fc00000, 0x40490fdb),
+            (0x7f7fffff, 0x33800000),
+            (0x00800001, 0x3f800001),
+        ];
+        for (a_bits, b_bits) in cases {
+            let a = APFloat::from_bits(8, 23, false, a_bits as u128);
+            let b = APFloat::from_bits(8, 23, false, b_bits as u128);
+            let (x, y) = (f32::from_bits(a_bits), f32::from_bits(b_bits));
+            assert_eq!(
+                a.mul(&b).to_bits() as u32,
+                (x * y).to_bits(),
+                "mul {a_bits:#x}"
+            );
+            assert_eq!(
+                a.add(&b).to_bits() as u32,
+                (x + y).to_bits(),
+                "add {a_bits:#x}"
+            );
+            assert_eq!(
+                a.sub(&b).to_bits() as u32,
+                (x - y).to_bits(),
+                "sub {a_bits:#x}"
+            );
+            assert_eq!(
+                a.div(&b).to_bits() as u32,
+                (x / y).to_bits(),
+                "div {a_bits:#x}"
+            );
+            assert_eq!(
+                a.fma(&b, &b).to_bits() as u32,
+                x.mul_add(y, y).to_bits(),
+                "fma {a_bits:#x}"
+            );
+            assert_eq!(
+                a.sqrt().to_bits() as u32,
+                x.sqrt().to_bits(),
+                "sqrt {a_bits:#x}"
+            );
+        }
+    }
     use super::*;
     use proptest::prelude::*;
+
+    // A result below the target format's smallest normal is a subnormal, not
+    // zero: narrowing has to denormalize the significand instead of dropping
+    // the exponent on the floor. Truncating leaves the mantissa reading as if
+    // it were still normalized, which is wrong by many orders of magnitude
+    // rather than by one ulp.
+    #[test]
+    fn narrowing_into_the_subnormal_range_keeps_the_value() {
+        for bits in [
+            0x0000_0001u32,
+            0x0000_0003,
+            0x0000_00ff,
+            0x007f_ffff,
+            0x0040_0000,
+        ] {
+            let wide = APFloat::from_f64(f32::from_bits(bits) as f64);
+            assert_eq!(
+                wide.convert(8, 23, false).to_bits() as u32,
+                bits,
+                "narrowing {bits:#x}"
+            );
+        }
+    }
+
+    // The same value seen through the wider format: a subnormal carries no
+    // implicit leading one and its exponent is the format's minimum, not the
+    // bias-relative reading of a zero exponent field.
+    #[test]
+    fn widening_a_subnormal_keeps_the_value() {
+        for bits in [0x0000_0001u32, 0x0000_0003, 0x007f_ffff] {
+            let narrow = APFloat::from_bits(8, 23, false, bits as u128);
+            assert_eq!(
+                narrow.to_f64(),
+                f32::from_bits(bits) as f64,
+                "widening {bits:#x}"
+            );
+        }
+    }
+
+    // Arithmetic whose result lands in the subnormal range, which is how the
+    // narrowing bug reaches the simulator: every binary32 operation wraps its
+    // result back into the format through a narrowing convert.
+    #[test]
+    fn binary32_arithmetic_reaches_subnormals() {
+        let cases: [(u32, u32); 4] = [
+            (0x0000_0001, 0x0000_0000),
+            (0x0000_0003, 0x0000_0000),
+            (0x0000_0001, 0x0000_0001),
+            (0x0080_0000, 0x0080_0000),
+        ];
+        for (a_bits, b_bits) in cases {
+            let a = APFloat::from_bits(8, 23, false, a_bits as u128);
+            let b = APFloat::from_bits(8, 23, false, b_bits as u128);
+            let (x, y) = (f32::from_bits(a_bits), f32::from_bits(b_bits));
+            assert_eq!(
+                a.add(&b).to_bits() as u32,
+                (x + y).to_bits(),
+                "add {a_bits:#x}"
+            );
+            assert_eq!(
+                a.sub(&b).to_bits() as u32,
+                (x - y).to_bits(),
+                "sub {a_bits:#x}"
+            );
+        }
+    }
+
+    // Narrowing is round-to-nearest-even, including when the result is
+    // subnormal and when rounding carries it up into the smallest normal.
+    #[test]
+    fn narrowing_rounds_to_nearest_even() {
+        let ulp = f32::from_bits(1) as f64;
+        let cases = [
+            (ulp * 0.5, 0x0000_0000u32),
+            (f64::from_bits((ulp * 0.5).to_bits() + 1), 0x0000_0001),
+            (ulp * 1.5, 0x0000_0002),
+            (ulp * 2.5, 0x0000_0002),
+            (ulp * 3.5, 0x0000_0004),
+            (f32::MIN_POSITIVE as f64 - ulp * 0.5, 0x0080_0000),
+        ];
+        for (value, want) in cases {
+            assert_eq!(
+                APFloat::from_f64(value).convert(8, 23, false).to_bits() as u32,
+                want,
+                "rounding {value:e}"
+            );
+        }
+    }
+
+    // Underflow past the smallest subnormal still gives a signed zero, and
+    // overflow past the largest finite still gives a signed infinity.
+    #[test]
+    fn narrowing_saturates_at_both_ends() {
+        let tiny = APFloat::from_f64(-f64::MIN_POSITIVE).convert(8, 23, false);
+        assert_eq!(tiny.to_bits() as u32, 0x8000_0000);
+        let huge = APFloat::from_f64(f64::MAX).convert(8, 23, false);
+        assert_eq!(huge.to_bits() as u32, f32::INFINITY.to_bits());
+    }
 
     /// Equality that treats any two NaNs as equal (f64 NaN != NaN otherwise).
     fn f64_eq(a: f64, b: f64) -> bool {
@@ -608,6 +841,29 @@ mod tests {
     }
 
     proptest! {
+        // Narrowing has to agree with the hardware conversion over the whole
+        // range, subnormals and rounding boundaries included.
+        #[test]
+        fn narrowing_to_binary32_matches_native(x in prop::num::f64::ANY) {
+            let narrowed = APFloat::from_f64(x).convert(8, 23, false);
+            let native = x as f32;
+            if native.is_nan() {
+                prop_assert!(narrowed.is_nan());
+            } else {
+                prop_assert_eq!(narrowed.to_bits() as u32, native.to_bits());
+            }
+        }
+
+        // And widening has to be exact, since every binary32 value is a
+        // binary64 value.
+        #[test]
+        fn widening_from_binary32_is_exact(bits in prop::num::u32::ANY) {
+            let value = f32::from_bits(bits);
+            prop_assume!(!value.is_nan());
+            let widened = APFloat::from_bits(8, 23, false, bits as u128).to_f64();
+            prop_assert_eq!(widened.to_bits(), (value as f64).to_bits());
+        }
+
         #[test]
         fn test_add(x in prop::num::f64::ANY, y in prop::num::f64::ANY) {
             let res = APFloat::from_f64(x).add(&APFloat::from_f64(y));

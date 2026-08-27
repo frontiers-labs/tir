@@ -70,6 +70,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 base: None,
 // CHECK-NEXT:                 file: None,
+// CHECK-NEXT:                 suffix: None,
 // CHECK-NEXT:                 parameters: {
 // CHECK-NEXT:                     "ENCODING_LEN": (
 // CHECK-NEXT:                         Integer,
@@ -504,7 +505,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 931..29533,
+// CHECK-NEXT:                 span: 931..29578,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

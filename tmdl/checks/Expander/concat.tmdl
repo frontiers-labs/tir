@@ -101,6 +101,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 base: None,
 // CHECK-NEXT:                 file: None,
+// CHECK-NEXT:                 suffix: None,
 // CHECK-NEXT:                 parameters: {
 // CHECK-NEXT:                     "ENCODING_LEN": (
 // CHECK-NEXT:                         Integer,
@@ -466,7 +467,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "mul64",
-// CHECK-NEXT:                                         span: 1651..25575,
+// CHECK-NEXT:                                         span: 1651..25620,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -481,7 +482,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "16",
-// CHECK-NEXT:                                         span: 1651..25575,
+// CHECK-NEXT:                                         span: 1651..25620,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -499,7 +500,7 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1651..25575,
+// CHECK-NEXT:                                             span: 1651..25620,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Binary(
@@ -507,29 +508,29 @@ alu2!(Mul, "mul", 1, 6)
 // CHECK-NEXT:                                             lhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs1",
-// CHECK-NEXT:                                                     span: 1651..25575,
+// CHECK-NEXT:                                                     span: 1651..25620,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             rhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs2",
-// CHECK-NEXT:                                                     span: 1651..25575,
+// CHECK-NEXT:                                                     span: 1651..25620,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             op: Add,
-// CHECK-NEXT:                                             span: 1651..25575,
+// CHECK-NEXT:                                             span: 1651..25620,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1651..25575,
+// CHECK-NEXT:                                     span: 1651..25620,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1651..25575,
+// CHECK-NEXT:                         span: 1651..25620,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1651..25575,
+// CHECK-NEXT:                 span: 1651..25620,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

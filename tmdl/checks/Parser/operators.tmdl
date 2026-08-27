@@ -77,6 +77,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 base: None,
 // CHECK-NEXT:                 file: None,
+// CHECK-NEXT:                 suffix: None,
 // CHECK-NEXT:                 parameters: {
 // CHECK-NEXT:                     "ENCODING_LEN": (
 // CHECK-NEXT:                         Integer,
@@ -639,7 +640,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1122..35887,
+// CHECK-NEXT:                 span: 1122..35932,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

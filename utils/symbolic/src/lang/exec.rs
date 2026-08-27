@@ -584,7 +584,18 @@ fn eval_node<V, M: Memory>(
                 split_bits(c(0), count)
             }
         }
-        SymKind::IterConcat => concat_lanes(c(0)),
+        SymKind::IterConcat => {
+            // Each operand contributes its lanes in order, the earliest operand
+            // into the low bits.
+            let mut lanes = vec![];
+            for index in 0..graph.children(node).count() {
+                let Value::Iterator(part) = c(index) else {
+                    panic!("concat requires iterator operands");
+                };
+                lanes.extend(part);
+            }
+            concat_lanes(Value::Iterator(lanes))
+        }
         SymKind::Iota => {
             let count = as_int!(c(0), "iota").to_u64();
             let width = as_int!(c(1), "iota").to_u64() as u32;

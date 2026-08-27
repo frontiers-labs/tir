@@ -193,8 +193,8 @@ impl SymKind {
             | SymKind::Bitcast
             | SymKind::Log2Ceil
             | SymKind::Sqrt
-            | SymKind::AsFloat
-            | SymKind::IterConcat => 1,
+            | SymKind::AsFloat => 1,
+            SymKind::IterConcat => 1,
             SymKind::If
             | SymKind::Clamp
             | SymKind::Extract
@@ -211,13 +211,15 @@ impl SymKind {
         }
     }
 
-    /// Whether a node of this kind may take `n` children. `Split` is the one
-    /// variadic form: `split(x, n)` cuts into equal lanes, `split(x, n, w)`
-    /// takes `n` lanes of `w` bits from the low end.
+    /// Whether a node of this kind may take `n` children. `Split` takes either
+    /// form: `split(x, n)` cuts into equal lanes, `split(x, n, w)` takes `n`
+    /// lanes of `w` bits from the low end. `Zip` and `IterConcat` are variadic,
+    /// pairing and joining any number of iterators respectively.
     pub fn accepts_arity(&self, n: usize) -> bool {
         match self {
             SymKind::Split => n == 2 || n == 3,
             SymKind::Zip => n >= 2,
+            SymKind::IterConcat => n >= 1,
             SymKind::StateAssign
             | SymKind::StateStore
             | SymKind::StateStoreConditional

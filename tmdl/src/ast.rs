@@ -1920,9 +1920,16 @@ impl Call {
                 ctx.add_node(tir_symbolic::lang::SymKind::Split, &children)
             }
             BuiltinFunction::Concat => {
-                assert!(self.arguments.len() == 1, "concat requires 1 argument");
-                let iter = self.arguments[0].lower_with_ctx(ctx);
-                ctx.add_node(tir_symbolic::lang::SymKind::IterConcat, &[iter])
+                assert!(
+                    !self.arguments.is_empty(),
+                    "concat requires at least 1 argument"
+                );
+                let iters: Vec<_> = self
+                    .arguments
+                    .iter()
+                    .map(|arg| arg.lower_with_ctx(ctx))
+                    .collect();
+                ctx.add_node(tir_symbolic::lang::SymKind::IterConcat, &iters)
             }
             BuiltinFunction::Zip => {
                 assert!(

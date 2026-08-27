@@ -485,10 +485,13 @@ impl APInt {
         self.value.cmp(&other.value)
     }
 
-    /// Signed comparison
+    /// Signed comparison. Like signed division, this is defined on the bit
+    /// pattern rather than on the `signed` flag: a value produced without the
+    /// flag set (e.g. an `extract`, or a vector lane out of a `split`) must
+    /// still compare with its high bit as the sign.
     pub fn scmp(&self, other: &APInt) -> Ordering {
         assert_eq!(self.width, other.width, "Widths must match");
-        self.to_i64().cmp(&other.to_i64())
+        self.signed_at_width().cmp(&other.signed_at_width())
     }
 
     /// Primary ordering key: magnitude as i128 (signed sign-extended, unsigned zero-extended).
@@ -728,6 +731,28 @@ impl_unop!(Neg, neg, neg);
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    // Signed comparison is defined on the bit pattern, like signed division:
+    // a lane that came out of an `extract` or `split` carries no signedness
+    // flag but still has its high bit as the sign.
+    #[test]
+    fn signed_compare_uses_the_bits_not_the_flag() {
+        let minus_16 = APInt::new(8, 0xF0);
+        let plus_48 = APInt::new(8, 0x30);
+        assert!(minus_16.slt(&plus_48));
+        assert!(!minus_16.sgt(&plus_48));
+        assert!(plus_48.sgt(&minus_16));
+        assert!(minus_16.ugt(&plus_48));
+    }
+
+    #[test]
+    fn signed_compare_at_narrow_widths() {
+        let min = APInt::new(9, 0x100);
+        let max = APInt::new(9, 0x0FF);
+        assert!(min.slt(&max));
+        assert!(max.sgt(&min));
+        assert!(min.ugt(&max));
+    }
 
     proptest! {
         #[test]

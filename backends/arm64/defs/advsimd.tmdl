@@ -101,6 +101,270 @@ register_class VPR2D for [AdvSIMD] {
     }
 }
 
+// Halving add and subtract: the exact sum or difference is formed one bit wider
+// than the lane and shifted back into it, so the intermediate never overflows.
+// The rounding forms add one before the shift. Truncating to `e` bits is what
+// makes the shift's sign irrelevant, so a plain `>>` is correct for both
+// signednesses.
+fn shadd_lane(a, b, e) { extract((sext(a, e + 1) + sext(b, e + 1)) >> 1, e - 1, 0) }
+fn uhadd_lane(a, b, e) { extract((zext(a, e + 1) + zext(b, e + 1)) >> 1, e - 1, 0) }
+fn srhadd_lane(a, b, e) { extract((sext(a, e + 1) + sext(b, e + 1) + zext(0b1, e + 1)) >> 1, e - 1, 0) }
+fn urhadd_lane(a, b, e) { extract((zext(a, e + 1) + zext(b, e + 1) + zext(0b1, e + 1)) >> 1, e - 1, 0) }
+fn shsub_lane(a, b, e) { extract((sext(a, e + 1) - sext(b, e + 1)) >> 1, e - 1, 0) }
+fn uhsub_lane(a, b, e) { extract((zext(a, e + 1) - zext(b, e + 1)) >> 1, e - 1, 0) }
+
+// Saturation endpoints for a lane, and the endpoint an overflowing result pins
+// to. Which endpoint that is follows the sign the exact result would have had,
+// which for every case below is the sign of the first operand.
+fn lane_max(e) { (zext(0b1, e) << (e - 1)) - zext(0b1, e) }
+fn lane_min(e) { zext(0b0, e) - (zext(0b1, e) << (e - 1)) }
+fn lane_ones(e) { sext(0b1, e) }
+fn sat_endpoint(a, e) { if extract(a, e - 1, e - 1) == zext(0b0, 1) { lane_max(e) } else { lane_min(e) } }
+
+// Signed saturation of a value already computed in `w` bits down to `e`. Only
+// the doubling multiplies need this; everything else below detects its own
+// overflow inside the lane, because a lane is as wide as constant folding goes.
+fn sat_signed(x, w, e) {
+    max = (zext(0b1, w) << (e - 1)) - zext(0b1, w);
+    min = zext(0b0, w) - (zext(0b1, w) << (e - 1));
+    if x > max { extract(max, e - 1, 0) } else if x < min { extract(min, e - 1, 0) } else { extract(x, e - 1, 0) }
+}
+
+// Saturating add and subtract, reading overflow off the signs rather than by
+// widening: a signed add overflows only when the operands agree in sign and the
+// result does not, a signed subtract only when they differ in sign and the
+// result disagrees with the first. An unsigned add overflows exactly when the
+// sum wraps below an operand, and an unsigned subtract can only underflow, so
+// it clamps to zero rather than to the unsigned maximum.
+fn sqadd_lane(a, b, e) {
+    r = a + b;
+    if extract((a ^ r) & (b ^ r), e - 1, e - 1) == zext(0b1, 1) { sat_endpoint(a, e) } else { r }
+}
+fn sqsub_lane(a, b, e) {
+    r = a - b;
+    if extract((a ^ b) & (a ^ r), e - 1, e - 1) == zext(0b1, 1) { sat_endpoint(a, e) } else { r }
+}
+fn uqadd_lane(a, b, e) { r = a + b; if r ~< a { lane_ones(e) } else { r } }
+fn uqsub_lane(a, b, e) { if a ~< b { zext(0b0, e) } else { a - b } }
+
+// Three-same shifts take a signed shift amount from the low byte of the second
+// source lane: non-negative shifts left, negative shifts right by the negation.
+// The amount is read nine bits wide because negating the most negative byte
+// (-128) needs the extra bit. Once an amount is known to be below the lane
+// width it is narrowed to the lane so the shift operands agree in width.
+fn shift_amount(b) { sext(extract(b, 7, 0), 9) }
+fn shift_narrow(m, e) { zext(extract(m, 7, 0), e) }
+
+// The primitive shifts, each by an already-positive amount `m`. Shifting at or
+// past the lane width clears the lane, except for a signed right shift, where
+// saturating the amount at `e - 1` already leaves the sign replicated.
+fn shl_lane(a, m, e) { if m ~>= zext(e, 9) { zext(0b0, e) } else { a << shift_narrow(m, e) } }
+fn sshr_lane(a, m, e) { if m ~>= zext(e, 9) { a >>> zext(e - 1, e) } else { a >>> shift_narrow(m, e) } }
+fn ushr_lane(a, m, e) { if m ~>= zext(e, 9) { zext(0b0, e) } else { a >> shift_narrow(m, e) } }
+
+// Rounding right shift: the shifted lane plus the last bit shifted out. That
+// sum cannot leave the lane, because shifting right by at least one has already
+// halved the magnitude. Shifting by the whole lane width keeps only the
+// rounding bit, which a signed lane never has set but an unsigned one can.
+fn round_bit(a, k, e) { zext(extract(a >> (k - zext(0b1, e)), 0, 0), e) }
+fn srshr_lane(a, m, e) {
+    if m ~>= zext(e, 9) { zext(0b0, e) }
+    else { k = shift_narrow(m, e); (a >>> k) + round_bit(a, k, e) }
+}
+fn urshr_lane(a, m, e) {
+    if m ~> zext(e, 9) { zext(0b0, e) }
+    else if m == zext(e, 9) { zext(extract(a, e - 1, e - 1), e) }
+    else { k = shift_narrow(m, e); (a >> k) + round_bit(a, k, e) }
+}
+
+// Saturating left shift: shift, then undo the shift to see whether it was
+// lossless. Anything that does not come back unchanged lost a significant bit
+// and pins to the endpoint instead.
+fn sqshl_left(a, m, e) {
+    if m ~>= zext(e, 9) { if a == zext(0b0, e) { zext(0b0, e) } else { sat_endpoint(a, e) } }
+    else { k = shift_narrow(m, e); r = a << k; if (r >>> k) == a { r } else { sat_endpoint(a, e) } }
+}
+fn uqshl_left(a, m, e) {
+    if m ~>= zext(e, 9) { if a == zext(0b0, e) { zext(0b0, e) } else { lane_ones(e) } }
+    else { k = shift_narrow(m, e); r = a << k; if (r >> k) == a { r } else { lane_ones(e) } }
+}
+
+
+// The three-same shift lanes: pick the direction from the amount's sign, then
+// the flavour of shift from the mnemonic. A right shift never saturates, so
+// the saturating mnemonics differ from the plain ones only when shifting left.
+fn sshl_lane(a, b, e) { sh = shift_amount(b); if sh >= zext(0b0, 9) { shl_lane(a, sh, e) } else { sshr_lane(a, zext(0b0, 9) - sh, e) } }
+fn ushl_lane(a, b, e) { sh = shift_amount(b); if sh >= zext(0b0, 9) { shl_lane(a, sh, e) } else { ushr_lane(a, zext(0b0, 9) - sh, e) } }
+fn srshl_lane(a, b, e) { sh = shift_amount(b); if sh >= zext(0b0, 9) { shl_lane(a, sh, e) } else { srshr_lane(a, zext(0b0, 9) - sh, e) } }
+fn urshl_lane(a, b, e) { sh = shift_amount(b); if sh >= zext(0b0, 9) { shl_lane(a, sh, e) } else { urshr_lane(a, zext(0b0, 9) - sh, e) } }
+fn sqshl_lane(a, b, e) { sh = shift_amount(b); if sh >= zext(0b0, 9) { sqshl_left(a, sh, e) } else { sshr_lane(a, zext(0b0, 9) - sh, e) } }
+fn uqshl_lane(a, b, e) { sh = shift_amount(b); if sh >= zext(0b0, 9) { uqshl_left(a, sh, e) } else { ushr_lane(a, zext(0b0, 9) - sh, e) } }
+fn sqrshl_lane(a, b, e) { sh = shift_amount(b); if sh >= zext(0b0, 9) { sqshl_left(a, sh, e) } else { srshr_lane(a, zext(0b0, 9) - sh, e) } }
+fn uqrshl_lane(a, b, e) { sh = shift_amount(b); if sh >= zext(0b0, 9) { uqshl_left(a, sh, e) } else { urshr_lane(a, zext(0b0, 9) - sh, e) } }
+
+
+// Absolute difference, accumulated by `saba`/`uaba` and produced alone by
+// `sabd`/`uabd`. The difference is taken in the wider of the two orders so it
+// is never negative, which is why the lane cannot overflow.
+fn sabd_lane(a, b, e) { if a > b { a - b } else { b - a } }
+fn uabd_lane(a, b, e) { if a ~> b { a - b } else { b - a } }
+
+// Polynomial multiply over GF(2): the xor of the copies of `a` shifted by each
+// set bit of `b`, truncated back to the lane. Only the byte arrangements have
+// this operation, so the eight terms are written out rather than folded over a
+// nested lambda, which cannot see the lane variables of the map it sits in.
+fn pmul_lane(a, b) {
+    (if extract(b, 0, 0) { a } else { zext(0b0, 8) })
+        ^ (if extract(b, 1, 1) { a << 1 } else { zext(0b0, 8) })
+        ^ (if extract(b, 2, 2) { a << 2 } else { zext(0b0, 8) })
+        ^ (if extract(b, 3, 3) { a << 3 } else { zext(0b0, 8) })
+        ^ (if extract(b, 4, 4) { a << 4 } else { zext(0b0, 8) })
+        ^ (if extract(b, 5, 5) { a << 5 } else { zext(0b0, 8) })
+        ^ (if extract(b, 6, 6) { a << 6 } else { zext(0b0, 8) })
+        ^ (if extract(b, 7, 7) { a << 7 } else { zext(0b0, 8) })
+}
+
+// Saturating doubling multiply, keeping the high half. Halving both the product
+// and the shift keeps the intermediate inside `w`, twice the lane: `2ab >> e` is
+// `ab >> (e - 1)`, and the rounding form's half ulp becomes `2^(e-2)`. The
+// narrowing saturates exactly once, when both sources are the most negative
+// value the lane holds.
+fn sqdmulh_lane(a, b, e, w) { sat_signed((sext(a, w) * sext(b, w)) >>> zext(e - 1, w), w, e) }
+
+fn sqrdmulh_lane(a, b, e, w) {
+    sat_signed(((sext(a, w) * sext(b, w)) + (zext(0b1, w) << (e - 2))) >>> zext(e - 1, w), w, e)
+}
+
+// Float lane helpers. `e` is the lane width and `m` its significand width, both
+// literals fixed by the arrangement (32/23 for the `.2s`/`.4s` forms, 64/52 for
+// `.2d`), which is what lets the format constants be built arithmetically
+// instead of selected at run time.
+fn fp_sign_mask(e) { zext(0b1, e) << (e - 1) }
+fn fp_mag(a, e) { a & (fp_sign_mask(e) - zext(0b1, e)) }
+fn fp_neg(a, e) { a ^ fp_sign_mask(e) }
+
+// Positive infinity is the all-ones exponent with an empty significand, so any
+// greater magnitude is a NaN.
+fn fp_inf(e, m) { (zext(0b1, e) << (e - 1)) - (zext(0b1, e) << m) }
+fn fp_is_nan(a, e, m) { fp_mag(a, e) ~> fp_inf(e, m) }
+fn fp_is_inf(a, e, m) { fp_mag(a, e) == fp_inf(e, m) }
+fn fp_is_zero(a, e) { fp_mag(a, e) == zext(0b0, e) }
+
+// Quieting sets the significand's leading bit, which leaves an already-quiet
+// NaN alone -- exactly what FPProcessNaNs does to the operand it returns.
+fn fp_quiet(a, e, m) { a | (zext(0b1, e) << (m - 1)) }
+
+// 2.0, 3.0 and 1.5: the exponent one above the bias, and the bias itself with
+// the significand's leading bit set.
+fn fp_two(e) { zext(0b1, e) << (e - 2) }
+fn fp_three(e, m) { fp_two(e) | (zext(0b1, e) << (m - 1)) }
+fn fp_one_point_five(e, m) { (fp_two(e) - (zext(0b1, e) << m)) | (zext(0b1, e) << (m - 1)) }
+
+// A signalling NaN is one whose significand's leading bit is clear.
+fn fp_is_snan(a, e, m) { fp_is_nan(a, e, m) & (extract(a, m - 1, m - 1) == zext(0b0, 1)) }
+fn fp_either_nan(a, b, e, m) { fp_is_nan(a, e, m) | fp_is_nan(b, e, m) }
+
+// FPProcessNaNs: signalling NaNs are preferred over quiet ones and the earlier
+// operand over the later, and the chosen NaN is returned quieted, keeping its
+// sign and payload. Plain IEEE arithmetic would return one canonical NaN
+// instead, so every float operation below has to select its result explicitly.
+fn fp_nan2(a, b, e, m) {
+    if fp_is_snan(a, e, m) { fp_quiet(a, e, m) }
+    else if fp_is_snan(b, e, m) { fp_quiet(b, e, m) }
+    else if fp_is_nan(a, e, m) { a }
+    else { b }
+}
+
+fn fp_nan3(d, a, b, e, m) {
+    if fp_is_snan(d, e, m) { fp_quiet(d, e, m) }
+    else if fp_is_snan(a, e, m) { fp_quiet(a, e, m) }
+    else if fp_is_snan(b, e, m) { fp_quiet(b, e, m) }
+    else if fp_is_nan(d, e, m) { d }
+    else if fp_is_nan(a, e, m) { a }
+    else { b }
+}
+
+// The plain arithmetic, each guarded so a NaN operand propagates.
+fn fadd_lane(a, b, e, m) { if fp_either_nan(a, b, e, m) { fp_nan2(a, b, e, m) } else { fadd(a, b) } }
+fn fsub_lane(a, b, e, m) { if fp_either_nan(a, b, e, m) { fp_nan2(a, b, e, m) } else { fsub(a, b) } }
+fn fmul_lane(a, b, e, m) { if fp_either_nan(a, b, e, m) { fp_nan2(a, b, e, m) } else { fmul(a, b) } }
+fn fdiv_lane(a, b, e, m) { if fp_either_nan(a, b, e, m) { fp_nan2(a, b, e, m) } else { fdiv(a, b) } }
+
+// FABD is the absolute value of the difference, so it clears the sign of
+// whatever the subtraction produced, a propagated NaN included.
+fn fabd_lane(a, b, e, m) { fp_mag(fsub_lane(a, b, e, m), e) }
+
+// FMAXNM/FMINNM treat a lone quiet NaN as the identity, so the other operand
+// wins; a signalling NaN, or two NaNs, still go through FPProcessNaNs.
+fn fmaxnm_lane(a, b, e, m) {
+    if fp_is_snan(a, e, m) | fp_is_snan(b, e, m) { fp_nan2(a, b, e, m) }
+    else if fp_is_nan(a, e, m) & fp_is_nan(b, e, m) { fp_nan2(a, b, e, m) }
+    else if fp_is_nan(a, e, m) { b }
+    else if fp_is_nan(b, e, m) { a }
+    else { fmax(a, b) }
+}
+
+fn fminnm_lane(a, b, e, m) {
+    if fp_is_snan(a, e, m) | fp_is_snan(b, e, m) { fp_nan2(a, b, e, m) }
+    else if fp_is_nan(a, e, m) & fp_is_nan(b, e, m) { fp_nan2(a, b, e, m) }
+    else if fp_is_nan(a, e, m) { b }
+    else if fp_is_nan(b, e, m) { a }
+    else { fmin(a, b) }
+}
+
+// FPMulAdd, whose NaN order puts the addend -- the destination lane -- first.
+fn fmla_lane(d, a, b, e, m) {
+    if fp_is_nan(d, e, m) | fp_either_nan(a, b, e, m) { fp_nan3(d, a, b, e, m) }
+    else { fma(asfloat(a), asfloat(b), asfloat(d)) }
+}
+fn fmls_lane(d, a, b, e, m) { fmla_lane(d, fp_neg(a, e), b, e, m) }
+
+// FMAX/FMIN propagate a NaN operand instead of returning the other one, which
+// is the only thing separating them from the FMAXNM/FMINNM pair that IEEE
+// maximumNumber/minimumNumber already describes.
+fn fmax_lane(a, b, e, m) { if fp_either_nan(a, b, e, m) { fp_nan2(a, b, e, m) } else { fmax(a, b) } }
+fn fmin_lane(a, b, e, m) { if fp_either_nan(a, b, e, m) { fp_nan2(a, b, e, m) } else { fmin(a, b) } }
+
+// FPMulX: a zero meeting an infinity gives +/-2.0 rather than a NaN, which is
+// what makes it safe in the reciprocal step sequences.
+fn fmulx_lane(a, b, e, m) {
+    if fp_either_nan(a, b, e, m) { fp_nan2(a, b, e, m) }
+    else if (fp_is_zero(a, e) & fp_is_inf(b, e, m)) | (fp_is_inf(a, e, m) & fp_is_zero(b, e)) {
+        fp_two(e) | ((a ^ b) & fp_sign_mask(e))
+    } else { fmul(a, b) }
+}
+
+// FPRecipStepFused / FPRSqrtStepFused: `2 - a*b` and `(3 - a*b)/2`, fused. The
+// first source is negated before anything else, so a NaN there is propagated
+// with its sign already flipped. Zero times infinity is the one case the fused
+// product cannot give, and yields the step's fixed point instead.
+fn frecps_lane(a, b, e, m) {
+    n = fp_neg(a, e);
+    if fp_either_nan(n, b, e, m) { fp_nan2(n, b, e, m) }
+    else if (fp_is_inf(n, e, m) & fp_is_zero(b, e)) | (fp_is_zero(n, e) & fp_is_inf(b, e, m)) { fp_two(e) }
+    else { fma(asfloat(n), asfloat(b), asfloat(fp_two(e))) }
+}
+
+fn frsqrts_lane(a, b, e, m) {
+    n = fp_neg(a, e);
+    if fp_either_nan(n, b, e, m) { fp_nan2(n, b, e, m) }
+    else if (fp_is_inf(n, e, m) & fp_is_zero(b, e)) | (fp_is_zero(n, e) & fp_is_inf(b, e, m)) { fp_one_point_five(e, m) }
+    else { fdiv(fma(asfloat(n), asfloat(b), asfloat(fp_three(e, m))), asfloat(fp_two(e))) }
+}
+
+// The signed and unsigned lane orderings, shared by the plain min/max
+// operations and by their pairwise forms.
+fn smax_lane(a, b, e) { if a > b { a } else { b } }
+fn smin_lane(a, b, e) { if a < b { a } else { b } }
+fn umax_lane(a, b, e) { if a ~> b { a } else { b } }
+fn umin_lane(a, b, e) { if a ~< b { a } else { b } }
+
+// The two halves of one adjacent lane pair. A pairwise operation splits its
+// source at twice the lane width, so each `p` already holds the pair its result
+// lane reduces and the two halves come out by static extraction.
+fn pair_lo(p, e) { extract(p, e - 1, 0) }
+fn pair_hi(p, e, d) { extract(p, d - 1, e) }
+
 // Advanced SIMD three same: `0 Q U 01110 size 1 Rm opcode 1 Rn Rd`. The
 // arrangement fixes both the encoded `Q`/`size` pair and the lane shape the
 // behavior splits into, so each (operation, arrangement) is its own
@@ -203,18 +467,18 @@ advsimd_three_same!(
     (UMinVector8H, "umin", "umin_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
     (UMinVector2S, "umin", "umin_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
     (UMinVector4S, "umin", "umin_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01101, WriteIALU, (if a ~< b { a } else { b })),
-    (SAbdVector8B, "sabd", "sabd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
-    (SAbdVector16B, "sabd", "sabd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
-    (SAbdVector4H, "sabd", "sabd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
-    (SAbdVector8H, "sabd", "sabd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
-    (SAbdVector2S, "sabd", "sabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
-    (SAbdVector4S, "sabd", "sabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01110, WriteIALU, (if a > b { a - b } else { b - a })),
-    (UAbdVector8B, "uabd", "uabd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
-    (UAbdVector16B, "uabd", "uabd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
-    (UAbdVector4H, "uabd", "uabd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
-    (UAbdVector8H, "uabd", "uabd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
-    (UAbdVector2S, "uabd", "uabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
-    (UAbdVector4S, "uabd", "uabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01110, WriteIALU, (if a ~> b { a - b } else { b - a })),
+    (SAbdVector8B, "sabd", "sabd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01110, WriteIALU, (sabd_lane(a, b, 8))),
+    (SAbdVector16B, "sabd", "sabd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01110, WriteIALU, (sabd_lane(a, b, 8))),
+    (SAbdVector4H, "sabd", "sabd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01110, WriteIALU, (sabd_lane(a, b, 16))),
+    (SAbdVector8H, "sabd", "sabd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01110, WriteIALU, (sabd_lane(a, b, 16))),
+    (SAbdVector2S, "sabd", "sabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01110, WriteIALU, (sabd_lane(a, b, 32))),
+    (SAbdVector4S, "sabd", "sabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01110, WriteIALU, (sabd_lane(a, b, 32))),
+    (UAbdVector8B, "uabd", "uabd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01110, WriteIALU, (uabd_lane(a, b, 8))),
+    (UAbdVector16B, "uabd", "uabd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01110, WriteIALU, (uabd_lane(a, b, 8))),
+    (UAbdVector4H, "uabd", "uabd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01110, WriteIALU, (uabd_lane(a, b, 16))),
+    (UAbdVector8H, "uabd", "uabd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01110, WriteIALU, (uabd_lane(a, b, 16))),
+    (UAbdVector2S, "uabd", "uabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01110, WriteIALU, (uabd_lane(a, b, 32))),
+    (UAbdVector4S, "uabd", "uabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01110, WriteIALU, (uabd_lane(a, b, 32))),
     (CmEqVector8B, "cmeq", "cmeq_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
     (CmEqVector16B, "cmeq", "cmeq_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 8) - zext(0b1, 8) } else { zext(0b0, 8) })),
     (CmEqVector4H, "cmeq", "cmeq_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b10001, WriteIALU, (if a == b { zext(0b0, 16) - zext(0b1, 16) } else { zext(0b0, 16) })),
@@ -266,33 +530,178 @@ advsimd_three_same!(
     (BicVector8B, "bic", "bic_v8b", VPR8B, 8, 8, 0b0, 0b01, 0b0, 0b00011, WriteIALU, (a & ~b)),
     (BicVector16B, "bic", "bic_v16b", VPR16B, 16, 8, 0b1, 0b01, 0b0, 0b00011, WriteIALU, (a & ~b)),
     (OrnVector8B, "orn", "orn_v8b", VPR8B, 8, 8, 0b0, 0b11, 0b0, 0b00011, WriteIALU, (a | ~b)),
+    (SHAddVector8B, "shadd", "shadd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b00000, WriteIALU, (shadd_lane(a, b, 8))),
+    (SHAddVector16B, "shadd", "shadd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b00000, WriteIALU, (shadd_lane(a, b, 8))),
+    (SHAddVector4H, "shadd", "shadd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b00000, WriteIALU, (shadd_lane(a, b, 16))),
+    (SHAddVector8H, "shadd", "shadd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b00000, WriteIALU, (shadd_lane(a, b, 16))),
+    (SHAddVector2S, "shadd", "shadd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b00000, WriteIALU, (shadd_lane(a, b, 32))),
+    (SHAddVector4S, "shadd", "shadd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b00000, WriteIALU, (shadd_lane(a, b, 32))),
+    (SHSubVector8B, "shsub", "shsub_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b00100, WriteIALU, (shsub_lane(a, b, 8))),
+    (SHSubVector16B, "shsub", "shsub_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b00100, WriteIALU, (shsub_lane(a, b, 8))),
+    (SHSubVector4H, "shsub", "shsub_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b00100, WriteIALU, (shsub_lane(a, b, 16))),
+    (SHSubVector8H, "shsub", "shsub_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b00100, WriteIALU, (shsub_lane(a, b, 16))),
+    (SHSubVector2S, "shsub", "shsub_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b00100, WriteIALU, (shsub_lane(a, b, 32))),
+    (SHSubVector4S, "shsub", "shsub_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b00100, WriteIALU, (shsub_lane(a, b, 32))),
+    (SRHAddVector8B, "srhadd", "srhadd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b00010, WriteIALU, (srhadd_lane(a, b, 8))),
+    (SRHAddVector16B, "srhadd", "srhadd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b00010, WriteIALU, (srhadd_lane(a, b, 8))),
+    (SRHAddVector4H, "srhadd", "srhadd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b00010, WriteIALU, (srhadd_lane(a, b, 16))),
+    (SRHAddVector8H, "srhadd", "srhadd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b00010, WriteIALU, (srhadd_lane(a, b, 16))),
+    (SRHAddVector2S, "srhadd", "srhadd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b00010, WriteIALU, (srhadd_lane(a, b, 32))),
+    (SRHAddVector4S, "srhadd", "srhadd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b00010, WriteIALU, (srhadd_lane(a, b, 32))),
+    (UHAddVector8B, "uhadd", "uhadd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b00000, WriteIALU, (uhadd_lane(a, b, 8))),
+    (UHAddVector16B, "uhadd", "uhadd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b00000, WriteIALU, (uhadd_lane(a, b, 8))),
+    (UHAddVector4H, "uhadd", "uhadd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b00000, WriteIALU, (uhadd_lane(a, b, 16))),
+    (UHAddVector8H, "uhadd", "uhadd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b00000, WriteIALU, (uhadd_lane(a, b, 16))),
+    (UHAddVector2S, "uhadd", "uhadd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b00000, WriteIALU, (uhadd_lane(a, b, 32))),
+    (UHAddVector4S, "uhadd", "uhadd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b00000, WriteIALU, (uhadd_lane(a, b, 32))),
+    (UHSubVector8B, "uhsub", "uhsub_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b00100, WriteIALU, (uhsub_lane(a, b, 8))),
+    (UHSubVector16B, "uhsub", "uhsub_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b00100, WriteIALU, (uhsub_lane(a, b, 8))),
+    (UHSubVector4H, "uhsub", "uhsub_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b00100, WriteIALU, (uhsub_lane(a, b, 16))),
+    (UHSubVector8H, "uhsub", "uhsub_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b00100, WriteIALU, (uhsub_lane(a, b, 16))),
+    (UHSubVector2S, "uhsub", "uhsub_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b00100, WriteIALU, (uhsub_lane(a, b, 32))),
+    (UHSubVector4S, "uhsub", "uhsub_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b00100, WriteIALU, (uhsub_lane(a, b, 32))),
+    (URHAddVector8B, "urhadd", "urhadd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b00010, WriteIALU, (urhadd_lane(a, b, 8))),
+    (URHAddVector16B, "urhadd", "urhadd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b00010, WriteIALU, (urhadd_lane(a, b, 8))),
+    (URHAddVector4H, "urhadd", "urhadd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b00010, WriteIALU, (urhadd_lane(a, b, 16))),
+    (URHAddVector8H, "urhadd", "urhadd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b00010, WriteIALU, (urhadd_lane(a, b, 16))),
+    (URHAddVector2S, "urhadd", "urhadd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b00010, WriteIALU, (urhadd_lane(a, b, 32))),
+    (URHAddVector4S, "urhadd", "urhadd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b00010, WriteIALU, (urhadd_lane(a, b, 32))),
+    (SQAddVector8B, "sqadd", "sqadd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b00001, WriteIALU, (sqadd_lane(a, b, 8))),
+    (SQAddVector16B, "sqadd", "sqadd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b00001, WriteIALU, (sqadd_lane(a, b, 8))),
+    (SQAddVector4H, "sqadd", "sqadd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b00001, WriteIALU, (sqadd_lane(a, b, 16))),
+    (SQAddVector8H, "sqadd", "sqadd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b00001, WriteIALU, (sqadd_lane(a, b, 16))),
+    (SQAddVector2S, "sqadd", "sqadd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b00001, WriteIALU, (sqadd_lane(a, b, 32))),
+    (SQAddVector4S, "sqadd", "sqadd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b00001, WriteIALU, (sqadd_lane(a, b, 32))),
+    (SQAddVector2D, "sqadd", "sqadd_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b00001, WriteIALU, (sqadd_lane(a, b, 64))),
+    (SQSubVector8B, "sqsub", "sqsub_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b00101, WriteIALU, (sqsub_lane(a, b, 8))),
+    (SQSubVector16B, "sqsub", "sqsub_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b00101, WriteIALU, (sqsub_lane(a, b, 8))),
+    (SQSubVector4H, "sqsub", "sqsub_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b00101, WriteIALU, (sqsub_lane(a, b, 16))),
+    (SQSubVector8H, "sqsub", "sqsub_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b00101, WriteIALU, (sqsub_lane(a, b, 16))),
+    (SQSubVector2S, "sqsub", "sqsub_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b00101, WriteIALU, (sqsub_lane(a, b, 32))),
+    (SQSubVector4S, "sqsub", "sqsub_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b00101, WriteIALU, (sqsub_lane(a, b, 32))),
+    (SQSubVector2D, "sqsub", "sqsub_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b00101, WriteIALU, (sqsub_lane(a, b, 64))),
+    (UQAddVector8B, "uqadd", "uqadd_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b00001, WriteIALU, (uqadd_lane(a, b, 8))),
+    (UQAddVector16B, "uqadd", "uqadd_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b00001, WriteIALU, (uqadd_lane(a, b, 8))),
+    (UQAddVector4H, "uqadd", "uqadd_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b00001, WriteIALU, (uqadd_lane(a, b, 16))),
+    (UQAddVector8H, "uqadd", "uqadd_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b00001, WriteIALU, (uqadd_lane(a, b, 16))),
+    (UQAddVector2S, "uqadd", "uqadd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b00001, WriteIALU, (uqadd_lane(a, b, 32))),
+    (UQAddVector4S, "uqadd", "uqadd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b00001, WriteIALU, (uqadd_lane(a, b, 32))),
+    (UQAddVector2D, "uqadd", "uqadd_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b00001, WriteIALU, (uqadd_lane(a, b, 64))),
+    (UQSubVector8B, "uqsub", "uqsub_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b00101, WriteIALU, (uqsub_lane(a, b, 8))),
+    (UQSubVector16B, "uqsub", "uqsub_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b00101, WriteIALU, (uqsub_lane(a, b, 8))),
+    (UQSubVector4H, "uqsub", "uqsub_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b00101, WriteIALU, (uqsub_lane(a, b, 16))),
+    (UQSubVector8H, "uqsub", "uqsub_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b00101, WriteIALU, (uqsub_lane(a, b, 16))),
+    (UQSubVector2S, "uqsub", "uqsub_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b00101, WriteIALU, (uqsub_lane(a, b, 32))),
+    (UQSubVector4S, "uqsub", "uqsub_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b00101, WriteIALU, (uqsub_lane(a, b, 32))),
+    (UQSubVector2D, "uqsub", "uqsub_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b00101, WriteIALU, (uqsub_lane(a, b, 64))),
+    (SRShlVector8B, "srshl", "srshl_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01010, WriteIALU, (srshl_lane(a, b, 8))),
+    (SRShlVector16B, "srshl", "srshl_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01010, WriteIALU, (srshl_lane(a, b, 8))),
+    (SRShlVector4H, "srshl", "srshl_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01010, WriteIALU, (srshl_lane(a, b, 16))),
+    (SRShlVector8H, "srshl", "srshl_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01010, WriteIALU, (srshl_lane(a, b, 16))),
+    (SRShlVector2S, "srshl", "srshl_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01010, WriteIALU, (srshl_lane(a, b, 32))),
+    (SRShlVector4S, "srshl", "srshl_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01010, WriteIALU, (srshl_lane(a, b, 32))),
+    (SRShlVector2D, "srshl", "srshl_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b01010, WriteIALU, (srshl_lane(a, b, 64))),
+    (SShlVector8B, "sshl", "sshl_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01000, WriteIALU, (sshl_lane(a, b, 8))),
+    (SShlVector16B, "sshl", "sshl_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01000, WriteIALU, (sshl_lane(a, b, 8))),
+    (SShlVector4H, "sshl", "sshl_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01000, WriteIALU, (sshl_lane(a, b, 16))),
+    (SShlVector8H, "sshl", "sshl_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01000, WriteIALU, (sshl_lane(a, b, 16))),
+    (SShlVector2S, "sshl", "sshl_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01000, WriteIALU, (sshl_lane(a, b, 32))),
+    (SShlVector4S, "sshl", "sshl_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01000, WriteIALU, (sshl_lane(a, b, 32))),
+    (SShlVector2D, "sshl", "sshl_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b01000, WriteIALU, (sshl_lane(a, b, 64))),
+    (URShlVector8B, "urshl", "urshl_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01010, WriteIALU, (urshl_lane(a, b, 8))),
+    (URShlVector16B, "urshl", "urshl_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01010, WriteIALU, (urshl_lane(a, b, 8))),
+    (URShlVector4H, "urshl", "urshl_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01010, WriteIALU, (urshl_lane(a, b, 16))),
+    (URShlVector8H, "urshl", "urshl_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01010, WriteIALU, (urshl_lane(a, b, 16))),
+    (URShlVector2S, "urshl", "urshl_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01010, WriteIALU, (urshl_lane(a, b, 32))),
+    (URShlVector4S, "urshl", "urshl_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01010, WriteIALU, (urshl_lane(a, b, 32))),
+    (URShlVector2D, "urshl", "urshl_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b01010, WriteIALU, (urshl_lane(a, b, 64))),
+    (UShlVector8B, "ushl", "ushl_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01000, WriteIALU, (ushl_lane(a, b, 8))),
+    (UShlVector16B, "ushl", "ushl_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01000, WriteIALU, (ushl_lane(a, b, 8))),
+    (UShlVector4H, "ushl", "ushl_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01000, WriteIALU, (ushl_lane(a, b, 16))),
+    (UShlVector8H, "ushl", "ushl_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01000, WriteIALU, (ushl_lane(a, b, 16))),
+    (UShlVector2S, "ushl", "ushl_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01000, WriteIALU, (ushl_lane(a, b, 32))),
+    (UShlVector4S, "ushl", "ushl_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01000, WriteIALU, (ushl_lane(a, b, 32))),
+    (UShlVector2D, "ushl", "ushl_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b01000, WriteIALU, (ushl_lane(a, b, 64))),
+    (SQRShlVector8B, "sqrshl", "sqrshl_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01011, WriteIALU, (sqrshl_lane(a, b, 8))),
+    (SQRShlVector16B, "sqrshl", "sqrshl_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01011, WriteIALU, (sqrshl_lane(a, b, 8))),
+    (SQRShlVector4H, "sqrshl", "sqrshl_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01011, WriteIALU, (sqrshl_lane(a, b, 16))),
+    (SQRShlVector8H, "sqrshl", "sqrshl_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01011, WriteIALU, (sqrshl_lane(a, b, 16))),
+    (SQRShlVector2S, "sqrshl", "sqrshl_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01011, WriteIALU, (sqrshl_lane(a, b, 32))),
+    (SQRShlVector4S, "sqrshl", "sqrshl_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01011, WriteIALU, (sqrshl_lane(a, b, 32))),
+    (SQRShlVector2D, "sqrshl", "sqrshl_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b01011, WriteIALU, (sqrshl_lane(a, b, 64))),
+    (SQShlVector8B, "sqshl", "sqshl_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01001, WriteIALU, (sqshl_lane(a, b, 8))),
+    (SQShlVector16B, "sqshl", "sqshl_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01001, WriteIALU, (sqshl_lane(a, b, 8))),
+    (SQShlVector4H, "sqshl", "sqshl_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01001, WriteIALU, (sqshl_lane(a, b, 16))),
+    (SQShlVector8H, "sqshl", "sqshl_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01001, WriteIALU, (sqshl_lane(a, b, 16))),
+    (SQShlVector2S, "sqshl", "sqshl_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01001, WriteIALU, (sqshl_lane(a, b, 32))),
+    (SQShlVector4S, "sqshl", "sqshl_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01001, WriteIALU, (sqshl_lane(a, b, 32))),
+    (SQShlVector2D, "sqshl", "sqshl_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b01001, WriteIALU, (sqshl_lane(a, b, 64))),
+    (UQRShlVector8B, "uqrshl", "uqrshl_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01011, WriteIALU, (uqrshl_lane(a, b, 8))),
+    (UQRShlVector16B, "uqrshl", "uqrshl_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01011, WriteIALU, (uqrshl_lane(a, b, 8))),
+    (UQRShlVector4H, "uqrshl", "uqrshl_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01011, WriteIALU, (uqrshl_lane(a, b, 16))),
+    (UQRShlVector8H, "uqrshl", "uqrshl_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01011, WriteIALU, (uqrshl_lane(a, b, 16))),
+    (UQRShlVector2S, "uqrshl", "uqrshl_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01011, WriteIALU, (uqrshl_lane(a, b, 32))),
+    (UQRShlVector4S, "uqrshl", "uqrshl_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01011, WriteIALU, (uqrshl_lane(a, b, 32))),
+    (UQRShlVector2D, "uqrshl", "uqrshl_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b01011, WriteIALU, (uqrshl_lane(a, b, 64))),
+    (UQShlVector8B, "uqshl", "uqshl_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01001, WriteIALU, (uqshl_lane(a, b, 8))),
+    (UQShlVector16B, "uqshl", "uqshl_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01001, WriteIALU, (uqshl_lane(a, b, 8))),
+    (UQShlVector4H, "uqshl", "uqshl_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01001, WriteIALU, (uqshl_lane(a, b, 16))),
+    (UQShlVector8H, "uqshl", "uqshl_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01001, WriteIALU, (uqshl_lane(a, b, 16))),
+    (UQShlVector2S, "uqshl", "uqshl_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01001, WriteIALU, (uqshl_lane(a, b, 32))),
+    (UQShlVector4S, "uqshl", "uqshl_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01001, WriteIALU, (uqshl_lane(a, b, 32))),
+    (UQShlVector2D, "uqshl", "uqshl_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b01001, WriteIALU, (uqshl_lane(a, b, 64))),
+    (PMulVector8B, "pmul", "pmul_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b10011, WriteIMul, (pmul_lane(a, b))),
+    (PMulVector16B, "pmul", "pmul_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b10011, WriteIMul, (pmul_lane(a, b))),
+    (SQDMulHVector4H, "sqdmulh", "sqdmulh_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b10110, WriteIMul, (sqdmulh_lane(a, b, 16, 32))),
+    (SQDMulHVector8H, "sqdmulh", "sqdmulh_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b10110, WriteIMul, (sqdmulh_lane(a, b, 16, 32))),
+    (SQDMulHVector2S, "sqdmulh", "sqdmulh_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b10110, WriteIMul, (sqdmulh_lane(a, b, 32, 64))),
+    (SQDMulHVector4S, "sqdmulh", "sqdmulh_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b10110, WriteIMul, (sqdmulh_lane(a, b, 32, 64))),
+    (SQRDMulHVector4H, "sqrdmulh", "sqrdmulh_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b10110, WriteIMul, (sqrdmulh_lane(a, b, 16, 32))),
+    (SQRDMulHVector8H, "sqrdmulh", "sqrdmulh_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b10110, WriteIMul, (sqrdmulh_lane(a, b, 16, 32))),
+    (SQRDMulHVector2S, "sqrdmulh", "sqrdmulh_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b10110, WriteIMul, (sqrdmulh_lane(a, b, 32, 64))),
+    (SQRDMulHVector4S, "sqrdmulh", "sqrdmulh_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b10110, WriteIMul, (sqrdmulh_lane(a, b, 32, 64))),
     (OrnVector16B, "orn", "orn_v16b", VPR16B, 16, 8, 0b1, 0b11, 0b0, 0b00011, WriteIALU, (a | ~b)),
 // The floating-point three-same operations over the single- and
 // double-precision arrangements. `fmaxnm`/`fminnm` are IEEE
 // maximumNumber/minimumNumber; the `fmax`/`fmin` pair, which propagates NaNs
 // instead, is not modeled here. `fabd` and the absolute compares clear the
 // sign bit with the all-but-top-bit mask rather than negating.
-    (FAddVector2S, "fadd", "fadd_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11010, WriteIALU, (fadd(a, b))),
-    (FAddVector4S, "fadd", "fadd_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11010, WriteIALU, (fadd(a, b))),
-    (FAddVector2D, "fadd", "fadd_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11010, WriteIALU, (fadd(a, b))),
-    (FSubVector2S, "fsub", "fsub_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11010, WriteIALU, (fsub(a, b))),
-    (FSubVector4S, "fsub", "fsub_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11010, WriteIALU, (fsub(a, b))),
-    (FSubVector2D, "fsub", "fsub_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11010, WriteIALU, (fsub(a, b))),
-    (FMulVector2S, "fmul", "fmul_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b1, 0b11011, WriteIALU, (fmul(a, b))),
-    (FMulVector4S, "fmul", "fmul_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b1, 0b11011, WriteIALU, (fmul(a, b))),
-    (FMulVector2D, "fmul", "fmul_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b1, 0b11011, WriteIALU, (fmul(a, b))),
-    (FDivVector2S, "fdiv", "fdiv_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b1, 0b11111, WriteIALU, (fdiv(a, b))),
-    (FDivVector4S, "fdiv", "fdiv_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b1, 0b11111, WriteIALU, (fdiv(a, b))),
-    (FDivVector2D, "fdiv", "fdiv_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b1, 0b11111, WriteIALU, (fdiv(a, b))),
-    (FMaxNmVector2S, "fmaxnm", "fmaxnm_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11000, WriteIALU, (fmax(a, b))),
-    (FMaxNmVector4S, "fmaxnm", "fmaxnm_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11000, WriteIALU, (fmax(a, b))),
-    (FMaxNmVector2D, "fmaxnm", "fmaxnm_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11000, WriteIALU, (fmax(a, b))),
-    (FMinNmVector2S, "fminnm", "fminnm_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11000, WriteIALU, (fmin(a, b))),
-    (FMinNmVector4S, "fminnm", "fminnm_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11000, WriteIALU, (fmin(a, b))),
-    (FMinNmVector2D, "fminnm", "fminnm_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11000, WriteIALU, (fmin(a, b))),
-    (FAbdVector2S, "fabd", "fabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b11010, WriteIALU, (fsub(a, b) & ((zext(0b0, 32) - zext(0b1, 32)) >> 1))),
-    (FAbdVector4S, "fabd", "fabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b11010, WriteIALU, (fsub(a, b) & ((zext(0b0, 32) - zext(0b1, 32)) >> 1))),
-    (FAbdVector2D, "fabd", "fabd_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b11010, WriteIALU, (fsub(a, b) & ((zext(0b0, 64) - zext(0b1, 64)) >> 1))),
+    (FMaxVector2S, "fmax", "fmax_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11110, WriteIALU, (fmax_lane(a, b, 32, 23))),
+    (FMaxVector4S, "fmax", "fmax_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11110, WriteIALU, (fmax_lane(a, b, 32, 23))),
+    (FMaxVector2D, "fmax", "fmax_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11110, WriteIALU, (fmax_lane(a, b, 64, 52))),
+    (FMinVector2S, "fmin", "fmin_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11110, WriteIALU, (fmin_lane(a, b, 32, 23))),
+    (FMinVector4S, "fmin", "fmin_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11110, WriteIALU, (fmin_lane(a, b, 32, 23))),
+    (FMinVector2D, "fmin", "fmin_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11110, WriteIALU, (fmin_lane(a, b, 64, 52))),
+    (FMulXVector2S, "fmulx", "fmulx_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11011, WriteIALU, (fmulx_lane(a, b, 32, 23))),
+    (FMulXVector4S, "fmulx", "fmulx_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11011, WriteIALU, (fmulx_lane(a, b, 32, 23))),
+    (FMulXVector2D, "fmulx", "fmulx_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11011, WriteIALU, (fmulx_lane(a, b, 64, 52))),
+    (FRecpsVector2S, "frecps", "frecps_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11111, WriteIALU, (frecps_lane(a, b, 32, 23))),
+    (FRecpsVector4S, "frecps", "frecps_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11111, WriteIALU, (frecps_lane(a, b, 32, 23))),
+    (FRecpsVector2D, "frecps", "frecps_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11111, WriteIALU, (frecps_lane(a, b, 64, 52))),
+    (FRSqrtsVector2S, "frsqrts", "frsqrts_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11111, WriteIALU, (frsqrts_lane(a, b, 32, 23))),
+    (FRSqrtsVector4S, "frsqrts", "frsqrts_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11111, WriteIALU, (frsqrts_lane(a, b, 32, 23))),
+    (FRSqrtsVector2D, "frsqrts", "frsqrts_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11111, WriteIALU, (frsqrts_lane(a, b, 64, 52))),
+    (FAddVector2S, "fadd", "fadd_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11010, WriteIALU, (fadd_lane(a, b, 32, 23))),
+    (FAddVector4S, "fadd", "fadd_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11010, WriteIALU, (fadd_lane(a, b, 32, 23))),
+    (FAddVector2D, "fadd", "fadd_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11010, WriteIALU, (fadd_lane(a, b, 64, 52))),
+    (FSubVector2S, "fsub", "fsub_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11010, WriteIALU, (fsub_lane(a, b, 32, 23))),
+    (FSubVector4S, "fsub", "fsub_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11010, WriteIALU, (fsub_lane(a, b, 32, 23))),
+    (FSubVector2D, "fsub", "fsub_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11010, WriteIALU, (fsub_lane(a, b, 64, 52))),
+    (FMulVector2S, "fmul", "fmul_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b1, 0b11011, WriteIALU, (fmul_lane(a, b, 32, 23))),
+    (FMulVector4S, "fmul", "fmul_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b1, 0b11011, WriteIALU, (fmul_lane(a, b, 32, 23))),
+    (FMulVector2D, "fmul", "fmul_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b1, 0b11011, WriteIALU, (fmul_lane(a, b, 64, 52))),
+    (FDivVector2S, "fdiv", "fdiv_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b1, 0b11111, WriteIALU, (fdiv_lane(a, b, 32, 23))),
+    (FDivVector4S, "fdiv", "fdiv_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b1, 0b11111, WriteIALU, (fdiv_lane(a, b, 32, 23))),
+    (FDivVector2D, "fdiv", "fdiv_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b1, 0b11111, WriteIALU, (fdiv_lane(a, b, 64, 52))),
+    (FMaxNmVector2S, "fmaxnm", "fmaxnm_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11000, WriteIALU, (fmaxnm_lane(a, b, 32, 23))),
+    (FMaxNmVector4S, "fmaxnm", "fmaxnm_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11000, WriteIALU, (fmaxnm_lane(a, b, 32, 23))),
+    (FMaxNmVector2D, "fmaxnm", "fmaxnm_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11000, WriteIALU, (fmaxnm_lane(a, b, 64, 52))),
+    (FMinNmVector2S, "fminnm", "fminnm_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11000, WriteIALU, (fminnm_lane(a, b, 32, 23))),
+    (FMinNmVector4S, "fminnm", "fminnm_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11000, WriteIALU, (fminnm_lane(a, b, 32, 23))),
+    (FMinNmVector2D, "fminnm", "fminnm_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11000, WriteIALU, (fminnm_lane(a, b, 64, 52))),
+    (FAbdVector2S, "fabd", "fabd_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b11010, WriteIALU, (fabd_lane(a, b, 32, 23))),
+    (FAbdVector4S, "fabd", "fabd_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b11010, WriteIALU, (fabd_lane(a, b, 32, 23))),
+    (FAbdVector2D, "fabd", "fabd_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b11010, WriteIALU, (fabd_lane(a, b, 64, 52))),
     (FCmEqVector2S, "fcmeq", "fcmeq_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11100, WriteIALU, (if asfloat(a) == asfloat(b) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
     (FCmEqVector4S, "fcmeq", "fcmeq_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11100, WriteIALU, (if asfloat(a) == asfloat(b) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
     (FCmEqVector2D, "fcmeq", "fcmeq_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11100, WriteIALU, (if asfloat(a) == asfloat(b) { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) })),
@@ -308,6 +717,262 @@ advsimd_three_same!(
     (FAcGtVector2S, "facgt", "facgt_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) > asfloat(b & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
     (FAcGtVector4S, "facgt", "facgt_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) > asfloat(b & ((zext(0b0, 32) - zext(0b1, 32)) >> 1)) { zext(0b0, 32) - zext(0b1, 32) } else { zext(0b0, 32) })),
     (FAcGtVector2D, "facgt", "facgt_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b1, 0b11101, WriteIALU, (if asfloat(a & ((zext(0b0, 64) - zext(0b1, 64)) >> 1)) > asfloat(b & ((zext(0b0, 64) - zext(0b1, 64)) >> 1)) { zext(0b0, 64) - zext(0b1, 64) } else { zext(0b0, 64) }))
+)
+
+// The three-same operations that accumulate into the destination. They share
+// the encoding of `advsimd_three_same`; only the behavior differs, because the
+// destination lane is a source too and so has to be zipped in alongside the two
+// register sources.
+macro advsimd_three_same_acc {
+    ( $( ( $name:ident, $mnemonic:literal, $opname:literal, $cls:ident,
+           $lanes:literal, $esize:literal, $q:literal, $size:literal,
+           $u:literal, $opcode:literal, $sched:ident, $op:tt ) ),* ) => {
+        $( instruction $name for [AdvSIMD] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            param Q: bits<1> = $q;
+            param U: bits<1> = $u;
+            param SIZE: bits<2> = $size;
+            param OPCODE: bits<5> = $opcode;
+            schedule { units = [$sched]; }
+
+            operands {
+                vd: $cls,
+                vn: $cls,
+                vm: $cls,
+            }
+
+            encoding {
+                0..4 => vd,
+                5..9 => vn,
+                10 => 0b1,
+                11..15 => OPCODE,
+                16..20 => vm,
+                21 => 0b1,
+                22..23 => SIZE,
+                24..28 => 0b01110,
+                29 => U,
+                30 => Q,
+                31 => 0b0,
+            }
+
+            asm {
+                "{self.MNEMONIC} {vd}, {vn}, {vm}"
+            }
+
+            behavior {
+                vd = concat(map(zip(split(vd, $lanes, $esize), split(vn, $lanes, $esize), split(vm, $lanes, $esize)),
+                    |d, a, b| $op));
+            }
+        } )*
+    };
+}
+
+
+// Multiply-accumulate and absolute-difference-accumulate, which read the
+// destination as their addend.
+advsimd_three_same_acc!(
+    (MLAVector8B, "mla", "mla_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b10010, WriteIMul, (d + a * b)),
+    (MLAVector16B, "mla", "mla_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b10010, WriteIMul, (d + a * b)),
+    (MLAVector4H, "mla", "mla_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b10010, WriteIMul, (d + a * b)),
+    (MLAVector8H, "mla", "mla_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b10010, WriteIMul, (d + a * b)),
+    (MLAVector2S, "mla", "mla_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b10010, WriteIMul, (d + a * b)),
+    (MLAVector4S, "mla", "mla_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b10010, WriteIMul, (d + a * b)),
+    (MLSVector8B, "mls", "mls_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b10010, WriteIMul, (d - a * b)),
+    (MLSVector16B, "mls", "mls_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b10010, WriteIMul, (d - a * b)),
+    (MLSVector4H, "mls", "mls_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b10010, WriteIMul, (d - a * b)),
+    (MLSVector8H, "mls", "mls_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b10010, WriteIMul, (d - a * b)),
+    (MLSVector2S, "mls", "mls_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b10010, WriteIMul, (d - a * b)),
+    (MLSVector4S, "mls", "mls_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b10010, WriteIMul, (d - a * b)),
+    (SAbaVector8B, "saba", "saba_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b0, 0b01111, WriteIALU, (d + sabd_lane(a, b, 8))),
+    (SAbaVector16B, "saba", "saba_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b0, 0b01111, WriteIALU, (d + sabd_lane(a, b, 8))),
+    (SAbaVector4H, "saba", "saba_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b0, 0b01111, WriteIALU, (d + sabd_lane(a, b, 16))),
+    (SAbaVector8H, "saba", "saba_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b0, 0b01111, WriteIALU, (d + sabd_lane(a, b, 16))),
+    (SAbaVector2S, "saba", "saba_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b01111, WriteIALU, (d + sabd_lane(a, b, 32))),
+    (SAbaVector4S, "saba", "saba_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b01111, WriteIALU, (d + sabd_lane(a, b, 32))),
+    (UAbaVector8B, "uaba", "uaba_v8b", VPR8B, 8, 8, 0b0, 0b00, 0b1, 0b01111, WriteIALU, (d + uabd_lane(a, b, 8))),
+    (UAbaVector16B, "uaba", "uaba_v16b", VPR16B, 16, 8, 0b1, 0b00, 0b1, 0b01111, WriteIALU, (d + uabd_lane(a, b, 8))),
+    (UAbaVector4H, "uaba", "uaba_v4h", VPR4H, 4, 16, 0b0, 0b01, 0b1, 0b01111, WriteIALU, (d + uabd_lane(a, b, 16))),
+    (UAbaVector8H, "uaba", "uaba_v8h", VPR8H, 8, 16, 0b1, 0b01, 0b1, 0b01111, WriteIALU, (d + uabd_lane(a, b, 16))),
+    (UAbaVector2S, "uaba", "uaba_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b1, 0b01111, WriteIALU, (d + uabd_lane(a, b, 32))),
+    (UAbaVector4S, "uaba", "uaba_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b1, 0b01111, WriteIALU, (d + uabd_lane(a, b, 32)))
+)
+
+
+// Bitwise select and insert: `bsl` takes its mask from the destination and its
+// data from both sources, while `bit`/`bif` keep the destination as data and
+// take the mask from the second source, inverted for `bif`.
+advsimd_three_same_acc!(
+    (BIFVector8B, "bif", "bif_v8b", VPR8B, 8, 8, 0b0, 0b11, 0b1, 0b00011, WriteIALU, (d ^ ((d ^ a) & ~b))),
+    (BIFVector16B, "bif", "bif_v16b", VPR16B, 16, 8, 0b1, 0b11, 0b1, 0b00011, WriteIALU, (d ^ ((d ^ a) & ~b))),
+    (BITVector8B, "bit", "bit_v8b", VPR8B, 8, 8, 0b0, 0b10, 0b1, 0b00011, WriteIALU, (d ^ ((d ^ a) & b))),
+    (BITVector16B, "bit", "bit_v16b", VPR16B, 16, 8, 0b1, 0b10, 0b1, 0b00011, WriteIALU, (d ^ ((d ^ a) & b))),
+    (BSLVector8B, "bsl", "bsl_v8b", VPR8B, 8, 8, 0b0, 0b01, 0b1, 0b00011, WriteIALU, (b ^ ((b ^ a) & d))),
+    (BSLVector16B, "bsl", "bsl_v16b", VPR16B, 16, 8, 0b1, 0b01, 0b1, 0b00011, WriteIALU, (b ^ ((b ^ a) & d)))
+)
+
+
+// Fused float multiply-accumulate, which reads the destination as its addend.
+advsimd_three_same_acc!(
+    (FMlaVector2S, "fmla", "fmla_v2s", VPR2S, 2, 32, 0b0, 0b00, 0b0, 0b11001, WriteIALU, (fmla_lane(d, a, b, 32, 23))),
+    (FMlaVector4S, "fmla", "fmla_v4s", VPR4S, 4, 32, 0b1, 0b00, 0b0, 0b11001, WriteIALU, (fmla_lane(d, a, b, 32, 23))),
+    (FMlaVector2D, "fmla", "fmla_v2d", VPR2D, 2, 64, 0b1, 0b01, 0b0, 0b11001, WriteIALU, (fmla_lane(d, a, b, 64, 52))),
+    (FMlsVector2S, "fmls", "fmls_v2s", VPR2S, 2, 32, 0b0, 0b10, 0b0, 0b11001, WriteIALU, (fmls_lane(d, a, b, 32, 23))),
+    (FMlsVector4S, "fmls", "fmls_v4s", VPR4S, 4, 32, 0b1, 0b10, 0b0, 0b11001, WriteIALU, (fmls_lane(d, a, b, 32, 23))),
+    (FMlsVector2D, "fmls", "fmls_v2d", VPR2D, 2, 64, 0b1, 0b11, 0b0, 0b11001, WriteIALU, (fmls_lane(d, a, b, 64, 52)))
+)
+
+// The pairwise three-same operations. They share the encoding of
+// `advsimd_three_same`, but a result lane reduces a pair of adjacent source
+// lanes rather than one lane from each source: `vn` supplies the low half of
+// the result and `vm` the high half. Splitting each source at twice the lane
+// width hands the behavior whole pairs, so no index arithmetic is needed and
+// every intermediate stays inside one register.
+macro advsimd_three_same_pair {
+    ( $( ( $name:ident, $mnemonic:literal, $opname:literal, $cls:ident,
+           $pairs:literal, $esize:literal, $paired:literal,
+           $q:literal, $size:literal, $u:literal, $opcode:literal,
+           $sched:ident, $op:tt ) ),* ) => {
+        $( instruction $name for [AdvSIMD] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            param Q: bits<1> = $q;
+            param U: bits<1> = $u;
+            param SIZE: bits<2> = $size;
+            param OPCODE: bits<5> = $opcode;
+            schedule { units = [$sched]; }
+
+            operands {
+                vd: $cls,
+                vn: $cls,
+                vm: $cls,
+            }
+
+            encoding {
+                0..4 => vd,
+                5..9 => vn,
+                10 => 0b1,
+                11..15 => OPCODE,
+                16..20 => vm,
+                21 => 0b1,
+                22..23 => SIZE,
+                24..28 => 0b01110,
+                29 => U,
+                30 => Q,
+                31 => 0b0,
+            }
+
+            asm {
+                "{self.MNEMONIC} {vd}, {vn}, {vm}"
+            }
+
+            behavior {
+                vd = concat(map(split(vn, $pairs, $paired), |p| $op),
+                            map(split(vm, $pairs, $paired), |p| $op));
+            }
+        } )*
+    };
+}
+
+// The pairwise operations, integer then float.
+advsimd_three_same_pair!(
+    (AddPVector8B, "addp", "addp_v8b", VPR8B, 4, 8, 16, 0b0, 0b00, 0b0, 0b10111, WriteIALU, (pair_lo(p, 8) + pair_hi(p, 8, 16))),
+    (AddPVector16B, "addp", "addp_v16b", VPR16B, 8, 8, 16, 0b1, 0b00, 0b0, 0b10111, WriteIALU, (pair_lo(p, 8) + pair_hi(p, 8, 16))),
+    (AddPVector4H, "addp", "addp_v4h", VPR4H, 2, 16, 32, 0b0, 0b01, 0b0, 0b10111, WriteIALU, (pair_lo(p, 16) + pair_hi(p, 16, 32))),
+    (AddPVector8H, "addp", "addp_v8h", VPR8H, 4, 16, 32, 0b1, 0b01, 0b0, 0b10111, WriteIALU, (pair_lo(p, 16) + pair_hi(p, 16, 32))),
+    (AddPVector2S, "addp", "addp_v2s", VPR2S, 1, 32, 64, 0b0, 0b10, 0b0, 0b10111, WriteIALU, (pair_lo(p, 32) + pair_hi(p, 32, 64))),
+    (AddPVector4S, "addp", "addp_v4s", VPR4S, 2, 32, 64, 0b1, 0b10, 0b0, 0b10111, WriteIALU, (pair_lo(p, 32) + pair_hi(p, 32, 64))),
+    (FAddPVector2S, "faddp", "faddp_v2s", VPR2S, 1, 32, 64, 0b0, 0b00, 0b1, 0b11010, WriteIALU, (fadd_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FAddPVector4S, "faddp", "faddp_v4s", VPR4S, 2, 32, 64, 0b1, 0b00, 0b1, 0b11010, WriteIALU, (fadd_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FMaxNmPVector2S, "fmaxnmp", "fmaxnmp_v2s", VPR2S, 1, 32, 64, 0b0, 0b00, 0b1, 0b11000, WriteIALU, (fmaxnm_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FMaxNmPVector4S, "fmaxnmp", "fmaxnmp_v4s", VPR4S, 2, 32, 64, 0b1, 0b00, 0b1, 0b11000, WriteIALU, (fmaxnm_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FMaxPVector2S, "fmaxp", "fmaxp_v2s", VPR2S, 1, 32, 64, 0b0, 0b00, 0b1, 0b11110, WriteIALU, (fmax_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FMaxPVector4S, "fmaxp", "fmaxp_v4s", VPR4S, 2, 32, 64, 0b1, 0b00, 0b1, 0b11110, WriteIALU, (fmax_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FMinNmPVector2S, "fminnmp", "fminnmp_v2s", VPR2S, 1, 32, 64, 0b0, 0b10, 0b1, 0b11000, WriteIALU, (fminnm_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FMinNmPVector4S, "fminnmp", "fminnmp_v4s", VPR4S, 2, 32, 64, 0b1, 0b10, 0b1, 0b11000, WriteIALU, (fminnm_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FMinPVector2S, "fminp", "fminp_v2s", VPR2S, 1, 32, 64, 0b0, 0b10, 0b1, 0b11110, WriteIALU, (fmin_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (FMinPVector4S, "fminp", "fminp_v4s", VPR4S, 2, 32, 64, 0b1, 0b10, 0b1, 0b11110, WriteIALU, (fmin_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32, 23))),
+    (SMaxPVector8B, "smaxp", "smaxp_v8b", VPR8B, 4, 8, 16, 0b0, 0b00, 0b0, 0b10100, WriteIALU, (smax_lane(pair_lo(p, 8), pair_hi(p, 8, 16), 8))),
+    (SMaxPVector16B, "smaxp", "smaxp_v16b", VPR16B, 8, 8, 16, 0b1, 0b00, 0b0, 0b10100, WriteIALU, (smax_lane(pair_lo(p, 8), pair_hi(p, 8, 16), 8))),
+    (SMaxPVector4H, "smaxp", "smaxp_v4h", VPR4H, 2, 16, 32, 0b0, 0b01, 0b0, 0b10100, WriteIALU, (smax_lane(pair_lo(p, 16), pair_hi(p, 16, 32), 16))),
+    (SMaxPVector8H, "smaxp", "smaxp_v8h", VPR8H, 4, 16, 32, 0b1, 0b01, 0b0, 0b10100, WriteIALU, (smax_lane(pair_lo(p, 16), pair_hi(p, 16, 32), 16))),
+    (SMaxPVector2S, "smaxp", "smaxp_v2s", VPR2S, 1, 32, 64, 0b0, 0b10, 0b0, 0b10100, WriteIALU, (smax_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32))),
+    (SMaxPVector4S, "smaxp", "smaxp_v4s", VPR4S, 2, 32, 64, 0b1, 0b10, 0b0, 0b10100, WriteIALU, (smax_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32))),
+    (SMinPVector8B, "sminp", "sminp_v8b", VPR8B, 4, 8, 16, 0b0, 0b00, 0b0, 0b10101, WriteIALU, (smin_lane(pair_lo(p, 8), pair_hi(p, 8, 16), 8))),
+    (SMinPVector16B, "sminp", "sminp_v16b", VPR16B, 8, 8, 16, 0b1, 0b00, 0b0, 0b10101, WriteIALU, (smin_lane(pair_lo(p, 8), pair_hi(p, 8, 16), 8))),
+    (SMinPVector4H, "sminp", "sminp_v4h", VPR4H, 2, 16, 32, 0b0, 0b01, 0b0, 0b10101, WriteIALU, (smin_lane(pair_lo(p, 16), pair_hi(p, 16, 32), 16))),
+    (SMinPVector8H, "sminp", "sminp_v8h", VPR8H, 4, 16, 32, 0b1, 0b01, 0b0, 0b10101, WriteIALU, (smin_lane(pair_lo(p, 16), pair_hi(p, 16, 32), 16))),
+    (SMinPVector2S, "sminp", "sminp_v2s", VPR2S, 1, 32, 64, 0b0, 0b10, 0b0, 0b10101, WriteIALU, (smin_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32))),
+    (SMinPVector4S, "sminp", "sminp_v4s", VPR4S, 2, 32, 64, 0b1, 0b10, 0b0, 0b10101, WriteIALU, (smin_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32))),
+    (UMaxPVector8B, "umaxp", "umaxp_v8b", VPR8B, 4, 8, 16, 0b0, 0b00, 0b1, 0b10100, WriteIALU, (umax_lane(pair_lo(p, 8), pair_hi(p, 8, 16), 8))),
+    (UMaxPVector16B, "umaxp", "umaxp_v16b", VPR16B, 8, 8, 16, 0b1, 0b00, 0b1, 0b10100, WriteIALU, (umax_lane(pair_lo(p, 8), pair_hi(p, 8, 16), 8))),
+    (UMaxPVector4H, "umaxp", "umaxp_v4h", VPR4H, 2, 16, 32, 0b0, 0b01, 0b1, 0b10100, WriteIALU, (umax_lane(pair_lo(p, 16), pair_hi(p, 16, 32), 16))),
+    (UMaxPVector8H, "umaxp", "umaxp_v8h", VPR8H, 4, 16, 32, 0b1, 0b01, 0b1, 0b10100, WriteIALU, (umax_lane(pair_lo(p, 16), pair_hi(p, 16, 32), 16))),
+    (UMaxPVector2S, "umaxp", "umaxp_v2s", VPR2S, 1, 32, 64, 0b0, 0b10, 0b1, 0b10100, WriteIALU, (umax_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32))),
+    (UMaxPVector4S, "umaxp", "umaxp_v4s", VPR4S, 2, 32, 64, 0b1, 0b10, 0b1, 0b10100, WriteIALU, (umax_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32))),
+    (UMinPVector8B, "uminp", "uminp_v8b", VPR8B, 4, 8, 16, 0b0, 0b00, 0b1, 0b10101, WriteIALU, (umin_lane(pair_lo(p, 8), pair_hi(p, 8, 16), 8))),
+    (UMinPVector16B, "uminp", "uminp_v16b", VPR16B, 8, 8, 16, 0b1, 0b00, 0b1, 0b10101, WriteIALU, (umin_lane(pair_lo(p, 8), pair_hi(p, 8, 16), 8))),
+    (UMinPVector4H, "uminp", "uminp_v4h", VPR4H, 2, 16, 32, 0b0, 0b01, 0b1, 0b10101, WriteIALU, (umin_lane(pair_lo(p, 16), pair_hi(p, 16, 32), 16))),
+    (UMinPVector8H, "uminp", "uminp_v8h", VPR8H, 4, 16, 32, 0b1, 0b01, 0b1, 0b10101, WriteIALU, (umin_lane(pair_lo(p, 16), pair_hi(p, 16, 32), 16))),
+    (UMinPVector2S, "uminp", "uminp_v2s", VPR2S, 1, 32, 64, 0b0, 0b10, 0b1, 0b10101, WriteIALU, (umin_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32))),
+    (UMinPVector4S, "uminp", "uminp_v4s", VPR4S, 2, 32, 64, 0b1, 0b10, 0b1, 0b10101, WriteIALU, (umin_lane(pair_lo(p, 32), pair_hi(p, 32, 64), 32)))
+)
+
+// The `.2d` pairwise forms, whose pair spans the whole register: splitting at
+// twice the lane would ask for a 128-bit lane, wider than a constant can be, so
+// each source is reduced over its two elements and the two results, each put
+// back into a one-lane iterator, are concatenated instead.
+macro advsimd_three_same_pair_wide {
+    ( $( ( $name:ident, $mnemonic:literal, $opname:literal, $q:literal,
+           $size:literal, $u:literal, $opcode:literal, $op:tt ) ),* ) => {
+        $( instruction $name for [AdvSIMD] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            param Q: bits<1> = $q;
+            param U: bits<1> = $u;
+            param SIZE: bits<2> = $size;
+            param OPCODE: bits<5> = $opcode;
+            schedule { units = [WriteIALU]; }
+
+            operands {
+                vd: VPR2D,
+                vn: VPR2D,
+                vm: VPR2D,
+            }
+
+            encoding {
+                0..4 => vd,
+                5..9 => vn,
+                10 => 0b1,
+                11..15 => OPCODE,
+                16..20 => vm,
+                21 => 0b1,
+                22..23 => SIZE,
+                24..28 => 0b01110,
+                29 => U,
+                30 => Q,
+                31 => 0b0,
+            }
+
+            asm {
+                "{self.MNEMONIC} {vd}, {vn}, {vm}"
+            }
+
+            behavior {
+                vd = concat(split(reduce(split(vn, 2, 64), |x, y| $op), 1, 64),
+                            split(reduce(split(vm, 2, 64), |x, y| $op), 1, 64));
+            }
+        } )*
+    };
+}
+
+advsimd_three_same_pair_wide!(
+    (AddPVector2D, "addp", "addp_v2d", 0b1, 0b11, 0b0, 0b10111, (x + y)),
+    (FAddPVector2D, "faddp", "faddp_v2d", 0b1, 0b01, 0b1, 0b11010, (fadd_lane(x, y, 64, 52))),
+    (FMaxPVector2D, "fmaxp", "fmaxp_v2d", 0b1, 0b01, 0b1, 0b11110, (fmax_lane(x, y, 64, 52))),
+    (FMinPVector2D, "fminp", "fminp_v2d", 0b1, 0b11, 0b1, 0b11110, (fmin_lane(x, y, 64, 52))),
+    (FMaxNmPVector2D, "fmaxnmp", "fmaxnmp_v2d", 0b1, 0b01, 0b1, 0b11000, (fmaxnm_lane(x, y, 64, 52))),
+    (FMinNmPVector2D, "fminnmp", "fminnmp_v2d", 0b1, 0b11, 0b1, 0b11000, (fminnm_lane(x, y, 64, 52)))
 )
 
 // The 128-bit view of the SIMD&FP file used by whole-register loads and
