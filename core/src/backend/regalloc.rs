@@ -709,6 +709,11 @@ impl Pass for RegisterAllocationPass {
         frame.reserve_outgoing(outgoing_size);
         let stack_allocas = collect_stack_allocas(context, &blocks, &mut frame);
         self.rematerialize_stack_allocas(context, rewriter, &blocks, &stack_allocas, &mut frame)?;
+        // Rematerializing left the allocations naming nothing, so they go now
+        // rather than after allocation: a definition the function still holds is
+        // a live range the allocator may pick to spill, and the spill code it
+        // would write names a value this erasure is about to retire.
+        erase_stack_allocas(context, rewriter, &stack_allocas)?;
         let assignment = loop {
             // Recomputed each round: spills insert ops within blocks but never add
             // or remove edges, so the CFG is stable across rounds.
@@ -785,7 +790,6 @@ impl Pass for RegisterAllocationPass {
         let saves = callee_saved_slots(&assignment, &mut frame, self.abi.callee_saved);
 
         let frame_size = frame.prologue_adjustment(has_calls, saves.len());
-        erase_stack_allocas(context, rewriter, &stack_allocas)?;
         let stack_args = collect_stack_arg_loads(context, &blocks)?;
         self.insert_incoming_stack_arg_loads(
             context,
