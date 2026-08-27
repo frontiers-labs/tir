@@ -1,5 +1,7 @@
 //! PassManager, Rewriter and pass-driven analysis invalidation.
 
+use std::collections::HashMap;
+
 use tir::{
     builtin::{ops, AddIOp, IntegerType},
     cfg::ops as cfg_ops,
@@ -533,4 +535,35 @@ fn a_pathological_graph_grows_linearly() {
         per_block.windows(2).all(|step| step[0] == step[1]),
         "every added block must cost the same: {per_block:?} from {measured:?}"
     );
+}
+
+/// A copy that runs somewhere else names its inputs under the caller's names —
+/// the region's own arguments included, so the copy's arguments go unused rather
+/// than shadowing what was bound.
+#[test]
+fn cloning_a_region_with_a_mapping_binds_arguments_and_outside_values() {
+    let context = Context::with_default_dialects();
+    let i32 = IntegerType::new(&context, 32);
+    let outside = context.create_block(Vec::new());
+    let x = outside
+        .append_op(ops::constant(&context, 1, i32).build())
+        .result();
+    let y = outside
+        .append_op(ops::constant(&context, 2, i32).build())
+        .result();
+    let z = outside
+        .append_op(ops::constant(&context, 3, i32).build())
+        .result();
+    let region = context.create_region();
+    let argument = context.create_value(i32, None);
+    let block = context.create_block(vec![argument.clone()]);
+    region.add_block(block.id());
+    block.append_op(ops::addi(&context, argument.id(), x, i32).build());
+
+    let bindings = HashMap::from([(argument.id(), y), (x, z)]);
+    let copy = tir::clone_region_with_mapping(&context, region.id(), &bindings);
+
+    let body = context.get_block(context.get_region(copy).block_ids()[0]);
+    let add = context.get_op(body.op_ids()[0]);
+    assert_eq!(add.operands().as_slice(), vec![y, z]);
 }

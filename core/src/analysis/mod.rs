@@ -1,3 +1,4 @@
+pub mod affine;
 pub mod alias_facts;
 pub mod constant_facts;
 pub mod defuse;
@@ -9,6 +10,7 @@ pub mod scopes;
 pub mod slots;
 pub mod solver;
 
+pub use affine::AffineView;
 pub use alias_facts::{AliasFacts, AliasResult, Base, PointerFact};
 pub use constant_facts::{ConstantFacts, Fact};
 pub use defuse::{DefUse, OpRegs, PhysReg, execution_regs, op_regs};

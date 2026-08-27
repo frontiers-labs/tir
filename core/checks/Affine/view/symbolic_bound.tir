@@ -1,0 +1,36 @@
+// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+
+// A bound nothing computes before the nest runs is a parameter, not a refusal.
+// The trip count is unknown, so the distance test has no box to bound `δ` with —
+// and still decides this pair, because `4·δ = 0` has no solution away from zero
+// whatever the box is.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @scale(%1: !i32) {
+    %2 = ptr.alloca {size = 1024, align = 4} : !ptr.p
+    %3 = constant {value = 0} : !i32
+    %4 = constant {value = 1} : !i32
+    %5 = constant {value = 4} : !i64
+    %6 = scf.for %3, %1, %4 iter_args(%7 = %3) -> !i32 {
+      %8 = extsi %7 : !i64
+      %9 = muli %8, %5 : !i64
+      %10 = ptr.ptradd %2, %9 : !ptr.p
+      %11 = ptr.load %10 : !i32
+      %12 = addi %11, %4 : !i32
+      ptr.store %12, %10
+      %13 = addi %7, %4 : !i32
+      scf.yield %13
+    }
+    func.return
+  }
+  module_end
+}
+
+// CHECK: affine.view %[[NEST:[0-9]+]] {
+// CHECK-NEXT: symbols s0 = %[[N:[0-9]+]]
+// CHECK-NEXT: loop 0 %[[NEST]] i32 [0, s0) step 1 counter %{{[0-9]+}} trip unknown
+// CHECK-NEXT: access 0 read %{{[0-9]+}} chain %[[S:[0-9]+]] base %[[A:[0-9]+]] offset 4*d0 extent 4
+// CHECK-NEXT: access 1 write %{{[0-9]+}} chain %[[S]] base %[[A]] offset 4*d0 extent 4
+// CHECK-NEXT: dep 0 1 independent

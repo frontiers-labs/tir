@@ -170,5 +170,5 @@ to understand what the code is doing.
    changes, `#[doc(hidden)]`, re-exports) to make something testable; a test
    that needs private access is rewritten against public API or deleted.
 4. Light utility crates with small dependency footprints (`utils/adt`,
-   `utils/graph`, `utils/filecheck`, `utils/lit`, `utils/pbqp`, `xtask`)
-   keep their unit tests in-crate.
+   `utils/arrange`, `utils/graph`, `utils/filecheck`, `utils/lit`,
+   `utils/pbqp`, `xtask`) keep their unit tests in-crate.

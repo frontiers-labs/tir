@@ -1,0 +1,65 @@
+// RUN: tir opt --pass func.func(thread-state,affine) --verify %s | filecheck %s
+
+// A dimension no tile size divides. The tiled loop stops at the last whole tile —
+// `lb + ((ub - lb) / stride)·stride`, the span divided unsigned so a loop
+// longer than its width's signed half is still counted right — and a copy of
+// everything under it runs the remainder untiled, entered on the value the
+// tile loop's counter ended at: where the loop runs no iteration, that is `lb`,
+// and the remainder runs none either. That copy is the one a vectorizer's
+// `n % VF` needs. The other dimension runs to a bound nothing computes before
+// the nest, and the model tiles nothing whose length it cannot read.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @transpose_add(%29: !i32) {
+    %1 = ptr.alloca {size = 4294967296, align = 4} : !ptr.p
+    %2 = ptr.alloca {size = 4294967296, align = 4} : !ptr.p
+    %3 = constant {value = 0} : !i32
+    %5 = constant {value = 1048580} : !i32
+    %6 = constant {value = 1} : !i32
+    %7 = constant {value = 4194320} : !i64
+    %8 = constant {value = 4194320} : !i64
+    %9 = constant {value = 4} : !i64
+    %10 = scf.for %3, %29, %6 iter_args(%11 = %3) -> !i32 {
+      %12 = scf.for %3, %5, %6 iter_args(%13 = %3) -> !i32 {
+        %14 = extsi %11 : !i64
+        %15 = extsi %13 : !i64
+        %16 = muli %14, %7 : !i64
+        %17 = muli %15, %9 : !i64
+        %18 = ptr.ptradd %1, %16 : !ptr.p
+        %19 = ptr.ptradd %18, %17 : !ptr.p
+        %20 = muli %15, %8 : !i64
+        %21 = muli %14, %9 : !i64
+        %22 = ptr.ptradd %2, %20 : !ptr.p
+        %23 = ptr.ptradd %22, %21 : !ptr.p
+        %24 = ptr.load %19 : !i32
+        %25 = ptr.load %23 : !i32
+        %26 = addi %24, %25 : !i32
+        ptr.store %26, %19
+        %27 = addi %13, %6 : !i32
+        scf.yield %27
+      }
+      %28 = addi %11, %6 : !i32
+      scf.yield %28
+    }
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @transpose_add(%[[N:[0-9]+]]: !i32)
+// CHECK: %[[T:[0-9]+]] = muli %{{[0-9]+}}, %{{[0-9]+}} : !i32
+// CHECK-NEXT: %[[SPAN:[0-9]+]] = subi %[[UB:[0-9]+]], %[[LB:[0-9]+]]
+// CHECK-NEXT: %[[TILES:[0-9]+]] = divui %[[SPAN]], %[[T]]
+// CHECK-NEXT: %[[COVERED:[0-9]+]] = muli %[[TILES]], %[[T]]
+// CHECK-NEXT: %[[LAST:[0-9]+]] = addi %[[LB]], %[[COVERED]]
+// The whole tiles run first, and the symbolic dimension runs inside each.
+// CHECK-NEXT: %[[FINAL:[0-9]+]], %[[S0:[0-9]+]], %[[S1:[0-9]+]] = scf.for %[[LB]], %[[LAST]], %[[T]] iter_args(%[[TO:[0-9]+]] = %[[LB]]
+// CHECK-NEXT: %[[END:[0-9]+]] = addi %[[TO]], %[[T]]
+// CHECK-NEXT: scf.for %[[TO]], %[[END]], %{{[0-9]+}}
+// CHECK-NEXT: scf.for %{{[0-9]+}}, %[[N]], %{{[0-9]+}}
+// Then one copy over what is left, entered where the tiles stopped and on the
+// chains they left behind.
+// CHECK: scf.for %[[FINAL]], %[[UB]], %{{[0-9]+}} iter_args(%{{[0-9]+}} = %[[FINAL]], %{{[0-9]+}} = %[[S0]], %{{[0-9]+}} = %[[S1]])
+// CHECK-NEXT: scf.for %{{[0-9]+}}, %[[N]], %{{[0-9]+}}

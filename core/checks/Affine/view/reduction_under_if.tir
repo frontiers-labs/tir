@@ -1,0 +1,30 @@
+// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+
+// `acc + (c ? acc : x)` is no reduction: the value added is computed from the
+// port inside the gate, which threads nothing through its operands. What a
+// region reads counts as read.
+
+#data_layout = {types = {i1 = {abi = 8, size = 8}, i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @sum(%1: !i32, %2: !i1) -> !i32 {
+    %3 = constant {value = 0} : !i32
+    %4 = constant {value = 64} : !i32
+    %5 = constant {value = 1} : !i32
+    %6, %7 = scf.for %3, %4, %5 iter_args(%8 = %3, %9 = %1) -> !i32, !i32 {
+      %10 = scf.if %2 -> !i32 {
+        scf.yield %9
+      } else {
+        scf.yield %5
+      }
+      %11 = addi %9, %10 : !i32
+      %12 = addi %8, %5 : !i32
+      scf.yield %12, %11
+    }
+    func.return %7
+  }
+  module_end
+}
+
+// CHECK: port 0 %{{[0-9]+}} induction init %{{[0-9]+}} step 1
+// CHECK-NEXT: port 1 %{{[0-9]+}} other

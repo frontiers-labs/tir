@@ -823,6 +823,12 @@ impl Context {
         slab_get(&inner.value_block, id.index()).is_some()
     }
 
+    /// The block `id` is an argument of, or `None` when an operation defines it.
+    pub fn block_of_argument(&self, id: ValueId) -> Option<BlockId> {
+        let inner = self.0.read();
+        slab_get(&inner.value_block, id.index()).copied()
+    }
+
     pub fn create_region(&self) -> RegionHandle {
         let mut inner = self.0.write();
 

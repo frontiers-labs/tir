@@ -101,6 +101,11 @@ impl DataLayout {
         bits(self.entries.get("stack_alignment"))
     }
 
+    /// Bytes a cache line holds, which is what a locality model counts in.
+    pub fn cache_line(&self) -> Option<u32> {
+        bits(self.entries.get("cache_line"))
+    }
+
     /// Width of a pointer, in bits.
     pub fn pointer_size(&self) -> Option<u32> {
         self.class_layout("p").map(|(size, _)| size)
@@ -191,6 +196,7 @@ pub fn data_layout_spec(
                 "stack_alignment".to_string(),
                 AttributeValue::UInt(u64::from(stack_alignment)),
             ),
+            ("cache_line".to_string(), AttributeValue::UInt(64)),
             (
                 "types".to_string(),
                 AttributeValue::Dict(Box::new(types.collect())),

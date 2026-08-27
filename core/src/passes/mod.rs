@@ -1,5 +1,6 @@
 //! Transformation passes over generic TIR interfaces.
 
+pub mod affine;
 pub mod dce;
 pub mod dse;
 pub mod erase_state;
@@ -13,6 +14,7 @@ pub mod shuffle_state;
 pub mod symbol_uniqueness;
 pub mod thread_state;
 
+pub use affine::AffineSchedulePass;
 pub use dce::DeadCodeEliminationPass;
 pub use dse::DeadStoreEliminationPass;
 pub use erase_state::EraseStatePass;

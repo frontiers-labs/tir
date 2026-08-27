@@ -27,6 +27,27 @@ pub(crate) fn clone_region(context: &Context, region: RegionId) -> RegionId {
     clone_region_into(context, region, &mut Mapping::default())
 }
 
+/// Copy `region`, substituting `bindings` for the definitions outside it and
+/// for its own block arguments.
+///
+/// A plain clone keeps outside references as they are, which is right for a copy
+/// that runs where the original did. A copy that runs somewhere else — the tile
+/// of a strip-mined loop, the epilogue that finishes it, the arm a versioned
+/// nest picks — reads the same values under new names, and this is where those
+/// names are given. A bound argument's copy is still declared, but nothing in
+/// the copy names it. References the map does not mention are kept.
+pub fn clone_region_with_mapping(
+    context: &Context,
+    region: RegionId,
+    bindings: &HashMap<ValueId, ValueId>,
+) -> RegionId {
+    let mut mapping = Mapping {
+        values: bindings.clone(),
+        blocks: HashMap::new(),
+    };
+    clone_region_into(context, region, &mut mapping)
+}
+
 /// Blocks are created before any operation is copied, so a branch to a block
 /// later in the region already has its copy to name.
 fn clone_region_into(context: &Context, region: RegionId, mapping: &mut Mapping) -> RegionId {
@@ -42,7 +63,7 @@ fn clone_region_into(context: &Context, region: RegionId, mapping: &mut Mapping)
             .iter()
             .map(|argument| {
                 let copy = context.create_value(argument.ty(), None);
-                mapping.values.insert(argument.id(), copy.id());
+                mapping.values.entry(argument.id()).or_insert(copy.id());
                 copy
             })
             .collect();

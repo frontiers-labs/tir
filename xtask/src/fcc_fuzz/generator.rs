@@ -289,6 +289,7 @@ impl Generator {
         let acc = self.fresh("s");
         body.push_str(&format!("    int {acc} = 0;\n"));
         body.push_str(&format!("    for (int i = 0; i < {trips}; i++) {{\n"));
+        let mark = scope.variables.len();
         scope.push_read_only("i", trips.saturating_sub(1));
         let step = self.expr(&scope, VALUE_BOUND, 1);
         body.push_str(&format!(
@@ -298,13 +299,71 @@ impl Generator {
         ));
         body.push_str(&format!("        printf(\"%d\\n\", {acc});\n"));
         body.push_str("    }\n");
+        // The counter left the block it was declared in.
+        scope.restore(mark);
         // Every element is printed: a store through a pointer that went wrong
         // shows up even where the loop above never read it.
         body.push_str(&format!(
             "    for (int i = 0; i < {ARRAY_LEN}; i++) printf(\"%d\\n\", arr[i]);\n"
         ));
 
+        body.push_str(&self.matrix_nests(&mut scope));
+
         format!("int main(void) {{\n{body}    return 0;\n}}\n")
+    }
+
+    /// Counted nests over a local matrix, which is what the affine view is
+    /// defined on and what nothing else here generates.
+    ///
+    /// Three nests, each a different answer from the dependence test: a
+    /// transposed update the scheduler may reorder, an update carrying the
+    /// distance `(1, -1)` — which no swap keeps lexicographically positive, so
+    /// reordering it would be a miscompile the printed matrix reports — and the
+    /// print itself. Every stored value is masked back into `[0, 255]`, so no
+    /// accumulation can overflow whatever the trip counts do.
+    fn matrix_nests(&mut self, scope: &mut Scope) -> String {
+        const SIDE: usize = 8;
+        let name = self.fresh("mat");
+        let mut body = format!("    int {name}[{SIDE}][{SIDE}];\n");
+        let mark = scope.variables.len();
+
+        let (row, column) = (self.fresh("mi"), self.fresh("mj"));
+        scope.push_read_only(&row, (SIDE - 1) as i64);
+        scope.push_read_only(&column, (SIDE - 1) as i64);
+        let seed = self.expr(scope, VALUE_BOUND, 2);
+        body.push_str(&format!(
+            "    for (int {row} = 0; {row} < {SIDE}; {row}++)\n\
+             \x20       for (int {column} = 0; {column} < {SIDE}; {column}++)\n\
+             \x20           {name}[{row}][{column}] = ({}) & 255;\n",
+            seed.text
+        ));
+
+        // Transposed subscripts: the loop that walks a row is the outer one, so
+        // the schedule the cost model wants is the swap, and the values may not
+        // change under it.
+        let step = self.expr(scope, VALUE_BOUND, 2);
+        body.push_str(&format!(
+            "    for (int {row} = 0; {row} < {SIDE}; {row}++)\n\
+             \x20       for (int {column} = 0; {column} < {SIDE}; {column}++)\n\
+             \x20           {name}[{column}][{row}] = ({name}[{column}][{row}] + ({})) & 255;\n",
+            step.text
+        ));
+
+        // `(1, -1)`: swapping the loops reverses it, and the result would differ.
+        body.push_str(&format!(
+            "    for (int {row} = 1; {row} < {SIDE}; {row}++)\n\
+             \x20       for (int {column} = 0; {column} < {SIDE} - 1; {column}++)\n\
+             \x20           {name}[{row}][{column}] = ({name}[{row} - 1][{column} + 1] + \
+             {name}[{row}][{column}]) & 255;\n"
+        ));
+
+        body.push_str(&format!(
+            "    for (int {row} = 0; {row} < {SIDE}; {row}++)\n\
+             \x20       for (int {column} = 0; {column} < {SIDE}; {column}++)\n\
+             \x20           printf(\"%d\\n\", {name}[{row}][{column}]);\n"
+        ));
+        scope.restore(mark);
+        body
     }
 
     fn statements(&mut self, scope: &mut Scope, body: &mut String, depth: u32) {

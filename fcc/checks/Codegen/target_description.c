@@ -7,7 +7,7 @@
 
 int id(int value) { return value; }
 
-// CHECK: #data_layout = {endianness = "little", stack_alignment = 128
+// CHECK: #data_layout = {cache_line = 64, endianness = "little", stack_alignment = 128
 // CHECK-SAME: p = {abi = 64, size = 64}
 // CHECK: #target_env = {arch = "riscv64"
 // CHECK: module {data_layout = #data_layout, target_env = #target_env} {

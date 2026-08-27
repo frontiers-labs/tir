@@ -223,6 +223,13 @@ pub(super) fn emit_machine_code(
         // The chains reach the backend, which drops them; `dse` reads them here,
         // where a write's readers are the operations naming the state it left.
         function_pipeline.add_pass(tir::passes::DeadStoreEliminationPass::new());
+        // Loop scheduling reads the chains too, and what it leaves behind — a
+        // rebuilt nest, an unrolled body — is address arithmetic nobody has
+        // folded yet, so the value passes run once more over it.
+        function_pipeline.add_pass(tir::passes::AffineSchedulePass::new());
+        function_pipeline.add_pass(tir::passes::InstCombinePass::new());
+        function_pipeline.add_pass(tir::passes::SccpPass::new());
+        function_pipeline.add_pass(tir::passes::DeadCodeEliminationPass::new());
     }
     // Data lowering consumes the δ ops, so the functions that name them must
     // hold symbol addresses of their own by then.

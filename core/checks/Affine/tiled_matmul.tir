@@ -1,0 +1,71 @@
+// RUN: tir opt --pass func.func(thread-state,affine) --verify %s | filecheck %s
+
+// A 1024-square matmul over local arrays: 12 MB, past what the modelled
+// hierarchy absorbs, so the fetched lines are worth a loop. Every dependence
+// vector is componentwise non-negative, so any band is permutable and the
+// arranger may tile it; the tiles it picks divide 1024, so no remainder runs
+// afterwards and the result is one nest. The point loops run `i, k, j` — the
+// order the read of `B` walks a row in.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @matmul() {
+    %1 = ptr.alloca {size = 4194304, align = 4} : !ptr.p
+    %2 = ptr.alloca {size = 4194304, align = 4} : !ptr.p
+    %3 = ptr.alloca {size = 4194304, align = 4} : !ptr.p
+    %4 = constant {value = 0} : !i32
+    %5 = constant {value = 1024} : !i32
+    %6 = constant {value = 1} : !i32
+    %7 = constant {value = 4096} : !i64
+    %8 = constant {value = 4} : !i64
+    %9 = scf.for %4, %5, %6 iter_args(%10 = %4) -> !i32 {
+      %11 = scf.for %4, %5, %6 iter_args(%12 = %4) -> !i32 {
+        %13 = scf.for %4, %5, %6 iter_args(%14 = %4) -> !i32 {
+          %15 = extsi %10 : !i64
+          %16 = extsi %12 : !i64
+          %17 = extsi %14 : !i64
+          %18 = muli %15, %7 : !i64
+          %19 = muli %17, %8 : !i64
+          %20 = ptr.ptradd %1, %18 : !ptr.p
+          %21 = ptr.ptradd %20, %19 : !ptr.p
+          %22 = muli %17, %7 : !i64
+          %23 = muli %16, %8 : !i64
+          %24 = ptr.ptradd %2, %22 : !ptr.p
+          %25 = ptr.ptradd %24, %23 : !ptr.p
+          %26 = ptr.ptradd %3, %18 : !ptr.p
+          %27 = ptr.ptradd %26, %23 : !ptr.p
+          %28 = ptr.load %21 : !i32
+          %29 = ptr.load %25 : !i32
+          %30 = muli %28, %29 : !i32
+          %31 = ptr.load %27 : !i32
+          %32 = addi %31, %30 : !i32
+          ptr.store %32, %27
+          %33 = addi %14, %6 : !i32
+          scf.yield %33
+        }
+        %34 = addi %12, %6 : !i32
+        scf.yield %34
+      }
+      %35 = addi %10, %6 : !i32
+      scf.yield %35
+    }
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @matmul
+// CHECK: %[[T:[0-9]+]] = constant {value = 64} : !i32
+// The tiled dimension counts in steps of a tile, and the loop inside it runs
+// from where that one stands to one tile further.
+// CHECK: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %[[T]] iter_args(%[[TO:[0-9]+]] = %{{[0-9]+}}
+// CHECK-NEXT: %[[END:[0-9]+]] = addi %[[TO]], %[[T]]
+// CHECK-NEXT: scf.for %[[TO]], %[[END]], %{{[0-9]+}} iter_args(%[[I:[0-9]+]] = %[[TO]]
+// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[K:[0-9]+]] = %{{[0-9]+}}
+// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[J:[0-9]+]] = %{{[0-9]+}}
+// CHECK-NEXT: extsi %[[I]]
+// CHECK-NEXT: extsi %[[J]]
+// CHECK-NEXT: extsi %[[K]]
+// Every tile is whole, so nothing runs after the nest to finish it.
+// CHECK-NOT: divui

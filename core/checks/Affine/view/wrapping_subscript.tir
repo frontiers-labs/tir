@@ -1,0 +1,34 @@
+// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+
+// The subscript is computed in the counter's own width, and `4·i` leaves what a
+// signed byte holds long before the loop ends. The form describes the access
+// only where the arithmetic does not wrap, so the pair it makes is undecided —
+// undefined behaviour is not what rescues it, because none is modelled.
+
+#data_layout = {types = {i8 = {abi = 8, size = 8}, i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @wrap() {
+    %1 = ptr.alloca {size = 1024, align = 4} : !ptr.p
+    %2 = constant {value = 0} : !i8
+    %3 = constant {value = 100} : !i8
+    %4 = constant {value = 1} : !i8
+    %5 = constant {value = 4} : !i8
+    %6 = scf.for %2, %3, %4 iter_args(%7 = %2) -> !i8 {
+      %8 = muli %7, %5 : !i8
+      %9 = extsi %8 : !i64
+      %10 = ptr.ptradd %1, %9 : !ptr.p
+      %11 = ptr.load %10 : !i32
+      %12 = addi %11, %11 : !i32
+      ptr.store %12, %10
+      %13 = addi %7, %4 : !i8
+      scf.yield %13
+    }
+    func.return
+  }
+  module_end
+}
+
+// CHECK: access 0 read %{{[0-9]+}} chain %{{[0-9]+}} base %{{[0-9]+}} offset 4*d0 extent 4 wrapping
+// CHECK-NEXT: access 1 write %{{[0-9]+}} chain %{{[0-9]+}} base %{{[0-9]+}} offset 4*d0 extent 4 wrapping
+// CHECK-NEXT: dep 0 1 unknown

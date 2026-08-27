@@ -16,6 +16,10 @@ pub struct ToolArgs {
     #[arg(long)]
     verify: bool,
 
+    /// Print the affine view of every counted loop nest, ahead of the IR.
+    #[arg(long = "print-affine")]
+    print_affine: bool,
+
     /// Output file, or `-` for stdout.
     #[arg(short = 'o', default_value = "-")]
     output: OsString,
@@ -42,6 +46,12 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         })?;
         pm.run(&context, context.get_op(module.id()))
             .map_err(|e| format!("pass pipeline failed: {e}"))?;
+    }
+
+    if args.print_affine {
+        for view in tir::analysis::affine::nests_under(&context, module.id()) {
+            print!("{}", view.render(&context));
+        }
     }
 
     if args.verify {

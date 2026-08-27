@@ -2104,6 +2104,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "tir-adt",
+ "tir-arrange",
  "tir-graph",
  "tir-macros",
  "tir-pbqp",
@@ -2125,6 +2126,10 @@ dependencies = [
  "tir",
  "tmdl",
 ]
+
+[[package]]
+name = "tir-arrange"
+version = "0.1.0"
 
 [[package]]
 name = "tir-capi"

@@ -9,6 +9,7 @@ pub mod attributes;
 pub mod backend;
 mod block;
 mod clone;
+pub use clone::clone_region_with_mapping;
 mod context;
 mod diagnostics;
 mod dialect;

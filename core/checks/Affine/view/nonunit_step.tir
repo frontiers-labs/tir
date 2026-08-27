@@ -1,0 +1,36 @@
+// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+
+// The counter is not the iteration: `for (i = 0; i < 16; i += 2)` names the
+// even numbers, and a distance is a number of iterations. The forms are over
+// iterations, so the step lands in the coefficient — `a[i] = a[i + 10]` is a
+// dependence five iterations apart, not ten.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @shift() {
+    %1 = ptr.alloca {size = 1024, align = 4} : !ptr.p
+    %2 = constant {value = 0} : !i32
+    %3 = constant {value = 16} : !i32
+    %4 = constant {value = 2} : !i32
+    %5 = constant {value = 4} : !i64
+    %6 = constant {value = 40} : !i64
+    %7 = scf.for %2, %3, %4 iter_args(%8 = %2) -> !i32 {
+      %9 = extsi %8 : !i64
+      %10 = muli %9, %5 : !i64
+      %11 = ptr.ptradd %1, %10 : !ptr.p
+      %12 = ptr.ptradd %11, %6 : !ptr.p
+      %13 = ptr.load %12 : !i32
+      ptr.store %13, %11
+      %14 = addi %8, %4 : !i32
+      scf.yield %14
+    }
+    func.return
+  }
+  module_end
+}
+
+// CHECK: loop 0 %{{[0-9]+}} i32 [0, 16) step 2 counter %{{[0-9]+}} trip 8
+// CHECK-NEXT: access 0 read %{{[0-9]+}} chain %{{[0-9]+}} base %{{[0-9]+}} offset 8*d0 + 40 extent 4
+// CHECK-NEXT: access 1 write %{{[0-9]+}} chain %{{[0-9]+}} base %{{[0-9]+}} offset 8*d0 extent 4
+// CHECK-NEXT: dep 0 1 (5)

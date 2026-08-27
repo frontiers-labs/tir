@@ -1,0 +1,11 @@
+[package]
+name = "tir-arrange"
+version = "0.1.0"
+edition = "2024"
+
+# The arranger engine: placement under constraints, with no idea what is being
+# placed. Nothing here may depend on `tir` — the whole point of the contract is
+# that a second instance on a different axis reuses it unchanged.
+
+[lib]
+doctest = false

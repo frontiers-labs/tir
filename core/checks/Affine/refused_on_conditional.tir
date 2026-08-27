@@ -1,0 +1,45 @@
+// RUN: tir opt --pass func.func(thread-state,affine) --verify %s | filecheck %s
+
+// Two pointer parameters are one chain and two objects, so the pair between them
+// is decided by a range predicate, not by a distance. That predicate is
+// versioning's input, not this pass's: until something has made it hold, the
+// nest is left as it stands.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @touch(%1: !ptr.p, %2: !ptr.p) {
+    %3 = constant {value = 0} : !i32
+    %4 = constant {value = 16} : !i32
+    %5 = constant {value = 1} : !i32
+    %6 = constant {value = 64} : !i64
+    %7 = constant {value = 4} : !i64
+    %8 = scf.for %3, %4, %5 iter_args(%9 = %3) -> !i32 {
+      %10 = scf.for %3, %4, %5 iter_args(%11 = %3) -> !i32 {
+        %12 = extsi %9 : !i64
+        %13 = extsi %11 : !i64
+        %14 = muli %13, %6 : !i64
+        %15 = muli %12, %7 : !i64
+        %16 = ptr.ptradd %1, %14 : !ptr.p
+        %17 = ptr.ptradd %16, %15 : !ptr.p
+        %18 = ptr.ptradd %2, %14 : !ptr.p
+        %19 = ptr.ptradd %18, %15 : !ptr.p
+        %20 = ptr.load %19 : !i32
+        %21 = addi %20, %5 : !i32
+        ptr.store %21, %17
+        %22 = addi %11, %5 : !i32
+        scf.yield %22
+      }
+      %23 = addi %9, %5 : !i32
+      scf.yield %23
+    }
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @touch
+// CHECK: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[OUTER:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}})
+// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[INNER:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}})
+// CHECK-NEXT: %[[A:[0-9]+]] = extsi %[[OUTER]]
+// CHECK-NEXT: %[[B:[0-9]+]] = extsi %[[INNER]]

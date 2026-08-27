@@ -1,0 +1,33 @@
+// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+
+// A loop entered at `n` counts `n + i` on iteration `i`: the lower bound is a
+// parameter of the form, and the range predicate a caller could be asked
+// starts where the loop does.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @tail(%1: !ptr.p, %2: !ptr.p, %3: !i32) {
+    %4 = constant {value = 64} : !i32
+    %5 = constant {value = 1} : !i32
+    %6 = constant {value = 4} : !i64
+    %7 = scf.for %3, %4, %5 iter_args(%8 = %3) -> !i32 {
+      %9 = extsi %8 : !i64
+      %10 = muli %9, %6 : !i64
+      %11 = ptr.ptradd %1, %10 : !ptr.p
+      %12 = ptr.ptradd %2, %10 : !ptr.p
+      %13 = ptr.load %12 : !i32
+      ptr.store %13, %11
+      %14 = addi %8, %5 : !i32
+      scf.yield %14
+    }
+    func.return
+  }
+  module_end
+}
+
+// CHECK: symbols s0 = %[[N:[0-9]+]]
+// CHECK-NEXT: loop 0 %{{[0-9]+}} i32 [s0, 64) step 1 counter %{{[0-9]+}} trip unknown
+// CHECK-NEXT: access 0 read %{{[0-9]+}} chain %{{[0-9]+}} base %[[B:[0-9]+]] offset 4*d0 + 4*s0 extent 4
+// CHECK-NEXT: access 1 write %{{[0-9]+}} chain %{{[0-9]+}} base %[[A:[0-9]+]] offset 4*d0 + 4*s0 extent 4
+// CHECK-NEXT: dep 0 1 conditional disjoint %[[B]][4*s0, 255] %[[A]][4*s0, 255]
