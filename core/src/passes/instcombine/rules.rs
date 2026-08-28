@@ -299,24 +299,24 @@ fn cmp_complement(context: Context, predicate: &'static str, complement: &'stati
         "cmp-complement",
         lhs,
         Rhs::Apply(Box::new(move |eg, substitution, root| {
-            let operands = vec![operand(substitution, 0), operand(substitution, 1)];
-            let Some(ty) = class_type(eg, eg.find(root)) else {
+            // Only a settled comparison says anything, and the pair is registered
+            // both ways round, so the search for the complement — a scan of the
+            // classes holding that predicate — is paid only where there is a fact
+            // to spend.
+            let root = eg.find(root);
+            let (Some(value), Some(ty)) = (const_value(eg, root), class_type(eg, root)) else {
                 return;
             };
+            let operands = vec![operand(substitution, 0), operand(substitution, 1)];
             let Some(other) = class_holding(eg, &cmpi(&context, complement, Some(ty), operands))
             else {
                 return;
             };
-            for (settled, opposite) in [(eg.find(root), other), (other, eg.find(root))] {
-                let Some(value) = const_value(eg, settled) else {
-                    continue;
-                };
-                let negated = eg.add(konst(APInt::new(
-                    value.width(),
-                    u64::from(value.to_u64() == 0),
-                )));
-                eg.union(opposite, negated);
-            }
+            let negated = eg.add(konst(APInt::new(
+                value.width(),
+                u64::from(value.to_u64() == 0),
+            )));
+            eg.union(other, negated);
         })),
     )
 }
