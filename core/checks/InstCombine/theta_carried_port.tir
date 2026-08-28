@@ -21,8 +21,8 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[C:[0-9]+]] = constant {value = 7} : !i32
-// CHECK: %{{[0-9]+}}, %[[N:[0-9]+]] = scf.for
+// CHECK: %{{[0-9]+}}, %[[N:[0-9]+]] = scf.for {{.*}} iter_args(%[[P:[0-9]+]] = %[[C]]
 // CHECK: %[[NEXT:[0-9]+]] = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
-// CHECK-NEXT: scf.yield %[[C]], %[[NEXT]]
+// CHECK-NEXT: scf.yield %[[P]], %[[NEXT]]
 // CHECK: %[[SUM:[0-9]+]] = addi %[[C]], %[[N]] : !i32
 // CHECK-NEXT: func.return %[[SUM]]

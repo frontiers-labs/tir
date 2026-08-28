@@ -1,0 +1,55 @@
+// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+
+// A tested loop's body knows the flag its test forwarded holds, but a port the
+// body only forwards on an edge stays in its register: a literal is worth
+// something to an op that computes with it, and nothing to an edge already
+// carrying the value. Where the body does compute with the port — a gate
+// deciding on it — that read is the literal, and the edge still forwards the
+// register.
+
+module {
+  %fn_forward = func.func @forward(%f0: !i1, %v0: !i32) -> !i32 {
+    %r, %s = scf.while iter_args(%f = %f0, %v = %v0) -> !i1, !i32 {
+      %n = constant {value = 10} : !i32
+      %c = cmpi %v, %n {predicate = "slt"} : !i1
+      scf.condition %c, %c, %v
+    } do(%bf, %bv) {
+      %one = constant {value = 1} : !i32
+      %x = addi %bv, %one : !i32
+      scf.yield %bf, %x
+    }
+    func.return %s
+  }
+  %fn_compute = func.func @compute(%f0: !i1, %v0: !i32) -> !i32 {
+    %r, %s = scf.while iter_args(%f = %f0, %v = %v0) -> !i1, !i32 {
+      %n = constant {value = 10} : !i32
+      %c = cmpi %v, %n {predicate = "slt"} : !i1
+      scf.condition %c, %c, %v
+    } do(%bf, %bv) {
+      %one = constant {value = 1} : !i32
+      %two = constant {value = 2} : !i32
+      %x = scf.if %bf -> !i32 {
+        %a = addi %bv, %one : !i32
+        scf.yield %a
+      } else {
+        %b = addi %bv, %two : !i32
+        scf.yield %b
+      }
+      scf.yield %bf, %x
+    }
+    func.return %s
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @forward
+// CHECK: do(%[[BF:[0-9]+]], %[[BV:[0-9]+]]) {
+// CHECK-NOT: constant {value = 1} : !i1
+// CHECK: scf.yield %[[BF]], %{{[0-9]+}}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @compute
+// CHECK: do(%[[BF:[0-9]+]], %[[BV:[0-9]+]]) {
+// CHECK: %[[T:[0-9]+]] = constant {value = 1} : !i1
+// CHECK: scf.if %[[T]]
+// CHECK: scf.yield %[[BF]], %{{[0-9]+}}

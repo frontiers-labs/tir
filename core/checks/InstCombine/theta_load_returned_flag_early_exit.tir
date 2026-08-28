@@ -8,8 +8,8 @@
 //
 // The value slot is never written before the loop, so what it carries in is a
 // read of what it holds there, and that slot stays in memory around the promoted
-// value. The body runs under the condition the test yields, so the gate that
-// re-tests it is decided and the break carries out the literals it proves.
+// value. The body runs under the loop's test, so the gate re-testing the flag
+// is decided; the edges keep forwarding the ports.
 
 module {
   %fn_find = func.func @find(%0: !i1, %1: !i32) -> !i32 {
@@ -47,10 +47,10 @@ module {
 // CHECK: %[[INIT:[0-9]+]] = ptr.load %3 : !i32
 // CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] = scf.while iter_args(%{{[0-9]+}} = %4, %{{[0-9]+}} = %[[INIT]]) -> !i1, !i32 {
 // CHECK: do scope(%[[SCOPE:[0-9]+]])(%[[FLAG:[0-9]+]], %[[VALUE:[0-9]+]]) {
-// CHECK-NEXT: %[[RAISED:[0-9]+]] = constant {value = 1} : !i1
-// CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}} = scf.if %0 -> !i1, !i32 {
+// CHECK: %[[RAISED:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: %[[SET:[0-9]+]], %[[TAKEN:[0-9]+]] = scf.if %0 -> !i1, !i32 {
 // CHECK: scf.yield %[[FLAG]], %[[VALUE]]
 // CHECK: scf.if %[[RAISED]] {
-// CHECK-NEXT: scf.break %[[SCOPE]], %[[RAISED]], %1
-// CHECK: scf.yield %[[RAISED]], %1
+// CHECK-NEXT: scf.break %[[SCOPE]], %[[SET]], %[[TAKEN]]
+// CHECK: scf.yield %[[SET]], %[[TAKEN]]
 // CHECK: func.return %[[RESULT]]

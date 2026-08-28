@@ -178,9 +178,43 @@ impl Driver<'_> {
             return Ok(());
         };
         if new_value != value && self.dominates_op(new_value, target.op().id) {
-            self.context.replace_value_uses(value, new_value);
+            self.replace_reads(value, new_value, target);
         }
         Ok(())
+    }
+
+    /// Rewire the readers of `value` under the region `target` sits in, except
+    /// the edges: a region exit forwarding `value` already carries it in a
+    /// register, and a literal there buys an instruction for nothing.
+    fn replace_reads(&self, value: ValueId, new_value: ValueId, target: &OperationRef) {
+        let Some(region) = self
+            .context
+            .get_op(target.op().id)
+            .parent_block()
+            .and_then(|block| self.context.parent_region(block))
+        else {
+            return;
+        };
+        let mut pending = vec![region];
+        while let Some(region) = pending.pop() {
+            for block in self.context.get_region(region).iter(self.context.clone()) {
+                for op_id in block.op_ids() {
+                    let op = self.context.get_op(op_id);
+                    pending.extend(op.regions());
+                    if scopes::region_exit_kind(&op).is_some() {
+                        continue;
+                    }
+                    let operands = op.operands();
+                    if operands.contains(&value) {
+                        let rebound = operands
+                            .iter()
+                            .map(|&operand| if operand == value { new_value } else { operand })
+                            .collect();
+                        self.context.set_op_operands(op_id, rebound);
+                    }
+                }
+            }
+        }
     }
 
     /// A cursor at `op`, for a rewrite to build in front of.
