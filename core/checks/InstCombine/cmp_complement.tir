@@ -1,0 +1,43 @@
+// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+
+// A comparison and its complement over the same operands are one fact: knowing
+// `a < b` is knowing `a >= b` is false, in either arm and in either direction.
+
+module {
+  %fn_ordering = func.func @ordering(%a: !i32, %b: !i32) -> !i1 {
+    %c = cmpi %a, %b {predicate = "slt"} : !i1
+    %r = scf.if %c -> !i1 {
+      %t = cmpi %a, %b {predicate = "sge"} : !i1
+      scf.yield %t
+    } else {
+      %e = cmpi %a, %b {predicate = "sge"} : !i1
+      scf.yield %e
+    }
+    func.return %r
+  }
+  %fn_equality = func.func @equality(%a: !i32, %b: !i32) -> !i1 {
+    %c = cmpi %a, %b {predicate = "eq"} : !i1
+    %r = scf.if %c -> !i1 {
+      %t = cmpi %a, %b {predicate = "ne"} : !i1
+      scf.yield %t
+    } else {
+      %e = cmpi %a, %b {predicate = "ne"} : !i1
+      scf.yield %e
+    }
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @ordering
+// CHECK: scf.if
+// CHECK-NEXT: constant {value = 0} : !i1
+// CHECK: else
+// CHECK-NEXT: constant {value = 1} : !i1
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @equality
+// CHECK: scf.if
+// CHECK-NEXT: constant {value = 0} : !i1
+// CHECK: else
+// CHECK-NEXT: constant {value = 1} : !i1

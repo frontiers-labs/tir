@@ -6,9 +6,11 @@ use super::seed::Seeded;
 use super::state;
 use crate::utils::APInt;
 use crate::{
-    Conditional, ConstantFold, Context, OperationRef, PassError, Rewriter, TypeId, ValueId,
+    Conditional, ConstantFold, Context, Operation, OperationRef, PassError, Rewriter, TypeId,
+    ValueId,
+    attributes::AttributeValue,
     builtin::{IntegerType, ops},
-    sem::{Prov, SemNode as Node, SymKind, Value},
+    sem::{IrOp, Kind, Prov, SemNode as Node, SymKind, Value},
 };
 
 pub(crate) type Sym = u32;
@@ -47,6 +49,9 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
     }
     for arity in gamma_arities(eg) {
         ruleset.push(decided_gamma(context.clone(), arity), None);
+    }
+    for (predicate, complement) in COMPLEMENTS {
+        ruleset.push(cmp_complement(context.clone(), predicate, complement), None);
     }
     ruleset.push(state::forward_load(context.clone()), None);
     ruleset.push(
@@ -264,6 +269,93 @@ fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
             .map(|(_, case)| case)
             .collect(),
     )
+}
+
+/// Each comparison predicate paired with its negation at the same operand order:
+/// `!(a < b)` is `a >= b`. Both directions, so knowing either settles the other.
+const COMPLEMENTS: [(&str, &str); 10] = [
+    ("eq", "ne"),
+    ("ne", "eq"),
+    ("slt", "sge"),
+    ("sge", "slt"),
+    ("sle", "sgt"),
+    ("sgt", "sle"),
+    ("ult", "uge"),
+    ("uge", "ult"),
+    ("ule", "ugt"),
+    ("ugt", "ule"),
+];
+
+/// A comparison and its complement over the same operands are one fact: whichever
+/// of the two a scope or a constant settles, the other is its negation. A
+/// comparison's identity is its predicate attribute, and the PDL backend generates
+/// neither attribute matching nor attribute emission, so this family is written
+/// here instead of in `rules.pdl`.
+fn cmp_complement(context: Context, predicate: &'static str, complement: &'static str) -> Rule {
+    let mut lhs = Pattern::new();
+    let args: Vec<Id> = (0..2).map(|index| lhs.var(Var::Symbol(index))).collect();
+    lhs.add(cmpi(&context, predicate, None, args));
+    Rewrite::new(
+        "cmp-complement",
+        lhs,
+        Rhs::Apply(Box::new(move |eg, substitution, root| {
+            let operands = vec![operand(substitution, 0), operand(substitution, 1)];
+            let Some(ty) = class_type(eg, eg.find(root)) else {
+                return;
+            };
+            let Some(other) = class_holding(eg, &cmpi(&context, complement, Some(ty), operands))
+            else {
+                return;
+            };
+            for (settled, opposite) in [(eg.find(root), other), (other, eg.find(root))] {
+                let Some(value) = const_value(eg, settled) else {
+                    continue;
+                };
+                let negated = eg.add(konst(APInt::new(
+                    value.width(),
+                    u64::from(value.to_u64() == 0),
+                )));
+                eg.union(opposite, negated);
+            }
+        })),
+    )
+}
+
+/// The class holding `template` verbatim, if the graph already has one.
+/// [`EGraph::lookup`] answers this off the hash-cons, which is keyed by the
+/// children a node was interned with: an open scope merges classes without
+/// re-canonicalizing it, and the very facts this rule reads are such merges.
+fn class_holding(eg: &EGraph<Node>, template: &Node) -> Option<Id> {
+    eg.classes_with_op(template.op_key())
+        .into_iter()
+        .find(|&class| {
+            eg.nodes(class).iter().any(|node| {
+                node.matches(template)
+                    && node.children().len() == template.children().len()
+                    && std::iter::zip(node.children(), template.children())
+                        .all(|(&a, &b)| eg.find(a) == eg.find(b))
+            })
+        })
+}
+
+/// The `builtin.cmpi` node of `predicate` over `children`, at `ty` — `None` for a
+/// pattern template, which matches the comparison at any result type.
+fn cmpi(context: &Context, predicate: &str, ty: Option<TypeId>, children: Vec<Id>) -> Node {
+    Node {
+        kind: Kind::Ir(IrOp {
+            dialect: ops::CmpIOp::dialect(),
+            name: ops::CmpIOp::name(),
+            attrs: vec![
+                context.named_attribute("predicate", AttributeValue::Str(predicate.into())),
+            ],
+            commutative: false,
+            cost: 0,
+        }),
+        payload: None,
+        ty,
+        children,
+        prov: Prov::None,
+    }
 }
 
 fn produces_integer(context: &Context, op: crate::OpId) -> bool {
