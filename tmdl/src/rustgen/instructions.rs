@@ -442,6 +442,16 @@ fn emit_instructions<'a>(
 
         let implicit_items = implicit_register_items(inst, &register_index_map, &pc_classes);
 
+        // One fact, two readers: the `InstrInfo::effects` derived from the
+        // execute body decides both what the backend is told about the opcode's
+        // memory behavior and whether the opcode has a chain to carry it in.
+        let (reads_memory, writes_memory) = behavior_memory_effects(&inst.behavior);
+        let state_schema = if reads_memory || writes_memory {
+            quote! { state: "in_out", }
+        } else {
+            quote! {}
+        };
+
         instruction_defs.push(quote! {
             operation! {
                 #name_ident {
@@ -449,6 +459,7 @@ fn emit_instructions<'a>(
                     dialect: #dialect,
                     #operands_schema
                     #results_schema
+                    #state_schema
                     attributes: A { #attrs_schema },
                     interfaces: #interfaces_list,
                     format: custom,
@@ -1388,7 +1399,6 @@ fn emit_instructions<'a>(
             info_fields.push(quote! { implicit_regs: &[ #(#implicit_items),* ] });
         }
         info_fields.push(quote! { regs: &#ports_ident });
-        let (reads_memory, writes_memory) = behavior_memory_effects(&inst.behavior);
         if reads_memory || writes_memory {
             info_fields.push(quote! {
                 effects: tir::backend::MemoryEffects {

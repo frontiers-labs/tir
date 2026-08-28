@@ -122,6 +122,9 @@ impl AsmPrinter {
             || op.is::<SectionEndOp>()
             || op.is::<SymbolEndOp>()
             || op.is::<BlockEndOp>()
+            // Memory order is notation, not code: the ops that name a chain's
+            // root and its merges assemble to nothing, like a label.
+            || crate::backend::names_memory_state(op)
             // External declarations produce no assembly; references resolve
             // at link time.
             || op.is::<DeclareOp>()

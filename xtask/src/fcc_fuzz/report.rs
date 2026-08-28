@@ -104,9 +104,7 @@ mod tests {
         Failure {
             job: "differential-fuzz".into(),
             summary: "instcombine miscompiles a masked array store".into(),
-            identity:
-                "func.func(thread-state,instcombine,erase-state)\nint main(void) { return 0; }\n"
-                    .into(),
+            identity: "func.func(thread-state,instcombine)\nint main(void) { return 0; }\n".into(),
             reproduce: "cargo xtask fcc-fuzz --seed 42 --iterations 1".into(),
             details: "line 1: expected \"7\", got \"9\"".into(),
             artifact: "int main(void) { return 0; }\n".into(),
@@ -122,7 +120,7 @@ mod tests {
         assert_eq!(failure().signature(), found_again.signature());
 
         let mut other_defect = failure();
-        other_defect.identity = "func.func(thread-state,dce,erase-state)\n".into();
+        other_defect.identity = "func.func(thread-state,dce)\n".into();
         assert_ne!(failure().signature(), other_defect.signature());
     }
 

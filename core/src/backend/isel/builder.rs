@@ -74,9 +74,6 @@ pub(crate) struct SemDagBuilder<'a> {
     pub(crate) value_to_class: HashMap<ValueId, Id>,
     /// Serial of the next opaque leaf; each un-lowerable node gets its own.
     opaque_serial: u32,
-    /// The state chain the next memory access reads, or `None` where it is
-    /// unknown and the next access mints a fresh one ([`Self::state`]).
-    state: Option<Id>,
 }
 
 impl<'a> SemDagBuilder<'a> {
@@ -93,7 +90,6 @@ impl<'a> SemDagBuilder<'a> {
             pointer_width,
             value_to_class: HashMap::new(),
             opaque_serial: 0,
-            state: None,
         }
     }
 
@@ -105,10 +101,6 @@ impl<'a> SemDagBuilder<'a> {
     ) -> Seeds {
         let mut seeds = Seeds::default();
         for &block in blocks {
-            // Blocks are lowered in region order, which is not an execution
-            // order: what ran before a block is a join the straight-line chain
-            // does not model, so each block reads a fresh unknown state.
-            self.break_state();
             self.build_block(block, float_widths, &mut seeds);
         }
         seeds
@@ -133,7 +125,6 @@ impl<'a> SemDagBuilder<'a> {
             .map(|block| block.id())
             .collect();
         for block in blocks {
-            self.break_state();
             self.build_block(block, float_widths, seeds);
         }
     }
@@ -175,15 +166,14 @@ impl<'a> SemDagBuilder<'a> {
 
     /// A region-carrying operation is read through its own interfaces: its regions
     /// join this graph, and what it publishes is the γ over what its arms yield or
-    /// the θ over what its edges carry. Its regions may have written anything the
-    /// straight-line chain cannot spell, so the chain breaks across it.
+    /// the θ over what its edges carry. What its regions did to memory is on the
+    /// state ports it carries, so nothing here has to guess at it.
     fn build_region_op(&mut self, op: &OpHandle, float_widths: &HashSet<u32>, seeds: &mut Seeds) {
         if let Some(conditional) = op.clone().as_interface::<dyn Conditional>() {
             for region in op.regions().to_vec() {
                 self.bind_region_arguments(op, region);
                 self.build_region(region, float_widths, seeds);
             }
-            self.break_state();
             self.seed_gamma(op, conditional.as_ref());
             return;
         }
@@ -194,7 +184,6 @@ impl<'a> SemDagBuilder<'a> {
         for region in op.regions().to_vec() {
             self.build_region(region, float_widths, seeds);
         }
-        self.break_state();
     }
 
     /// γ: what a gate publishes is the choice between what its arms yield, one
@@ -300,7 +289,6 @@ impl<'a> SemDagBuilder<'a> {
             }
             self.build_region(region, float_widths, seeds);
         }
-        self.break_state();
 
         let edges: Vec<OpHandle> = op
             .clone()
@@ -567,28 +555,6 @@ impl<'a> SemDagBuilder<'a> {
         self.egraph.union(own, viewed)
     }
 
-    /// The chain the next memory access reads. An unknown chain is an opaque
-    /// leaf: nothing merges through it, so the accesses after one are still
-    /// terms over *something*.
-    fn state(&mut self) -> Id {
-        match self.state {
-            Some(state) => state,
-            None => {
-                let state = self.add_opaque();
-                self.state = Some(state);
-                state
-            }
-        }
-    }
-
-    /// Forget the current chain, so the next access reads a fresh unknown one.
-    /// The state edges this builder threads are straight-line: a block boundary
-    /// is a join the linear order does not model, and an operation whose effect
-    /// the builder cannot spell may have written anything.
-    pub(crate) fn break_state(&mut self) {
-        self.state = None;
-    }
-
     fn add_leaf(
         &mut self,
         kind: SymKind,
@@ -665,26 +631,15 @@ impl<'a> SemDagBuilder<'a> {
         if op.is::<crate::builtin::ConstantFOp>() {
             return None;
         }
-        let class = if let Some(class) = self.build_memory_effect(op) {
-            class
-        } else {
-            let operands = self.build_operands(&op.operands());
-            let mut graph = SemGraph::new();
-            let Some(root) = op.clone().as_dyn_op().semantic_expr(&mut graph) else {
-                // Nothing says what this operation does, so nothing says it left
-                // memory alone: the chain it may have written is not one the
-                // accesses after it may read through.
-                if !op.is::<crate::builtin::ConstantOp>() {
-                    self.break_state();
-                }
-                return None;
-            };
-            let class = self.lower_typed(&graph, root, &operands);
-            if !class_is_pure(self.egraph, class) {
-                self.break_state();
-            }
-            class
-        };
+        // A memory access names its own results: what it reads is the term, and
+        // what it publishes is the chain the accesses after it read.
+        if let Some(class) = self.build_memory_effect(op) {
+            return Some(class);
+        }
+        let operands = self.build_operands(&op.operands());
+        let mut graph = SemGraph::new();
+        let root = op.clone().as_dyn_op().semantic_expr(&mut graph)?;
+        let class = self.lower_typed(&graph, root, &operands);
         for result in op.results() {
             self.value_to_class.insert(result, class);
         }
@@ -703,52 +658,56 @@ impl<'a> SemDagBuilder<'a> {
         self.lower_graph_node(graph, root, operands, types.as_deref())
     }
 
+    /// Lower a memory access over the chain the IR says it reads. The state is an
+    /// ordinary operand: `state.entry_state`, a block argument and `state.join`
+    /// are leaves, and a write's own term is the state the accesses after it
+    /// read. Nothing here invents an order — the mid-end's chains are the whole
+    /// of memory identity, and the ports the term is built from are the ones
+    /// emission threads through the machine instruction covering it.
     fn build_memory_effect(&mut self, op: &OpHandle) -> Option<Id> {
-        let read_parts = op
-            .clone()
-            .as_interface::<dyn MemoryRead>()
-            .map(|read| (read.read_location(), read.read_value()));
-
-        if let Some((location, result)) = read_parts {
+        if let Some(read) = op.clone().as_interface::<dyn MemoryRead>() {
+            let result = read.read_value();
             let result_ty = self.context.get_value(result).ty();
             let bytes = self.type_width(result_ty)? / 8;
-            let address = self.build_from_value(location);
+            let observed = read.state_operand()?;
+            let address = self.build_from_value(read.read_location());
             let address = self.zero_offset_address(address);
             let bytes = self.add_u64_const(u64::from(bytes));
             let metadata = self.add_u64_const(0);
-            let state = self.state();
+            let state = self.build_from_value(observed);
             // A read leaves memory as it found it, so the chain runs on
             // unchanged; two reads of one address on one chain are one term.
-            return Some(self.add_op(
+            let class = self.add_op(
                 SymKind::LoadMemory,
                 vec![address, bytes, metadata, state],
                 Some(result_ty),
-            ));
+            );
+            self.value_to_class.insert(result, class);
+            if let Some(published) = read.state_result() {
+                self.value_to_class.insert(published, state);
+            }
+            return Some(class);
         }
 
-        let write_parts = op
-            .clone()
-            .as_interface::<dyn MemoryWrite>()
-            .map(|write| (write.write_location(), write.written_value()));
-
-        if let Some((location, value)) = write_parts {
-            let value_ty = self.context.get_value(value).ty();
+        if let Some(write) = op.clone().as_interface::<dyn MemoryWrite>() {
+            let written = write.written_value();
+            let value_ty = self.context.get_value(written).ty();
             let bytes = self.type_width(value_ty)? / 8;
-            let address = self.build_from_value(location);
+            let observed = write.state_operand()?;
+            let published = write.state_result()?;
+            let address = self.build_from_value(write.write_location());
             let address = self.zero_offset_address(address);
             let bytes = self.add_u64_const(u64::from(bytes));
-            let value = self.build_from_value(value);
+            let value = self.build_from_value(written);
             let address_space = self.add_u64_const(0);
-            let state = self.state();
-            let store = self.add_op(
+            let state = self.build_from_value(observed);
+            let class = self.add_op(
                 SymKind::StoreMemory,
                 vec![address, bytes, value, address_space, state],
                 None,
             );
-            // The write takes memory to a state nothing before it names, so the
-            // term *is* the chain the accesses after it read.
-            self.state = Some(store);
-            return Some(store);
+            self.value_to_class.insert(published, class);
+            return Some(class);
         }
 
         None

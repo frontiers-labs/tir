@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // Two slots written under one gate inside a loop. Each becomes a port of the
 // loop: the arm that writes yields what it wrote, the arm that does not yields

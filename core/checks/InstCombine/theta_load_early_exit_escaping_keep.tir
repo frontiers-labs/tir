@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // The same reading holds of a loop left through a `break`: the slot's pointer is
 // handed to a call, so the term graph does not see every access of it. No port
@@ -30,7 +30,7 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @escapes
 // CHECK: ptr.alloca
 // CHECK: ptr.store
-// CHECK: scf.while {
+// CHECK: scf.while 
 // CHECK: ptr.store
 // CHECK: scf.break
 // CHECK: ptr.load

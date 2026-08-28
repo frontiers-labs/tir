@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // The shape a structured early func.return out of a loop leaves behind: the
 // func.return value written under a guard, the flag tested right after, and an

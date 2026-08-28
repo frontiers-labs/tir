@@ -73,15 +73,15 @@ module {
   module_end
 }
 
-// CHECK:      x86_64.addsd_norex {dst = %55:XMMlow, dst_tied = %0:XMM, src = %1:XMM}
-// CHECK-NEXT: x86_64.mulsd_norex {dst = %56:XMMlow, dst_tied = %1:XMM, src = %55:XMMlow}
-// CHECK-NEXT: x86_64.subsd_norex {dst = %57:XMMlow, dst_tied = %56:XMMlow, src = %0:XMM}
-// CHECK-NEXT: x86_64.divsd_norex {dst = %58:XMMlow, dst_tied = %57:XMMlow, src = %1:XMM}
+// CHECK:      x86_64.addsd_norex {dst = %[[ADD:[0-9]+]]:XMMlow, dst_tied = %0:XMM, src = %1:XMM}
+// CHECK-NEXT: x86_64.mulsd_norex {dst = %[[MUL:[0-9]+]]:XMMlow, dst_tied = %1:XMM, src = %[[ADD]]:XMMlow}
+// CHECK-NEXT: x86_64.subsd_norex {dst = %[[SUB:[0-9]+]]:XMMlow, dst_tied = %[[MUL]]:XMMlow, src = %0:XMM}
+// CHECK-NEXT: x86_64.divsd_norex {dst = %{{[0-9]+}}:XMMlow, dst_tied = %[[SUB]]:XMMlow, src = %1:XMM}
 // CHECK-NEXT: asm.vret
-// CHECK:      x86_64.cvtsi2sd32_norex {dst = %59:XMMlow, src = %7:GPR}
+// CHECK:      x86_64.cvtsi2sd32_norex {dst = %{{[0-9]+}}:XMMlow, src = %7:GPR}
 // CHECK:      x86_64.movzxd {dst = %[[ZEXT:[0-9]+]]:GPR, src = %10:GPR}
-// CHECK-NEXT: x86_64.cvtsi2sd64 {dst = %62:XMM, src = %[[ZEXT]]:GPR}
-// CHECK:      x86_64.cvttsd2si32_norex {dst = %63:GPR32low, src = %13:XMM}
+// CHECK-NEXT: x86_64.cvtsi2sd64 {dst = %{{[0-9]+}}:XMM, src = %[[ZEXT]]:GPR}
+// CHECK:      x86_64.cvttsd2si32_norex {dst = %{{[0-9]+}}:GPR32low, src = %13:XMM}
 // The i32 result is the low half of the 64-bit conversion: a zero-instruction
 // re-view, so no truncating mov follows.
 // CHECK:      x86_64.cvttsd2si64 {dst = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:XMM}

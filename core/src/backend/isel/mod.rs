@@ -25,6 +25,7 @@ use tir::{
     Operation, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, Terminator, TypeId,
     ValueId,
     analysis::{DefUse, DominatorTree, scopes},
+    builtin::{trailing_state_operand, trailing_state_result},
     graph::{Dag, MutDag, NodeId, OperandConstraint},
     sem::{
         EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
@@ -218,6 +219,18 @@ pub struct EmitRequest<'a> {
     pub results: &'a [ValueId],
     /// The type of the first result, when known.
     pub result_ty: Option<TypeId>,
+    /// The memory chain the covered access reads and the state it publishes,
+    /// taken from the IR operation the tile covers. An opcode that touches
+    /// memory carries them as its trailing ports.
+    pub state: Option<StatePorts>,
+}
+
+/// The `!state` values an emitted instruction takes over from the IR access it
+/// covers: memory order is the mid-end's, and selection only keeps the edges.
+#[derive(Clone, Copy, Debug)]
+pub struct StatePorts {
+    pub observed: ValueId,
+    pub published: Option<ValueId>,
 }
 
 impl<'a> EmitRequest<'a> {
@@ -878,7 +891,12 @@ impl FunctionSelection {
                         let survives = !self.op_root.contains_key(&def)
                             && !context.get_op(def).is::<crate::builtin::ConstantOp>()
                             && !context.get_op(def).is::<crate::builtin::ConstantFOp>();
-                        if !survives && !self.placed_at(class, def_block) {
+                        // Demand is what says a tile was placed for the value —
+                        // and it is asked of the member the value belongs to,
+                        // not of the whole class: a scope may merge a class the
+                        // block materialized with one it folded into an
+                        // encoding, and only the first leaves a register behind.
+                        if !survives && !self.demand.contains(&(member, def_block)) {
                             continue;
                         }
                         (2, self.dom_distance(dom, block, def_block), v.number())
@@ -1571,8 +1589,17 @@ impl InstructionSelectPass {
         // Every value a class computes: the input leaves it interned plus every op
         // result rooting it (a result never used as an operand is absent from
         // `value_to_class`). Sorted and deduped for a deterministic binding order.
+        //
+        // A `!state` value names memory, not a register. It is interned like any
+        // other operand — a memory term is a term over the chain it reads — but
+        // no tile ever materializes it, so it is not one of the values a class
+        // can be bound to or remapped onto.
+        let state_ty = crate::builtin::StateType::new(context);
         let mut class_values: HashMap<Id, Vec<ValueId>> = HashMap::new();
         for (&value, &class) in &value_to_class {
+            if context.get_value(value).ty() == state_ty {
+                continue;
+            }
             class_values
                 .entry(egraph.find(class))
                 .or_default()
@@ -1824,6 +1851,7 @@ impl InstructionSelectPass {
                 op: source.as_ref(),
                 results: &scheduled.results,
                 result_ty: scheduled.result_ty,
+                state: scheduled.state,
             };
             let rule = &self.rules[scheduled.rule_index];
             let tile_anchor = scheduled
@@ -1883,12 +1911,37 @@ impl InstructionSelectPass {
             self.region_values.insert((*op, *slot), emit.clone());
         }
 
+        // The chains the emitted instructions took over. One tile answers a
+        // whole group of accesses, so the group's other members publish no
+        // state of their own.
+        let claimed: HashSet<ValueId> = plan
+            .schedule
+            .iter()
+            .filter_map(|scheduled| scheduled.state?.published)
+            .collect();
+
         // The cover replaces a whole group of operations at once, and region
         // destruction still reads the values it consumed — a region terminator
         // forwards them across an edge whether or not a tile re-produced them.
         // The ops go; the values they defined stay readable.
         for op in plan.erase_ops.into_iter().rev() {
-            let op = OperationRef::new(context.get_op(op), Some(block_arc.clone()), None);
+            let instance = context.get_op(op);
+            // A read the cover answered from another access leaves memory where
+            // that one left it: its readers take the state it observed. Only a
+            // read is ever answered this way — a write's term is a state
+            // nothing before it names, so no other access can stand for it.
+            if let (Some(published), Some(observed)) = (
+                trailing_state_result(context, &instance),
+                trailing_state_operand(context, &instance),
+            ) && !claimed.contains(&published)
+                && instance
+                    .clone()
+                    .as_interface::<dyn tir::MemoryWrite>()
+                    .is_none()
+            {
+                context.replace_value_uses(published, observed);
+            }
+            let op = OperationRef::new(instance, Some(block_arc.clone()), None);
             rewriter.erase_op_keeping_results(&op)?;
         }
 
@@ -2135,13 +2188,40 @@ impl InstructionSelectPass {
         let tiles = schedule_tiles(&fs.egraph, &matches, &root_match, &positions)
             .ok_or_else(|| format!("cyclic instruction schedule for {block_id:?}"))?;
 
+        // The state ports of every access this block holds, by the class the
+        // access is rooted at: what a tile covering it must read and publish.
+        // Block order visits the earliest op of a class first, as `source_op` does.
+        let mut state_by_class: HashMap<Id, StatePorts> = HashMap::new();
+        for &op_id in &op_ids {
+            let Some(&root) = fs.op_root.get(&op_id) else {
+                continue;
+            };
+            let op = context.get_op(op_id);
+            let Some(observed) = trailing_state_operand(context, &op) else {
+                continue;
+            };
+            state_by_class
+                .entry(fs.egraph.find(root))
+                .or_insert(StatePorts {
+                    observed,
+                    published: trailing_state_result(context, &op),
+                });
+        }
+
+        let state_ty = tir::builtin::StateType::new(context);
         let mut destinations = HashMap::new();
         let mut tile_results = HashMap::new();
         for &(class, _) in &tiles {
             let source_op = block_op_by_root.get(&class).copied();
-            let mut results = source_op
+            // A state result is a port, not a destination: the emitted
+            // instruction takes it over as its own, so it is not one of the
+            // registers a tile defines.
+            let mut results: Vec<ValueId> = source_op
                 .map(|op| context.get_op(op).results().to_vec())
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|value| context.get_value(*value).ty() != state_ty)
+                .collect();
             let mut result_ty = results.first().map(|value| context.get_value(*value).ty());
             if results.is_empty() && node::class_is_pure(&fs.egraph, class) {
                 let ty = class_width(context, &fs.egraph, class)
@@ -2161,6 +2241,16 @@ impl InstructionSelectPass {
             .into_iter()
             .map(|(class, match_id)| {
                 let (source_op, results, result_ty) = tile_results.remove(&class).unwrap();
+                // A tile covering an access — at its root, or fused into it —
+                // carries that access's chain: the instruction reads the memory
+                // the IR said it does and publishes the state the IR named.
+                let state = matches[match_id]
+                    .bindings
+                    .pattern_nodes
+                    .iter()
+                    .filter(|binding| !binding.is_boundary && !binding.is_state)
+                    .find_map(|binding| state_by_class.get(&fs.egraph.find(binding.class)))
+                    .copied();
                 ScheduledEmit {
                     rule_index: matches[match_id].rule_index,
                     m: resolve_match(
@@ -2173,6 +2263,7 @@ impl InstructionSelectPass {
                         &destinations,
                     ),
                     source_op,
+                    state,
                     anchor: positions.get(&class).map(|&position| op_ids[position]),
                     results,
                     result_ty,

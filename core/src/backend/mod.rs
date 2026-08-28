@@ -448,7 +448,43 @@ pub fn print_machine_op<T: tir::Operation>(
     if !first {
         fmt.write("}")?;
     }
+    // Memory order is an operand like any other: an instruction that touches
+    // memory names the state it observed and the one it leaves behind.
+    tir::builtin::print_state_clause(
+        fmt,
+        tir::builtin::trailing_state_operand(&context, &handle),
+        tir::builtin::trailing_state_result(&context, &handle),
+    )?;
     fmt.write("\n")
+}
+
+/// Hand `new` the state ports `old` carried, so a lowering that replaces one
+/// instruction with another keeps it on the chain.
+///
+/// The ports are grown onto `new` whatever its own opcode says about memory: a
+/// call's effect is the callee's, and no per-opcode record can state it —
+/// `bl` and `jal` write a link register and touch no memory of their own, yet
+/// the call they finalize observes and leaves every object the outside can
+/// reach. Called before `new` is inserted, because an opcode's builder cannot
+/// know the chain.
+pub fn forward_state(context: &tir::Context, old: &tir::OpHandle, new: &dyn tir::Operation) {
+    let (Some(observed), Some(published)) = (
+        tir::builtin::trailing_state_operand(context, old),
+        tir::builtin::trailing_state_result(context, old),
+    ) else {
+        return;
+    };
+    context.append_operand(new.id(), observed);
+    context.adopt_result(new.id(), published);
+}
+
+/// Whether the operation exists only to name a memory state: the root of a
+/// chain, a merge of several, or the re-naming of a merge. They carry the
+/// mid-end's memory order into machine IR and assemble to nothing.
+pub fn names_memory_state(op: &tir::OpHandle) -> bool {
+    op.is::<tir::state::EntryStateOp>()
+        || op.is::<tir::state::JoinOp>()
+        || op.is::<tir::state::SplitOp>()
 }
 
 fn print_register(

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // The slot's pointer is handed to a call, so the term graph does not see every
 // access of it: a value the θ reconstructed would answer for memory the graph

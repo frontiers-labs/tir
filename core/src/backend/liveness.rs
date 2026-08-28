@@ -89,6 +89,14 @@ fn ordered(a: u32, b: u32) -> (u32, u32) {
     (a.min(b), a.max(b))
 }
 
+/// Whether `value` is a register at all. A `!state` port names the memory an
+/// instruction observes and leaves behind: it is an SSA edge like any other, but
+/// it lives in no register, so allocation neither colors it nor interferes on it.
+fn is_register(context: &Context, value: ValueId) -> bool {
+    context.has_value(value)
+        && context.get_value(value).ty() != tir::builtin::StateType::new(context)
+}
+
 /// Every virtual register some instruction in `blocks` names, as a use or a def.
 fn referenced_vregs(context: &Context, blocks: &[BlockId]) -> BTreeSet<u32> {
     let mut referenced = BTreeSet::new();
@@ -96,7 +104,9 @@ fn referenced_vregs(context: &Context, blocks: &[BlockId]) -> BTreeSet<u32> {
         for op_id in context.get_block(block_id).op_ids() {
             let regs = op_regs(&context.get_op(op_id));
             for value in regs.uses.iter().chain(&regs.defs) {
-                referenced.insert(value.number());
+                if is_register(context, *value) {
+                    referenced.insert(value.number());
+                }
             }
         }
     }
@@ -153,7 +163,7 @@ pub fn analyze(
             let mut clobbers = Vec::new();
             let mut phys_uses = Vec::new();
 
-            for value in &regs.uses {
+            for value in regs.uses.iter().filter(|v| is_register(context, **v)) {
                 let id = value.number();
                 record_class(
                     &mut result,
@@ -168,7 +178,7 @@ pub fn analyze(
                     exposed_uses.insert(id);
                 }
             }
-            for value in &regs.defs {
+            for value in regs.defs.iter().filter(|v| is_register(context, **v)) {
                 let id = value.number();
                 record_class(
                     &mut result,

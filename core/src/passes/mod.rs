@@ -2,7 +2,6 @@
 
 pub mod affine;
 pub mod dce;
-pub mod erase_state;
 pub mod instcombine;
 pub mod lower_memory_intrinsics;
 pub mod lower_ptr_disjoint;
@@ -15,7 +14,6 @@ pub mod thread_state;
 
 pub use affine::AffineSchedulePass;
 pub use dce::DeadCodeEliminationPass;
-pub use erase_state::EraseStatePass;
 pub use instcombine::InstCombinePass;
 pub use lower_memory_intrinsics::LowerMemoryIntrinsicsPass;
 pub use lower_ptr_disjoint::LowerPtrDisjointPass;

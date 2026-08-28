@@ -54,6 +54,26 @@ impl Type for StateType {
     fn hash(&self, _state: &mut dyn std::hash::Hasher) {}
 }
 
+/// The memory state `op` observes, read off its ports rather than through the
+/// opcode's generated accessor: what a machine instruction carries is known from
+/// the value's type alone, and passes that walk ops of every opcode read it here.
+pub fn trailing_state_operand(context: &Context, op: &crate::OpHandle) -> Option<crate::ValueId> {
+    trailing_state(context, &op.operands())
+}
+
+/// The memory state `op` leaves behind. See [`trailing_state_operand`].
+pub fn trailing_state_result(context: &Context, op: &crate::OpHandle) -> Option<crate::ValueId> {
+    trailing_state(context, &op.results())
+}
+
+fn trailing_state(context: &Context, values: &[crate::ValueId]) -> Option<crate::ValueId> {
+    let state = StateType::new(context);
+    values
+        .last()
+        .copied()
+        .filter(|id| context.has_value(*id) && context.get_value(*id).ty() == state)
+}
+
 /// The state ports written in an op's ` state(%in -> %out)` clause.
 #[derive(Default)]
 pub struct StateClause {

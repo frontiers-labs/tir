@@ -66,9 +66,10 @@ pub struct EmitSpec {
     /// `|instance| Box::new(FooOp(instance))`.
     pub wrap: fn(OpHandle) -> Box<dyn Operation>,
     pub attrs: &'static [EmitAttr],
-    /// The emitted opcode's register ports, so a slot lands in the SSA position
-    /// the opcode declares for it whatever order the rule binds them in.
-    pub regs: &'static [crate::backend::RegPort],
+    /// The emitted opcode's own record: its register ports place a slot in the
+    /// SSA position the opcode declares for it whatever order the rule binds
+    /// them in, and its memory effects say whether it carries a state chain.
+    pub info: &'static crate::backend::InstrInfo,
 }
 
 /// Interprets an [`EmitSpec`]: bind each slot from the match and build the op.
@@ -90,7 +91,8 @@ pub fn emit_with(
     let mut results: Vec<(usize, tir::ValueId)> = Vec::new();
     let mut pins = std::collections::BTreeMap::new();
     let port = |name: &str| {
-        spec.regs
+        spec.info
+            .regs
             .iter()
             .position(|port| port.name == name)
             .ok_or_else(|| {
@@ -102,7 +104,7 @@ pub fn emit_with(
     };
     let bind = |name: &str, value: tir::ValueId| -> Result<(usize, tir::ValueId), PassError> {
         let port = port(name)?;
-        if let Some(class) = spec.regs[port].class {
+        if let Some(class) = spec.info.regs[port].class {
             crate::backend::retype_untyped(context, value, class);
         }
         Ok((port, value))
@@ -168,11 +170,26 @@ pub fn emit_with(
     }
     operands.sort_by_key(|(port, _)| *port);
     results.sort_by_key(|(port, _)| *port);
+    let mut operand_values: Vec<tir::ValueId> =
+        operands.into_iter().map(|(_, value)| value).collect();
+    let mut result_values: Vec<tir::ValueId> =
+        results.into_iter().map(|(_, value)| value).collect();
+    // An opcode that touches memory carries the chain of the access it covers,
+    // as its trailing ports: the state the IR access read, and the state it
+    // published, taken over as this instruction's own definition.
+    let effects = spec.info.effects;
+    if effects.reads || effects.writes {
+        let state = req
+            .state
+            .ok_or_else(|| PassError::RewriteFailed(req.op_id()))?;
+        operand_values.push(state.observed);
+        result_values.extend(state.published);
+    }
     let instance = OpInstance::new_dynamic(
         spec.op,
         context.as_context_ref(),
-        operands.into_iter().map(|(_, value)| value).collect(),
-        results.into_iter().map(|(_, value)| value).collect(),
+        operand_values,
+        result_values,
         vec![],
         attributes,
     );

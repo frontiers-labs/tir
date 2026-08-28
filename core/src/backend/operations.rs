@@ -16,6 +16,18 @@ const fn virtual_info(name: &'static str, control_flow: ControlFlow) -> InstrInf
     }
 }
 
+/// [`virtual_info`] for a call: it runs a function, so it touches every object
+/// the outside can reach and carries the chain of them.
+const fn virtual_call_info(name: &'static str) -> InstrInfo {
+    InstrInfo {
+        effects: tir::backend::MemoryEffects {
+            reads: true,
+            writes: true,
+        },
+        ..virtual_info(name, ControlFlow::Unconditional)
+    }
+}
+
 operation! {
     SectionOp {
         name: "section",
@@ -188,12 +200,13 @@ operation! {
             outgoing_stack_size: "UInt",
         },
         interfaces: [tir::backend::MachineInstruction],
+        state: "in_out",
     }
 }
 
 impl MachineInstruction for VirtualCallOp {
     fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_info("vcall", ControlFlow::Unconditional);
+        static INFO: InstrInfo = virtual_call_info("vcall");
         &INFO
     }
 
@@ -213,12 +226,13 @@ operation! {
             outgoing_stack_size: "UInt",
         },
         interfaces: [tir::backend::MachineInstruction],
+        state: "in_out",
     }
 }
 
 impl MachineInstruction for VirtualIndirectCallOp {
     fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_info("vcall_indirect", ControlFlow::Unconditional);
+        static INFO: InstrInfo = virtual_call_info("vcall_indirect");
         &INFO
     }
 

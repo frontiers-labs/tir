@@ -243,7 +243,7 @@ pub fn verify_op_tree(context: &Context, op_id: OpId) -> Result<(), Error> {
 ///
 /// State crossing a region boundary does so as a carried argument, which is a
 /// fresh value, so a single walk of the whole tree suffices.
-fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), Error> {
+pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), Error> {
     let state = crate::builtin::StateType::new(context);
     let mut consumers: std::collections::HashMap<crate::ValueId, Vec<(OpId, bool)>> =
         std::collections::HashMap::new();
@@ -279,9 +279,23 @@ fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), Error> {
 
 /// Whether `op` leaves the memory it names as it found it. An operation declaring
 /// both memory interfaces writes the extent it reads, so it is no observer.
+///
+/// A machine instruction states what it does to memory in its
+/// [`InstrInfo`](crate::backend::InstrInfo) effects; the memory interfaces are
+/// what a mid-end operation has instead. One rule, read off whichever the
+/// operation carries, so the discipline is the same on both sides of selection.
 fn observes_only(op: &OpHandle) -> bool {
     if op.is::<crate::state::JoinOp>() {
         return true;
+    }
+    if let Some(machine) = op
+        .clone()
+        .as_interface::<dyn crate::backend::MachineInstruction>()
+    {
+        // Anything that does not write cannot have changed the memory a state
+        // names: a load leaves it as it found it, and a branch only carries it
+        // along the edge it takes.
+        return !machine.info().effects.writes;
     }
     op.has_interface::<dyn crate::MemoryRead>() && !op.has_interface::<dyn crate::MemoryWrite>()
 }

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // Only one arm stores. The other leaves the state it was handed, so the read
 // distributed into it forwards from the store before the gate: each arm answers

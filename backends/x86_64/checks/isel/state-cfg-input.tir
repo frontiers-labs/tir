@@ -1,0 +1,27 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A `.tir` function arrives as a raw CFG carrying no memory order at all. The
+// backend restructures it and threads the chains itself, so selection sees one
+// chain model whatever the input was: the arm's store and the join's load are
+// on the slot's chain, and the join reads it as a `!state` parameter.
+
+module {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i1) -> !i32 {
+    cfg.cond_br %1, ^bb1, ^bb2
+  ^bb1:
+    %2 = constant {value = 7} : !i32
+    ptr.store %2, %0
+    cfg.br ^bb2
+  ^bb2:
+    %3 = ptr.load %0 : !i32
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK: ^{{bb[0-9]+}}(%[[ARM:[0-9]+]]: !state):
+// CHECK: x86_64.mov_store32_norex {{.*}} state(%[[ARM]] -> %[[STORED:[0-9]+]])
+// CHECK-NEXT: asm.vbr %[[STORED]] ^[[JOIN:bb[0-9]+]]
+// CHECK: ^[[JOIN]](%[[MERGED:[0-9]+]]: !state):
+// CHECK-NEXT: x86_64.mov_load32_norex {{.*}} state(%[[MERGED]] -> %{{[0-9]+}})

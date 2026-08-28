@@ -1,5 +1,5 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
-// RUN: tir opt --pass func.func(promote) --pass func.func(thread-state) --pass func.func(instcombine) --pass func.func(erase-state) --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote) --pass func.func(thread-state) --pass func.func(instcombine) --verify %s | filecheck %s
 // RUN: not tir opt --pass func.func(nope) %s
 
 // The shape a front end leaves for a straight-line function: one slot per name,

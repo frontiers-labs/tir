@@ -304,10 +304,15 @@ impl Derivation<'_> {
             .collect()
     }
 
+    /// Whether `value` names a module-level object. A value whose definition has
+    /// been erased — a λ the backend has already lowered to a machine symbol,
+    /// still named by the calls in the functions it has not reached — names no
+    /// object this analysis can read.
     fn is_global(&self, value: ValueId) -> bool {
         self.context
             .get_value(value)
             .defining_op()
+            .filter(|op| self.context.has_operation(*op))
             .is_some_and(|op| self.context.get_op(op).is::<GlobalOp>())
     }
 }

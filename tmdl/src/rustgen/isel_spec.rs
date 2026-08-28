@@ -132,13 +132,13 @@ fn emit_emitter_spec(
     let shim_ident = format_ident!("emit_isel_{}", rule_key);
     let dialect_lit = proc_macro2::Literal::string(dialect);
     let op_name_lit = proc_macro2::Literal::string(op_name);
-    let ports_ident = format_ident!("REGS_{}", inst_name.to_uppercase());
+    let info = info_ident(inst_name);
     let tokens = quote! {
         static #spec_ident: tir::backend::isel::EmitSpec = tir::backend::isel::EmitSpec {
             op: (#dialect_lit, #op_name_lit),
             wrap: <#op_ty_ident as tir::Operation>::from_op_instance_dyn,
             attrs: &[#(#attrs),*],
-            regs: &#ports_ident,
+            info: &#info,
         };
 
         fn #shim_ident(

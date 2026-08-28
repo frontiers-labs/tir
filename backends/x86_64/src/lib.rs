@@ -668,6 +668,7 @@ mod isa {
             let real = CallOpBuilder::new(context)
                 .attr("imm", AttributeValue::Str(callee))
                 .build();
+            tir::backend::forward_state(context, op.op(), &real);
             rewriter.replace_op(op, &real)?;
             return Ok(true);
         }
@@ -694,6 +695,7 @@ mod isa {
             } else {
                 Box::new(CallIndirectOpBuilder::new(context).target(target).build())
             };
+            tir::backend::forward_state(context, op.op(), real.as_ref());
             rewriter.replace_op(op, real.as_ref())?;
             return Ok(true);
         }

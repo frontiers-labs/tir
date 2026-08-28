@@ -985,6 +985,7 @@ impl RegisterAllocationPass {
             let offset = frame.alloc_slot();
 
             for &block_id in blocks {
+                let mut chain = SlotChain::default();
                 // Re-read the op list each pass since we mutate the block.
                 let op_ids = context.get_block(block_id).op_ids();
                 for op_id in op_ids {
@@ -1021,6 +1022,7 @@ impl RegisterAllocationPass {
                         let reload = self
                             .target
                             .emit_spill_reload(context, fresh, class, &frame_reg, offset);
+                        chain.observe(context, rewriter, &op_ref, reload.as_ref())?;
                         rewriter.insert_op_before(&op_ref, reload.as_ref())?;
                     }
                     for index in uses {
@@ -1033,6 +1035,7 @@ impl RegisterAllocationPass {
                         let store = self
                             .target
                             .emit_spill_store(context, fresh, class, &frame_reg, offset);
+                        chain.change(context, rewriter, &op_ref, store.as_ref())?;
                         insert_after(context, rewriter, block_id, op_id, store.as_ref())?;
                     }
                 }
@@ -1093,6 +1096,10 @@ impl RegisterAllocationPass {
             return Ok(());
         };
         let frame_register = self.frame_register();
+        // The incoming argument area is a memory of its own, and nothing in this
+        // function writes it: the loads all read the state it was entered with
+        // and are ordered against nothing, including each other.
+        let mut incoming = SlotChain::default();
         for arg in args {
             let load_id = arg.load;
             let op = context.get_op(load_id);
@@ -1117,6 +1124,7 @@ impl RegisterAllocationPass {
                 self.target
                     .emit_spill_reload(context, value, dst.0, &frame_register, offset);
             let target = op_ref_in(context, entry, load_id);
+            incoming.observe(context, rewriter, &target, load.as_ref())?;
             rewriter.replace_op(&target, load.as_ref())?;
         }
         Ok(())
@@ -1286,16 +1294,29 @@ fn collect_stack_allocas(
     allocas
 }
 
+/// Erase the allocations, keeping the chains they rooted. A slot's memory is its
+/// own — the allocation is what said so — so with the op gone the chain starts at
+/// a `state.entry_state` of its own instead, and the accesses on it stay ordered
+/// against each other and against nothing else.
 fn erase_stack_allocas(
     context: &Context,
     rewriter: &mut Rewriter,
     allocas: &[StackAlloca],
 ) -> Result<(), PassError> {
     for alloca in allocas {
-        if context.has_operation(alloca.op_id) {
-            let op_ref = op_ref_in(context, alloca.block, alloca.op_id);
-            rewriter.erase_op(&op_ref)?;
+        if !context.has_operation(alloca.op_id) {
+            continue;
         }
+        let op_ref = op_ref_in(context, alloca.block, alloca.op_id);
+        if let Some(published) = tir::builtin::trailing_state_result(context, op_ref.op()) {
+            let root = tir::state::EntryStateOpBuilder::new(context)
+                .result_type(tir::builtin::StateType::new(context))
+                .build();
+            let root_state = root.result();
+            rewriter.insert_op_before(&op_ref, &root)?;
+            context.replace_value_uses(published, root_state);
+        }
+        rewriter.erase_op(&op_ref)?;
     }
     Ok(())
 }
@@ -1351,6 +1372,104 @@ fn mark_coalescable(context: &Context, op_id: OpId) {
     attributes
         .push(context.named_attribute(prealloc::COALESCABLE_COPY_ATTR, AttributeValue::Bool(true)));
     context.set_op_attributes(op_id, attributes);
+}
+
+/// One frame slot's memory, as the spill rewrite lays it down inside a block.
+///
+/// A slot is a memory of its own — the allocator made it, and nothing outside
+/// the function can reach it — so its accesses are ordered against each other
+/// and against nothing else, in the shape every other chain has: any number of
+/// reloads observe what the last store left, unordered among themselves, and the
+/// next store takes `state.join` of what they published, which is the edge that
+/// orders it after every one of them.
+///
+/// The chain is per block and rooted where its first access lands. What ran
+/// before a block is the control flow, not an edge: a root shared across blocks
+/// would claim an order between them that nothing wrote down, and would be two
+/// futures for one memory the moment two blocks stored to the slot.
+#[derive(Default)]
+struct SlotChain {
+    /// The memory the slot holds, once something in this block has named it.
+    written: Option<ValueId>,
+    /// What the reloads since that store published, unordered among themselves.
+    read: Vec<ValueId>,
+}
+
+impl SlotChain {
+    /// Order `reload` after the store that filled the slot, and against nothing
+    /// else: it observes what that store left and publishes the same memory.
+    fn observe(
+        &mut self,
+        context: &Context,
+        rewriter: &mut Rewriter,
+        before: &OperationRef,
+        reload: &dyn Operation,
+    ) -> Result<(), PassError> {
+        let observed = self.root(context, rewriter, before)?;
+        self.read.push(put_on_chain(context, reload, observed));
+        Ok(())
+    }
+
+    /// Order `store` after every reload since the last one, through the join of
+    /// what they published; the memory it leaves is what the slot holds next.
+    fn change(
+        &mut self,
+        context: &Context,
+        rewriter: &mut Rewriter,
+        before: &OperationRef,
+        store: &dyn Operation,
+    ) -> Result<(), PassError> {
+        let observed = self.root(context, rewriter, before)?;
+        // Merging one memory is that memory, as it is where the chains are
+        // drawn: only a fork of several reloads needs a join to close it.
+        let taken = match std::mem::take(&mut self.read).as_slice() {
+            [] => observed,
+            [only] => *only,
+            states => {
+                let join = tir::state::JoinOpBuilder::new(context)
+                    .states(states.to_vec())
+                    .result_type(tir::builtin::StateType::new(context))
+                    .build();
+                let merged = join.result();
+                rewriter.insert_op_before(before, &join)?;
+                merged
+            }
+        };
+        self.written = Some(put_on_chain(context, store, taken));
+        Ok(())
+    }
+
+    /// The memory the slot holds, opening the block's chain at a
+    /// `state.entry_state` where this is its first access.
+    fn root(
+        &mut self,
+        context: &Context,
+        rewriter: &mut Rewriter,
+        before: &OperationRef,
+    ) -> Result<ValueId, PassError> {
+        if let Some(written) = self.written {
+            return Ok(written);
+        }
+        let root = tir::state::EntryStateOpBuilder::new(context)
+            .result_type(tir::builtin::StateType::new(context))
+            .build();
+        let state = root.result();
+        rewriter.insert_op_before(before, &root)?;
+        self.written = Some(state);
+        Ok(state)
+    }
+}
+
+/// Put `op` on `state`'s chain and hand back the state it leaves behind. Spill
+/// code is built by the target's own opcode builders, which know nothing of the
+/// slot it lands in, so the ports are grown onto the instruction here.
+fn put_on_chain(context: &Context, op: &dyn Operation, state: ValueId) -> ValueId {
+    context.append_operand(op.id(), state);
+    let published = context
+        .create_value(tir::builtin::StateType::new(context), None)
+        .id();
+    context.adopt_result(op.id(), published);
+    published
 }
 
 /// Insert `new_op` immediately after `op_id` in its block (before the following op,

@@ -131,6 +131,7 @@ pub(crate) fn finalize_virtual_ops(
         let bl = BranchLinkOpBuilder::new(context)
             .attr("imm", AttributeValue::Str(callee.into()))
             .build();
+        tir::backend::forward_state(context, op.op(), &bl);
         rewriter.replace_op(op, &bl)?;
         return Ok(true);
     }
@@ -142,6 +143,7 @@ pub(crate) fn finalize_virtual_ops(
             tir::PassError::InvalidRuleSet("indirect call has no callee register".to_string())
         })?;
         let blr = BranchLinkRegOpBuilder::new(context).rn(target).build();
+        tir::backend::forward_state(context, op.op(), &blr);
         rewriter.replace_op(op, &blr)?;
         return Ok(true);
     }

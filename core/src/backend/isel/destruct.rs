@@ -215,7 +215,10 @@ impl<'a> Destructor<'a> {
             self.add_block(next.id());
             let (taken, taken_args) = edges[index].as_ref().unwrap();
             let test = self.aux(op, AuxSlot::Test(index))?;
-            self.branch(&current, test, *taken, taken_args, next.id(), &inputs)?;
+            // The next test in the chain is a block of its own with no
+            // parameters: what an arm reads it reads from the operation's own
+            // block, so only an edge into an *arm* carries the inputs.
+            self.branch(&current, test, *taken, taken_args, next.id(), &[])?;
             current = next;
         }
         let (taken, taken_args) = edges[last].as_ref().unwrap();
@@ -494,9 +497,12 @@ impl<'a> Destructor<'a> {
             self.jump(block, dest, args);
             return Ok(());
         }
-        let target = if taken_args.is_empty() {
-            taken
-        } else {
+        // A taken edge has no operand slot to carry assignments in, so one that
+        // performs any goes through a block only it reaches. A `!state`
+        // argument is not an assignment — nothing moves for it, and the
+        // parameter names the chain the join is entered on — so an edge
+        // carrying only those needs no block of its own.
+        let target = if taken_args.iter().any(|&value| !self.is_state(value)) {
             trampoline(
                 self.context,
                 Some(self.region),
@@ -504,6 +510,8 @@ impl<'a> Destructor<'a> {
                 taken_args,
                 self.emitters,
             )
+        } else {
+            taken
         };
         let AuxEmit::Branch(branch) = test else {
             return Err(PassError::InvalidRuleSet(
@@ -529,6 +537,7 @@ impl<'a> Destructor<'a> {
                     op: None,
                     results: &[],
                     result_ty: None,
+                    state: None,
                 };
                 if let Some(prelude) = rule.prelude_emit {
                     block.append(prelude(self.context, &request, &m)?.id());
@@ -558,6 +567,10 @@ impl<'a> Destructor<'a> {
                 Err(Self::decline(op, "a counter advance is not a branch"))
             }
         }
+    }
+
+    fn is_state(&self, value: ValueId) -> bool {
+        self.context.get_value(value).ty() == tir::builtin::StateType::new(self.context)
     }
 
     fn value(&self, value: ValueId) -> ValueId {

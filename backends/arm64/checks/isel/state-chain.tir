@@ -1,0 +1,22 @@
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
+
+// The mid-end's chain reaches encoding. Load, store, load of one address: the
+// store takes the state the first load published — that is the WAR edge — and
+// the second load takes the state the store left, which is why it is a second
+// load and not the first one reused.
+
+module {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
+    %2 = ptr.load %0 : !i32
+    ptr.store %1, %0
+    %3 = ptr.load %0 : !i32
+    %4 = addi %2, %3 : !i32
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: arm64.load_word_unsigned {{.*}} state(%[[ENTRY]] -> %[[READ:[0-9]+]])
+// CHECK-NEXT: arm64.store_word {{.*}} state(%[[READ]] -> %[[WRITTEN:[0-9]+]])
+// CHECK-NEXT: arm64.load_word_unsigned {{.*}} state(%[[WRITTEN]] -> %{{[0-9]+}})

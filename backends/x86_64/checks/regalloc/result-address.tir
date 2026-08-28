@@ -15,6 +15,6 @@ module {
 // CHECK-LABEL: asm.symbol {name = "make_large"
 // CHECK: x86_64.mov_store {base = %{{[0-9]+}}:rdi, src = %{{[0-9]+}}:rsi}
 // CHECK-LABEL: asm.symbol {name = "caller"
-// CHECK-DAG: x86_64.mov {dst = %7:rdx, src = %{{[0-9]+}}:{{.*}}}
-// CHECK-DAG: x86_64.mov {dst = %8:rcx, src = %{{[0-9]+}}:{{.*}}}
+// CHECK-DAG: x86_64.mov {dst = %{{[0-9]+}}:rdx, src = %{{[0-9]+}}:{{.*}}}
+// CHECK-DAG: x86_64.mov {dst = %{{[0-9]+}}:rcx, src = %{{[0-9]+}}:{{.*}}}
 // CHECK: asm.vcall {callee = "make_large"

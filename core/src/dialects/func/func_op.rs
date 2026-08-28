@@ -337,4 +337,15 @@ operation! {
     }
 }
 
+impl ReturnOp {
+    /// The value the function returns, or `None` for a void return. The trailing
+    /// `!state` operand names the memory handed back to the caller, not a value.
+    pub fn returned_value(&self) -> Option<crate::ValueId> {
+        let operands = self.operands();
+        operands[..operands.len() - self.state_operand().is_some() as usize]
+            .first()
+            .copied()
+    }
+}
+
 impl Terminator for ReturnOp {}

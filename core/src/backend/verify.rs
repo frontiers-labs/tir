@@ -27,6 +27,10 @@ use crate::backend::{ARG_PINS_ATTR, ASSIGNMENT_ATTR, SymbolOp};
 
 /// Verify the machine IR under `root`.
 pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
+    // Memory order is the same discipline it is in the mid-end — selection keeps
+    // the chains rather than re-deriving them, so the rule that describes them
+    // is the one that already did.
+    crate::operation::verify_state_forks(context, root)?;
     let mut stack = vec![root];
     while let Some(op_id) = stack.pop() {
         if !context.has_operation(op_id) {
@@ -34,6 +38,7 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
         }
         let op = context.get_op(op_id);
         verify_reg_slots(context, &op)?;
+        verify_state_operands(context, &op)?;
         verify_views(context, &RegAssignment::of_op(&op, ARG_PINS_ATTR))?;
         verify_slot_pins(context, &op)?;
         if op.is::<SymbolOp>() {
@@ -43,6 +48,31 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
             for block in context.get_region(region).iter(context.clone()) {
                 stack.extend(block.op_ids());
             }
+        }
+    }
+    Ok(())
+}
+
+/// Every memory state an operation observes is one something still names: an
+/// operation that is still here, or a block parameter standing for the chain the
+/// block is entered on. A port naming a definition selection took away is an
+/// edge to nothing, and these edges are the memory order from here to encoding.
+fn verify_state_operands(context: &Context, op: &OpHandle) -> Result<(), Error> {
+    let state = tir::builtin::StateType::new(context);
+    for value in op.operands().iter().copied() {
+        if !context.has_value(value) || context.get_value(value).ty() != state {
+            continue;
+        }
+        let defined = match context.get_value(value).defining_op() {
+            Some(def) => context.has_operation(def),
+            None => context.is_block_argument(value),
+        };
+        if !defined {
+            return Err(Error::VerificationError(format!(
+                "{} observes %{}, a memory state nothing defines",
+                op.name().as_str(),
+                value.number(),
+            )));
         }
     }
     Ok(())
@@ -75,7 +105,8 @@ fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
         )));
     }
     // Every SSA position is some port's: a surplus operand or result would be
-    // read by nothing, and a missing one shifts every later port.
+    // read by nothing, and a missing one shifts every later port. The trailing
+    // `!state` ports are memory order, not registers, and are not counted.
     let (values_read, values_written) = slots.iter().fold((0, 0), |(read, written), slot| {
         match (slot.slot, slot.port.def) {
             (RegSlot::Value(_), false) => (read + 1, written),
@@ -83,14 +114,22 @@ fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
             _ => (read, written),
         }
     });
+    let state = tir::builtin::StateType::new(context);
+    let registers = |values: &[ValueId]| {
+        values
+            .iter()
+            .filter(|value| !context.has_value(**value) || context.get_value(**value).ty() != state)
+            .count()
+    };
+    let (operands, results) = (registers(&op.operands()), registers(&op.results()));
     if !crate::backend::reg_ports(op).is_empty()
-        && (values_read != op.operands().len() || values_written != op.results().len())
+        && (values_read != operands || values_written != results)
     {
         return Err(Error::VerificationError(format!(
             "{} has {} operands and {} results for {} use and {} def register slots",
             op.name().as_str(),
-            op.operands().len(),
-            op.results().len(),
+            operands,
+            results,
             values_read,
             values_written,
         )));

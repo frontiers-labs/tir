@@ -150,6 +150,8 @@ impl BinaryWriter {
             || op.is::<SectionEndOp>()
             || op.is::<SymbolEndOp>()
             || op.is::<BlockEndOp>()
+            // Memory order is notation, not code (see the assembly printer).
+            || crate::backend::names_memory_state(op)
             // External declarations contribute nothing to the object; their
             // symbols materialize as undefined entries via relocations.
             || op.is::<DeclareOp>()

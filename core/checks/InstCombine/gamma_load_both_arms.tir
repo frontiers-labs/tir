@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // The state the load reads is the gate's: distributing the load into the arms
 // puts each arm's read on the state that arm's store left, so store-to-load

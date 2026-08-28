@@ -18,7 +18,6 @@ compile/20000502-1.c
 compile/20000511-1.c
 compile/20000518-1.c
 compile/20000609-1.c
-compile/20000701-1.c
 compile/20000802-1.c
 compile/20000804-1.c
 compile/20000818-1.c
@@ -181,7 +180,6 @@ compile/20050516-1.c
 compile/20050721-1.c
 compile/20050801-1.c
 compile/20050801-2.c
-compile/20051216-1.c
 compile/20060109-1.c
 compile/20060202-1.c
 compile/20060208-1.c
@@ -199,7 +197,6 @@ compile/20070603-2.c
 compile/20070905-1.c
 compile/20070915-1.c
 compile/20070919-1.c
-compile/20071027-1.c
 compile/20071102-1.c
 compile/20071107-1.c
 compile/20071108-1.c
@@ -221,7 +218,6 @@ compile/20081203-1.c
 compile/20090107-1.c
 compile/20090114-1.c
 compile/20090518-1.c
-compile/20090519-1.c
 compile/20090907-1.c
 compile/20090917-1.c
 compile/20091215-1.c
@@ -319,7 +315,6 @@ compile/920928-6.c
 compile/921011-1.c
 compile/921011-2.c
 compile/921012-1.c
-compile/921012-2.c
 compile/921021-1.c
 compile/921024-1.c
 compile/921103-1.c
@@ -351,7 +346,6 @@ compile/930513-2.c
 compile/930529-1.c
 compile/930530-1.c
 compile/930602-1.c
-compile/930603-1.c
 compile/930611-1.c
 compile/930618-1.c
 compile/930623-1.c
@@ -545,7 +539,6 @@ compile/dead.c
 compile/debugvlafunction-1.c
 compile/delay.c
 compile/di.c
-compile/dilayout.c
 compile/dimul.c
 compile/div.c
 compile/divdf.c
@@ -835,7 +828,6 @@ compile/pr36141.c
 compile/pr36154.c
 compile/pr36172.c
 compile/pr36238.c
-compile/pr36666.c
 compile/pr37026.c
 compile/pr37056.c
 compile/pr37078.c
@@ -871,7 +863,6 @@ compile/pr38752.c
 compile/pr38771.c
 compile/pr38789.c
 compile/pr38926.c
-compile/pr39202.c
 compile/pr39360.c
 compile/pr39394.c
 compile/pr39423-2.c
@@ -894,8 +885,6 @@ compile/pr40252.c
 compile/pr40291.c
 compile/pr40321.c
 compile/pr40351.c
-compile/pr40432.c
-compile/pr40556.c
 compile/pr40676.c
 compile/pr40753.c
 compile/pr41016.c
@@ -906,7 +895,6 @@ compile/pr41634.c
 compile/pr41661.c
 compile/pr41679.c
 compile/pr41987.c
-compile/pr42025-2.c
 compile/pr42164.c
 compile/pr42196-1.c
 compile/pr42196-2.c
@@ -1054,7 +1042,6 @@ compile/pr58997.c
 compile/pr59102.c
 compile/pr59322.c
 compile/pr59362.c
-compile/pr59386.c
 compile/pr59417.c
 compile/pr59743.c
 compile/pr59803.c
@@ -1080,7 +1067,6 @@ compile/pr65241.c
 compile/pr65540.c
 compile/pr65593.c
 compile/pr65595.c
-compile/pr65680.c
 compile/pr65873.c
 compile/pr65875.c
 compile/pr66168.c
@@ -1267,7 +1253,6 @@ compile/str.c
 compile/strcpy-1.c
 compile/strcpy-2.c
 compile/string-large-1.c
-compile/stru.c
 compile/struct-non-lval-2.c
 compile/structret.c
 compile/structs.c
@@ -1383,7 +1368,6 @@ execute/20010711-1.c
 execute/20010915-1.c
 execute/20010924-1.c
 execute/20010925-1.c
-execute/20011008-3.c
 execute/20011019-1.c
 execute/20011024-1.c
 execute/20011115-1.c
@@ -1798,7 +1782,6 @@ execute/990208-1.c
 execute/990326-1.c
 execute/990413-2.c
 execute/990524-1.c
-execute/990525-1.c
 execute/990531-1.c
 execute/990604-1.c
 execute/990628-1.c
@@ -1850,7 +1833,6 @@ execute/builtin-prefetch-5.c
 execute/builtin-prefetch-6.c
 execute/builtin-types-compatible-p.c
 execute/builtins/20010124-1-lib.c
-execute/builtins/20010124-1.c
 execute/builtins/abs-1-lib.c
 execute/builtins/abs-2-lib.c
 execute/builtins/abs-2.c

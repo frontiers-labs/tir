@@ -242,22 +242,42 @@ Ops implementing `MemoryRead` / `MemoryWrite` are lowered by
 with the chain the access reads appended. The state operand *is*
 memory identity: two reads of one address on one chain are one term and select
 one instruction, a write takes the chain to a state nothing before it names, and
-the accesses after it read that. The chain never orders anything — the emission
-schedule is the block's own op order (`schedule_tiles` serializes the effect
-tiles by position), and a state edge only names identity.
+the accesses after it read that. The chain does not yet order anything — the
+emission schedule is the block's own op order (`schedule_tiles` serializes the
+effect tiles by position) — but it is the order the edges will be read as (B3).
 
-The chains are conservative, because the graph does not carry the control flow: a
-fresh unknown chain (an opaque leaf) starts every block and follows every
-operation whose effect the lowering cannot spell — a call, an `alloca`, anything
-with no declared semantics or with effectful ones. Inside such a straight-line run
-the lowering order *is* the execution order, so a read reaches the writes that
-happened on it and nothing else.
+The chains are the IR's, not selection's. `build_memory_effect` lowers the access's
+own `state_operand()`: a `state.entry_state`, a region argument or a `state.join`
+becomes a leaf, and a write's term is the state the accesses after it read, which
+is exactly the node the read's state operand names. A read publishes the memory it
+observed, so its state result names the same class as its operand.
 
-These are selection's own chains, not the IR's. The middle-end carries its state
-edges to the backend boundary and `erase-state` drops them in the backend
-prologue, ahead of restructure and selection, so what selection sees is the
-implicit order (`ir.md` §6). Selection consuming the IR's chains instead of
-rebuilding its own is a separate change.
+What the chains say is therefore what `thread-state` said — one chain per object,
+a fork of reads off each write, a join before the next write — and nothing weaker.
+Two accesses of one address on one chain are one term wherever they sit, including
+in different blocks: the cover reuses the tile that dominates and the other access
+is erased, its state result forwarded to the state it read.
+
+The edges survive selection. A tile covering an access takes that access's ports —
+its own if the access roots the tile, the fused load's if the tile fuses one — and
+the emitted machine instruction carries them, because the opcode declares
+`state: "in_out"` wherever its `InstrInfo::effects` touches memory. An access the
+cover answered from another publishes no state of its own: it is erased with its
+readers handed the state it observed, which is what its own read would have left.
+Memory order is explicit in machine IR from here to encoding (`son-backend` B2),
+under the same fork/join discipline the mid-end's chains have:
+`verify_machine_ir` runs `verify_state_forks` over the selected function and
+holds every port to naming a definition that exists.
+
+Destruction leaves a `!state` block parameter for every chain a region carried,
+and it means "the memory this block is entered with" — not a join of named edges.
+A `vbr` has an operand slot and carries the incoming state into it; a selected
+conditional branch has none, and minting a block to carry a value nothing moves
+would cost a jump per gate, so its edge carries nothing. Either way
+`BlockArgLoweringPass` clears the operands and copies nothing: before register
+allocation every state parameter is a root, and the order the edges state is the
+order *within* a block. Ordering blocks against each other is B3's, and it reads
+the CFG, not these parameters.
 
 Rules say nothing about state: a TMDL memory pattern is arity 3/4, and
 `compile_isel_pattern` appends the state operand to every memory node it compiles

@@ -26,5 +26,12 @@ module {
   module_end
 }
 
-// CHECK: x86_64.mov_store_disp
-// CHECK: x86_64.mov_load_disp
+// A frame slot is a memory of its own, rooted at a state nothing else names: a
+// reload takes the state the store that filled that slot left, and the slot at
+// offset 8 carries a chain of its own — the two slots are ordered against each
+// other by nothing.
+// CHECK: state.entry_state
+// CHECK: x86_64.mov_store_disp {{.*}}imm = 0} state(%{{[0-9]+}} -> %[[FILLED:[0-9]+]])
+// CHECK-NEXT: x86_64.mov_load_disp {{.*}}imm = 0} state(%[[FILLED]] -> %{{[0-9]+}})
+// CHECK: x86_64.mov_store_disp {{.*}}imm = 8} state(%{{[0-9]+}} -> %[[FILLED8:[0-9]+]])
+// CHECK-NEXT: x86_64.mov_load_disp {{.*}}imm = 8} state(%[[FILLED8]] -> %{{[0-9]+}})

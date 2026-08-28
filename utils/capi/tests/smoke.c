@@ -31,7 +31,7 @@ int main(void) {
     }
 
     TirPassManager *pm =
-        tir_pipeline_parse("func.func(thread-state,instcombine,erase-state)");
+        tir_pipeline_parse("func.func(thread-state,instcombine)");
     if (!pm) {
         fprintf(stderr, "pipeline parse failed: %s\n", tir_last_error());
         return 1;

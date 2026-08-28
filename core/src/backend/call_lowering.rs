@@ -89,7 +89,7 @@ impl CallLowering {
                 for op_id in block.op_ids() {
                     let instance = context.get_op(op_id);
                     if let Some(ret) = instance.clone().as_op::<ReturnOp>()
-                        && let Some(value) = ret.operands().first().copied()
+                        && let Some(value) = ret.returned_value()
                     {
                         let ty = context.get_value(value).ty();
                         let data = context.get_type_data(ty);
@@ -402,22 +402,39 @@ impl CallLowering {
                 .collect::<Vec<_>>()
                 .into(),
         );
+        // The call runs a function, so the memory it observes and the one it
+        // leaves behind are the chain the mid-end put it on: the virtual call
+        // takes both ports over from `func.call`.
+        let observed = call.state_operand();
+        let published = call.state_result();
         let call: Box<dyn Operation> = match callee {
-            Callee::Direct(name) => Box::new(
-                super::VirtualCallOpBuilder::new(context)
+            Callee::Direct(name) => {
+                let mut builder = super::VirtualCallOpBuilder::new(context)
                     .attr("callee", AttributeValue::Str(name.into()))
                     .outgoing_stack_size(u64::from(outgoing_size))
-                    .attr("clobbers", clobbers)
-                    .build(),
-            ),
-            Callee::Indirect(_) => Box::new(
-                super::VirtualIndirectCallOpBuilder::new(context)
+                    .attr("clobbers", clobbers);
+                if let Some(observed) = observed {
+                    builder = builder.state(observed).state_result();
+                }
+                Box::new(builder.build())
+            }
+            Callee::Indirect(_) => {
+                let mut builder = super::VirtualIndirectCallOpBuilder::new(context)
                     .callee(fresh_callee.expect("indirect callee was detached"))
                     .outgoing_stack_size(u64::from(outgoing_size))
-                    .attr("clobbers", clobbers)
-                    .build(),
-            ),
+                    .attr("clobbers", clobbers);
+                if let Some(observed) = observed {
+                    builder = builder.state(observed).state_result();
+                }
+                Box::new(builder.build())
+            }
         };
+        if let (Some(published), Some(new)) = (
+            published,
+            tir::builtin::trailing_state_result(context, &context.get_op(call.id())),
+        ) {
+            context.replace_value_uses(published, new);
+        }
         rewriter.insert_op_before(op, call.as_ref())?;
         for suffix in self.emitter.call_suffix(context, self.abi, outgoing_size) {
             rewriter.insert_op_before(op, suffix.as_ref())?;
@@ -516,11 +533,14 @@ impl CallLowering {
             .copied()
             .ok_or_else(|| PassError::InvalidRuleSet("ABI has no return register".to_string()))?;
         // The call op is erased below and takes its result with it, so the copy
-        // defines a register value of its own.
+        // defines a register value of its own. The rewiring is explicit: the
+        // call publishes a state as well as a value, so the shapes of the two
+        // ops do not line up for [`Rewriter::replace_op`] to do it.
         let returned = fresh_reg(context, return_reg.0);
         let copy = self
             .emitter
             .copy(context, RegSlot::Value(returned), RegSlot::Phys(return_reg));
+        context.replace_value_uses(result, returned);
         rewriter.replace_op(op, copy.as_ref())?;
         erase_dead_tuple_arguments(context, rewriter, &tuple_arguments)?;
         Ok(true)

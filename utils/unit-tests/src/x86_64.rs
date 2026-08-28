@@ -28,6 +28,30 @@ fn instruction_info_carries_every_per_opcode_fact() {
 }
 
 #[test]
+fn memory_instructions_declare_a_state_chain() {
+    // One fact, two readers: the memory effects rustgen derives from an
+    // instruction's `execute` body decide both what the backend is told the
+    // opcode does to memory and whether the opcode has a chain to carry it in.
+    // Neither can be true without the other, for any instruction of the ISA.
+    for info in tir_x86_64::instruction_infos() {
+        let schema = tir::OP_SCHEMAS
+            .iter()
+            .find(|schema| schema.dialect == "x86_64" && schema.name == info.name)
+            .unwrap_or_else(|| panic!("x86-64 registers no schema for '{}'", info.name));
+        let carries_state = schema
+            .operands
+            .last()
+            .is_some_and(|operand| operand.name == "state");
+        assert_eq!(
+            carries_state,
+            info.effects.reads || info.effects.writes,
+            "{}",
+            info.name
+        );
+    }
+}
+
+#[test]
 fn guarded_relaxations_hold_for_all_rules() {
     let context = tir::Context::with_default_dialects();
     let config = TargetConfig::parse("x86_64", None, None).unwrap();

@@ -84,6 +84,12 @@ impl Pass for ThreadStatePass {
         {
             return Ok(());
         }
+        // Threading a threaded function would draw a second order over the one
+        // that is already there. The chains are the memory order, so where they
+        // exist there is nothing to say.
+        if already_threaded(context, &ops) {
+            return Ok(());
+        }
 
         let entry_block = context.get_block(entry);
         if !threadable(context, &entry_block) {
@@ -607,6 +613,18 @@ fn threadable(context: &Context, block: &BlockHandle) -> bool {
 }
 
 /// Whether `op` can carry a chain across its regions as a port.
+/// Whether any operation already names a memory state.
+fn already_threaded(context: &Context, ops: &[OpId]) -> bool {
+    let state = StateType::new(context);
+    ops.iter().any(|&op_id| {
+        let op = context.get_op(op_id);
+        op.operands()
+            .iter()
+            .chain(op.results().iter())
+            .any(|&value| context.get_value(value).ty() == state)
+    })
+}
+
 fn carries_state(op: &OpHandle) -> bool {
     op.is::<scf::ForOp>()
         || op.is::<scf::WhileOp>()

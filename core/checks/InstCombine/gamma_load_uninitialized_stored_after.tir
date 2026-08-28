@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // The read a law distributes into an arm that stores nothing is emitted where
 // the state it reads is published — here the allocation itself, since nothing
@@ -29,7 +29,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @stand_in
-// CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
+// CHECK: %[[SLOT:[0-9]+]] = ptr.alloca
 // CHECK-NEXT: %[[UNINIT:[0-9]+]] = ptr.load %[[SLOT]]
 // CHECK-NEXT: %[[FIRST:[0-9]+]] = scf.if %0 -> !i32 {
 // CHECK-NEXT: scf.yield %2

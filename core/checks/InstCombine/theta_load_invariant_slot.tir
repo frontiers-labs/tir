@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // A slot the body only reads: nothing inside the loop writes it, so every edge
 // back into its state port carries the port's own argument and the θ over them

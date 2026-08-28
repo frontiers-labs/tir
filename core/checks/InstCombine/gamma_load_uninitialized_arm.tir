@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // Nothing stores before the gate, so the read distributed into the arm that
 // stores nothing forwards from no store. With no operation naming an
@@ -23,7 +23,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @guarded
-// CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
+// CHECK: %[[SLOT:[0-9]+]] = ptr.alloca
 // CHECK-NEXT: %[[UNINIT:[0-9]+]] = ptr.load %[[SLOT]]
 // CHECK-NEXT: %[[RESULT:[0-9]+]] = scf.if %0 -> !i32 {
 // CHECK-NEXT: scf.yield %1

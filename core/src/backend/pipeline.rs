@@ -16,8 +16,8 @@ use tir::{
 use crate::backend::TargetMachine;
 use crate::backend::lower::OpLoweringPass;
 use crate::passes::{
-    CheckUniqueSymbolsPass, DeadCodeEliminationPass, EraseStatePass, LowerMemoryIntrinsicsPass,
-    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, RestructurePass,
+    CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass,
+    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, RestructurePass, ThreadStatePass,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,18 +112,22 @@ pub fn build_pipeline(
 /// function's lowering.
 fn module_prologue() -> PassManager {
     let mut pm = PassManager::new();
-    // Memory state is the mid-end's order and codegen takes the implicit one
-    // back, so the chains are dropped at the boundary — here, because a function
-    // is lowered and erased one at a time and by then the λ its calls name may
-    // already be a machine symbol, which is not IR erasure can be checked
-    // against. It goes ahead of the intrinsic lowering, which expands a `memcpy`
-    // into accesses no chain would reach.
     {
         let functions = pm.nest::<FuncOp>();
-        functions.add_pass(EraseStatePass::new());
-        // A no-alias fact is mid-end vocabulary too: no machine has an
-        // instruction for it, so it becomes the range check it stands for.
+        // A no-alias fact is mid-end vocabulary: no machine has an instruction
+        // for it, so it becomes the range check it stands for.
         functions.add_pass(LowerPtrDisjointPass::new());
+        // Selection takes structured regions: a function that still holds a raw
+        // CFG (a `.tir` input, or JIT text) is raised here. One that is already
+        // a single structured block is left alone.
+        functions.add_pass(RestructurePass::new());
+        // Memory order reaches selection as the chains the mid-end drew. A
+        // function that arrives without them — a `.tir` input, JIT text — is
+        // threaded here, once it is structured, so selection sees one chain
+        // model always. Both run while the module is whole: they read a
+        // function's calls, and by the time it is lowered one at a time the λ
+        // those name may already be a machine symbol.
+        functions.add_pass(ThreadStatePass::new());
     }
     // Object symbols are unique by name, so overloads must already be mangled.
     pm.add_pass(CheckUniqueSymbolsPass::new());
@@ -145,10 +149,6 @@ fn add_function_passes(
 ) {
     pm.add_pass(TargetIntegerLegalizer::new(target));
     let function_pipeline = pm.nest::<FuncOp>();
-    // Selection takes structured regions: a function that still holds a raw CFG
-    // (a `.tir` input, or JIT text) is raised here. One that is already a single
-    // structured block is left alone.
-    function_pipeline.add_pass(RestructurePass::new());
     function_pipeline.add_pass(target.isel_pass(context));
     // Remove pure instructions left dead by selection (e.g. a value recomputed in
     // a consumer's block by cross-block fusion). Runs while results are still

@@ -1051,17 +1051,28 @@ fn memory_ops_select_via_interfaces() {
     let i32_ty = IntegerType::new(&context, 32);
     let (module, func, region, args) = function(&context, &[i32_ty], i32_ty);
 
+    // Threaded: an access names the chain it reads, and the slot's own chain
+    // starts where it is allocated.
     let slot_ty = tir::ptr::PtrType::typed(&context, i32_ty);
-    let slot = func
-        .body()
-        .append_op(tir::ptr::ops::alloca(&context, 4u64, 4u64, slot_ty).build());
+    let slot = tir::ptr::ops::alloca(&context, 4u64, 4u64, slot_ty)
+        .state_result()
+        .build();
+    let allocated = slot.state_result().expect("the allocation opens a chain");
+    let store = tir::ptr::ops::store(&context, args[0], slot.result())
+        .state(allocated)
+        .state_result()
+        .build();
+    let stored = store.state_result().expect("the store publishes a state");
+    let loaded = tir::ptr::ops::load(&context, slot.result(), i32_ty)
+        .state(stored)
+        .state_result()
+        .build();
+    let result = loaded.result();
+    func.body().append_op(slot);
+    func.body().append_op(store);
+    func.body().append_op(loaded);
     func.body()
-        .append_op(tir::ptr::ops::store(&context, args[0], slot.result()).build());
-    let loaded = func
-        .body()
-        .append_op(tir::ptr::ops::load(&context, slot.result(), i32_ty).build());
-    func.body()
-        .append_op(func_ops::r#return(&context, loaded.result()).build());
+        .append_op(func_ops::r#return(&context, result).build());
 
     let rules = vec![
         Rule::new("load", load_pattern(), LATENCY_COST_SCALE, emit_load_marker),

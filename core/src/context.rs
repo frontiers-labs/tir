@@ -937,6 +937,21 @@ impl Context {
         inner.edit_op(op);
     }
 
+    /// Append `value` to `op`'s results, moving its definition onto `op`. A
+    /// lowering that replaces an instruction hands the replacement the state the
+    /// original published this way, so the chain crosses the rewrite intact.
+    pub fn adopt_result(&self, op: OpId, value: ValueId) {
+        let mut inner = self.0.write();
+        let Some(instance) = inner.op_mut(op) else {
+            return;
+        };
+        instance.push_result(value);
+        if let Some(value) = inner.value_mut(value) {
+            value.set_defining_op(op);
+        }
+        inner.edit_op(op);
+    }
+
     /// Drop `op`'s last operand, keeping the segment sizes that describe the
     /// grouping in step. The inverse of [`Context::append_operand`].
     pub fn pop_operand(&self, op: OpId) {

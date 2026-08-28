@@ -19,7 +19,9 @@ module {data_layout = #data_layout} {
     %8 = ptr.load %6 : !i32
     ptr.store %2, %3
     %9 = addi %7, %8 : !i32
-    func.return %4
+    %10 = extsi %9 : !i64
+    %11 = addi %4, %10 : !i64
+    func.return %11
   }
   module_end
 }
@@ -28,4 +30,4 @@ module {data_layout = #data_layout} {
 // CHECK-NOT: ptr.store %1,
 // CHECK: %[[R:[0-9]+]] = ptr.load %6 : !i32 state(%{{[0-9]+}} -> %{{[0-9]+}})
 // CHECK-NOT: ptr.store
-// CHECK: func.return %0
+// CHECK: addi %0,

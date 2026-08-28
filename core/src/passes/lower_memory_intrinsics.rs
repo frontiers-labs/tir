@@ -109,12 +109,15 @@ impl Pass for LowerMemoryIntrinsicsPass {
             let copy = operation
                 .as_op::<MemcpyOp>()
                 .expect("operation was collected as ptr.memcpy");
-            let call = func_ops::CallOpBuilder::new(context)
-                .callee(memcpy.expect("a copy to lower implies a memcpy declaration"))
-                .args(copy.operands().to_vec())
-                .result_type(pointer)
-                .build();
-            rewriter.replace_op(&operation, &call)?;
+            let args = vec![copy.operands()[0], copy.operands()[1], copy.operands()[2]];
+            let call = threaded_call(
+                context,
+                memcpy.expect("a copy to lower implies a memcpy declaration"),
+                args,
+                pointer,
+                copy.state_operand(),
+            );
+            replace_threaded(context, rewriter, &operation, &call, copy.state_result())?;
         }
         for operation in sets {
             let set = operation
@@ -122,19 +125,58 @@ impl Pass for LowerMemoryIntrinsicsPass {
                 .expect("operation was collected as ptr.memset");
             let extended = b::extui(context, set.operands()[1], value).build();
             rewriter.insert_op_before(&operation, &extended)?;
-            let call = func_ops::CallOpBuilder::new(context)
-                .callee(memset.expect("a set to lower implies a memset declaration"))
-                .args(vec![
-                    set.operands()[0],
-                    extended.result(),
-                    set.operands()[2],
-                ])
-                .result_type(pointer)
-                .build();
-            rewriter.replace_op(&operation, &call)?;
+            let args = vec![set.operands()[0], extended.result(), set.operands()[2]];
+            let call = threaded_call(
+                context,
+                memset.expect("a set to lower implies a memset declaration"),
+                args,
+                pointer,
+                set.state_operand(),
+            );
+            replace_threaded(context, rewriter, &operation, &call, set.state_result())?;
         }
         Ok(())
     }
+}
+
+/// The call an intrinsic becomes, on the chain the intrinsic was on: the library
+/// routine touches the same memory the intrinsic did, so it takes the state the
+/// intrinsic observed and publishes the one it left.
+fn threaded_call(
+    context: &Context,
+    callee: ValueId,
+    args: Vec<ValueId>,
+    result_type: TypeId,
+    state: Option<ValueId>,
+) -> impl Operation {
+    let mut builder = func_ops::CallOpBuilder::new(context)
+        .callee(callee)
+        .args(args)
+        .result_type(result_type);
+    if let Some(state) = state {
+        builder = builder.state(state).state_result();
+    }
+    builder.build()
+}
+
+/// Replace `operation` by `call`, handing the state the intrinsic published to
+/// the call's own. The shapes differ — a call yields a value the intrinsic did
+/// not — so the generic result rewiring in [`Rewriter::replace_op`] does not
+/// apply.
+fn replace_threaded(
+    context: &Context,
+    rewriter: &mut Rewriter,
+    operation: &OperationRef,
+    call: &dyn Operation,
+    published: Option<ValueId>,
+) -> Result<(), PassError> {
+    if let (Some(published), Some(new)) = (
+        published,
+        crate::builtin::trailing_state_result(context, &context.get_op(call.id())),
+    ) {
+        context.replace_value_uses(published, new);
+    }
+    rewriter.replace_op(operation, call)
 }
 
 /// The λ value of `name`, declaring it at the top of the module when nothing in

@@ -229,9 +229,16 @@ impl Pass for BlockArgLoweringPass {
                 // leave the rest of the parameter holding whatever the
                 // destination carried before; such a class only decides the copy
                 // when the type names no file at all.
+                let state = tir::builtin::StateType::new(context);
                 let mut pairs: Vec<(ValueId, ValueId, RegClassId)> = Vec::new();
                 for (&param, &arg) in params.iter().zip(args.iter()) {
                     if param == arg {
+                        continue;
+                    }
+                    // A `!state` port is memory order, not a register: nothing
+                    // moves across the edge, and the parameter simply names the
+                    // chain the join is entered on.
+                    if context.get_value(param).ty() == state {
                         continue;
                     }
                     let class = info

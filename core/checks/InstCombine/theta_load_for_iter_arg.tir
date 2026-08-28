@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // The state a loop carries is the θ over the state it starts with and the one
 // its body leaves, so a load of it is the θ of the two loads: what the slot

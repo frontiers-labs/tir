@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
 
 // A slot holding a pointer promotes like any other, since the data layout gives
 // the pointer the width the access terms need. The gate grows the port carrying

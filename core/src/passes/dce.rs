@@ -11,9 +11,10 @@ use std::collections::HashMap;
 
 use crate::analysis::{DefUse, execution_regs, op_regs};
 use crate::backend::SymbolOp;
+use crate::builtin::{StateType, trailing_state_operand, trailing_state_result};
 use crate::{
     AnalysisManager, Context, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
-    PassTarget, Rewriter, Terminator, func::FuncOp,
+    PassTarget, Rewriter, Terminator, ValueId, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -76,10 +77,22 @@ pub(crate) fn erase_dead(
             continue;
         }
         let instance = context.get_op(op_id);
-        if !is_erasable(&instance, &use_counts) {
+        if !is_erasable(context, &instance, &use_counts) {
             continue;
         }
 
+        // A read leaves memory as it found it, so the state it published names
+        // the memory it observed: erasing the read hands its readers that one,
+        // and the reads it hands over move to the state they now name — a write
+        // whose state a forwarded reader took is still read.
+        if let (Some(published), Some(observed)) = (
+            trailing_state_result(context, &instance),
+            trailing_state_operand(context, &instance),
+        ) {
+            context.replace_value_uses(published, observed);
+            let moved = use_counts.insert(published.number(), 0).unwrap_or(0);
+            *use_counts.entry(observed.number()).or_default() += moved;
+        }
         let block = instance.parent_block().map(|b| context.get_block(b));
         // Read before the erase: the op's storage goes away with it.
         let used_regs = op_regs(&instance).uses;
@@ -103,11 +116,14 @@ pub(crate) fn erase_dead(
 /// mid-end op with SSA results must additionally declare pure semantics, so
 /// effectful ops like calls survive even when their result is unread.
 ///
-/// A write to memory is the exception the state chains buy: what it publishes is
-/// the whole of what anything can observe about it, so a write no state reads is
-/// a write nobody can tell happened. Where no chain is threaded it publishes
-/// nothing, defines nothing, and the last test below leaves it alone.
-fn is_erasable(instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
+/// Memory accesses are the exception the state chains buy. What a write
+/// publishes is the whole of what anything can observe about it, so a write no
+/// state reads is a write nobody can tell happened; a read leaves memory as it
+/// found it, so one whose value nothing takes is a read nobody can tell happened
+/// either, and its readers are handed the state it observed. Where no chain is
+/// threaded a write publishes nothing, defines nothing, and the last test below
+/// leaves it alone.
+fn is_erasable(context: &Context, instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
     if !instance.regions().is_empty() || instance.clone().as_interface::<dyn Terminator>().is_some()
     {
         return false;
@@ -119,10 +135,26 @@ fn is_erasable(instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
         .clone()
         .as_interface::<dyn crate::backend::MachineInstruction>();
     let writes_memory = instance.has_interface::<dyn MemoryWrite>();
+    // A read leaves memory as it found it, so the state it publishes names the
+    // one it observed: its state result is not a definition that keeps it alive,
+    // and erasing it hands its readers the state it took. Read off the declared
+    // effects, not off the absence of a write interface — a call writes memory
+    // and declares no location for it.
+    let reads_only = match &machine {
+        Some(mi) => mi.info().effects.reads && !mi.info().effects.writes,
+        None => instance.has_interface::<dyn crate::MemoryRead>() && !writes_memory,
+    };
+    let forwards_state = reads_only && trailing_state_operand(context, instance).is_some();
+    // An allocation is the object its state names. With neither its address nor
+    // that state read, the object is one nothing in the function can tell exists
+    // — the slot sweep the chains make an ordinary def-use question.
+    let allocation = instance.has_interface::<dyn crate::PromotableAllocation>();
     match &machine {
         Some(mi) if mi.info().effects.writes => return false,
         None if !instance.results().is_empty()
             && !writes_memory
+            && !forwards_state
+            && !allocation
             && !super::is_pure_value(instance) =>
         {
             return false;
@@ -135,8 +167,15 @@ fn is_erasable(instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
         return false;
     }
 
+    let state = StateType::new(context);
+    let is_state =
+        |value: &ValueId| context.has_value(*value) && context.get_value(*value).ty() == state;
     let mut defines = false;
-    for def in &regs.defs {
+    for def in regs
+        .defs
+        .iter()
+        .filter(|def| !(forwards_state && is_state(def)))
+    {
         defines = true;
         if use_counts
             .get(&def.number())

@@ -134,12 +134,15 @@ pub fn lower_function_and_return(
         // reach machine instructions without being defined by one, so they are
         // retyped through the same map. A tuple parameter is not a register: its
         // elements are, and they were retyped above.
+        let state = tir::builtin::StateType::new(context);
         for block in context
             .get_region(op.op().regions()[0])
             .iter(context.clone())
         {
             for (index, argument) in block.arguments().iter().enumerate() {
-                if type_class(context, argument.ty()).is_some() {
+                // A `!state` parameter names the memory the join is entered
+                // with. It lives in no register, so there is no class to give it.
+                if argument.ty() == state || type_class(context, argument.ty()).is_some() {
                     continue;
                 }
                 let ty = context.get_type_data(argument.ty());
@@ -179,7 +182,7 @@ pub fn lower_function_and_return(
 
     if let Some(ret) = op.as_op::<ReturnOp>() {
         let mut tuple_source = None;
-        let values = match ret.operands().first().copied() {
+        let values = match ret.returned_value() {
             None => Vec::new(),
             Some(value) => {
                 let ty = context.get_type_data(context.get_value(value).ty());

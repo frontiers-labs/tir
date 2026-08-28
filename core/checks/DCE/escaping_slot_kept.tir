@@ -1,0 +1,21 @@
+// RUN: tir opt --pass func.func(thread-state) --pass func.func(dce) --verify %s | filecheck %s
+
+// A slot whose address the outside can reach is not the sweep's to take: the
+// call observes the memory the store left, so the store's published state has a
+// reader and the allocation's address has one too.
+
+module {
+  %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !i32
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %1
+    %2 = func.call %fn_sink(%1 : !ptr.p<!i32>) -> !i32
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: %[[SLOT:[0-9]+]] = ptr.alloca
+// CHECK: ptr.store %{{[0-9]+}}, %[[SLOT]] state(%{{[0-9]+}} -> %[[STORED:[0-9]+]])
+// CHECK: func.call %{{[0-9]+}}(%[[SLOT]] {{.*}} state(%[[STORED]] -> %{{[0-9]+}})

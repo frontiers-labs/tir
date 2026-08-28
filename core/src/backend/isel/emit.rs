@@ -38,6 +38,8 @@ pub(crate) struct ScheduledEmit {
     pub(crate) rule_index: usize,
     pub(crate) m: RuleMatch,
     pub(crate) source_op: Option<OpId>,
+    /// The state ports of the access this tile covers, where it covers one.
+    pub(crate) state: Option<super::StatePorts>,
     /// The original op to insert this instruction before: the source op's
     /// position, pulled earlier for pure tiles whose consumers precede it
     /// (a constant read by an earlier op through class merging), so surviving

@@ -320,8 +320,20 @@ derived from them, not the other way round (§6.3).
 No chain enters a function *signature*: a call's arguments must be exactly what
 the callee's `!fn` type takes, and ABI lowering maps region arguments to
 registers — a state argument would break both. Hence the entry-state op and the
-trailing return operand. State is erased at the backend boundary, before
-anything ABI-relevant happens; it never survives into machine IR.
+trailing return operand.
+
+The chains survive the backend boundary. A machine opcode whose `InstrInfo`
+effects touch memory declares `state: "in_out"` and carries the chain of the
+access it was selected for; a virtual call carries the one every chain it may
+touch was merged into; a frame slot the allocator makes is a memory of its own,
+rooted at an `entry_state` of its own and threaded with the same fork of reloads
+and join before the next store. Memory order is an explicit def-use edge from
+construction to encoding, and §6.4's discipline is checked on both sides of
+selection — `observes_only` reads a machine instruction's declared effects where
+a mid-end op has the memory interfaces instead, and an instruction that writes
+nothing observes whatever state it names, a load and a branch alike. Register
+allocation is the one thing blind to all of it: a `!state` value lives in no
+register, so liveness and colouring pass it over (`son-backend` B2).
 
 ### 6.2 Chains
 
@@ -386,15 +398,24 @@ missing edge is a divergence with a reproducer.
   is in the cone of the state its next write takes is what `shuffle-state` is
   for; the verifier is not that net.
 - A state crossing a region boundary does so as a carried argument, which is a
-  fresh value, so the check is one walk of the whole tree.
+  fresh value, so the check is one walk of the whole tree. A machine block
+  parameter is the same fresh value, and a branch forwarding a state along an
+  edge changes nothing, so the walk describes machine IR too — it is run there
+  by `verify_machine_ir`, which the generic op-tree verifier does not reach.
+- What an operation does to the memory it names is read off whichever fact it
+  carries: the memory interfaces for a mid-end op, the
+  [`InstrInfo`](instruction_selection.md) effects for a machine instruction.
+  One that writes nothing observes — a load leaves memory as it found it, and a
+  branch only carries it along the edge it takes.
 - A read's published state *is* the state it observed, so a transform erasing a
   read hands its readers — joins included — the state it took.
 - A store is *dead* iff nothing that reads the bytes it wrote can tell the
   memory it left from the memory before it: the chain is the barrier and the
   extent is the question, and law S2 (§6.5) is that statement inside the e-graph
   view. It is also dead where its own state is read by nothing at all — the
-  commit's sweep — and where the slot it writes has no reader, which
-  `erase-state` takes with the allocation at the backend boundary.
+  commit's sweep — and where the slot it writes has no reader, in which case the
+  allocation is dead too: with neither its address nor its state read, the object
+  is one nothing in the function can tell exists, and DCE takes it.
 
 ### 6.5 The state laws
 
@@ -542,7 +563,7 @@ and their single survivors:
 | `mem2reg` (both variants) | dominance/φ machinery obsolete by structure: the region tree *is* the dominance, and a local slot's value belongs on the ports construction should have put it on | `promote` (demand annotation) + `thread-state` + shared escape classifier |
 | mid-end DCE pass | a rewrite's cascade belongs to the commit that caused it | the commit's sweep (DCE remains for machine IR) |
 | `sccp` + `ConstantFacts` | a second engine for a fact the first one can state: constants are classes, reachability is a gate's own scope | the e-graph's scopes, hypothesis rounds included |
-| `dse` | same-chain overwrite is law S2 on terms; a slot with no reader is `erase-state`'s sweep | S2 (§6.5) + `erase-state` |
+| `dse` | same-chain overwrite is law S2 on terms; a slot with no reader is a dead definition | S2 (§6.5) + DCE on chains |
 | `scf_to_cfg` + `cfg_cleanup` | destruction lives inside emission and emits clean CFG once | destruction-at-emission |
 | three e-graph seeders (instcombine's, isel's `SemDagBuilder`, the sea view) | one program, one seeding | the §7.2 seeder |
 | eager `Value::uses` in the green core | derived data in ground truth | `DefUse` view |

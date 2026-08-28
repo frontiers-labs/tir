@@ -1,0 +1,21 @@
+// RUN: tir opt --pass func.func(thread-state) --pass func.func(dce) --verify %s | filecheck %s
+
+// The counterpart: a slot whose value is read back is a memory something can
+// tell, so nothing of it goes — the sweep is a question about readers, not a
+// rule about slots.
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %1
+    %2 = ptr.load %1 : !i32
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: ptr.alloca
+// CHECK: ptr.store %0, %1
+// CHECK: %2 = ptr.load %1
+// CHECK: func.return %2
