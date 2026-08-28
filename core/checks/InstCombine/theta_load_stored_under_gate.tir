@@ -7,6 +7,8 @@
 //
 // The value slot is never written before the loop, so the value it carries in is
 // a read of what the slot holds there, and the slot stays in memory around it.
+// The body runs under the condition the test yields, which is the flag port, so
+// the arm that writes nothing yields the literal the body proves it to be.
 
 module {
   %fn_find = func.func @find(%0: !i1, %1: !i32) -> !i32 {
@@ -40,10 +42,11 @@ module {
 // CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] = scf.while iter_args(%[[FLAG:[0-9]+]] = %4, %[[VALUE:[0-9]+]] = %[[INIT]]) -> !i1, !i32 {
 // CHECK-NEXT: scf.condition %[[FLAG]], %[[FLAG]], %[[VALUE]]
 // CHECK-NEXT: }
-// CHECK-NEXT: do(%[[BODYFLAG:[0-9]+]], %[[BODY:[0-9]+]]) {
+// CHECK-NEXT: do(%{{[0-9]+}}, %[[BODY:[0-9]+]]) {
+// CHECK-NEXT: %[[HELD:[0-9]+]] = constant {value = 1} : !i1
 // CHECK-NEXT: %[[SET:[0-9]+]], %[[TAKEN:[0-9]+]] = scf.if %0 -> !i1, !i32 {
 // CHECK: scf.yield %[[ONE:[0-9]+]], %1
 // CHECK: else {
-// CHECK-NEXT: scf.yield %[[BODYFLAG]], %[[BODY]]
+// CHECK-NEXT: scf.yield %[[HELD]], %[[BODY]]
 // CHECK: scf.yield %[[SET]], %[[TAKEN]]
 // CHECK: func.return %[[RESULT]]

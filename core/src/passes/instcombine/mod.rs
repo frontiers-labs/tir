@@ -29,9 +29,9 @@ use tir_symbolic::egraph::{EGraph, Extraction, Id};
 
 use crate::analysis::scopes;
 use crate::{
-    AnalysisManager, BlockId, Conditional, ConstantLike, Context, LoopLike, MemoryRead,
-    MemoryWrite, OpId, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId,
-    ValueId,
+    AnalysisManager, BlockId, Conditional, ConstantLike, Context, EntryGuard, GuardedLoop,
+    LoopLike, MemoryRead, MemoryWrite, OpId, OperationRef, Pass, PassError, PassTarget, RegionId,
+    Rewriter, TypeId, ValueId,
     attributes::AttributeValue,
     builtin::{StateType, ops},
     func::FuncOp,
@@ -303,7 +303,7 @@ impl Driver<'_> {
         }
     }
 
-    /// Recurse into each nested region, assuming a guard's fact inside its region.
+    /// Recurse into each nested region, assuming its guard's fact inside it.
     fn recurse(&mut self, op_ids: &[OpId], rewriter: &mut Rewriter) -> Result<(), PassError> {
         for &op_id in op_ids {
             if !self.context.has_operation(op_id) {
@@ -313,11 +313,7 @@ impl Driver<'_> {
             if instance.regions().is_empty() {
                 continue;
             }
-            let guarded = instance
-                .clone()
-                .as_interface::<dyn Conditional>()
-                .map(|g| g.guarded_regions())
-                .unwrap_or_default();
+            let guarded = region_facts(&instance);
             for sub in instance.regions() {
                 match guarded.iter().find(|&&(r, ..)| r == sub) {
                     Some(&(_, value, holds)) => {
@@ -713,6 +709,34 @@ impl Driver<'_> {
         let op = target.op().id;
         self.context.get_value(value).defining_op() == Some(op) || self.dominates_op(value, op)
     }
+}
+
+/// The assumption each of `op`'s regions runs under, read off the operation's own
+/// interfaces: a [`Conditional`]'s guarded arm runs on its decision holding, and a
+/// tested loop's body runs on the condition its test region yields — which holds on
+/// every iteration, since the condition is spelled over the ports' per-iteration
+/// heads. A region a structured operation states nothing about (a switch case, a
+/// loop's own test) carries no fact.
+fn region_facts(op: &crate::OpHandle) -> Vec<(RegionId, ValueId, bool)> {
+    if let Some(conditional) = op.clone().as_interface::<dyn Conditional>() {
+        return conditional.guarded_regions();
+    }
+    let Some(guard) = op.clone().as_interface::<dyn GuardedLoop>() else {
+        return Vec::new();
+    };
+    let EntryGuard::Region {
+        region: test,
+        condition,
+        ..
+    } = guard.entry_guard()
+    else {
+        return Vec::new();
+    };
+    op.regions()
+        .iter()
+        .filter(|&&region| region != test)
+        .map(|&region| (region, condition, true))
+        .collect()
 }
 
 /// How a literal is written down. A class holds one node per bit pattern however

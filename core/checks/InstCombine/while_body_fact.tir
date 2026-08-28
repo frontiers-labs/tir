@@ -1,0 +1,25 @@
+// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+
+// A tested loop's body runs under the condition its test yields. The condition
+// is spelled over the ports' per-iteration heads, so it holds on every
+// iteration: this body knows its two carried values are equal.
+
+module {
+  %fn_equal_body = func.func @equal_body(%n: !i64, %acc: !i64) -> !i64 {
+    %r = scf.while iter_args(%a = %acc, %i = %n) -> !i64, !i64 {
+      %c = cmpi %i, %a {predicate = "eq"} : !i1
+      scf.condition %c, %a, %i
+    } do scope(%tok)(%ca, %ci) {
+      %d = subi %ci, %ca : !i64
+      scf.yield %d, %ci
+    }
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @equal_body
+// CHECK: do scope
+// CHECK-NEXT: constant {value = 0} : !i64
+// CHECK-NOT: subi
