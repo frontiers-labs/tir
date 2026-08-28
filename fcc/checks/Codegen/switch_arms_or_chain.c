@@ -1,11 +1,11 @@
 // RUN: fcc compile --stage asm --march x86_64 -o - %s | filecheck %s
 
-// The shape instruction selection is quadratic on: an `||` chain nests one
-// assumption scope per test and a dense switch nests one more per arm, so each
-// arm is covered under the whole stack of conditions proven above it. Selection
-// must still spell every arm as the plain add it is, and must still use what the
-// scope proves - the first two arms compare against the registers the chain
-// above already pinned to 0 and 1 rather than against fresh immediates.
+// The shape that used to make instruction selection quadratic: an `||` chain and
+// a dense switch, one guarded arm per test. The facts are the mid-end's now — an
+// arm that is entered only when `value` equals its case computes over that
+// literal — so every arm arrives at selection already folded and is spelled as
+// the single move it is. The chain above still pins its first two comparisons to
+// the registers holding 0 and 1.
 
 int classify(int value, int flag)
 {
@@ -28,12 +28,12 @@ int classify(int value, int flag)
 
 // CHECK: classify:
 // CHECK: cmp eax, edi
-// CHECK: add edi, 100
+// CHECK: mov eax, 100
 // CHECK: cmp ecx, edi
-// CHECK: add edi, 101
+// CHECK: mov eax, 102
 // CHECK: cmp edi, 2
-// CHECK: add edi, 102
+// CHECK: mov eax, 104
 // CHECK: cmp edi, 3
-// CHECK: add edi, 103
+// CHECK: mov eax, 106
 // CHECK: cmp edi, 5
-// CHECK: add edi, 105
+// CHECK: mov eax, 110

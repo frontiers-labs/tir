@@ -31,7 +31,11 @@ use crate::analysis::scopes;
 use crate::{
     AnalysisManager, BlockId, Conditional, ConstantLike, Context, LoopLike, MemoryRead,
     MemoryWrite, OpId, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId,
-    ValueId, builtin::StateType, func::FuncOp, utils::APInt,
+    ValueId,
+    attributes::AttributeValue,
+    builtin::{StateType, ops},
+    func::FuncOp,
+    utils::APInt,
 };
 
 use crate::sem::node::cost;
@@ -436,18 +440,51 @@ impl Driver<'_> {
     }
 
     /// Assume `value == holds` in the current context by unioning its class with the
-    /// matching boolean constant.
+    /// matching boolean constant. An equality the assumption settles says more than
+    /// the truth of the condition: the two operands name one value there, so their
+    /// classes are merged as well and every term over either is a term over the
+    /// cheapest form of both — the literal, where one side is one.
     fn inject(&mut self, value: ValueId, holds: bool) {
-        let cond = self
-            .value_class
-            .get(&value)
-            .copied()
-            .unwrap_or_else(|| self.eg.add(Node::input(value)));
+        let cond = self.class_of(value);
         let constant = self
             .eg
             .add(Node::constant(APInt::new(1, holds as u64), Prov::None));
         self.eg.union(cond, constant);
+        if let Some((lhs, rhs)) = self.settled_equality(value, holds) {
+            self.eg.union(lhs, rhs);
+        }
         self.eg.rebuild();
+    }
+
+    /// The operand classes a guard proves congruent: an `eq` that holds, or a
+    /// `ne` that does not.
+    fn settled_equality(&mut self, value: ValueId, holds: bool) -> Option<(Id, Id)> {
+        let op = self.context.get_value(value).defining_op()?;
+        let instance = self.context.get_op(op);
+        if !instance.is::<ops::CmpIOp>() {
+            return None;
+        }
+        let AttributeValue::Str(predicate) = instance.attr("predicate")? else {
+            return None;
+        };
+        let equal = match &*predicate {
+            "eq" => holds,
+            "ne" => !holds,
+            _ => return None,
+        };
+        let [lhs, rhs] = instance.operands()[..] else {
+            return None;
+        };
+        equal.then(|| (self.class_of(lhs), self.class_of(rhs)))
+    }
+
+    /// The class standing for `value`, anchoring it as an opaque leaf if the
+    /// seeding named none.
+    fn class_of(&mut self, value: ValueId) -> Id {
+        self.value_class
+            .get(&value)
+            .copied()
+            .unwrap_or_else(|| self.eg.add(Node::input(value)))
     }
 
     /// Rebuild the value of `class`'s cheapest node: an existing value is reused, a
