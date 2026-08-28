@@ -1,8 +1,9 @@
-// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // The slot's address never leaves the function, so it is a memory of its own and
 // no call is on its chain: the first write is overwritten with nothing able to
-// read it back, however much memory the call between them touches.
+// read it back, however much memory the call between them touches. The slot is
+// then a value, and the call keeps the chain it does reach.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
@@ -20,6 +21,6 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NOT: ptr.store %0,
+// CHECK-NOT: ptr.
 // CHECK: func.call
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK-NEXT: func.return %2

@@ -1,7 +1,7 @@
 // RUN: fcc compile --stage asm --march x86_64 -o - %s | filecheck %s
 // RUN: fcc compile --stage ir -o /tmp/fcc-matmul-dynamic.tir %s
-// RUN: tir opt --pass func.func(thread-state,instcombine,sccp,dce,dse) -o /tmp/fcc-matmul-dynamic.base /tmp/fcc-matmul-dynamic.tir
-// RUN: tir opt --pass func.func(thread-state,instcombine,sccp,dce,dse,affine) -o /tmp/fcc-matmul-dynamic.affine /tmp/fcc-matmul-dynamic.tir
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) -o /tmp/fcc-matmul-dynamic.base /tmp/fcc-matmul-dynamic.tir
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine,affine) -o /tmp/fcc-matmul-dynamic.affine /tmp/fcc-matmul-dynamic.tir
 // RUN: cmp /tmp/fcc-matmul-dynamic.base /tmp/fcc-matmul-dynamic.affine
 
 // The shape C code actually has: plain pointers and a row length nothing knows.

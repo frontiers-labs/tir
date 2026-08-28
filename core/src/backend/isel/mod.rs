@@ -2090,6 +2090,18 @@ impl InstructionSelectPass {
                     .map(|position| (class, position))
             })
             .collect();
+        // A destruction's values are read by a branch that replaces something: the
+        // structured operation itself, where this block holds it (its zero-trip
+        // guard runs before it), or else this block's own terminator.
+        for &(op, _, class) in fs.region_aux.get(&block_id).into_iter().flatten() {
+            let position = op_ids
+                .iter()
+                .position(|candidate| *candidate == op)
+                .unwrap_or(op_ids.len() - 1);
+            positions
+                .entry(fs.chase_low_extract(fs.egraph.find(class)))
+                .or_insert(position);
+        }
         // Pull each pure tile up to its earliest consumer's position: surviving
         // mid-block ops (calls) and other tiles read their operands in block
         // order, so a tile must precede every consumer even when its original op
@@ -2119,18 +2131,6 @@ impl InstructionSelectPass {
             if !changed {
                 break;
             }
-        }
-        // A destruction's values are read by a branch that replaces something: the
-        // structured operation itself, where this block holds it (its zero-trip
-        // guard runs before it), or else this block's own terminator.
-        for &(op, _, class) in fs.region_aux.get(&block_id).into_iter().flatten() {
-            let position = op_ids
-                .iter()
-                .position(|candidate| *candidate == op)
-                .unwrap_or(op_ids.len() - 1);
-            positions
-                .entry(fs.chase_low_extract(fs.egraph.find(class)))
-                .or_insert(position);
         }
         let tiles = schedule_tiles(&fs.egraph, &matches, &root_match, &positions)
             .ok_or_else(|| format!("cyclic instruction schedule for {block_id:?}"))?;

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // The slot's own pointer is stored into another slot, so its contents may be
 // reached by a name the term graph never sees. Distributing over the arms of a

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // Two slots the test region updates, one reading the other. The second port is
 // asked for from inside the arm, where the arm's own assumption makes the whole

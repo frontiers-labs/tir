@@ -1,0 +1,27 @@
+// RUN: tir opt --pass instcombine --verify %s | filecheck %s
+
+// The latch is a term over the port, not the port itself, so no fixpoint a
+// bottom-up saturation reaches says what the loop carries. Hypothesise that the
+// port holds the constant the loop was entered on: under that assumption the
+// latch folds to that same constant, no edge back into the port refutes it, and
+// the hypothesis is a fact of the base graph — every read of the port, inside
+// the loop and after it, is the literal.
+
+module {
+  %fn_f = func.func @f(%0: !index, %1: !index, %2: !index) -> !i32 {
+    %3 = constant {value = 7} : !i32
+    %4 = constant {value = 0} : !i32
+    %5 = scf.for %0, %1, %2 iter_args(%6 = %3) -> !i32 {
+      %7 = addi %6, %4 : !i32
+      scf.yield %7
+    }
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: %[[SEVEN:[0-9]+]] = constant {value = 7} : !i32
+// CHECK: scf.for
+// CHECK-NOT: addi
+// CHECK: func.return %[[SEVEN]]

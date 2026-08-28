@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // A slot written twice: the second store covers the extent the first one wrote
 // and nothing reads the state between them, so the first store is not there to

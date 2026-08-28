@@ -1,10 +1,9 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
-// The laws compose. The state a loop carries is a θ whose latch is the gate the
-// body ends on, so a read of the flag distributes over the θ, then over that
-// gate, and store-to-load forwarding answers the arm that wrote — the arm that
-// did not yields the carry itself, which inside the body is the port argument.
-// The condition's read of the flag becomes the argument it tests.
+// Two slots written under one gate inside a loop. Each becomes a port of the
+// loop: the arm that writes yields what it wrote, the arm that does not yields
+// the port argument, and the condition's read of the flag is the argument it
+// tests.
 //
 // The value slot is never written before the loop, so the value it carries in is
 // a read of what the slot holds there, and the slot stays in memory around it.
@@ -38,13 +37,13 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @find
 // CHECK-NOT: ptr.alloca {size = 1
 // CHECK: %[[INIT:[0-9]+]] = ptr.load %3 : !i32
-// CHECK: %[[RESULT:[0-9]+]], %{{[0-9]+}} = scf.while iter_args(%[[VALUE:[0-9]+]] = %[[INIT]], %[[FLAG:[0-9]+]] = %4) -> !i32, !i1 {
-// CHECK-NEXT: scf.condition %[[FLAG]], %[[VALUE]], %[[FLAG]]
+// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] = scf.while iter_args(%[[FLAG:[0-9]+]] = %4, %[[VALUE:[0-9]+]] = %[[INIT]]) -> !i1, !i32 {
+// CHECK-NEXT: scf.condition %[[FLAG]], %[[FLAG]], %[[VALUE]]
 // CHECK-NEXT: }
-// CHECK-NEXT: do(%[[BODY:[0-9]+]], %[[BODYFLAG:[0-9]+]]) {
-// CHECK-NEXT: %[[TAKEN:[0-9]+]], %[[SET:[0-9]+]] = scf.if %0 -> !i32, !i1 {
-// CHECK: scf.yield %1, %[[ONE:[0-9]+]]
+// CHECK-NEXT: do(%[[BODYFLAG:[0-9]+]], %[[BODY:[0-9]+]]) {
+// CHECK-NEXT: %[[SET:[0-9]+]], %[[TAKEN:[0-9]+]] = scf.if %0 -> !i1, !i32 {
+// CHECK: scf.yield %[[ONE:[0-9]+]], %1
 // CHECK: else {
-// CHECK-NEXT: scf.yield %[[BODY]], %[[BODYFLAG]]
-// CHECK: scf.yield %[[TAKEN]], %[[SET]]
+// CHECK-NEXT: scf.yield %[[BODYFLAG]], %[[BODY]]
+// CHECK: scf.yield %[[SET]], %[[TAKEN]]
 // CHECK: func.return %[[RESULT]]

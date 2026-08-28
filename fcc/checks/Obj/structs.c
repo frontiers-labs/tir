@@ -11,12 +11,17 @@
 // A64: Symbol read:
 // A64: Symbol copy:
 
+// `copy` writes one field of a local and copies the whole struct into another
+// local; neither leaves the function, so nothing observes the memory and the
+// return value is the literal it was given.
 // RVASM: read:
 // RVASM-NEXT: {{(c\.)?lw}} {{.*}}, 4({{.*}})
 // RVASM: copy:
-// RVASM: sw
+// RVASM-NEXT: addi {{.*}}, {{.*}}, 37
+// RVASM-NOT: sw
 
 // A64ASM: read:
 // A64ASM-NEXT: ldr {{.*}}, [{{.*}}, 4]
 // A64ASM: copy:
-// A64ASM: str
+// A64ASM-NEXT: movz {{.*}}, 37
+// A64ASM-NOT: str

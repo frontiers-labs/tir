@@ -1,8 +1,8 @@
-// RUN: tir opt --pass func.func(sccp) %s | filecheck %s
+// RUN: tir opt --pass instcombine --verify %s | filecheck %s
 
-// A port carrying the same literal round every iteration is that literal at
-// every read of it, inside the loop and after it. A port the body increments
-// gives up: it is not the same value twice.
+// A port every edge carries round unchanged is the value the loop was entered
+// with, at every read of it inside the loop and after it. A port the body
+// increments is refuted: it is not the same value twice.
 
 module {
   %fn_f = func.func @f(%lb: !index, %ub: !index, %step: !index) -> !i32 {
@@ -19,9 +19,10 @@ module {
   module_end
 }
 
-// CHECK: %{{[0-9]+}}, %[[N:[0-9]+]] = scf.for
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[C:[0-9]+]] = constant {value = 7} : !i32
+// CHECK: %{{[0-9]+}}, %[[N:[0-9]+]] = scf.for
 // CHECK: %[[NEXT:[0-9]+]] = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
 // CHECK-NEXT: scf.yield %[[C]], %[[NEXT]]
-// CHECK: %[[SUM:[0-9]+]] = addi %{{[0-9]+}}, %[[N]] : !i32
+// CHECK: %[[SUM:[0-9]+]] = addi %[[C]], %[[N]] : !i32
 // CHECK-NEXT: func.return %[[SUM]]

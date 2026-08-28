@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // The shape restructuring leaves a `goto`/`while` loop in: the whole body sits
 // in the condition region, so the update happens before `scf.condition` and the

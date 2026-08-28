@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // The read a law distributes into an arm that stores nothing is emitted where
 // the state it reads is published — here the allocation itself, since nothing

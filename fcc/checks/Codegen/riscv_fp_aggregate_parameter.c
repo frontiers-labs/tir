@@ -22,8 +22,11 @@ double pair_sum(struct Pair pair) {
 // CHECK: %{{[0-9]+}} = func.func @scalar_value(%{{[0-9]+}}: !f64) -> !f64 {
 // CHECK: %{{[0-9]+}} = func.func @pair_sum(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !f64) -> !f64 {
 
+// A one-field aggregate is one register: the slot the frontend spelled for it is
+// local, whole and of one type, so construction carries its value and the
+// function stores nothing.
 // ASM-LABEL: scalar_value:
-// ASM: fsd f10, 0({{.*}})
+// ASM-NOT: fsd
 // ASM-LABEL: pair_sum:
 // ASM: fsd f10, 0({{.*}})
 // ASM: fsd f11, 8({{.*}})

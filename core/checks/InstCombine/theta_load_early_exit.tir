@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // A body leaving through `scf.break` never reaches its yield, so the break edge
 // is where the slot's value leaves the loop. The carried port is fed on that

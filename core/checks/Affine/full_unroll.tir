@@ -1,15 +1,15 @@
-// RUN: tir opt --pass func.func(thread-state,affine,sccp,instcombine,dce) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(thread-state,affine,instcombine) --verify %s | filecheck %s
 
 // Four iterations of a small body: the loop is replaced by the four copies, each
 // naming its counter outright, and folding turns what was an address computation
-// per iteration into four constants. Nothing here is a placement — the arranger
-// decides orders, not sizes.
+// per iteration into four constants. The array is a parameter, so the writes are
+// memory the caller reads. Nothing here is a placement — the arranger decides
+// orders, not sizes.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  %0 = func.func @fill(%1: !i32) {
-    %2 = ptr.alloca {size = 16, align = 4} : !ptr.p
+  %0 = func.func @fill(%1: !i32, %2: !ptr.p) {
     %3 = constant {value = 0} : !i32
     %4 = constant {value = 4} : !i32
     %5 = constant {value = 1} : !i32

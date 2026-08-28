@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // Distributing a read into an arm leaves a read of that arm's state, which is a
 // gate of its own where the arm holds one: the law names the operation rebuilding

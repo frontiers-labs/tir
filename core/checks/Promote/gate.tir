@@ -1,0 +1,31 @@
+// RUN: tir opt --pass promote --verify %s | filecheck %s
+
+// A local slot every access names whole is not memory. The gate that writes it
+// carries its value on a port of its own, the read after the gate is that port,
+// and the allocation goes.
+
+module {
+  %fn_f = func.func @f(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
+    %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    scf.if %0 {
+      ptr.store %1, %3
+      scf.yield
+    } else {
+      ptr.store %2, %3
+      scf.yield
+    }
+    %4 = ptr.load %3 : !i32
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NOT: ptr.
+// CHECK: %[[RESULT:[0-9]+]] = scf.if %0 -> !i32 {
+// CHECK-NEXT: scf.yield %1
+// CHECK-NEXT: }
+// CHECK: else {
+// CHECK-NEXT: scf.yield %2
+// CHECK-NEXT: }
+// CHECK-NEXT: func.return %[[RESULT]]

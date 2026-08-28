@@ -1,11 +1,11 @@
-// RUN: tir opt --pass func.func(thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // Law S2 says the overwritten store leaves the state it was handed. Where the
 // two stores agree on everything but that state they are one node apart from it,
 // so unioning the inner one's result with the state before it makes the
 // overwriting store congruent to the store it replaced — and the chain collapses
 // into the state it started from, both writes gone rather than one. The law is
-// refused there; `dse` removes the earlier write on the chain instead.
+// refused there: the term does not say the memory already holds the value.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 

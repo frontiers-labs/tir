@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use crate::analysis::{Escape, EscapeFacts};
 use crate::ptr::PtrAddOp;
-use crate::{Context, MemoryRead, MemoryWrite, OpId, PromotableAllocation, ValueId};
+use crate::{Context, MemoryRead, MemoryWrite, OpId, PromotableAllocation, TypeId, ValueId};
 
 /// What is known about one allocated stack slot across the operations it was
 /// collected from.
@@ -82,7 +82,7 @@ pub fn collect_slots(
 
 /// The allocation a pointer names: arithmetic on a pointer points into the
 /// object it started from, so the chain of `ptradd`s reads back to it.
-pub fn slot_base(context: &Context, pointer: ValueId) -> ValueId {
+fn slot_base(context: &Context, pointer: ValueId) -> ValueId {
     let mut base = pointer;
     while let Some(defining) = context.get_value(base).defining_op() {
         let instance = context.get_op(defining);
@@ -94,11 +94,12 @@ pub fn slot_base(context: &Context, pointer: ValueId) -> ValueId {
     base
 }
 
-/// Whether the slot's loads and stores all name one type. Promotion reconstructs
-/// a single SSA value per slot and substitutes it for the loads, so a slot whose
-/// values disagree on type — a frontend spelling one pointer both opaque and
-/// typed, say — has no type to give that value and stays in memory.
-pub fn values_agree_on_type(context: &Context, state: &SlotState) -> bool {
+/// The one type the slot's loads and stores name, or `None` where they disagree.
+/// Promotion carries a single value per slot and substitutes it for the loads,
+/// so a slot whose accesses disagree on type — a frontend spelling one pointer
+/// both opaque and typed, say — has no type to give that value and stays in
+/// memory. A slot nothing accesses has no type either, and nothing to carry.
+pub fn agreed_value_type(context: &Context, state: &SlotState) -> Option<TypeId> {
     let mut types = state
         .loads
         .iter()
@@ -110,14 +111,12 @@ pub fn values_agree_on_type(context: &Context, state: &SlotState) -> bool {
                 .map(|&store| store_value(context, store)),
         )
         .map(|value| context.get_value(value).ty());
-    let Some(ty) = types.next() else {
-        return true;
-    };
-    types.all(|other| other == ty)
+    let ty = types.next()?;
+    types.all(|other| other == ty).then_some(ty)
 }
 
 /// The value a collected store writes.
-pub fn store_value(context: &Context, store: OpId) -> ValueId {
+fn store_value(context: &Context, store: OpId) -> ValueId {
     context
         .get_op(store)
         .as_interface::<dyn MemoryWrite>()

@@ -30,20 +30,20 @@ use harness::Outcome;
 /// neutral orderings of the registered passes; a correct compiler must give
 /// identical behavior under each.
 const EXTRA_PIPELINES: [&str; 4] = [
-    "func.func(thread-state,instcombine,sccp,dce,affine,instcombine,dse)",
-    "func.func(thread-state,sccp,dce,dse,affine)",
-    "func.func(thread-state,instcombine,sccp,instcombine,sccp,dse)",
+    "func.func(promote,thread-state,instcombine,affine,instcombine)",
+    "func.func(promote,thread-state,affine,instcombine)",
+    "func.func(promote,thread-state,instcombine,instcombine)",
     // Scheduling with nothing folded before it and nothing after: the rebuilt
     // nest has to be right on its own, not because a later pass tidied it.
-    "func.func(thread-state,affine,dse)",
+    "func.func(promote,thread-state,affine)",
 ];
 
 /// The pipeline that proves the state edges are the whole memory order: every
 /// block is re-linearized by another topological order of the value and state
 /// DAG, once on the threaded IR and once more on what the optimizers left. A
 /// divergence under it is an edge the threader did not draw.
-const SHUFFLE_PIPELINE: &str = "func.func(thread-state,shuffle-state,instcombine,\
-                                sccp,dce,shuffle-state,dse,affine,shuffle-state)";
+const SHUFFLE_PIPELINE: &str = "func.func(promote,thread-state,shuffle-state,instcombine,\
+                                shuffle-state,affine,shuffle-state)";
 
 const CORPUS_DIRS: [&str; 3] = ["fcc/checks", "fcc/tests", "utils/unit-tests/src/fcc/corpus"];
 

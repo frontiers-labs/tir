@@ -195,19 +195,54 @@ fn sweep_dead_slots(
         {
             continue;
         }
-        // The sweep erases the slot's accesses and its allocation. Anything else
-        // still naming the address — the pointer arithmetic a derived access was
-        // reached through — would be left reading a definition that is gone.
-        let accessed = |op: &OpId| slot.loads.contains(op) || slot.stores.contains(op);
-        if !index.users_of(pointer.number()).iter().all(accessed) {
+        // The sweep erases the slot's accesses, the arithmetic that named them
+        // and its allocation. Anything else still holding the address would be
+        // left reading a definition that is gone.
+        let Some(derived) = slot_addresses(context, index, &slot, pointer) else {
             continue;
-        }
-        for op_id in slot.loads.into_iter().chain(slot.stores).chain([alloca]) {
+        };
+        for op_id in slot
+            .loads
+            .iter()
+            .copied()
+            .chain(slot.stores.iter().copied())
+            .chain(derived)
+            .chain([alloca])
+        {
             let block = context.parent_block(op_id).map(|id| context.get_block(id));
             rewriter.erase_op(&OperationRef::new(context.get_op(op_id), block, None))?;
         }
     }
     Ok(())
+}
+
+/// The arithmetic naming a slot's address, innermost last: a `ptradd` from the
+/// allocation, or from another such `ptradd`, whose readers are the slot's own
+/// accesses and more of the same. `None` where anything else holds the address —
+/// the slot is then not the sweep's to erase.
+fn slot_addresses(
+    context: &Context,
+    index: &DefUse,
+    slot: &crate::analysis::slots::SlotState,
+    pointer: crate::ValueId,
+) -> Option<Vec<OpId>> {
+    let mut derived = Vec::new();
+    let mut pending = vec![pointer];
+    while let Some(address) = pending.pop() {
+        for &user in index.users_of(address.number()) {
+            if slot.loads.contains(&user) || slot.stores.contains(&user) {
+                continue;
+            }
+            let instance = context.get_op(user);
+            if !instance.is::<crate::ptr::PtrAddOp>() {
+                return None;
+            }
+            derived.push(user);
+            pending.extend(instance.results().first().copied());
+        }
+    }
+    derived.reverse();
+    Some(derived)
 }
 
 fn drop_trailing_state_operands(context: &Context, op: OpId, state: TypeId) {

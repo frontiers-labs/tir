@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // The `restrict` counterpart of `may_alias_parameter_kept`: the qualifier says
 // the write through the other parameter cannot be a read of this one, so the

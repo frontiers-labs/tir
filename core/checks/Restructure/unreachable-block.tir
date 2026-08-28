@@ -1,0 +1,21 @@
+// RUN: tir opt --pass func.func(restructure) --verify %s | filecheck %s
+
+// Nothing branches to ^bb1, so no execution reaches it. Construction reads the
+// control-flow graph from its entry, and a block it never reaches is not part of
+// the structure it builds: the block and everything it held go.
+
+module {
+  %fn_f = func.func @f(%a: !i32) -> !i32 {
+    cfg.br ^bb2
+  ^bb1:
+    %0 = constant {value = 3} : !i32
+    func.return %0
+  ^bb2:
+    func.return %a
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NOT: constant
+// CHECK-NEXT: func.return

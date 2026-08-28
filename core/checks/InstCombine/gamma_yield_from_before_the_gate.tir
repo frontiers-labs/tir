@@ -1,0 +1,35 @@
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+
+// The arm that leaves the slot alone yields what the slot held on entry, which
+// is a definition from before the gate: a port carries a value out of a region,
+// and what feeds it is read where the arm sits. The read after the gate is the
+// port, and adding the initial value's zero to it folds away.
+
+module {
+  %fn_spell = func.func @spell(%0: !i1, %1: !i32) -> !i32 {
+    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = constant {value = 0} : !i32
+    ptr.store %3, %2
+    scf.if %0 {
+      ptr.store %1, %2
+      scf.yield
+    } else {
+      scf.yield
+    }
+    %4 = ptr.load %2 : !i32
+    %5 = addi %4, %3 : !i32
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @spell
+// CHECK-NOT: ptr.
+// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
+// CHECK: %[[RESULT:[0-9]+]] = scf.if %0 -> !i32 {
+// CHECK-NEXT: scf.yield %1
+// CHECK-NEXT: }
+// CHECK: else {
+// CHECK-NEXT: scf.yield %[[ZERO]]
+// CHECK-NEXT: }
+// CHECK-NEXT: func.return %[[RESULT]]

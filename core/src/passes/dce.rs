@@ -3,20 +3,16 @@
 //! unused, retiring the erased op's reads so newly dead producers are revisited
 //! without rescanning.
 //!
-//! A block no execution reaches is dead the same way: `sccp` leaves its
-//! executability in [`ConstantFacts`], and the blocks it never reached go with
-//! everything they held.
-//!
 //! In backend pipelines it must run before register allocation — a
 //! physical-register write counts as a side effect, so nothing is eligible
 //! after allocation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crate::analysis::{ConstantFacts, DefUse, execution_regs, op_regs};
+use crate::analysis::{DefUse, execution_regs, op_regs};
 use crate::backend::SymbolOp;
 use crate::{
-    AnalysisManager, BlockId, Context, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
+    AnalysisManager, Context, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
     PassTarget, Rewriter, Terminator, func::FuncOp,
 };
 
@@ -54,118 +50,65 @@ impl Pass for DeadCodeEliminationPass {
         }
 
         let defuse = analyses.get::<DefUse>(context, op.op().id);
-        // Live read counts, retired as dead readers are erased.
-        let mut use_counts = defuse.use_counts();
-        // LIFO over walk order visits consumers before their producers.
-        let mut queue: Vec<_> = defuse.ops().to_vec();
-
-        while let Some(op_id) = queue.pop() {
-            if !context.has_operation(op_id) {
-                continue;
-            }
-            let instance = context.get_op(op_id);
-            if !is_erasable(&instance, &use_counts) {
-                continue;
-            }
-
-            let block = instance.parent_block().map(|b| context.get_block(b));
-            // Read before the erase: the op's storage goes away with it.
-            let used_regs = op_regs(&instance).uses;
-            rewriter.erase_op(&OperationRef::new(instance.clone(), block, None))?;
-
-            for used in used_regs {
-                let id = used.number();
-                if let Some(count) = use_counts.get_mut(&id) {
-                    *count -= 1;
-                    if *count == 0 {
-                        queue.extend_from_slice(defuse.defs_of(id));
-                    }
-                }
-            }
-        }
-
-        if op.as_op::<FuncOp>().is_some() {
-            erase_unreached_blocks(context, rewriter, analyses, op.op().id)?;
-        }
-        Ok(())
+        erase_dead(context, rewriter, &defuse)
     }
 }
 
-/// Erase every block no execution reaches, along with the operations it held. A
-/// block a surviving branch still names stays put: rewriting that branch is not
-/// this pass's business.
-fn erase_unreached_blocks(
+/// Erase every operation nothing can tell the absence of, cascading: an erased
+/// op's operands whose def is then unread are revisited without rescanning.
+///
+/// The cascade is what a rewrite leaves behind, so
+/// [`instcombine`](super::instcombine) runs it as part of its own commit; this
+/// pass is the same walk where no rewrite caused it — after instruction
+/// selection, which leaves values its fusions recomputed.
+pub(crate) fn erase_dead(
     context: &Context,
     rewriter: &mut Rewriter,
-    analyses: &AnalysisManager,
-    root: OpId,
+    defuse: &DefUse,
 ) -> Result<(), PassError> {
-    let facts = analyses.get::<ConstantFacts>(context, root);
-    for region in super::regions_under(context, root) {
-        if !context.has_region(region) {
+    // Live read counts, retired as dead readers are erased.
+    let mut use_counts = defuse.use_counts();
+    // LIFO over walk order visits consumers before their producers.
+    let mut queue: Vec<OpId> = defuse.ops().to_vec();
+
+    while let Some(op_id) = queue.pop() {
+        if !context.has_operation(op_id) {
             continue;
         }
-        let blocks = context.get_region(region).block_ids();
-        // A region control never entered says nothing about what is dead inside
-        // it: the solver only reasons about blocks it reached the entry of.
-        match blocks.first() {
-            Some(&entry) if facts.is_executable(entry) => {}
-            _ => continue,
+        let instance = context.get_op(op_id);
+        if !is_erasable(&instance, &use_counts) {
+            continue;
         }
-        // What survives: the blocks control reaches, and — since no branch is
-        // rewritten here — whatever a surviving branch still names, transitively.
-        let mut kept: HashSet<BlockId> = blocks
-            .iter()
-            .copied()
-            .filter(|&block| facts.is_executable(block))
-            .collect();
-        let mut queue: Vec<BlockId> = blocks
-            .iter()
-            .copied()
-            .filter(|block| kept.contains(block))
-            .collect();
-        while let Some(block) = queue.pop() {
-            for successor in successors(context, block) {
-                if kept.insert(successor) {
-                    queue.push(successor);
+
+        let block = instance.parent_block().map(|b| context.get_block(b));
+        // Read before the erase: the op's storage goes away with it.
+        let used_regs = op_regs(&instance).uses;
+        rewriter.erase_op(&OperationRef::new(instance.clone(), block, None))?;
+
+        for used in used_regs {
+            let id = used.number();
+            if let Some(count) = use_counts.get_mut(&id) {
+                *count -= 1;
+                if *count == 0 {
+                    queue.extend_from_slice(defuse.defs_of(id));
                 }
             }
-        }
-        for &block in &blocks {
-            if kept.contains(&block) {
-                continue;
-            }
-            let handle = context.get_block(block);
-            for op_id in handle.op_ids().into_iter().rev() {
-                let target = OperationRef::new(context.get_op(op_id), Some(handle.clone()), None);
-                rewriter.erase_op(&target)?;
-            }
-            rewriter.erase_block(block);
         }
     }
     Ok(())
 }
 
-/// The blocks `block`'s terminator branches to.
-fn successors(context: &Context, block: BlockId) -> Vec<BlockId> {
-    context
-        .get_block(block)
-        .op_ids()
-        .last()
-        .map(|&terminator| context.get_op(terminator))
-        .and_then(|terminator| terminator.as_interface::<dyn Terminator>())
-        .map(|terminator| terminator.successors())
-        .unwrap_or_default()
-}
-
-/// A pure value-producing op whose every virtual def is unused. Nested regions,
-/// a terminator, a memory write, or any physical-register write keep it; a
+/// An op whose every virtual def is unused and whose absence nothing else can
+/// tell. Nested regions, a terminator, or any physical-register write keep it; a
 /// mid-end op with SSA results must additionally declare pure semantics, so
 /// effectful ops like calls survive even when their result is unread.
+///
+/// A write to memory is the exception the state chains buy: what it publishes is
+/// the whole of what anything can observe about it, so a write no state reads is
+/// a write nobody can tell happened. Where no chain is threaded it publishes
+/// nothing, defines nothing, and the last test below leaves it alone.
 fn is_erasable(instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
-    if !instance.regions().is_empty()
-        || instance.clone().as_interface::<dyn Terminator>().is_some()
-        || instance.clone().as_interface::<dyn MemoryWrite>().is_some()
+    if !instance.regions().is_empty() || instance.clone().as_interface::<dyn Terminator>().is_some()
     {
         return false;
     }
@@ -175,9 +118,15 @@ fn is_erasable(instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
     let machine = instance
         .clone()
         .as_interface::<dyn crate::backend::MachineInstruction>();
+    let writes_memory = instance.has_interface::<dyn MemoryWrite>();
     match &machine {
         Some(mi) if mi.info().effects.writes => return false,
-        None if !instance.results().is_empty() && !super::is_pure_value(instance) => return false,
+        None if !instance.results().is_empty()
+            && !writes_memory
+            && !super::is_pure_value(instance) =>
+        {
+            return false;
+        }
         _ => {}
     }
 

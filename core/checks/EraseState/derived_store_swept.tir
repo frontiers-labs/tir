@@ -1,9 +1,9 @@
 // RUN: tir opt --pass thread-state --pass erase-state --verify %s | filecheck %s
 
 // Pointer arithmetic keeps the address inside the function, so a slot only ever
-// written through it is still a memory nothing reads: the write goes. The
-// allocation stays — the arithmetic still names it, and erasing what a surviving
-// operand reads is not this pass's business.
+// written through it is still a memory nothing reads: the write goes, and so do
+// the allocation and the arithmetic that named it. Nothing else holds the
+// address, so the arithmetic serves the slot and nothing else.
 
 module {
   %fn_f = func.func @f(%0: !i32) {
@@ -17,5 +17,5 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NOT: ptr.store
-// CHECK: ptr.alloca
+// CHECK-NOT: ptr.
+// CHECK: func.return

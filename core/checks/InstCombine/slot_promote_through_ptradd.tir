@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // Pointer arithmetic does not let an address out of the function, so a slot only
 // reached through it is still a memory of its own: its accesses get a chain the

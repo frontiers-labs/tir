@@ -3,7 +3,7 @@
 //! A loop whose trip count is a small constant and whose body is small becomes
 //! that many copies of the body, each with the counter spelled as the literal it
 //! takes. Nothing is decided here: what makes the copies worth their size is
-//! that the address arithmetic in them folds, which `sccp` and `instcombine` do
+//! that the address arithmetic in them folds, which `instcombine` does
 //! afterwards.
 
 use std::collections::HashMap;

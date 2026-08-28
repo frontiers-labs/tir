@@ -10,7 +10,6 @@
 
 use crate::BlockHandle;
 
-use crate::analysis::DominatorTree;
 use crate::builtin::TokenType;
 use crate::{BlockId, Context, OpHandle, OpId, RegionId, ValueId, ValueIds, scf};
 
@@ -167,41 +166,23 @@ pub fn is_module_level(context: &Context, value: ValueId) -> bool {
 
 /// Whether a definition in `block` — `def`, or a block argument where there is
 /// none — is in scope at `op`.
-pub fn precedes(
-    context: &Context,
-    dom: &DominatorTree,
-    block: BlockId,
-    def: Option<OpId>,
-    op: OpId,
-) -> bool {
+///
+/// The region tree is the dominance: what a block defines is in scope in that
+/// block after the definition, and inside the regions the operations after it
+/// hold. Nothing here computes a dominator tree, because a structured region has
+/// one block and a block reaches only what it encloses.
+pub fn precedes(context: &Context, block: BlockId, def: Option<OpId>, op: OpId) -> bool {
     let Some(ob) = context.get_op(op).parent_block() else {
         return false;
     };
-    // A block argument precedes every op in its block.
-    let Some(def) = def else {
-        return block == ob || dom.dominates(block, ob);
-    };
-    if block != ob {
-        return dom.dominates(block, ob)
-            && holder_in(context, block, ob)
-                .is_none_or(|holder| context.get_block(block).is_before(def, holder));
-    }
-    context.get_block(block).is_before(def, op)
-}
-
-/// Whether `a`, defined in `ab`, is in scope in `bb`. A block dominates the
-/// blocks of the regions its operations hold, but only the part of it that runs
-/// before the holding operation reaches inside, so `a` must precede that
-/// operation. Vacuously true when `bb` is not nested under `ab`.
-pub fn reaches_into(context: &Context, a: ValueId, ab: BlockId, bb: BlockId) -> bool {
-    let Some(holder) = holder_in(context, ab, bb) else {
-        return true;
-    };
-    match context.get_value(a).defining_op() {
-        Some(a_op) => context.get_block(ab).is_before(a_op, holder),
+    if block == ob {
         // A block argument precedes every op in its block.
-        None => true,
+        return def.is_none_or(|def| context.get_block(block).is_before(def, op));
     }
+    let Some(holder) = holder_in(context, block, ob) else {
+        return false;
+    };
+    def.is_none_or(|def| context.get_block(block).is_before(def, holder))
 }
 
 /// The operation of `block` whose regions transitively contain `inner`.

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // A `scf.while` reads what it carries in its condition region and forwards it to
 // the body, so the port the commit grows enters both: the condition passes its

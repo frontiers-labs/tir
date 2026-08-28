@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // A parameter pointer is an object the analysis cannot tell apart from another
 // parameter's, so a write through one may be read back through the other and

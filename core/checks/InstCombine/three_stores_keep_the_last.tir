@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // Three writes to one address, alternating values. Law S2 may take the first
 // pair; taking the next one as well would make the surviving stores congruent to

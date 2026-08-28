@@ -1,0 +1,31 @@
+// RUN: tir opt --pass instcombine --verify %s | filecheck %s
+
+// Every edge back into a port refutes it, the body's latch and each `break`
+// leaving the loop's scope alike. The latch carries the constant the loop was
+// entered on and would prove the hypothesis on its own; the break carries
+// something else, so the port is not that constant and the read after the loop
+// is the loop's result.
+
+module {
+  %fn_f = func.func @f(%0: !i1, %1: !i32) -> !i32 {
+    %2 = constant {value = 7} : !i32
+    %3 = scf.while iter_args(%4 = %2) -> !i32 {
+      scf.condition %0, %4
+    } do scope(%5)(%6) {
+      scf.if %0 {
+        scf.break %5, %1
+      } else {
+        scf.yield
+      }
+      %7 = constant {value = 7} : !i32
+      scf.yield %7
+    }
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%{{[0-9]+}} = %2) -> !i32 {
+// CHECK: scf.break %{{[0-9]+}}, %1
+// CHECK: func.return %[[RESULT]]

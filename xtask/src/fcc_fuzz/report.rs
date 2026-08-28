@@ -103,9 +103,10 @@ mod tests {
     fn failure() -> Failure {
         Failure {
             job: "differential-fuzz".into(),
-            summary: "sccp miscompiles a masked array store".into(),
-            identity: "func.func(thread-state,sccp,erase-state)\nint main(void) { return 0; }\n"
-                .into(),
+            summary: "instcombine miscompiles a masked array store".into(),
+            identity:
+                "func.func(thread-state,instcombine,erase-state)\nint main(void) { return 0; }\n"
+                    .into(),
             reproduce: "cargo xtask fcc-fuzz --seed 42 --iterations 1".into(),
             details: "line 1: expected \"7\", got \"9\"".into(),
             artifact: "int main(void) { return 0; }\n".into(),

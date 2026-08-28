@@ -160,10 +160,10 @@ mod tests {
 
     #[test]
     fn drops_every_pass_the_divergence_does_not_need() {
-        let pipeline = "func.func(thread-state,instcombine,sccp,dce,instcombine)";
+        let pipeline = "func.func(thread-state,instcombine,promote,dce,instcombine)";
 
-        let minimal = bisect_pipeline(pipeline, &mut |candidate| candidate.contains("sccp"));
+        let minimal = bisect_pipeline(pipeline, &mut |candidate| candidate.contains("promote"));
 
-        assert_eq!(minimal, "func.func(thread-state,sccp)");
+        assert_eq!(minimal, "func.func(thread-state,promote)");
     }
 }

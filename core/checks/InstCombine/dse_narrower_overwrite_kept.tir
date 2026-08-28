@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // The two writes start at the same address, but the second covers four bytes of
 // the eight the first wrote: the other four are still readable, so the wider

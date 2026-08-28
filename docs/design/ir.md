@@ -280,6 +280,23 @@ Correctness is pinned two ways: LIT snapshots for the canonical hard shapes
 goto-into-switch), and a fuzz harness comparing execution of restructured
 versus original CFGs through the JIT.
 
+### 5.3 Demand annotation: the values on the ports
+
+Restructuring gives control structure over memory; construction is not done
+until the *values* are on ports. The `promote` pass is that last step, and it
+is construction, not optimization: for every stack slot whose address never
+leaves the function, whose accesses all name it whole and agree on one type,
+the region that reads it takes its value as an argument, the region that
+writes it yields it, and a loop that does either carries it. The allocation
+goes with the last access.
+
+The walk needs no dominance and places no φ — the region tree *is* the
+dominance — and it grows a port only where the value is demanded: a region
+that reads the slot before writing it, or a write something after the op can
+read. What stays a slot — an escaping address, arithmetic reaching part of
+it, accesses disagreeing on a type — keeps every access and reaches
+`thread-state` as the memory it is.
+
 ## 6. Memory: explicit state
 
 Memory identity and ordering are def-use edges over `!state` values, in the
@@ -372,12 +389,12 @@ missing edge is a divergence with a reproducer.
   fresh value, so the check is one walk of the whole tree.
 - A read's published state *is* the state it observed, so a transform erasing a
   read hands its readers — joins included — the state it took.
-- A store is *dead* iff the state it published reaches only writes covering its
-  extent: the chain is the barrier, and `dse` asks `AliasFacts` only what two
-  addresses are. Law S2 is the same statement inside the e-graph view. It is
-  also dead where the slot it writes has no reader at all — an allocation the
-  function never lets out of its frame and never loads, whose chain the walk
-  cannot follow past the ports it crosses.
+- A store is *dead* iff nothing that reads the bytes it wrote can tell the
+  memory it left from the memory before it: the chain is the barrier and the
+  extent is the question, and law S2 (§6.5) is that statement inside the e-graph
+  view. It is also dead where its own state is read by nothing at all — the
+  commit's sweep — and where the slot it writes has no reader, which
+  `erase-state` takes with the allocation at the backend boundary.
 
 ### 6.5 The state laws
 
@@ -387,17 +404,23 @@ bit-blaster has no memory model). What keeps them honest: both sides read
 the state operand, so a law that fires has already been told the accesses
 alias exactly.
 
+Both laws read the *extent* an access names — the object its address is
+derived from, the byte offset into it, and the byte count — rather than the
+address class alone, so `p + 4` and `p + 2 + 2` are the one extent they are.
+
 - **S1** load-over-store forwarding: `Load(Store(s,a,n,v), a, n) = v` at one
   IR type.
 - **S2** dead-store elimination: a write overwritten by the next write to
-  the same extent leaves the chain as it found it — where nothing else reads
-  that chain (checked against exported states).
+  the same extent leaves the chain as it found it — where nothing on either
+  state reads those bytes, no second write to the extent precedes it, no
+  operation outside the term graph observes either state, and the state it
+  was handed is not a loop's carried port.
 - **S3** disjoint-chain commutation: structural; asserted by test.
-- **Distribution** (restricted to non-escaping alloca chains, where loads
-  cannot trap and extents are known):
-  `Load(If(p, s₁, s₂), a, n) = If(p, Load(s₁,a,n), Load(s₂,a,n))`.
 
 Every *other* memory equality remains an SMT obligation or does not exist.
+Scalar promotion is not a law: it is construction (§5.1's demand annotation,
+the `promote` pass), and by the time the view is built a local slot's value
+is already a value the regions carry on ports.
 
 ## 7. Red views
 
@@ -435,9 +458,11 @@ outside identity.
   class).
 - `Conditional` seeds each result port as an `If`(decision, per-arm yields)
   term where the port is speculatable; otherwise the port anchors.
-- `LoopLike` seeds each carried port as a `Theta(init, latch)` projection.
-  Body-argument and output projections are **distinct terms** (conflating
-  them was a known defect of the previous implementation).
+- `LoopLike` seeds each carried *state* port as a `Theta(init, latch)`
+  projection. A value port every edge carries unchanged is unioned with what
+  the loop was entered on; one the body changes is recorded for the
+  hypothesis rounds below, which is what keeps the body argument and the
+  loop's result distinct terms.
 - Head-controlled loops compose: `If(guard₀, Theta(init, latch), init)` per
   port, with the guard term built in the e-graph from `GuardedLoop` —
   `lb < ub` for counted loops, the condition region seeded over the inits
@@ -455,20 +480,30 @@ rules generated from TMDL), and the state laws (§6.5). Loop unrolling is
 banned as a saturation rule (non-terminating); it is a structural clone via
 the tree-edit API.
 
+**Hypothesis scopes** are the optimism a sparse conditional solver has and a
+bottom-up saturation does not. Before the base graph is read, each loop's
+value ports are *hypothesised* to hold the constant the loop is entered on;
+the body saturates under that assumption in a scope of its own; a port some
+edge back into it refutes is dropped and the round runs again; what survives
+is unioned into the base graph. A nest is resolved under its own enclosing
+scope — an inner port entered on what an outer one carries is constant only
+while the outer hypothesis is open, and an outer port latched from an inner
+loop's result is unrefuted only once the inner one is proved. The mechanism
+is a lattice fact stated as a term, so it extends to any fact a term can
+state.
+
 **Extraction and commit.** Cost-based extraction (`OpCost`, class-dependent
 costs); commit stages a replacement region and lands it atomically (§2.5),
 or discards if not improved. Two properties matter:
 
-- Commit materializes only terms reachable from the region's results —
-  **dead code is not deleted, it is never rebuilt**. The mid-end needs no
-  DCE pass.
-- Commit may **materialize ports**: extraction can select a
-  `Theta(init, latch)` term that corresponds to no existing loop port, and
-  commit creates the port via the port-edit primitive. This is how
-  loop-carried memory becomes a loop-carried value (scalar promotion), and
-  it is the same capability hoisting-style extractions (LICM/PRE) use: an
-  e-class whose terms use no loop-body port can be placed in the parent
-  region.
+- A rewrite reroutes the readers of a value, and the operation that computed
+  it — and every operation only that one read — is dead from that moment.
+  The cascade is part of the commit, worklist-style, so the mid-end needs no
+  DCE pass. A write is dead the same way: the state it publishes is the whole
+  of what anything can observe about it.
+- Commit rewires values, not only op results: a block argument, one result of
+  many, a port a hypothesis proved constant. That is what makes constant
+  propagation an instance of the same commit rather than a pass of its own.
 
 **Consumers.** The canonicalizer pass ("instcombine") is a thin
 build–saturate–extract–commit driver. Instruction selection builds the same
@@ -504,8 +539,10 @@ and their single survivors:
 |---|---|---|
 | `core/src/sea` (parallel IR: arenas, kinds, raise/lower, view, commit) | second IR ≠ the IR | this design |
 | GSA / `gated_ssa.rs`, `SemNode::Merge(η/φ)` | derived gates from CFG; the structured form *states* gates | interfaces, read by the seeder |
-| `mem2reg` (both variants) | dominance/φ machinery obsolete by structure; forwarding is S1 + distribution; loop promotion is port-materializing commit | `thread-state` + view rewrites + shared escape classifier |
-| mid-end DCE pass | commit rebuilds only reachable terms | commit reachability (DCE remains for machine IR) |
+| `mem2reg` (both variants) | dominance/φ machinery obsolete by structure: the region tree *is* the dominance, and a local slot's value belongs on the ports construction should have put it on | `promote` (demand annotation) + `thread-state` + shared escape classifier |
+| mid-end DCE pass | a rewrite's cascade belongs to the commit that caused it | the commit's sweep (DCE remains for machine IR) |
+| `sccp` + `ConstantFacts` | a second engine for a fact the first one can state: constants are classes, reachability is a gate's own scope | the e-graph's scopes, hypothesis rounds included |
+| `dse` | same-chain overwrite is law S2 on terms; a slot with no reader is `erase-state`'s sweep | S2 (§6.5) + `erase-state` |
 | `scf_to_cfg` + `cfg_cleanup` | destruction lives inside emission and emits clean CFG once | destruction-at-emission |
 | three e-graph seeders (instcombine's, isel's `SemDagBuilder`, the sea view) | one program, one seeding | the §7.2 seeder |
 | eager `Value::uses` in the green core | derived data in ground truth | `DefUse` view |

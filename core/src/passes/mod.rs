@@ -2,28 +2,26 @@
 
 pub mod affine;
 pub mod dce;
-pub mod dse;
 pub mod erase_state;
 pub mod instcombine;
 pub mod lower_memory_intrinsics;
 pub mod lower_ptr_disjoint;
 pub mod materialize_symbol_addresses;
+pub mod promote;
 pub mod restructure;
-pub mod sccp;
 pub mod shuffle_state;
 pub mod symbol_uniqueness;
 pub mod thread_state;
 
 pub use affine::AffineSchedulePass;
 pub use dce::DeadCodeEliminationPass;
-pub use dse::DeadStoreEliminationPass;
 pub use erase_state::EraseStatePass;
 pub use instcombine::InstCombinePass;
 pub use lower_memory_intrinsics::LowerMemoryIntrinsicsPass;
 pub use lower_ptr_disjoint::LowerPtrDisjointPass;
 pub use materialize_symbol_addresses::MaterializeSymbolAddressesPass;
+pub use promote::PromotePass;
 pub use restructure::RestructurePass;
-pub use sccp::SccpPass;
 pub use shuffle_state::ShuffleStatePass;
 pub use symbol_uniqueness::CheckUniqueSymbolsPass;
 pub use thread_state::ThreadStatePass;

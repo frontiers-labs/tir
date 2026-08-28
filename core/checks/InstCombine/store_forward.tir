@@ -8,7 +8,7 @@ module {
     %2 = state.entry_state : !state
     ptr.store %1, %0 state(%2 -> %3)
     %4 = ptr.load %0 : !i32 state(%3)
-    func.return %4
+    func.return %4 state(%3)
   }
   module_end
 }

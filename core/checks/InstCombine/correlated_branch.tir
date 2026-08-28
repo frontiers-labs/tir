@@ -1,8 +1,8 @@
-// RUN: tir opt --pass func.func(sccp) %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure,instcombine) --verify %s | filecheck %s
 
-// ^bb1 is entered only through the edge that holds `%0`, so the same condition
-// re-tested there decides its own branch: the merge is reached on one edge
-// alone and takes the literal that edge carries.
+// The arm is entered only when the condition holds, so the same condition
+// re-tested inside it decides its own gate: the inner gate takes the arm the
+// fact selects and its class is the literal that arm yields.
 
 module {
   %fn_f = func.func @f(%a: !i32, %b: !i32) -> !i32 {
@@ -20,6 +20,7 @@ module {
   module_end
 }
 
-// CHECK: ^bb3(%{{[0-9]+}}: !i32):
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: scf.if
 // CHECK-NEXT: %[[C:[0-9]+]] = constant {value = 1} : !i32
-// CHECK-NEXT: func.return %[[C]]
+// CHECK: scf.yield %[[C]]

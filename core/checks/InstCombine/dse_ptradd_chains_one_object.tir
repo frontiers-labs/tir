@@ -1,8 +1,10 @@
-// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // Two spellings of one address: `+4` and `+2+2` land on the same byte of the
-// same object, so the write naming the state the first one published overwrites
-// every byte of it.
+// same object. The extent a law reads is the object an address is derived from
+// and the offset into it, so the two spellings are the one extent: the second
+// write overwrites the first, and the read after them takes its value. Nothing
+// then reads the slot at all, and the writes go with it.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
@@ -23,6 +25,6 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NOT: ptr.store %0,
-// CHECK: ptr.store %1, %7 state(%{{[0-9]+}} -> %{{[0-9]+}})
-// CHECK-NEXT: ptr.load %4
+// CHECK-NOT: ptr.store
+// CHECK-NOT: ptr.load
+// CHECK: func.return %1

@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use crate::analysis::escape_facts::is_pointer;
 use crate::analysis::solver::{FactDomain, Facts, Lattice, solve};
-use crate::analysis::{Analysis, AnalysisManager, ConstantFacts, DefUse, Escape, EscapeFacts};
+use crate::analysis::{Analysis, AnalysisManager, DefUse, Escape, EscapeFacts};
 use crate::builtin::GlobalOp;
 use crate::func::FuncOp;
 use crate::ptr::PtrAddOp;
@@ -182,7 +182,6 @@ impl Analysis for AliasFacts {
             context,
             root: op,
             defuse: analyses.get::<DefUse>(context, op),
-            constants: analyses.get::<ConstantFacts>(context, op),
         };
         Self {
             facts: solve(&derivation),
@@ -195,7 +194,6 @@ struct Derivation<'a> {
     context: &'a Context,
     root: OpId,
     defuse: Rc<DefUse>,
-    constants: Rc<ConstantFacts>,
 }
 
 impl FactDomain for Derivation<'_> {
@@ -267,8 +265,8 @@ impl FactDomain for Derivation<'_> {
                 PointerFact::Object { base, offset } => PointerFact::Object {
                     base: *base,
                     offset: offset.and_then(|offset| {
-                        let added = self.constants.constant(instance.operands()[1])?;
-                        Some(offset.wrapping_add(added.to_i64()))
+                        let added = constant_offset(self.context, instance.operands()[1])?;
+                        Some(offset.wrapping_add(added))
                     }),
                 },
                 other => other.clone(),
@@ -276,6 +274,20 @@ impl FactDomain for Derivation<'_> {
             facts.raise(instance.results()[0], derived);
         }
     }
+}
+
+/// The literal a value holds, where an operation states it outright. A `ptradd`
+/// whose offset is spelled any other way points somewhere in the object the
+/// analysis cannot name, so the fact it derives carries no offset.
+fn constant_offset(context: &Context, value: ValueId) -> Option<i64> {
+    let op = context.get_value(value).defining_op()?;
+    Some(
+        context
+            .get_op(op)
+            .as_interface::<dyn crate::ConstantLike>()?
+            .constant_value()
+            .to_i64(),
+    )
 }
 
 impl Derivation<'_> {

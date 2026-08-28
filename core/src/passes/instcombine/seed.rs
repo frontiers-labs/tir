@@ -11,8 +11,6 @@ use std::collections::{HashMap, HashSet};
 use tir_symbolic::egraph::{EGraph, Id};
 
 use crate::analysis::scopes::{carried_operands, port_edges, region_exit, tested_ports};
-use crate::analysis::slots::{collect_slots, values_agree_on_type};
-use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::builtin::StateType;
 use crate::sem::egraph::{minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
@@ -28,20 +26,38 @@ const STORE_OPERANDS: usize = 3;
 
 /// The seeded e-graph plus the driver's maps: each value's class, each block
 /// argument's block, the state classes something outside the term graph
-/// observes, and the addresses a law may reason about as a value.
+/// observes, and the value ports each loop carries.
 pub struct Seeded {
     pub eg: EGraph<Node>,
     pub value_class: HashMap<ValueId, Id>,
     pub arg_block: HashMap<ValueId, BlockId>,
     pub exported_states: Vec<Id>,
-    pub promotable_addresses: Vec<Id>,
+    pub loop_ports: Vec<LoopPorts>,
+}
+
+/// The value ports one loop carries, in the order it carries them.
+pub struct LoopPorts {
+    pub op: OpId,
+    pub ports: Vec<Port>,
+}
+
+/// One carried value port: the class it is read as at the head of an iteration,
+/// the class the loop is entered on, the class each edge back into it carries,
+/// the class of the loop's result, and the class that result *is* — what the
+/// loop publishes where it was left, which is the head itself unless a test
+/// forwards something else.
+pub struct Port {
+    pub head: Id,
+    pub init: Id,
+    pub edges: Vec<Id>,
+    pub result: Id,
+    pub published: Id,
 }
 
 /// Build the e-graph for the regions of `root`.
-pub fn seed(analyses: &AnalysisManager, context: &Context, root: OpId) -> Seeded {
+pub fn seed(context: &Context, root: OpId) -> Seeded {
     let mut seeder = Seeder {
         context,
-        escapes: analyses.get::<EscapeFacts>(context, root),
         eg: EGraph::new(),
         value_class: HashMap::new(),
         arg_block: HashMap::new(),
@@ -50,24 +66,22 @@ pub fn seed(analyses: &AnalysisManager, context: &Context, root: OpId) -> Seeded
         pointer_width: crate::DataLayout::for_op(context, root)
             .and_then(|layout| layout.pointer_size()),
         exported_states: Vec::new(),
-        ops: Vec::new(),
+        loop_ports: Vec::new(),
     };
     for region in context.get_op(root).regions().to_vec() {
         seeder.seed_region(region);
     }
-    let promotable_addresses = seeder.promotable_addresses();
     Seeded {
         eg: seeder.eg,
         value_class: seeder.value_class,
         arg_block: seeder.arg_block,
         exported_states: seeder.exported_states,
-        promotable_addresses,
+        loop_ports: seeder.loop_ports,
     }
 }
 
 struct Seeder<'a> {
     context: &'a Context,
-    escapes: std::rc::Rc<EscapeFacts>,
     eg: EGraph<Node>,
     value_class: HashMap<ValueId, Id>,
     arg_block: HashMap<ValueId, BlockId>,
@@ -75,7 +89,7 @@ struct Seeder<'a> {
     state_ty: TypeId,
     pointer_width: Option<u32>,
     exported_states: Vec<Id>,
-    ops: Vec<OpId>,
+    loop_ports: Vec<LoopPorts>,
 }
 
 impl Seeder<'_> {
@@ -91,25 +105,9 @@ impl Seeder<'_> {
                 self.class_of(argument.id());
             }
             for op in block.op_ids() {
-                self.ops.push(op);
                 self.seed_op(op);
             }
         }
-    }
-
-    /// The classes of the addresses a slot-level law may treat as a value: an
-    /// allocation whose address never leaves the function — pointer arithmetic on
-    /// it does not count as leaving — and whose accesses agree on one type, so a
-    /// value reconstructed for it has one spelling. The reading is the one every
-    /// memory transform asks for.
-    fn promotable_addresses(&self) -> Vec<Id> {
-        collect_slots(self.context, &self.escapes, &self.ops)
-            .iter()
-            .filter(|(_, slot)| {
-                slot.alloca.is_some() && !slot.escapes && values_agree_on_type(self.context, slot)
-            })
-            .filter_map(|(address, _)| self.value_class.get(address).copied())
-            .collect()
     }
 
     /// The class of `value`: the one already seeded for it, the one its defining
@@ -272,31 +270,27 @@ impl Seeder<'_> {
     /// after — an edge is a term over the argument itself. The loop's result is
     /// the port read where the loop was left.
     ///
-    /// Only state ports: a value the loop carries is one the term graph already
-    /// reads as an argument, and nothing yet asks it what the loop does to it.
+    /// A port of any type every edge carries unchanged is the value the loop was
+    /// entered with, wherever it is read. What the loop does change is a fact no
+    /// term states: a value port that is not invariant is recorded for the
+    /// hypothesis rounds, which prove or refute it in a scope of their own.
     fn seed_theta(&mut self, instance: &OpHandle, loop_like: &dyn LoopLike) {
         let carried = loop_like.carried_args();
-        let ports: Vec<usize> = carried
-            .iter()
-            .enumerate()
-            .filter(|&(_, &argument)| self.context.get_value(argument).ty() == self.state_ty)
-            .map(|(index, _)| index)
-            .collect();
         let tested = tested_ports(self.context, instance, carried.len());
         let heads = match &tested {
             Some((_, arguments, _)) => arguments.clone(),
             None => carried.clone(),
         };
-        for &port in &ports {
-            self.anchor(heads[port]);
+        for &head in &heads {
+            self.anchor(head);
         }
         // The body reads what the test forwards into it, so the test's region is
         // read first and its forwarded values name the body's arguments.
         if let Some((region, _, forwarded)) = tested.clone() {
             self.seed_region(region);
-            for &port in &ports {
+            for (port, &argument) in carried.iter().enumerate() {
                 let id = self.class_of(forwarded[port]);
-                self.value_class.insert(carried[port], id);
+                self.value_class.insert(argument, id);
             }
         }
         for region in instance.regions().to_vec() {
@@ -314,23 +308,23 @@ impl Seeder<'_> {
         if edges.is_empty() {
             return;
         }
-        for (slot, &port) in ports.iter().enumerate() {
+        let mut ports = Vec::new();
+        for port in 0..carried.len() {
             let init = self.class_of(inits[port]);
-            let Some(states) = self.carried_states(&edges, slot, ports.len()) else {
+            let Some(values) = self.carried_values(&edges, port, carried.len()) else {
                 continue;
             };
             let head = self.class_of(heads[port]);
-            let carried: Vec<Id> = states.iter().map(|&state| self.class_of(state)).collect();
-            // A port every edge carries unchanged has the state the loop was
-            // entered with for its fixpoint: θ(init, arg…) is init.
-            if carried
+            let classes: Vec<Id> = values.iter().map(|&value| self.class_of(value)).collect();
+            let state = self.context.get_value(carried[port]).ty() == self.state_ty;
+            let invariant = classes
                 .iter()
-                .all(|&edge| self.eg.find(edge) == self.eg.find(head))
-            {
+                .all(|&edge| self.eg.find(edge) == self.eg.find(head));
+            if invariant {
                 self.eg.union(head, init);
-            } else {
+            } else if state {
                 let mut args = vec![init];
-                args.extend(carried);
+                args.extend(classes.iter().copied());
                 let theta = self.eg.add(Node::theta(finals[port], args));
                 self.eg.union(theta, head);
             }
@@ -338,26 +332,43 @@ impl Seeder<'_> {
                 Some((_, _, forwarded)) => self.class_of(forwarded[port]),
                 None => head,
             };
-            self.value_class.insert(finals[port], published);
+            if state || invariant {
+                self.value_class.insert(finals[port], published);
+            } else {
+                let result = self.anchor(finals[port]);
+                ports.push(Port {
+                    head,
+                    init,
+                    edges: classes,
+                    result,
+                    published,
+                });
+            }
+        }
+        if !ports.is_empty() {
+            self.loop_ports.push(LoopPorts {
+                op: instance.id,
+                ports,
+            });
         }
         self.eg.rebuild();
     }
 
-    /// The state each edge carries into the `slot`-th of a loop's `states` state
+    /// The value each edge carries into the `port`-th of a loop's `ports` carried
     /// ports: the ports are the trailing values an edge carries, in the loop's own
     /// order. `None` where an edge carries too few to name them.
-    fn carried_states(
+    fn carried_values(
         &self,
         edges: &[OpHandle],
-        slot: usize,
-        states: usize,
+        port: usize,
+        ports: usize,
     ) -> Option<Vec<ValueId>> {
         edges
             .iter()
             .map(|edge| {
                 let carried = carried_operands(edge);
-                let first = carried.len().checked_sub(states)?;
-                carried.get(first + slot).copied()
+                let first = carried.len().checked_sub(ports)?;
+                carried.get(first + port).copied()
             })
             .collect()
     }

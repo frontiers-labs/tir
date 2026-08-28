@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // The shape a `do` loop leaves behind: the body, then a guard that repeats or
 // leaves the loop. The arm that breaks never reaches the gate's continuation, so

@@ -1,9 +1,9 @@
 // RUN: tir opt --pass instcombine %s | filecheck %s
 // RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
 
-// The block holding an `scf.if` dominates the blocks of its regions, but a value
-// defined after the `scf.if` does not reach into them: the arm keeps its own
-// constant rather than taking over the later, identical one.
+// A value defined after the `scf.if` does not reach into its arms: the arm
+// spells the literal its class carries where it stands rather than taking over
+// the later, identical one.
 
 module {
   %fn_f = func.func @f(%0: !i1, %1: !i8) -> !i8 {
@@ -25,6 +25,5 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: scf.if
-// CHECK: %[[CONST:[0-9]+]] = constant {value = 1} : !i32
-// CHECK: %[[NARROW:[0-9]+]] = trunci %[[CONST]] : !i8
-// CHECK: scf.yield %[[NARROW]]
+// CHECK-NEXT: %[[OWN:[0-9]+]] = constant {value = 1} : !i8
+// CHECK-NEXT: scf.yield %[[OWN]]

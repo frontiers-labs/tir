@@ -1,11 +1,8 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
-// Two slots a gate writes one apiece: each arm holds the other's value, and both
-// updates fold to the same literal, so the two gates the loads distribute into
-// share a class. A class is one term but the values holding it are spread over
-// the tree, and the form a bottom-up extraction picks may sit in the arm that
-// cannot see it — the arm answers with a form of the class it can spell, and
-// both slots leave memory.
+// Two slots a gate writes one apiece. Each becomes a port of the gate: the arm
+// that writes yields what it wrote, and the arm that leaves the slot alone
+// yields the value it held before the gate. Both slots leave memory.
 
 module {
   %fn_cross = func.func @cross(%0: !i1) -> !i32 {
@@ -37,9 +34,9 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @cross
 // CHECK-NOT: ptr.
+// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
 // CHECK: %[[LEFT:[0-9]+]], %[[RIGHT:[0-9]+]] = scf.if %0 -> !i32, !i32 {
-// CHECK: %[[THEN_ZERO:[0-9]+]] = constant {value = 0} : !i32
-// CHECK: scf.yield %{{[0-9]+}}, %[[THEN_ZERO]]
-// CHECK: %[[ELSE_ZERO:[0-9]+]] = constant {value = 0} : !i32
-// CHECK: scf.yield %[[ELSE_ZERO]], %{{[0-9]+}}
+// CHECK: scf.yield %{{[0-9]+}}, %[[ZERO]]
+// CHECK: else {
+// CHECK: scf.yield %[[ZERO]], %{{[0-9]+}}
 // CHECK: addi %[[LEFT]], %[[RIGHT]]

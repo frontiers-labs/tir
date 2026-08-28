@@ -10,7 +10,7 @@ module {
     ptr.store %1, %0 state(%3 -> %4)
     %5 = ptr.load %0 : !i32 state(%4 -> %6)
     ptr.store %2, %0 state(%6 -> %7)
-    func.return %5
+    func.return %5 state(%7)
   }
   module_end
 }

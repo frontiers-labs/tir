@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // The break leaves on a state the loop's latch does not name: the slot holds 1
 // where the body breaks and 0 where it comes round again, so the value the loop

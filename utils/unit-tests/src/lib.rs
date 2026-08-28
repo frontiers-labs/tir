@@ -113,7 +113,6 @@ mod core {
     mod context;
     mod dialects;
     mod dominance;
-    mod edge_facts;
     mod encodings;
     mod fixtures;
     mod float;

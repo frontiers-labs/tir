@@ -1,10 +1,9 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass restructure --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure,instcombine) %s | filecheck %s
 
-// The `c == 1` fact of the guarded edge into ^bb1 holds throughout the blocks
-// ^bb1 dominates. ^bb3 has ^bb1 as its sole predecessor, so it inherits the fact
-// by scope nesting without any re-assertion, and its redundant compare folds two
-// levels below the guard.
+// The `c == 1` fact holds throughout the arm the gate guards, however deeply the
+// restructured code nests inside it: the scope is pushed once and the nesting
+// carries it down with no re-assertion, and the redundant compare folds.
 
 module {
   %fn_nested = func.func @nested(%a: !i32, %b: !i32) -> !i1 {
@@ -23,6 +22,6 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @nested
 // CHECK: cmpi
-// CHECK: ^bb3:
+// CHECK: scf.if
 // CHECK-NEXT: constant {value = 1}
 // CHECK-NOT: cmpi

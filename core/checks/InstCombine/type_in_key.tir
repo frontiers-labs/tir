@@ -9,7 +9,9 @@ module {
   %fn_typed = func.func @typed(%x: !i32) -> !i16 {
     %0 = trunci %x : !i16
     %1 = trunci %x : !i8
-    func.return %0
+    %2 = extsi %1 : !i16
+    %3 = addi %0, %2 : !i16
+    func.return %3
   }
   module_end
 }

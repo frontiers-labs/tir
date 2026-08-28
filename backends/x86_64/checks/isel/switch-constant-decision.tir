@@ -1,0 +1,25 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A gate's decision is read by the tests its destruction branches on, not by any
+// operation of the block, so a literal decision is a tile whose only consumer is
+// a branch. It has to be placed ahead of that branch like any other operand: a
+// tile that lands after the block it is read in is a register read before it is
+// written.
+
+module {
+  %fn_g = func.func @g(%0: !i64) -> !i64 {
+    %1 = constant {value = 0} : !i32
+    %2 = scf.switch %1 -> !i64 case 0 {
+      %3 = addi %0, %0 : !i64
+      scf.yield %3
+    } default {
+      scf.yield %0
+    }
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "g"
+// CHECK: x86_64.mov_imm8_norex {dst = %[[D:[0-9]+]]{{.*}}, imm = 0}
+// CHECK: x86_64.cmp_imm8_norex {dst = %[[D]]{{.*}}, imm = 1}

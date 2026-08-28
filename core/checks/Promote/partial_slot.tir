@@ -1,0 +1,25 @@
+// RUN: tir opt --pass promote --verify %s | filecheck %s
+
+// Pointer arithmetic reaches part of the slot, so no single value stands for
+// what it holds and the allocation stays.
+
+#data_layout = {types = {p = {abi = 64, size = 64}, i32 = {abi = 32}, i64 = {abi = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_f = func.func @f(%0: !i32, %1: !i32) -> !i32 {
+    %2 = ptr.alloca {size = 8, align = 4} : !ptr.p<!i32>
+    %3 = constant {value = 4} : !i64
+    %4 = ptr.ptradd %2, %3 : !ptr.p<!i32>
+    ptr.store %0, %2
+    ptr.store %1, %4
+    %5 = ptr.load %2 : !i32
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: ptr.alloca
+// CHECK: ptr.store %0
+// CHECK: ptr.store %1
+// CHECK: ptr.load

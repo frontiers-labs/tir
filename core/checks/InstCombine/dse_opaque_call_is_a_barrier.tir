@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // The slot's address reaches the call, so the call is on the chain the slot's
 // accesses are on and the facts model nothing about what it does to memory: it

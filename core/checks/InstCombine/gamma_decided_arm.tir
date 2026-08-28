@@ -1,8 +1,7 @@
-// RUN: tir opt --pass func.func(sccp) %s | filecheck %s
+// RUN: tir opt --pass instcombine --verify %s | filecheck %s
 
-// The gate's decision is a literal, so only the arm it selects runs: the merge
-// takes that arm's yield alone and stays constant, however overdefined the other
-// arm is.
+// The gate's decision is a literal, so the gate publishes what the arm that
+// literal selects yields, however overdefined the other arm is.
 
 module {
   %fn_f = func.func @f(%a: !i32) -> !i32 {

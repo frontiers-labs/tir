@@ -53,14 +53,6 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
         state::eliminate_dead_store(seeded.exported_states.clone()),
         None,
     );
-    ruleset.push(
-        state::distribute_load_over_gamma(context.clone(), seeded.promotable_addresses.clone()),
-        None,
-    );
-    ruleset.push(
-        state::distribute_load_over_theta(context.clone(), seeded.promotable_addresses.clone()),
-        None,
-    );
     ruleset
 }
 

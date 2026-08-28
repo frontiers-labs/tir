@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // The mirror of theta_load_for_iter_arg for a slot holding a pointer: the loop
 // grows the port carrying it, spelled at the pointer type the accesses agree on,

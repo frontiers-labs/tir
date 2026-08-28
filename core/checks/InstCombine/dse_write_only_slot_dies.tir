@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // The counter `raise-loops` leaves behind: a private slot whose loads folding
 // removed, still written once per iteration. Nothing can read those bytes back,

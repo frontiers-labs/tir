@@ -1,8 +1,10 @@
-// RUN: tir opt --pass func.func(thread-state,dse) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
 
 // A fresh allocation is nothing else, so the two slots are two memories: the
 // write to the second is not on the first's chain at all, and the write that
-// overwrites the first is what names the state it published.
+// overwrites the first leaves the state it was handed. Every access of both
+// slots is whole and local, so promotion carries their values and no memory is
+// left for the writes to name.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
@@ -22,6 +24,6 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NOT: ptr.store %0,
-// CHECK: ptr.store %1, %4 state(%{{[0-9]+}} -> %{{[0-9]+}})
-// CHECK-NEXT: ptr.store %2, %3 state(%{{[0-9]+}} -> %{{[0-9]+}})
+// CHECK-NOT: ptr.
+// CHECK: %[[SUM:[0-9]+]] = addi %2, %1 : !i32
+// CHECK-NEXT: func.return %[[SUM]]

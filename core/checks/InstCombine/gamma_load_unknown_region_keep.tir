@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
+// RUN: tir opt --pass promote --pass thread-state --pass instcombine --pass erase-state --verify %s | filecheck %s
 
 // An arm writes the slot from inside a region that is neither a conditional nor
 // a loop. Nothing says what leaves such a region, so no chain is threaded
