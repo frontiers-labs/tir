@@ -172,6 +172,7 @@ impl CompiledIselPattern {
             Some(OperandConstraint::Immediate) => egraph
                 .nodes(class)
                 .iter()
+                .chain(egraph.assumed_const(class))
                 .any(|n| n.kind == SymKind::Constant),
             None => true,
         }

@@ -1032,8 +1032,15 @@ each, reading the condition's `prepared` `ConditionExpr`:
   (`EGraph::assume_const`),
 - the defining comparison is assumed the same truth, its *complement* comparison
   (`!(a<b)` is `a>=b`) the opposite,
-- an `eq`-true / `ne`-false fact additionally asserts `lhs ≡ rhs` (a union), so
-  scope congruence merges everything computed from equal operands.
+- an `eq`-true / `ne`-false fact additionally asserts `lhs ≡ rhs`: as a fact on
+  the other side's class when one side is a literal (`assert_equal`), as a union
+  otherwise. A literal's class is hash-consed function-wide, so a union with it
+  would dirty every user of the literal instead of every user of the compared
+  value — on a `switch`-shaped function, most of the graph. The fact reaches the
+  same readers: `class_int_binding`, the immediate boundary constraint, and
+  register resolution, which also offers a register already holding the literal
+  (and, for the literal's own class, the register of a value proven equal to it —
+  `EGraph::assumed_classes`) so the congruence still coalesces where it did.
 
 A truth fact is a scoped side entry on the condition's own class, not a union
 with the literal's class. The alternative — merging every proven condition into
@@ -1043,7 +1050,7 @@ function and a compare-shaped pattern matched the constant class once per
 enclosing scope. As a fact, the class keeps its identity and parents: readers
 that ask for a class's constant (`class_int_binding`, the matcher's integer
 leaves) see the fact exactly as they saw the merged literal, and `scope_dirty`
-holds only the condition, its users, and what the `lhs ≡ rhs` merge touched.
+holds only the condition, the compared value, and their users.
 
 After asserting, the block `rebuild`s and **saturates inside the scope**, so the
 rewrites propagate the facts. Consequences then fall out of the ordinary

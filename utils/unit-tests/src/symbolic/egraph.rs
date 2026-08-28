@@ -544,6 +544,25 @@ fn assume_const_is_read_under_the_scope_and_gone_after_pop() {
 }
 
 #[test]
+fn assumed_classes_names_every_class_assumed_to_be_the_constant() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let c = sym(&mut g, 2);
+    g.rebuild();
+
+    g.push_context();
+    g.assume_const(a, Math::Num(1));
+    g.assume_const(b, Math::Num(1));
+    g.assume_const(c, Math::Num(0));
+    let mut ones: Vec<Id> = g.assumed_classes(&Math::Num(1)).collect();
+    ones.sort();
+    assert_eq!(ones, vec![g.find(a), g.find(b)]);
+    g.pop_context();
+    assert!(g.assumed_classes(&Math::Num(1)).next().is_none());
+}
+
+#[test]
 fn nested_assumption_shadows_and_restores_the_outer_one() {
     let mut g = EGraph::new();
     let a = sym(&mut g, 0);

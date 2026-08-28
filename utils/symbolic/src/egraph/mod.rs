@@ -374,6 +374,14 @@ impl<L: ENode> EGraph<L> {
         self.assumed.get(&self.find(class))
     }
 
+    /// The classes the open scopes assume to evaluate to `node`.
+    pub fn assumed_classes<'a>(&'a self, node: &'a L) -> impl Iterator<Item = Id> + 'a {
+        self.assumed
+            .iter()
+            .filter(move |(_, assumed)| assumed.matches(node))
+            .map(|(&class, _)| class)
+    }
+
     /// Intern `node`, returning its e-class. A non-unique node equal to an existing
     /// one shares its class; otherwise (always for unique nodes) a fresh class.
     pub fn add(&mut self, mut node: L) -> Id {

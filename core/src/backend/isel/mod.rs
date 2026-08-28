@@ -850,8 +850,24 @@ impl FunctionSelection {
         while let Some(source) = low_extract_source(&self.egraph, class) {
             class = source;
         }
+        // A class a fact proves equal to a literal may read a register already
+        // holding that literal, and a literal may read the register of a value
+        // proven equal to it: the union used to make them one class, and this is
+        // the one place that congruence was worth a register.
+        let literal = self
+            .egraph
+            .assumed_const(class)
+            .and_then(|node| self.egraph.lookup(node))
+            .map(|id| self.egraph.find(id));
+        let equal: Vec<Id> = self
+            .egraph
+            .nodes(class)
+            .iter()
+            .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
+            .map(|node| self.egraph.assumed_classes(node).collect())
+            .unwrap_or_default();
         let mut best: Option<((u8, usize, u32), ValueId)> = None;
-        for member in self.base_members(class) {
+        for member in self.base_members(class).chain(literal).chain(equal) {
             let Some(candidates) = self.class_values.get(&member) else {
                 continue;
             };
@@ -3019,6 +3035,28 @@ fn assert_fact(context: &Context, egraph: &mut SemEGraph, expr: &ConditionExpr, 
             egraph.assume_const(complement_class, truth(!holds));
         }
         if (kind == SymKind::Eq && holds) || (kind == SymKind::Ne && !holds) {
+            assert_equal(egraph, lhs, rhs);
+        }
+    }
+}
+
+/// Assert `lhs ≡ rhs` in the current scope. A side that is a literal becomes a
+/// fact on the other side's class rather than a union with the literal's own
+/// class: that class is hash-consed function-wide, so merging into it would dirty
+/// every user of the literal instead of every user of the compared value.
+fn assert_equal(egraph: &mut SemEGraph, lhs: Id, rhs: Id) {
+    let literal = |class: Id| {
+        egraph
+            .nodes(egraph.find(class))
+            .iter()
+            .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
+            .cloned()
+    };
+    match (literal(lhs), literal(rhs)) {
+        (Some(_), Some(_)) => {}
+        (None, Some(node)) => egraph.assume_const(lhs, node),
+        (Some(node), None) => egraph.assume_const(rhs, node),
+        (None, None) => {
             egraph.union(lhs, rhs);
         }
     }
