@@ -13,7 +13,6 @@ compile/20000405-2.c
 compile/20000405-3.c
 compile/20000412-2.c
 compile/20000420-1.c
-compile/20000420-2.c
 compile/20000427-1.c
 compile/20000502-1.c
 compile/20000511-1.c
@@ -46,6 +45,7 @@ compile/20010118-1.c
 compile/20010202-1.c
 compile/20010209-1.c
 compile/20010226-1.c
+compile/20010227-1.c
 compile/20010313-1.c
 compile/20010320-1.c
 compile/20010326-1.c
@@ -101,6 +101,7 @@ compile/20020930-1.c
 compile/20021001-1.c
 compile/20021008-1.c
 compile/20021015-2.c
+compile/20021103-1.c
 compile/20021108-1.c
 compile/20021120-1.c
 compile/20021120-2.c
@@ -767,6 +768,7 @@ compile/pr25224.c
 compile/pr25311.c
 compile/pr25513.c
 compile/pr25514.c
+compile/pr25861.c
 compile/pr26213.c
 compile/pr26725.c
 compile/pr26781-1.c
@@ -878,6 +880,7 @@ compile/pr39614-3.c
 compile/pr39614-4.c
 compile/pr39614-5.c
 compile/pr39824.c
+compile/pr39845.c
 compile/pr39886.c
 compile/pr39928-2.c
 compile/pr39937.c
@@ -942,8 +945,8 @@ compile/pr44687.c
 compile/pr44707.c
 compile/pr44788.c
 compile/pr44891.c
+compile/pr44937.c
 compile/pr44941.c
-compile/pr44946.c
 compile/pr45059.c
 compile/pr45109.c
 compile/pr45535.c
