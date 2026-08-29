@@ -2256,6 +2256,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tir-relational"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "tir-adt",
+]
+
+[[package]]
 name = "tir-riscv"
 version = "0.1.0"
 dependencies = [

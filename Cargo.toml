@@ -30,6 +30,7 @@ members = [
     "utils/pbqp",
     "utils/unit-tests",
     "utils/arrange",
+    "utils/relational",
 ]
 
 [workspace.dependencies]
@@ -47,6 +48,7 @@ tir-lit = { path = "utils/lit" }
 tir-llvm = { path = "utils/llvm" }
 tir-jit = { path = "utils/jit" }
 tir-pbqp = { path = "utils/pbqp" }
+tir-relational = { path = "utils/relational" }
 
 # Per-target crates
 tir-riscv = { path = "backends/riscv" }
