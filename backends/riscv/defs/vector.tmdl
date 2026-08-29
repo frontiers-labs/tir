@@ -253,12 +253,12 @@ instruction VSetVli for [RVV] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => avl,
-        20..30 => vtypei,
-        31 => 0b0,
+        0b0,
+        vtypei,
+        avl,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -302,12 +302,12 @@ instruction VSetIVli for [RVV] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => avl,
-        20..29 => vtypei,
-        30..31 => 0b11,
+        0b11,
+        vtypei,
+        avl,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -344,12 +344,12 @@ instruction VSetVL for [RVV] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => avl,
-        20..24 => vt,
-        25..31 => 0b1000000,
+        0b1000000,
+        vt,
+        avl,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -396,13 +396,13 @@ macro whole_register_moves {
             }
 
             encoding {
-                0..6 => OPCODE,
-                7..11 => vd,
-                12..14 => FUNCT3,
-                15..19 => NFIELDS,
-                20..24 => vs,
-                25 => 0b1,
-                26..31 => FUNCT6,
+                FUNCT6,
+                0b1,
+                vs[4..0],
+                NFIELDS,
+                FUNCT3,
+                vd[4..0],
+                OPCODE,
             }
 
             asm {

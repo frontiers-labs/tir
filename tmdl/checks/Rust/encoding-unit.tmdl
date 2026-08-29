@@ -1,0 +1,75 @@
+// An encoding is a list of fields, high bit first within an encoding unit and
+// units in emission order. A byte-stream ISA declares `ENCODING_UNIT = 8`, so
+// each byte is written the way its manual draws it: the REX byte as 0100WRXB,
+// then the opcode, then ModR/M as mod, reg, rm. A field spanning whole units
+// (the 32-bit displacement) is little-endian across them.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa ByteIsa {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [ByteIsa] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+
+    registers {
+        rax..rdi => { },
+    }
+}
+
+instruction LoadDisp for [ByteIsa] {
+    param MNEMONIC: String = "loaddisp";
+    param OPCODE: bits<8> = 0x8b;
+
+    operands {
+        dst: GPR,
+        base: GPR,
+        disp: bits<32>,
+    }
+
+    encoding {
+        0b0100, 0b1, dst[3], 0b0, base[3],
+        OPCODE,
+        0b10, dst[2..0], base[2..0],
+        disp,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {base}, {disp}"
+    }
+
+    behavior {
+        dst = sext(disp, self.XLEN) + base;
+    }
+}
+
+// REX byte 0x48 at word bits 0..7, opcode 0x8b at 8..15, ModR/M mod=0b10 at
+// 22..23: const_word = 0x808b48. Seven bytes in total.
+// CHECK: static ENCODE_LOADDISP: tir::backend::binary::EncodeSpec = tir::backend::binary::EncodeSpec {
+// CHECK-NEXT: const_word: 8424264u128,
+// CHECK-NEXT: width_bytes: 7,
+
+// Fields appear in ascending bit order, so `base` (REX.B at bit 0) comes first.
+// CHECK: attr: "base",
+// CHECK: op_lo: 3,
+// CHECK-NEXT: word_lo: 0,
+// CHECK-NEXT: width: 1,
+// CHECK: op_lo: 0,
+// CHECK-NEXT: word_lo: 16,
+// CHECK-NEXT: width: 3,
+
+// CHECK: attr: "dst",
+// CHECK: op_lo: 3,
+// CHECK-NEXT: word_lo: 2,
+// CHECK-NEXT: width: 1,
+// CHECK: op_lo: 0,
+// CHECK-NEXT: word_lo: 19,
+// CHECK-NEXT: width: 3,
+
+// CHECK: attr: "disp",
+// CHECK: op_lo: 0,
+// CHECK-NEXT: word_lo: 24,
+// CHECK-NEXT: width: 32,

@@ -9,11 +9,11 @@ instruction FenceI for [Zifencei] {
     param OPCODE: bits<7> = 0b0001111;
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => 0,
-        12..14 => 0b001,
-        15..19 => 0,
-        20..31 => 0,
+        0x000,
+        0b00000,
+        0b001,
+        0b00000,
+        OPCODE,
     }
 
     asm {

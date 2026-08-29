@@ -28,14 +28,14 @@ template AMOType for [A] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => rs2,
-        25 => RL,
-        26 => AQ,
-        27..31 => FUNCT5,
+        FUNCT5,
+        AQ,
+        RL,
+        rs2,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -60,14 +60,14 @@ template LRType for [A] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => 0b00000,
-        25 => RL,
-        26 => AQ,
-        27..31 => FUNCT5,
+        FUNCT5,
+        AQ,
+        RL,
+        0b00000,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {

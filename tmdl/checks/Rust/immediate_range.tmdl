@@ -29,9 +29,9 @@ instruction OpImm8 for [ImmIsa] {
     }
 
     encoding {
-        0..6 => 0b0010011,
-        7..11 => rd,
-        12..19 => imm,
+        imm,
+        rd,
+        0b0010011,
     }
 
     asm {

@@ -29,11 +29,11 @@ template ParentInst for [TestIsa32, TestIsa64] {
     }
 
     encoding {
-        0 => 1,
-        1..5 => rs1,
-        6..10 => rs2,
-        11..15 => rd,
-        16..31 => 0,
+        0x0000,
+        rd,
+        rs2,
+        rs1,
+        0b1,
     }
 
     asm {

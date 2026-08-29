@@ -389,17 +389,17 @@ macro advsimd_three_same {
             }
 
             encoding {
-                0..4 => vd,
-                5..9 => vn,
-                10 => 0b1,
-                11..15 => OPCODE,
-                16..20 => vm,
-                21 => 0b1,
-                22..23 => SIZE,
-                24..28 => 0b01110,
-                29 => U,
-                30 => Q,
-                31 => 0b0,
+                0b0,
+                Q,
+                U,
+                0b01110,
+                SIZE,
+                0b1,
+                vm[4..0],
+                OPCODE,
+                0b1,
+                vn[4..0],
+                vd[4..0],
             }
 
             asm {
@@ -743,17 +743,17 @@ macro advsimd_three_same_acc {
             }
 
             encoding {
-                0..4 => vd,
-                5..9 => vn,
-                10 => 0b1,
-                11..15 => OPCODE,
-                16..20 => vm,
-                21 => 0b1,
-                22..23 => SIZE,
-                24..28 => 0b01110,
-                29 => U,
-                30 => Q,
-                31 => 0b0,
+                0b0,
+                Q,
+                U,
+                0b01110,
+                SIZE,
+                0b1,
+                vm[4..0],
+                OPCODE,
+                0b1,
+                vn[4..0],
+                vd[4..0],
             }
 
             asm {
@@ -849,17 +849,17 @@ macro advsimd_three_same_pair {
             }
 
             encoding {
-                0..4 => vd,
-                5..9 => vn,
-                10 => 0b1,
-                11..15 => OPCODE,
-                16..20 => vm,
-                21 => 0b1,
-                22..23 => SIZE,
-                24..28 => 0b01110,
-                29 => U,
-                30 => Q,
-                31 => 0b0,
+                0b0,
+                Q,
+                U,
+                0b01110,
+                SIZE,
+                0b1,
+                vm[4..0],
+                OPCODE,
+                0b1,
+                vn[4..0],
+                vd[4..0],
             }
 
             asm {
@@ -941,17 +941,17 @@ macro advsimd_three_same_pair_wide {
             }
 
             encoding {
-                0..4 => vd,
-                5..9 => vn,
-                10 => 0b1,
-                11..15 => OPCODE,
-                16..20 => vm,
-                21 => 0b1,
-                22..23 => SIZE,
-                24..28 => 0b01110,
-                29 => U,
-                30 => Q,
-                31 => 0b0,
+                0b0,
+                Q,
+                U,
+                0b01110,
+                SIZE,
+                0b1,
+                vm,
+                OPCODE,
+                0b1,
+                vn,
+                vd,
             }
 
             asm {
@@ -1007,14 +1007,14 @@ macro advsimd_dup_general {
             }
 
             encoding {
-                0..4 => vd,
-                5..9 => rn,
-                10..15 => 0b000011,
-                16..20 => IMM5,
-                21..28 => 0b01110000,
-                29 => 0b0,
-                30 => Q,
-                31 => 0b0,
+                0b0,
+                Q,
+                0b0,
+                0b01110000,
+                IMM5,
+                0b000011,
+                rn[4..0],
+                vd[4..0],
             }
 
             asm {
@@ -1061,16 +1061,16 @@ macro advsimd_modified_immediate {
             }
 
             encoding {
-                0..4 => vd,
-                5..9 => imm[0..4],
-                10..11 => 0b01,
-                12..15 => CMODE,
-                16..18 => imm[5..7],
-                19..23 => 0b00000,
-                24..28 => 0b01111,
-                29 => OP,
-                30 => Q,
-                31 => 0b0,
+                0b0,
+                Q,
+                OP,
+                0b01111,
+                0b00000,
+                imm[7..5],
+                CMODE,
+                0b01,
+                imm[4..0],
+                vd[4..0],
             }
 
             asm {

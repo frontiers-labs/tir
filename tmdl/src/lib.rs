@@ -1,6 +1,7 @@
 mod ast;
 mod btor2gen;
 mod compiler;
+mod encoding;
 mod error;
 mod expander;
 mod fninline;

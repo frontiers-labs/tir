@@ -116,7 +116,7 @@ instruction SignExtendDividend for [X86_64] {
     param OPNAME: String = "sign_extend_dividend";
     param MNEMONIC: String = "cqo";
     schedule { units = [WriteIExtend]; }
-    encoding { 0..7 => 0x48, 8..15 => 0x99, }
+    encoding { 0x48, 0x99 }
     asm { "{self.MNEMONIC}" }
     behavior {
         GPR::rdx = sext(extract(GPR::rax, self.XLEN - 1, self.XLEN - 1), self.XLEN);
@@ -151,7 +151,7 @@ instruction ZeroExtendDividend for [X86_64] {
     param OPNAME: String = "zero_extend_dividend";
     param MNEMONIC: String = "xor";
     schedule { units = [WriteIALU]; }
-    encoding { 0..7 => 0x31, 8..15 => 0xD2, }
+    encoding { 0x31, 0xD2 }
     asm { "{self.MNEMONIC} edx, edx" }
     behavior {
         GPR::rdx = zext(0b0, self.XLEN);
@@ -189,7 +189,7 @@ instruction SignExtendDividend32 for [X86_64] {
     param OPNAME: String = "sign_extend_dividend32";
     param MNEMONIC: String = "cdq";
     schedule { units = [WriteIExtend]; }
-    encoding { 0..7 => 0x99, }
+    encoding { 0x99 }
     asm { "{self.MNEMONIC}" }
     behavior {
         GPR32::edx = sext(extract(GPR32::eax, 31, 31), 32);
@@ -223,7 +223,7 @@ instruction ZeroExtendDividend32 for [X86_64] {
     param OPNAME: String = "zero_extend_dividend32";
     param MNEMONIC: String = "xor";
     schedule { units = [WriteIALU]; }
-    encoding { 0..7 => 0x31, 8..15 => 0xD2, }
+    encoding { 0x31, 0xD2 }
     asm { "{self.MNEMONIC} edx, edx" }
     behavior {
         GPR32::edx = zext(0b0, 32);
@@ -303,7 +303,7 @@ instruction SignExtendDividend32Norex for [X86] {
     param OPNAME: String = "sign_extend_dividend32_norex";
     param MNEMONIC: String = "cdq";
     schedule { units = [WriteIExtend]; }
-    encoding { 0..7 => 0x99, }
+    encoding { 0x99 }
     asm { "{self.MNEMONIC}" }
     behavior {
         GPR32::edx = sext(extract(GPR32::eax, 31, 31), 32);
@@ -370,11 +370,11 @@ macro extend32_norex {
                operands { dst: GPR32low, src: $src, }
 
                encoding {
-                   0..7 => 0x0F,
-                   8..15 => $opcode,
-                   16..18 => src[0..2],
-                   19..21 => dst[0..2],
-                   22..23 => 0b11,
+                   0x0F,
+                   $opcode,
+                   0b11,
+                   dst[2..0],
+                   src[2..0],
                }
 
                asm { "{self.MNEMONIC} {dst}, {src}" }
@@ -407,15 +407,15 @@ instruction Movsxd for [X86_64] {
     }
 
     encoding {
-        0 => src[3],
-        1 => 0b0,
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x63,
-        16..18 => src[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b11,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        src[3],
+        0x63,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -441,15 +441,15 @@ instruction Movzxd for [X86_64] {
     }
 
     encoding {
-        0 => src[3],
-        1 => 0b0,
-        2 => dst[3],
-        3 => 0b0,
-        4..7 => 0b0100,
-        8..15 => 0x8B,
-        16..18 => src[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b11,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x8B,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -475,14 +475,14 @@ instruction MovAbs for [X86_64] {
     }
 
     encoding {
-        0 => dst[3],
-        1 => 0b0,
-        2 => 0b0,
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..10 => dst[0..2],
-        11..15 => 0b10111,
-        16..79 => imm,
+        0b0100,
+        0b1,
+        0b0,
+        0b0,
+        dst[3],
+        0b10111,
+        dst[2..0],
+        imm,
     }
 
     asm {

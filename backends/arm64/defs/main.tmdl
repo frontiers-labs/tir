@@ -3,6 +3,7 @@
 isa ARMv8A64 {
     param XLEN: Integer = 64;
     param FLAG_WIDTH: Integer = 1;
+    param ENCODING_UNIT: Integer = 32;
 }
 
 register_class PC for [ARMv8A64] {
@@ -137,17 +138,17 @@ macro tmpl_fp_arith {
             }
 
             encoding {
-                0..4 => fd,
-                5..9 => fa,
-                10..11 => 0b10,
-                12..15 => OPCODE,
-                16..20 => fb,
-                21 => 0b1,
-                22..23 => $ptype,
-                24..28 => 0b11110,
-                29 => 0b0,
-                30 => 0b0,
-                31 => 0b0,
+                0b0,
+                0b0,
+                0b0,
+                0b11110,
+                $ptype,
+                0b1,
+                fb[4..0],
+                OPCODE,
+                0b10,
+                fa[4..0],
+                fd[4..0],
             }
 
             asm {
@@ -178,16 +179,16 @@ macro tmpl_addsub_reg {
             }
 
             encoding {
-                0..4 => rd,
-                5..9 => rn,
-                10..15 => 0b000000,
-                16..20 => rm,
-                21 => 0b0,
-                22..23 => SHIFT,
-                24..28 => 0b01011,
-                29 => SETFLAGS,
-                30 => OP,
-                31 => SF,
+                SF,
+                OP,
+                SETFLAGS,
+                0b01011,
+                SHIFT,
+                0b0,
+                rm[4..0],
+                0b000000,
+                rn[4..0],
+                rd[4..0],
             }
 
             asm {
@@ -215,16 +216,16 @@ macro tmpl_cmp_reg {
             }
 
             encoding {
-                0..4 => 0b11111,
-                5..9 => rn,
-                10..15 => 0b000000,
-                16..20 => rm,
-                21 => 0b0,
-                22..23 => SHIFT,
-                24..28 => 0b01011,
-                29 => 0b1,
-                30 => OP,
-                31 => SF,
+                SF,
+                OP,
+                0b1,
+                0b01011,
+                SHIFT,
+                0b0,
+                rm[4..0],
+                0b000000,
+                rn[4..0],
+                0b11111,
             }
 
             asm {
@@ -254,14 +255,14 @@ macro tmpl_cmp_imm {
             }
 
             encoding {
-                0..4 => 0b11111,
-                5..9 => rn,
-                10..21 => imm,
-                22 => SH,
-                23..28 => 0b100010,
-                29 => 0b1,
-                30 => OP,
-                31 => SF,
+                SF,
+                OP,
+                0b1,
+                0b100010,
+                SH,
+                imm,
+                rn[4..0],
+                0b11111,
             }
 
             asm {
@@ -289,15 +290,15 @@ macro tmpl_tst_reg {
             }
 
             encoding {
-                0..4 => 0b11111,
-                5..9 => rn,
-                10..15 => 0b000000,
-                16..20 => rm,
-                21 => 0b0,
-                22..23 => SHIFT,
-                24..28 => 0b01010,
-                29..30 => 0b11,
-                31 => SF,
+                SF,
+                0b11,
+                0b01010,
+                SHIFT,
+                0b0,
+                rm[4..0],
+                0b000000,
+                rn[4..0],
+                0b11111,
             }
 
             asm {
@@ -328,14 +329,14 @@ macro tmpl_addsub_imm {
             }
 
             encoding {
-                0..4 => rd,
-                5..9 => rn,
-                10..21 => imm,
-                22 => SH,
-                23..28 => 0b100010,
-                29 => SETFLAGS,
-                30 => OP,
-                31 => SF,
+                SF,
+                OP,
+                SETFLAGS,
+                0b100010,
+                SH,
+                imm,
+                rn[4..0],
+                rd[4..0],
             }
 
             asm {
@@ -367,14 +368,14 @@ macro tmpl_addsub_imm_flags {
             }
 
             encoding {
-                0..4 => rd,
-                5..9 => rn,
-                10..21 => imm,
-                22 => SH,
-                23..28 => 0b100010,
-                29 => SETFLAGS,
-                30 => OP,
-                31 => SF,
+                SF,
+                OP,
+                SETFLAGS,
+                0b100010,
+                SH,
+                imm,
+                rn[4..0],
+                rd[4..0],
             }
 
             asm {
@@ -406,15 +407,15 @@ macro tmpl_logical_reg {
             }
 
             encoding {
-                0..4 => rd,
-                5..9 => rn,
-                10..15 => 0b000000,
-                16..20 => rm,
-                21 => N,
-                22..23 => SHIFT,
-                24..28 => 0b01010,
-                29..30 => OPC,
-                31 => SF,
+                SF,
+                OPC,
+                0b01010,
+                SHIFT,
+                N,
+                rm[4..0],
+                0b000000,
+                rn[4..0],
+                rd[4..0],
             }
 
             asm {
@@ -443,13 +444,13 @@ macro tmpl_shift_reg {
             }
 
             encoding {
-                0..4 => rd,
-                5..9 => rn,
-                10..15 => OPCODE,
-                16..20 => rm,
-                21..28 => 0b11010110,
-                29..30 => 0b00,
-                31 => SF,
+                SF,
+                0b00,
+                0b11010110,
+                rm[4..0],
+                OPCODE,
+                rn[4..0],
+                rd[4..0],
             }
 
             asm {
@@ -483,14 +484,14 @@ macro tmpl_loadstore_imm {
             }
 
             encoding {
-                0..4 => rt,
-                5..9 => rn,
-                10..21 => imm,
-                22..23 => OPC,
-                24..25 => 0b01,
-                26 => V,
-                27..29 => 0b111,
-                30..31 => SIZE,
+                SIZE,
+                0b111,
+                V,
+                0b01,
+                OPC,
+                imm,
+                rn[4..0],
+                rt[4..0],
             }
 
             asm {
@@ -521,14 +522,14 @@ macro tmpl_loadstore_immh {
             }
 
             encoding {
-                0..4 => rt,
-                5..9 => rn,
-                10..21 => imm[1..12],
-                22..23 => OPC,
-                24..25 => 0b01,
-                26 => V,
-                27..29 => 0b111,
-                30..31 => SIZE,
+                SIZE,
+                0b111,
+                V,
+                0b01,
+                OPC,
+                imm[12..1],
+                rn[4..0],
+                rt[4..0],
             }
 
             asm {
@@ -559,14 +560,14 @@ macro tmpl_loadstore_scaled_word {
             }
 
             encoding {
-                0..4 => rt,
-                5..9 => rn,
-                10..21 => imm[2..13],
-                22..23 => OPC,
-                24..25 => 0b01,
-                26 => V,
-                27..29 => 0b111,
-                30..31 => SIZE,
+                SIZE,
+                0b111,
+                V,
+                0b01,
+                OPC,
+                imm[13..2],
+                rn[4..0],
+                rt[4..0],
             }
 
             asm {
@@ -595,14 +596,14 @@ template LoadStoreImmUnsignedD for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rt,
-        5..9 => rn,
-        10..21 => imm[3..14],
-        22..23 => OPC,
-        24..25 => 0b01,
-        26 => V,
-        27..29 => 0b111,
-        30..31 => SIZE,
+        SIZE,
+        0b111,
+        V,
+        0b01,
+        OPC,
+        imm[14..3],
+        rn[4..0],
+        rt,
     }
 
     asm {
@@ -624,14 +625,14 @@ macro tmpl_loadstore_float_scaled {
             }
 
             encoding {
-                0..4 => ft,
-                5..9 => rn,
-                10..21 => imm[$lo..$hi],
-                22..23 => OPC,
-                24..25 => 0b01,
-                26 => 0b1,
-                27..29 => 0b111,
-                30..31 => $size,
+                $size,
+                0b111,
+                0b1,
+                0b01,
+                OPC,
+                imm[$hi..$lo],
+                rn[4..0],
+                ft[4..0],
             }
 
             asm {
@@ -653,8 +654,8 @@ template BranchImm for [ARMv8A64] {
     }
 
     encoding {
-        0..25 => imm,
-        26..31 => 0b000101,
+        0b000101,
+        imm,
     }
 
     asm {
@@ -671,8 +672,8 @@ template BranchLinkImm for [ARMv8A64] {
     }
 
     encoding {
-        0..25 => imm,
-        26..31 => 0b100101,
+        0b100101,
+        imm,
     }
 
     asm {
@@ -690,12 +691,12 @@ template BranchReg for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => 0b00000,
-        5..9 => rn,
-        10..15 => 0b000000,
-        16..20 => 0b11111,
-        21..24 => OPCODE,
-        25..31 => 0b1101011,
+        0b1101011,
+        OPCODE,
+        0b11111,
+        0b000000,
+        rn,
+        0b00000,
     }
 
     asm {
@@ -713,11 +714,11 @@ template CondBranchImm for [ARMv8A64] {
     }
 
     encoding {
-        0..3 => COND,
-        4 => 0b0,
-        5..23 => imm,
-        24 => 0b0,
-        25..31 => 0b0101010,
+        0b0101010,
+        0b0,
+        imm,
+        0b0,
+        COND,
     }
 
     asm {
@@ -743,15 +744,15 @@ macro tmpl_data_proc_3src {
             }
 
             encoding {
-                0..4 => rd,
-                5..9 => rn,
-                10..14 => ra,
-                15 => O0,
-                16..20 => rm,
-                21..23 => OP31,
-                24..28 => 0b11011,
-                29..30 => 0b00,
-                31 => SF,
+                SF,
+                0b00,
+                0b11011,
+                OP31,
+                rm[4..0],
+                O0,
+                ra[4..0],
+                rn[4..0],
+                rd[4..0],
             }
 
             asm {
@@ -782,15 +783,15 @@ macro tmpl_data_proc_3src_zr {
             }
 
             encoding {
-                0..4 => rd,
-                5..9 => rn,
-                10..14 => 0b11111,
-                15 => O0,
-                16..20 => rm,
-                21..23 => OP31,
-                24..28 => 0b11011,
-                29..30 => 0b00,
-                31 => SF,
+                SF,
+                0b00,
+                0b11011,
+                OP31,
+                rm[4..0],
+                O0,
+                0b11111,
+                rn[4..0],
+                rd[4..0],
             }
 
             asm {
@@ -819,14 +820,14 @@ template BitfieldFixed for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..15 => IMMS,
-        16..21 => IMMR,
-        22 => 0b1,
-        23..28 => 0b100110,
-        29..30 => OPC,
-        31 => SF,
+        SF,
+        OPC,
+        0b100110,
+        0b1,
+        IMMR,
+        IMMS,
+        rn,
+        rd,
     }
 
     asm {
@@ -853,14 +854,14 @@ macro tmpl_signext_fixed {
             }
 
             encoding {
-                0..4 => rd,
-                5..9 => rn,
-                10..15 => IMMS,
-                16..21 => IMMR,
-                22 => $sf,
-                23..28 => 0b100110,
-                29..30 => OPC,
-                31 => SF,
+                SF,
+                OPC,
+                0b100110,
+                $sf,
+                IMMR,
+                IMMS,
+                rn,
+                rd[4..0],
             }
 
             asm {
@@ -889,14 +890,14 @@ template ShiftRightImmTemplate for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..15 => 0b111111,
-        16..21 => imm,
-        22 => 0b1,
-        23..28 => 0b100110,
-        29..30 => OPC,
-        31 => SF,
+        SF,
+        OPC,
+        0b100110,
+        0b1,
+        imm,
+        0b111111,
+        rn,
+        rd,
     }
 
     asm {
@@ -917,16 +918,16 @@ template ShiftRightImmWordTemplate for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..14 => 0b11111,
-        15 => 0b0,
-        16..20 => imm,
-        21 => 0b0,
-        22 => 0b0,
-        23..28 => 0b100110,
-        29..30 => OPC,
-        31 => SF,
+        SF,
+        OPC,
+        0b100110,
+        0b0,
+        0b0,
+        imm,
+        0b0,
+        0b11111,
+        rn,
+        rd,
     }
 
     asm {
@@ -948,11 +949,11 @@ template PCRelAddr for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rd,
-        5..23 => imm[2..20],
-        24..28 => 0b10000,
-        29..30 => imm[0..1],
-        31 => OP,
+        OP,
+        imm[1..0],
+        0b10000,
+        imm[20..2],
+        rd,
     }
 
     asm {
@@ -975,14 +976,14 @@ template CondSelect for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..11 => 0b00,
-        12..15 => COND,
-        16..20 => rm,
-        21..28 => 0b11010100,
-        29..30 => 0b00,
-        31 => SF,
+        SF,
+        0b00,
+        0b11010100,
+        rm,
+        COND,
+        0b00,
+        rn,
+        rd,
     }
 
     asm {
@@ -1003,14 +1004,14 @@ template CondSet for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rd,
-        5..9 => 0b11111,
-        10..11 => 0b01,
-        12..15 => COND,
-        16..20 => 0b11111,
-        21..28 => 0b11010100,
-        29..30 => 0b00,
-        31 => SF,
+        SF,
+        0b00,
+        0b11010100,
+        0b11111,
+        COND,
+        0b01,
+        0b11111,
+        rd,
     }
 
     asm {
@@ -1034,11 +1035,11 @@ macro tmpl_compare_branch {
             }
 
             encoding {
-                0..4 => rt,
-                5..23 => imm,
-                24 => OP,
-                25..30 => 0b011010,
-                31 => SF,
+                SF,
+                0b011010,
+                OP,
+                imm,
+                rt[4..0],
             }
 
             asm {
@@ -1065,12 +1066,12 @@ template TestBitBranch for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rt,
-        5..18 => imm,
-        19..23 => bit[0..4],
-        24 => OP,
-        25..30 => 0b011011,
-        31 => bit[5],
+        bit[5],
+        0b011011,
+        OP,
+        bit[4..0],
+        imm,
+        rt,
     }
 
     asm {
@@ -1090,12 +1091,12 @@ template TestBitBranchWord for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rt,
-        5..18 => imm,
-        19..23 => bit,
-        24 => OP,
-        25..30 => 0b011011,
-        31 => 0b0,
+        0b0,
+        0b011011,
+        OP,
+        bit,
+        imm,
+        rt,
     }
 
     asm {
@@ -1120,16 +1121,16 @@ macro tmpl_loadstore_unscaled {
             }
 
             encoding {
-                0..4 => rt,
-                5..9 => rn,
-                10..11 => 0b00,
-                12..20 => imm,
-                21 => 0b0,
-                22..23 => OPC,
-                24..25 => 0b00,
-                26 => V,
-                27..29 => 0b111,
-                30..31 => SIZE,
+                SIZE,
+                0b111,
+                V,
+                0b00,
+                OPC,
+                0b0,
+                imm,
+                0b00,
+                rn[4..0],
+                rt[4..0],
             }
 
             asm {
@@ -1166,18 +1167,18 @@ macro tmpl_loadstore_reg_offset {
             }
 
             encoding {
-                0..4 => rt,
-                5..9 => rn,
-                10..11 => 0b10,
-                12 => S,
-                13..15 => OPTION,
-                16..20 => rm,
-                21 => 0b1,
-                22..23 => OPC,
-                24..25 => 0b00,
-                26 => V,
-                27..29 => 0b111,
-                30..31 => SIZE,
+                SIZE,
+                0b111,
+                V,
+                0b00,
+                OPC,
+                0b1,
+                rm,
+                OPTION,
+                S,
+                0b10,
+                rn[4..0],
+                rt[4..0],
             }
 
             asm {
@@ -1208,15 +1209,15 @@ template LoadStorePair for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rt,
-        5..9 => rn,
-        10..14 => rt2,
-        15..21 => imm[3..9],
-        22 => L,
-        23..25 => 0b010,
-        26 => V,
-        27..29 => 0b101,
-        30..31 => 0b10,
+        0b10,
+        0b101,
+        V,
+        0b010,
+        L,
+        imm[9..3],
+        rt2,
+        rn[4..0],
+        rt,
     }
 
     asm {
@@ -1241,16 +1242,16 @@ template LoadStorePostIndex for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rt,
-        5..9 => rn,
-        10..11 => 0b01,
-        12..20 => imm,
-        21 => 0b0,
-        22..23 => OPC,
-        24..25 => 0b00,
-        26 => V,
-        27..29 => 0b111,
-        30..31 => SIZE,
+        SIZE,
+        0b111,
+        V,
+        0b00,
+        OPC,
+        0b0,
+        imm,
+        0b01,
+        rn[4..0],
+        rt,
     }
 
     asm {
@@ -1273,16 +1274,16 @@ template LoadStorePreIndex for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rt,
-        5..9 => rn,
-        10..11 => 0b11,
-        12..20 => imm,
-        21 => 0b0,
-        22..23 => OPC,
-        24..25 => 0b00,
-        26 => V,
-        27..29 => 0b111,
-        30..31 => SIZE,
+        SIZE,
+        0b111,
+        V,
+        0b00,
+        OPC,
+        0b0,
+        imm,
+        0b11,
+        rn[4..0],
+        rt,
     }
 
     asm {
@@ -1309,15 +1310,15 @@ template LoadStorePairWriteback for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rt,
-        5..9 => rn,
-        10..14 => rt2,
-        15..21 => imm[3..9],
-        22 => L,
-        23..25 => INDEX,
-        26 => V,
-        27..29 => 0b101,
-        30..31 => 0b10,
+        0b10,
+        0b101,
+        V,
+        INDEX,
+        L,
+        imm[9..3],
+        rt2,
+        rn[4..0],
+        rt,
     }
 
     asm {
@@ -1344,15 +1345,15 @@ template LogicalShiftedReg for [ARMv8A64] {
     }
 
     encoding {
-        0..4 => rd,
-        5..9 => rn,
-        10..15 => imm,
-        16..20 => rm,
-        21 => N,
-        22..23 => SHIFT,
-        24..28 => 0b01010,
-        29..30 => OPC,
-        31 => SF,
+        SF,
+        OPC,
+        0b01010,
+        SHIFT,
+        N,
+        rm,
+        imm,
+        rn,
+        rd,
     }
 
     asm {

@@ -206,72 +206,59 @@
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [
-// CHECK-NEXT:                     EncodingArm {
-// CHECK-NEXT:                         start: 0,
-// CHECK-NEXT:                         end: None,
+// CHECK-NEXT:                     EncodingField {
 // CHECK-NEXT:                         value: Lit(
 // CHECK-NEXT:                             Int(
 // CHECK-NEXT:                                 LitInt {
-// CHECK-NEXT:                                     value: "1",
-// CHECK-NEXT:                                     span: 696..697,
+// CHECK-NEXT:                                     value: "0x0000",
+// CHECK-NEXT:                                     span: 691..697,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ),
+// CHECK-NEXT:                         width: 16,
 // CHECK-NEXT:                         span: 691..697,
 // CHECK-NEXT:                     },
-// CHECK-NEXT:                     EncodingArm {
-// CHECK-NEXT:                         start: 1,
-// CHECK-NEXT:                         end: Some(
-// CHECK-NEXT:                             5,
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         value: Ident(
-// CHECK-NEXT:                             Ident {
-// CHECK-NEXT:                                 name: "rs1",
-// CHECK-NEXT:                                 span: 715..718,
-// CHECK-NEXT:                             },
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         span: 707..718,
-// CHECK-NEXT:                     },
-// CHECK-NEXT:                     EncodingArm {
-// CHECK-NEXT:                         start: 6,
-// CHECK-NEXT:                         end: Some(
-// CHECK-NEXT:                             10,
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         value: Ident(
-// CHECK-NEXT:                             Ident {
-// CHECK-NEXT:                                 name: "rs2",
-// CHECK-NEXT:                                 span: 737..740,
-// CHECK-NEXT:                             },
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         span: 728..740,
-// CHECK-NEXT:                     },
-// CHECK-NEXT:                     EncodingArm {
-// CHECK-NEXT:                         start: 11,
-// CHECK-NEXT:                         end: Some(
-// CHECK-NEXT:                             15,
-// CHECK-NEXT:                         ),
+// CHECK-NEXT:                     EncodingField {
 // CHECK-NEXT:                         value: Ident(
 // CHECK-NEXT:                             Ident {
 // CHECK-NEXT:                                 name: "rd",
-// CHECK-NEXT:                                 span: 760..762,
+// CHECK-NEXT:                                 span: 707..709,
 // CHECK-NEXT:                             },
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                         span: 750..762,
+// CHECK-NEXT:                         width: 5,
+// CHECK-NEXT:                         span: 707..709,
 // CHECK-NEXT:                     },
-// CHECK-NEXT:                     EncodingArm {
-// CHECK-NEXT:                         start: 16,
-// CHECK-NEXT:                         end: Some(
-// CHECK-NEXT:                             31,
+// CHECK-NEXT:                     EncodingField {
+// CHECK-NEXT:                         value: Ident(
+// CHECK-NEXT:                             Ident {
+// CHECK-NEXT:                                 name: "rs2",
+// CHECK-NEXT:                                 span: 719..722,
+// CHECK-NEXT:                             },
 // CHECK-NEXT:                         ),
+// CHECK-NEXT:                         width: 5,
+// CHECK-NEXT:                         span: 719..722,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     EncodingField {
+// CHECK-NEXT:                         value: Ident(
+// CHECK-NEXT:                             Ident {
+// CHECK-NEXT:                                 name: "rs1",
+// CHECK-NEXT:                                 span: 732..735,
+// CHECK-NEXT:                             },
+// CHECK-NEXT:                         ),
+// CHECK-NEXT:                         width: 5,
+// CHECK-NEXT:                         span: 732..735,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     EncodingField {
 // CHECK-NEXT:                         value: Lit(
 // CHECK-NEXT:                             Int(
 // CHECK-NEXT:                                 LitInt {
-// CHECK-NEXT:                                     value: "0",
-// CHECK-NEXT:                                     span: 782..783,
+// CHECK-NEXT:                                     value: "0b1",
+// CHECK-NEXT:                                     span: 745..748,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                         span: 772..783,
+// CHECK-NEXT:                         width: 1,
+// CHECK-NEXT:                         span: 745..748,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 asm: Some(
@@ -282,18 +269,18 @@
 // CHECK-NEXT:                                     Str(
 // CHECK-NEXT:                                         LitStr {
 // CHECK-NEXT:                                             value: "{self.MNEMONIC} {rd}, {rs1}, {rs2}",
-// CHECK-NEXT:                                             span: 810..851,
+// CHECK-NEXT:                                             span: 775..816,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ],
 // CHECK-NEXT:                             last_expr_return: true,
-// CHECK-NEXT:                             span: 800..853,
+// CHECK-NEXT:                             span: 765..818,
 // CHECK-NEXT:                         },
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 488..856,
+// CHECK-NEXT:                 span: 488..821,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:         Instruction(
@@ -315,7 +302,7 @@
 // CHECK-NEXT:                                 Str(
 // CHECK-NEXT:                                     LitStr {
 // CHECK-NEXT:                                         value: "add",
-// CHECK-NEXT:                                         span: 943..948,
+// CHECK-NEXT:                                         span: 908..913,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -330,7 +317,7 @@
 // CHECK-NEXT:                                 Int(
 // CHECK-NEXT:                                     LitInt {
 // CHECK-NEXT:                                         value: "0b00001011",
-// CHECK-NEXT:                                         span: 978..988,
+// CHECK-NEXT:                                         span: 943..953,
 // CHECK-NEXT:                                     },
 // CHECK-NEXT:                                 ),
 // CHECK-NEXT:                             ),
@@ -348,7 +335,7 @@
 // CHECK-NEXT:                                     dest: Ident(
 // CHECK-NEXT:                                         Ident {
 // CHECK-NEXT:                                             name: "rd",
-// CHECK-NEXT:                                             span: 1014..1017,
+// CHECK-NEXT:                                             span: 979..982,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
 // CHECK-NEXT:                                     value: Binary(
@@ -356,29 +343,29 @@
 // CHECK-NEXT:                                             lhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs1",
-// CHECK-NEXT:                                                     span: 1019..1023,
+// CHECK-NEXT:                                                     span: 984..988,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             rhs: Ident(
 // CHECK-NEXT:                                                 Ident {
 // CHECK-NEXT:                                                     name: "rs2",
-// CHECK-NEXT:                                                     span: 1025..1028,
+// CHECK-NEXT:                                                     span: 990..993,
 // CHECK-NEXT:                                                 },
 // CHECK-NEXT:                                             ),
 // CHECK-NEXT:                                             op: Add,
-// CHECK-NEXT:                                             span: 1019..1028,
+// CHECK-NEXT:                                             span: 984..993,
 // CHECK-NEXT:                                         },
 // CHECK-NEXT:                                     ),
-// CHECK-NEXT:                                     span: 1014..1028,
+// CHECK-NEXT:                                     span: 979..993,
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ],
 // CHECK-NEXT:                         last_expr_return: false,
-// CHECK-NEXT:                         span: 1004..1036,
+// CHECK-NEXT:                         span: 969..1001,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 856..1038,
+// CHECK-NEXT:                 span: 821..1003,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

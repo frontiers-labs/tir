@@ -21,7 +21,7 @@ instruction UseBeforeDef for [LIsa] {
     param MNEMONIC: String = "usebeforedef";
     param OPCODE: bits<7> = 0b0110011;
     operands { rd: GPR, rs1: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    encoding { rs1, 0b000, rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}" }
     behavior {
         rd = sum;
@@ -33,7 +33,7 @@ instruction ShadowOperand for [LIsa] {
     param MNEMONIC: String = "shadowoperand";
     param OPCODE: bits<7> = 0b0110011;
     operands { rd: GPR, rs1: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    encoding { rs1, 0b000, rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}" }
     behavior {
         let rs1 = rd + rd;
@@ -45,7 +45,7 @@ instruction ShadowBinding for [LIsa] {
     param MNEMONIC: String = "shadowbinding";
     param OPCODE: bits<7> = 0b0110011;
     operands { rd: GPR, rs1: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    encoding { rs1, 0b000, rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}" }
     behavior {
         let tmp = rs1 + rs1;

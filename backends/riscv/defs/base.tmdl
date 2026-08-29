@@ -460,12 +460,12 @@ template ShiftImm for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..25 => imm,
-        26..31 => FUNCT6,
+        FUNCT6,
+        imm[5..0],
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -486,12 +486,12 @@ template ShiftImmWord64 for [RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => imm,
-        25..31 => FUNCT7,
+        FUNCT7,
+        imm,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -575,9 +575,9 @@ template SystemNoOperand for [RV32I, RV64I] {
     param OPCODE: bits<7> = 0b1110011;
 
     encoding {
-        0..6 => OPCODE,
-        7..19 => 0,
-        20..31 => IMM12,
+        IMM12,
+        0b0_0000_0000_0000,
+        OPCODE,
     }
 
     asm {
@@ -598,13 +598,13 @@ instruction Fence for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => 0,
-        12..14 => 0b000,
-        15..19 => 0,
-        20..23 => succ,
-        24..27 => pred,
-        28..31 => 0,
+        0b0000,
+        pred,
+        succ,
+        0b00000,
+        0b000,
+        0b00000,
+        OPCODE,
     }
 
     asm {

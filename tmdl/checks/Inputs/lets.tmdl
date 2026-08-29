@@ -30,7 +30,7 @@ instruction AddDouble for [LIsa] {
     param OPCODE: bits<7> = 0b0110011;
 
     operands { rd: GPR, rs1: GPR, rs2: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    encoding { rs2, rs1, 0b000, rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
 
     behavior {
@@ -44,7 +44,7 @@ instruction AmoAddWLet for [LIsa] {
     param OPCODE: bits<7> = 0b0101111;
 
     operands { rd: GPR, rs1: GPR, rs2: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    encoding { rs2, rs1, 0b000, rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
 
     behavior {
@@ -58,7 +58,7 @@ instruction LoadTwice for [LIsa] {
     param OPCODE: bits<7> = 0b0000011;
 
     operands { rd: GPR, rs1: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, }
+    encoding { rs1, 0b000, rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}, ({rs1})" }
 
     behavior {
@@ -72,7 +72,7 @@ instruction AmoAddDBare for [LIsa] {
     param OPCODE: bits<7> = 0b0101111;
 
     operands { rd: GPR, rs1: GPR, rs2: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, 15..19 => rs1, 20..24 => rs2, }
+    encoding { rs2, rs1, 0b000, rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}, {rs2}, ({rs1})" }
 
     behavior {

@@ -32,7 +32,7 @@ instruction PopLike for [FIsa] {
     param OPCODE: bits<7> = 0b0001011;
 
     operands { rd: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, }
+    encoding { rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}" }
 
     behavior {
@@ -47,7 +47,7 @@ instruction PushLike for [FIsa] {
     param OPCODE: bits<7> = 0b0011011;
 
     operands { rs: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rs, }
+    encoding { rs, OPCODE }
     asm { "{self.MNEMONIC} {rs}" }
 
     behavior {
@@ -63,7 +63,7 @@ instruction LoadFixedBase for [FIsa] {
     param OPCODE: bits<7> = 0b0000011;
 
     operands { rd: GPR, }
-    encoding { 0..6 => OPCODE, 7..11 => rd, }
+    encoding { rd, OPCODE }
     asm { "{self.MNEMONIC} {rd}" }
 
     behavior {

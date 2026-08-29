@@ -1,0 +1,36 @@
+// The fields of an encoding must fill a whole number of encoding units, and a
+// field may only cross a unit boundary by spanning whole units.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa ByteIsa {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [ByteIsa] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { rax..rdi => { } }
+}
+
+instruction ShortEncoding for [ByteIsa] {
+    param MNEMONIC: String = "short";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR }
+    asm { "{self.MNEMONIC} {dst}" }
+    behavior { dst = dst; }
+    encoding { OPCODE, dst }
+}
+
+instruction StraddlingField for [ByteIsa] {
+    param MNEMONIC: String = "straddle";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, imm: bits<16> }
+    asm { "{self.MNEMONIC} {dst}, {imm}" }
+    behavior { dst = sext(imm, self.XLEN); }
+    encoding { OPCODE, 0b0000, imm, dst, 0b0000_0000 }
+}
+
+// CHECK-DAG: encoding of instruction 'ShortEncoding' is 12 bits, which is not a whole number of 8-bit encoding units
+// CHECK-DAG: encoding of instruction 'StraddlingField' has a field crossing an 8-bit encoding unit boundary without filling whole units

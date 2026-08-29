@@ -1,0 +1,47 @@
+// Every encoding field must carry its own width. A decimal literal spells none,
+// a name that is neither operand nor parameter has none, and an operand whose
+// width is an ISA-parameter expression has no single one.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa WordIsa {
+    param XLEN: Integer = 32;
+    param ENCODING_UNIT: Integer = 32;
+}
+
+register_class GPR for [WordIsa] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x31 => { } }
+}
+
+instruction DecimalLiteral for [WordIsa] {
+    param MNEMONIC: String = "declit";
+    param OPCODE: bits<7> = 0b0010011;
+    operands { rd: GPR }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior { rd = rd; }
+    encoding { 0, 0b00000000_00000000_000, rd, OPCODE }
+}
+
+instruction UnknownField for [WordIsa] {
+    param MNEMONIC: String = "unknown";
+    param OPCODE: bits<7> = 0b0010011;
+    operands { rd: GPR }
+    asm { "{self.MNEMONIC} {rd}" }
+    behavior { rd = rd; }
+    encoding { 0b00000000_00000000_000, rd, FUNCT3, OPCODE }
+}
+
+instruction IsaDependentWidth for [WordIsa] {
+    param MNEMONIC: String = "isadep";
+    param OPCODE: bits<7> = 0b0010011;
+    operands { rd: GPR, shamt: bits<log2Ceil(self.XLEN)> }
+    asm { "{self.MNEMONIC} {rd}, {shamt}" }
+    behavior { rd = rd << shamt; }
+    encoding { 0b00000000_0000000, shamt, rd, OPCODE }
+}
+
+// CHECK-DAG: decimal literal '0' has no width; write it in binary or hex
+// CHECK-DAG: Unknown 'FUNCT3' in encoding of instruction 'UnknownField'
+// CHECK-DAG: width of 'shamt' in 'IsaDependentWidth' depends on an ISA parameter; give the encoding field an explicit bit range

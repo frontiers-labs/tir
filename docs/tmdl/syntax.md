@@ -31,7 +31,7 @@ Expressions are used in parameters, encodings, asm templates, and behavior.
 - Identifiers and field access: `self.MNEMONIC`, `imm`.
 - Indexing and slicing on bitvectors:
   - Single bit/index: `imm[11]`
-  - Range (inclusive): `imm[0..4]` (selects bits 0–4)
+  - Range (inclusive, high bit first): `imm[4..0]` (selects bits 4–0)
 - Calls: `foo(a, b)` (reserved for future extensions).
 - Grouping: `(expr)`
 - Binary operators and precedence:
@@ -193,12 +193,12 @@ template RType for [RV32I, RV64I] {
   }
 
   encoding {
-    0..6  => OPCODE,
-    7..11 => rd,
-    12..14 => FUNCT3,
-    15..19 => rs1,
-    20..24 => rs2,
-    25..31 => FUNCT7,
+    FUNCT7,
+    rs2,
+    rs1,
+    FUNCT3,
+    rd,
+    OPCODE,
   }
 
   asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
@@ -206,8 +206,10 @@ template RType for [RV32I, RV64I] {
 ```
 
 - `operands` — operand name to type mapping (typically to a register class or a bitvector type).
-- `encoding` — bitfield layout using single bits `i => expr` and ranges `i..j => expr`.
-  - Right‑hand side can reference operands, parameters, slices (e.g., `imm[0..4]`).
+- `encoding` — the instruction word as a list of fields, high bit first (see
+  [Encoding Section Details](#encoding-section-details)).
+  - A field can be an operand, a parameter, a bit slice (e.g. `imm[4..0]`) or a
+    literal; each carries its own width.
 - `asm` — expression producing assembly syntax. Today commonly a string template with placeholders:
   - `{self.MNEMONIC}` resolves to the instruction mnemonic (from parameters).
   - `{name}` inserts the textual form of operand `name` (registers and immediates).
@@ -281,22 +283,49 @@ instruction Add for [RV32I, RV64I] : RType {
 
 ## Encoding Section Details
 
-- Locations use bit indices where `0` is least significant bit.
-- Range `a..b` covers bits `[a, b]` inclusive; e.g., `7..11` covers bits 7,8,9,10,11.
-- RHS expressions can be immediates, parameters, operand values, slices/indexes of bitvectors.
-- Register operands can be sliced too, splitting one register across several
-  fields. x86-64 r8..r15 put their 4th number bit in the REX prefix and the low
-  three in ModR/M: `0 => dst[3]` and `16..18 => dst[0..2]`.
+An `encoding` lists the fields of the instruction word the way the ISA's manual
+draws them: high bit first within an **encoding unit**, units in emission order.
+The unit is the ISA's `ENCODING_UNIT` parameter — 32 for a fixed-width word ISA
+like RISC-V or AArch64, 8 for a byte-stream ISA like x86-64, whose manual draws
+one byte at a time. With no `ENCODING_UNIT` declared the whole encoding is a
+single unit. A field wider than one unit spans whole units and is little-endian
+across them, which is how a multi-byte displacement or immediate reaches memory.
 
-Examples from `tmdl/checks/Inputs/simple.tmdl`:
+Every field carries its own width, so the fields together determine the
+instruction's size and no bit position is ever written down:
+
+- An operand or parameter contributes its declared width — `bits<N>`, or the
+  `ENCODING_LEN` of a register operand's class.
+- A bit slice contributes its span: `imm[4..0]` is five bits, `imm[11]` is one.
+  An operand whose width is an ISA-parameter expression (the RV32/RV64
+  `bits<log2Ceil(self.XLEN)>` shift amount) has no single width, so it must be
+  sliced explicitly.
+- A literal contributes the bits it spells: one per binary digit and four per
+  hex digit, so `0b000` is three bits and `0x8b` is eight. A decimal literal
+  spells no width and is rejected. Underscores group digits: `0b0000_1111`.
+
+Register operands can be sliced, splitting one register across several fields.
+x86-64 r8..r15 put their 4th number bit in the REX prefix and the low three in
+ModR/M, so with `ENCODING_UNIT = 8` a register-to-register instruction reads as
+the manual's `0100WRXB`, opcode, `mod reg r/m`:
 
 ```
 encoding {
-  0 => 1,
-  1..5 => rs1,
-  6..10 => rs2,
-  11..15 => rd,
-  16..31 => 0,
+  0b0100, REXW, src[3], 0b0, dst[3],
+  OPCODE,
+  0b11, src[2..0], dst[2..0],
+}
+```
+
+Example from `tmdl/checks/Inputs/simple.tmdl`:
+
+```
+encoding {
+  0x0000,
+  rd,
+  rs2,
+  rs1,
+  0b1,
 }
 ```
 

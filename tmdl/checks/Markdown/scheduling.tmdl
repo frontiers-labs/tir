@@ -4,7 +4,7 @@ isa TestIsa {}
 sched_class ALU { latency = 1; }
 instruction Nop for [TestIsa] {
     param MNEMONIC: String = "nop";
-    encoding { 0..31 => 0, }
+    encoding { 0x00000000 }
     asm { "{self.MNEMONIC}" }
     schedule { units = [ALU]; }
     behavior { todo(); }

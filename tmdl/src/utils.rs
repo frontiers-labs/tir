@@ -168,7 +168,7 @@ pub fn resolve_template_chain<'a>(
 pub fn resolve_effective_encoding_for_instruction<'a>(
     inst: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
-) -> &'a [ast::EncodingArm] {
+) -> &'a [ast::EncodingField] {
     if !inst.encoding.is_empty() {
         return &inst.encoding;
     }
@@ -207,11 +207,15 @@ pub fn resolve_effective_schedule_for_instruction<'a>(
     })
 }
 
+/// The instruction's encoding as instruction-word bit ranges, laid out in the
+/// encoding units its ISA declares (see [`crate::encoding`]).
 pub fn get_encoding_arms<'a>(
     instruction: &'a Instruction,
     item_cache: &HashMap<&'a str, &'a Item>,
 ) -> Vec<ast::EncodingArm> {
-    resolve_effective_encoding_for_instruction(instruction, item_cache).to_vec()
+    let fields = resolve_effective_encoding_for_instruction(instruction, item_cache);
+    let unit = crate::encoding::encoding_unit(&resolve_isa_param_values(instruction, item_cache));
+    crate::encoding::encoding_arms(fields, unit).unwrap_or_default()
 }
 
 /// The instruction's encoding size in bytes. With no encoding (a text-only
@@ -221,12 +225,11 @@ pub fn encoding_width_bytes<'a>(
     instruction: &'a Instruction,
     item_cache: &HashMap<&'a str, &'a Item>,
 ) -> u64 {
-    get_encoding_arms(instruction, item_cache)
+    let total: u16 = resolve_effective_encoding_for_instruction(instruction, item_cache)
         .iter()
-        .map(|arm| arm.end.unwrap_or(arm.start))
-        .max()
-        .map(|max_end| ((max_end + 1) as u32).div_ceil(8) as u64)
-        .unwrap_or(0)
+        .map(|field| field.width)
+        .sum();
+    u64::from(u32::from(total).div_ceil(8))
 }
 
 pub fn resolve_params_for_instruction<'a>(
@@ -564,8 +567,8 @@ pub(crate) fn map_child_exprs(
         }),
         ast::Expr::Slice(s) => ast::Expr::Slice(ast::Slice {
             base: Box::new(f(&s.base)),
-            start: s.start,
-            end: s.end,
+            hi: s.hi,
+            lo: s.lo,
             span: s.span,
         }),
         ast::Expr::Try(t) => ast::Expr::Try(ast::TryExcept {

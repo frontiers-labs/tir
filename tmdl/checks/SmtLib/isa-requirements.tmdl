@@ -25,7 +25,7 @@ instruction CAdd for [C] {
     param OPCODE: bits<2> = 0b10;
 
     operands { rd: GPR, rs2: GPR, }
-    encoding { 0..1 => OPCODE, 2..6 => rs2, 7..11 => rd, }
+    encoding { rd, rs2, OPCODE }
     asm { "{self.MNEMONIC} {rd}, {rs2}" }
     behavior { rd = rd + rs2; }
 }
@@ -35,7 +35,7 @@ instruction C64Add for [C64] {
     param OPCODE: bits<2> = 0b01;
 
     operands { rd: GPR, rs2: GPR, }
-    encoding { 0..1 => OPCODE, 2..6 => rs2, 7..11 => rd, }
+    encoding { rd, rs2, OPCODE }
     asm { "{self.MNEMONIC} {rd}, {rs2}" }
     behavior { rd = rd + rs2; }
 }

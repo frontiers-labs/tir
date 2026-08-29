@@ -29,10 +29,11 @@ instruction GuardedDiv for [GuardIsa] {
     }
 
     encoding {
-        0..6 => 0b0110011,
-        7..11 => rd,
-        15..19 => rs1,
-        20..24 => rs2,
+        rs2,
+        rs1,
+        0b000,
+        rd,
+        0b0110011,
     }
 
     asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
@@ -57,10 +58,11 @@ instruction PlainAdd for [GuardIsa] {
     }
 
     encoding {
-        0..6 => 0b0110111,
-        7..11 => rd,
-        15..19 => rs1,
-        20..24 => rs2,
+        rs2,
+        rs1,
+        0b000,
+        rd,
+        0b0110111,
     }
 
     asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }

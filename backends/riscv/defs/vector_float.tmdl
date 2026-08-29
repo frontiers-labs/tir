@@ -44,13 +44,13 @@ template OpFVV for [VF] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => vs1,
-        20..24 => vs2,
-        25 => VM,
-        26..31 => FUNCT6,
+        FUNCT6,
+        VM,
+        vs2,
+        vs1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -83,13 +83,13 @@ template OpFVF for [VF] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => vs2,
-        25 => VM,
-        26..31 => FUNCT6,
+        FUNCT6,
+        VM,
+        vs2,
+        rs1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -151,13 +151,13 @@ template OpFUnary for [VF] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => VS1,
-        20..24 => vs2,
-        25 => VM,
-        26..31 => FUNCT6,
+        FUNCT6,
+        VM,
+        vs2,
+        VS1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1272,13 +1272,13 @@ instruction VFMvVF for [VF] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => 0b0,
-        25 => 0b1,
-        26..31 => FUNCT6,
+        FUNCT6,
+        0b1,
+        0b00000,
+        rs1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1309,13 +1309,13 @@ instruction VFMvFS for [VF] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => fd,
-        12..14 => FUNCT3,
-        15..19 => 0b0,
-        20..24 => vs2,
-        25 => 0b1,
-        26..31 => FUNCT6,
+        FUNCT6,
+        0b1,
+        vs2,
+        0b00000,
+        FUNCT3,
+        fd,
+        OPCODE,
     }
 
     asm {
@@ -1341,13 +1341,13 @@ instruction VFMvSF for [VF] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => 0b0,
-        25 => 0b1,
-        26..31 => FUNCT6,
+        FUNCT6,
+        0b1,
+        0b00000,
+        rs1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {

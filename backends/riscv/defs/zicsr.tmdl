@@ -45,11 +45,11 @@ template CSRType for [Zicsr] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..31 => csr,
+        csr,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -69,11 +69,11 @@ template CSRImmType for [Zicsr] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => zimm,
-        20..31 => csr,
+        csr,
+        zimm,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {

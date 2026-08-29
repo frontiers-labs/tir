@@ -633,7 +633,7 @@ fn infer<'a>(
             }
         },
 
-        // base[lo..hi] → bits<hi - lo + 1>  (inclusive on both ends)
+        // base[hi..lo] → bits<hi - lo + 1>  (inclusive on both ends)
         ast::Expr::Slice(slc) => {
             let base_ty = infer(&slc.base, env, tvg, subst, cache, diags, file_name);
             let width_var = tvg.fresh();
@@ -645,7 +645,7 @@ fn infer<'a>(
                 diags,
                 file_name,
             );
-            Type::Bits(slc.end - slc.start + 1)
+            Type::Bits(slc.hi - slc.lo + 1)
         }
 
         // base[i] → bits<1>

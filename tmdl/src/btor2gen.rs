@@ -625,7 +625,7 @@ fn decode_layout(
                     pieces
                         .entry(id.name.clone())
                         .or_default()
-                        .push((s.start, s.end, word_lo, word_hi));
+                        .push((s.lo, s.hi, word_lo, word_hi));
                 }
             }
             ast::Expr::IndexAccess(s) => {

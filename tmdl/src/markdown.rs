@@ -10,7 +10,7 @@ use crate::ast::{
 };
 use crate::error::TMDLError;
 use crate::utils::{
-    resolve_effective_asm_for_instruction, resolve_effective_encoding_for_instruction,
+    get_encoding_arms, resolve_effective_asm_for_instruction,
     resolve_effective_schedule_for_instruction, resolve_operands_for_instruction,
     resolve_params_for_instruction,
 };
@@ -325,9 +325,7 @@ fn write_instructions(
                 writeln!(output, "\n**Scheduling class:** {classes}")?;
             }
 
-            let mut encoding = resolve_effective_encoding_for_instruction(instruction, item_cache)
-                .iter()
-                .collect::<Vec<_>>();
+            let mut encoding = get_encoding_arms(instruction, item_cache);
             encoding.sort_by_key(|arm| std::cmp::Reverse(arm.end.unwrap_or(arm.start)));
             if !encoding.is_empty() {
                 writeln!(output, "\n**Encoding**\n")?;
@@ -536,12 +534,7 @@ fn format_expr_with_precedence(expr: &Expr, parent_precedence: u8) -> String {
             .collect::<Vec<_>>()
             .join("::"),
         Expr::Field(field) => format!("{}.{}", format_expr(&field.base), field.member),
-        Expr::Slice(slice) => format!(
-            "{}[{}..{}]",
-            format_expr(&slice.base),
-            slice.start,
-            slice.end
-        ),
+        Expr::Slice(slice) => format!("{}[{}..{}]", format_expr(&slice.base), slice.hi, slice.lo),
         Expr::IndexAccess(index) => format!("{}[{}]", format_expr(&index.base), index.index),
         Expr::Assign(assign) => {
             format!(

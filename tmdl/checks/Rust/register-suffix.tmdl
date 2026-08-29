@@ -48,11 +48,11 @@ instruction AddVector4S for [SuffixIsa] {
     }
 
     encoding {
-        0..4 => vd,
-        5..9 => vn,
-        10..15 => 0b100001,
-        16..20 => vm,
-        21..31 => 0b01001110101,
+        0b01001110101,
+        vm,
+        0b100001,
+        vn,
+        vd,
     }
 
     asm {

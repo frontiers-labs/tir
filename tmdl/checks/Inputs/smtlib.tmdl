@@ -60,12 +60,12 @@ template RType for [TestIsa] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => rs2,
-        25..31 => FUNCT7,
+        FUNCT7,
+        rs2,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -85,11 +85,11 @@ template BType for [TestIsa] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..19 => imm,
-        20..24 => rs1,
-        25..29 => rs2,
-        30..31 => FUNCT2,
+        FUNCT2,
+        rs2,
+        rs1,
+        imm,
+        OPCODE,
     }
 
     asm {

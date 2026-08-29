@@ -39,12 +39,13 @@ instruction VLe8 for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -69,12 +70,13 @@ instruction VSe8 for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -99,13 +101,13 @@ instruction VLe8FF for [RVV] {
     }
 
     encoding {
-        20..24 => 0x10,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -131,14 +133,14 @@ instruction VLse8 for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b10,
+        0b1,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -164,14 +166,14 @@ instruction VSse8 for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b10,
+        0b1,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -197,14 +199,14 @@ instruction VVluxei8 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b01,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -230,14 +232,14 @@ instruction VVloxei8 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b11,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -263,14 +265,14 @@ instruction VVsuxei8 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b01,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -296,14 +298,14 @@ instruction VVsoxei8 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b11,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -329,12 +331,13 @@ instruction VLe8M for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -361,12 +364,13 @@ instruction VSe8M for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -394,13 +398,13 @@ instruction VLe8FFM for [RVV] {
     }
 
     encoding {
-        20..24 => 0x10,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -428,14 +432,14 @@ instruction VLse8M for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -462,14 +466,14 @@ instruction VSse8M for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -496,14 +500,14 @@ instruction VVluxei8M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -530,14 +534,14 @@ instruction VVloxei8M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -564,14 +568,14 @@ instruction VVsuxei8M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -598,14 +602,14 @@ instruction VVsoxei8M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -630,12 +634,13 @@ instruction VLe16 for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -660,12 +665,13 @@ instruction VSe16 for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -690,13 +696,13 @@ instruction VLe16FF for [RVV] {
     }
 
     encoding {
-        20..24 => 0x10,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -722,14 +728,14 @@ instruction VLse16 for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b10,
+        0b1,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -755,14 +761,14 @@ instruction VSse16 for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b10,
+        0b1,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -788,14 +794,14 @@ instruction VVluxei16 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b01,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -821,14 +827,14 @@ instruction VVloxei16 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b11,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -854,14 +860,14 @@ instruction VVsuxei16 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b01,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -887,14 +893,14 @@ instruction VVsoxei16 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b11,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -920,12 +926,13 @@ instruction VLe16M for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -952,12 +959,13 @@ instruction VSe16M for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -985,13 +993,13 @@ instruction VLe16FFM for [RVV] {
     }
 
     encoding {
-        20..24 => 0x10,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1019,14 +1027,14 @@ instruction VLse16M for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1053,14 +1061,14 @@ instruction VSse16M for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1087,14 +1095,14 @@ instruction VVluxei16M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1121,14 +1129,14 @@ instruction VVloxei16M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1155,14 +1163,14 @@ instruction VVsuxei16M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1189,14 +1197,14 @@ instruction VVsoxei16M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1221,12 +1229,13 @@ instruction VLe32 for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1251,12 +1260,13 @@ instruction VSe32 for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1281,13 +1291,13 @@ instruction VLe32FF for [RVV] {
     }
 
     encoding {
-        20..24 => 0x10,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1313,14 +1323,14 @@ instruction VLse32 for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b10,
+        0b1,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1346,14 +1356,14 @@ instruction VSse32 for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b10,
+        0b1,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1379,14 +1389,14 @@ instruction VVluxei32 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b01,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1412,14 +1422,14 @@ instruction VVloxei32 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b11,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1445,14 +1455,14 @@ instruction VVsuxei32 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b01,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1478,14 +1488,14 @@ instruction VVsoxei32 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b11,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1511,12 +1521,13 @@ instruction VLe32M for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1543,12 +1554,13 @@ instruction VSe32M for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1576,13 +1588,13 @@ instruction VLe32FFM for [RVV] {
     }
 
     encoding {
-        20..24 => 0x10,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1610,14 +1622,14 @@ instruction VLse32M for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1644,14 +1656,14 @@ instruction VSse32M for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1678,14 +1690,14 @@ instruction VVluxei32M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1712,14 +1724,14 @@ instruction VVloxei32M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1746,14 +1758,14 @@ instruction VVsuxei32M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1780,14 +1792,14 @@ instruction VVsoxei32M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1812,12 +1824,13 @@ instruction VLe64 for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1842,12 +1855,13 @@ instruction VSe64 for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1872,13 +1886,13 @@ instruction VLe64FF for [RVV] {
     }
 
     encoding {
-        20..24 => 0x10,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1904,14 +1918,14 @@ instruction VLse64 for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b10,
+        0b1,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -1937,14 +1951,14 @@ instruction VSse64 for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b10,
+        0b1,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -1970,14 +1984,14 @@ instruction VVluxei64 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b01,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2003,14 +2017,14 @@ instruction VVloxei64 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b11,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2036,14 +2050,14 @@ instruction VVsuxei64 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b01,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2069,14 +2083,14 @@ instruction VVsoxei64 for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b0000,
+        0b11,
+        0b1,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2102,12 +2116,13 @@ instruction VLe64M for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2134,12 +2149,13 @@ instruction VSe64M for [RVV] {
     }
 
     encoding {
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b00000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2167,13 +2183,13 @@ instruction VLe64FFM for [RVV] {
     }
 
     encoding {
-        20..24 => 0x10,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b000000,
+        0b0,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2201,14 +2217,14 @@ instruction VLse64M for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2235,14 +2251,14 @@ instruction VSse64M for [RVV] {
     }
 
     encoding {
-        20..24 => rs2,
-        26..27 => 0b10,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2269,14 +2285,14 @@ instruction VVluxei64M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2303,14 +2319,14 @@ instruction VVloxei64M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2337,14 +2353,14 @@ instruction VVsuxei64M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b01,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2371,14 +2387,14 @@ instruction VVsoxei64M for [RVV] {
     }
 
     encoding {
-        20..24 => vs2,
-        26..27 => 0b11,
-        28..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b0,
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2403,14 +2419,14 @@ instruction VL1Re8 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b000,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2435,14 +2451,14 @@ instruction VL1Re16 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b000,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2467,14 +2483,14 @@ instruction VL1Re32 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b000,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2499,14 +2515,14 @@ instruction VL1Re64 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b000,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2531,14 +2547,14 @@ instruction VS1R for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b000,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2563,14 +2579,14 @@ instruction VL2Re8 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b001,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b001,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2595,14 +2611,14 @@ instruction VL2Re16 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b001,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b001,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2627,14 +2643,14 @@ instruction VL2Re32 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b001,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b001,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2659,14 +2675,14 @@ instruction VL2Re64 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b001,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b001,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2691,14 +2707,14 @@ instruction VS2R for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b001,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b001,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2723,14 +2739,14 @@ instruction VL4Re8 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b011,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b011,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2755,14 +2771,14 @@ instruction VL4Re16 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b011,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b011,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2787,14 +2803,14 @@ instruction VL4Re32 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b011,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b011,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2819,14 +2835,14 @@ instruction VL4Re64 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b011,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b011,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2851,14 +2867,14 @@ instruction VS4R for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b011,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b011,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -2883,14 +2899,14 @@ instruction VL8Re8 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b111,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b111,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2915,14 +2931,14 @@ instruction VL8Re16 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b111,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b111,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2947,14 +2963,14 @@ instruction VL8Re32 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b111,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b111,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -2979,14 +2995,14 @@ instruction VL8Re64 for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b111,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b111,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -3011,14 +3027,14 @@ instruction VS8R for [RVV] {
     }
 
     encoding {
-        20..24 => 0x08,
-        26..28 => 0b0,
-        29..31 => 0b111,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b111,
+        0b000,
+        0b1,
+        0b01000,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {
@@ -3043,13 +3059,13 @@ instruction VLmV for [RVV] {
     }
 
     encoding {
-        20..24 => 0x0b,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b01011,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -3074,13 +3090,13 @@ instruction VSmV for [RVV] {
     }
 
     encoding {
-        20..24 => 0x0b,
-        26..31 => 0b0,
-        0..6 => OPCODE,
-        7..11 => vs3,
-        12..14 => WIDTH3,
-        15..19 => rs1,
-        25 => 0b1,
+        0b000000,
+        0b1,
+        0b01011,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
     }
 
     asm {

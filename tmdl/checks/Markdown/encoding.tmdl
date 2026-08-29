@@ -4,11 +4,11 @@ isa TestIsa {}
 
 instruction Nop for [TestIsa] {
     param MNEMONIC: String = "nop";
-    encoding { 0..31 => 0, }
+    encoding { 0x00000000 }
     asm { "{self.MNEMONIC}" }
     behavior { todo(); }
 }
 
 // CHECK: **Encoding**
 // CHECK: | Bits | Value |
-// CHECK: | 31–0 | `0` |
+// CHECK: | 31–0 | `0x00000000` |

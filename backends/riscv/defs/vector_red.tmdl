@@ -23,13 +23,13 @@ template OpRedVV for [RVV] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => vs1,
-        20..24 => vs2,
-        25 => VM,
-        26..31 => FUNCT6,
+        FUNCT6,
+        VM,
+        vs2,
+        vs1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {

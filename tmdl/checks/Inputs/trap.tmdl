@@ -44,7 +44,7 @@ instruction TCall for [TrapIsa] {
     param MNEMONIC: String = "tcall";
 
     encoding {
-        0..31 => 0b1110011,
+        0x00000073,
     }
 
     asm { "{self.MNEMONIC}" }
@@ -63,11 +63,11 @@ instruction TLoad for [TrapIsa] {
     }
 
     encoding {
-        0..6 => 0b0000011,
-        7..11 => rd,
-        12..14 => 0b010,
-        15..19 => rs1,
-        20..31 => 0,
+        0x000,
+        rs1,
+        0b010,
+        rd,
+        0b0000011,
     }
 
     asm { "{self.MNEMONIC} {rd}, {rs1}" }

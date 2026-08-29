@@ -1653,6 +1653,7 @@ fn check_instruction_consistent(
             effective_encoding,
             &params_cache,
             &operands_cache,
+            crate::encoding::encoding_unit(&isa_params),
             file_name,
         ));
     }
@@ -2246,42 +2247,15 @@ fn expr_span(e: &ast::Expr) -> Span {
 
 fn check_encoding(
     instruction: &ast::Instruction,
-    encoding: &[ast::EncodingArm],
+    encoding: &[ast::EncodingField],
     params_cache: &HashMap<&str, (Type, Option<ast::Expr>)>,
     operands_cache: &HashMap<&str, Type>,
+    unit: Option<u16>,
     file_name: &str,
 ) -> Vec<(String, Diag)> {
     let mut diags = vec![];
 
-    let known = |name: &str| params_cache.contains_key(name) || operands_cache.contains_key(name);
-    let invalid_value = |span: Span| {
-        (
-            file_name.to_string(),
-            Rich::custom(
-                span,
-                format!(
-                    "Encoding value in instruction '{}' must be a literal, \
-                     parameter, or operand reference",
-                    instruction.name
-                ),
-            ),
-        )
-    };
-    let unknown_value = |name: &str, span: Span| {
-        (
-            file_name.to_string(),
-            Rich::custom(
-                span,
-                format!(
-                    "Unknown '{}' in encoding of instruction '{}': \
-                     not a parameter or operand",
-                    name, instruction.name
-                ),
-            ),
-        )
-    };
-
-    let value_width = |name: &str| -> Option<u16> {
+    let declared_width = |name: &str| -> Option<u16> {
         let ty = params_cache
             .get(name)
             .map(|(ty, _)| ty)
@@ -2291,7 +2265,7 @@ fn check_encoding(
             _ => None,
         }
     };
-    let width_error = |span: Span, message: String| {
+    let out_of_range = |span: Span, message: String| {
         (
             file_name.to_string(),
             Rich::custom(
@@ -2304,78 +2278,36 @@ fn check_encoding(
         )
     };
 
-    for arm in encoding {
-        if let ast::Expr::Lit(_) = arm.value {
+    for field in encoding {
+        let Some(name) = encoding_value_name(&field.value) else {
             continue;
-        }
-
-        match encoding_value_name(&arm.value) {
-            Some(name) if !known(name) => diags.push(unknown_value(name, arm.span)),
-            Some(name) => {
-                let arm_width = arm.end.unwrap_or(arm.start) - arm.start + 1;
-                match &arm.value {
-                    ast::Expr::Slice(slc) => {
-                        let slice_width = slc.end - slc.start + 1;
-                        if slice_width != arm_width {
-                            diags.push(width_error(
-                                arm.span,
-                                format!(
-                                    "slice '{name}[{}..{}]' is {slice_width} bits but the arm covers {arm_width}",
-                                    slc.start, slc.end
-                                ),
-                            ));
-                        }
-                        if let Some(width) = value_width(name)
-                            && slc.end >= width
-                        {
-                            diags.push(width_error(
-                                arm.span,
-                                format!(
-                                    "slice '{name}[{}..{}]' exceeds bits<{width}>",
-                                    slc.start, slc.end
-                                ),
-                            ));
-                        }
-                    }
-                    ast::Expr::IndexAccess(idx) => {
-                        if arm_width != 1 {
-                            diags.push(width_error(
-                                arm.span,
-                                format!(
-                                    "single bit '{name}[{}]' assigned to a {arm_width}-bit arm",
-                                    idx.index
-                                ),
-                            ));
-                        }
-                        if let Some(width) = value_width(name)
-                            && idx.index >= width
-                        {
-                            diags.push(width_error(
-                                arm.span,
-                                format!("bit '{name}[{}]' exceeds bits<{width}>", idx.index),
-                            ));
-                        }
-                    }
-                    ast::Expr::Ident(_) => {
-                        if let Some(width) = value_width(name)
-                            && arm_width != width
-                        {
-                            diags.push(width_error(
-                                arm.span,
-                                format!(
-                                    "'{name}' is bits<{width}> but the arm covers {arm_width} bits"
-                                ),
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            None => {
-                diags.push(invalid_value(arm.span));
-            }
+        };
+        let Some(width) = declared_width(name) else {
+            continue;
+        };
+        match &field.value {
+            ast::Expr::Slice(slc) if slc.hi >= width => diags.push(out_of_range(
+                field.span,
+                format!(
+                    "slice '{name}[{}..{}]' exceeds bits<{width}>",
+                    slc.hi, slc.lo
+                ),
+            )),
+            ast::Expr::IndexAccess(idx) if idx.index >= width => diags.push(out_of_range(
+                field.span,
+                format!("bit '{name}[{}]' exceeds bits<{width}>", idx.index),
+            )),
+            _ => {}
         }
     }
+
+    diags.extend(crate::encoding::check_encoding_units(
+        encoding,
+        unit,
+        &instruction.name,
+        instruction.span,
+        file_name,
+    ));
 
     diags
 }

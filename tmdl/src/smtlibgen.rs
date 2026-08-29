@@ -913,7 +913,7 @@ fn build_encoding_metadata<'a>(
                         ast::Expr::Ident(id) => Some(id.name.to_lowercase()),
                         _ => None,
                     };
-                    (operand, slice.start, "0".to_string())
+                    (operand, slice.lo, "0".to_string())
                 }
                 ast::Expr::IndexAccess(index) => {
                     let operand = match &*index.base {
@@ -982,7 +982,7 @@ fn build_smt_encoding<'a>(
                     ast::Expr::Ident(id) => id.name.to_lowercase(),
                     _ => "(_ bv0 64)".to_string(),
                 };
-                format!("((_ extract {} {}) {})", s.end, s.start, base_str)
+                format!("((_ extract {} {}) {})", s.hi, s.lo, base_str)
             }
             ast::Expr::IndexAccess(s) => {
                 let base_str = match &*s.base {
@@ -2673,7 +2673,7 @@ fn build_decoder<'a>(
                         operand_pieces
                             .entry(id.name.clone())
                             .or_default()
-                            .push((s.start, s.end, word_lo, word_hi));
+                            .push((s.lo, s.hi, word_lo, word_hi));
                     }
                 }
                 ast::Expr::IndexAccess(s) => {

@@ -19,7 +19,7 @@ instruction ImmSplice for [Arch] {
     param MNEMONIC: String = "immsplice";
     param OPCODE: bits<7> = 0b0010011;
     operands { imm: bits<13> }
-    encoding { 0..6 => OPCODE, 7 => imm[12], 8..11 => imm[1..4], 12..19 => imm[5..12] }
+    encoding { imm[12..5], imm[4..1], imm[12], OPCODE }
     asm { "{self.MNEMONIC} {imm}" }
     behavior { imm = imm; }
 }
@@ -27,7 +27,7 @@ instruction ImmSplice for [Arch] {
 instruction RegSplice for [Arch] {
     param MNEMONIC: String = "regsplice";
     operands { dst: GPR }
-    encoding { 0 => dst[3], 1..7 => 0b0100100, 8..10 => dst[0..2] }
+    encoding { dst[2..0], 0b0100100, dst[3] }
     asm { "{self.MNEMONIC} {dst}" }
     behavior { dst = dst; }
 }

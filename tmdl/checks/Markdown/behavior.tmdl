@@ -11,7 +11,7 @@ register_class GPR for [TestIsa] {
 instruction Add for [TestIsa] {
     param MNEMONIC: String = "add";
     operands { rd: GPR, rs1: GPR, rs2: GPR, }
-    encoding { 0..4 => rd, 5..9 => rs1, 10..14 => rs2, 15..31 => 0, }
+    encoding { 0b0_0000_0000_0000_0000, rs2, rs1, rd }
     asm { "{self.MNEMONIC} {rd}, {rs1}, {rs2}" }
     behavior { rd = rs1 + rs2; }
 }

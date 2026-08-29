@@ -2,6 +2,7 @@
 
 isa RV32I {
     param XLEN: Integer = 32;
+    param ENCODING_UNIT: Integer = 32;
 
     // Machine-mode trap entry (M is the only implemented privilege level):
     // mepc/mcause/mtval record the exception, mstatus stacks MIE into MPIE
@@ -20,6 +21,7 @@ isa RV32I {
 
 isa RV64I {
     param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 32;
 
     // Machine-mode trap entry (M is the only implemented privilege level):
     // mepc/mcause/mtval record the exception, mstatus stacks MIE into MPIE
@@ -77,12 +79,12 @@ template RType for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => rs2,
-        25..31 => FUNCT7,
+        FUNCT7,
+        rs2,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -104,12 +106,12 @@ template RTypeWord for [RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => rs2,
-        25..31 => FUNCT7,
+        FUNCT7,
+        rs2,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -130,11 +132,11 @@ template IType for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..31 => imm,
+        imm,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -156,11 +158,11 @@ template ITypePC for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..31 => imm,
+        imm,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -181,11 +183,11 @@ template ITypeWord for [RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..31 => imm,
+        imm,
+        rs1,
+        FUNCT3,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -217,12 +219,12 @@ template SType for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => imm[0..4],
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => rs2,
-        25..31 => imm[5..11],
+        imm[11..5],
+        rs2,
+        rs1,
+        FUNCT3,
+        imm[4..0],
+        OPCODE,
     }
 
     asm {
@@ -249,14 +251,14 @@ template BType for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7 => imm[11],
-        8..11 => imm[1..4],
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => rs2,
-        25..30 => imm[5..10],
-        31 => imm[12],
+        imm[12],
+        imm[10..5],
+        rs2,
+        rs1,
+        FUNCT3,
+        imm[4..1],
+        imm[11],
+        OPCODE,
     }
 
     asm {
@@ -278,14 +280,14 @@ template BTypePC for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7 => imm[11],
-        8..11 => imm[1..4],
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => rs2,
-        25..30 => imm[5..10],
-        31 => imm[12],
+        imm[12],
+        imm[10..5],
+        rs2,
+        rs1,
+        FUNCT3,
+        imm[4..1],
+        imm[11],
+        OPCODE,
     }
 
     asm {
@@ -309,9 +311,9 @@ template UType for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..31 => imm,
+        imm,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -331,9 +333,9 @@ template UTypePC for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..31 => imm,
+        imm,
+        rd,
+        OPCODE,
     }
 
     asm {
@@ -352,12 +354,12 @@ template JType for [RV32I, RV64I] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..19 => imm[12..19],
-        20 => imm[11],
-        21..30 => imm[1..10],
-        31 => imm[20],
+        imm[20],
+        imm[10..1],
+        imm[11],
+        imm[19..12],
+        rd,
+        OPCODE,
     }
 
     asm {

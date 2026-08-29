@@ -427,10 +427,13 @@ fn mcpu_resolves_machine_models() {
 
 #[test]
 fn isa_params_resolve_from_the_selected_base() {
-    assert_eq!(tir_riscv::isa_params(&[Feature::RV32I]), vec![("XLEN", 32)]);
+    assert_eq!(
+        tir_riscv::isa_params(&[Feature::RV32I]),
+        vec![("XLEN", 32), ("ENCODING_UNIT", 32)]
+    );
     assert_eq!(
         tir_riscv::isa_params(&[Feature::RV64I, Feature::RVM]),
-        vec![("XLEN", 64)]
+        vec![("XLEN", 64), ("ENCODING_UNIT", 32)]
     );
     // VR is dynamically sized (width = vlenb, an architectural runtime value),
     // so it carries no static width here; its size is supplied by the machine.

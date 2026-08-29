@@ -44,9 +44,9 @@ instruction RotLike for [FlagIsa] {
     }
 
     encoding {
-        0..4 => dst,
-        5..10 => imm,
-        11..31 => 0,
+        0b0_0000_0000_0000_0000_0000,
+        imm,
+        dst,
     }
 
     asm {
@@ -74,9 +74,9 @@ instruction AdcLike for [FlagIsa] {
     }
 
     encoding {
-        0..4 => dst,
-        5..9 => src,
-        10..31 => 0,
+        0b00_0000_0000_0000_0000_0000,
+        src,
+        dst,
     }
 
     asm {
@@ -100,8 +100,8 @@ instruction SetccLike for [FlagIsa] {
     }
 
     encoding {
-        0..4 => dst,
-        5..31 => 0,
+        0b000_0000_0000_0000_0000_0000_0000,
+        dst,
     }
 
     asm {
@@ -127,9 +127,9 @@ instruction Cmp for [FlagIsa] {
     }
 
     encoding {
-        0..4 => rn,
-        5..9 => rm,
-        10..31 => 0,
+        0b00_0000_0000_0000_0000_0000,
+        rm,
+        rn,
     }
 
     asm {
@@ -157,9 +157,9 @@ instruction CmpPreserve for [FlagIsa] {
     }
 
     encoding {
-        0..4 => rn,
-        5..9 => rm,
-        10..31 => 0,
+        0b00_0000_0000_0000_0000_0000,
+        rm,
+        rn,
     }
 
     asm {
@@ -184,8 +184,8 @@ instruction BranchEq for [FlagIsa] {
     }
 
     encoding {
-        0..11 => imm,
-        12..31 => 0,
+        0x00000,
+        imm,
     }
 
     asm {

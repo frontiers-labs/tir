@@ -22,13 +22,13 @@ template OpWideVV for [RVV] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => vs1,
-        20..24 => vs2,
-        25 => VM,
-        26..31 => FUNCT6,
+        FUNCT6,
+        VM,
+        vs2,
+        vs1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -60,13 +60,13 @@ template OpWideVX for [RVV] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => rs1,
-        20..24 => vs2,
-        25 => VM,
-        26..31 => FUNCT6,
+        FUNCT6,
+        VM,
+        vs2,
+        rs1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -150,13 +150,13 @@ template OpNarrowWI for [RVV] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => imm,
-        20..24 => vs2,
-        25 => VM,
-        26..31 => FUNCT6,
+        FUNCT6,
+        VM,
+        vs2,
+        imm,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {
@@ -189,13 +189,13 @@ template OpVext for [RVV] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => vd,
-        12..14 => FUNCT3,
-        15..19 => VS1,
-        20..24 => vs2,
-        25 => VM,
-        26..31 => FUNCT6,
+        FUNCT6,
+        VM,
+        vs2,
+        VS1,
+        FUNCT3,
+        vd,
+        OPCODE,
     }
 
     asm {

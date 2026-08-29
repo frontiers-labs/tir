@@ -132,7 +132,7 @@ fn emit_instruction_encoder(
                     dst,
                     &id.name,
                     IntField {
-                        op_lo: slc.start,
+                        op_lo: slc.lo,
                         word_lo,
                         width,
                     },
@@ -343,7 +343,7 @@ fn emit_instruction_decoder(
                     dst,
                     &id.name,
                     IntField {
-                        op_lo: slc.start,
+                        op_lo: slc.lo,
                         word_lo,
                         width,
                     },

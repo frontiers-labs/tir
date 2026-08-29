@@ -273,31 +273,24 @@
         "max_uops_per_instruction"
       ]
     },
-    "EncodingArm": {
-      "description": "One inclusive bit range in an instruction encoding.",
+    "EncodingField": {
+      "description": "One field of an instruction encoding. Fields are listed high bit first\nwithin an encoding unit, units in emission order.",
       "type": "object",
       "properties": {
-        "end": {
-          "description": "Highest encoded bit; omitted for a single-bit arm.",
-          "type": "integer",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0
-        },
-        "start": {
-          "description": "Lowest encoded bit.",
-          "type": "integer",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0
-        },
         "value": {
           "$ref": "#/$defs/Expr"
+        },
+        "width": {
+          "description": "Bits the field occupies, from what it names.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
         }
       },
       "additionalProperties": false,
       "required": [
-        "start",
+        "width",
         "value"
       ]
     },
@@ -613,13 +606,13 @@
           ]
         },
         {
-          "description": "Inclusive bit slice.",
+          "description": "Inclusive bit slice, high bit first.",
           "type": "object",
           "properties": {
             "base": {
               "$ref": "#/$defs/Expr"
             },
-            "end": {
+            "hi": {
               "type": "integer",
               "format": "uint16",
               "maximum": 65535,
@@ -629,7 +622,7 @@
               "type": "string",
               "const": "slice"
             },
-            "start": {
+            "lo": {
               "type": "integer",
               "format": "uint16",
               "maximum": 65535,
@@ -640,8 +633,8 @@
           "required": [
             "kind",
             "base",
-            "start",
-            "end"
+            "hi",
+            "lo"
           ]
         },
         {
@@ -1100,7 +1093,7 @@
             "encoding": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/EncodingArm"
+                "$ref": "#/$defs/EncodingField"
               }
             },
             "isas": {
@@ -1157,7 +1150,7 @@
             "encoding": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/EncodingArm"
+                "$ref": "#/$defs/EncodingField"
               }
             },
             "isas": {

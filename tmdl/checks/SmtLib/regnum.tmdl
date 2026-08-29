@@ -49,11 +49,11 @@ instruction TCsrSet for [RegIsa] {
     }
 
     encoding {
-        0..6 => OPCODE,
-        7..11 => rd,
-        12..14 => 0b010,
-        15..19 => rs1,
-        20..31 => csr,
+        csr,
+        rs1,
+        0b010,
+        rd,
+        OPCODE,
     }
 
     asm {

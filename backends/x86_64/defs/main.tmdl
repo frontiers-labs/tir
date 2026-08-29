@@ -4,10 +4,11 @@
 // REX.W prefix. r8..r15 carry the 4th register-number bit in the REX prefix
 // (REX.R for the ModR/M reg field, REX.B for the rm field); the low three bits
 // stay in ModR/M. Register operands are spliced across both fields via slices,
-// e.g. `dst[0..2]` and `dst[3]`.
+// e.g. `dst[2..0]` and `dst[3]`.
 
 isa X86 {
     param XLEN: Integer = 32;
+    param ENCODING_UNIT: Integer = 8;
 }
 
 isa SSE requires X86 {}
@@ -16,6 +17,7 @@ isa SSE2 requires SSE {}
 
 isa X86_64 requires [X86, SSE2] {
     param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
 }
 
 register_class PC for [X86_64] {
@@ -408,15 +410,15 @@ template RegShiftOne for [X86_64] {
     param EXT: bits<3>;
     operands { dst: GPR, }
     encoding {
-        0 => dst[3],
-        1 => 0b0,
-        2 => 0b0,
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0xD1,
-        16..18 => dst[0..2],
-        19..21 => EXT,
-        22..23 => 0b11,
+        0b0100,
+        0b1,
+        0b0,
+        0b0,
+        dst[3],
+        0xD1,
+        0b11,
+        EXT,
+        dst[2..0],
     }
     asm { "{self.MNEMONIC} {dst}" }
 }
@@ -426,15 +428,15 @@ template RegShiftOne32 for [X86_64] {
     param EXT: bits<3>;
     operands { dst: GPR32, }
     encoding {
-        0 => dst[3],
-        1 => 0b0,
-        2 => 0b0,
-        3 => 0b0,
-        4..7 => 0b0100,
-        8..15 => 0xD1,
-        16..18 => dst[0..2],
-        19..21 => EXT,
-        22..23 => 0b11,
+        0b0100,
+        0b0,
+        0b0,
+        0b0,
+        dst[3],
+        0xD1,
+        0b11,
+        EXT,
+        dst[2..0],
     }
     asm { "{self.MNEMONIC} {dst}" }
 }
@@ -444,10 +446,10 @@ template RegShiftOne32Norex for [X86] {
     param EXT: bits<3>;
     operands { dst: GPR32low, }
     encoding {
-        0..7 => 0xD1,
-        8..10 => dst[0..2],
-        11..13 => EXT,
-        14..15 => 0b11,
+        0xD1,
+        0b11,
+        EXT,
+        dst[2..0],
     }
     asm { "{self.MNEMONIC} {dst}" }
 }
@@ -468,11 +470,11 @@ template RegRegExt32Norex for [X86] {
     param OPCODE: bits<8>;
     operands { dst: GPR32low, src: GPR32low, }
     encoding {
-        0..7 => 0x0F,
-        8..15 => OPCODE,
-        16..18 => src[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b11,
+        0x0F,
+        OPCODE,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
     asm { "{self.MNEMONIC} {dst}, {src}" }
 }
@@ -488,11 +490,11 @@ template RegRegImm32Norex for [X86] {
     param MNEMONIC: String;
     operands { dst: GPR32low, src: GPR32low, imm: bits<32>, }
     encoding {
-        0..7 => 0x69,
-        8..10 => src[0..2],
-        11..13 => dst[0..2],
-        14..15 => 0b11,
-        16..47 => imm,
+        0x69,
+        0b11,
+        dst[2..0],
+        src[2..0],
+        imm,
     }
     asm { "{self.MNEMONIC} {dst}, {src}, {imm}" }
 }
@@ -565,9 +567,9 @@ template JccRel32 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x0F,
-        8..15 => CC,
-        16..47 => imm,
+        0x0F,
+        CC,
+        imm,
     }
 
     asm {
@@ -580,9 +582,9 @@ template JccRel32Legacy for [X86] {
     param CC: bits<8>;
     operands { imm: bits<32>, }
     encoding {
-        0..7 => 0x0F,
-        8..15 => CC,
-        16..47 => imm,
+        0x0F,
+        CC,
+        imm,
     }
     asm { "{self.MNEMONIC} {imm}" }
 }
@@ -810,15 +812,15 @@ macro tmpl_rr {
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
             encoding {
-                0 => dst[3],
-                1 => 0b0,
-                2 => src[3],
-                3 => $rexw,
-                4..7 => 0b0100,
-                8..15 => OPCODE,
-                16..18 => dst[0..2],
-                19..21 => src[0..2],
-                22..23 => 0b11,
+                0b0100,
+                $rexw,
+                src[3],
+                0b0,
+                dst[3],
+                OPCODE,
+                0b11,
+                src[2..0],
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, {src}" }
         }
@@ -829,16 +831,16 @@ macro tmpl_rr {
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
             encoding {
-                0..7 => 0x66,
-                8 => dst[3],
-                9 => 0b0,
-                10 => src[3],
-                11 => 0b0,
-                12..15 => 0b0100,
-                16..23 => OPCODE,
-                24..26 => dst[0..2],
-                27..29 => src[0..2],
-                30..31 => 0b11,
+                0x66,
+                0b0100,
+                0b0,
+                src[3],
+                0b0,
+                dst[3],
+                OPCODE,
+                0b11,
+                src[2..0],
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, {src}" }
         }
@@ -849,12 +851,12 @@ macro tmpl_rr {
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
             encoding {
-                0..7 => OPCODE,
-                8..9 => dst[0..1],
-                10 => 0b1,
-                11..12 => src[0..1],
-                13 => 0b1,
-                14..15 => 0b11,
+                OPCODE,
+                0b11,
+                0b1,
+                src[1..0],
+                0b1,
+                dst[1..0],
             }
             asm { "{self.MNEMONIC} {dst}, {src}" }
         }
@@ -866,10 +868,10 @@ macro tmpl_rr {
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
             encoding {
-                0..7 => OPCODE,
-                8..10 => dst[0..2],
-                11..13 => src[0..2],
-                14..15 => 0b11,
+                OPCODE,
+                0b11,
+                src[2..0],
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, {src}" }
         }
@@ -881,11 +883,11 @@ macro tmpl_rr {
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
             encoding {
-                0..7 => 0x66,
-                8..15 => OPCODE,
-                16..18 => dst[0..2],
-                19..21 => src[0..2],
-                22..23 => 0b11,
+                0x66,
+                OPCODE,
+                0b11,
+                src[2..0],
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, {src}" }
         }
@@ -900,16 +902,16 @@ macro tmpl_ri {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<32>, }
             encoding {
-                0 => dst[3],
-                1 => 0b0,
-                2 => 0b0,
-                3 => $rexw,
-                4..7 => 0b0100,
-                8..15 => OPCODE,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
-                24..55 => imm,
+                0b0100,
+                $rexw,
+                0b0,
+                0b0,
+                dst[3],
+                OPCODE,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -921,16 +923,16 @@ macro tmpl_ri {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0 => dst[3],
-                1 => 0b0,
-                2 => 0b0,
-                3 => 0b0,
-                4..7 => 0b0100,
-                8..15 => OPCODE,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
-                24..31 => imm,
+                0b0100,
+                0b0,
+                0b0,
+                0b0,
+                dst[3],
+                OPCODE,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -942,17 +944,17 @@ macro tmpl_ri {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<16>, }
             encoding {
-                0..7 => 0x66,
-                8 => dst[3],
-                9 => 0b0,
-                10 => 0b0,
-                11 => 0b0,
-                12..15 => 0b0100,
-                16..23 => OPCODE,
-                24..26 => dst[0..2],
-                27..29 => EXT,
-                30..31 => 0b11,
-                32..47 => imm,
+                0x66,
+                0b0100,
+                0b0,
+                0b0,
+                0b0,
+                dst[3],
+                OPCODE,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -964,12 +966,12 @@ macro tmpl_ri {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => OPCODE,
-                8..9 => dst[0..1],
-                10 => 0b1,
-                11..13 => EXT,
-                14..15 => 0b11,
-                16..23 => imm,
+                OPCODE,
+                0b11,
+                EXT,
+                0b1,
+                dst[1..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -982,11 +984,11 @@ macro tmpl_ri {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<32>, }
             encoding {
-                0..7 => OPCODE,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
-                16..47 => imm,
+                OPCODE,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -999,12 +1001,12 @@ macro tmpl_ri {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<16>, }
             encoding {
-                0..7 => 0x66,
-                8..15 => OPCODE,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
-                24..39 => imm,
+                0x66,
+                OPCODE,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1017,11 +1019,11 @@ macro tmpl_ri {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => OPCODE,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
-                16..23 => imm,
+                OPCODE,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1037,16 +1039,16 @@ macro tmpl_ri8 {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0 => dst[3],
-                1 => 0b0,
-                2 => 0b0,
-                3 => $rexw,
-                4..7 => 0b0100,
-                8..15 => 0x83,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
-                24..31 => imm,
+                0b0100,
+                $rexw,
+                0b0,
+                0b0,
+                dst[3],
+                0x83,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1057,17 +1059,17 @@ macro tmpl_ri8 {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => 0x66,
-                8 => dst[3],
-                9 => 0b0,
-                10 => 0b0,
-                11 => 0b0,
-                12..15 => 0b0100,
-                16..23 => 0x83,
-                24..26 => dst[0..2],
-                27..29 => EXT,
-                30..31 => 0b11,
-                32..39 => imm,
+                0x66,
+                0b0100,
+                0b0,
+                0b0,
+                0b0,
+                dst[3],
+                0x83,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1078,11 +1080,11 @@ macro tmpl_ri8 {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => 0x83,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
-                16..23 => imm,
+                0x83,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1093,12 +1095,12 @@ macro tmpl_ri8 {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => 0x66,
-                8..15 => 0x83,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
-                24..31 => imm,
+                0x66,
+                0x83,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1112,16 +1114,16 @@ macro tmpl_rs {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0 => dst[3],
-                1 => 0b0,
-                2 => 0b0,
-                3 => $rexw,
-                4..7 => 0b0100,
-                8..15 => $opc,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
-                24..31 => imm,
+                0b0100,
+                $rexw,
+                0b0,
+                0b0,
+                dst[3],
+                $opc,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1132,17 +1134,17 @@ macro tmpl_rs {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => 0x66,
-                8 => dst[3],
-                9 => 0b0,
-                10 => 0b0,
-                11 => 0b0,
-                12..15 => 0b0100,
-                16..23 => 0xC1,
-                24..26 => dst[0..2],
-                27..29 => EXT,
-                30..31 => 0b11,
-                32..39 => imm,
+                0x66,
+                0b0100,
+                0b0,
+                0b0,
+                0b0,
+                dst[3],
+                0xC1,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1153,12 +1155,12 @@ macro tmpl_rs {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => 0xC0,
-                8..9 => dst[0..1],
-                10 => 0b1,
-                11..13 => EXT,
-                14..15 => 0b11,
-                16..23 => imm,
+                0xC0,
+                0b11,
+                EXT,
+                0b1,
+                dst[1..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1170,11 +1172,11 @@ macro tmpl_rs {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => 0xC1,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
-                16..23 => imm,
+                0xC1,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1186,12 +1188,12 @@ macro tmpl_rs {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => 0x66,
-                8..15 => 0xC1,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
-                24..31 => imm,
+                0x66,
+                0xC1,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1203,11 +1205,11 @@ macro tmpl_rs {
             param EXT: bits<3>;
             operands { dst: $cls, imm: bits<8>, }
             encoding {
-                0..7 => 0xC0,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
-                16..23 => imm,
+                0xC0,
+                0b11,
+                EXT,
+                dst[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {imm}" }
         }
@@ -1222,15 +1224,15 @@ macro tmpl_rscl {
             param EXT: bits<3>;
             operands { dst: $cls, }
             encoding {
-                0 => dst[3],
-                1 => 0b0,
-                2 => 0b0,
-                3 => $rexw,
-                4..7 => 0b0100,
-                8..15 => 0xD3,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
+                0b0100,
+                $rexw,
+                0b0,
+                0b0,
+                dst[3],
+                0xD3,
+                0b11,
+                EXT,
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, cl" }
         }
@@ -1242,10 +1244,10 @@ macro tmpl_rscl {
             param EXT: bits<3>;
             operands { dst: $cls, }
             encoding {
-                0..7 => 0xD3,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
+                0xD3,
+                0b11,
+                EXT,
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, cl" }
         }
@@ -1257,11 +1259,11 @@ macro tmpl_rscl {
             param EXT: bits<3>;
             operands { dst: $cls, }
             encoding {
-                0..7 => 0x66,
-                8..15 => 0xD3,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
+                0x66,
+                0xD3,
+                0b11,
+                EXT,
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, cl" }
         }
@@ -1273,10 +1275,10 @@ macro tmpl_rscl {
             param EXT: bits<3>;
             operands { dst: $cls, }
             encoding {
-                0..7 => 0xD2,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
+                0xD2,
+                0b11,
+                EXT,
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, cl" }
         }
@@ -1290,16 +1292,16 @@ macro tmpl_rrext {
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, }
             encoding {
-                0 => src[3],
-                1 => 0b0,
-                2 => dst[3],
-                3 => $rexw,
-                4..7 => 0b0100,
-                8..15 => 0x0F,
-                16..23 => OPCODE,
-                24..26 => src[0..2],
-                27..29 => dst[0..2],
-                30..31 => 0b11,
+                0b0100,
+                $rexw,
+                dst[3],
+                0b0,
+                src[3],
+                0x0F,
+                OPCODE,
+                0b11,
+                dst[2..0],
+                src[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, {src}" }
         }
@@ -1313,16 +1315,16 @@ macro tmpl_rrimm {
             param OPCODE: bits<8>;
             operands { dst: $cls, src: $cls, imm: bits<32>, }
             encoding {
-                0 => src[3],
-                1 => 0b0,
-                2 => dst[3],
-                3 => $rexw,
-                4..7 => 0b0100,
-                8..15 => OPCODE,
-                16..18 => src[0..2],
-                19..21 => dst[0..2],
-                22..23 => 0b11,
-                24..55 => imm,
+                0b0100,
+                $rexw,
+                dst[3],
+                0b0,
+                src[3],
+                OPCODE,
+                0b11,
+                dst[2..0],
+                src[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, {src}, {imm}" }
         }
@@ -1489,15 +1491,15 @@ macro tmpl_runary {
             param EXT: bits<3>;
             operands { dst: $cls, }
             encoding {
-                0 => dst[3],
-                1 => 0b0,
-                2 => 0b0,
-                3 => $rexw,
-                4..7 => 0b0100,
-                8..15 => 0xF7,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
+                0b0100,
+                $rexw,
+                0b0,
+                0b0,
+                dst[3],
+                0xF7,
+                0b11,
+                EXT,
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}" }
         }
@@ -1509,10 +1511,10 @@ macro tmpl_runary {
             param EXT: bits<3>;
             operands { dst: $cls, }
             encoding {
-                0..7 => 0xF7,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
+                0xF7,
+                0b11,
+                EXT,
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}" }
         }
@@ -1524,11 +1526,11 @@ macro tmpl_runary {
             param EXT: bits<3>;
             operands { dst: $cls, }
             encoding {
-                0..7 => 0x66,
-                8..15 => 0xF7,
-                16..18 => dst[0..2],
-                19..21 => EXT,
-                22..23 => 0b11,
+                0x66,
+                0xF7,
+                0b11,
+                EXT,
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}" }
         }
@@ -1540,10 +1542,10 @@ macro tmpl_runary {
             param EXT: bits<3>;
             operands { dst: $cls, }
             encoding {
-                0..7 => 0xF6,
-                8..10 => dst[0..2],
-                11..13 => EXT,
-                14..15 => 0b11,
+                0xF6,
+                0b11,
+                EXT,
+                dst[2..0],
             }
             asm { "{self.MNEMONIC} {dst}" }
         }
@@ -1557,16 +1559,16 @@ macro tmpl_extend {
             param OPCODE: bits<8>;
             operands { dst: GPR, src: $cls, }
             encoding {
-                0 => src[3],
-                1 => 0b0,
-                2 => dst[3],
-                3 => 0b1,
-                4..7 => 0b0100,
-                8..15 => 0x0F,
-                16..23 => OPCODE,
-                24..26 => src[0..2],
-                27..29 => dst[0..2],
-                30..31 => 0b11,
+                0b0100,
+                0b1,
+                dst[3],
+                0b0,
+                src[3],
+                0x0F,
+                OPCODE,
+                0b11,
+                dst[2..0],
+                src[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, {src}" }
         }
@@ -1579,11 +1581,7 @@ macro tmpl_extend {
 // arms (with a trailing comma) so the remaining arms follow directly.
 macro rex {
     ( { $($b0:tt)* }, { $($b2:tt)* }, $w:literal ) => {
-        0 => $($b0)*,
-        1 => 0b0,
-        2 => $($b2)*,
-        3 => $w,
-        4..7 => 0b0100,
+        0b0100, $w, $($b2)*, 0b0, $($b0)*,
     };
 }
 

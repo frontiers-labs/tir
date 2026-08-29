@@ -1,0 +1,16 @@
+// A slice is written high bit first, as ISA manuals and `extract(x, hi, lo)`
+// do. A low-first slice is rejected at parse time, so the AST invariant
+// `hi >= lo` holds everywhere downstream.
+
+// RUN: not tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+
+isa TestIsa { param XLEN: Integer = 64; }
+
+instruction LowFirst for [TestIsa] {
+    param MNEMONIC: String = "lowfirst";
+    operands { imm: bits<13> }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { imm = zext(imm[0..11], 13); }
+}
+
+// CHECK: slice '[0..11]' is written low bit first; slices run high to low

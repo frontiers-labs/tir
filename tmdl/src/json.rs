@@ -136,7 +136,7 @@ enum Item {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         operands: Vec<Operand>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
-        encoding: Vec<EncodingArm>,
+        encoding: Vec<EncodingField>,
         #[serde(skip_serializing_if = "Option::is_none")]
         #[schemars(with = "Expr")]
         assembly: Option<Expr>,
@@ -156,7 +156,7 @@ enum Item {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         operands: Vec<Operand>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
-        encoding: Vec<EncodingArm>,
+        encoding: Vec<EncodingField>,
         #[serde(skip_serializing_if = "Option::is_none")]
         #[schemars(with = "Expr")]
         assembly: Option<Expr>,
@@ -260,7 +260,7 @@ impl Item {
                 template: template.parent_template.clone(),
                 parameters: parameters(&template.params),
                 operands: operands(&template.operands),
-                encoding: template.encoding.iter().map(EncodingArm::from).collect(),
+                encoding: template.encoding.iter().map(EncodingField::from).collect(),
                 assembly: template.asm.as_ref().map(Expr::from),
                 schedule: schedule_classes(&template.schedule),
             },
@@ -270,7 +270,11 @@ impl Item {
                 template: instruction.parent_template.clone(),
                 parameters: parameters(&instruction.params),
                 operands: operands(&instruction.operands),
-                encoding: instruction.encoding.iter().map(EncodingArm::from).collect(),
+                encoding: instruction
+                    .encoding
+                    .iter()
+                    .map(EncodingField::from)
+                    .collect(),
                 assembly: instruction.asm.as_ref().map(Expr::from),
                 behavior: Expr::from(&instruction.behavior),
                 schedule: schedule_classes(&instruction.schedule),
@@ -536,23 +540,19 @@ impl From<&AstType> for Type {
 
 #[derive(Serialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-/// One inclusive bit range in an instruction encoding.
-struct EncodingArm {
-    /// Lowest encoded bit.
-    start: u16,
-    /// Highest encoded bit; omitted for a single-bit arm.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "u16")]
-    end: Option<u16>,
+/// One field of an instruction encoding. Fields are listed high bit first
+/// within an encoding unit, units in emission order.
+struct EncodingField {
+    /// Bits the field occupies, from what it names.
+    width: u16,
     value: Expr,
 }
 
-impl From<&ast::EncodingArm> for EncodingArm {
-    fn from(arm: &ast::EncodingArm) -> Self {
+impl From<&ast::EncodingField> for EncodingField {
+    fn from(field: &ast::EncodingField) -> Self {
         Self {
-            start: arm.start,
-            end: arm.end,
-            value: Expr::from(&arm.value),
+            width: field.width,
+            value: Expr::from(&field.value),
         }
     }
 }

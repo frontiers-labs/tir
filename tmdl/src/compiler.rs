@@ -212,6 +212,12 @@ impl Compiler {
         crate::ast::resolve_register_class_inheritance(&mut parsed_files);
         crate::ast::resolve_abi_inheritance(&mut parsed_files);
 
+        let encoding_diags = crate::encoding::resolve_encoding_widths(&mut parsed_files);
+        if !encoding_diags.is_empty() {
+            print_diags(encoding_diags, &self.inputs, &sources);
+            return Ok(None);
+        }
+
         let inline_diags = crate::fninline::inline_functions(&mut parsed_files);
         if !inline_diags.is_empty() {
             print_diags(inline_diags, &self.inputs, &sources);

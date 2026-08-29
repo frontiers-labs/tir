@@ -1,0 +1,21 @@
+// Underscores group digits in numeric literals and carry no value, so a long
+// binary field stays readable. They are stripped from the literal, which is
+// what every consumer sees.
+
+// RUN: tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+
+isa TestIsa { param XLEN: Integer = 64; }
+
+instruction Grouped for [TestIsa] {
+    param MNEMONIC: String = "grouped";
+    param MASK: bits<16> = 0b0000_1111_0000_1111;
+    param ADDR: bits<32> = 0xdead_beef;
+    param COUNT: Integer = 1_000;
+    operands { imm: bits<8> }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { imm = imm; }
+}
+
+// CHECK-DAG: "0b0000111100001111",
+// CHECK-DAG: "0xdeadbeef",
+// CHECK-DAG: "1000",

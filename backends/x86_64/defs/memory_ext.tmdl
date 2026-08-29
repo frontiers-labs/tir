@@ -7,10 +7,10 @@ macro mov32_memory_norex {
             param MNEMONIC: String = "mov";
             operands { dst: GPR32low, base: GPRaddrDirectLow, }
             encoding {
-                0..7 => 0x8B,
-                8..10 => base[0..2],
-                11..13 => dst[0..2],
-                14..15 => 0b00,
+                0x8B,
+                0b00,
+                dst[2..0],
+                base[2..0],
             }
             asm { "{self.MNEMONIC} {dst}, [{base}]" }
             behavior { dst = load(base, 4, 0b0); }
@@ -22,10 +22,10 @@ macro mov32_memory_norex {
             param MNEMONIC: String = "mov";
             operands { base: GPRaddrDirectLow, src: GPR32low, }
             encoding {
-                0..7 => 0x89,
-                8..10 => base[0..2],
-                11..13 => src[0..2],
-                14..15 => 0b00,
+                0x89,
+                0b00,
+                src[2..0],
+                base[2..0],
             }
             asm { "{self.MNEMONIC} [{base}], {src}" }
             behavior { store(base, 4, src); }
@@ -41,11 +41,11 @@ instruction Mov16StoreNorex for [X86] {
     param MNEMONIC: String = "mov";
     operands { base: GPRaddrDirectLow, src: GPR16low, }
     encoding {
-        0..7 => 0x66,
-        8..15 => 0x89,
-        16..18 => base[0..2],
-        19..21 => src[0..2],
-        22..23 => 0b00,
+        0x66,
+        0x89,
+        0b00,
+        src[2..0],
+        base[2..0],
     }
     asm { "{self.MNEMONIC} [{base}], {src}" }
     behavior { store(base, 2, src); }
@@ -56,10 +56,10 @@ instruction Mov8StoreNorex for [X86] {
     param MNEMONIC: String = "mov";
     operands { base: GPRaddrDirectLow, src: GPR8low, }
     encoding {
-        0..7 => 0x88,
-        8..10 => base[0..2],
-        11..13 => src[0..2],
-        14..15 => 0b00,
+        0x88,
+        0b00,
+        src[2..0],
+        base[2..0],
     }
     asm { "{self.MNEMONIC} [{base}], {src}" }
     behavior { store(base, 1, src); }
@@ -72,11 +72,11 @@ macro extend_load32_norex {
                param MNEMONIC: String = $mnemonic;
                operands { dst: GPR32low, base: GPRaddrDirectLow, }
                encoding {
-                   0..7 => 0x0F,
-                   8..15 => $opcode,
-                   16..18 => base[0..2],
-                   19..21 => dst[0..2],
-                   22..23 => 0b00,
+                   0x0F,
+                   $opcode,
+                   0b00,
+                   dst[2..0],
+                   base[2..0],
                }
                asm { ${concat("{self.MNEMONIC} {dst}, ", $size, " ptr [{base}]")} }
                behavior { $($b)* }
@@ -118,12 +118,12 @@ template ExtendLoadSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x0F,
-        16..23 => OPCODE,
-        24..26 => 0b100,
-        27..29 => dst[0..2],
-        30..31 => 0b00,
-        32..39 => 0x24,
+        0x0F,
+        OPCODE,
+        0b00,
+        dst[2..0],
+        0b100,
+        0x24,
     }
 
     asm {
@@ -142,12 +142,12 @@ template ExtendLoadRbp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x0F,
-        16..23 => OPCODE,
-        24..26 => 0b101,
-        27..29 => dst[0..2],
-        30..31 => 0b01,
-        32..39 => 0x00,
+        0x0F,
+        OPCODE,
+        0b01,
+        dst[2..0],
+        0b101,
+        0x00,
     }
 
     asm {
@@ -278,11 +278,11 @@ instruction MovsxdLoadSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x63,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b00,
-        24..31 => 0x24,
+        0x63,
+        0b00,
+        dst[2..0],
+        0b100,
+        0x24,
     }
 
     asm {
@@ -305,11 +305,11 @@ instruction MovsxdLoadRbp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x63,
-        16..18 => 0b101,
-        19..21 => dst[0..2],
-        22..23 => 0b01,
-        24..31 => 0x00,
+        0x63,
+        0b01,
+        dst[2..0],
+        0b101,
+        0x00,
     }
 
     asm {
@@ -332,11 +332,11 @@ instruction Mov32LoadSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b0)
-        8..15 => 0x8B,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b00,
-        24..31 => 0x24,
+        0x8B,
+        0b00,
+        dst[2..0],
+        0b100,
+        0x24,
     }
 
     asm {
@@ -359,11 +359,11 @@ instruction Mov32LoadRbp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b0)
-        8..15 => 0x8B,
-        16..18 => 0b101,
-        19..21 => dst[0..2],
-        22..23 => 0b01,
-        24..31 => 0x00,
+        0x8B,
+        0b01,
+        dst[2..0],
+        0b101,
+        0x00,
     }
 
     asm {
@@ -386,11 +386,11 @@ instruction Mov32StoreSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x89,
-        16..18 => 0b100,
-        19..21 => src[0..2],
-        22..23 => 0b00,
-        24..31 => 0x24,
+        0x89,
+        0b00,
+        src[2..0],
+        0b100,
+        0x24,
     }
 
     asm {
@@ -413,11 +413,11 @@ instruction Mov32StoreRbp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x89,
-        16..18 => 0b101,
-        19..21 => src[0..2],
-        22..23 => 0b01,
-        24..31 => 0x00,
+        0x89,
+        0b01,
+        src[2..0],
+        0b101,
+        0x00,
     }
 
     asm {
@@ -439,17 +439,17 @@ instruction Mov16StoreSib for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x89,
-        24..26 => 0b100,
-        27..29 => src[0..2],
-        30..31 => 0b00,
-        32..39 => 0x24,
+        0x66,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x89,
+        0b00,
+        src[2..0],
+        0b100,
+        0x24,
     }
 
     asm {
@@ -471,17 +471,17 @@ instruction Mov16StoreRbp for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x89,
-        24..26 => 0b101,
-        27..29 => src[0..2],
-        30..31 => 0b01,
-        32..39 => 0x00,
+        0x66,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x89,
+        0b01,
+        src[2..0],
+        0b101,
+        0x00,
     }
 
     asm {
@@ -504,11 +504,11 @@ instruction Mov8StoreSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x88,
-        16..18 => 0b100,
-        19..21 => src[0..2],
-        22..23 => 0b00,
-        24..31 => 0x24,
+        0x88,
+        0b00,
+        src[2..0],
+        0b100,
+        0x24,
     }
 
     asm {
@@ -531,11 +531,11 @@ instruction Mov8StoreRbp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x88,
-        16..18 => 0b101,
-        19..21 => src[0..2],
-        22..23 => 0b01,
-        24..31 => 0x00,
+        0x88,
+        0b01,
+        src[2..0],
+        0b101,
+        0x00,
     }
 
     asm {
@@ -560,12 +560,12 @@ instruction MovLoadDispSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x8B,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b10,
-        24..31 => 0x24,
-        32..63 => imm,
+        0x8B,
+        0b10,
+        dst[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -589,12 +589,12 @@ instruction MovStoreDispSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b1)
-        8..15 => 0x89,
-        16..18 => 0b100,
-        19..21 => src[0..2],
-        22..23 => 0b10,
-        24..31 => 0x24,
-        32..63 => imm,
+        0x89,
+        0b10,
+        src[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -618,12 +618,12 @@ instruction Mov32LoadDispSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b0)
-        8..15 => 0x8B,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b10,
-        24..31 => 0x24,
-        32..63 => imm,
+        0x8B,
+        0b10,
+        dst[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -647,12 +647,12 @@ instruction Mov32StoreDispSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x89,
-        16..18 => 0b100,
-        19..21 => src[0..2],
-        22..23 => 0b10,
-        24..31 => 0x24,
-        32..63 => imm,
+        0x89,
+        0b10,
+        src[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -675,18 +675,18 @@ instruction Mov16LoadDispSib for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => base[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x8B,
-        24..26 => 0b100,
-        27..29 => dst[0..2],
-        30..31 => 0b10,
-        32..39 => 0x24,
-        40..71 => imm,
+        0x66,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        base[3],
+        0x8B,
+        0b10,
+        dst[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -709,18 +709,18 @@ instruction Mov16StoreDispSib for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x89,
-        24..26 => 0b100,
-        27..29 => src[0..2],
-        30..31 => 0b10,
-        32..39 => 0x24,
-        40..71 => imm,
+        0x66,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x89,
+        0b10,
+        src[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -744,12 +744,12 @@ instruction Mov8LoadDispSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b0)
-        8..15 => 0x8A,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b10,
-        24..31 => 0x24,
-        32..63 => imm,
+        0x8A,
+        0b10,
+        dst[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -773,12 +773,12 @@ instruction Mov8StoreDispSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x88,
-        16..18 => 0b100,
-        19..21 => src[0..2],
-        22..23 => 0b10,
-        24..31 => 0x24,
-        32..63 => imm,
+        0x88,
+        0b10,
+        src[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -804,11 +804,11 @@ template ExtendLoad for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x0F,
-        16..23 => OPCODE,
-        24..26 => base[0..2],
-        27..29 => dst[0..2],
-        30..31 => 0b00,
+        0x0F,
+        OPCODE,
+        0b00,
+        dst[2..0],
+        base[2..0],
     }
 
     asm {
@@ -884,10 +884,10 @@ instruction MovsxdLoad for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x63,
-        16..18 => base[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b00,
+        0x63,
+        0b00,
+        dst[2..0],
+        base[2..0],
     }
 
     asm {
@@ -914,10 +914,10 @@ instruction Mov32Load for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b0)
-        8..15 => 0x8B,
-        16..18 => base[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b00,
+        0x8B,
+        0b00,
+        dst[2..0],
+        base[2..0],
     }
 
     asm {
@@ -940,10 +940,10 @@ instruction Mov32Store for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x89,
-        16..18 => base[0..2],
-        19..21 => src[0..2],
-        22..23 => 0b00,
+        0x89,
+        0b00,
+        src[2..0],
+        base[2..0],
     }
 
     asm {
@@ -965,16 +965,16 @@ instruction Mov16Store for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x89,
-        24..26 => base[0..2],
-        27..29 => src[0..2],
-        30..31 => 0b00,
+        0x66,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x89,
+        0b00,
+        src[2..0],
+        base[2..0],
     }
 
     asm {
@@ -997,10 +997,10 @@ instruction Mov8Store for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x88,
-        16..18 => base[0..2],
-        19..21 => src[0..2],
-        22..23 => 0b00,
+        0x88,
+        0b00,
+        src[2..0],
+        base[2..0],
     }
 
     asm {
@@ -1026,11 +1026,11 @@ instruction MovLoadDisp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x8B,
-        16..18 => base[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b10,
-        24..55 => imm,
+        0x8B,
+        0b10,
+        dst[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1054,11 +1054,11 @@ instruction MovStoreDisp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b1)
-        8..15 => 0x89,
-        16..18 => base[0..2],
-        19..21 => src[0..2],
-        22..23 => 0b10,
-        24..55 => imm,
+        0x89,
+        0b10,
+        src[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1082,11 +1082,11 @@ instruction Mov32LoadDisp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b0)
-        8..15 => 0x8B,
-        16..18 => base[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b10,
-        24..55 => imm,
+        0x8B,
+        0b10,
+        dst[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1110,11 +1110,11 @@ instruction Mov32StoreDisp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x89,
-        16..18 => base[0..2],
-        19..21 => src[0..2],
-        22..23 => 0b10,
-        24..55 => imm,
+        0x89,
+        0b10,
+        src[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1137,17 +1137,17 @@ instruction Mov16LoadDisp for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => base[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x8B,
-        24..26 => base[0..2],
-        27..29 => dst[0..2],
-        30..31 => 0b10,
-        32..63 => imm,
+        0x66,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        base[3],
+        0x8B,
+        0b10,
+        dst[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1170,17 +1170,17 @@ instruction Mov16StoreDisp for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x89,
-        24..26 => base[0..2],
-        27..29 => src[0..2],
-        30..31 => 0b10,
-        32..63 => imm,
+        0x66,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x89,
+        0b10,
+        src[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1204,11 +1204,11 @@ instruction Mov8LoadDisp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b0)
-        8..15 => 0x8A,
-        16..18 => base[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b10,
-        24..55 => imm,
+        0x8A,
+        0b10,
+        dst[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1232,11 +1232,11 @@ instruction Mov8StoreDisp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b0)
-        8..15 => 0x88,
-        16..18 => base[0..2],
-        19..21 => src[0..2],
-        22..23 => 0b10,
-        24..55 => imm,
+        0x88,
+        0b10,
+        src[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1257,18 +1257,18 @@ template LeaBaseIndexTemplate for [X86_64] {
         index: GPRaddrIndex,
     }
     encoding {
-        0 => base[3],
-        1 => index[3],
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b00,
-        24..26 => base[0..2],
-        27..29 => index[0..2],
-        30..31 => SCALE_BITS,
+        0b0100,
+        0b1,
+        dst[3],
+        index[3],
+        base[3],
+        0x8D,
+        0b00,
+        dst[2..0],
+        0b100,
+        SCALE_BITS,
+        index[2..0],
+        base[2..0],
     }
 }
 
@@ -1343,19 +1343,19 @@ template LeaRbpIndexTemplate for [X86_64] {
     }
 
     encoding {
-        0 => base[3],
-        1 => index[3],
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b01,
-        24..26 => base[0..2],
-        27..29 => index[0..2],
-        30..31 => SCALE_BITS,
-        32..39 => 0x00,
+        0b0100,
+        0b1,
+        dst[3],
+        index[3],
+        base[3],
+        0x8D,
+        0b01,
+        dst[2..0],
+        0b100,
+        SCALE_BITS,
+        index[2..0],
+        base[2..0],
+        0x00,
     }
 }
 
@@ -1430,19 +1430,19 @@ template LeaScaledIndex for [X86_64] {
     }
 
     encoding {
-        0 => 0b0,
-        1 => index[3],
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b00,
-        24..26 => 0b101,
-        27..29 => index[0..2],
-        30..31 => SCALE_BITS,
-        32..63 => 0x00000000,
+        0b0100,
+        0b1,
+        dst[3],
+        index[3],
+        0b0,
+        0x8D,
+        0b00,
+        dst[2..0],
+        0b100,
+        SCALE_BITS,
+        index[2..0],
+        0b101,
+        0x00000000,
     }
 }
 
@@ -1485,19 +1485,19 @@ template LeaBaseIndexDisp8Template for [X86_64] {
     }
 
     encoding {
-        0 => base[3],
-        1 => index[3],
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b01,
-        24..26 => base[0..2],
-        27..29 => index[0..2],
-        30..31 => SCALE_BITS,
-        32..39 => imm,
+        0b0100,
+        0b1,
+        dst[3],
+        index[3],
+        base[3],
+        0x8D,
+        0b01,
+        dst[2..0],
+        0b100,
+        SCALE_BITS,
+        index[2..0],
+        base[2..0],
+        imm,
     }
 }
 
@@ -1573,19 +1573,19 @@ template LeaIndexDisp32 for [X86_64] {
     }
 
     encoding {
-        0 => 0b0,
-        1 => index[3],
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b00,
-        24..26 => 0b101,
-        27..29 => index[0..2],
-        30..31 => SCALE_BITS,
-        32..63 => imm,
+        0b0100,
+        0b1,
+        dst[3],
+        index[3],
+        0b0,
+        0x8D,
+        0b00,
+        dst[2..0],
+        0b100,
+        SCALE_BITS,
+        index[2..0],
+        0b101,
+        imm,
     }
 }
 
@@ -1631,16 +1631,16 @@ instruction LeaBaseDisp8 for [X86_64] {
     }
 
     encoding {
-        0 => base[3],
-        1 => 0b0,
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => base[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b01,
-        24..31 => imm,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        base[3],
+        0x8D,
+        0b01,
+        dst[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1665,17 +1665,17 @@ instruction LeaBaseDisp8Sib for [X86_64] {
     }
 
     encoding {
-        0 => base[3],
-        1 => 0b0,
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b01,
-        24..31 => 0x24,
-        32..39 => imm,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        base[3],
+        0x8D,
+        0b01,
+        dst[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -1700,16 +1700,16 @@ instruction LeaBaseDisp32 for [X86_64] {
     }
 
     encoding {
-        0 => base[3],
-        1 => 0b0,
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => base[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b10,
-        24..55 => imm,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        base[3],
+        0x8D,
+        0b10,
+        dst[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1734,17 +1734,17 @@ instruction LeaBaseDisp32Sib for [X86_64] {
     }
 
     encoding {
-        0 => base[3],
-        1 => 0b0,
-        2 => dst[3],
-        3 => 0b1,
-        4..7 => 0b0100,
-        8..15 => 0x8D,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b10,
-        24..31 => 0x24,
-        32..63 => imm,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        base[3],
+        0x8D,
+        0b10,
+        dst[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -1773,11 +1773,11 @@ instruction LeaRip for [X86_64] {
 
     encoding {
         rex!({ 0b0 }, { dst[3] }, 0b1)
-        8..15 => 0x8D,
-        16..18 => 0b101,
-        19..21 => dst[0..2],
-        22..23 => 0b00,
-        24..55 => imm,
+        0x8D,
+        0b00,
+        dst[2..0],
+        0b101,
+        imm,
     }
 
     asm {
@@ -1801,8 +1801,8 @@ template PushPop for [X86_64] {
 
     encoding {
         rex!({ reg[3] }, { 0b0 }, 0b0)
-        8..10 => reg[0..2],
-        11..15 => OPCODE,
+        OPCODE,
+        reg[2..0],
     }
 
     asm {
@@ -1842,8 +1842,8 @@ template PushPopNorex for [X86] {
     }
 
     encoding {
-        0..2 => reg[0..2],
-        3..7 => OPCODE,
+        OPCODE,
+        reg[2..0],
     }
 
     asm {

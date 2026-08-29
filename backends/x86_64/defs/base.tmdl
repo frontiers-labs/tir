@@ -246,8 +246,8 @@ instruction Jmp for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xE9,
-        8..39 => imm,
+        0xE9,
+        imm,
     }
 
     asm {
@@ -264,7 +264,7 @@ instruction JmpLegacy for [X86] {
     param MNEMONIC: String = "jmp";
     schedule { units = [WriteJump]; }
     operands { imm: bits<32>, }
-    encoding { 0..7 => 0xE9, 8..39 => imm, }
+    encoding { 0xE9, imm }
     asm { "{self.MNEMONIC} {imm}" }
     behavior {
         PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b101, self.XLEN);
@@ -291,8 +291,8 @@ instruction Call for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xE8,
-        8..39 => imm,
+        0xE8,
+        imm,
     }
 
     asm {
@@ -310,7 +310,7 @@ instruction CallLegacy for [X86] {
     param OPNAME: String = "call_legacy";
     param MNEMONIC: String = "call";
     operands { imm: bits<32>, }
-    encoding { 0..7 => 0xE8, 8..39 => imm, }
+    encoding { 0xE8, imm }
     asm { "{self.MNEMONIC} {imm}" }
     behavior {
         GPR::rsp = GPR::rsp - zext(0b100, self.XLEN);
@@ -323,7 +323,7 @@ instruction Ret for [X86_64] {
     param MNEMONIC: String = "ret";
 
     encoding {
-        0..7 => 0xC3,
+        0xC3,
     }
 
     asm {
@@ -339,7 +339,7 @@ instruction Ret for [X86_64] {
 instruction RetLegacy for [X86] {
     param OPNAME: String = "ret_legacy";
     param MNEMONIC: String = "ret";
-    encoding { 0..7 => 0xC3, }
+    encoding { 0xC3 }
     asm { "{self.MNEMONIC}" }
     behavior {
         PC::pc = load(GPR::rsp, 4, 0b0);
@@ -364,11 +364,11 @@ instruction MovLoadSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x8B,
-        16..18 => 0b100,
-        19..21 => dst[0..2],
-        22..23 => 0b00,
-        24..31 => 0x24,
+        0x8B,
+        0b00,
+        dst[2..0],
+        0b100,
+        0x24,
     }
 
     asm {
@@ -391,11 +391,11 @@ instruction MovLoadRbp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x8B,
-        16..18 => 0b101,
-        19..21 => dst[0..2],
-        22..23 => 0b01,
-        24..31 => 0x00,
+        0x8B,
+        0b01,
+        dst[2..0],
+        0b101,
+        0x00,
     }
 
     asm {
@@ -418,11 +418,11 @@ instruction MovStoreSib for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b1)
-        8..15 => 0x89,
-        16..18 => 0b100,
-        19..21 => src[0..2],
-        22..23 => 0b00,
-        24..31 => 0x24,
+        0x89,
+        0b00,
+        src[2..0],
+        0b100,
+        0x24,
     }
 
     asm {
@@ -445,11 +445,11 @@ instruction MovStoreRbp for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b1)
-        8..15 => 0x89,
-        16..18 => 0b101,
-        19..21 => src[0..2],
-        22..23 => 0b01,
-        24..31 => 0x00,
+        0x89,
+        0b01,
+        src[2..0],
+        0b101,
+        0x00,
     }
 
     asm {
@@ -472,10 +472,10 @@ instruction MovLoad for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { dst[3] }, 0b1)
-        8..15 => 0x8B,
-        16..18 => base[0..2],
-        19..21 => dst[0..2],
-        22..23 => 0b00,
+        0x8B,
+        0b00,
+        dst[2..0],
+        base[2..0],
     }
 
     asm {
@@ -498,10 +498,10 @@ instruction MovStore for [X86_64] {
 
     encoding {
         rex!({ base[3] }, { src[3] }, 0b1)
-        8..15 => 0x89,
-        16..18 => base[0..2],
-        19..21 => src[0..2],
-        22..23 => 0b00,
+        0x89,
+        0b00,
+        src[2..0],
+        base[2..0],
     }
 
     asm {
@@ -525,10 +525,10 @@ instruction JmpIndirect for [X86_64] {
 
     encoding {
         rex!({ target[3] }, { 0b0 }, 0b0)
-        8..15 => 0xFF,
-        16..18 => target[0..2],
-        19..21 => 0b100,
-        22..23 => 0b11,
+        0xFF,
+        0b11,
+        0b100,
+        target[2..0],
     }
 
     asm {
@@ -550,10 +550,10 @@ instruction CallIndirect for [X86_64] {
 
     encoding {
         rex!({ target[3] }, { 0b0 }, 0b0)
-        8..15 => 0xFF,
-        16..18 => target[0..2],
-        19..21 => 0b010,
-        22..23 => 0b11,
+        0xFF,
+        0b11,
+        0b010,
+        target[2..0],
     }
 
     asm {
@@ -580,10 +580,10 @@ instruction JmpIndirectNorex for [X86] {
     }
 
     encoding {
-        0..7 => 0xFF,
-        8..10 => target[0..2],
-        11..13 => 0b100,
-        14..15 => 0b11,
+        0xFF,
+        0b11,
+        0b100,
+        target[2..0],
     }
 
     asm {
@@ -604,10 +604,10 @@ instruction CallIndirectNorex for [X86] {
     }
 
     encoding {
-        0..7 => 0xFF,
-        8..10 => target[0..2],
-        11..13 => 0b010,
-        14..15 => 0b11,
+        0xFF,
+        0b11,
+        0b010,
+        target[2..0],
     }
 
     asm {
@@ -660,14 +660,14 @@ instruction MovImm32 for [X86_64] {
     }
 
     encoding {
-        0 => dst[3],
-        1 => 0b0,
-        2 => 0b0,
-        3 => 0b0,
-        4..7 => 0b0100,
-        8..10 => dst[0..2],
-        11..15 => 0b10111,
-        16..47 => imm,
+        0b0100,
+        0b0,
+        0b0,
+        0b0,
+        dst[3],
+        0b10111,
+        dst[2..0],
+        imm,
     }
 
     asm {
@@ -1042,9 +1042,9 @@ instruction MovImm32Norex for [X86] {
     }
 
     encoding {
-        0..2 => dst[0..2],
-        3..7 => 0b10111,
-        8..39 => imm,
+        0b10111,
+        dst[2..0],
+        imm,
     }
 
     asm {

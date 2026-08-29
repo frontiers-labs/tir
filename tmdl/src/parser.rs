@@ -716,7 +716,7 @@ where
 enum TemplateOrInstBody {
     Param((String, (Type, Option<ast::Expr>))),
     Operands(Vec<(String, Type)>),
-    Encoding(Vec<EncodingArm>),
+    Encoding(Vec<EncodingField>),
     Asm(Expr),
     Behavior(Expr),
     Schedule(Schedule),
@@ -746,7 +746,17 @@ where
     })
 }
 
+/// Digits of a numeric token without its grouping underscores.
+fn digits(n: &str) -> std::borrow::Cow<'_, str> {
+    if n.contains('_') {
+        std::borrow::Cow::Owned(n.replace('_', ""))
+    } else {
+        std::borrow::Cow::Borrowed(n)
+    }
+}
+
 fn parse_int_lit(n: &str) -> Option<i64> {
+    let n = digits(n);
     if let Some(h) = n.strip_prefix("0x").or_else(|| n.strip_prefix("0X")) {
         i64::from_str_radix(h, 16).ok()
     } else if let Some(b) = n.strip_prefix("0b").or_else(|| n.strip_prefix("0B")) {
@@ -1495,43 +1505,30 @@ where
         .labelled("machine definition")
 }
 
+/// `encoding { field, field, ... }`: the fields of an instruction word, high
+/// bit first within an encoding unit and units in emission order. Each field's
+/// width comes from what it names, resolved after parsing by
+/// [`crate::encoding::resolve_encoding_widths`].
 fn encoding<'src, I>()
--> impl Parser<'src, I, Vec<EncodingArm>, extra::Err<Rich<'src, Token<'src>, Span>>>
+-> impl Parser<'src, I, Vec<EncodingField>, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let num = select! { Token::Number(i) => i.parse::<u16>().unwrap() };
-
-    let single_bit = num
-        .then_ignore(just(Token::FatArrow))
-        .then(inline_expr())
-        .map_with(|(start, value), e| EncodingArm {
-            start,
-            end: None,
-            value,
-            span: e.span(),
-        });
-    let range = num
-        .then_ignore(just(Token::Range))
-        .then(num)
-        .then_ignore(just(Token::FatArrow))
-        .then(inline_expr())
-        .map_with(|((start, end), value), e| EncodingArm {
-            start,
-            end: Some(end),
-            value,
-            span: e.span(),
-        });
+    let field = inline_expr().map_with(|value, e| EncodingField {
+        value,
+        width: 0,
+        span: e.span(),
+    });
     just(Token::KwEncoding)
         .ignored()
         .then(
-            choice((single_bit, range))
+            field
                 .separated_by(just(Token::Comma))
                 .allow_trailing()
                 .collect()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|((), arms)| arms)
+        .map(|((), fields)| fields)
 }
 
 fn parameter<'src, I>()
@@ -1869,7 +1866,7 @@ where
         .labelled("value");
 
         let num = select! {
-          Token::Number(n) => n.parse::<u16>().unwrap(),
+          Token::Number(n) => digits(n).parse::<u16>().unwrap_or(0),
         };
 
         let ident = select! { Token::Identifier(i) => i.to_string() };
@@ -1946,11 +1943,22 @@ where
             just(Token::Dot)
                 .then(ident)
                 .map_with(|(_, b), e| PostfixOp::Field(b, e.span())),
-            // slice: [start..end]
+            // slice: [hi..lo], high bit first and inclusive at both ends
             num.then_ignore(just(Token::Range))
                 .then(num)
                 .delimited_by(just(Token::LBracket), just(Token::RBracket))
-                .map_with(|(start, end), e| PostfixOp::Slice(start, end, e.span())),
+                .validate(|(hi, lo), e, emitter| {
+                    if hi < lo {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            format!(
+                                "slice '[{hi}..{lo}]' is written low bit first; \
+                                 slices run high to low"
+                            ),
+                        ));
+                    }
+                    PostfixOp::Slice(hi, lo, e.span())
+                }),
             // index: [idx]
             num.delimited_by(just(Token::LBracket), just(Token::RBracket))
                 .map_with(|index, e| PostfixOp::Index(index, e.span())),
@@ -1968,10 +1976,10 @@ where
                     member,
                     span,
                 }),
-                PostfixOp::Slice(start, end, span) => Expr::Slice(Slice {
+                PostfixOp::Slice(hi, lo, span) => Expr::Slice(Slice {
                     base: Box::new(base),
-                    start,
-                    end,
+                    hi,
+                    lo,
                     span,
                 }),
                 PostfixOp::Index(index, span) => Expr::IndexAccess(IndexAccess {
@@ -2226,7 +2234,8 @@ where
 
     let width = num
         .try_map_with(|n, e| {
-            n.parse::<u16>()
+            digits(n)
+                .parse::<u16>()
                 .map_err(|_| Rich::custom(e.span(), "Expected unsigned integer"))
         })
         .then_ignore(just(Token::RAngle))

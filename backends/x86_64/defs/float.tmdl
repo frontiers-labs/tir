@@ -112,17 +112,17 @@ template FpArith32 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => OPCODE,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF3,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        OPCODE,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -140,12 +140,12 @@ template FpArith32Norex for [SSE] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8..15 => 0x0F,
-        16..23 => OPCODE,
-        24..26 => src[0..2],
-        27..29 => dst[0..2],
-        30..31 => 0b11,
+        0xF3,
+        0x0F,
+        OPCODE,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -167,17 +167,17 @@ template FpArith for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => OPCODE,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF2,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        OPCODE,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -198,12 +198,12 @@ template FpArithNorex for [SSE2] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8..15 => 0x0F,
-        16..23 => OPCODE,
-        24..26 => src[0..2],
-        27..29 => dst[0..2],
-        30..31 => 0b11,
+        0xF2,
+        0x0F,
+        OPCODE,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -220,11 +220,11 @@ template UcomissNorexTemplate for [SSE] {
     }
 
     encoding {
-        0..7 => 0x0F,
-        8..15 => 0x2E,
-        16..18 => rhs[0..2],
-        19..21 => lhs[0..2],
-        22..23 => 0b11,
+        0x0F,
+        0x2E,
+        0b11,
+        lhs[2..0],
+        rhs[2..0],
     }
 
     asm {
@@ -241,12 +241,12 @@ template UcomisdNorexTemplate for [SSE2] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8..15 => 0x0F,
-        16..23 => 0x2E,
-        24..26 => rhs[0..2],
-        27..29 => lhs[0..2],
-        30..31 => 0b11,
+        0x66,
+        0x0F,
+        0x2E,
+        0b11,
+        lhs[2..0],
+        rhs[2..0],
     }
 
     asm {
@@ -267,12 +267,12 @@ macro fp_convert_norex_template {
             }
 
             encoding {
-                0..7 => PREFIX,
-                8..15 => 0x0F,
-                16..23 => OPCODE,
-                24..26 => src[0..2],
-                27..29 => dst[0..2],
-                30..31 => 0b11,
+                PREFIX,
+                0x0F,
+                OPCODE,
+                0b11,
+                dst[2..0],
+                src[2..0],
             }
 
             asm {
@@ -518,16 +518,16 @@ instruction Ucomiss for [X86_64] {
     }
 
     encoding {
-        0 => rhs[3],
-        1 => 0b0,
-        2 => lhs[3],
-        3 => 0b0,
-        4..7 => 0b0100,
-        8..15 => 0x0F,
-        16..23 => 0x2E,
-        24..26 => rhs[0..2],
-        27..29 => lhs[0..2],
-        30..31 => 0b11,
+        0b0100,
+        0b0,
+        lhs[3],
+        0b0,
+        rhs[3],
+        0x0F,
+        0x2E,
+        0b11,
+        lhs[2..0],
+        rhs[2..0],
     }
 
     asm {
@@ -570,17 +570,17 @@ instruction Ucomisd for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => rhs[3],
-        9 => 0b0,
-        10 => lhs[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2E,
-        32..34 => rhs[0..2],
-        35..37 => lhs[0..2],
-        38..39 => 0b11,
+        0x66,
+        0b0100,
+        0b0,
+        lhs[3],
+        0b0,
+        rhs[3],
+        0x0F,
+        0x2E,
+        0b11,
+        lhs[2..0],
+        rhs[2..0],
     }
 
     asm {
@@ -626,17 +626,17 @@ instruction Movsd for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x10,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF2,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x10,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -661,17 +661,17 @@ instruction MovqXmmGpr for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b1,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x6E,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0x66,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x6E,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -696,17 +696,17 @@ instruction MovqGprXmm for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => dst[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b1,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x7E,
-        32..34 => dst[0..2],
-        35..37 => src[0..2],
-        38..39 => 0b11,
+        0x66,
+        0b0100,
+        0b1,
+        src[3],
+        0b0,
+        dst[3],
+        0x0F,
+        0x7E,
+        0b11,
+        src[2..0],
+        dst[2..0],
     }
 
     asm {
@@ -730,17 +730,17 @@ instruction MovdXmmGpr32 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0x66,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x6E,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0x66,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x6E,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -765,12 +765,12 @@ template MovdGpr32XmmNorexTemplate for [SSE2] {
     param MNEMONIC: String;
     operands { dst: GPR32low, src: XMM32low, }
     encoding {
-        0..7 => 0x66,
-        8..15 => 0x0F,
-        16..23 => 0x7E,
-        24..26 => dst[0..2],
-        27..29 => src[0..2],
-        30..31 => 0b11,
+        0x66,
+        0x0F,
+        0x7E,
+        0b11,
+        src[2..0],
+        dst[2..0],
     }
     asm { "{self.MNEMONIC} {dst}, {src}" }
 }
@@ -788,17 +788,17 @@ instruction MovdGpr32Xmm for [X86_64] {
     schedule { units = [WriteFPMove]; }
     operands { dst: GPR32, src: XMM32, }
     encoding {
-        0..7 => 0x66,
-        8 => dst[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x7E,
-        32..34 => dst[0..2],
-        35..37 => src[0..2],
-        38..39 => 0b11,
+        0x66,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        dst[3],
+        0x0F,
+        0x7E,
+        0b11,
+        src[2..0],
+        dst[2..0],
     }
     asm { "{self.MNEMONIC} {dst}, {src}" }
     behavior { dst = bitcast(src); }
@@ -852,17 +852,17 @@ instruction Cvtsi2ss32 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2A,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF3,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x2A,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -886,17 +886,17 @@ instruction Cvtsi2ss64 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b1,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2A,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF3,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x2A,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -920,17 +920,17 @@ instruction Cvttss2si32 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2C,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF3,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x2C,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -954,17 +954,17 @@ instruction Cvttss2si64 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b1,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2C,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF3,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x2C,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -989,17 +989,17 @@ instruction Cvtsi2sd32 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2A,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF2,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x2A,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -1024,17 +1024,17 @@ instruction Cvtsi2sd64 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b1,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2A,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF2,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x2A,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -1059,17 +1059,17 @@ instruction Cvttsd2si32 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2C,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF2,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x2C,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -1094,17 +1094,17 @@ instruction Cvttsd2si64 for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => src[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b1,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x2C,
-        32..34 => src[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b11,
+        0xF2,
+        0b0100,
+        0b1,
+        dst[3],
+        0b0,
+        src[3],
+        0x0F,
+        0x2C,
+        0b11,
+        dst[2..0],
+        src[2..0],
     }
 
     asm {
@@ -1128,13 +1128,13 @@ macro fp_mem_norex {
             schedule { units = [WriteFPMove]; }
             operands { dst: $xmm, base: GPRaddrDispLow, imm: bits<32>, }
             encoding {
-                0..7 => $prefix,
-                8..15 => 0x0F,
-                16..23 => 0x10,
-                24..26 => base[0..2],
-                27..29 => dst[0..2],
-                30..31 => 0b10,
-                32..63 => imm,
+                $prefix,
+                0x0F,
+                0x10,
+                0b10,
+                dst[2..0],
+                base[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, [{base} + {imm}]" }
             behavior { dst = load(base + sext(imm, self.XLEN), $bytes, 0b0); }
@@ -1146,13 +1146,13 @@ macro fp_mem_norex {
             schedule { units = [WriteFPMove]; }
             operands { base: GPRaddrDispLow, imm: bits<32>, src: $xmm, }
             encoding {
-                0..7 => $prefix,
-                8..15 => 0x0F,
-                16..23 => 0x11,
-                24..26 => base[0..2],
-                27..29 => src[0..2],
-                30..31 => 0b10,
-                32..63 => imm,
+                $prefix,
+                0x0F,
+                0x11,
+                0b10,
+                src[2..0],
+                base[2..0],
+                imm,
             }
             asm { "{self.MNEMONIC} [{base} + {imm}], {src}" }
             behavior { store(base + sext(imm, self.XLEN), $bytes, src); }
@@ -1164,14 +1164,14 @@ macro fp_mem_norex {
             schedule { units = [WriteFPMove]; }
             operands { dst: $xmm, base: GPRsibLow, imm: bits<32>, }
             encoding {
-                0..7 => $prefix,
-                8..15 => 0x0F,
-                16..23 => 0x10,
-                24..26 => 0b100,
-                27..29 => dst[0..2],
-                30..31 => 0b10,
-                32..39 => 0x24,
-                40..71 => imm,
+                $prefix,
+                0x0F,
+                0x10,
+                0b10,
+                dst[2..0],
+                0b100,
+                0x24,
+                imm,
             }
             asm { "{self.MNEMONIC} {dst}, [{base} + {imm}]" }
             behavior { dst = load(base + sext(imm, self.XLEN), $bytes, 0b0); }
@@ -1183,14 +1183,14 @@ macro fp_mem_norex {
             schedule { units = [WriteFPMove]; }
             operands { base: GPRsibLow, imm: bits<32>, src: $xmm, }
             encoding {
-                0..7 => $prefix,
-                8..15 => 0x0F,
-                16..23 => 0x11,
-                24..26 => 0b100,
-                27..29 => src[0..2],
-                30..31 => 0b10,
-                32..39 => 0x24,
-                40..71 => imm,
+                $prefix,
+                0x0F,
+                0x11,
+                0b10,
+                src[2..0],
+                0b100,
+                0x24,
+                imm,
             }
             asm { "{self.MNEMONIC} [{base} + {imm}], {src}" }
             behavior { store(base + sext(imm, self.XLEN), $bytes, src); }
@@ -1225,18 +1225,18 @@ instruction MovssLoadDisp for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => base[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x10,
-        32..34 => base[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b10,
-        40..71 => imm,
+        0xF3,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        base[3],
+        0x0F,
+        0x10,
+        0b10,
+        dst[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1259,18 +1259,18 @@ instruction MovssStoreDisp for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x11,
-        32..34 => base[0..2],
-        35..37 => src[0..2],
-        38..39 => 0b10,
-        40..71 => imm,
+        0xF3,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x0F,
+        0x11,
+        0b10,
+        src[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1293,19 +1293,19 @@ instruction MovssLoadDispSib for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => base[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x10,
-        32..34 => 0b100,
-        35..37 => dst[0..2],
-        38..39 => 0b10,
-        40..47 => 0x24,
-        48..79 => imm,
+        0xF3,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        base[3],
+        0x0F,
+        0x10,
+        0b10,
+        dst[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -1328,19 +1328,19 @@ instruction MovssStoreDispSib for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF3,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x11,
-        32..34 => 0b100,
-        35..37 => src[0..2],
-        38..39 => 0b10,
-        40..47 => 0x24,
-        48..79 => imm,
+        0xF3,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x0F,
+        0x11,
+        0b10,
+        src[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -1363,18 +1363,18 @@ instruction MovsdLoadDisp for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => base[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x10,
-        32..34 => base[0..2],
-        35..37 => dst[0..2],
-        38..39 => 0b10,
-        40..71 => imm,
+        0xF2,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        base[3],
+        0x0F,
+        0x10,
+        0b10,
+        dst[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1397,18 +1397,18 @@ instruction MovsdStoreDisp for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x11,
-        32..34 => base[0..2],
-        35..37 => src[0..2],
-        38..39 => 0b10,
-        40..71 => imm,
+        0xF2,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x0F,
+        0x11,
+        0b10,
+        src[2..0],
+        base[2..0],
+        imm,
     }
 
     asm {
@@ -1431,19 +1431,19 @@ instruction MovsdLoadDispSib for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => base[3],
-        9 => 0b0,
-        10 => dst[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x10,
-        32..34 => 0b100,
-        35..37 => dst[0..2],
-        38..39 => 0b10,
-        40..47 => 0x24,
-        48..79 => imm,
+        0xF2,
+        0b0100,
+        0b0,
+        dst[3],
+        0b0,
+        base[3],
+        0x0F,
+        0x10,
+        0b10,
+        dst[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {
@@ -1466,19 +1466,19 @@ instruction MovsdStoreDispSib for [X86_64] {
     }
 
     encoding {
-        0..7 => 0xF2,
-        8 => base[3],
-        9 => 0b0,
-        10 => src[3],
-        11 => 0b0,
-        12..15 => 0b0100,
-        16..23 => 0x0F,
-        24..31 => 0x11,
-        32..34 => 0b100,
-        35..37 => src[0..2],
-        38..39 => 0b10,
-        40..47 => 0x24,
-        48..79 => imm,
+        0xF2,
+        0b0100,
+        0b0,
+        src[3],
+        0b0,
+        base[3],
+        0x0F,
+        0x11,
+        0b10,
+        src[2..0],
+        0b100,
+        0x24,
+        imm,
     }
 
     asm {

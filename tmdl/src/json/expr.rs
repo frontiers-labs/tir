@@ -58,12 +58,8 @@ pub(super) enum Expr {
     String { value: String },
     /// Integer or bit literal retaining radix and source digits.
     Integer { value: String },
-    /// Inclusive bit slice.
-    Slice {
-        base: Box<Expr>,
-        start: u16,
-        end: u16,
-    },
+    /// Inclusive bit slice, high bit first.
+    Slice { base: Box<Expr>, hi: u16, lo: u16 },
     /// Precise-trap body and its ordered exception handlers.
     Try {
         body: Box<Expr>,
@@ -138,8 +134,8 @@ impl From<&ast::Expr> for Expr {
             },
             ast::Expr::Slice(slice) => Self::Slice {
                 base: Box::new(Expr::from(slice.base.as_ref())),
-                start: slice.start,
-                end: slice.end,
+                hi: slice.hi,
+                lo: slice.lo,
             },
             ast::Expr::Try(try_) => Self::Try {
                 body: Box::new(Expr::from(try_.body.as_ref())),

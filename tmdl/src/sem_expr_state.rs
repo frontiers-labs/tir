@@ -222,8 +222,8 @@ fn sequence_behavior(expr: &ast::Expr, bindings: &mut Bindings) -> ast::Expr {
         }),
         ast::Expr::Slice(slice) => ast::Expr::Slice(ast::Slice {
             base: Box::new(sequence_behavior(&slice.base, bindings)),
-            start: slice.start,
-            end: slice.end,
+            hi: slice.hi,
+            lo: slice.lo,
             span: slice.span,
         }),
         ast::Expr::Try(try_expr) => {

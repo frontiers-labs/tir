@@ -209,7 +209,7 @@ pub struct Template {
     pub parent_template: Option<String>,
     pub params: StableHashMap<String, (Type, Option<Expr>)>,
     pub operands: Vec<(String, Type)>,
-    pub encoding: Vec<EncodingArm>,
+    pub encoding: Vec<EncodingField>,
     pub asm: Option<Expr>,
     /// Scheduling-class membership shared by derived instructions that declare no
     /// `schedule` of their own (resolved by
@@ -226,7 +226,7 @@ pub struct Instruction {
     pub parent_template: Option<String>,
     pub params: StableHashMap<String, (Type, Option<Expr>)>,
     pub operands: Vec<(String, Type)>,
-    pub encoding: Vec<EncodingArm>,
+    pub encoding: Vec<EncodingField>,
     pub asm: Option<Expr>,
     pub behavior: Expr,
     /// Performance model membership: the scheduling classes this
@@ -470,6 +470,21 @@ pub struct Machine {
     pub span: Span,
 }
 
+/// One field of an `encoding` block. Fields are listed high bit first within an
+/// encoding unit, units in emission order (see [`crate::encoding`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodingField {
+    pub value: Expr,
+    /// Bit width of `value`, resolved from its declared type by
+    /// [`crate::encoding::resolve_encoding_widths`]; zero before that runs.
+    pub width: u16,
+    pub span: Span,
+}
+
+/// One contiguous bit range of an encoded instruction word, `[start, end]`
+/// inclusive with bit 0 the least significant. Derived from an instruction's
+/// [`EncodingField`] list by [`crate::encoding::encoding_arms`]; every consumer
+/// of an encoding works in these terms.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncodingArm {
     pub start: u16,
@@ -768,10 +783,12 @@ pub struct Lambda {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// `base[hi..lo]`: a bit range, high bit first, inclusive at both ends.
+/// The parser rejects `hi < lo`, so that invariant holds everywhere downstream.
 pub struct Slice {
     pub base: Box<Expr>,
-    pub start: u16,
-    pub end: u16,
+    pub hi: u16,
+    pub lo: u16,
     pub span: Span,
 }
 
@@ -1047,7 +1064,14 @@ impl Item {
 }
 
 impl LitInt {
+    /// Digit separators carry no value, so they are dropped here and no
+    /// consumer of [`LitInt::value`] has to know about them.
     pub fn new(value: String, span: Span) -> Self {
+        let value = if value.contains('_') {
+            value.replace('_', "")
+        } else {
+            value
+        };
         Self { value, span }
     }
 
@@ -1628,8 +1652,8 @@ impl Slice {
         ctx: &mut SemaExprLoweringCtx<'_, G>,
     ) -> tir_graph::NodeId {
         let input = self.base.lower_with_ctx(ctx);
-        let high = Lit::Int(LitInt::new(self.end.to_string(), self.span)).as_sema_expr(ctx);
-        let low = Lit::Int(LitInt::new(self.start.to_string(), self.span)).as_sema_expr(ctx);
+        let high = Lit::Int(LitInt::new(self.hi.to_string(), self.span)).as_sema_expr(ctx);
+        let low = Lit::Int(LitInt::new(self.lo.to_string(), self.span)).as_sema_expr(ctx);
         ctx.build_extract(input, high, low)
     }
 }

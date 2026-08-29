@@ -157,13 +157,18 @@ pub fn lex<'src>(source: &'src str) -> (Vec<Spanned<Token<'src>>>, Vec<Cheap>) {
 
 pub(crate) fn lexer<'src>()
 -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>, extra::Err<Cheap>> {
+    // Underscores group digits (`0b0000_1111`) and are stripped by `LitInt`.
+    let digits = |radix| {
+        text::int(radix)
+            .or(just("_").to_slice())
+            .repeated()
+            .at_least(1)
+    };
     let num = just("0b")
-        .then(text::int(2).repeated().at_least(1))
+        .then(digits(2))
         .to_slice()
-        .or(just("0x")
-            .then(text::int(16).repeated().at_least(1))
-            .to_slice())
-        .or(text::int(10).repeated().at_least(1).to_slice())
+        .or(just("0x").then(digits(16)).to_slice())
+        .or(digits(10).to_slice())
         .map(|n: &str| Token::Number(n));
 
     let str_ = just('"')
