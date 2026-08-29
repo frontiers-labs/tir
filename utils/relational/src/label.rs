@@ -80,8 +80,12 @@ pub trait Label: Debug + Clone {
 /// The distinct labels the graph has seen, so a row carries a `u32` where the
 /// scalar engine carried a term. Congruence then compares two `u32`s and a slice
 /// of child ids instead of calling [`Label::matches`].
+///
+/// [`Label::label_hash`] sees the operand count, so one label at two arities
+/// interns twice. That makes label equality finer than [`Label::matches`], which
+/// costs nothing: congruent rows have equal children and so equal arity.
 #[derive(Debug)]
-pub struct Labels<L> {
+pub(crate) struct Labels<L> {
     table: Vec<L>,
     /// [`Label::label_hash`] bucket -> the labels interned under it.
     index: FxHashMap<u64, Vec<LabelId>>,
@@ -99,7 +103,7 @@ impl<L> Default for Labels<L> {
 impl<L: Label> Labels<L> {
     /// The id of `node`'s label, interning it on first sight. The stored copy
     /// keeps whatever children `node` had; nothing reads them.
-    pub fn intern(&mut self, node: &L) -> LabelId {
+    pub(crate) fn intern(&mut self, node: &L) -> LabelId {
         let bucket = self.index.entry(node.label_hash()).or_default();
         for &id in bucket.iter() {
             if self.table[id.index()].matches(node) {
@@ -113,7 +117,7 @@ impl<L: Label> Labels<L> {
     }
 
     /// The id of `node`'s label if it has been seen, without interning it.
-    pub fn get(&self, node: &L) -> Option<LabelId> {
+    pub(crate) fn get(&self, node: &L) -> Option<LabelId> {
         self.index
             .get(&node.label_hash())?
             .iter()
@@ -121,16 +125,8 @@ impl<L: Label> Labels<L> {
             .find(|&id| self.table[id.index()].matches(node))
     }
 
-    pub fn label(&self, id: LabelId) -> &L {
-        &self.table[id.index()]
-    }
-
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.table.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.table.is_empty()
     }
 }
 

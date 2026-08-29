@@ -215,6 +215,20 @@ impl<L: Label> Engine<L> {
         self.uf.len()
     }
 
+    /// Bytes the columns hold: the row arrays, the child array, the per-class
+    /// arrays and the interned labels. Excludes the hash-cons and the operator
+    /// index, which are rebuilt rather than owned. An estimate for ranking, not
+    /// an allocator total.
+    pub fn approx_bytes(&self) -> usize {
+        let rows = self.node.len();
+        let per_row = size_of::<L>() + 4 * size_of::<u32>();
+        rows * per_row
+            + self.children.len() * size_of::<u32>()
+            + self.uf.len() * 7 * size_of::<u32>()
+            + self.edge_row.len() * 2 * size_of::<u32>()
+            + self.labels.len() * size_of::<L>()
+    }
+
     /// Work done since the engine was built. A saturation round reads the
     /// difference across it; a scope does not roll these back, since they count
     /// work, not state.

@@ -99,9 +99,14 @@ correctness of the Stage-1 ratchet, not for bytes.
 
 ## Suspects the numbers clear
 
-- **E-graph views.** Largest anywhere: 1,925 nodes / 349,008 approx bytes
-  (core_main); core_list_join peaks at 449 nodes / 80,912 B. Under 0.5% of peak
-  RSS. The 32 B/node budget matters for cache behaviour, not for peak memory.
+- **E-graph views.** Largest anywhere: 2,761 nodes / 755,580 approx bytes
+  (core_main); core_list_join peaks at 414 nodes / 108,180 B. Under 4% of peak
+  RSS. The per-node budget matters for cache behaviour, not for peak memory.
+  The census now sums the engine's columns — rows, children, the per-class
+  arrays, the parent back-edges and the interned labels — where it used to
+  charge a node struct plus a flat 64 B per class and exclude children and the
+  hash-cons, so the number is larger than the one it replaces and measures more
+  of the graph, not more memory.
 - **TMDL sem blobs / attribute strings.** The pre-first-pass floor is
   14.5–16.2 MB and barely varies with input size, so target tables are decoded
   once and shared. Nothing here scales with the program.

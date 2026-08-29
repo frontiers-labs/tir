@@ -18,7 +18,7 @@ mod testing;
 
 pub use csr::Csr;
 pub use engine::{ClassRef, Engine, Rows, Stats};
-pub use label::{Label, Labels};
+pub use label::Label;
 pub use unionfind::UnionFind;
 
 /// Whether `TIR_SAT_TRACE` asked for a saturation trace on stderr: every class

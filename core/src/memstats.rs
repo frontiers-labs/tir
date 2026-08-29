@@ -126,20 +126,17 @@ pub fn analysis_census(pass: &'static str, entries: usize) {
     eprintln!("tir-mem: analyses after={pass} entries={entries}");
 }
 
-/// Node and class counts of a view, plus the bytes its arenas hold: node structs
-/// inline (children and hash-cons indices excluded) and a flat per-class charge
-/// for the class map. An estimate for ranking, not an allocator total.
+/// Node and class counts of a view, plus the bytes its columns hold. An estimate
+/// for ranking, not an allocator total.
 pub fn egraph_census<L: ENode>(label: &str, egraph: &EGraph<L>) {
     if !enabled() {
         return;
     }
     let nodes = egraph.total_size();
     let classes = egraph.num_classes();
-    let bytes = nodes * std::mem::size_of::<L>() + classes * BYTES_PER_ECLASS;
+    let bytes = egraph.approx_bytes();
     eprintln!("tir-mem: egraph label={label} nodes={nodes} classes={classes} approx_bytes={bytes}");
 }
-
-const BYTES_PER_ECLASS: usize = 64;
 
 /// One PBQP solve: problem size and the bytes its edge matrices occupy. Called
 /// once per solve, so a regalloc spill retry shows up as another line.
