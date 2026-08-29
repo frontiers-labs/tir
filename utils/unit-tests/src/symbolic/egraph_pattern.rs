@@ -90,6 +90,30 @@ fn search_binds_operands() {
     assert_eq!(m.subst.get(&Var::Symbol("y")), Some(g.find(b)));
 }
 
+/// One capture name written in two operand slots binds one class, and the
+/// bindings report it under both pattern nodes.
+#[test]
+fn a_repeated_capture_matches_only_equal_operands() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let differ = add(&mut g, a, b);
+    let same = add(&mut g, a, a);
+
+    let mut p: Pattern<Math, &'static str> = Pattern::new();
+    let x = p.var(Var::Symbol("x"));
+    let y = p.var(Var::Symbol("x"));
+    let root = p.add(Math::Add([x, y]));
+
+    let matches = p.search(&g);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(g.find(matches[0].root), g.find(same));
+    assert_ne!(g.find(same), g.find(differ));
+    assert_eq!(matches[0].binding(x), g.find(a));
+    assert_eq!(matches[0].binding(y), g.find(a));
+    assert_eq!(matches[0].binding(root), g.find(same));
+}
+
 #[test]
 fn search_roots_only_visits_requested_classes() {
     let mut g = EGraph::new();

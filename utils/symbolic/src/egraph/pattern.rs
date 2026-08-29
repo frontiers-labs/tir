@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use smallvec::SmallVec;
-use tir_adt::{APFloat, APInt, FxBuildHasher};
+use tir_adt::{APFloat, APInt};
+use tir_relational::{Atom, Plan, Query};
 
 use crate::egraph::{Delta, EGraph, ENode, Id};
 
@@ -75,6 +76,28 @@ pub struct Pattern<N: ENode, S> {
     /// filled in one pass as nodes are pushed.
     heights: Vec<usize>,
     root: Id,
+    /// The query this pattern is, compiled on first search and dropped by any
+    /// edit. `None` inside once the language turns out to have no term for a
+    /// literal the pattern demands, which no graph can match.
+    lowered: OnceLock<Option<Lowered<N>>>,
+}
+
+/// A pattern as the engine evaluates it: one query variable per pattern node, so
+/// a match's bindings are indexed by pattern node and the legality hook still
+/// speaks of pattern nodes.
+#[derive(Clone, Debug)]
+struct Lowered<N: ENode> {
+    plan: Plan<N>,
+    /// Capture holes in the order the nest reaches them, which is the order the
+    /// substitution lists them in.
+    captures: Vec<Id>,
+    /// Per pattern node, the node whose variable it shares: itself, or the first
+    /// hole that named the same capture. A rule may write one name twice
+    /// (`gamma(c, x, x)`), and those occurrences are one variable.
+    alias: Vec<Id>,
+    /// The inverse, minus the canonical node itself: what else the legality hook
+    /// must be asked about when a variable binds.
+    shared: Vec<Vec<Id>>,
 }
 
 /// One match of a [`Pattern`] against an e-graph: the matched e-class, the
@@ -110,6 +133,7 @@ impl<N: ENode, S> Pattern<N, S> {
             nodes: Vec::new(),
             heights: Vec::new(),
             root: Id::from_raw(0),
+            lowered: OnceLock::new(),
         }
     }
 
@@ -125,6 +149,7 @@ impl<N: ENode, S> Pattern<N, S> {
 
     pub fn set_root(&mut self, root: Id) {
         self.root = root;
+        self.lowered = OnceLock::new();
     }
 
     pub fn root(&self) -> Id {
@@ -194,7 +219,124 @@ impl<N: ENode, S> Pattern<N, S> {
         self.nodes.push(node);
         self.heights.push(height);
         self.root = id;
+        self.lowered = OnceLock::new();
         id
+    }
+}
+
+impl<N: ENode, S: PartialEq> Pattern<N, S> {
+    /// The compiled query, or `None` when a literal the pattern demands has no
+    /// term in the language — a pattern no graph can match.
+    fn lowered(&self) -> Option<&Lowered<N>> {
+        self.lowered.get_or_init(|| self.lower()).as_ref()
+    }
+
+    fn lower(&self) -> Option<Lowered<N>> {
+        let mut captures = Vec::new();
+        let mut alias: Vec<Id> = (0..self.nodes.len() as u32).map(Id::from_raw).collect();
+        let mut shared = vec![Vec::new(); self.nodes.len()];
+        self.name(
+            self.root,
+            &mut vec![false; self.nodes.len()],
+            &mut captures,
+            &mut alias,
+            &mut shared,
+        );
+
+        let mut atoms = Vec::new();
+        self.emit(
+            self.root,
+            &mut vec![false; self.nodes.len()],
+            &alias,
+            &mut atoms,
+        )?;
+        Some(Lowered {
+            plan: Plan::compile(Query {
+                vars: self.nodes.len() as u32,
+                root: alias[self.root.index()].0,
+                atoms,
+            }),
+            captures,
+            alias,
+            shared,
+        })
+    }
+
+    /// Name the variables: a hole is one variable, and a rule that writes the
+    /// same name twice (`gamma(c, x, x)`) gets one variable at both nodes — the
+    /// equality the goal stack used to enforce through the substitution.
+    fn name(
+        &self,
+        node: Id,
+        seen: &mut [bool],
+        captures: &mut Vec<Id>,
+        alias: &mut [Id],
+        shared: &mut [Vec<Id>],
+    ) {
+        if std::mem::replace(&mut seen[node.index()], true) {
+            return;
+        }
+        match &self.nodes[node.index()] {
+            PatternNode::Var(hole @ Var::Symbol(_)) => {
+                let first = captures.iter().copied().find(|&first| {
+                    matches!(&self.nodes[first.index()], PatternNode::Var(other) if other == hole)
+                });
+                match first {
+                    Some(first) => {
+                        alias[node.index()] = first;
+                        shared[first.index()].push(node);
+                    }
+                    None => captures.push(node),
+                }
+            }
+            PatternNode::Var(_) => {}
+            PatternNode::Node(template) => {
+                for &child in template.children() {
+                    self.name(child, seen, captures, alias, shared);
+                }
+            }
+        }
+    }
+
+    /// One atom per template node and per literal hole, in the order a
+    /// depth-first walk from the root reaches them: the order the goal stack
+    /// popped them in, and so the order the plan steps them in.
+    fn emit(
+        &self,
+        node: Id,
+        seen: &mut [bool],
+        alias: &[Id],
+        atoms: &mut Vec<Atom<N>>,
+    ) -> Option<()> {
+        if std::mem::replace(&mut seen[alias[node.index()].index()], true) {
+            return Some(());
+        }
+        match &self.nodes[node.index()] {
+            PatternNode::Var(Var::Symbol(_)) => {}
+            PatternNode::Var(Var::Int(value)) => atoms.push(Atom::Literal {
+                value: N::from_int(value.clone())?,
+                class: node.0,
+            }),
+            PatternNode::Var(Var::Float(value)) => atoms.push(Atom::Literal {
+                value: N::from_float(value.clone())?,
+                class: node.0,
+            }),
+            PatternNode::Node(template) => {
+                atoms.push(Atom::Node {
+                    template: template.clone(),
+                    args: template
+                        .children()
+                        .iter()
+                        .map(|&child| alias[child.index()].0)
+                        .collect(),
+                    class: node.0,
+                });
+                for &child in template.children() {
+                    self.emit(child, seen, alias, atoms)?;
+                }
+            }
+        }
+        Some(())
     }
 }
 
@@ -263,145 +405,47 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
         allowed: &dyn Fn(Id, Id) -> bool,
         only_new: bool,
     ) -> Vec<EMatch<S>> {
-        let mut search = Search {
-            eg,
-            allowed,
-            // A pattern of nothing but holes binds no e-node, so freshness has
-            // nothing to read and the filter would drop every match. Nor is
-            // there anything to read under a scope: a scoped rebuild leaves the
-            // base rows alone by design, so a match the hypothesis newly enabled
-            // binds e-nodes that are all older than the round.
-            only_new: only_new && self.nodes.iter().any(|n| matches!(n, PatternNode::Node(_))),
-            goals: Vec::new(),
-            subst: SmallVec::new(),
-            bound: SmallVec::from_elem(None, self.nodes.len()),
-            fresh: 0,
-            out: Vec::new(),
+        let Some(lowered) = self.lowered() else {
+            return Vec::new();
         };
-        let mut seen: HashSet<Id, FxBuildHasher> = HashSet::default();
-        for root in roots {
-            let root = eg.find(root);
-            if !seen.insert(root) {
-                continue;
-            }
-            search.goals.push((self.root, root));
-            self.solve(&mut search, root);
-            search.goals.clear();
-        }
-        search.out
-    }
-
-    /// Depth-first backtracking e-matcher: pops one goal off the `(pattern node,
-    /// e-class)` stack, explores every solution restoring the search state
-    /// between branches, then restores the goal for the caller.
-    fn solve<'p>(&'p self, s: &mut Search<'p, '_, N, S>, root: Id) {
-        let eg = s.eg;
-        let Some((pat, class)) = s.goals.pop() else {
-            if !s.only_new || s.fresh > 0 {
-                s.out.push(EMatch {
-                    root,
+        // A variable two pattern nodes share is asked about under both names:
+        // the hook answers per pattern node, and both occurrences carried one.
+        let ask = |node: tir_relational::Var, class: Id| {
+            let node = Id::from_raw(node);
+            allowed(node, class)
+                && lowered.shared[node.index()]
+                    .iter()
+                    .all(|&same| allowed(same, class))
+        };
+        lowered
+            .plan
+            .search(eg, roots, &ask, only_new)
+            .into_iter()
+            .map(|matched| {
+                let mut bindings = matched.bindings;
+                for (node, &named) in lowered.alias.iter().enumerate() {
+                    if named.index() != node {
+                        bindings[node] = bindings[named.index()];
+                    }
+                }
+                EMatch {
+                    root: matched.root,
                     subst: Substitution {
-                        vec: s.subst.iter().map(|&(v, id)| (v.clone(), id)).collect(),
-                    },
-                    bindings: s.bound.clone(),
-                });
-            }
-            return;
-        };
-        let class = eg.find(class);
-        // A pattern node shared by several parents (a DAG pattern) must bind the
-        // same class at every occurrence.
-        let previous = s.bound[pat.index()];
-        let consistent = previous.is_none_or(|existing| eg.find(existing) == class);
-        if consistent && (s.allowed)(pat, class) {
-            s.bound[pat.index()] = Some(class);
-            let mark = s.goals.len();
-            match &self.nodes[pat.index()] {
-                PatternNode::Var(var @ Var::Symbol(_)) => {
-                    match s.subst.iter().find(|(v, _)| *v == var).map(|&(_, id)| id) {
-                        Some(prior) if eg.find(prior) != class => {}
-                        Some(_) => self.solve(s, root),
-                        None => {
-                            s.subst.push((var, class));
-                            self.solve(s, root);
-                            s.subst.pop();
-                        }
-                    }
-                }
-                PatternNode::Var(Var::Int(v)) => {
-                    self.solve_const(s, root, N::from_int(v.clone()), class);
-                }
-                PatternNode::Var(Var::Float(v)) => {
-                    self.solve_const(s, root, N::from_float(v.clone()), class);
-                }
-                PatternNode::Node(template) => {
-                    let tchildren = template.children();
-                    for row in eg.rows(class) {
-                        let node_children = eg.children(row);
-                        if !template.matches_template(eg.node(row))
-                            || tchildren.len() != node_children.len()
-                        {
-                            continue;
-                        }
-                        // A commutative binary operator matches in both operand
-                        // orders.
-                        let orders = if eg.node(row).commutative() && node_children.len() == 2 {
-                            2
-                        } else {
-                            1
-                        };
-                        let fresh = usize::from(eg.row_is_new(row));
-                        s.fresh += fresh;
-                        for order in 0..orders {
-                            for (slot, pc) in tchildren.iter().enumerate().rev() {
-                                let ec = if order == 1 {
-                                    node_children[1 - slot]
-                                } else {
-                                    node_children[slot]
+                        vec: lowered
+                            .captures
+                            .iter()
+                            .map(|&hole| {
+                                let PatternNode::Var(var) = &self.nodes[hole.index()] else {
+                                    unreachable!("a capture is a hole")
                                 };
-                                s.goals.push((*pc, eg.find(ec)));
-                            }
-                            self.solve(s, root);
-                            s.goals.truncate(mark);
-                        }
-                        s.fresh -= fresh;
-                    }
+                                (var.clone(), bindings[hole.index()].expect("bound"))
+                            })
+                            .collect(),
+                    },
+                    bindings,
                 }
-            }
-            s.bound[pat.index()] = previous;
-        }
-        s.goals.push((pat, class));
-    }
-
-    /// Continue only if `class` holds `target` as a literal or is assumed to
-    /// evaluate to it. An assumption is a fact rather than an e-node, so it has
-    /// no round to be new in and always counts as fresh — a rule reading one
-    /// must never be skipped as already applied.
-    fn solve_const<'p>(
-        &'p self,
-        s: &mut Search<'p, '_, N, S>,
-        root: Id,
-        target: Option<N>,
-        class: Id,
-    ) {
-        let Some(target) = target else { return };
-        let eg = s.eg;
-        if eg.assumed_const(class).is_some_and(|n| target.matches(n)) {
-            s.fresh += 1;
-            self.solve(s, root);
-            s.fresh -= 1;
-            return;
-        }
-        let Some(row) = eg
-            .rows(class)
-            .find(|&row| eg.children(row).is_empty() && target.matches(eg.node(row)))
-        else {
-            return;
-        };
-        let fresh = usize::from(eg.row_is_new(row));
-        s.fresh += fresh;
-        self.solve(s, root);
-        s.fresh -= fresh;
+            })
+            .collect()
     }
 
     /// Build this pattern into `eg` under `subst`, returning the root e-class.
@@ -432,19 +476,4 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
         }
         ids[self.root.index()]
     }
-}
-
-/// State one [`Pattern::search_roots_delta`] threads through the backtracking.
-/// Bindings borrow the pattern's `Var`s; names are cloned only when a full match
-/// is emitted.
-struct Search<'p, 'e, N: ENode, S> {
-    eg: &'e EGraph<N>,
-    allowed: &'e dyn Fn(Id, Id) -> bool,
-    only_new: bool,
-    goals: Vec<(Id, Id)>,
-    subst: SmallVec<[(&'p Var<S>, Id); 4]>,
-    bound: SmallVec<[Option<Id>; 8]>,
-    /// How many e-nodes of the partial match the previous round touched.
-    fresh: usize,
-    out: Vec<EMatch<S>>,
 }

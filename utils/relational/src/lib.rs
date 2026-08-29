@@ -11,6 +11,7 @@
 mod csr;
 mod engine;
 mod label;
+mod query;
 mod unionfind;
 
 #[cfg(test)]
@@ -19,6 +20,7 @@ mod testing;
 pub use csr::Csr;
 pub use engine::{ClassRef, Engine, Rows, Stats};
 pub use label::Label;
+pub use query::{Atom, Match, Plan, Query, Var};
 pub use unionfind::UnionFind;
 
 /// Whether `TIR_SAT_TRACE` asked for a saturation trace on stderr: every class

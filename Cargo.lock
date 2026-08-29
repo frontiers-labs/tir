@@ -2260,6 +2260,7 @@ name = "tir-relational"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "smallvec",
  "tir-adt",
 ]
 
