@@ -749,7 +749,6 @@ impl<'a> SemDagBuilder<'a> {
         let comparison = self
             .egraph
             .nodes(class)
-            .iter()
             .find(|n| n.sym().is_some_and(tir::sem::egraph::is_comparison))?
             .clone();
         Some((
@@ -852,7 +851,7 @@ impl<'a> SemDagBuilder<'a> {
 
     /// The IR type recorded on an operand class (taken from any member carrying one).
     fn class_ty(&self, class: Id) -> Option<TypeId> {
-        self.egraph.nodes(class).iter().find_map(|n| n.ty)
+        self.egraph.nodes(class).find_map(|n| n.ty)
     }
 
     fn lower_graph_node(

@@ -172,7 +172,7 @@ impl<N: ENode, S> Pattern<N, S> {
     fn roots_all(&self, eg: &EGraph<N>) -> Vec<Id> {
         match &self.nodes[self.root.index()] {
             PatternNode::Node(template) => eg.classes_with_op(template.op_key()),
-            _ => eg.classes().map(|c| c.id()).collect(),
+            _ => eg.class_ids().collect(),
         }
     }
 
@@ -302,16 +302,16 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
                 }
                 PatternNode::Node(template) => {
                     let tchildren = template.children();
-                    for enode in eg.nodes(class) {
-                        let node_children = enode.children();
-                        if !template.matches_template(enode)
+                    for row in eg.rows(class) {
+                        let node_children = eg.children(row);
+                        if !template.matches_template(eg.node(row))
                             || tchildren.len() != node_children.len()
                         {
                             continue;
                         }
                         // A commutative binary operator matches in both operand
                         // orders.
-                        let orders = if enode.commutative() && node_children.len() == 2 {
+                        let orders = if eg.node(row).commutative() && node_children.len() == 2 {
                             2
                         } else {
                             1
@@ -374,7 +374,6 @@ fn class_has_const<N: ENode>(eg: &EGraph<N>, target: Option<N>, class: Id) -> bo
     };
     eg.assumed_const(class).is_some_and(|n| target.matches(n))
         || eg
-            .nodes(class)
-            .iter()
-            .any(|n| n.children().is_empty() && target.matches(n))
+            .rows(class)
+            .any(|row| eg.children(row).is_empty() && target.matches(eg.node(row)))
 }

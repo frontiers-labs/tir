@@ -450,7 +450,7 @@ impl Driver<'_> {
     }
 
     fn is_constant(&self, class: Id) -> bool {
-        self.eg.nodes(class).iter().any(|node| node.int().is_some())
+        self.eg.nodes(class).any(|node| node.int().is_some())
     }
 
     /// How deep in the region tree `op` sits, so the loops are read outermost first.
@@ -614,7 +614,6 @@ impl Driver<'_> {
         reaching.extend(
             self.eg
                 .nodes(class)
-                .iter()
                 .filter_map(|node| self.named_value(node))
                 .filter(|&value| Some(value) != named && self.reaches(value, target)),
         );
@@ -650,7 +649,7 @@ impl Driver<'_> {
         target: &OperationRef,
         rewriter: &mut Rewriter,
     ) -> Result<Option<ValueId>, PassError> {
-        let Some(literal) = self.eg.nodes(class).iter().find_map(Node::int) else {
+        let Some(literal) = self.eg.nodes(class).find_map(Node::int) else {
             return Ok(None);
         };
         Ok(Some(super::literal_before(

@@ -17,7 +17,7 @@ mod unionfind;
 mod testing;
 
 pub use csr::Csr;
-pub use engine::{Engine, Rows};
+pub use engine::{ClassRef, Engine, Rows, Stats};
 pub use label::{Label, Labels};
 pub use unionfind::UnionFind;
 

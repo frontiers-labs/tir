@@ -69,12 +69,11 @@ pub(crate) fn operand(substitution: &Substitution<Sym>, index: u32) -> Id {
 
 fn const_value(eg: &EGraph<Node>, class: Id) -> Option<APInt> {
     eg.nodes(eg.find(class))
-        .iter()
         .find_map(|node| node.int().cloned())
 }
 
 fn class_type(eg: &EGraph<Node>, class: Id) -> Option<TypeId> {
-    eg.nodes(eg.find(class)).iter().find_map(Node::op_type)
+    eg.nodes(eg.find(class)).find_map(Node::op_type)
 }
 
 fn class_int_width(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<u32> {
@@ -86,7 +85,7 @@ fn class_int_width(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<u3
 }
 
 pub(crate) fn class_value_type(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<TypeId> {
-    eg.nodes(eg.find(class)).iter().find_map(|node| {
+    eg.nodes(eg.find(class)).find_map(|node| {
         node.ty
             .or_else(|| node.value().map(|value| context.get_value(value).ty()))
     })
@@ -167,7 +166,7 @@ fn const_fold(context: Context, template: &Node) -> Rule {
 }
 
 fn fold_class(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<(APInt, TypeId)> {
-    eg.nodes(class).iter().find_map(|node| {
+    eg.nodes(class).find_map(|node| {
         let (Prov::Op(op), Some(ty)) = (node.prov, node.op_type()) else {
             return None;
         };
@@ -239,7 +238,7 @@ fn decided_gamma(context: Context, arity: usize) -> Rule {
 }
 
 fn decided_arm(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<Id> {
-    eg.nodes(class).iter().find_map(|node| {
+    eg.nodes(class).find_map(|node| {
         let [decision, arms @ ..] = &node.children[..] else {
             return None;
         };
@@ -338,7 +337,7 @@ fn class_holding(eg: &EGraph<Node>, template: &Node) -> Option<Id> {
     eg.classes_with_op(template.op_key())
         .into_iter()
         .find(|&class| {
-            eg.nodes(class).iter().any(|node| {
+            eg.nodes(class).any(|node| {
                 node.matches(template)
                     && node.children().len() == template.children().len()
                     && std::iter::zip(node.children(), template.children())

@@ -97,18 +97,21 @@ impl UnionFind {
         }
     }
 
-    /// Undo every merge logged after `mark` and drop the classes pushed after
-    /// `classes`, restoring exactly the state the scope opened on. Merges are
-    /// undone newest first: a root's size stops moving the moment it is
-    /// absorbed, so subtracting it from its survivor restores that survivor.
-    pub fn rollback(&mut self, mark: usize, classes: usize) {
+    /// Undo every merge logged after `mark`, restoring the partition the scope
+    /// opened on. Merges are undone newest first: a root's size stops moving the
+    /// moment it is absorbed, so subtracting it from its survivor restores that
+    /// survivor.
+    ///
+    /// Ids minted inside the scope are *not* dropped. They keep a singleton
+    /// entry, so a caller still holding one after the pop finds it rather than
+    /// indexing off the end — the scalar engine's behaviour, which the classes a
+    /// discarded hypothesis built relied on.
+    pub fn rollback(&mut self, mark: usize) {
         while self.log.len() > mark {
             let (absorbed, survivor) = self.log.pop().expect("logged merge");
             self.parent[absorbed.index()] = absorbed.0;
             self.size[survivor.index()] -= self.size[absorbed.index()];
         }
-        self.parent.truncate(classes);
-        self.size.truncate(classes);
     }
 }
 
@@ -207,9 +210,9 @@ mod tests {
                 uf.union(ClassId(a), ClassId(b));
             }
             uf.push();
-            uf.rollback(mark, classes);
-            prop_assert_eq!(uf.len(), classes);
+            uf.rollback(mark);
             prop_assert_eq!(uf.log_len(), mark);
+            prop_assert_eq!(uf.find(ClassId(classes as u32)).0, classes as u32);
             for i in 0..12u32 {
                 prop_assert_eq!(uf.find(ClassId(i)).0, roots[i as usize]);
             }

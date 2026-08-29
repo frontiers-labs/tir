@@ -22,7 +22,7 @@ use tir_symbolic::egraph::{ENode, Id};
 /// materializer, no instruction, and no cross-width union (the i32 view and any
 /// explicit i64 widening stay distinct classes, kept apart by the width matcher).
 pub(crate) fn low_extract_source(egraph: &SemEGraph, class: Id) -> Option<Id> {
-    egraph.nodes(class).iter().find_map(|n| {
+    egraph.nodes(class).find_map(|n| {
         (n.kind == SymKind::Extract
             && n.children().len() == 3
             && class_int_binding(egraph, egraph.find(n.children()[2]))
@@ -39,7 +39,7 @@ pub(crate) fn is_low_extract_view(egraph: &SemEGraph, class: Id) -> bool {
 }
 
 pub(crate) fn low_extract_width(egraph: &SemEGraph, class: Id) -> Option<u32> {
-    egraph.nodes(class).iter().find_map(|node| {
+    egraph.nodes(class).find_map(|node| {
         if node.kind != SymKind::Extract || node.children().len() != 3 {
             return None;
         }
@@ -59,7 +59,6 @@ pub(crate) fn class_value_binding(
 ) -> Option<ValueId> {
     egraph
         .nodes(class)
-        .iter()
         .find_map(|n| match n.payload.as_ref() {
             Some(tir::sem::SemPayload::Expr(tir::sem::SymPayload::Value(v))) => Some(*v),
             _ => None,
@@ -80,7 +79,7 @@ pub(crate) fn class_value_binding(
 /// an op with no memory effect. A gated-SSA merge is not — it is the schedule,
 /// not a value expression.
 pub(crate) fn class_is_pure(egraph: &SemEGraph, class: Id) -> bool {
-    egraph.nodes(class).iter().all(|n| match &n.kind {
+    egraph.nodes(class).all(|n| match &n.kind {
         tir::sem::Kind::Sym(kind) => kind_is_pure(*kind),
         tir::sem::Kind::Ir(_) => true,
     })
@@ -120,7 +119,6 @@ pub(crate) fn class_register_type(
         let width = pointer_width?;
         egraph
             .nodes(class)
-            .iter()
             .any(|node| {
                 node.ty.is_some_and(|ty| {
                     let data = ctx.get_type_data(ty);

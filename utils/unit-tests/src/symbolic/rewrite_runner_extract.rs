@@ -205,7 +205,7 @@ fn ties_keep_the_first_node_to_reach_the_minimum() {
     let extraction = g.extract_best(|_, node| unit(node));
     let root = g.find(ab);
     let chosen = extraction.node(root).unwrap();
-    assert_eq!(chosen.children(), g.nodes(root)[0].children());
+    assert_eq!(chosen.children(), g.nodes(root).next().unwrap().children());
 }
 
 #[test]
@@ -458,7 +458,7 @@ fn deep_read_rule() -> Rewrite<Math, &'static str> {
         let Some(deep) = child_of_add(g, left, 0) else {
             return;
         };
-        if !g.nodes(deep).iter().any(|n| matches!(n, Math::Num(7))) {
+        if !g.nodes(deep).any(|n| matches!(n, Math::Num(7))) {
             return;
         }
         let marker = g.add(Math::Num(99));
@@ -468,7 +468,7 @@ fn deep_read_rule() -> Rewrite<Math, &'static str> {
 }
 
 fn child_of_add(g: &EGraph<Math>, class: Id, slot: usize) -> Option<Id> {
-    g.nodes(class).iter().find_map(|node| match node {
+    g.nodes(class).find_map(|node| match node {
         Math::Add(kids) => Some(g.find(kids[slot])),
         _ => None,
     })
@@ -508,11 +508,8 @@ fn applier_reading_past_the_pattern_is_still_re_searched() {
     semi.rebuild();
     semi.saturate(borrowed.iter().copied(), 30, 10_000);
 
-    let holds_marker = |g: &EGraph<Math>, root: Id| {
-        g.nodes(g.find(root))
-            .iter()
-            .any(|n| matches!(n, Math::Num(99)))
-    };
+    let holds_marker =
+        |g: &EGraph<Math>, root: Id| g.nodes(g.find(root)).any(|n| matches!(n, Math::Num(99)));
     assert!(holds_marker(&naive, naive_root), "naive must fire the rule");
     assert!(
         holds_marker(&semi, semi_root),

@@ -1,5 +1,10 @@
-use super::FxHashMap;
+use std::collections::HashMap;
+
+use tir_adt::FxBuildHasher;
+
 use crate::egraph::{EGraph, ENode, Id};
+
+type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 
 /// Cheapest representative e-node per e-class, chosen by [`EGraph::extract_best`].
 pub struct Extraction<L: ENode> {
@@ -110,26 +115,30 @@ impl<'a, L: ENode> FlatGraph<'a, L> {
         let mut index: FxHashMap<Id, usize> = FxHashMap::default();
         let mut classes: Vec<Id> = Vec::new();
         let mut nodes: Vec<FlatNode<'a, L>> = Vec::new();
-        for class in eg.classes() {
-            let id = eg.find(class.id());
+        let mut rows: Vec<tir_relational::RowId> = Vec::new();
+        for id in eg.class_ids() {
             let slot = *index.entry(id).or_insert_with(|| {
                 classes.push(id);
                 classes.len() - 1
             });
-            nodes.extend(class.nodes().iter().map(|node| FlatNode {
-                node,
-                class: slot,
-                base: cost_of(id, node),
-                children: 0..0,
-                costable: true,
-            }));
+            for row in eg.rows(id) {
+                let node = eg.node(row);
+                rows.push(row);
+                nodes.push(FlatNode {
+                    node,
+                    class: slot,
+                    base: cost_of(id, node),
+                    children: 0..0,
+                    costable: true,
+                });
+            }
         }
 
         let mut children = Vec::new();
         let mut parents = vec![Vec::new(); classes.len()];
         for (position, entry) in nodes.iter_mut().enumerate() {
             let start = children.len();
-            for &child in entry.node.children() {
+            for &child in eg.children(rows[position]) {
                 match index.get(&eg.find(child)) {
                     Some(&slot) => {
                         children.push(slot);

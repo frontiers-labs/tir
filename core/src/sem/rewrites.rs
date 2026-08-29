@@ -97,7 +97,7 @@ fn saturate_impl(
     // and the next saturation of this graph may not trust it.
     let mut on_a_limit = true;
     for _ in 0..limits.max_iterations {
-        let mut stats = RoundStats::start(delta.as_ref());
+        let mut stats = RoundStats::start(eg, delta.as_ref());
         let mut matches = Vec::new();
         for (index, rw) in rewrites.iter().enumerate() {
             if rw.post_saturation {
@@ -111,7 +111,7 @@ fn saturate_impl(
             }
         }
         if matches.is_empty() {
-            stats.finish();
+            stats.finish(eg);
             on_a_limit = false;
             break;
         }
@@ -121,7 +121,7 @@ fn saturate_impl(
             stats.apply(eg, |eg| (rewrites[*index].apply)(ctx, eg, m));
         }
         eg.rebuild();
-        stats.finish();
+        stats.finish(eg);
         delta = eg.take_changed().map(Delta::new);
         if let Some(roots) = &mut roots {
             let dirty: HashSet<Id> = eg.scope_dirty().into_iter().collect();

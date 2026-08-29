@@ -216,7 +216,7 @@ fn add_pat(p: &mut Pattern<Math, u32>, e: &Sexp, vars: &mut HashMap<String, Id>)
 }
 
 fn class_has(g: &EGraph<Math>, class: Id, pred: impl Fn(&Math) -> bool) -> bool {
-    g.nodes(class).iter().any(pred)
+    g.nodes(class).any(pred)
 }
 
 fn var_class(subst: &Substitution<u32>, v: &str) -> Id {

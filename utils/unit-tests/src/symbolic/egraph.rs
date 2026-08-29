@@ -10,7 +10,7 @@ fn hash_consing_shares_identical_expressions() {
     let e1 = add(&mut g, a, b);
     let e2 = add(&mut g, a, b);
     assert_eq!(g.find(e1), g.find(e2));
-    assert_eq!(g.nodes(e1).len(), 1);
+    assert_eq!(g.nodes(e1).count(), 1);
     assert_eq!(g.total_size(), 3);
     assert_eq!(g.num_classes(), 3);
 }
@@ -114,7 +114,7 @@ fn unique_nodes_never_share_or_merge() {
     g.union(a, b);
     g.rebuild();
     assert_ne!(g.find(ua), g.find(ub));
-    let child = g.nodes(ua)[0].children()[0];
+    let child = g.nodes(ua).next().unwrap().children()[0];
     assert!(g.connected(child, a));
 }
 
@@ -252,7 +252,7 @@ fn nested_pop_restores_outer_scope_hash_cons() {
     // the outer scope's hash-cons survived the nested pop.
     let again = add(&mut g, a, b);
     assert_eq!(g.find(again), g.find(outer));
-    assert_eq!(g.nodes(g.find(outer)).len(), 1);
+    assert_eq!(g.nodes(g.find(outer)).count(), 1);
 }
 
 #[test]
@@ -370,7 +370,7 @@ fn scope_merge_aggregates_nodes_in_base_order() {
     g.rebuild();
     let root = g.find(a);
     assert_eq!(g.scope_members(root), &[a, c][..]);
-    let nodes = g.nodes(root);
+    let nodes: Vec<&Math> = g.nodes(root).collect();
     assert!(matches!(nodes[0], Math::Sym(0)));
     assert!(matches!(nodes[1], Math::Sym(2)));
     assert_eq!(g.num_classes(), 2);
@@ -379,7 +379,7 @@ fn scope_merge_aggregates_nodes_in_base_order() {
     g.pop_context();
     assert_eq!(g.num_classes(), 3);
     assert!(g.scope_members(root).is_empty());
-    assert_eq!(g.nodes(g.find(a)).len(), 1);
+    assert_eq!(g.nodes(g.find(a)).count(), 1);
 }
 
 #[test]
@@ -405,7 +405,7 @@ fn nested_pop_restores_outer_scope_partition() {
     assert_eq!(g.num_classes(), 3);
     assert_eq!(g.total_size(), 4);
     assert_eq!(g.scope_members(outer), &[a, b][..]);
-    assert_eq!(g.nodes(outer).len(), 2);
+    assert_eq!(g.nodes(outer).count(), 2);
     assert!(!g.connected(c, d));
 
     g.pop_context();
@@ -413,7 +413,7 @@ fn nested_pop_restores_outer_scope_partition() {
 }
 
 #[test]
-fn scope_class_view_is_snapshot_until_rebuild() {
+fn scope_counts_follow_the_hypothesis_and_the_pop_undoes_them() {
     let mut g = EGraph::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
@@ -421,13 +421,16 @@ fn scope_class_view_is_snapshot_until_rebuild() {
 
     g.push_context();
     g.union(a, b);
-    // No rebuild yet: the aggregated view still shows the pre-union partition.
-    assert_eq!(g.num_classes(), 2);
+    // A merge counts the moment it happens; congruence repair is what waits for
+    // the rebuild.
+    assert_eq!(g.num_classes(), 1);
     assert_eq!(g.total_size(), 2);
     g.rebuild();
     assert_eq!(g.num_classes(), 1);
     assert_eq!(g.total_size(), 2);
     g.pop_context();
+    assert_eq!(g.num_classes(), 2);
+    assert_eq!(g.total_size(), 2);
 }
 
 #[test]
@@ -726,7 +729,7 @@ fn a_scope_leaves_the_change_log_as_it_found_it() {
     // and the scope's merges, which no longer hold, are gone.
     assert_eq!(g.take_changed(), Some(vec![c]));
     assert!(!g.connected(a, b));
-    assert!(g.nodes(g.find(na)).len() == 1);
+    assert!(g.nodes(g.find(na)).count() == 1);
 }
 
 #[test]

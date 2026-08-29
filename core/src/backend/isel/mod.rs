@@ -75,7 +75,7 @@ impl FunctionMatches {
     fn patterns_rooting_at(&self, fs: &FunctionSelection, class: Id) -> Vec<usize> {
         let mut indices = self.anywhere.clone();
         let assumed = fs.egraph.assumed_const(class).into_iter();
-        for node in fs.egraph.nodes(class).iter().chain(assumed) {
+        for node in fs.egraph.nodes(class).chain(assumed) {
             indices.extend(self.by_op.get(&node.op_key()).into_iter().flatten());
         }
         indices.sort_unstable();
@@ -862,7 +862,6 @@ impl FunctionSelection {
         let equal: Vec<Id> = self
             .egraph
             .nodes(class)
-            .iter()
             .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
             .map(|node| self.egraph.assumed_classes(node).collect())
             .unwrap_or_default();
@@ -2685,11 +2684,7 @@ impl InstructionSelectPass {
             // computes: an op of B, a guard condition of B, a
             // rewrite-introduced intermediate, or a terminal constant covered
             // by a real target materializer instruction.
-            let is_computed = fs
-                .egraph
-                .nodes(root)
-                .iter()
-                .any(|n| !n.children().is_empty());
+            let is_computed = fs.egraph.nodes(root).any(|n| !n.children().is_empty());
             let synthetic = is_computed || compiled.constant_materializer_range().is_some();
             if block_op.is_none() && !is_guard_class && !synthetic {
                 continue;
@@ -3049,7 +3044,6 @@ fn assert_equal(egraph: &mut SemEGraph, lhs: Id, rhs: Id) {
     let literal = |class: Id| {
         egraph
             .nodes(egraph.find(class))
-            .iter()
             .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
             .cloned()
     };

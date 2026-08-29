@@ -2287,6 +2287,7 @@ dependencies = [
  "egg",
  "tir-adt",
  "tir-graph",
+ "tir-relational",
 ]
 
 [[package]]

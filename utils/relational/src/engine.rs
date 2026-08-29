@@ -58,6 +58,7 @@ pub struct Engine<L: Label> {
 
     /// Classes a union touched, awaiting congruence repair.
     pending: Vec<ClassId>,
+    stats: Stats,
     total_nodes: usize,
     num_classes: usize,
 
@@ -78,6 +79,14 @@ pub struct Engine<L: Label> {
     /// Per open scope, the base reps grouped under their scoped rep; merged
     /// groups only. Cloned on push, so a nested frame keeps naming base reps.
     scope_members: Vec<FxHashMap<ClassId, Vec<ClassId>>>,
+}
+
+/// Cumulative engine work, for the saturation counters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    pub merges: usize,
+    pub adds: usize,
+    pub repairs: usize,
 }
 
 /// What a scope's state was when it opened; everything after it is truncated.
@@ -151,6 +160,7 @@ impl<L: Label> Engine<L> {
             scope_memo: Vec::new(),
             op_rows: FxHashMap::default(),
             pending: Vec::new(),
+            stats: Stats::default(),
             total_nodes: 0,
             num_classes: 0,
             changed: Vec::new(),
@@ -188,6 +198,13 @@ impl<L: Label> Engine<L> {
 
     pub fn num_classes(&self) -> usize {
         self.num_classes
+    }
+
+    /// Work done since the engine was built. A saturation round reads the
+    /// difference across it; a scope does not roll these back, since they count
+    /// work, not state.
+    pub fn stats(&self) -> Stats {
+        self.stats
     }
 
     pub fn in_scope(&self) -> bool {
@@ -230,12 +247,33 @@ impl<L: Label> Engine<L> {
         self.class_len[self.find(id).index()] as usize
     }
 
-    /// Every live class, ascending id — the order the scalar engine's insertion-
-    /// ordered class map produced.
-    pub fn classes(&self) -> impl Iterator<Item = ClassId> + '_ {
-        (0..self.uf.len() as u32)
-            .map(ClassId)
-            .filter(|&id| self.find(id) == id)
+    /// Every live class, at the position of its lowest member: ascending id in
+    /// the base graph, and under a scope the position of the group's lowest base
+    /// rep. Extraction and bare-variable-rooted patterns walk classes in this
+    /// order and break ties by it, so it is part of the contract.
+    pub fn class_ids(&self) -> impl Iterator<Item = ClassId> + '_ {
+        (0..self.uf.len() as u32).map(ClassId).filter_map(|id| {
+            let root = self.find(id);
+            if self.class_len[root.index()] == 0 {
+                return None;
+            }
+            match self.scope_members(root) {
+                [] => (root == id).then_some(id),
+                group => (Some(&id) == group.iter().min()).then_some(root),
+            }
+        })
+    }
+
+    /// [`Self::class_ids`] as readable classes.
+    pub fn classes(&self) -> impl Iterator<Item = ClassRef<'_, L>> + '_ {
+        self.class_ids().map(|id| self.class(id))
+    }
+
+    pub fn class(&self, id: ClassId) -> ClassRef<'_, L> {
+        ClassRef {
+            engine: self,
+            id: self.find(id),
+        }
     }
 
     /// Canonical classes holding a node in the `op` bucket, each once, in
@@ -295,6 +333,7 @@ impl<L: Label> Engine<L> {
         if ra == rb {
             return ra;
         }
+        self.stats.merges += 1;
         let survivor = self.uf.union(ra, rb);
         let absorbed = if survivor == ra { rb } else { ra };
         self.rekey_assumption(absorbed, survivor);
@@ -344,6 +383,7 @@ impl<L: Label> Engine<L> {
     /// a child, refresh their hash-cons entries, and union any that became
     /// structurally equal (queueing more work through [`Self::union`]).
     fn repair(&mut self, id: ClassId) {
+        self.stats.repairs += 1;
         let id = self.find(id);
         let edges = self.take_parents(id);
 
@@ -399,6 +439,7 @@ impl<L: Label> Engine<L> {
     /// once the scope pops. Canonicalization happens in a scratch buffer against
     /// a hash-cons that lives only as long as the rebuild.
     fn rebuild_scope(&mut self) {
+        self.sort_scope_members();
         let mut memo: FxHashMap<u64, Vec<(LabelId, Vec<ClassId>, ClassId)>> = FxHashMap::default();
         let mut scratch: Vec<ClassId> = Vec::new();
         while !self.pending.is_empty() {
@@ -430,6 +471,19 @@ impl<L: Label> Engine<L> {
                         None => bucket.push((label, scratch.clone(), class)),
                     }
                 }
+            }
+        }
+        self.sort_scope_members();
+    }
+
+    /// The scope partition's groups, ascending. A group's members are what a
+    /// side table keyed by base reps is aggregated over, and what
+    /// [`Self::class_ids`] positions the group by, so the order is observable.
+    fn sort_scope_members(&mut self) {
+        if let Some(frame) = self.scope_members.last_mut() {
+            for members in frame.values_mut() {
+                members.sort_unstable();
+                members.dedup();
             }
         }
     }
@@ -466,6 +520,7 @@ impl<L: Label> Engine<L> {
         }
         self.total_nodes += 1;
         self.num_classes += 1;
+        self.stats.adds += 1;
         self.log_change(class);
         class
     }
@@ -848,20 +903,25 @@ impl<L: Label> Engine<L> {
                 }
             }
         }
-        self.uf.rollback(frame.union_log, frame.classes);
+        self.uf.rollback(frame.union_log);
         self.row_label.truncate(frame.rows);
         self.row_class.truncate(frame.rows);
         self.row_start.truncate(frame.rows + 1);
         self.children.truncate(self.row_start[frame.rows] as usize);
         self.node.truncate(frame.rows);
         self.row_next.truncate(frame.rows);
-        self.class_head.truncate(frame.classes);
-        self.class_tail.truncate(frame.classes);
-        self.class_len.truncate(frame.classes);
-        self.parent_head.truncate(frame.classes);
-        self.parent_tail.truncate(frame.classes);
         self.edge_row.truncate(frame.edges);
         self.edge_next.truncate(frame.edges);
+        // The classes the scope minted keep their ids, so a caller still holding
+        // one finds it, but they lose every row the scope gave them and stop
+        // being classes: `class_ids` skips a root with no rows.
+        for class in frame.classes..self.uf.len() {
+            self.class_head[class] = NONE;
+            self.class_tail[class] = NONE;
+            self.class_len[class] = 0;
+            self.parent_head[class] = NONE;
+            self.parent_tail[class] = NONE;
+        }
         self.scope_memo.pop();
         self.scope_members.pop();
         self.pending = frame.pending;
@@ -898,7 +958,9 @@ impl<L: Label> Engine<L> {
     /// the ones minted inside them, and transitively every class holding a node
     /// with such a child. Ascending id. Empty with no scope open.
     pub fn scope_dirty(&self) -> Vec<ClassId> {
-        let base = self.scopes.first().map_or(0, |frame| frame.classes) as u32;
+        let Some(base) = self.scopes.first().map(|frame| frame.classes as u32) else {
+            return Vec::new();
+        };
         let seeds: Vec<ClassId> = (base..self.uf.len() as u32)
             .map(ClassId)
             .chain(self.assumed.keys().copied())
@@ -956,6 +1018,43 @@ fn hash_row(label: LabelId, children: &[ClassId]) -> u64 {
     label.0.hash(&mut h);
     children.hash(&mut h);
     h.finish()
+}
+
+/// A class, read through the columns. Not a struct the engine owns: an e-class
+/// is a set of rows, and this is the cursor into it.
+pub struct ClassRef<'a, L: Label> {
+    engine: &'a Engine<L>,
+    id: ClassId,
+}
+
+impl<L: Label> Clone for ClassRef<'_, L> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<L: Label> Copy for ClassRef<'_, L> {}
+
+impl<'a, L: Label> ClassRef<'a, L> {
+    pub fn id(self) -> ClassId {
+        self.id
+    }
+
+    pub fn rows(self) -> Rows<'a, L> {
+        self.engine.rows(self.id)
+    }
+
+    pub fn nodes(self) -> impl Iterator<Item = &'a L> + Clone {
+        self.engine.nodes(self.id)
+    }
+
+    pub fn len(self) -> usize {
+        self.engine.class_len(self.id)
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Walks a class's rows through the intrusive membership list.
@@ -1196,7 +1295,7 @@ mod tests {
 
     /// Everything a caller can observe, for the scope round-trip test.
     fn state(eg: &Engine<Term>) -> Vec<(u32, Vec<String>, Vec<Vec<u32>>)> {
-        eg.classes()
+        eg.class_ids()
             .map(|class| {
                 (
                     class.0,
@@ -1243,7 +1342,7 @@ mod tests {
             // No two live rows share a label and canonical children in
             // different classes.
             let mut seen: std::collections::HashMap<(u32, Vec<u32>), u32> = Default::default();
-            for class in eg.classes() {
+            for class in eg.class_ids() {
                 for row in eg.rows(class) {
                     if eg.node(row).is_unique() {
                         continue;

@@ -10,6 +10,7 @@ doctest = false
 [dependencies]
 tir-graph.workspace = true
 tir-adt.workspace = true
+tir-relational.workspace = true
 chumsky.workspace = true
 
 [[bin]]

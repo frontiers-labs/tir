@@ -1133,7 +1133,7 @@ fn merged_value_classes_resolve_to_earliest_def() {
         apply: Box::new(|_ctx: &Context, egraph: &mut SemEGraph, m: &EMatch<u32>| {
             let add_class = egraph
                 .classes()
-                .find(|class| class.nodes().iter().any(|n| n.kind == SymKind::Add))
+                .find(|class| class.nodes().any(|n| n.kind == SymKind::Add))
                 .map(|class| class.id());
             if let Some(add_class) = add_class {
                 egraph.union(m.root, add_class);

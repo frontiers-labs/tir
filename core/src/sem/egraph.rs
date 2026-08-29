@@ -29,7 +29,7 @@ pub(crate) fn class_int_binding(egraph: &SemEGraph, class: Id) -> Option<APInt> 
     egraph
         .assumed_const(class)
         .and_then(int)
-        .or_else(|| egraph.nodes(class).iter().find_map(int))
+        .or_else(|| egraph.nodes(class).find_map(int))
 }
 
 /// An unsigned literal at its minimal width. Widths identify a constant class,
@@ -109,7 +109,6 @@ pub(crate) fn ir_type(context: &Context, ty: &SemType) -> Option<TypeId> {
 pub(crate) fn class_width(ctx: &Context, egraph: &SemEGraph, class: Id) -> Option<u32> {
     egraph
         .nodes(class)
-        .iter()
         .find_map(|n| n.ty.and_then(|ty| type_width(ctx, ty)))
 }
 
@@ -117,6 +116,5 @@ pub(crate) fn class_width(ctx: &Context, egraph: &SemEGraph, class: Id) -> Optio
 pub(crate) fn class_semantic_type(ctx: &Context, egraph: &SemEGraph, class: Id) -> Option<SemType> {
     egraph
         .nodes(class)
-        .iter()
         .find_map(|node| node.ty.and_then(|ty| semantic_type(ctx, ty)))
 }

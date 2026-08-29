@@ -198,7 +198,7 @@ fn float_literal_matches_constant() {
 /// leaves, so operator equality via [`ENode::matches`] is full equality).
 fn class_has_const(eg: &EGraph<Math>, node: Option<Math>, class: Id) -> bool {
     match node {
-        Some(n) => eg.nodes(class).iter().any(|e| e.matches(&n)),
+        Some(n) => eg.nodes(class).any(|e| e.matches(&n)),
         None => false,
     }
 }

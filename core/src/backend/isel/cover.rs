@@ -475,10 +475,10 @@ pub(crate) fn completeness_error(
         }
         let nodes = egraph.nodes(class);
         if let Some(kind) = nodes
-            .iter()
+            .clone()
             .filter_map(|n| n.sym())
             .find(|kind| *kind != SymKind::If)
-            .or_else(|| nodes.first().and_then(|n| n.sym()))
+            .or_else(|| nodes.clone().next().and_then(|n| n.sym()))
             && !missing.contains(&kind)
         {
             missing.push(kind);

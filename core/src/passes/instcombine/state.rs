@@ -117,7 +117,6 @@ pub(crate) fn eliminate_dead_store(exported: Vec<Id>) -> Rule {
             // would forward the value the body overwrote.
             if eg
                 .nodes(before)
-                .iter()
                 .any(|node| node.sym() == Some(SymKind::Theta))
             {
                 return;
@@ -192,7 +191,7 @@ const DERIVATION_LIMIT: usize = 8;
 
 /// The extent an access over `address` covering `bytes` names.
 fn extent(eg: &EGraph<Node>, address: Id, bytes: Id) -> Option<Extent> {
-    let bytes = eg.nodes(bytes).iter().find_map(Node::int)?.to_i64();
+    let bytes = eg.nodes(bytes).find_map(Node::int)?.to_i64();
     let (base, offset) = derivation(eg, eg.find(address), 0, 0);
     Some(Extent {
         base,
@@ -220,7 +219,7 @@ fn derivation(eg: &EGraph<Node>, address: Id, offset: i64, depth: usize) -> (Id,
         let [base, added] = node.children[..] else {
             continue;
         };
-        let Some(step) = eg.nodes(eg.find(added)).iter().find_map(Node::int) else {
+        let Some(step) = eg.nodes(eg.find(added)).find_map(Node::int) else {
             continue;
         };
         return derivation(eg, eg.find(base), offset + step.to_i64(), depth + 1);
@@ -232,7 +231,6 @@ fn derivation(eg: &EGraph<Node>, address: Id, offset: i64, depth: usize) -> (Id,
 /// is not the very store overwriting it.
 fn overwritten_state(eg: &EGraph<Node>, state: Id, written: &[Id], over: Extent) -> Option<Id> {
     eg.nodes(state)
-        .iter()
         .filter(|node| node.sym() == Some(SymKind::StoreMemory))
         .find_map(|node| {
             let dead = canonical(eg, node);
@@ -244,7 +242,7 @@ fn overwritten_state(eg: &EGraph<Node>, state: Id, written: &[Id], over: Extent)
 
 /// Whether `state` is the memory a store to the extent `over` names left.
 fn writes_over(eg: &EGraph<Node>, state: Id, over: Extent) -> bool {
-    eg.nodes(state).iter().any(|node| {
+    eg.nodes(state).any(|node| {
         node.sym() == Some(SymKind::StoreMemory) && {
             let written = canonical(eg, node);
             extent(eg, written[ADDRESS], written[BYTES]) == Some(over)
@@ -289,7 +287,6 @@ fn observed(
 /// The type the load standing for `read` in `class` yields.
 fn loaded_type(eg: &EGraph<Node>, class: Id, read: &[Id]) -> Option<TypeId> {
     eg.nodes(class)
-        .iter()
         .find(|node| node.sym() == Some(SymKind::LoadMemory) && canonical(eg, node) == read)
         .and_then(|node| node.ty)
 }
@@ -304,7 +301,6 @@ fn stored_value(
     ty: TypeId,
 ) -> Option<Id> {
     eg.nodes(state)
-        .iter()
         .filter(|node| node.sym() == Some(SymKind::StoreMemory))
         .find_map(|node| {
             let written = canonical(eg, node);

@@ -6,6 +6,8 @@ use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use tir_relational::Stats;
+
 use super::{Delta, EGraph, ENode};
 
 /// Mirrors the core pass timer's switch; this crate cannot see it.
@@ -27,9 +29,6 @@ struct Round {
 
 thread_local! {
     static ROUNDS: RefCell<Vec<Round>> = const { RefCell::new(Vec::new()) };
-    static MERGED: Cell<usize> = const { Cell::new(0) };
-    static ADDED: Cell<usize> = const { Cell::new(0) };
-    static REPAIRS: Cell<usize> = const { Cell::new(0) };
     static ELAPSED: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     static EXTRACTED: Cell<(usize, Duration)> = const { Cell::new((0, Duration::ZERO)) };
 }
@@ -63,54 +62,33 @@ impl Timer {
     }
 }
 
-/// Merges and classes minted so far this round. `num_classes`/`total_size` cannot
-/// answer this: inside a scope they read a [`ScopeView`](super::EGraph) snapshot
-/// that only refreshes at rebuild, so they hold still while a round applies.
-fn effects() -> (usize, usize) {
-    (MERGED.with(Cell::get), ADDED.with(Cell::get))
-}
-
-pub(super) fn count_merge() {
-    if enabled() {
-        MERGED.with(|count| count.set(count.get() + 1));
-    }
-}
-
-pub(super) fn count_add() {
-    if enabled() {
-        ADDED.with(|count| count.set(count.get() + 1));
-    }
-}
-
-pub(super) fn count_repair() {
-    if enabled() {
-        REPAIRS.with(|count| count.set(count.get() + 1));
-    }
-}
-
 /// One saturation round's counters, or nothing when telemetry is off — every
-/// method is then a plain pass-through.
-pub struct RoundStats(Option<Round>);
+/// method is then a plain pass-through. The engine counts its own work, so a
+/// round is the difference across it: `num_classes`/`total_size` cannot answer
+/// this, since a match may merge two classes and mint two more.
+pub struct RoundStats(Option<(Round, Stats)>);
 
 impl RoundStats {
     /// Open a round searching against `delta` (`None` on the first round, which
     /// searches everything).
-    pub fn start(delta: Option<&Delta>) -> Self {
+    pub fn start<L: ENode>(eg: &EGraph<L>, delta: Option<&Delta>) -> Self {
         if !enabled() {
             return Self(None);
         }
-        MERGED.with(|count| count.set(0));
-        ADDED.with(|count| count.set(0));
-        REPAIRS.with(|count| count.set(0));
-        Self(Some(Round {
-            changed: delta.map_or(usize::MAX, Delta::len),
-            ..Round::default()
-        }))
+        Self(Some((
+            Round {
+                changed: delta.map_or(usize::MAX, Delta::len),
+                ..Round::default()
+            },
+            eg.stats(),
+        )))
     }
 
     /// One rule's root set for this round, drawn from `delta`'s frontier.
     pub fn searched(&mut self, roots: usize, delta: Option<&Delta>) {
-        let Some(round) = &mut self.0 else { return };
+        let Some((round, _)) = &mut self.0 else {
+            return;
+        };
         round.searched += roots;
         round.delta = round.delta.max(delta.map_or(0, Delta::frontier));
     }
@@ -118,20 +96,24 @@ impl RoundStats {
     /// Apply one match, counting it as a no-op if it merged nothing and minted
     /// nothing — the match was already in the graph, as re-finding an old one is.
     pub fn apply<L: ENode>(&mut self, eg: &mut EGraph<L>, apply: impl FnOnce(&mut EGraph<L>)) {
-        let Some(round) = &mut self.0 else {
+        let Some((round, _)) = &mut self.0 else {
             return apply(eg);
         };
         round.found += 1;
-        let before = effects();
+        let before = eg.stats();
         apply(eg);
-        round.noop += usize::from(effects() == before);
+        let after = eg.stats();
+        round.noop += usize::from((after.merges, after.adds) == (before.merges, before.adds));
     }
 
     /// Close the round; call after the rebuild, whose merges and repairs it counts.
-    pub fn finish(self) {
-        let Some(mut round) = self.0 else { return };
-        round.merged = MERGED.with(Cell::take);
-        round.repairs = REPAIRS.with(Cell::take);
+    pub fn finish<L: ENode>(self, eg: &EGraph<L>) {
+        let Some((mut round, base)) = self.0 else {
+            return;
+        };
+        let now = eg.stats();
+        round.merged = now.merges - base.merges;
+        round.repairs = now.repairs - base.repairs;
         ROUNDS.with(|rounds| rounds.borrow_mut().push(round));
     }
 }
