@@ -122,7 +122,7 @@ impl<L: ENode> EGraph<L> {
             let searched: Vec<_> = rules
                 .iter()
                 .map(|rule| {
-                    let narrow = rule.cone_bounded() && delta.is_some();
+                    let narrow = rule.unconditional() && delta.is_some();
                     let frontier = delta.as_mut().filter(|_| rule.cone_bounded());
                     let roots = rule.lhs.round_roots(self, None, frontier);
                     stats.searched(roots.len(), delta.as_ref());
@@ -149,6 +149,13 @@ impl<L: ENode> EGraph<L> {
                 break;
             }
             if (self.num_classes(), self.total_size()) == before {
+                // The counts held, but a round that changed only facts changed
+                // nothing they count — and the matches it never reached are not
+                // named by a log this break is about to drop. `None` is the
+                // widest such log there is, so it marks too.
+                if delta.as_ref().is_none_or(|delta| !delta.is_empty()) {
+                    self.mark_all_changed();
+                }
                 break;
             }
         }

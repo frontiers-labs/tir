@@ -103,14 +103,14 @@ fn saturate_impl(
             if rw.post_saturation {
                 continue;
             }
-            let narrow = rw.cone_bounded && delta.is_some();
             let frontier = delta.as_mut().filter(|_| rw.cone_bounded);
             let round = rw.searcher.round_roots(eg, roots.as_deref(), frontier);
             stats.searched(round.len(), delta.as_ref());
-            for m in rw
-                .searcher
-                .search_roots_delta(eg, round, &|_, _| true, narrow)
-            {
+            // No `only_new` here: every `IselRewrite` applier may decline — on a
+            // width guard, an immediate's range, a missing constant binding —
+            // and what stops it declining is the content of a class the pattern
+            // bound, which no e-node the match binds records.
+            for m in rw.searcher.search_roots(eg, round) {
                 matches.push((index, m));
             }
         }
@@ -139,7 +139,10 @@ fn saturate_impl(
         }
 
         if (eg.num_classes(), eg.total_size()) == before {
-            on_a_limit = false;
+            // The counts held, but a round that changed only facts changed
+            // nothing they count, and is not a fixpoint. `None` is the widest
+            // such log there is, so it counts too.
+            on_a_limit = delta.as_ref().is_none_or(|delta| !delta.is_empty());
             break;
         }
         if eg.num_classes() >= limits.max_classes {

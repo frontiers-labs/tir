@@ -44,6 +44,21 @@ impl<N: ENode, S: Clone + PartialEq> Rewrite<N, S> {
         self
     }
 
+    /// Whether the pattern is the *whole* match predicate: a template right-hand
+    /// side instantiates and unions whatever it matched, so a match it found
+    /// once it applied once.
+    ///
+    /// Strictly stronger than [`Self::cone_bounded`], and the two license
+    /// different things. Bounding what a rule *reads* licenses narrowing its
+    /// roots, because an applier that declines is offered the match again on
+    /// every round its cone moves. Skipping a match whose e-nodes are all older
+    /// than the round needs this instead: an applier that declined has left no
+    /// trace, and what changed its mind may be the *content* of a class the
+    /// pattern bound as a hole, which no e-node the match binds records.
+    pub fn unconditional(&self) -> bool {
+        matches!(self.rhs, Rhs::Pattern(_))
+    }
+
     pub fn new(name: impl Into<String>, lhs: Pattern<N, S>, rhs: Rhs<N, S>) -> Self {
         Self {
             name: name.into(),

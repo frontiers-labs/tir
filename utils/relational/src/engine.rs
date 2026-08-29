@@ -379,6 +379,13 @@ impl<L: Label> Engine<L> {
     /// repair is deferred to [`Self::rebuild`]; the merge itself is visible
     /// immediately, so an applier that unions and then instantiates hash-conses
     /// against the result.
+    ///
+    /// A union inside a scope must be followed by [`Self::rebuild`] before the
+    /// next [`Self::take_changed`]. Until that rebuild refreshes the read view,
+    /// the merge is invisible to every query, so a drain that ran in between
+    /// would retire the round that made those e-nodes readable and semi-naive
+    /// would skip the matches they enable. Every caller obeys this; nothing
+    /// enforces it.
     pub fn union(&mut self, a: ClassId, b: ClassId) -> ClassId {
         let ra = self.find(a);
         let rb = self.find(b);
@@ -768,27 +775,16 @@ impl<L: Label> Engine<L> {
     /// Detach and return `class`'s parent back-edges, so a repair can rebuild
     /// the list while [`Self::union`] appends to it.
     fn take_parents(&mut self, class: ClassId) -> Vec<u32> {
+        debug_assert!(!self.in_scope(), "repair never runs under a scope");
         let edges: Vec<u32> = self.parent_edges(class).collect();
-        if self.in_scope() {
-            self.undo.push(Undo::ParentList {
-                class: class.0,
-                head: self.parent_head[class.index()],
-                tail: self.parent_tail[class.index()],
-            });
-        }
         self.parent_head[class.index()] = NONE;
         self.parent_tail[class.index()] = NONE;
         edges
     }
 
     fn append_parents(&mut self, class: ClassId, edges: Vec<u32>) {
+        debug_assert!(!self.in_scope(), "repair never runs under a scope");
         for edge in edges {
-            if self.in_scope() {
-                self.undo.push(Undo::EdgeNext {
-                    edge,
-                    next: self.edge_next[edge as usize],
-                });
-            }
             self.edge_next[edge as usize] = NONE;
             self.append_edge(class, edge, edge);
         }

@@ -244,9 +244,18 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
     /// moves — so they were applied then, and applying them again instantiates
     /// terms that hash-cons back onto themselves. That is what the round
     /// counters call a no-op, and on `core_main.c` it is 99 % of the matches
-    /// instcombine applies. Sound only under the same condition that licenses
-    /// narrowing the roots at all: the pattern must be the whole match
-    /// predicate ([`Rewrite::cone_bounded`](super::Rewrite::cone_bounded)).
+    /// instcombine applies.
+    ///
+    /// Sound only when the pattern is the whole match predicate
+    /// ([`Rewrite::unconditional`](super::Rewrite::unconditional)), which is a
+    /// stronger claim than the one that licenses narrowing the roots: an
+    /// applier that declined left no trace, and what changes its mind may be the
+    /// content of a class the pattern bound as a hole, which no e-node the match
+    /// binds records.
+    ///
+    /// `allowed` is part of that predicate. A hook that rejects on class content
+    /// is an applier that declines by another route, so `only_new` requires one
+    /// that answers the same way whatever the graph has done since.
     pub fn search_roots_delta(
         &self,
         eg: &EGraph<N>,
