@@ -852,8 +852,10 @@ mod tests {
                 eg.const_of(class).is_some_and(|known| value.matches(known))
             }
             Atom::Fact { column, .. } => eg.fact(*column, class).is_some(),
+            // The offset lands in a scalar the naive oracle cannot see, so only
+            // the object is checked here.
             Atom::Object { base, .. } => {
-                eg.object_of(class) == Some((assignment[*base as usize], 0))
+                eg.object_of(class).map(|(from, _)| from) == Some(assignment[*base as usize])
             }
             Atom::Node { template, args, .. } => eg.rows(class).any(|row| {
                 let children: Vec<ClassId> = eg.children(row).iter().map(|&c| eg.find(c)).collect();

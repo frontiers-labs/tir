@@ -223,6 +223,39 @@ mod tests {
         assert_eq!(eg.object_of(second), Some((p, 8)));
     }
 
+    /// A chain placed before its own base was placed says the same thing once
+    /// the base is: what the column joins is where the two land, not the step
+    /// each was written with.
+    #[test]
+    fn a_derivation_written_early_agrees_with_the_one_written_late() {
+        let mut eg = Engine::new();
+        let p = eg.add(Term::leaf("p"));
+        let first = eg.add(Term::leaf("q"));
+        let second = eg.add(Term::leaf("r"));
+        eg.rebuild();
+
+        eg.raise_object(second, first, 4);
+        eg.raise_object(first, p, 4);
+        eg.raise_object(second, p, 8);
+        assert_eq!(eg.object_of(second), Some((p, 8)));
+    }
+
+    /// The same fact raised again after its base was absorbed is the same fact.
+    #[test]
+    fn a_derivation_survives_its_base_being_merged_away() {
+        let mut eg = Engine::new();
+        let a = eg.add(Term::leaf("a"));
+        let b = eg.add(Term::leaf("b"));
+        let x = eg.add(Term::leaf("x"));
+        eg.rebuild();
+
+        eg.raise_object(x, b, 4);
+        let survivor = eg.union(a, b);
+        eg.rebuild();
+        eg.raise_object(x, survivor, 4);
+        assert_eq!(eg.object_of(x), Some((survivor, 4)));
+    }
+
     #[test]
     fn two_derivations_that_disagree_leave_the_class_unplaceable() {
         let mut eg = Engine::new();

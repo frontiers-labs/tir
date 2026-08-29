@@ -84,14 +84,25 @@ impl<V: Copy + Eq + Hash> Column<V> {
         self.write(class, Fact::Known(value), epoch)
     }
 
-    /// Join `fact` onto what `class` is known to be. The caller that keeps
-    /// class-naming values canonical joins them itself and writes the result.
+    /// Replace `class`'s entry with `fact`, no join. For a column whose values
+    /// name classes: what is stored may be stale — a base that has since been
+    /// absorbed, or one whose own derivation deepened — so only the caller that
+    /// can read it back to what it means may combine two of them.
+    pub fn put(&mut self, class: ClassId, fact: Fact<V>, epoch: u32) -> bool {
+        self.set(class, fact, epoch)
+    }
+
+    /// Join `fact` onto what `class` is known to be.
     pub fn write(&mut self, class: ClassId, fact: Fact<V>, epoch: u32) -> bool {
-        let previous = self.fact.get(&class).copied();
-        let joined = match previous {
+        let joined = match self.fact.get(&class) {
             Some(entry) => entry.fact.join(fact, self.how),
             None => fact,
         };
+        self.set(class, joined, epoch)
+    }
+
+    fn set(&mut self, class: ClassId, joined: Fact<V>, epoch: u32) -> bool {
+        let previous = self.fact.get(&class).copied();
         if previous.is_some_and(|entry| entry.fact == joined) {
             return false;
         }

@@ -986,6 +986,15 @@ impl<L: Label> Engine<L> {
             .flatten()
     }
 
+    /// The class that holds `node` as its own literal, whatever type the row
+    /// carries. The hash-cons cannot answer this: a class is known to be a
+    /// *value*, and the row saying so may spell it at a type the caller has no
+    /// way to name.
+    pub fn const_class(&self, node: &L) -> Option<ClassId> {
+        self.classes_with_const(node)
+            .find(|&class| !self.consts.written_in_scope(class))
+    }
+
     /// The classes an open scope assumed to be `node`.
     pub fn classes_assumed_const<'a>(&'a self, node: &L) -> impl Iterator<Item = ClassId> + 'a {
         self.classes_with_const(node)
@@ -1029,16 +1038,22 @@ impl<L: Label> Engine<L> {
             Some((base, offset)) => Fact::Known(Object { base, offset }),
             None => Fact::Conflict,
         };
-        let joined = match self.canonical_object(class) {
-            Some(known) => known.join(raised, Join::Agree),
+        // Both sides are read back to where they land before they are compared.
+        // What is stored may name a class since absorbed, or a base whose own
+        // derivation deepened after it was written, and neither is a second
+        // opinion — it is the same one, spelled at the time it was learned.
+        let stored = self.resolved_object(class);
+        let joined = match stored {
+            Some(stored) => stored.join(raised, Join::Agree),
             None => raised,
         };
-        let moved = self.objects.write(class, joined, self.row_epoch);
-        if moved {
-            self.stats.raises += 1;
-            self.log_change(class);
+        if stored == Some(joined) {
+            return false;
         }
-        moved
+        self.objects.put(class, joined, self.row_epoch);
+        self.stats.raises += 1;
+        self.log_change(class);
+        true
     }
 
     /// What `class` is derived from: the end of its derivation chain, or itself
@@ -1089,13 +1104,24 @@ impl<L: Label> Engine<L> {
         })
     }
 
+    /// The stored entry read all the way back to where it lands.
+    fn resolved_object(&self, class: ClassId) -> Option<Fact<Object>> {
+        Some(match self.canonical_object(class)? {
+            Fact::Known(object) => match self.resolve(object.base, object.offset) {
+                Some((base, offset)) => Fact::Known(Object { base, offset }),
+                None => Fact::Conflict,
+            },
+            Fact::Conflict => Fact::Conflict,
+        })
+    }
+
     fn merge_object(&mut self, absorbed: ClassId, survivor: ClassId) -> bool {
         let Some(fact) = self.objects.detach(absorbed) else {
             return false;
         };
         match fact {
             Fact::Known(object) => self.raise_object(survivor, object.base, object.offset),
-            Fact::Conflict => self.objects.write(survivor, Fact::Conflict, self.row_epoch),
+            Fact::Conflict => self.objects.put(survivor, Fact::Conflict, self.row_epoch),
         }
     }
 
@@ -1105,7 +1131,9 @@ impl<L: Label> Engine<L> {
         match column {
             ColumnId::Const => self.consts.get(class).map(|label| label.0 as u64),
             ColumnId::Type => self.types.get(class),
-            ColumnId::Object => self.objects.get(class).map(|object| object.offset as u64),
+            // Not a word: a derivation is a class and a distance, which
+            // [`crate::Atom::Object`] binds as a variable and a scalar.
+            ColumnId::Object => None,
         }
     }
 

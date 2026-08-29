@@ -857,7 +857,7 @@ impl FunctionSelection {
         let literal = self
             .egraph
             .assumed_const(class)
-            .and_then(|node| self.egraph.lookup(node))
+            .and_then(|node| self.egraph.const_class(node))
             .map(|id| self.egraph.find(id));
         let equal: Vec<Id> = self
             .egraph
