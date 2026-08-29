@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use tir_adt::FxHasher;
 
+use crate::column::Column;
 use crate::label::{FxHashMap, Labels};
 use crate::{ClassId, Label, LabelId, RowId, UnionFind};
 
@@ -93,9 +94,9 @@ pub struct Engine<L: Label> {
     /// read off the id range.
     minted: Vec<Vec<ClassId>>,
     undo: Vec<Undo>,
-    /// Scoped facts: canonical class -> the constant it is assumed to hold.
-    assumed: FxHashMap<ClassId, L>,
-    scope_assumed: Vec<Vec<(ClassId, Option<L>)>>,
+    /// The constant a class is known to be: seeded by every literal row, raised
+    /// by a scope's assumption, joined by a union.
+    consts: Column<LabelId>,
     /// Per open scope, the base reps grouped under their scoped rep; merged
     /// groups only. Cloned on push, so a nested frame keeps naming base reps.
     scope_members: Vec<FxHashMap<ClassId, Vec<ClassId>>>,
@@ -183,8 +184,7 @@ impl<L: Label> Engine<L> {
             scopes: Vec::new(),
             minted: Vec::new(),
             undo: Vec::new(),
-            assumed: FxHashMap::default(),
-            scope_assumed: Vec::new(),
+            consts: Column::default(),
             scope_members: Vec::new(),
             view: FxHashMap::default(),
         }
@@ -411,7 +411,9 @@ impl<L: Label> Engine<L> {
         // columns later (never, inside a scope), but the matcher may run first,
         // and semi-naive has to see both as new either way.
         self.mark_merged_new(absorbed);
-        self.rekey_assumption(absorbed, survivor);
+        if self.consts.merge(absorbed, survivor, self.row_epoch) {
+            self.log_change(survivor);
+        }
         if !self.in_scope() {
             self.splice_class(survivor, absorbed);
             self.splice_parents(survivor, absorbed);
@@ -604,6 +606,7 @@ impl<L: Label> Engine<L> {
     fn make_class(&mut self, node: L) -> ClassId {
         let op_key = node.op_key();
         let unique = node.is_unique();
+        let constant = node.is_constant();
         let row = self.push_row(node);
         let class = self.uf.push();
         self.class_head.push(row.0);
@@ -629,6 +632,10 @@ impl<L: Label> Engine<L> {
         if let Some(minted) = self.minted.last_mut() {
             minted.push(class);
             self.undo.push(Undo::OpBucket { op: op_key });
+        }
+        if constant {
+            let label = self.row_label[row.index()];
+            self.consts.raise(class, label, self.row_epoch);
         }
         self.total_nodes += 1;
         self.num_classes += 1;
@@ -903,51 +910,52 @@ impl<L: Label> Engine<L> {
 
     // ---- facts ------------------------------------------------------------
 
-    /// Assume, inside the current scope, that `class` evaluates to constant
+    /// Raise, inside the current scope, that `class` evaluates to constant
     /// `node`. A fact, not a merge: the class keeps its identity and parents, so
     /// only its users see a change. Panics with no scope open — an unscoped
     /// assumption would never be popped.
     pub fn assume_const(&mut self, class: ClassId, node: L) {
-        let root = self.find(class);
-        let previous = self.assumed.insert(root, node);
-        self.scope_assumed
-            .last_mut()
-            .expect("open scope")
-            .push((root, previous));
-        self.log_change(root);
+        assert!(
+            self.in_scope(),
+            "an assumption needs a scope to be undone by"
+        );
+        let label = self.labels.intern(&node);
+        self.raise_const(self.find(class), label);
     }
 
-    /// The constant `class` is assumed to hold in the open scopes, if any.
-    pub fn assumed_const(&self, class: ClassId) -> Option<&L> {
-        self.assumed.get(&self.find(class))
+    /// The constant `class` is known to be — its own literal row, or what an
+    /// open scope assumed of it. `None` when nothing is known and when two
+    /// values were proven, which a refuted hypothesis reads as "unknown".
+    pub fn const_of(&self, class: ClassId) -> Option<&L> {
+        self.consts
+            .get(self.find(class))
+            .map(|label| self.labels.node(label))
     }
 
-    /// The classes the open scopes assume to hold `node`.
-    pub fn assumed_classes<'a>(&'a self, node: &'a L) -> impl Iterator<Item = ClassId> + 'a {
-        self.assumed
-            .iter()
-            .filter(move |(_, assumed)| assumed.matches(node))
-            .map(|(&class, _)| class)
+    /// Whether `class` was proven two different constants — a refuted scope.
+    pub fn const_conflicted(&self, class: ClassId) -> bool {
+        self.consts.is_conflicted(self.find(class))
     }
 
-    /// Move a fact keyed on a just-absorbed class under the survivor, logged as
-    /// writes of the current scope so its pop puts both keys back. The
-    /// survivor's own fact wins when both carry one.
-    fn rekey_assumption(&mut self, absorbed: ClassId, survivor: ClassId) {
-        let Some(node) = self.assumed.remove(&absorbed) else {
-            return;
-        };
-        let frame = self.scope_assumed.last_mut().expect("open scope");
-        frame.push((absorbed, Some(node.clone())));
-        if self.assumed.contains_key(&survivor) {
-            return;
+    /// Whether the constant fact on `class` rose during the round the last
+    /// [`Self::take_changed`] closed. The row-level counterpart of
+    /// [`Self::row_is_new`], for a match a fact rather than an e-node enabled.
+    pub fn const_is_new(&self, class: ClassId) -> bool {
+        self.consts.is_new(self.find(class), self.row_epoch)
+    }
+
+    /// The classes known to be `node`.
+    pub fn classes_with_const<'a>(&'a self, node: &L) -> impl Iterator<Item = ClassId> + 'a {
+        self.labels
+            .get(node)
+            .into_iter()
+            .flat_map(|label| self.consts.classes_with(label))
+    }
+
+    fn raise_const(&mut self, class: ClassId, label: LabelId) {
+        if self.consts.raise(class, label, self.row_epoch) {
+            self.log_change(class);
         }
-        self.assumed.insert(survivor, node);
-        self.scope_assumed
-            .last_mut()
-            .expect("open scope")
-            .push((survivor, None));
-        self.log_change(survivor);
     }
 
     // ---- scopes -----------------------------------------------------------
@@ -969,7 +977,7 @@ impl<L: Label> Engine<L> {
         });
         self.uf.push_scope();
         self.scope_memo.push(FxHashMap::default());
-        self.scope_assumed.push(Vec::new());
+        self.consts.push_scope();
         self.scope_members.push(members);
         self.minted.push(Vec::new());
         self.refresh_view();
@@ -979,12 +987,7 @@ impl<L: Label> Engine<L> {
     /// the enclosing scope (or the base graph) is restored without a rebuild.
     pub fn pop_context(&mut self) {
         let frame = self.scopes.pop().expect("open scope");
-        for (key, previous) in self.scope_assumed.pop().into_iter().flatten().rev() {
-            match previous {
-                Some(node) => self.assumed.insert(key, node),
-                None => self.assumed.remove(&key),
-            };
-        }
+        self.consts.pop_scope();
         for entry in self.undo.drain(frame.undo..).rev() {
             match entry {
                 Undo::ParentList { class, head, tail } => {
@@ -1075,7 +1078,7 @@ impl<L: Label> Engine<L> {
             .iter()
             .flatten()
             .copied()
-            .chain(self.assumed.keys().copied())
+            .chain(self.consts.scoped_keys())
             .chain(
                 self.scope_members
                     .last()
@@ -1405,7 +1408,7 @@ mod tests {
         eg.pop_context();
         assert_eq!(state(&eg), before);
         assert!(!eg.connected(x, y));
-        assert_eq!(eg.assumed_const(g), None);
+        assert_eq!(eg.const_of(g), None);
     }
 
     #[test]

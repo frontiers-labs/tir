@@ -58,6 +58,14 @@ pub trait Label: Debug + Clone {
         false
     }
 
+    /// Whether the node is a ground constant: a childless term whose class is
+    /// therefore *known to be* that value, not merely to hold it. Seeds the
+    /// engine's constant column, so a rule reads a class's constant as a fact
+    /// rather than by scanning its rows.
+    fn is_constant(&self) -> bool {
+        false
+    }
+
     /// A unique node gets a fresh class on every insert and never hash-conses or
     /// congruence-merges (effectful ops, distinct unknowns); its operands still
     /// resolve through the union-find.
@@ -123,6 +131,12 @@ impl<L: Label> Labels<L> {
             .iter()
             .copied()
             .find(|&id| self.table[id.index()].matches(node))
+    }
+
+    /// The node interned under `id`. Its children are whatever the first node
+    /// with this label carried; nothing reads them.
+    pub(crate) fn node(&self, id: LabelId) -> &L {
+        &self.table[id.index()]
     }
 
     pub(crate) fn len(&self) -> usize {

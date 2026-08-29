@@ -74,7 +74,7 @@ impl FunctionMatches {
     /// same pattern order the base search recorded them in.
     fn patterns_rooting_at(&self, fs: &FunctionSelection, class: Id) -> Vec<usize> {
         let mut indices = self.anywhere.clone();
-        let assumed = fs.egraph.assumed_const(class).into_iter();
+        let assumed = fs.egraph.const_of(class).into_iter();
         for node in fs.egraph.nodes(class).chain(assumed) {
             indices.extend(self.by_op.get(&node.op_key()).into_iter().flatten());
         }
@@ -856,14 +856,14 @@ impl FunctionSelection {
         // the one place that congruence was worth a register.
         let literal = self
             .egraph
-            .assumed_const(class)
+            .const_of(class)
             .and_then(|node| self.egraph.lookup(node))
             .map(|id| self.egraph.find(id));
         let equal: Vec<Id> = self
             .egraph
             .nodes(class)
             .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
-            .map(|node| self.egraph.assumed_classes(node).collect())
+            .map(|node| self.egraph.classes_with_const(node).collect())
             .unwrap_or_default();
         let mut best: Option<((u8, usize, u32), ValueId)> = None;
         for member in self.base_members(class).chain(literal).chain(equal) {

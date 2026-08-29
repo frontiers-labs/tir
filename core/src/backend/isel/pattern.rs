@@ -171,7 +171,7 @@ impl CompiledIselPattern {
             Some(OperandConstraint::Register) => true,
             Some(OperandConstraint::Immediate) => egraph
                 .nodes(class)
-                .chain(egraph.assumed_const(class))
+                .chain(egraph.const_of(class))
                 .any(|n| n.kind == SymKind::Constant),
             None => true,
         }

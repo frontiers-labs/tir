@@ -52,6 +52,10 @@ impl ENode for Math {
         }
     }
 
+    fn is_constant(&self) -> bool {
+        matches!(self, Math::Num(_) | Math::FNum(_))
+    }
+
     fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Math::Num(a), Math::Num(b)) => a == b,

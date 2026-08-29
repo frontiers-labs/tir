@@ -541,12 +541,12 @@ fn assume_const_is_read_under_the_scope_and_gone_after_pop() {
     let a = sym(&mut g, 0);
     g.rebuild();
 
-    assert!(g.assumed_const(a).is_none());
+    assert!(g.const_of(a).is_none());
     g.push_context();
     g.assume_const(a, Math::Num(1));
-    assert!(matches!(g.assumed_const(a), Some(Math::Num(1))));
+    assert!(matches!(g.const_of(a), Some(Math::Num(1))));
     g.pop_context();
-    assert!(g.assumed_const(a).is_none());
+    assert!(g.const_of(a).is_none());
 }
 
 #[test]
@@ -561,15 +561,19 @@ fn assumed_classes_names_every_class_assumed_to_be_the_constant() {
     g.assume_const(a, Math::Num(1));
     g.assume_const(b, Math::Num(1));
     g.assume_const(c, Math::Num(0));
-    let mut ones: Vec<Id> = g.assumed_classes(&Math::Num(1)).collect();
+    let mut ones: Vec<Id> = g.classes_with_const(&Math::Num(1)).collect();
     ones.sort();
     assert_eq!(ones, vec![g.find(a), g.find(b)]);
     g.pop_context();
-    assert!(g.assumed_classes(&Math::Num(1)).next().is_none());
+    assert!(g.classes_with_const(&Math::Num(1)).next().is_none());
 }
 
+/// A nested scope that assumes the opposite of its parent has assumed a
+/// contradiction, and the column says so: facts join, they do not shadow. A
+/// conflicted class reads as nothing known, which is the conservative answer a
+/// block proven unreachable needs.
 #[test]
-fn nested_assumption_shadows_and_restores_the_outer_one() {
+fn a_nested_assumption_conflicts_with_the_outer_one_and_the_pop_restores_it() {
     let mut g = EGraph::new();
     let a = sym(&mut g, 0);
     g.rebuild();
@@ -578,11 +582,12 @@ fn nested_assumption_shadows_and_restores_the_outer_one() {
     g.assume_const(a, Math::Num(1));
     g.push_context();
     g.assume_const(a, Math::Num(0));
-    assert!(matches!(g.assumed_const(a), Some(Math::Num(0))));
+    assert!(g.const_of(a).is_none());
+    assert!(g.const_conflicted(a));
     g.pop_context();
-    assert!(matches!(g.assumed_const(a), Some(Math::Num(1))));
+    assert!(matches!(g.const_of(a), Some(Math::Num(1))));
     g.pop_context();
-    assert!(g.assumed_const(a).is_none());
+    assert!(g.const_of(a).is_none());
 }
 
 #[test]
@@ -596,10 +601,10 @@ fn assumption_follows_the_class_through_a_scoped_union() {
     g.assume_const(a, Math::Num(1));
     g.union(a, b);
     g.rebuild();
-    assert!(matches!(g.assumed_const(b), Some(Math::Num(1))));
+    assert!(matches!(g.const_of(b), Some(Math::Num(1))));
     g.pop_context();
-    assert!(g.assumed_const(a).is_none());
-    assert!(g.assumed_const(b).is_none());
+    assert!(g.const_of(a).is_none());
+    assert!(g.const_of(b).is_none());
 }
 
 #[test]
@@ -614,10 +619,10 @@ fn inner_union_rekeys_an_outer_assumption_and_pop_restores_it() {
     g.push_context();
     g.union(a, b);
     g.rebuild();
-    assert!(matches!(g.assumed_const(b), Some(Math::Num(1))));
+    assert!(matches!(g.const_of(b), Some(Math::Num(1))));
     g.pop_context();
-    assert!(matches!(g.assumed_const(a), Some(Math::Num(1))));
-    assert!(g.assumed_const(b).is_none());
+    assert!(matches!(g.const_of(a), Some(Math::Num(1))));
+    assert!(g.const_of(b).is_none());
     g.pop_context();
 }
 
@@ -640,7 +645,7 @@ fn scope_dirty_holds_an_assumed_class_and_its_parents() {
 }
 
 #[test]
-#[should_panic(expected = "open scope")]
+#[should_panic(expected = "a scope to be undone by")]
 fn assume_const_without_a_scope_panics() {
     let mut g = EGraph::new();
     let a = sym(&mut g, 0);

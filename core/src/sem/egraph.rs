@@ -27,7 +27,7 @@ pub(crate) fn class_int_binding(egraph: &SemEGraph, class: Id) -> Option<APInt> 
         _ => None,
     };
     egraph
-        .assumed_const(class)
+        .const_of(class)
         .and_then(int)
         .or_else(|| egraph.nodes(class).find_map(int))
 }

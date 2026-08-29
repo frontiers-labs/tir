@@ -211,10 +211,9 @@ impl<L: Label> Plan<L> {
         }
     }
 
-    /// A literal is satisfied by an e-node in the class or by an assumption the
-    /// open scopes made. An assumption is a fact rather than a row, so it has no
-    /// round to be new in and always counts as fresh — a rule reading one must
-    /// never be skipped as already applied.
+    /// A literal reads the constant column rather than the class's rows: what a
+    /// class is *known* to be covers both its own literal and what a scope
+    /// assumed of it, and the column's stamp says which round proved it.
     fn literal(
         &self,
         eval: &mut Eval<'_, L>,
@@ -224,17 +223,10 @@ impl<L: Label> Plan<L> {
         class: ClassId,
     ) {
         let eg = eval.eg;
-        let fresh = if eg.assumed_const(class).is_some_and(|n| value.matches(n)) {
-            1
-        } else {
-            let Some(row) = eg
-                .rows(class)
-                .find(|&row| eg.children(row).is_empty() && value.matches(eg.node(row)))
-            else {
-                return;
-            };
-            usize::from(eg.row_is_new(row))
-        };
+        if !eg.const_of(class).is_some_and(|known| value.matches(known)) {
+            return;
+        }
+        let fresh = usize::from(eg.const_is_new(class));
         eval.fresh += fresh;
         self.step(eval, root, index + 1);
         eval.fresh -= fresh;
@@ -368,9 +360,9 @@ mod tests {
     fn holds(eg: &Engine<Term>, atom: &Atom<Term>, assignment: &[ClassId]) -> bool {
         let class = assignment[atom.class() as usize];
         match atom {
-            Atom::Literal { value, .. } => eg
-                .rows(class)
-                .any(|row| eg.children(row).is_empty() && value.matches(eg.node(row))),
+            Atom::Literal { value, .. } => {
+                eg.const_of(class).is_some_and(|known| value.matches(known))
+            }
             Atom::Node { template, args, .. } => eg.rows(class).any(|row| {
                 let children: Vec<ClassId> = eg.children(row).iter().map(|&c| eg.find(c)).collect();
                 if children.len() != args.len() || !template.matches_template(eg.node(row)) {

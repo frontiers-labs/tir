@@ -8,6 +8,7 @@
 //! layout follows: every hot loop is a loop over `Vec<u32>` columns, not a walk
 //! over per-node allocations.
 
+mod column;
 mod csr;
 mod engine;
 mod label;
@@ -17,6 +18,7 @@ mod unionfind;
 #[cfg(test)]
 mod testing;
 
+pub use column::{Column, Fact};
 pub use csr::Csr;
 pub use engine::{ClassRef, Engine, Rows, Stats};
 pub use label::Label;

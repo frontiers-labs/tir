@@ -437,6 +437,12 @@ impl ENode for SemNode {
         }
     }
 
+    /// An integer literal: its class is *known to be* that value, which is what
+    /// seeds the engine's constant column.
+    fn is_constant(&self) -> bool {
+        self.sym() == Some(SymKind::Constant) && self.int().is_some()
+    }
+
     fn from_int(value: APInt) -> Option<Self> {
         Some(SemNode::constant(value, Prov::None))
     }
