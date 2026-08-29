@@ -16,6 +16,7 @@ mod smtlibgen;
 mod typeck;
 mod types;
 mod utils;
+mod widths;
 
 use chumsky::prelude::*;
 

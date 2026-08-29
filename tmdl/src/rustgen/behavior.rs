@@ -67,6 +67,7 @@ fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
         }
         ast::Expr::IndexAccess(i) => behavior_has_atomic_ops(&i.base),
         ast::Expr::Slice(s) => behavior_has_atomic_ops(&s.base),
+        ast::Expr::Cast(c) => behavior_has_atomic_ops(&c.x) || behavior_has_atomic_ops(&c.width),
         ast::Expr::Try(t) => {
             behavior_has_atomic_ops(&t.body)
                 || t.handlers.iter().any(|h| behavior_has_atomic_ops(&h.body))
@@ -127,6 +128,7 @@ fn behavior_has_dynamic_sized_memory_access(
         }
         ast::Expr::IndexAccess(i) => recurse(&i.base),
         ast::Expr::Slice(s) => recurse(&s.base),
+        ast::Expr::Cast(c) => recurse(&c.x) || recurse(&c.width),
         ast::Expr::Try(t) => {
             recurse(&t.body) || t.handlers.iter().any(|h| recurse(&h.body))
         }

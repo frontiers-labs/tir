@@ -32,11 +32,41 @@ Expressions are used in parameters, encodings, asm templates, and behavior.
 - Indexing and slicing on bitvectors:
   - Single bit/index: `imm[11]`
   - Range (inclusive, high bit first): `imm[4..0]` (selects bits 4–0)
+- Register-operand projections: `rs1.value` is the bits the register holds,
+  `rs1.index` the architectural register number the encoding spells. A bare
+  operand means whichever the context is about — the value in a behavior, the
+  index in an encoding — so both are only written when the two are mixed.
+- Casts: `x as bits<N>` — the low `N` bits of `x`.
 - Calls: `foo(a, b)` (reserved for future extensions).
 - Grouping: `(expr)`
 - Binary operators and precedence:
   - Highest: `*` `/`
   - Next: `+` `-` `|` `&` `^` `<<` `>>` (these share the same precedence tier)
+
+### Typing
+
+Widths are inferred; only the lossy conversions are written down.
+
+- A literal has no width of its own: it takes one from where it is used, so
+  `rs1 + 1` adds one to a register value and `self.XLEN - 1` is a spec-time
+  `Integer`. A literal in an encoding is the exception — there the bits it
+  spells *are* the field, so `0b000` is three bits and `0x8b` is eight.
+- A narrower value reaches a wider one by zero-extension, with nothing written.
+  Sign extension is `sext(x, w)` and narrowing is `x as bits<N>`; neither ever
+  happens implicitly. A value whose width the spec never pins down — a register
+  operand, whose class takes its `WIDTH` from an ISA parameter — cannot be used
+  where a narrower width is expected without saying so.
+- `bits<1>` is the condition type. There is no `bool`: an `if` takes a
+  comparison, a single bit, or `&`/`|`/`!` over them.
+- A `let` may name the width of its binding — `let low: bits<8> = ...` — and
+  the bound value must fit in it.
+- The `N` in `bits<N>`, whether in a cast or a `let`, is a literal: a cast keeps
+  the low `N` bits, so a width the spec cannot pin down would not say which. A
+  `fn` parameter works — `x as bits<n>` inside a helper — because calls are
+  inlined before type checking.
+- `width(x)` is the width `x`'s type declares, as a spec-time `Integer`. It is
+  substituted before lowering, so it needs a declared type to read: an operand,
+  a parameter, a slice, a cast or an annotated `let`, not a computed value.
 
 Blocks and if‑expressions are supported for richer constructs:
 
@@ -239,7 +269,7 @@ instruction Add for [RV32I, RV64I] : RType {
 - Same structure as `template` with optional inheritance and `for [...]`.
 - `behavior` — required; describes semantics using the expression language. Statements execute in order. Operand and fixed-register reads start as instruction-entry snapshots; assigning a name updates that name for later statements without changing a different operand that aliases the same physical register. Basic assignments and arithmetic/bitwise ops are supported.
 - Builtin functions usable in behaviors: `sext`/`zext` (width extension),
-  `extract`, `clamp`, `log2Ceil`, `load`/`store` (memory), and `trap(cause)` —
+  `extract`, `width`, `clamp`, `log2Ceil`, `load`/`store` (memory), and `trap(cause)` —
   raise a synchronous exception with a constant cause code (e.g. RISC-V
   `ecall`/`ebreak`); the simulator routes it to its exception callback.
 - Atomic memory and fence builtins (an optional trailing `Ordering::*` argument

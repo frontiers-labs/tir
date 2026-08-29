@@ -13,8 +13,13 @@ pub(super) enum Expr {
         destination: Box<Expr>,
         value: Box<Expr>,
     },
-    /// Immutable behavior-local binding.
-    Let { name: String, value: Box<Expr> },
+    /// Immutable behavior-local binding, optionally annotated `bits<width>`.
+    Let {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        width: Option<Box<Expr>>,
+        value: Box<Expr>,
+    },
     /// Binary operator application.
     Binary {
         op: BinOp,
@@ -60,6 +65,8 @@ pub(super) enum Expr {
     Integer { value: String },
     /// Inclusive bit slice, high bit first.
     Slice { base: Box<Expr>, hi: u16, lo: u16 },
+    /// `value as bits<width>`: the low `width` bits of `value`.
+    Cast { value: Box<Expr>, width: Box<Expr> },
     /// Precise-trap body and its ordered exception handlers.
     Try {
         body: Box<Expr>,
@@ -85,6 +92,10 @@ impl From<&ast::Expr> for Expr {
             },
             ast::Expr::Let(binding) => Self::Let {
                 name: binding.name.clone(),
+                width: binding
+                    .width
+                    .as_ref()
+                    .map(|width| Box::new(Expr::from(width.as_ref()))),
                 value: Box::new(Expr::from(binding.value.as_ref())),
             },
             ast::Expr::Binary(binary) => Self::Binary {
@@ -136,6 +147,10 @@ impl From<&ast::Expr> for Expr {
                 base: Box::new(Expr::from(slice.base.as_ref())),
                 hi: slice.hi,
                 lo: slice.lo,
+            },
+            ast::Expr::Cast(cast) => Self::Cast {
+                value: Box::new(Expr::from(cast.x.as_ref())),
+                width: Box::new(Expr::from(cast.width.as_ref())),
             },
             ast::Expr::Try(try_) => Self::Try {
                 body: Box::new(Expr::from(try_.body.as_ref())),
@@ -260,6 +275,7 @@ pub(super) enum BuiltinFunction {
     Regnum,
     #[serde(rename = "sext")]
     SExt,
+    Width,
     #[serde(rename = "zext")]
     ZExt,
     Load,
@@ -316,6 +332,7 @@ impl From<ast::BuiltinFunction> for BuiltinFunction {
             ast::BuiltinFunction::Log2Ceil => Self::Log2Ceil,
             ast::BuiltinFunction::Regnum => Self::Regnum,
             ast::BuiltinFunction::SExt => Self::SExt,
+            ast::BuiltinFunction::Width => Self::Width,
             ast::BuiltinFunction::ZExt => Self::ZExt,
             ast::BuiltinFunction::Load => Self::Load,
             ast::BuiltinFunction::Store => Self::Store,

@@ -1,0 +1,127 @@
+// The typing rules a spec relies on: explicit narrowing with `as`, literal
+// widths taken from the use site, implicit widening, `let` annotations,
+// register-operand projections and `width(x)`.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// RUN: tmdlc --action=emit-markdown --dialect=test --output=- %s | filecheck %s --check-prefix=MD
+// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=Test --output=- %s | filecheck %s --check-prefix=SMT
+
+isa Test { param XLEN: Integer = 32; }
+
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+
+template RegReg for [Test] {
+    param MNEMONIC: String;
+    param OPCODE: bits<6>;
+    operands { rd: GPR, rs1: GPR, }
+    encoding { 0x0000, OPCODE, rs1, rd }
+    asm { "{self.MNEMONIC} {rd}, {rs1}" }
+}
+
+template RegImm for [Test] {
+    param MNEMONIC: String;
+    param OPCODE: bits<6>;
+    operands { rd: GPR, imm: bits<16>, }
+    encoding { imm, OPCODE, 0b00000, rd }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+}
+
+// `x as bits<N>` is the explicit narrowing: the low N bits of x.
+instruction TruncByte for [Test] : RegReg {
+    param MNEMONIC: String = "truncbyte";
+    param OPCODE: bits<6> = 0b000001;
+    behavior { rd = sext(rs1 as bits<8>, self.XLEN); }
+}
+
+// A literal takes its width from the use site, so adding one to a register
+// value needs no annotation.
+instruction AddOne for [Test] : RegReg {
+    param MNEMONIC: String = "addone";
+    param OPCODE: bits<6> = 0b000010;
+    behavior { rd = rs1 + 1; }
+}
+
+// A `let` may name the width of its binding; the value must fit in it.
+instruction LetTyped for [Test] : RegReg {
+    param MNEMONIC: String = "lettyped";
+    param OPCODE: bits<6> = 0b000011;
+    behavior {
+        let low: bits<8> = rs1 as bits<8>;
+        rd = sext(low, self.XLEN);
+    }
+}
+
+// Widening is implicit: a narrow immediate reaches a wider binding by
+// zero-extension, with nothing written down.
+instruction WidenLet for [Test] : RegImm {
+    param MNEMONIC: String = "widenlet";
+    param OPCODE: bits<6> = 0b000100;
+    behavior {
+        let wide: bits<32> = imm;
+        rd = sext(wide, self.XLEN);
+    }
+}
+
+// A register operand projects by context: `.value` is the bits it holds,
+// `.index` the architectural register number the encoding carries.
+instruction IndexGuard for [Test] : RegReg {
+    param MNEMONIC: String = "indexguard";
+    param OPCODE: bits<6> = 0b000101;
+    behavior {
+        if rs1.index != 0 {
+            rd = rs1.value;
+        }
+    }
+}
+
+// `width(x)` is x's declared width, substituted before lowering, so a helper
+// can talk about the width it was handed. A `fn` reaches the compressed-form
+// predicates the same way, its parameters substituted before type checking.
+fn signed_fits(x, n) { sext(x as bits<n>, width(x)) == x }
+
+instruction SextByte for [Test] : RegReg {
+    param MNEMONIC: String = "sextbyte";
+    param OPCODE: bits<6> = 0b000110;
+    behavior { rd = sext(rs1 as bits<8>, width(rs1)); }
+}
+
+instruction FitsGuard for [Test] : RegReg {
+    param MNEMONIC: String = "fitsguard";
+    param OPCODE: bits<6> = 0b000111;
+    behavior { if signed_fits(rs1, 8) { rd = rs1; } }
+}
+
+// An annotated binding declares a width like an operand's type does.
+instruction WidthOfLet for [Test] : RegReg {
+    param MNEMONIC: String = "widthoflet";
+    param OPCODE: bits<6> = 0b001000;
+    behavior {
+        let low: bits<8> = rs1 as bits<8>;
+        rd = sext(low, width(low));
+    }
+}
+
+// MD-DAG: let low: bits<8> = rs1 as bits<8>
+// MD-DAG: rd = sext(rs1 as bits<8>, self.XLEN)
+// A `fn` parameter reaches the cast width and `width(x)` alike.
+// MD-DAG: sext(rs1 as bits<8>, self.XLEN) == rs1
+// MD-DAG: rd = sext(low, 8)
+
+// A cast keeps the low bits and nothing else.
+// SMT-DAG: (write_gpr st rd ((_ sign_extend 24) ((_ extract 7 0) (read_gpr st rs1))))
+// The inlined helper carries real semantics, not an unsupported-behavior stub.
+// SMT-DAG: (ite (= ((_ sign_extend 24) ((_ extract 7 0) (read_gpr st rs1))) (read_gpr st rs1))
+
+// CHECK-DAG: SymKind::Extract
+// CHECK-DAG: TruncByteOp
+// CHECK-DAG: AddOneOp
+// CHECK-DAG: LetTypedOp
+// CHECK-DAG: WidenLetOp
+// CHECK-DAG: RegAttrIndex("rs1")
+// CHECK-DAG: SextByteOp
+// CHECK-DAG: FitsGuardOp
+// CHECK-DAG: WidthOfLetOp

@@ -400,6 +400,7 @@ pub fn behavior_uses_todo(expr: &ast::Expr) -> bool {
         }
         ast::Expr::IndexAccess(i) => behavior_uses_todo(&i.base),
         ast::Expr::Slice(s) => behavior_uses_todo(&s.base),
+        ast::Expr::Cast(c) => behavior_uses_todo(&c.x) || behavior_uses_todo(&c.width),
         ast::Expr::Try(t) => {
             behavior_uses_todo(&t.body) || t.handlers.iter().any(|h| behavior_uses_todo(&h.body))
         }
@@ -441,7 +442,12 @@ fn visit_exprs(expr: &ast::Expr, f: &mut impl FnMut(&ast::Expr)) {
             visit_exprs(&a.dest, f);
             visit_exprs(&a.value, f);
         }
-        ast::Expr::Let(l) => visit_exprs(&l.value, f),
+        ast::Expr::Let(l) => {
+            if let Some(width) = &l.width {
+                visit_exprs(width, f);
+            }
+            visit_exprs(&l.value, f);
+        }
         ast::Expr::Binary(b) => {
             visit_exprs(&b.lhs, f);
             visit_exprs(&b.rhs, f);
@@ -462,6 +468,10 @@ fn visit_exprs(expr: &ast::Expr, f: &mut impl FnMut(&ast::Expr)) {
         }
         ast::Expr::IndexAccess(i) => visit_exprs(&i.base, f),
         ast::Expr::Slice(s) => visit_exprs(&s.base, f),
+        ast::Expr::Cast(c) => {
+            visit_exprs(&c.x, f);
+            visit_exprs(&c.width, f);
+        }
         ast::Expr::Try(t) => {
             visit_exprs(&t.body, f);
             t.handlers.iter().for_each(|h| visit_exprs(&h.body, f));
@@ -525,6 +535,7 @@ pub(crate) fn map_child_exprs(
         }),
         ast::Expr::Let(l) => ast::Expr::Let(ast::Let {
             name: l.name.clone(),
+            width: l.width.as_ref().map(|w| Box::new(f(w))),
             value: Box::new(f(&l.value)),
             span: l.span,
         }),
@@ -570,6 +581,11 @@ pub(crate) fn map_child_exprs(
             hi: s.hi,
             lo: s.lo,
             span: s.span,
+        }),
+        ast::Expr::Cast(c) => ast::Expr::Cast(ast::Cast {
+            x: Box::new(f(&c.x)),
+            width: Box::new(f(&c.width)),
+            span: c.span,
         }),
         ast::Expr::Try(t) => ast::Expr::Try(ast::TryExcept {
             body: Box::new(f(&t.body)),

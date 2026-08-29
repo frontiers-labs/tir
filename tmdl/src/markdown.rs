@@ -505,7 +505,7 @@ fn format_type(ty: &Type) -> String {
         Type::Bits(width) => format!("bits<{width}>"),
         Type::BitsExpr(width) => format!("bits<{}>", format_expr(width)),
         Type::Struct(name) => name.clone(),
-        Type::Var(var) => format!("{var:?}"),
+        Type::Var(var) | Type::Num(var) => format!("{var:?}"),
         Type::Fn(argument, result) => {
             format!("{} -> {}", format_type(argument), format_type(result))
         }
@@ -535,6 +535,11 @@ fn format_expr_with_precedence(expr: &Expr, parent_precedence: u8) -> String {
             .join("::"),
         Expr::Field(field) => format!("{}.{}", format_expr(&field.base), field.member),
         Expr::Slice(slice) => format!("{}[{}..{}]", format_expr(&slice.base), slice.hi, slice.lo),
+        Expr::Cast(cast) => format!(
+            "{} as bits<{}>",
+            format_expr_with_precedence(&cast.x, u8::MAX),
+            format_expr(&cast.width)
+        ),
         Expr::IndexAccess(index) => format!("{}[{}]", format_expr(&index.base), index.index),
         Expr::Assign(assign) => {
             format!(
@@ -543,9 +548,15 @@ fn format_expr_with_precedence(expr: &Expr, parent_precedence: u8) -> String {
                 format_expr(&assign.value)
             )
         }
-        Expr::Let(binding) => {
-            format!("let {} = {}", binding.name, format_expr(&binding.value))
-        }
+        Expr::Let(binding) => match &binding.width {
+            Some(width) => format!(
+                "let {}: bits<{}> = {}",
+                binding.name,
+                format_expr(width),
+                format_expr(&binding.value)
+            ),
+            None => format!("let {} = {}", binding.name, format_expr(&binding.value)),
+        },
         Expr::Binary(binary) => {
             let (operator, precedence) = format_binary_operator(&binary.op);
             let expression = format!(
@@ -693,6 +704,7 @@ fn format_builtin(builtin: &BuiltinFunction) -> &'static str {
         BuiltinFunction::Log2Ceil => "log2Ceil",
         BuiltinFunction::Regnum => "regnum",
         BuiltinFunction::SExt => "sext",
+        BuiltinFunction::Width => "width",
         BuiltinFunction::ZExt => "zext",
         BuiltinFunction::Load => "load",
         BuiltinFunction::Store => "store",

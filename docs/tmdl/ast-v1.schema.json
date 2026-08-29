@@ -191,6 +191,7 @@
         "log2_ceil",
         "regnum",
         "sext",
+        "width",
         "zext",
         "load",
         "store",
@@ -340,7 +341,7 @@
           ]
         },
         {
-          "description": "Immutable behavior-local binding.",
+          "description": "Immutable behavior-local binding, optionally annotated `bits<width>`.",
           "type": "object",
           "properties": {
             "kind": {
@@ -352,6 +353,16 @@
             },
             "value": {
               "$ref": "#/$defs/Expr"
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Expr"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "additionalProperties": false,
@@ -635,6 +646,28 @@
             "base",
             "hi",
             "lo"
+          ]
+        },
+        {
+          "description": "`value as bits<width>`: the low `width` bits of `value`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "cast"
+            },
+            "value": {
+              "$ref": "#/$defs/Expr"
+            },
+            "width": {
+              "$ref": "#/$defs/Expr"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value",
+            "width"
           ]
         },
         {

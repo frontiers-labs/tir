@@ -531,7 +531,7 @@ impl From<&AstType> for Type {
                 width: Box::new(Expr::from(width.as_ref())),
             },
             AstType::Struct(name) => Self::Named { name: name.clone() },
-            AstType::Var(_) | AstType::Fn(_, _) | AstType::Con(_, _) => {
+            AstType::Var(_) | AstType::Num(_) | AstType::Fn(_, _) | AstType::Con(_, _) => {
                 unreachable!("inferred types are not part of the checked AST output")
             }
         }

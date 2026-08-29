@@ -62,7 +62,7 @@ pub fn resolve_encoding_widths(files: &mut [ast::File]) -> Vec<Diag> {
 
 /// `ENCODING_LEN` of every register class, i.e. the width of an operand of that
 /// class in an encoding.
-fn register_class_widths(files: &[ast::File]) -> HashMap<String, u16> {
+pub fn register_class_widths(files: &[ast::File]) -> HashMap<String, u16> {
     files
         .iter()
         .flat_map(|f| &f.items)
@@ -143,7 +143,7 @@ impl FieldContext<'_> {
 
 /// Bits a literal spells: one per binary digit, four per hex digit. A decimal
 /// literal spells no width, so it cannot stand in an encoding.
-fn literal_width(spelling: &str) -> Result<u16, String> {
+pub(crate) fn literal_width(spelling: &str) -> Result<u16, String> {
     if let Some(digits) = spelling.strip_prefix("0b").or(spelling.strip_prefix("0B")) {
         Ok(digits.len() as u16)
     } else if let Some(digits) = spelling.strip_prefix("0x").or(spelling.strip_prefix("0X")) {

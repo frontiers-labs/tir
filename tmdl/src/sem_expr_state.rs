@@ -130,6 +130,7 @@ fn sequence_behavior(expr: &ast::Expr, bindings: &mut Bindings) -> ast::Expr {
         // its right-hand side, which every use then shares.
         ast::Expr::Let(binding) => ast::Expr::Let(ast::Let {
             name: binding.name.clone(),
+            width: binding.width.clone(),
             value: Box::new(sequence_behavior(&binding.value, bindings)),
             span: binding.span,
         }),
@@ -225,6 +226,11 @@ fn sequence_behavior(expr: &ast::Expr, bindings: &mut Bindings) -> ast::Expr {
             hi: slice.hi,
             lo: slice.lo,
             span: slice.span,
+        }),
+        ast::Expr::Cast(cast) => ast::Expr::Cast(ast::Cast {
+            x: Box::new(sequence_behavior(&cast.x, bindings)),
+            width: cast.width.clone(),
+            span: cast.span,
         }),
         ast::Expr::Try(try_expr) => {
             let entry = bindings.clone();

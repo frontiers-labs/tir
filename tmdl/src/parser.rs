@@ -1803,6 +1803,7 @@ where
                 "regnum" => Some(BuiltinFunction::Regnum),
                 "sext" => Some(BuiltinFunction::SExt),
                 "zext" => Some(BuiltinFunction::ZExt),
+                "width" => Some(BuiltinFunction::Width),
                 "load" => Some(BuiltinFunction::Load),
                 "store" => Some(BuiltinFunction::Store),
                 "load_reserved" => Some(BuiltinFunction::LoadReserved),
@@ -1936,7 +1937,10 @@ where
             Slice(u16, u16, Span),
             Index(u16, Span),
             Call(Vec<Expr>, Span),
+            Cast(Expr, Span),
         }
+
+        let cast_width = bits_width_of(expr.clone()).boxed();
 
         let postfix_op = choice((
             // field: .ident
@@ -1966,6 +1970,10 @@ where
             items
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .map_with(|arguments, e| PostfixOp::Call(arguments, e.span())),
+            // cast: as bits<W>
+            just(Token::KwAs)
+                .ignore_then(cast_width)
+                .map_with(|width, e| PostfixOp::Cast(width, e.span())),
         ));
 
         let basic = atom
@@ -1990,6 +1998,11 @@ where
                 PostfixOp::Call(arguments, span) => Expr::Call(Call {
                     callee: Box::new(base),
                     arguments,
+                    span,
+                }),
+                PostfixOp::Cast(width, span) => Expr::Cast(Cast {
+                    x: Box::new(base),
+                    width: Box::new(width),
                     span,
                 }),
             });
@@ -2137,11 +2150,17 @@ where
             .labelled("assignment");
         let let_ = just(Token::KwLet)
             .ignore_then(ident)
+            .then(
+                just(Token::Colon)
+                    .ignore_then(bits_width_of(inline_expr()).boxed())
+                    .or_not(),
+            )
             .then_ignore(just(Token::Equals))
             .then(expr.clone().or(inline_expr()))
-            .map_with(|(name, value), e| {
+            .map_with(|((name, width), value), e| {
                 Expr::Let(Let {
                     name,
+                    width: width.map(Box::new),
                     value: Box::new(value),
                     span: e.span(),
                 })
@@ -2222,6 +2241,26 @@ where
 
         choice((block.clone(), if_, try_))
     })
+}
+
+/// `bits<W>`: the width a cast or a `let` annotation names. `expr` parses a
+/// width computed from parameters; a plain literal is tried first so the
+/// closing `>` is never read as a comparison.
+fn bits_width_of<'src, I, P>(
+    expr: P,
+) -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+    P: Parser<'src, I, Expr, extra::Err<Rich<'src, Token<'src>, Span>>>,
+{
+    let num = select! { Token::Number(n) => n.to_string() };
+    just(Token::Identifier("bits"))
+        .ignore_then(just(Token::LAngle))
+        .ignore_then(
+            num.map_with(|n, e| Expr::Lit(Lit::Int(LitInt::new(n, e.span()))))
+                .then_ignore(just(Token::RAngle))
+                .or(expr.then_ignore(just(Token::RAngle))),
+        )
 }
 
 fn type_<'src, I>() -> impl Parser<'src, I, Type, extra::Err<Rich<'src, Token<'src>, Span>>>

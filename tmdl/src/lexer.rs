@@ -137,6 +137,8 @@ pub enum Token<'a> {
     KwFn,
     /// `let`
     KwLet,
+    /// `as`
+    KwAs,
 }
 
 impl<'a> Token<'a> {
@@ -240,6 +242,7 @@ pub(crate) fn lexer<'src>()
         "macro" => Token::KwMacro,
         "fn" => Token::KwFn,
         "let" => Token::KwLet,
+        "as" => Token::KwAs,
         _ => Token::Identifier(ident),
     });
 
@@ -339,6 +342,7 @@ impl<'a> fmt::Display for Token<'a> {
             Token::KwMacro => f.write_str("macro"),
             Token::KwFn => f.write_str("fn"),
             Token::KwLet => f.write_str("let"),
+            Token::KwAs => f.write_str("as"),
         }
     }
 }

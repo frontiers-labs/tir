@@ -24,6 +24,7 @@ pub fn check<'a>(files: &'a [ast::File]) -> (TypeCache<'a>, Vec<(String, Diag)>)
 
     let isa_param_vars = build_isa_param_vars(files, &mut tvg);
     let synonyms = build_synonym_table(files, &isa_param_vars, &mut tvg);
+    let encoding_lens = crate::encoding::register_class_widths(files);
 
     let item_cache: HashMap<&str, &ast::Item> = files
         .iter()
@@ -32,7 +33,14 @@ pub fn check<'a>(files: &'a [ast::File]) -> (TypeCache<'a>, Vec<(String, Diag)>)
 
     for file in files {
         for instr in file.instructions() {
-            let env = build_instr_env(instr, &item_cache, &synonyms, &isa_param_vars, &mut tvg);
+            let env = build_instr_env(
+                instr,
+                &item_cache,
+                &synonyms,
+                &isa_param_vars,
+                &encoding_lens,
+                &mut tvg,
+            );
             let mut subst = Substitution::new();
             infer(
                 &instr.behavior,
@@ -146,10 +154,24 @@ fn build_instr_env<'a>(
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     synonyms: &SynonymTable,
     isa_param_vars: &HashMap<String, TypeVar>,
+    encoding_lens: &HashMap<String, u16>,
     tvg: &mut TypeVarGen,
 ) -> TypeEnv {
     let mut env = TypeEnv::new();
     for (name, ty) in utils::resolve_operands_for_instruction(instr, item_cache) {
+        // A register operand carries two things a spec can ask for: the bits it
+        // holds and the architectural number the encoding spells. Both are in
+        // scope as projections; the bare name is the value, which is what a
+        // behavior means by an operand.
+        if let Type::Struct(class) = &ty {
+            env.bind(
+                format!("{name}.value"),
+                TypeScheme::mono(normalize(&ty, synonyms)),
+            );
+            if let Some(&len) = encoding_lens.get(class) {
+                env.bind(format!("{name}.index"), TypeScheme::mono(Type::Bits(len)));
+            }
+        }
         // A `bits<expr>` width is ISA-dependent, so across ISAs the operand is
         // "bits of some width", like a register class with symbolic WIDTH.
         let ty = match ty {
@@ -170,6 +192,79 @@ fn build_instr_env<'a>(
 // ---------------------------------------------------------------------------
 // Type inference
 // ---------------------------------------------------------------------------
+
+/// The concrete width of a resolved bit type, or `None` while it is still a
+/// variable (a register class whose `WIDTH` is an ISA parameter, say).
+fn bit_width(ty: &Type) -> Option<u16> {
+    match ty {
+        Type::Bits(n) => Some(*n),
+        Type::Con(name, args) if name == "bits" && args.len() == 1 => bit_width(&args[0]),
+        _ => None,
+    }
+}
+
+/// Whether `ty` is a bitvector, whatever its width. A register operand whose
+/// class takes its `WIDTH` from an ISA parameter is one of these: known to be
+/// bits, not known to be any particular number of them.
+fn is_bits(ty: &Type) -> bool {
+    matches!(ty, Type::Bits(_))
+        || matches!(ty, Type::Con(name, args) if name == "bits" && args.len() == 1)
+}
+
+/// Constrain `from` to be usable where `to` is expected. Widening is implicit
+/// (zero-extension); narrowing has to be written `as bits<N>`.
+fn coerce(
+    from: &Type,
+    to: &Type,
+    subst: &mut Substitution,
+    span: Span,
+    diags: &mut Vec<(String, Diag)>,
+    file_name: &str,
+) {
+    let (from, to) = (from.apply(subst), to.apply(subst));
+    let message = match (bit_width(&from), bit_width(&to)) {
+        (Some(from_width), Some(to_width)) if from_width > to_width => format!(
+            "implicit narrowing from bits<{from_width}> to bits<{to_width}>; \
+             write the truncation as `as bits<{to_width}>`"
+        ),
+        (Some(_), Some(_)) => return,
+        // The value is bits of a width this spec never pins down (an
+        // ISA-parameter register width): whether it fits cannot be decided, so
+        // the truncation has to be written.
+        (None, Some(to_width)) if is_bits(&from) => format!(
+            "value of unknown width used as bits<{to_width}>; \
+             write the truncation as `as bits<{to_width}>`"
+        ),
+        _ => return constrain(&from, &to, subst, span, diags, file_name),
+    };
+    diags.push((file_name.to_string(), Rich::custom(span, message)));
+}
+
+/// The type of two operands used together: the wider of the two, since the
+/// narrower zero-extends. Widths still unresolved unify instead.
+fn join(
+    lhs: &Type,
+    rhs: &Type,
+    subst: &mut Substitution,
+    span: Span,
+    diags: &mut Vec<(String, Diag)>,
+    file_name: &str,
+) -> Type {
+    let (lhs, rhs) = (lhs.apply(subst), rhs.apply(subst));
+    match (bit_width(&lhs), bit_width(&rhs)) {
+        (Some(l), Some(r)) => {
+            if l >= r {
+                lhs
+            } else {
+                rhs
+            }
+        }
+        _ => {
+            constrain(&lhs, &rhs, subst, span, diags, file_name);
+            lhs.apply(subst)
+        }
+    }
+}
 
 fn constrain(
     t1: &Type,
@@ -211,7 +306,9 @@ fn infer<'a>(
             }
         },
 
-        ast::Expr::Lit(ast::Lit::Int(_)) => Type::Integer,
+        // A literal has no width of its own; unification with the use site
+        // gives it one (or leaves it a spec-time `Integer`).
+        ast::Expr::Lit(ast::Lit::Int(_)) => Type::Num(tvg.fresh()),
         ast::Expr::Lit(ast::Lit::Str(_)) => Type::String,
 
         ast::Expr::Binary(bin) => {
@@ -226,8 +323,7 @@ fn infer<'a>(
                 | ast::BinOp::BitwiseAnd
                 | ast::BinOp::BitwiseOr
                 | ast::BinOp::BitwiseXor => {
-                    constrain(&lhs_ty, &rhs_ty, subst, bin.span, diags, file_name);
-                    lhs_ty.apply(subst)
+                    join(&lhs_ty, &rhs_ty, subst, bin.span, diags, file_name)
                 }
                 // Shifts: result is the LHS type; RHS is unconstrained so that
                 // both register operands (bits<N>) and clamp results (Integer) are accepted.
@@ -244,7 +340,7 @@ fn infer<'a>(
                 | ast::BinOp::UnsignedGreaterThan
                 | ast::BinOp::UnsignedLessThenEqual
                 | ast::BinOp::UnsignedGreaterThanEqual => {
-                    constrain(&lhs_ty, &rhs_ty, subst, bin.span, diags, file_name);
+                    join(&lhs_ty, &rhs_ty, subst, bin.span, diags, file_name);
                     Type::Bits(1)
                 }
             }
@@ -253,13 +349,13 @@ fn infer<'a>(
         ast::Expr::Assign(asgn) => {
             let dest_ty = infer(&asgn.dest, env, tvg, subst, cache, diags, file_name);
             let val_ty = infer(&asgn.value, env, tvg, subst, cache, diags, file_name);
-            constrain(&dest_ty, &val_ty, subst, asgn.span, diags, file_name);
+            coerce(&val_ty, &dest_ty, subst, asgn.span, diags, file_name);
             val_ty.apply(subst)
         }
 
         // A `let` outside a block introduces no visible scope; its type is the
         // bound value's. Blocks bind the name (see the `Block` arm below).
-        ast::Expr::Let(binding) => infer(&binding.value, env, tvg, subst, cache, diags, file_name),
+        ast::Expr::Let(binding) => infer_let(binding, env, tvg, subst, cache, diags, file_name),
 
         ast::Expr::Path(path) => {
             // `Ordering::<member>` is a memory-ordering constant of type `bits<3>`,
@@ -306,15 +402,8 @@ fn infer<'a>(
             let mut ty = Type::Integer;
             for stmt in &block.stmts {
                 if let ast::Expr::Let(binding) = stmt {
-                    let val_ty = infer(
-                        &binding.value,
-                        &block_env,
-                        tvg,
-                        subst,
-                        cache,
-                        diags,
-                        file_name,
-                    );
+                    let val_ty =
+                        infer_let(binding, &block_env, tvg, subst, cache, diags, file_name);
                     block_env.bind(binding.name.clone(), TypeScheme::mono(val_ty.clone()));
                     cache.insert(stmt, val_ty.clone());
                     ty = val_ty;
@@ -341,7 +430,31 @@ fn infer<'a>(
         }
 
         ast::Expr::Field(field) => {
-            // Only `self.MEMBER` is supported; the member is resolved as an ISA parameter.
+            // An operand projection (`rs1.index`, `rs1.value`) is in scope under
+            // its spelled name.
+            if let ast::Expr::Ident(base) = &*field.base
+                && matches!(field.member.as_str(), "value" | "index")
+            {
+                return match env.get(format!("{}.{}", base.name, field.member)) {
+                    Some(scheme) => scheme.ty.apply(subst),
+                    None => {
+                        diags.push((
+                            file_name.to_string(),
+                            Rich::custom(
+                                field.span,
+                                format!(
+                                    "'{}' is not a register operand, so it has no \
+                                     '.{}' projection",
+                                    base.name, field.member
+                                ),
+                            ),
+                        ));
+                        Type::Var(tvg.fresh())
+                    }
+                };
+            }
+            // Otherwise only `self.MEMBER` is supported; the member is resolved
+            // as an ISA parameter.
             let is_self = matches!(&*field.base, ast::Expr::Ident(id) if id.name == "self");
             if is_self {
                 match env.get(&field.member) {
@@ -648,6 +761,34 @@ fn infer<'a>(
             Type::Bits(slc.hi - slc.lo + 1)
         }
 
+        // `x as bits<W>` → bits<W>: the low W bits of x. Widening is implicit,
+        // so a cast only ever narrows.
+        ast::Expr::Cast(cast) => {
+            let from = infer(&cast.x, env, tvg, subst, cache, diags, file_name).apply(subst);
+            let to = match declared_width(&cast.width) {
+                Ok(to) => to,
+                Err(message) => {
+                    diags.push((file_name.to_string(), Rich::custom(cast.span, message)));
+                    return Type::Var(tvg.fresh());
+                }
+            };
+            if let Some(from) = bit_width(&from)
+                && from < to
+            {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        cast.span,
+                        format!(
+                            "cast of bits<{from}> to the wider bits<{to}>; \
+                             widening is implicit"
+                        ),
+                    ),
+                ));
+            }
+            Type::Bits(to)
+        }
+
         // base[i] → bits<1>
         ast::Expr::IndexAccess(idx) => {
             let base_ty = infer(&idx.base, env, tvg, subst, cache, diags, file_name);
@@ -664,7 +805,22 @@ fn infer<'a>(
         }
 
         ast::Expr::If(if_) => {
-            infer(&if_.cond, env, tvg, subst, cache, diags, file_name);
+            // `bits<1>` is the condition type: there is no bool, so anything
+            // wider has to say what it is being tested against.
+            let cond_ty = infer(&if_.cond, env, tvg, subst, cache, diags, file_name).apply(subst);
+            match bit_width(&cond_ty) {
+                Some(1) => {}
+                Some(width) => diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        if_.span,
+                        format!("condition must be bits<1>, found bits<{width}>"),
+                    ),
+                )),
+                // A lane of a split vector is one bit wide without the checker
+                // knowing it, so an unresolved width takes bits<1> here.
+                None => constrain(&cond_ty, &Type::Bits(1), subst, if_.span, diags, file_name),
+            }
             let then_ty = infer(&if_.then, env, tvg, subst, cache, diags, file_name);
             if let Some(else_) = &if_.else_ {
                 let else_ty = infer(else_, env, tvg, subst, cache, diags, file_name);
@@ -729,6 +885,58 @@ fn infer<'a>(
 
     cache.insert(expr, ty.clone());
     ty
+}
+
+/// Infer a `let` binding's type: its annotation when it carries one, and then
+/// the bound value must fit in it.
+#[allow(clippy::too_many_arguments)]
+fn infer_let<'a>(
+    binding: &'a ast::Let,
+    env: &TypeEnv,
+    tvg: &mut TypeVarGen,
+    subst: &mut Substitution,
+    cache: &mut TypeCache<'a>,
+    diags: &mut Vec<(String, Diag)>,
+    file_name: &str,
+) -> Type {
+    let val_ty = infer(&binding.value, env, tvg, subst, cache, diags, file_name);
+    let Some(width) = &binding.width else {
+        return val_ty;
+    };
+    let width = match declared_width(width) {
+        Ok(width) => width,
+        Err(message) => {
+            diags.push((file_name.to_string(), Rich::custom(binding.span, message)));
+            return val_ty;
+        }
+    };
+    if let ast::Expr::Lit(ast::Lit::Int(lit)) = &*binding.value {
+        let value = utils::parse_literal_value(lit);
+        if width < 64 && value >= 1 << width {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    binding.span,
+                    format!("{value} does not fit in bits<{width}>"),
+                ),
+            ));
+        }
+    }
+    let ty = Type::Bits(width);
+    coerce(&val_ty, &ty, subst, binding.span, diags, file_name);
+    ty
+}
+
+/// The number of bits a `bits<W>` annotation names. `W` has to be a literal:
+/// a cast keeps the low bits and an annotation is checked against them, so a
+/// width the spec never pins down would say nothing. `fn` parameters are
+/// substituted before type checking, so `bits<n>` in a helper is a literal here.
+fn declared_width(width: &ast::Expr) -> Result<u16, String> {
+    let ast::Expr::Lit(ast::Lit::Int(lit)) = width else {
+        return Err("width must be a literal number of bits".to_string());
+    };
+    let value = utils::parse_literal_value(lit);
+    u16::try_from(value).map_err(|_| format!("width bits<{value}> is out of range"))
 }
 
 /// An iterator (vector) type carrying elements of `elem`.

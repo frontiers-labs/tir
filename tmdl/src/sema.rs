@@ -1750,7 +1750,12 @@ fn check_behavior(
                 walk_paths(&a.dest, out);
                 walk_paths(&a.value, out);
             }
-            ast::Expr::Let(l) => walk_paths(&l.value, out),
+            ast::Expr::Let(l) => {
+                if let Some(width) = &l.width {
+                    walk_paths(width, out);
+                }
+                walk_paths(&l.value, out);
+            }
             ast::Expr::Binary(b) => {
                 walk_paths(&b.lhs, out);
                 walk_paths(&b.rhs, out);
@@ -1777,6 +1782,10 @@ fn check_behavior(
             }
             ast::Expr::IndexAccess(i) => walk_paths(&i.base, out),
             ast::Expr::Slice(s) => walk_paths(&s.base, out),
+            ast::Expr::Cast(c) => {
+                walk_paths(&c.x, out);
+                walk_paths(&c.width, out);
+            }
             ast::Expr::Try(t) => {
                 walk_paths(&t.body, out);
                 for handler in &t.handlers {
@@ -1958,6 +1967,9 @@ fn check_let_bindings(
             };
             match expr {
                 ast::Expr::Let(l) => {
+                    if let Some(width) = &l.width {
+                        self.walk(width, scope, diags);
+                    }
                     self.walk(&l.value, scope, diags);
                     let owner = self.owner;
                     if scope.contains(&l.name) || self.reserved.contains(&l.name) {
@@ -2018,6 +2030,10 @@ fn check_let_bindings(
                 }
                 ast::Expr::IndexAccess(ix) => self.walk(&ix.base, scope, diags),
                 ast::Expr::Slice(s) => self.walk(&s.base, scope, diags),
+                ast::Expr::Cast(c) => {
+                    self.walk(&c.x, scope, diags);
+                    self.walk(&c.width, scope, diags);
+                }
                 ast::Expr::Try(t) => {
                     nested(self, &t.body, scope, diags);
                     for handler in &t.handlers {
@@ -2078,7 +2094,12 @@ fn visit_exprs<'a>(e: &'a ast::Expr, f: &mut dyn FnMut(&'a ast::Expr)) {
             visit_exprs(&a.dest, f);
             visit_exprs(&a.value, f);
         }
-        ast::Expr::Let(l) => visit_exprs(&l.value, f),
+        ast::Expr::Let(l) => {
+            if let Some(width) = &l.width {
+                visit_exprs(width, f);
+            }
+            visit_exprs(&l.value, f);
+        }
         ast::Expr::Binary(b) => {
             visit_exprs(&b.lhs, f);
             visit_exprs(&b.rhs, f);
@@ -2099,6 +2120,10 @@ fn visit_exprs<'a>(e: &'a ast::Expr, f: &mut dyn FnMut(&'a ast::Expr)) {
         }
         ast::Expr::IndexAccess(ix) => visit_exprs(&ix.base, f),
         ast::Expr::Slice(s) => visit_exprs(&s.base, f),
+        ast::Expr::Cast(c) => {
+            visit_exprs(&c.x, f);
+            visit_exprs(&c.width, f);
+        }
         ast::Expr::Try(t) => {
             visit_exprs(&t.body, f);
             t.handlers.iter().for_each(|h| visit_exprs(&h.body, f));
@@ -2235,6 +2260,7 @@ fn expr_span(e: &ast::Expr) -> Span {
         ast::Expr::If(i) => i.span,
         ast::Expr::IndexAccess(ix) => ix.span,
         ast::Expr::Slice(s) => s.span,
+        ast::Expr::Cast(c) => c.span,
         ast::Expr::Try(t) => t.span,
         ast::Expr::Path(p) => p.span,
         ast::Expr::Ident(id) => id.span,

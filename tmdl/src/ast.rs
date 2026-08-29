@@ -624,6 +624,9 @@ pub struct Assign {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Let {
     pub name: String,
+    /// `let x: bits<W>`: the width the binding is used at. `None` leaves it to
+    /// inference.
+    pub width: Option<Box<Expr>>,
     pub value: Box<Expr>,
     pub span: Span,
 }
@@ -693,6 +696,9 @@ pub enum BuiltinFunction {
     Regnum,
     SExt,
     ZExt,
+    /// `width(x)`: the width `x`'s type declares. Spec-time information,
+    /// substituted before lowering (see `widths.rs`).
+    Width,
     Load,
     Store,
     /// `load_reserved(addr, bytes, ordering)`: read memory and register a
@@ -800,8 +806,18 @@ pub struct IndexAccess {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// `x as bits<W>`: the low `W` bits of `x`. Widening is implicit
+/// (zero-extension), so a cast only ever narrows.
+pub struct Cast {
+    pub x: Box<Expr>,
+    pub width: Box<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     Assign(Assign),
+    Cast(Cast),
     Let(Let),
     Binary(Binary),
     Unary(Unary),
@@ -1171,6 +1187,7 @@ impl Expr {
             Expr::Path(x) => x.as_sema_expr(ctx),
             Expr::Lit(x) => x.as_sema_expr(ctx),
             Expr::Slice(x) => x.as_sema_expr(ctx),
+            Expr::Cast(x) => x.as_sema_expr(ctx),
             // Semantic expressions model the no-trap path; only the SMT
             // backend gives the handlers meaning.
             Expr::Try(x) => x.body.lower_with_ctx(ctx),
@@ -1495,6 +1512,21 @@ impl Field {
                 return Ident::new(self.member.clone(), self.span).as_sema_expr(ctx);
             }
 
+            // A register operand's two projections: the bits it holds and the
+            // architectural number the encoding spells. `.index` is the same
+            // symbol `regnum(op)` binds.
+            match self.member.as_str() {
+                "value" => return base_ident.as_sema_expr(ctx),
+                "index" => {
+                    let sym = ctx.get_or_create_regnum_symbol(base_ident.name.clone());
+                    return ctx.add_leaf(
+                        tir_symbolic::lang::SymKind::Symbol,
+                        tir_symbolic::lang::SymPayload::SymbolId(sym),
+                    );
+                }
+                _ => {}
+            }
+
             let register_number = if let Some(num_str) = self.member.strip_prefix('x') {
                 num_str
                     .parse::<u32>()
@@ -1658,6 +1690,39 @@ impl Slice {
     }
 }
 
+impl Cast {
+    fn as_sema_expr<
+        G: tir_graph::MutDag<
+                Node = tir_symbolic::lang::SymKind,
+                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
+            >,
+    >(
+        &self,
+        ctx: &mut SemaExprLoweringCtx<'_, G>,
+    ) -> tir_graph::NodeId {
+        let input = self.x.lower_with_ctx(ctx);
+        // A literal width folds to the constant `Extract` wants, so `x as
+        // bits<8>` and `extract(x, 7, 0)` lower to the same term. A width over
+        // ISA parameters stays symbolic, like every other `self.PARAM` use.
+        let high = match &*self.width {
+            Expr::Lit(Lit::Int(lit)) => Lit::Int(LitInt::new(
+                lit.parse_u64().saturating_sub(1).to_string(),
+                self.span,
+            ))
+            .as_sema_expr(ctx),
+            _ => Expr::Binary(Binary {
+                lhs: self.width.clone(),
+                rhs: Box::new(Expr::Lit(Lit::Int(LitInt::new("1".to_string(), self.span)))),
+                op: BinOp::Sub,
+                span: self.span,
+            })
+            .lower_with_ctx(ctx),
+        };
+        let low = Lit::Int(LitInt::new("0".to_string(), self.span)).as_sema_expr(ctx);
+        ctx.build_extract(input, high, low)
+    }
+}
+
 impl IndexAccess {
     fn as_sema_expr<
         G: tir_graph::MutDag<
@@ -1817,6 +1882,9 @@ impl Call {
                     tir_symbolic::lang::SymPayload::SymbolId(sym),
                 )
             }
+            // Every `width(x)` is substituted before lowering; reaching here
+            // means the resolution pass was skipped.
+            BuiltinFunction::Width => panic!("width() must be resolved before lowering"),
             BuiltinFunction::SExt => {
                 assert!(self.arguments.len() == 2, "sext requires 2 arguments");
                 let input = self.arguments[0].lower_with_ctx(ctx);

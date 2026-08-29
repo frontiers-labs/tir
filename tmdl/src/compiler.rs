@@ -224,6 +224,12 @@ impl Compiler {
             return Ok(None);
         }
 
+        let width_diags = crate::widths::resolve_width_calls(&mut parsed_files);
+        if !width_diags.is_empty() {
+            print_diags(width_diags, &self.inputs, &sources);
+            return Ok(None);
+        }
+
         let sema_diags = sema_analyze(&parsed_files, self.text_only);
         if !sema_diags.is_empty() {
             print_diags(sema_diags, &self.inputs, &sources);

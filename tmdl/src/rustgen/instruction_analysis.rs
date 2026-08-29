@@ -219,6 +219,10 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
         }
         ast::Expr::IndexAccess(i) => collect_referenced_idents(&i.base, operands, out),
         ast::Expr::Slice(s) => collect_referenced_idents(&s.base, operands, out),
+        ast::Expr::Cast(c) => {
+            collect_referenced_idents(&c.x, operands, out);
+            collect_referenced_idents(&c.width, operands, out);
+        }
         ast::Expr::Try(t) => {
             collect_referenced_idents(&t.body, operands, out);
             for h in &t.handlers {
@@ -513,6 +517,9 @@ fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> boo
         }
         ast::Expr::IndexAccess(i) => behavior_references_pc(&i.base, pc_classes),
         ast::Expr::Slice(s) => behavior_references_pc(&s.base, pc_classes),
+        ast::Expr::Cast(c) => {
+            behavior_references_pc(&c.x, pc_classes) || behavior_references_pc(&c.width, pc_classes)
+        }
         ast::Expr::Try(t) => {
             behavior_references_pc(&t.body, pc_classes)
                 || t.handlers
@@ -568,6 +575,10 @@ fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>
         }
         ast::Expr::IndexAccess(i) => behavior_reads_flag_register(&i.base, flag_classes),
         ast::Expr::Slice(s) => behavior_reads_flag_register(&s.base, flag_classes),
+        ast::Expr::Cast(c) => {
+            behavior_reads_flag_register(&c.x, flag_classes)
+                || behavior_reads_flag_register(&c.width, flag_classes)
+        }
         ast::Expr::Try(t) => {
             behavior_reads_flag_register(&t.body, flag_classes)
                 || t.handlers

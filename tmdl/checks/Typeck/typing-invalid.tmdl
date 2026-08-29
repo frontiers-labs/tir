@@ -1,0 +1,94 @@
+// Typing rules that reject a program: implicit narrowing (both when the source
+// width is known and when it is not), a wide condition, a cast that widens, a
+// width that is not a literal, an annotation the value overflows, and a
+// projection on something that is not a register.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+isa Test { param XLEN: Integer = 32; }
+
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+
+// Dropping bits is never implicit, not even into an annotated binding.
+instruction NarrowLet for [Test] {
+    param MNEMONIC: String = "narrowlet";
+    operands { rd: GPR, imm: bits<16>, }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior {
+        let low: bits<8> = imm;
+        rd = sext(low, self.XLEN);
+    }
+}
+
+// A condition is one bit: there is no bool, so a wider value has to say what
+// it is being tested against.
+instruction WideCondition for [Test] {
+    param MNEMONIC: String = "widecondition";
+    operands { rd: GPR, imm: bits<16>, }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior {
+        if imm {
+            rd = sext(imm, self.XLEN);
+        }
+    }
+}
+
+// `as` only narrows; a wider type is reached by zero-extension, unwritten.
+instruction WideningCast for [Test] {
+    param MNEMONIC: String = "wideningcast";
+    operands { rd: GPR, imm: bits<16>, }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = sext(imm as bits<32>, self.XLEN); }
+}
+
+// A register operand's width comes from an ISA parameter, so whether it fits
+// is undecidable here; the truncation has to be written.
+instruction NarrowRegister for [Test] {
+    param MNEMONIC: String = "narrowregister";
+    operands { rd: GPR, rs1: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}" }
+    behavior {
+        let low: bits<8> = rs1;
+        rd = sext(low, self.XLEN);
+    }
+}
+
+// A cast keeps the low bits, so its width has to be a number the spec pins
+// down — `fn` parameters are substituted before this point.
+instruction ParamWidth for [Test] {
+    param MNEMONIC: String = "paramwidth";
+    operands { rd: GPR, imm: bits<16>, }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = imm as bits<self.XLEN>; }
+}
+
+// The bound value has to fit the width the binding names.
+instruction Overflowing for [Test] {
+    param MNEMONIC: String = "overflowing";
+    operands { rd: GPR, rs1: GPR, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}" }
+    behavior {
+        let small: bits<2> = 300;
+        rd = sext(small, self.XLEN);
+    }
+}
+
+// Only a register operand has an encoding index.
+instruction ImmediateIndex for [Test] {
+    param MNEMONIC: String = "immediateindex";
+    operands { rd: GPR, imm: bits<16>, }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = sext(imm.index, self.XLEN); }
+}
+
+// CHECK-DAG: value of unknown width used as bits<8>; write the truncation as `as bits<8>`
+// CHECK-DAG: width must be a literal number of bits
+// CHECK-DAG: 300 does not fit in bits<2>
+// CHECK-DAG: 'imm' is not a register operand, so it has no '.index' projection
+// CHECK-DAG: cast of bits<16> to the wider bits<32>; widening is implicit
+// CHECK-DAG: condition must be bits<1>, found bits<16>
+// CHECK-DAG: implicit narrowing from bits<16> to bits<8>; write the truncation as `as bits<8>`

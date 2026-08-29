@@ -737,6 +737,10 @@ fn collect_register_path_reads(expr: &ast::Expr, out: &mut HashSet<(String, Stri
         }
         ast::Expr::IndexAccess(i) => collect_register_path_reads(&i.base, out),
         ast::Expr::Slice(s) => collect_register_path_reads(&s.base, out),
+        ast::Expr::Cast(c) => {
+            collect_register_path_reads(&c.x, out);
+            collect_register_path_reads(&c.width, out);
+        }
         ast::Expr::Try(t) => {
             collect_register_path_reads(&t.body, out);
             for h in &t.handlers {

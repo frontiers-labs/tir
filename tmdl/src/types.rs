@@ -10,6 +10,9 @@ pub enum Type {
     String,
     Integer,
     Bits(u16),
+    /// The type of an integer literal before its use site is known: a number of
+    /// some width, resolved by unification to `Integer` or a `bits` type.
+    Num(TypeVar),
     /// `bits<expr>` whose width is a constant expression over ISA parameters
     /// (e.g. `bits<log2Ceil(self.XLEN)>`); resolved to `Bits` per ISA before
     /// type checking and code generation.
@@ -46,7 +49,7 @@ impl Type {
     /// Collect all free type variables.
     pub fn free_vars(&self) -> HashSet<TypeVar> {
         match self {
-            Type::Var(v) => std::iter::once(*v).collect(),
+            Type::Var(v) | Type::Num(v) => std::iter::once(*v).collect(),
             Type::Fn(a, b) => {
                 let mut s = a.free_vars();
                 s.extend(b.free_vars());
@@ -62,6 +65,12 @@ impl Type {
     pub fn apply(&self, subst: &Substitution) -> Type {
         match self {
             Type::Var(v) => subst.get(v),
+            // An unresolved literal keeps its identity so a later use site can
+            // still fix its width.
+            Type::Num(v) => match subst.get(v) {
+                Type::Var(u) if u == *v => Type::Num(*v),
+                resolved => resolved,
+            },
             Type::Fn(a, b) => Type::Fn(Box::new(a.apply(subst)), Box::new(b.apply(subst))),
             Type::Con(name, args) => {
                 Type::Con(name.clone(), args.iter().map(|a| a.apply(subst)).collect())
@@ -73,7 +82,7 @@ impl Type {
     /// Check whether a type variable occurs in this type (for occurs check).
     pub fn occurs(&self, v: TypeVar) -> bool {
         match self {
-            Type::Var(u) => *u == v,
+            Type::Var(u) | Type::Num(u) => *u == v,
             Type::Fn(a, b) => a.occurs(v) || b.occurs(v),
             Type::Con(_, args) => args.iter().any(|a| a.occurs(v)),
             _ => false,
@@ -185,6 +194,22 @@ pub fn unify(t1: &Type, t2: &Type) -> Result<Substitution, UnifyError> {
             if t.occurs(*v) {
                 return Err(UnifyError::OccursCheck(*v, t.clone()));
             }
+            let mut s = Substitution::new();
+            s.insert(*v, t.clone());
+            Ok(s)
+        }
+
+        // A literal resolves to whatever number type its use site demands.
+        (Type::Num(v), Type::Num(u)) if v == u => Ok(Substitution::new()),
+        (Type::Num(v), t @ (Type::Integer | Type::Bits(_) | Type::Num(_)))
+        | (t @ (Type::Integer | Type::Bits(_)), Type::Num(v)) => {
+            let mut s = Substitution::new();
+            s.insert(*v, t.clone());
+            Ok(s)
+        }
+        (Type::Num(v), t @ Type::Con(name, args)) | (t @ Type::Con(name, args), Type::Num(v))
+            if name == "bits" && args.len() == 1 =>
+        {
             let mut s = Substitution::new();
             s.insert(*v, t.clone());
             Ok(s)
