@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::ClassId;
 
 /// One partition over the class ids: parent pointers plus the set size at a root.
@@ -73,6 +75,12 @@ impl Level {
 pub struct UnionFind {
     base: Level,
     layers: Vec<Level>,
+    /// Each id's last answer, stamped with the epoch it was found in. A union or
+    /// a scope boundary bumps the epoch, so the cache is dropped rather than
+    /// unwound — path compression across layers would need an undo log, and a
+    /// search phase performs no unions at all, so the cache holds for all of it.
+    hint: Vec<Cell<(u32, u32)>>,
+    epoch: Cell<u32>,
 }
 
 impl UnionFind {
@@ -87,6 +95,7 @@ impl UnionFind {
         for layer in &mut self.layers {
             layer.push();
         }
+        self.hint.push(Cell::new((id, 0)));
         ClassId(id)
     }
 
@@ -102,11 +111,31 @@ impl UnionFind {
     /// top-down walk would miss a layer's redirect for an id that layer never
     /// touched.
     pub fn find(&self, id: ClassId) -> ClassId {
+        let epoch = self.epoch.get();
+        let cached = self.hint[id.index()].get();
+        if cached.1 == epoch {
+            return ClassId(cached.0);
+        }
         let mut root = self.base.find(id.0);
         for layer in &self.layers {
             root = layer.find(root);
         }
+        self.hint[id.index()].set((root, epoch));
         ClassId(root)
+    }
+
+    /// Every stamp of the current epoch becomes stale. Wrapping onto an epoch a
+    /// stamp still holds would resurrect it, so the wrap clears them instead.
+    fn invalidate(&mut self) {
+        let next = self.epoch.get().wrapping_add(1);
+        if next == 0 {
+            for slot in &self.hint {
+                slot.set((0, 0));
+            }
+            self.epoch.set(1);
+        } else {
+            self.epoch.set(next);
+        }
     }
 
     /// Merge the classes of `a` and `b` in the innermost open scope (the base
@@ -117,6 +146,7 @@ impl UnionFind {
         if ra == rb {
             return ra;
         }
+        self.invalidate();
         let level = self.layers.last_mut().unwrap_or(&mut self.base);
         ClassId(level.union(ra.0, rb.0))
     }
@@ -124,17 +154,20 @@ impl UnionFind {
     /// Enter an assumption scope; unions until the matching [`Self::pop_scope`]
     /// are local to it.
     pub fn push_scope(&mut self) {
+        self.invalidate();
         self.layers.push(Level::with_size(self.base.parent.len()));
     }
 
     /// Leave the scope, discarding its merges.
     pub fn pop_scope(&mut self) {
+        self.invalidate();
         self.layers.pop();
     }
 
     /// Flatten the partition the next round's finds read: the innermost open
     /// layer, or the base with none open.
     pub fn flatten(&mut self) {
+        self.invalidate();
         self.layers.last_mut().unwrap_or(&mut self.base).flatten();
     }
 }

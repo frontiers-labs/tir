@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 
 use tir_adt::FxHasher;
@@ -56,6 +57,10 @@ pub struct Engine<L: Label> {
     /// misses one.
     op_rows: FxHashMap<u64, Vec<RowId>>,
 
+    /// Reusable per-class "already seen" marks for the read-side sweeps, so a
+    /// query that visits a handful of classes does not first zero an array the
+    /// size of the graph.
+    marks: RefCell<Marks>,
     /// Classes a union touched, awaiting congruence repair.
     pending: Vec<ClassId>,
     stats: Stats,
@@ -150,6 +155,7 @@ impl<L: Label> Engine<L> {
             memo: FxHashMap::default(),
             scope_memo: Vec::new(),
             op_rows: FxHashMap::default(),
+            marks: RefCell::default(),
             pending: Vec::new(),
             stats: Stats::default(),
             total_nodes: 0,
@@ -288,11 +294,12 @@ impl<L: Label> Engine<L> {
         let Some(rows) = self.op_rows.get(&op) else {
             return Vec::new();
         };
-        let mut seen = vec![false; self.uf.len()];
+        let mut seen = self.marks.borrow_mut();
+        seen.begin(self.uf.len());
         let mut out = Vec::new();
         for &row in rows {
             let root = self.find(self.row_class[row.index()]);
-            if !std::mem::replace(&mut seen[root.index()], true) {
+            if seen.insert(root) {
                 out.push(root);
             }
         }
@@ -978,11 +985,12 @@ impl<L: Label> Engine<L> {
     /// `seeds` and everything reachable upward from them over parent edges in at
     /// most `levels` steps (unbounded when `None`), ascending.
     fn close_upward(&self, seeds: Vec<ClassId>, levels: Option<usize>) -> Vec<ClassId> {
-        let mut seen = vec![false; self.uf.len()];
+        let mut seen = self.marks.borrow_mut();
+        seen.begin(self.uf.len());
         let mut frontier: Vec<ClassId> = seeds
             .into_iter()
             .map(|id| self.find(id))
-            .filter(|&id| !std::mem::replace(&mut seen[id.index()], true))
+            .filter(|&id| seen.insert(id))
             .collect();
         let mut closure = frontier.clone();
         let mut level = 0;
@@ -992,7 +1000,7 @@ impl<L: Label> Engine<L> {
                 for edge in self.parent_edges(id) {
                     let row = RowId(self.edge_row[edge as usize]);
                     let parent = self.find(self.row_class[row.index()]);
-                    if !std::mem::replace(&mut seen[parent.index()], true) {
+                    if seen.insert(parent) {
                         closure.push(parent);
                         next.push(parent);
                     }
@@ -1003,6 +1011,33 @@ impl<L: Label> Engine<L> {
         }
         closure.sort_unstable();
         closure
+    }
+}
+
+/// Epoch-stamped membership marks over the class ids: `begin` costs nothing per
+/// class, so a sweep pays only for what it visits.
+#[derive(Default)]
+struct Marks {
+    stamp: Vec<u32>,
+    epoch: u32,
+}
+
+impl Marks {
+    fn begin(&mut self, classes: usize) {
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            self.stamp.fill(0);
+            self.epoch = 1;
+        }
+        if self.stamp.len() < classes {
+            self.stamp.resize(classes, 0);
+        }
+    }
+
+    /// Mark `id`, reporting whether this sweep had not seen it.
+    fn insert(&mut self, id: ClassId) -> bool {
+        let slot = &mut self.stamp[id.index()];
+        std::mem::replace(slot, self.epoch) != self.epoch
     }
 }
 
