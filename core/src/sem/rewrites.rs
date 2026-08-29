@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use tir_symbolic::egraph::{Delta, EMatch, ENode, Id, Pattern, RoundStats, Timer};
+use tir_symbolic::egraph::{Delta, EMatch, ENode, Id, Pattern, RoundStats, Timer, trace_enabled};
 
 use super::egraph::SemEGraph;
 use super::node::SemNode;
@@ -118,6 +118,9 @@ fn saturate_impl(
 
         let before = (eg.num_classes(), eg.total_size());
         for (index, m) in &matches {
+            if trace_enabled() {
+                eprintln!("M {} {}", rewrites[*index].name, eg.find(m.root).index());
+            }
             stats.apply(eg, |eg| (rewrites[*index].apply)(ctx, eg, m));
         }
         eg.rebuild();

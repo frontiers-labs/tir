@@ -1,88 +1,46 @@
 use crate::ClassId;
 
-/// Flat union-find over class ids.
-///
-/// Unions hook immediately — a caller that merges two classes sees the survivor
-/// from the next [`Self::find`], as the tree-walking engine did, and an applier
-/// that instantiates after one hash-conses against it — but no id is compressed
-/// until [`Self::flatten`] rewrites the array to depth one at rebuild. A round's
-/// finds therefore walk at most the depth its own unions built.
-///
-/// Every merge is logged in application order. A rebuild reads the log to learn
-/// which classes were absorbed without scanning the array, and a scope
-/// [`rolls it back`](Self::rollback) to undo its hypothesis.
+/// One partition over the class ids: parent pointers plus the set size at a root.
 #[derive(Clone, Default)]
-pub struct UnionFind {
+struct Level {
     parent: Vec<u32>,
-    /// Set size at a root; meaningless elsewhere, and frozen from the moment a
-    /// root is absorbed — which is what lets [`Self::rollback`] subtract it back.
     size: Vec<u32>,
-    /// `(absorbed root, survivor)` per merge, in the order they were applied.
-    log: Vec<(ClassId, ClassId)>,
 }
 
-impl UnionFind {
-    pub fn new() -> Self {
-        Self::default()
+impl Level {
+    fn with_size(len: usize) -> Self {
+        Self {
+            parent: (0..len as u32).collect(),
+            size: vec![1; len],
+        }
     }
 
-    /// A fresh singleton class.
-    pub fn push(&mut self) -> ClassId {
-        let id = self.parent.len() as u32;
-        self.parent.push(id);
+    fn push(&mut self) {
+        self.parent.push(self.parent.len() as u32);
         self.size.push(1);
-        ClassId(id)
     }
 
-    pub fn len(&self) -> usize {
-        self.parent.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.parent.is_empty()
-    }
-
-    pub fn find(&self, id: ClassId) -> ClassId {
-        let mut cur = id.0;
+    fn find(&self, mut cur: u32) -> u32 {
         while self.parent[cur as usize] != cur {
             cur = self.parent[cur as usize];
         }
-        ClassId(cur)
+        cur
     }
 
-    /// Merge two classes, returning the survivor. The larger set's root wins,
-    /// ties going to `b` — the rule the scalar engine used, kept so canonical
-    /// ids, and every extraction tie-break and side-table key downstream of
-    /// them, stay where they are.
-    pub fn union(&mut self, a: ClassId, b: ClassId) -> ClassId {
-        let mut ra = self.find(a);
-        let mut rb = self.find(b);
-        if ra == rb {
-            return ra;
+    /// Merge two roots, returning the survivor: the larger set's root, ties
+    /// going to `b`.
+    fn union(&mut self, mut a: u32, mut b: u32) -> u32 {
+        if self.size[a as usize] > self.size[b as usize] {
+            std::mem::swap(&mut a, &mut b);
         }
-        if self.size[ra.index()] > self.size[rb.index()] {
-            std::mem::swap(&mut ra, &mut rb);
-        }
-        self.parent[ra.index()] = rb.0;
-        self.size[rb.index()] += self.size[ra.index()];
-        self.log.push((ra, rb));
-        rb
-    }
-
-    /// The merges since the last drain, in application order.
-    pub fn take_log(&mut self) -> Vec<(ClassId, ClassId)> {
-        std::mem::take(&mut self.log)
-    }
-
-    pub fn log_len(&self) -> usize {
-        self.log.len()
+        self.parent[a as usize] = b;
+        self.size[b as usize] += self.size[a as usize];
+        b
     }
 
     /// Pointer-jump every entry to its root, so the next round's finds are one
-    /// load. Rounds of `parent[i] = parent[parent[i]]` over the flat array, run
-    /// to a fixpoint. Never called with a scope open: it would erase the
-    /// structure [`Self::rollback`] walks back.
-    pub fn flatten(&mut self) {
+    /// load: rounds of `parent[i] = parent[parent[i]]` to a fixpoint.
+    fn flatten(&mut self) {
         let mut moved = true;
         while moved {
             moved = false;
@@ -96,22 +54,88 @@ impl UnionFind {
             }
         }
     }
+}
 
-    /// Undo every merge logged after `mark`, restoring the partition the scope
-    /// opened on. Merges are undone newest first: a root's size stops moving the
-    /// moment it is absorbed, so subtracting it from its survivor restores that
-    /// survivor.
-    ///
-    /// Ids minted inside the scope are *not* dropped. They keep a singleton
-    /// entry, so a caller still holding one after the pop finds it rather than
-    /// indexing off the end — the scalar engine's behaviour, which the classes a
-    /// discarded hypothesis built relied on.
-    pub fn rollback(&mut self, mark: usize) {
-        while self.log.len() > mark {
-            let (absorbed, survivor) = self.log.pop().expect("logged merge");
-            self.parent[absorbed.index()] = absorbed.0;
-            self.size[survivor.index()] -= self.size[absorbed.index()];
+/// Union-find over class ids with stack-disciplined assumption scopes.
+///
+/// A scope is a fresh partition layered over the base one, so a pop discards its
+/// merges by dropping the layer — no undo log, and no way for a hypothesis to
+/// leave a trace in the base. The layer starts as singletons, so the size that
+/// breaks a scoped union's tie counts only what the scope itself merged: the
+/// survivor of a scoped union is *not* the one the same union would pick in the
+/// base graph, and everything keyed by canonical ids depends on that.
+///
+/// Unions hook immediately — a caller that merges two classes sees the survivor
+/// from the next [`Self::find`], and an applier that instantiates afterwards
+/// hash-conses against it. Nothing is compressed until [`Self::flatten`] at a
+/// rebuild, so a round's finds walk at most the depth its own unions built.
+#[derive(Clone, Default)]
+pub struct UnionFind {
+    base: Level,
+    layers: Vec<Level>,
+}
+
+impl UnionFind {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A fresh singleton class; the base and every open layer grow in lockstep.
+    pub fn push(&mut self) -> ClassId {
+        let id = self.base.parent.len() as u32;
+        self.base.push();
+        for layer in &mut self.layers {
+            layer.push();
         }
+        ClassId(id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.base.parent.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.base.parent.is_empty()
+    }
+
+    /// Canonicalize bottom-up: the base, then each open layer in order. A
+    /// top-down walk would miss a layer's redirect for an id that layer never
+    /// touched.
+    pub fn find(&self, id: ClassId) -> ClassId {
+        let mut root = self.base.find(id.0);
+        for layer in &self.layers {
+            root = layer.find(root);
+        }
+        ClassId(root)
+    }
+
+    /// Merge the classes of `a` and `b` in the innermost open scope (the base
+    /// with none open), returning the survivor.
+    pub fn union(&mut self, a: ClassId, b: ClassId) -> ClassId {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra == rb {
+            return ra;
+        }
+        let level = self.layers.last_mut().unwrap_or(&mut self.base);
+        ClassId(level.union(ra.0, rb.0))
+    }
+
+    /// Enter an assumption scope; unions until the matching [`Self::pop_scope`]
+    /// are local to it.
+    pub fn push_scope(&mut self) {
+        self.layers.push(Level::with_size(self.base.parent.len()));
+    }
+
+    /// Leave the scope, discarding its merges.
+    pub fn pop_scope(&mut self) {
+        self.layers.pop();
+    }
+
+    /// Flatten the partition the next round's finds read: the innermost open
+    /// layer, or the base with none open.
+    pub fn flatten(&mut self) {
+        self.layers.last_mut().unwrap_or(&mut self.base).flatten();
     }
 }
 
@@ -146,16 +170,40 @@ mod tests {
     }
 
     #[test]
-    fn take_log_reports_every_merge_once() {
+    fn a_scope_weighs_only_its_own_merges() {
         let mut uf = seeded(3);
         uf.union(ClassId(0), ClassId(1));
+        uf.push_scope();
+        // In the base, the survivor's set has two members and would win; the
+        // layer sees both sides as singletons, so the tie goes to `b`.
+        assert_eq!(uf.union(ClassId(0), ClassId(2)), ClassId(2));
+        uf.pop_scope();
+        assert_eq!(uf.union(ClassId(0), ClassId(2)), ClassId(1));
+    }
+
+    #[test]
+    fn a_scope_pop_discards_its_merges() {
+        let mut uf = seeded(4);
+        uf.push_scope();
         uf.union(ClassId(0), ClassId(1));
+        uf.push_scope();
         uf.union(ClassId(1), ClassId(2));
-        assert_eq!(
-            uf.take_log(),
-            vec![(ClassId(0), ClassId(1)), (ClassId(2), ClassId(1))]
-        );
-        assert!(uf.take_log().is_empty());
+        assert_eq!(uf.find(ClassId(0)), uf.find(ClassId(2)));
+        uf.pop_scope();
+        assert_eq!(uf.find(ClassId(0)), ClassId(1));
+        assert_ne!(uf.find(ClassId(2)), ClassId(1));
+        uf.pop_scope();
+        assert_eq!(uf.find(ClassId(0)), ClassId(0));
+    }
+
+    #[test]
+    fn a_class_minted_in_a_scope_survives_the_pop() {
+        let mut uf = seeded(1);
+        uf.push_scope();
+        let minted = uf.push();
+        uf.union(ClassId(0), minted);
+        uf.pop_scope();
+        assert_eq!(uf.find(minted), minted);
     }
 
     proptest! {
@@ -195,7 +243,7 @@ mod tests {
         }
 
         #[test]
-        fn rollback_restores_the_state_a_scope_opened_on(
+        fn a_scope_round_trip_restores_the_partition(
             before in prop::collection::vec((0u32..12, 0u32..12), 0..24),
             inside in prop::collection::vec((0u32..12, 0u32..12), 0..24),
         ) {
@@ -204,19 +252,16 @@ mod tests {
                 uf.union(ClassId(a), ClassId(b));
             }
             let roots: Vec<u32> = (0..12).map(|i| uf.find(ClassId(i)).0).collect();
-            let mark = uf.log_len();
-            let classes = uf.len();
+            uf.push_scope();
             for (a, b) in inside {
                 uf.union(ClassId(a), ClassId(b));
             }
             uf.push();
-            uf.rollback(mark);
-            prop_assert_eq!(uf.log_len(), mark);
-            prop_assert_eq!(uf.find(ClassId(classes as u32)).0, classes as u32);
+            uf.pop_scope();
             for i in 0..12u32 {
                 prop_assert_eq!(uf.find(ClassId(i)).0, roots[i as usize]);
             }
-            // Sizes must come back too, or the next tie breaks the other way.
+            // Sizes have to come back too, or the next tie breaks the other way.
             let mut replay = seeded(12);
             for i in 0..12u32 {
                 replay.union(ClassId(i), ClassId(roots[i as usize]));

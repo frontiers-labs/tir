@@ -21,6 +21,20 @@ pub use engine::{ClassRef, Engine, Rows, Stats};
 pub use label::{Label, Labels};
 pub use unionfind::UnionFind;
 
+/// Whether `TIR_SAT_TRACE` asked for a saturation trace on stderr: every class
+/// minted (`A id node children`) and every merge (`U a b -> survivor`), plus
+/// whatever the drivers add.
+///
+/// The trace is how an engine change is localized. Two compilers built from
+/// different commits assign the same ids for as long as they agree, so the first
+/// differing line of the diff is the coordinates of the divergence — the round,
+/// the rule and the match that caused it — rather than an object file that
+/// merely came out different.
+pub fn trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("TIR_SAT_TRACE").is_some_and(|value| value != "0"))
+}
+
 /// An e-class. Only [`UnionFind::find`] turns one into its canonical form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClassId(pub u32);

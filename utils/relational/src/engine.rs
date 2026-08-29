@@ -72,6 +72,10 @@ pub struct Engine<L: Label> {
     changed_all: bool,
 
     scopes: Vec<Frame>,
+    /// Per open scope, the classes minted inside it. A popped scope's classes
+    /// keep their ids but stop being the scope's business, so this cannot be
+    /// read off the id range.
+    minted: Vec<Vec<ClassId>>,
     undo: Vec<Undo>,
     /// Scoped facts: canonical class -> the constant it is assumed to hold.
     assumed: FxHashMap<ClassId, L>,
@@ -79,6 +83,13 @@ pub struct Engine<L: Label> {
     /// Per open scope, the base reps grouped under their scoped rep; merged
     /// groups only. Cloned on push, so a nested frame keeps naming base reps.
     scope_members: Vec<FxHashMap<ClassId, Vec<ClassId>>>,
+    /// The read view of the innermost scope: [`Self::scope_members`] as of the
+    /// last refresh, which is a scope push, pop, or rebuild. Reading e-nodes
+    /// through a snapshot rather than the live partition is what makes a class
+    /// hold still while a round applies its matches — the order in which a
+    /// hypothesis's classes are then re-searched is observable, so the snapshot
+    /// is part of the contract, not an artifact of how it was aggregated.
+    view: FxHashMap<ClassId, Vec<ClassId>>,
 }
 
 /// Cumulative engine work, for the saturation counters.
@@ -95,7 +106,6 @@ struct Frame {
     classes: usize,
     edges: usize,
     undo: usize,
-    union_log: usize,
     pending: Vec<ClassId>,
     total_nodes: usize,
     num_classes: usize,
@@ -108,28 +118,9 @@ struct Frame {
 /// A field a scope overwrote, with the value to put back. Only logged while a
 /// scope is open.
 enum Undo {
-    ClassList {
-        class: u32,
-        head: u32,
-        tail: u32,
-        len: u32,
-    },
-    ParentList {
-        class: u32,
-        head: u32,
-        tail: u32,
-    },
-    RowNext {
-        row: u32,
-        next: u32,
-    },
-    EdgeNext {
-        edge: u32,
-        next: u32,
-    },
-    OpBucket {
-        op: u64,
-    },
+    ParentList { class: u32, head: u32, tail: u32 },
+    EdgeNext { edge: u32, next: u32 },
+    OpBucket { op: u64 },
 }
 
 impl<L: Label> Default for Engine<L> {
@@ -168,10 +159,12 @@ impl<L: Label> Engine<L> {
             changed_epoch: 1,
             changed_all: true,
             scopes: Vec::new(),
+            minted: Vec::new(),
             undo: Vec::new(),
             assumed: FxHashMap::default(),
             scope_assumed: Vec::new(),
             scope_members: Vec::new(),
+            view: FxHashMap::default(),
         }
     }
 
@@ -231,9 +224,15 @@ impl<L: Label> Engine<L> {
     /// survivor's. Extraction and the matcher break ties by this order, so it is
     /// part of the contract — a rebuild must not re-sort it.
     pub fn rows(&self, id: ClassId) -> Rows<'_, L> {
+        let root = self.find(id);
+        // A scope leaves the base class lists alone, so a scoped class is the
+        // concatenation of its members' lists, ascending.
+        let members = self.viewed_members(root);
         Rows {
             engine: self,
-            cursor: self.class_head[self.find(id).index()],
+            cursor: self.class_head[members.first().copied().unwrap_or(root).index()],
+            members,
+            next_member: 1,
         }
     }
 
@@ -244,7 +243,14 @@ impl<L: Label> Engine<L> {
     }
 
     pub fn class_len(&self, id: ClassId) -> usize {
-        self.class_len[self.find(id).index()] as usize
+        let root = self.find(id);
+        match self.viewed_members(root) {
+            [] => self.class_len[root.index()] as usize,
+            members => members
+                .iter()
+                .map(|m| self.class_len[m.index()] as usize)
+                .sum(),
+        }
     }
 
     /// Every live class, at the position of its lowest member: ascending id in
@@ -257,7 +263,7 @@ impl<L: Label> Engine<L> {
             if self.class_len[root.index()] == 0 {
                 return None;
             }
-            match self.scope_members(root) {
+            match self.viewed_members(root) {
                 [] => (root == id).then_some(id),
                 group => (Some(&id) == group.iter().min()).then_some(root),
             }
@@ -335,10 +341,15 @@ impl<L: Label> Engine<L> {
         }
         self.stats.merges += 1;
         let survivor = self.uf.union(ra, rb);
+        if crate::trace_enabled() {
+            eprintln!("U {} {} -> {}", ra.0, rb.0, survivor.0);
+        }
         let absorbed = if survivor == ra { rb } else { ra };
         self.rekey_assumption(absorbed, survivor);
-        self.splice_class(survivor, absorbed);
-        self.splice_parents(survivor, absorbed);
+        if !self.in_scope() {
+            self.splice_class(survivor, absorbed);
+            self.splice_parents(survivor, absorbed);
+        }
         if let Some(frame) = self.scope_members.last_mut() {
             let taken = frame.remove(&absorbed).unwrap_or_else(|| vec![absorbed]);
             frame
@@ -439,7 +450,6 @@ impl<L: Label> Engine<L> {
     /// once the scope pops. Canonicalization happens in a scratch buffer against
     /// a hash-cons that lives only as long as the rebuild.
     fn rebuild_scope(&mut self) {
-        self.sort_scope_members();
         let mut memo: FxHashMap<u64, Vec<(LabelId, Vec<ClassId>, ClassId)>> = FxHashMap::default();
         let mut scratch: Vec<ClassId> = Vec::new();
         while !self.pending.is_empty() {
@@ -473,18 +483,21 @@ impl<L: Label> Engine<L> {
                 }
             }
         }
-        self.sort_scope_members();
+        self.uf.flatten();
+        self.refresh_view();
     }
 
-    /// The scope partition's groups, ascending. A group's members are what a
-    /// side table keyed by base reps is aggregated over, and what
-    /// [`Self::class_ids`] positions the group by, so the order is observable.
-    fn sort_scope_members(&mut self) {
-        if let Some(frame) = self.scope_members.last_mut() {
-            for members in frame.values_mut() {
-                members.sort_unstable();
-                members.dedup();
-            }
+    /// Re-aggregate the read view from the innermost scope frame, whose groups
+    /// it sorts in place.
+    fn refresh_view(&mut self) {
+        self.view.clear();
+        let Some(frame) = self.scope_members.last_mut() else {
+            return;
+        };
+        for (&rep, members) in frame.iter_mut() {
+            members.sort_unstable();
+            members.dedup();
+            self.view.insert(rep, members.clone());
         }
     }
 
@@ -515,12 +528,21 @@ impl<L: Label> Engine<L> {
             self.memo_insert(key, row);
         }
         self.op_rows.entry(op_key).or_default().push(row);
-        if self.in_scope() {
+        if let Some(minted) = self.minted.last_mut() {
+            minted.push(class);
             self.undo.push(Undo::OpBucket { op: op_key });
         }
         self.total_nodes += 1;
         self.num_classes += 1;
         self.stats.adds += 1;
+        if crate::trace_enabled() {
+            eprintln!(
+                "A {} {:?} {:?}",
+                class.0,
+                self.node(row),
+                self.children(row)
+            );
+        }
         self.log_change(class);
         class
     }
@@ -604,37 +626,20 @@ impl<L: Label> Engine<L> {
 
     // ---- intrusive lists --------------------------------------------------
 
+    /// Move the absorbed class's rows onto the end of the survivor's list, which
+    /// is where the scalar engine's `nodes.append` put them. Only outside a
+    /// scope: a scope leaves the base lists alone and aggregates over members.
     fn splice_class(&mut self, survivor: ClassId, absorbed: ClassId) {
         let (head, tail, len) = (
             self.class_head[absorbed.index()],
             self.class_tail[absorbed.index()],
             self.class_len[absorbed.index()],
         );
-        if self.in_scope() {
-            self.undo.push(Undo::ClassList {
-                class: absorbed.0,
-                head,
-                tail,
-                len,
-            });
-            self.undo.push(Undo::ClassList {
-                class: survivor.0,
-                head: self.class_head[survivor.index()],
-                tail: self.class_tail[survivor.index()],
-                len: self.class_len[survivor.index()],
-            });
-        }
         if head != NONE {
             let survivor_tail = self.class_tail[survivor.index()];
             if survivor_tail == NONE {
                 self.class_head[survivor.index()] = head;
             } else {
-                if self.in_scope() {
-                    self.undo.push(Undo::RowNext {
-                        row: survivor_tail,
-                        next: self.row_next[survivor_tail as usize],
-                    });
-                }
                 self.row_next[survivor_tail as usize] = head;
             }
             self.class_tail[survivor.index()] = tail;
@@ -650,29 +655,11 @@ impl<L: Label> Engine<L> {
             self.parent_head[absorbed.index()],
             self.parent_tail[absorbed.index()],
         );
-        if self.in_scope() {
-            self.undo.push(Undo::ParentList {
-                class: absorbed.0,
-                head,
-                tail,
-            });
-            self.undo.push(Undo::ParentList {
-                class: survivor.0,
-                head: self.parent_head[survivor.index()],
-                tail: self.parent_tail[survivor.index()],
-            });
-        }
         if head != NONE {
             let survivor_tail = self.parent_tail[survivor.index()];
             if survivor_tail == NONE {
                 self.parent_head[survivor.index()] = head;
             } else {
-                if self.in_scope() {
-                    self.undo.push(Undo::EdgeNext {
-                        edge: survivor_tail,
-                        next: self.edge_next[survivor_tail as usize],
-                    });
-                }
                 self.edge_next[survivor_tail as usize] = head;
             }
             self.parent_tail[survivor.index()] = tail;
@@ -712,9 +699,12 @@ impl<L: Label> Engine<L> {
     }
 
     fn parent_edges(&self, class: ClassId) -> Edges<'_, L> {
+        let members = self.scope_members(class);
         Edges {
             engine: self,
-            cursor: self.parent_head[class.index()],
+            cursor: self.parent_head[members.first().copied().unwrap_or(class).index()],
+            members,
+            next_member: 1,
         }
     }
 
@@ -853,16 +843,18 @@ impl<L: Label> Engine<L> {
             classes: self.uf.len(),
             edges: self.edge_row.len(),
             undo: self.undo.len(),
-            union_log: self.uf.log_len(),
             pending: self.pending.clone(),
             total_nodes: self.total_nodes,
             num_classes: self.num_classes,
             changed: self.changed.clone(),
             changed_all: self.changed_all,
         });
+        self.uf.push_scope();
         self.scope_memo.push(FxHashMap::default());
         self.scope_assumed.push(Vec::new());
         self.scope_members.push(members);
+        self.minted.push(Vec::new());
+        self.refresh_view();
     }
 
     /// Leave the scope, discarding its unions, its rows, and its assumptions;
@@ -877,21 +869,10 @@ impl<L: Label> Engine<L> {
         }
         for entry in self.undo.drain(frame.undo..).rev() {
             match entry {
-                Undo::ClassList {
-                    class,
-                    head,
-                    tail,
-                    len,
-                } => {
-                    self.class_head[class as usize] = head;
-                    self.class_tail[class as usize] = tail;
-                    self.class_len[class as usize] = len;
-                }
                 Undo::ParentList { class, head, tail } => {
                     self.parent_head[class as usize] = head;
                     self.parent_tail[class as usize] = tail;
                 }
-                Undo::RowNext { row, next } => self.row_next[row as usize] = next,
                 Undo::EdgeNext { edge, next } => self.edge_next[edge as usize] = next,
                 Undo::OpBucket { op } => {
                     if let Some(bucket) = self.op_rows.get_mut(&op) {
@@ -903,7 +884,7 @@ impl<L: Label> Engine<L> {
                 }
             }
         }
-        self.uf.rollback(frame.union_log);
+        self.uf.pop_scope();
         self.row_label.truncate(frame.rows);
         self.row_class.truncate(frame.rows);
         self.row_start.truncate(frame.rows + 1);
@@ -924,9 +905,11 @@ impl<L: Label> Engine<L> {
         }
         self.scope_memo.pop();
         self.scope_members.pop();
+        self.minted.pop();
         self.pending = frame.pending;
         self.total_nodes = frame.total_nodes;
         self.num_classes = frame.num_classes;
+        self.refresh_view();
         self.restore_changed(frame.changed, frame.changed_all);
     }
 
@@ -940,6 +923,13 @@ impl<L: Label> Engine<L> {
         }
         self.changed = changed;
         self.changed_all = all;
+    }
+
+    /// The groups of the read view: [`Self::scope_members`] as of the last
+    /// refresh. Empty for a class the view does not merge, which is then read
+    /// straight from its own row list.
+    fn viewed_members(&self, id: ClassId) -> &[ClassId] {
+        self.view.get(&id).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// The base class ids the open scope groups under the scoped-canonical `id`.
@@ -958,11 +948,14 @@ impl<L: Label> Engine<L> {
     /// the ones minted inside them, and transitively every class holding a node
     /// with such a child. Ascending id. Empty with no scope open.
     pub fn scope_dirty(&self) -> Vec<ClassId> {
-        let Some(base) = self.scopes.first().map(|frame| frame.classes as u32) else {
+        if !self.in_scope() {
             return Vec::new();
-        };
-        let seeds: Vec<ClassId> = (base..self.uf.len() as u32)
-            .map(ClassId)
+        }
+        let seeds: Vec<ClassId> = self
+            .minted
+            .iter()
+            .flatten()
+            .copied()
             .chain(self.assumed.keys().copied())
             .chain(
                 self.scope_members
@@ -1057,10 +1050,13 @@ impl<'a, L: Label> ClassRef<'a, L> {
     }
 }
 
-/// Walks a class's rows through the intrusive membership list.
+/// Walks a class's rows: its own intrusive membership list, or, under a scope
+/// that merged it, its members' lists back to back.
 pub struct Rows<'a, L: Label> {
     engine: &'a Engine<L>,
     cursor: u32,
+    members: &'a [ClassId],
+    next_member: usize,
 }
 
 impl<L: Label> Clone for Rows<'_, L> {
@@ -1068,6 +1064,8 @@ impl<L: Label> Clone for Rows<'_, L> {
         Self {
             engine: self.engine,
             cursor: self.cursor,
+            members: self.members,
+            next_member: self.next_member,
         }
     }
 }
@@ -1076,8 +1074,10 @@ impl<L: Label> Iterator for Rows<'_, L> {
     type Item = RowId;
 
     fn next(&mut self) -> Option<RowId> {
-        if self.cursor == NONE {
-            return None;
+        while self.cursor == NONE {
+            let member = *self.members.get(self.next_member)?;
+            self.next_member += 1;
+            self.cursor = self.engine.class_head[member.index()];
         }
         let row = RowId(self.cursor);
         self.cursor = self.engine.row_next[row.index()];
@@ -1085,17 +1085,22 @@ impl<L: Label> Iterator for Rows<'_, L> {
     }
 }
 
+/// The same walk over parent back-edges.
 struct Edges<'a, L: Label> {
     engine: &'a Engine<L>,
     cursor: u32,
+    members: &'a [ClassId],
+    next_member: usize,
 }
 
 impl<L: Label> Iterator for Edges<'_, L> {
     type Item = u32;
 
     fn next(&mut self) -> Option<u32> {
-        if self.cursor == NONE {
-            return None;
+        while self.cursor == NONE {
+            let member = *self.members.get(self.next_member)?;
+            self.next_member += 1;
+            self.cursor = self.engine.parent_head[member.index()];
         }
         let edge = self.cursor;
         self.cursor = self.engine.edge_next[edge as usize];

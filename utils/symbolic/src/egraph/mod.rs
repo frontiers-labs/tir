@@ -13,6 +13,7 @@ mod telemetry;
 
 use std::ops::{Deref, DerefMut};
 
+pub use tir_relational::trace_enabled;
 pub use tir_relational::{ClassId as Id, ClassRef as EClass, Label as ENode};
 
 pub use extract::*;
@@ -129,6 +130,9 @@ impl<L: ENode> EGraph<L> {
                 .collect();
             for (rule, matches) in &searched {
                 for m in matches {
+                    if trace_enabled() {
+                        eprintln!("M {} {}", rule.name, self.find(m.root).index());
+                    }
                     stats.apply(self, |eg| rule.apply_match(eg, m));
                 }
             }
