@@ -63,6 +63,25 @@ impl Delta {
     }
 }
 
+/// A law the driver can run: a rule stated as a query with a head, or — until
+/// every source is lowered — a pattern with an applier.
+pub enum Law<N: ENode, S> {
+    Query(Box<tir_relational::Rule<N>>),
+    Rewrite(Box<Rewrite<N, S>>),
+}
+
+/// The same, borrowed: what the round loop iterates.
+enum LawRef<'a, N: ENode, S> {
+    Query(&'a tir_relational::Rule<N>),
+    Rewrite(&'a Rewrite<N, S>),
+}
+
+/// What one law found in one round.
+enum Found<'a, N: ENode, S> {
+    Query(&'a tir_relational::Rule<N>, Vec<tir_relational::Match>),
+    Rewrite(&'a Rewrite<N, S>, Vec<EMatch<S>>),
+}
+
 /// The saturating e-graph: [`tir_relational::Engine`] plus a rule driver.
 pub struct EGraph<L: ENode>(tir_relational::Engine<L>);
 
@@ -104,8 +123,38 @@ impl<L: ENode> EGraph<L> {
         L: 'a,
         S: Clone + PartialEq + 'a,
     {
+        let laws: Vec<LawRef<'_, L, S>> = rules.into_iter().map(LawRef::Rewrite).collect();
+        self.run(&laws, &tir_relational::NoExterns, iter_limit, node_limit);
+    }
+
+    /// The same over a mixed rule set, with the host functions its guards call.
+    pub fn saturate_laws<S>(
+        &mut self,
+        laws: &[Law<L, S>],
+        externs: &dyn tir_relational::Externs<L>,
+        iter_limit: usize,
+        node_limit: usize,
+    ) where
+        S: Clone + PartialEq,
+    {
+        let laws: Vec<LawRef<'_, L, S>> = laws
+            .iter()
+            .map(|law| match law {
+                Law::Query(rule) => LawRef::Query(rule),
+                Law::Rewrite(rewrite) => LawRef::Rewrite(rewrite),
+            })
+            .collect();
+        self.run(&laws, externs, iter_limit, node_limit);
+    }
+
+    fn run<S: Clone + PartialEq>(
+        &mut self,
+        laws: &[LawRef<'_, L, S>],
+        externs: &dyn tir_relational::Externs<L>,
+        iter_limit: usize,
+        node_limit: usize,
+    ) {
         let timer = Timer::start();
-        let rules: Vec<&Rewrite<L, S>> = rules.into_iter().collect();
         let mut delta = self.take_changed().map(Delta::new);
         let mut iters = 0;
         loop {
@@ -119,25 +168,55 @@ impl<L: ENode> EGraph<L> {
             let before = (self.num_classes(), size);
 
             let mut stats = RoundStats::start(self, delta.as_ref());
-            let searched: Vec<_> = rules
-                .iter()
-                .map(|rule| {
-                    let narrow = rule.unconditional() && delta.is_some();
-                    let frontier = delta.as_mut().filter(|_| rule.cone_bounded());
-                    let roots = rule.lhs.round_roots(self, None, frontier);
-                    stats.searched(roots.len(), delta.as_ref());
-                    let matches = rule
-                        .lhs
-                        .search_roots_delta(self, roots, &|_, _| true, narrow);
-                    (*rule, matches)
-                })
-                .collect();
-            for (rule, matches) in &searched {
-                for m in matches {
-                    if trace_enabled() {
-                        eprintln!("M {} {}", rule.name, self.find(m.root).index());
+            let mut found: Vec<Found<'_, L, S>> = Vec::new();
+            for law in laws {
+                match law {
+                    LawRef::Rewrite(rule) => {
+                        let narrow = rule.unconditional() && delta.is_some();
+                        let frontier = delta.as_mut().filter(|_| rule.cone_bounded());
+                        let roots = rule.lhs.round_roots(self, None, frontier);
+                        stats.searched(roots.len(), delta.as_ref());
+                        let matches =
+                            rule.lhs
+                                .search_roots_delta(self, roots, &|_, _| true, narrow);
+                        found.push(Found::Rewrite(rule, matches));
                     }
-                    stats.apply(self, |eg| rule.apply_match(eg, m));
+                    LawRef::Query(rule) => {
+                        // Everything the rule reads is an atom or a guard over
+                        // what an atom bound, so both narrowings are free: no
+                        // hand-asserted licence, and a match with no new row or
+                        // fact is one the previous round applied.
+                        let mut roots = rule.plan.roots(self);
+                        if let Some(delta) = delta.as_mut() {
+                            let frontier = delta.at(self, rule.plan.height());
+                            roots.retain(|&root| frontier.binary_search(&self.find(root)).is_ok());
+                        }
+                        stats.searched(roots.len(), delta.as_ref());
+                        let matches =
+                            rule.plan
+                                .search(self, roots, &|_, _| true, delta.is_some(), externs);
+                        found.push(Found::Query(rule, matches));
+                    }
+                }
+            }
+            for law in &found {
+                match law {
+                    Found::Rewrite(rule, matches) => {
+                        for m in matches {
+                            if trace_enabled() {
+                                eprintln!("M {} {}", rule.name, self.find(m.root).index());
+                            }
+                            stats.apply(self, |eg| rule.apply_match(eg, m));
+                        }
+                    }
+                    Found::Query(rule, matches) => {
+                        for m in matches {
+                            if trace_enabled() {
+                                eprintln!("M {} {}", rule.name, self.find(m.root).index());
+                            }
+                            stats.apply(self, |eg| eg.apply_head(&rule.head, m));
+                        }
+                    }
                 }
             }
             self.rebuild();

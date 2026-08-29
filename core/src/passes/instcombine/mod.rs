@@ -117,8 +117,12 @@ impl Driver<'_> {
         region: RegionId,
         rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
-        self.eg
-            .saturate(&self.ruleset.rewrites, ITER_LIMIT, NODE_LIMIT);
+        self.eg.saturate_laws(
+            &self.ruleset.rewrites,
+            &self.ruleset.interpretation,
+            ITER_LIMIT,
+            NODE_LIMIT,
+        );
         crate::memstats::egraph_census("instcombine", &self.eg);
         let extraction = self.eg.extract_best(|_, node| cost(node));
 
@@ -404,8 +408,12 @@ impl Driver<'_> {
                     self.eg.union(port.head, port.init);
                 }
                 self.eg.rebuild();
-                self.eg
-                    .saturate(&self.ruleset.rewrites, ITER_LIMIT, NODE_LIMIT);
+                self.eg.saturate_laws(
+                    &self.ruleset.rewrites,
+                    &self.ruleset.interpretation,
+                    ITER_LIMIT,
+                    NODE_LIMIT,
+                );
                 self.hypothesize_within(loops, order, Some(holder.op));
                 let refuted: Vec<bool> = hypotheses
                     .iter()

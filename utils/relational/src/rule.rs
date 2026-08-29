@@ -53,8 +53,6 @@ pub struct Rule<L> {
     pub name: String,
     pub plan: Plan<L>,
     pub head: Vec<HeadOp<L>>,
-    /// Applied once after the iterative fixpoint instead of participating in it.
-    pub post_saturation: bool,
 }
 
 impl<L: Label> Engine<L> {
@@ -124,7 +122,7 @@ mod tests {
                     template: Term::op("f", &[ClassId(0), ClassId(0)]),
                     args: SmallVec::from_slice(&[1, 2]),
                     class: 0,
-                    reads: SmallVec::new(),
+                    row: None,
                 }],
             )),
             head: vec![
@@ -135,7 +133,6 @@ mod tests {
                 },
                 HeadOp::Union(0, 3),
             ],
-            post_saturation: false,
         }
     }
 

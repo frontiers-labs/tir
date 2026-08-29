@@ -343,6 +343,16 @@ impl SemNode {
     }
 }
 
+/// The fields of a [`SemNode`] a rule reads off a label or fills into one.
+pub mod field {
+    /// The result type, as [`crate::TypeId::number`].
+    pub const TY: u32 = 0;
+    /// An integer literal's value.
+    pub const INT_VALUE: u32 = 1;
+    /// An integer literal's width.
+    pub const INT_WIDTH: u32 = 2;
+}
+
 pub fn template_node(
     kind: SymKind,
     payload: Option<SymPayload<ValueId>>,
@@ -441,6 +451,37 @@ impl ENode for SemNode {
     /// seeds the engine's constant column.
     fn is_constant(&self) -> bool {
         self.sym() == Some(SymKind::Constant) && self.int().is_some()
+    }
+
+    fn type_key(&self) -> Option<u64> {
+        self.ty.map(|ty| ty.number() as u64)
+    }
+
+    fn scalar(&self, field: u32) -> Option<u64> {
+        match field {
+            field::TY => self.type_key(),
+            field::INT_VALUE => self.int().map(APInt::to_u64),
+            field::INT_WIDTH => self.int().map(|value| value.width() as u64),
+            _ => None,
+        }
+    }
+
+    fn fill(template: &Self, fills: &[(u32, u64)]) -> Option<Self> {
+        let mut node = template.clone();
+        let mut value = node.int().map(APInt::to_u64);
+        let mut width = node.int().map(APInt::width);
+        for &(field, word) in fills {
+            match field {
+                field::TY => node.ty = Some(TypeId::from_number(word as u32)),
+                field::INT_VALUE => value = Some(word),
+                field::INT_WIDTH => width = Some(word as u32),
+                _ => return None,
+            }
+        }
+        if let (Some(value), Some(width)) = (value, width) {
+            node.payload = Some(SemPayload::Expr(SymPayload::Int(APInt::new(width, value))));
+        }
+        Some(node)
     }
 
     fn from_int(value: APInt) -> Option<Self> {

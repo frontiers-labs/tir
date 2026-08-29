@@ -12,6 +12,7 @@ doctest = false
 [dependencies]
 tir-macros.workspace = true
 tir-graph.workspace = true
+tir-relational.workspace = true
 tir-symbolic.workspace = true
 tir-adt.workspace = true
 tir-arrange.workspace = true

@@ -32,20 +32,22 @@ pub enum ColumnId {
     Type,
 }
 
-/// The host's primitive functions. A guard may only read bound scalars, never
-/// the graph — that is what makes a match's existence a function of its atoms,
-/// and so what makes the delta exact.
-pub trait Externs {
-    /// `None` fails the match.
-    fn call(&self, id: ExternId, args: &[u64]) -> Option<u64>;
+/// The host's primitive functions over what a match bound: labels an atom
+/// matched or a fact named, and words a guard computed. A guard never sees the
+/// graph — a label is an e-node stripped of its children, so there is nowhere to
+/// navigate from it — which is what makes a match's existence a function of its
+/// atoms, and so what makes the delta exact.
+pub trait Externs<L> {
+    /// Fill `out` and report success; failure fails the match.
+    fn call(&self, id: ExternId, labels: &[&L], args: &[u64], out: &mut [u64]) -> bool;
 }
 
 /// No externs: every call fails.
 pub struct NoExterns;
 
-impl Externs for NoExterns {
-    fn call(&self, _id: ExternId, _args: &[u64]) -> Option<u64> {
-        None
+impl<L> Externs<L> for NoExterns {
+    fn call(&self, _id: ExternId, _labels: &[&L], _args: &[u64], _out: &mut [u64]) -> bool {
+        false
     }
 }
 
@@ -88,6 +90,23 @@ impl Expr {
     }
 }
 
+/// A term a guard reads: the e-node a row atom matched, or the label a fact
+/// named. A row keeps everything the node was interned with — its provenance,
+/// which label identity drops — so the two are not interchangeable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Row(Scalar),
+    Label(Scalar),
+}
+
+impl Source {
+    fn slot(self) -> Scalar {
+        match self {
+            Source::Row(slot) | Source::Label(slot) => slot,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmp {
     Lt,
@@ -104,15 +123,17 @@ pub enum Guard {
     /// width reach the guards as words. The engine owns the label table; this is
     /// a decode, not a look at the graph.
     Read {
-        label: Scalar,
+        term: Source,
         field: Field,
         out: Scalar,
     },
-    /// A host function; `out` binds its result, and `None` fails the match.
+    /// A host function over the labels and words named by `labels` and `args`;
+    /// it binds `out`, and failing fails the match.
     Extern {
         call: ExternId,
-        args: SmallVec<[Scalar; 4]>,
-        out: Option<Scalar>,
+        terms: SmallVec<[Source; 2]>,
+        args: SmallVec<[Expr; 4]>,
+        out: SmallVec<[Scalar; 2]>,
     },
 }
 
@@ -124,17 +145,22 @@ impl Guard {
                 a.reads(&mut out);
                 b.reads(&mut out);
             }
-            Guard::Read { label, .. } => out.push(*label),
-            Guard::Extern { args, .. } => out.extend(args.iter().copied()),
+            Guard::Read { term, .. } => out.push(term.slot()),
+            Guard::Extern { terms, args, .. } => {
+                out.extend(terms.iter().map(|term| term.slot()));
+                for arg in args {
+                    arg.reads(&mut out);
+                }
+            }
         }
         out
     }
 
-    fn writes(&self) -> Option<Scalar> {
+    fn writes(&self) -> SmallVec<[Scalar; 2]> {
         match self {
-            Guard::Cmp(..) => None,
-            Guard::Read { out, .. } | Guard::Extern { out: Some(out), .. } => Some(*out),
-            Guard::Extern { out: None, .. } => None,
+            Guard::Cmp(..) => SmallVec::new(),
+            Guard::Read { out, .. } => SmallVec::from_slice(&[*out]),
+            Guard::Extern { out, .. } => out.clone(),
         }
     }
 }
@@ -142,12 +168,13 @@ impl Guard {
 #[derive(Clone, Debug)]
 pub enum Atom<L> {
     /// A row of `class` whose label matches `template` and whose children bind
-    /// `args`, one per operand. `reads` pulls scalars off the matched label.
+    /// `args`, one per operand. `row` binds the matched row, whose e-node a
+    /// guard reads fields off or hands to a host function.
     Node {
         template: L,
         args: SmallVec<[Var; 4]>,
         class: Var,
-        reads: SmallVec<[(Field, Scalar); 2]>,
+        row: Option<Scalar>,
     },
     /// `class` holds `value` as a childless row, or is assumed to evaluate to it.
     Literal { value: L, class: Var },
@@ -172,7 +199,7 @@ impl<L> Atom<L> {
     /// The scalars this atom binds.
     fn writes(&self) -> SmallVec<[Scalar; 2]> {
         match self {
-            Atom::Node { reads, .. } => reads.iter().map(|&(_, slot)| slot).collect(),
+            Atom::Node { row, .. } => row.iter().copied().collect(),
             Atom::Literal { .. } => SmallVec::new(),
             Atom::Fact { value, .. } => SmallVec::from_slice(&[*value]),
         }
@@ -220,6 +247,7 @@ pub struct Match {
 pub struct Plan<L> {
     query: Query<L>,
     steps: Vec<Step>,
+    height: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,13 +270,15 @@ impl<L: Label> Plan<L> {
         let mut steps = Vec::with_capacity(query.atoms.len() + query.guards.len());
         let mut taken = vec![false; query.atoms.len()];
         let mut checked = vec![false; query.guards.len()];
+        let mut depth = vec![0usize; query.vars as usize];
+        let mut height = 0usize;
         loop {
             let guard = (0..query.guards.len()).find(|&i| {
                 !checked[i] && query.guards[i].reads().iter().all(|&s| known[s as usize])
             });
             if let Some(guard) = guard {
                 checked[guard] = true;
-                if let Some(out) = query.guards[guard].writes() {
+                for out in query.guards[guard].writes() {
                     known[out as usize] = true;
                 }
                 steps.push(Step::Guard(guard));
@@ -262,9 +292,12 @@ impl<L: Label> Plan<L> {
                 .expect("every atom's class is reachable from the root");
             taken[next] = true;
             steps.push(Step::Atom(next));
+            let below = depth[query.atoms[next].class() as usize] + 1;
             if let Atom::Node { args, .. } = &query.atoms[next] {
+                height = height.max(below);
                 for &arg in args {
                     bound[arg as usize] = true;
+                    depth[arg as usize] = depth[query.atoms[next].class() as usize] + 1;
                 }
             }
             for slot in query.atoms[next].writes() {
@@ -275,7 +308,11 @@ impl<L: Label> Plan<L> {
             checked.iter().all(|&c| c),
             "every guard reads scalars the atoms bind"
         );
-        Self { query, steps }
+        Self {
+            query,
+            steps,
+            height,
+        }
     }
 
     pub fn query(&self) -> &Query<L> {
@@ -285,6 +322,27 @@ impl<L: Label> Plan<L> {
     /// The atoms and guards in evaluation order.
     pub fn steps(&self) -> &[Step] {
         &self.steps
+    }
+
+    /// Template levels below the root this plan binds. A class outside the
+    /// frontier at this depth has an unchanged cone down to it, so its matches
+    /// are the previous round's.
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    /// The classes the root atom can match at: those holding its operator, or
+    /// every class when the root binds no row.
+    pub fn roots(&self, eg: &Engine<L>) -> Vec<ClassId> {
+        match self
+            .query
+            .atoms
+            .iter()
+            .find(|atom| atom.class() == self.query.root)
+        {
+            Some(Atom::Node { template, .. }) => eg.classes_with_op(template.op_key()),
+            _ => eg.class_ids().collect(),
+        }
     }
 
     /// Every match at `roots`, each root canonicalized and visited once.
@@ -300,7 +358,7 @@ impl<L: Label> Plan<L> {
         roots: impl IntoIterator<Item = ClassId>,
         allowed: &dyn Fn(Var, ClassId) -> bool,
         only_new: bool,
-        externs: &dyn Externs,
+        externs: &dyn Externs<L>,
     ) -> Vec<Match> {
         let mut eval = Eval {
             eg,
@@ -362,9 +420,9 @@ impl<L: Label> Plan<L> {
             Atom::Node {
                 template,
                 args,
-                reads,
+                row,
                 ..
-            } => self.node(eval, root, index, template, args, reads, class),
+            } => self.node(eval, root, index, template, args, *row, class),
         }
     }
 
@@ -376,7 +434,7 @@ impl<L: Label> Plan<L> {
         index: usize,
         template: &L,
         args: &[Var],
-        reads: &[(Field, Scalar)],
+        bind_row: Option<Scalar>,
         class: ClassId,
     ) {
         let eg = eval.eg;
@@ -385,9 +443,9 @@ impl<L: Label> Plan<L> {
             if children.len() != args.len() || !template.matches_template(eg.node(row)) {
                 continue;
             }
-            let Some(()) = eval.read(reads, row) else {
-                continue;
-            };
+            if let Some(slot) = bind_row {
+                eval.scalars[slot as usize] = row.0 as u64;
+            }
             // A commutative binary operator matches in both operand orders.
             let orders = if children.len() == 2 && eg.node(row).commutative() {
                 2
@@ -451,7 +509,7 @@ impl<L: Label> Plan<L> {
 /// State one [`Plan::search`] threads through the loop nest.
 struct Eval<'a, L: Label> {
     eg: &'a Engine<L>,
-    externs: &'a dyn Externs,
+    externs: &'a dyn Externs<L>,
     allowed: &'a dyn Fn(Var, ClassId) -> bool,
     only_new: bool,
     bound: SmallVec<[Option<ClassId>; 8]>,
@@ -463,7 +521,7 @@ struct Eval<'a, L: Label> {
     out: Vec<Match>,
 }
 
-impl<L: Label> Eval<'_, L> {
+impl<'a, L: Label> Eval<'a, L> {
     /// Bind `args` to a row's children, or report the row inconsistent with what
     /// is already bound. Whatever it bound before failing is on the trail.
     fn bind(&mut self, args: &[Var], children: &[ClassId], order: usize) -> bool {
@@ -489,6 +547,15 @@ impl<L: Label> Eval<'_, L> {
         true
     }
 
+    /// The e-node a scalar names.
+    fn term(&self, term: Source) -> Option<&'a L> {
+        let word = self.scalars[term.slot() as usize];
+        match term {
+            Source::Row(_) => Some(self.eg.node(crate::RowId(word as u32))),
+            Source::Label(_) => self.eg.label_node(crate::LabelId(word as u32)),
+        }
+    }
+
     /// Whether `guard` holds of the scalars bound so far, binding its own
     /// output if it does.
     fn holds(&mut self, guard: &Guard) -> bool {
@@ -504,37 +571,41 @@ impl<L: Label> Eval<'_, L> {
                     Cmp::Ne => a != b,
                 }
             }
-            Guard::Read { label, field, out } => {
-                let label = crate::LabelId(self.scalars[*label as usize] as u32);
-                let Some(value) = self.eg.label_scalar(label, *field) else {
+            Guard::Read { term, field, out } => {
+                let Some(value) = self.term(*term).and_then(|node| node.scalar(*field)) else {
                     return false;
                 };
                 self.scalars[*out as usize] = value;
                 true
             }
-            Guard::Extern { call, args, out } => {
-                let args: SmallVec<[u64; 4]> = args
-                    .iter()
-                    .map(|&slot| self.scalars[slot as usize])
-                    .collect();
-                let Some(value) = self.externs.call(*call, &args) else {
+            Guard::Extern {
+                call,
+                terms,
+                args,
+                out,
+            } => {
+                let Some(terms): Option<SmallVec<[&L; 2]>> =
+                    terms.iter().map(|&term| self.term(term)).collect()
+                else {
                     return false;
                 };
-                if let Some(slot) = out {
-                    self.scalars[*slot as usize] = value;
+                let Some(args): Option<SmallVec<[u64; 4]>> = args
+                    .iter()
+                    .map(|arg| arg.eval(&self.scalars).map(|value| value as u64))
+                    .collect()
+                else {
+                    return false;
+                };
+                let mut values: SmallVec<[u64; 2]> = SmallVec::from_elem(0, out.len());
+                if !self.externs.call(*call, &terms, &args, &mut values) {
+                    return false;
+                }
+                for (&slot, value) in out.iter().zip(values) {
+                    self.scalars[slot as usize] = value;
                 }
                 true
             }
         }
-    }
-
-    /// Pull `reads` off a matched row's label. `None` when the label has no such
-    /// field, which fails the atom.
-    fn read(&mut self, reads: &[(Field, Scalar)], row: crate::RowId) -> Option<()> {
-        for &(field, slot) in reads {
-            self.scalars[slot as usize] = self.eg.node(row).scalar(field)?;
-        }
-        Some(())
     }
 
     fn unbind(&mut self, mark: usize) {
@@ -555,7 +626,7 @@ mod tests {
             template,
             args: args.iter().copied().collect(),
             class,
-            reads: SmallVec::new(),
+            row: None,
         }
     }
 
@@ -576,6 +647,7 @@ mod tests {
     fn plan_steps_the_root_atom_first_then_what_it_bound() {
         let plan = Plan::compile(f_of_g());
         assert_eq!(plan.steps(), &[Step::Atom(1), Step::Atom(0)]);
+        assert_eq!(plan.height(), 2);
     }
 
     #[test]
@@ -664,7 +736,7 @@ mod tests {
             ],
             guards: vec![
                 Guard::Read {
-                    label: 0,
+                    term: Source::Label(0),
                     field: 0,
                     out: 1,
                 },

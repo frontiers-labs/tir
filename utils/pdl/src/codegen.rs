@@ -84,7 +84,7 @@ pub fn generate(file: &File) -> Result<String, Vec<Diagnostic>> {
 
     format_rust(quote! {
         pub(super) fn generated_ruleset(context: &Context) -> Ruleset {
-            let mut ruleset = Ruleset::new();
+            let mut ruleset = Ruleset::new(context);
             #(#initializers)*
             ruleset
         }

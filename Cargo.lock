@@ -2109,6 +2109,7 @@ dependencies = [
  "tir-macros",
  "tir-pbqp",
  "tir-pdl",
+ "tir-relational",
  "tir-symbolic",
 ]
 

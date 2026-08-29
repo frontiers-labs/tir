@@ -79,7 +79,7 @@ pub struct Pattern<N: ENode, S> {
     /// The query this pattern is, compiled on first search and dropped by any
     /// edit. `None` inside once the language turns out to have no term for a
     /// literal the pattern demands, which no graph can match.
-    lowered: OnceLock<Option<Lowered<N>>>,
+    lowered: OnceLock<Option<Box<Lowered<N>>>>,
 }
 
 /// A pattern as the engine evaluates it: one query variable per pattern node, so
@@ -228,7 +228,9 @@ impl<N: ENode, S: PartialEq> Pattern<N, S> {
     /// The compiled query, or `None` when a literal the pattern demands has no
     /// term in the language — a pattern no graph can match.
     fn lowered(&self) -> Option<&Lowered<N>> {
-        self.lowered.get_or_init(|| self.lower()).as_ref()
+        self.lowered
+            .get_or_init(|| self.lower().map(Box::new))
+            .as_deref()
     }
 
     fn lower(&self) -> Option<Lowered<N>> {
@@ -251,11 +253,11 @@ impl<N: ENode, S: PartialEq> Pattern<N, S> {
             &mut atoms,
         )?;
         Some(Lowered {
-            plan: Plan::compile(Query {
-                vars: self.nodes.len() as u32,
-                root: alias[self.root.index()].0,
+            plan: Plan::compile(Query::tree(
+                self.nodes.len() as u32,
+                alias[self.root.index()].0,
                 atoms,
-            }),
+            )),
             captures,
             alias,
             shared,
@@ -330,6 +332,7 @@ impl<N: ENode, S: PartialEq> Pattern<N, S> {
                         .map(|&child| alias[child.index()].0)
                         .collect(),
                     class: node.0,
+                    row: None,
                 });
                 for &child in template.children() {
                     self.emit(child, seen, alias, atoms)?;
@@ -419,7 +422,7 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
         };
         lowered
             .plan
-            .search(eg, roots, &ask, only_new)
+            .search(eg, roots, &ask, only_new, &tir_relational::NoExterns)
             .into_iter()
             .map(|matched| {
                 let mut bindings = matched.bindings;

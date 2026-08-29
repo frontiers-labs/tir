@@ -25,7 +25,7 @@ pub use engine::{ClassRef, Engine, Rows, Stats};
 pub use label::Label;
 pub use query::{
     Atom, Cmp, ColumnId, Expr, ExternId, Externs, Field, Guard, Match, NoExterns, Plan, Query,
-    Scalar, Step, Var,
+    Scalar, Source, Step, Var,
 };
 pub use rule::{HeadOp, LabelFill, Rule};
 pub use unionfind::UnionFind;

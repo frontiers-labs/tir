@@ -962,9 +962,9 @@ impl<L: Label> Engine<L> {
         self.types.get(self.find(class))
     }
 
-    /// A field of an interned label, as one word.
-    pub fn label_scalar(&self, label: LabelId, field: crate::Field) -> Option<u64> {
-        self.labels.node(label).scalar(field)
+    /// The node interned under `label`.
+    pub fn label_node(&self, label: LabelId) -> Option<&L> {
+        (label.index() < self.labels.len()).then(|| self.labels.node(label))
     }
 
     /// `class`'s value in `column`, as one word.
