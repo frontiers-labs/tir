@@ -60,6 +60,10 @@ pub enum Expr {
     Add(Box<Expr>, Box<Expr>),
     /// `2^e - 1`, the all-ones value of `e` bits.
     Ones(Box<Expr>),
+    /// One when the operand is zero, zero otherwise — a comparison's negation,
+    /// which is what a rule proving the complement of a settled comparison
+    /// needs to spell.
+    IsZero(Box<Expr>),
 }
 
 impl Expr {
@@ -74,6 +78,7 @@ impl Expr {
                 bits @ 0..64 => ((1u64 << bits) - 1) as i64,
                 _ => return None,
             },
+            Expr::IsZero(e) => i64::from(e.eval(scalars)? == 0),
         })
     }
 
@@ -85,7 +90,7 @@ impl Expr {
                 a.reads(out);
                 b.reads(out);
             }
-            Expr::Ones(e) => e.reads(out),
+            Expr::Ones(e) | Expr::IsZero(e) => e.reads(out),
         }
     }
 }
@@ -119,6 +124,11 @@ pub enum Cmp {
 #[derive(Clone, Debug)]
 pub enum Guard {
     Cmp(Cmp, Expr, Expr),
+    /// Bind `out` to what `value` evaluates to.
+    Let {
+        out: Scalar,
+        value: Expr,
+    },
     /// Read `field` off the label a fact column bound, so a constant's value and
     /// width reach the guards as words. The engine owns the label table; this is
     /// a decode, not a look at the graph.
@@ -145,6 +155,7 @@ impl Guard {
                 a.reads(&mut out);
                 b.reads(&mut out);
             }
+            Guard::Let { value, .. } => value.reads(&mut out),
             Guard::Read { term, .. } => out.push(term.slot()),
             Guard::Extern { terms, args, .. } => {
                 out.extend(terms.iter().map(|term| term.slot()));
@@ -159,7 +170,7 @@ impl Guard {
     fn writes(&self) -> SmallVec<[Scalar; 2]> {
         match self {
             Guard::Cmp(..) => SmallVec::new(),
-            Guard::Read { out, .. } => SmallVec::from_slice(&[*out]),
+            Guard::Let { out, .. } | Guard::Read { out, .. } => SmallVec::from_slice(&[*out]),
             Guard::Extern { out, .. } => out.clone(),
         }
     }
@@ -253,6 +264,13 @@ pub struct Plan<L> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     Atom(usize),
+    /// A sideways atom: its class is not bound, but its operand `slot` is, so it
+    /// is reached through that class's parent back-edges rather than by walking
+    /// down from the root.
+    Parents {
+        atom: usize,
+        slot: u8,
+    },
     Guard(usize),
 }
 
@@ -287,17 +305,38 @@ impl<L: Label> Plan<L> {
             if taken.iter().all(|&t| t) {
                 break;
             }
-            let next = (0..query.atoms.len())
-                .find(|&i| !taken[i] && bound[query.atoms[i].class() as usize])
-                .expect("every atom's class is reachable from the root");
+            let downward = (0..query.atoms.len())
+                .find(|&i| !taken[i] && bound[query.atoms[i].class() as usize]);
+            // Nothing left to walk down to: reach an atom whose class is still
+            // free through an operand that is not, which is the one shape a
+            // root-first plan cannot cover.
+            let (next, step) = match downward {
+                Some(next) => (next, Step::Atom(next)),
+                None => {
+                    let (next, slot) = (0..query.atoms.len())
+                        .filter(|&i| !taken[i])
+                        .find_map(|i| match &query.atoms[i] {
+                            Atom::Node { args, .. } => args
+                                .iter()
+                                .position(|&arg| bound[arg as usize])
+                                .map(|slot| (i, slot as u8)),
+                            _ => None,
+                        })
+                        .expect("every atom is reached from the root or from an operand");
+                    (next, Step::Parents { atom: next, slot })
+                }
+            };
             taken[next] = true;
-            steps.push(Step::Atom(next));
+            steps.push(step);
+            bound[query.atoms[next].class() as usize] = true;
             let below = depth[query.atoms[next].class() as usize] + 1;
             if let Atom::Node { args, .. } = &query.atoms[next] {
                 height = height.max(below);
                 for &arg in args {
-                    bound[arg as usize] = true;
-                    depth[arg as usize] = depth[query.atoms[next].class() as usize] + 1;
+                    if !bound[arg as usize] {
+                        bound[arg as usize] = true;
+                        depth[arg as usize] = below;
+                    }
                 }
             }
             for slot in query.atoms[next].writes() {
@@ -401,6 +440,20 @@ impl<L: Label> Plan<L> {
             return;
         };
         let atom = match step {
+            Step::Parents { atom, slot } => {
+                let Atom::Node {
+                    template,
+                    args,
+                    class,
+                    row,
+                } = &self.query.atoms[atom]
+                else {
+                    unreachable!("only a row atom is reached sideways")
+                };
+                let child = eval.bound[args[slot as usize] as usize].expect("bound operand");
+                self.parents(eval, root, index, template, args, *class, *row, child);
+                return;
+            }
             Step::Guard(guard) => {
                 // A guard writes at most one scalar and is placed once, so the
                 // branch that fails it cannot have clobbered a live value.
@@ -457,6 +510,49 @@ impl<L: Label> Plan<L> {
             for order in 0..orders {
                 let mark = eval.trail.len();
                 if eval.bind(args, children, order) {
+                    self.step(eval, root, index + 1);
+                }
+                eval.unbind(mark);
+            }
+            eval.fresh -= fresh;
+        }
+    }
+
+    /// Reach a row through a bound operand's back-edges. Everything already
+    /// bound is checked against the row; the rest, including the row's own
+    /// class, is bound from it.
+    #[allow(clippy::too_many_arguments)]
+    fn parents(
+        &self,
+        eval: &mut Eval<'_, L>,
+        root: ClassId,
+        index: usize,
+        template: &L,
+        args: &[Var],
+        class: Var,
+        bind_row: Option<Scalar>,
+        child: ClassId,
+    ) {
+        let eg = eval.eg;
+        for row in eg.parents(child) {
+            let children = eg.children(row);
+            if children.len() != args.len() || !template.matches_template(eg.node(row)) {
+                continue;
+            }
+            if let Some(slot) = bind_row {
+                eval.scalars[slot as usize] = row.0 as u64;
+            }
+            let orders = if children.len() == 2 && eg.node(row).commutative() {
+                2
+            } else {
+                1
+            };
+            let fresh = usize::from(eg.row_is_new(row));
+            eval.fresh += fresh;
+            for order in 0..orders {
+                let mark = eval.trail.len();
+                let owner = eg.find(eg.owner(row));
+                if eval.bind(&[class], &[owner], 0) && eval.bind(args, children, order) {
                     self.step(eval, root, index + 1);
                 }
                 eval.unbind(mark);
@@ -571,6 +667,13 @@ impl<'a, L: Label> Eval<'a, L> {
                     Cmp::Ne => a != b,
                 }
             }
+            Guard::Let { out, value } => {
+                let Some(value) = value.eval(&self.scalars) else {
+                    return false;
+                };
+                self.scalars[*out as usize] = value as u64;
+                true
+            }
             Guard::Read { term, field, out } => {
                 let Some(value) = self.term(*term).and_then(|node| node.scalar(*field)) else {
                     return false;
@@ -651,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "reachable from the root")]
+    #[should_panic(expected = "reached from the root or from an operand")]
     fn plan_rejects_an_atom_no_operand_reaches() {
         Plan::compile(Query::tree(2, 0, vec![node(Term::leaf("x"), &[], 1)]));
     }
@@ -709,6 +812,35 @@ mod tests {
                         && children == [want[1], want[0]])
             }),
         }
+    }
+
+    /// A second root reached from an operand the first bound.
+    #[test]
+    fn a_sideways_atom_is_reached_through_a_bound_operand() {
+        let mut eg = Engine::new();
+        let a = eg.add(Term::leaf("a"));
+        let b = eg.add(Term::leaf("b"));
+        let c = eg.add(Term::leaf("c"));
+        let f = eg.add(Term::op("f", &[a, b]));
+        let g = eg.add(Term::op("g", &[a, b]));
+        eg.add(Term::op("g", &[a, c]));
+        eg.rebuild();
+
+        let plan = Plan::compile(Query::tree(
+            4,
+            0,
+            vec![
+                node(Term::op("f", &[ClassId(0), ClassId(0)]), &[1, 2], 0),
+                node(Term::op("g", &[ClassId(0), ClassId(0)]), &[1, 2], 3),
+            ],
+        ));
+        assert_eq!(
+            plan.steps(),
+            &[Step::Atom(0), Step::Parents { atom: 1, slot: 0 }]
+        );
+        let found = plan.search(&eg, [f], &|_, _| true, false, &NoExterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].bindings[3], Some(g));
     }
 
     /// `f(?1, ?2)` where `?1` is a literal below ten.
@@ -806,7 +938,7 @@ mod tests {
     proptest! {
         /// The evaluator's bindings are exactly the satisfying assignments.
         #[test]
-        fn query_equals_brute_force(recipe in term_strategy(), which in 0usize..4) {
+        fn query_equals_brute_force(recipe in term_strategy(), which in 0usize..5) {
             let (eg, made) = build(&recipe);
             prop_assume!(!made.is_empty());
             let query = match which {
@@ -817,6 +949,10 @@ mod tests {
                 // One variable in two operand slots: the match must agree on it.
                 2 => Query::tree(2, 0, vec![
                     node(Term::op("f", &[ClassId(0), ClassId(0)]), &[1, 1], 0)]),
+                // A second root, reached sideways through a shared operand.
+                3 => Query::tree(4, 0, vec![
+                    node(Term::op("f", &[ClassId(0), ClassId(0)]), &[1, 2], 0),
+                    node(Term::op("g", &[ClassId(0), ClassId(0)]), &[1, 2], 3)]),
                 _ => f_of_g(),
             };
             let roots: Vec<ClassId> = eg.class_ids().collect();

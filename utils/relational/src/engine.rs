@@ -258,6 +258,11 @@ impl<L: Label> Engine<L> {
         &self.children[start..end]
     }
 
+    /// The class a row belongs to, possibly non-canonical.
+    pub fn owner(&self, row: RowId) -> ClassId {
+        self.row_class[row.index()]
+    }
+
     pub fn label(&self, row: RowId) -> LabelId {
         self.row_label[row.index()]
     }
@@ -816,6 +821,15 @@ impl<L: Label> Engine<L> {
             self.edge_next[old_tail as usize] = head;
         }
         self.parent_tail[class.index()] = tail;
+    }
+
+    /// The rows naming `class` among their children, each once per edge, in the
+    /// order the back-edge list holds them. Exact under a scope: a scoped union
+    /// splices nothing, and the walk covers the scope's members instead.
+    pub fn parents(&self, class: ClassId) -> impl Iterator<Item = RowId> + '_ {
+        let class = self.find(class);
+        self.parent_edges(class)
+            .map(|edge| RowId(self.edge_row[edge as usize]))
     }
 
     fn parent_edges(&self, class: ClassId) -> Edges<'_, L> {

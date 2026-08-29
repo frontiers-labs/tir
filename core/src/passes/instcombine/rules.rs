@@ -164,7 +164,7 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
         ruleset.push_query(decided_gamma(arity));
     }
     for (predicate, complement) in COMPLEMENTS {
-        ruleset.push(cmp_complement(context.clone(), predicate, complement), None);
+        ruleset.push_query(cmp_complement(context, predicate, complement));
     }
     ruleset.push(state::forward_load(context.clone()), None);
     ruleset.push(
@@ -433,51 +433,105 @@ const COMPLEMENTS: [(&str, &str); 10] = [
 /// comparison's identity is its predicate attribute, and the PDL backend generates
 /// neither attribute matching nor attribute emission, so this family is written
 /// here instead of in `rules.pdl`.
-fn cmp_complement(context: Context, predicate: &'static str, complement: &'static str) -> Rule {
-    let mut lhs = Pattern::new();
-    let args: Vec<Id> = (0..2).map(|index| lhs.var(Var::Symbol(index))).collect();
-    lhs.add(cmpi(&context, predicate, None, args));
-    Rewrite::new(
-        "cmp-complement",
-        lhs,
-        Rhs::Apply(Box::new(move |eg, substitution, root| {
-            // Only a settled comparison says anything, and the pair is registered
-            // both ways round, so the search for the complement — a scan of the
-            // classes holding that predicate — is paid only where there is a fact
-            // to spend.
-            let root = eg.find(root);
-            let (Some(value), Some(ty)) = (const_value(eg, root), class_type(eg, root)) else {
-                return;
-            };
-            let operands = vec![operand(substitution, 0), operand(substitution, 1)];
-            let Some(other) = class_holding(eg, &cmpi(&context, complement, Some(ty), operands))
-            else {
-                return;
-            };
-            let negated = eg.add(konst(APInt::new(
-                value.width(),
-                u64::from(value.to_u64() == 0),
-            )));
-            eg.union(other, negated);
-        })),
-    )
+/// A settled comparison decides its complement. The complement is reached
+/// sideways — through the back-edges of an operand this match already bound —
+/// rather than by a scan of every class holding that predicate.
+fn cmp_complement(
+    context: &Context,
+    predicate: &'static str,
+    complement: &'static str,
+) -> tir_relational::Rule<Node> {
+    // Variables: 0 the settled comparison, 1 and 2 its operands, 3 the
+    // complement, 4 the constant the head mints.
+    let operands = vec![Id::from_raw(1), Id::from_raw(2)];
+    tir_relational::Rule {
+        name: "cmp-complement".into(),
+        plan: Plan::compile(Query {
+            vars: 5,
+            scalars: 8,
+            root: 0,
+            atoms: vec![
+                Atom::Node {
+                    template: cmpi(context, predicate, None, operands.clone()),
+                    args: smallvec![1, 2],
+                    class: 0,
+                    row: Some(Complement::ROW),
+                },
+                Atom::Fact {
+                    column: ColumnId::Const,
+                    key: 0,
+                    value: Complement::CONST,
+                },
+                Atom::Node {
+                    template: cmpi(context, complement, None, operands),
+                    args: smallvec![1, 2],
+                    class: 3,
+                    row: Some(Complement::OTHER_ROW),
+                },
+            ],
+            guards: vec![
+                Guard::Read {
+                    term: Source::Label(Complement::CONST),
+                    field: field::INT_VALUE,
+                    out: Complement::VALUE,
+                },
+                Guard::Read {
+                    term: Source::Label(Complement::CONST),
+                    field: field::INT_WIDTH,
+                    out: Complement::WIDTH,
+                },
+                Guard::Let {
+                    out: Complement::NEGATED,
+                    value: Expr::IsZero(Box::new(Expr::Scalar(Complement::VALUE))),
+                },
+                Guard::Read {
+                    term: Source::Row(Complement::ROW),
+                    field: field::TY,
+                    out: Complement::TY,
+                },
+                Guard::Read {
+                    term: Source::Row(Complement::OTHER_ROW),
+                    field: field::TY,
+                    out: Complement::OTHER_TY,
+                },
+                // Both spellings answer at the same width, or they are not the
+                // same question.
+                Guard::Cmp(
+                    tir_relational::Cmp::Eq,
+                    Expr::Scalar(Complement::TY),
+                    Expr::Scalar(Complement::OTHER_TY),
+                ),
+            ],
+        }),
+        head: vec![
+            HeadOp::Insert {
+                label: LabelFill {
+                    template: konst(APInt::new(1, 0)),
+                    fills: smallvec![
+                        (field::INT_VALUE, Complement::NEGATED),
+                        (field::INT_WIDTH, Complement::WIDTH),
+                    ],
+                },
+                args: SmallVec::new(),
+                into: 4,
+            },
+            HeadOp::Union(3, 4),
+        ],
+    }
 }
 
-/// The class holding `template` verbatim, if the graph already has one.
-/// [`EGraph::lookup`] answers this off the hash-cons, which is keyed by the
-/// children a node was interned with: an open scope merges classes without
-/// re-canonicalizing it, and the very facts this rule reads are such merges.
-fn class_holding(eg: &EGraph<Node>, template: &Node) -> Option<Id> {
-    eg.classes_with_op(template.op_key())
-        .into_iter()
-        .find(|&class| {
-            eg.nodes(class).any(|node| {
-                node.matches(template)
-                    && node.children().len() == template.children().len()
-                    && std::iter::zip(node.children(), template.children())
-                        .all(|(&a, &b)| eg.find(a) == eg.find(b))
-            })
-        })
+/// The scalar slots [`cmp_complement`] names.
+struct Complement;
+
+impl Complement {
+    const ROW: u32 = 0;
+    const CONST: u32 = 1;
+    const VALUE: u32 = 2;
+    const WIDTH: u32 = 3;
+    const NEGATED: u32 = 4;
+    const OTHER_ROW: u32 = 5;
+    const TY: u32 = 6;
+    const OTHER_TY: u32 = 7;
 }
 
 /// The `builtin.cmpi` node of `predicate` over `children`, at `ty` — `None` for a
