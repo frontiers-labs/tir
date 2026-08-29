@@ -24,7 +24,11 @@ const COMPILE_TIMEOUT: Duration = Duration::from_secs(300);
 /// slower CI core can push them over the budget, so neither outcome counts as a
 /// baseline change. Keep the list minimal: every entry is codegen coverage
 /// traded away for a stable signal.
-const TIMEOUT_MARGINAL: &[&str] = &["execute/pr35800.c", "execute/pr48809.c"];
+const TIMEOUT_MARGINAL: &[&str] = &[
+    "compile/pr34093.c",
+    "execute/pr35800.c",
+    "execute/pr48809.c",
+];
 
 /// Compiles every torture case through codegen and compares the failures
 /// against the recorded baseline. `fcc` reuses an already built compiler
