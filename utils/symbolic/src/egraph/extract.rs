@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 
 use tir_adt::FxBuildHasher;
+use tir_relational::Csr;
 
 use crate::egraph::{EGraph, ENode, Id};
 
 type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
+
+/// No slot: a class the extraction's table does not cover.
+const NONE: u32 = u32::MAX;
 
 /// Cheapest representative e-node per e-class, chosen by [`EGraph::extract_best`].
 pub struct Extraction<L: ENode> {
@@ -61,10 +65,11 @@ impl<L: ENode> EGraph<L> {
                 if cost[node.class].is_none_or(|best| total < best) {
                     cost[node.class] = Some(total);
                     best[node.class] = Some(position);
-                    for &parent in &graph.parents[node.class] {
+                    for &parent in graph.parents.get(node.class as u32) {
                         // A parent still ahead of the sweep sees the improvement in
                         // this round, exactly as a full re-scan would; an earlier one
                         // waits for the next.
+                        let parent = parent as usize;
                         if parent > position {
                             dirty[parent] = true;
                         } else if !std::mem::replace(&mut next[parent], true) {
@@ -95,8 +100,8 @@ struct FlatGraph<'a, L: ENode> {
     /// Slot -> canonical class id.
     classes: Vec<Id>,
     nodes: Vec<FlatNode<'a, L>>,
-    /// Class slot -> positions of the e-nodes taking it as a child.
-    parents: Vec<Vec<usize>>,
+    /// Class slot -> positions of the e-nodes taking it as a child, ascending.
+    parents: Csr,
     /// Child slots, sliced by [`FlatNode::children`].
     children: Vec<usize>,
 }
@@ -112,21 +117,23 @@ struct FlatNode<'a, L> {
 
 impl<'a, L: ENode> FlatGraph<'a, L> {
     fn new(eg: &'a EGraph<L>, cost_of: impl Fn(Id, &L) -> u64) -> Self {
-        let mut index: FxHashMap<Id, usize> = FxHashMap::default();
+        // Class id -> slot, as a dense array: ids run to the graph's high-water
+        // mark, absorbed and scope-minted ones included, but the table is a
+        // fraction of what a probe per child costs.
+        let mut index: Vec<u32> = vec![NONE; eg.class_count()];
         let mut classes: Vec<Id> = Vec::new();
         let mut nodes: Vec<FlatNode<'a, L>> = Vec::new();
         let mut rows: Vec<tir_relational::RowId> = Vec::new();
         for id in eg.class_ids() {
-            let slot = *index.entry(id).or_insert_with(|| {
-                classes.push(id);
-                classes.len() - 1
-            });
+            let slot = classes.len() as u32;
+            index[id.index()] = slot;
+            classes.push(id);
             for row in eg.rows(id) {
                 let node = eg.node(row);
                 rows.push(row);
                 nodes.push(FlatNode {
                     node,
-                    class: slot,
+                    class: slot as usize,
                     base: cost_of(id, node),
                     children: 0..0,
                     costable: true,
@@ -135,25 +142,25 @@ impl<'a, L: ENode> FlatGraph<'a, L> {
         }
 
         let mut children = Vec::new();
-        let mut parents = vec![Vec::new(); classes.len()];
+        let mut edges: Vec<(u32, u32)> = Vec::new();
         for (position, entry) in nodes.iter_mut().enumerate() {
             let start = children.len();
             for &child in eg.children(rows[position]) {
-                match index.get(&eg.find(child)) {
-                    Some(&slot) => {
-                        children.push(slot);
-                        parents[slot].push(position);
+                match index[eg.find(child).index()] {
+                    NONE => entry.costable = false,
+                    slot => {
+                        children.push(slot as usize);
+                        edges.push((slot, position as u32));
                     }
-                    None => entry.costable = false,
                 }
             }
             entry.children = start..children.len();
         }
 
         Self {
+            parents: Csr::build(classes.len(), edges),
             classes,
             nodes,
-            parents,
             children,
         }
     }

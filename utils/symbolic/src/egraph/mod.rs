@@ -122,10 +122,14 @@ impl<L: ENode> EGraph<L> {
             let searched: Vec<_> = rules
                 .iter()
                 .map(|rule| {
+                    let narrow = rule.cone_bounded() && delta.is_some();
                     let frontier = delta.as_mut().filter(|_| rule.cone_bounded());
                     let roots = rule.lhs.round_roots(self, None, frontier);
                     stats.searched(roots.len(), delta.as_ref());
-                    (*rule, rule.lhs.search_roots(self, roots))
+                    let matches = rule
+                        .lhs
+                        .search_roots_delta(self, roots, &|_, _| true, narrow);
+                    (*rule, matches)
                 })
                 .collect();
             for (rule, matches) in &searched {

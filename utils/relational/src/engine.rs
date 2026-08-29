@@ -34,6 +34,11 @@ pub struct Engine<L: Label> {
     node: Vec<L>,
     /// Next row of the same class, or [`NONE`].
     row_next: Vec<u32>,
+    /// The [`Self::row_epoch`] a row was appended or re-canonicalized in.
+    row_stamp: Vec<u32>,
+    /// Bumped by every change-log drain, so `row_stamp == row_epoch - 1` reads as
+    /// "touched during the round that just ended".
+    row_epoch: u32,
 
     class_head: Vec<u32>,
     class_tail: Vec<u32>,
@@ -61,6 +66,8 @@ pub struct Engine<L: Label> {
     /// query that visits a handful of classes does not first zero an array the
     /// size of the graph.
     marks: RefCell<Marks>,
+    /// Scratch for walks that write back through `&mut self`.
+    edge_scratch: Vec<u32>,
     /// Classes a union touched, awaiting congruence repair.
     pending: Vec<ClassId>,
     stats: Stats,
@@ -145,6 +152,8 @@ impl<L: Label> Engine<L> {
             children: Vec::new(),
             node: Vec::new(),
             row_next: Vec::new(),
+            row_stamp: Vec::new(),
+            row_epoch: 1,
             class_head: Vec::new(),
             class_tail: Vec::new(),
             class_len: Vec::new(),
@@ -156,6 +165,7 @@ impl<L: Label> Engine<L> {
             scope_memo: Vec::new(),
             op_rows: FxHashMap::default(),
             marks: RefCell::default(),
+            edge_scratch: Vec::new(),
             pending: Vec::new(),
             stats: Stats::default(),
             total_nodes: 0,
@@ -199,6 +209,12 @@ impl<L: Label> Engine<L> {
         self.num_classes
     }
 
+    /// One past the highest class id ever minted, live or not — the size a table
+    /// indexed by class id needs.
+    pub fn class_count(&self) -> usize {
+        self.uf.len()
+    }
+
     /// Work done since the engine was built. A saturation round reads the
     /// difference across it; a scope does not roll these back, since they count
     /// work, not state.
@@ -233,10 +249,19 @@ impl<L: Label> Engine<L> {
         let root = self.find(id);
         // A scope leaves the base class lists alone, so a scoped class is the
         // concatenation of its members' lists, ascending.
-        let members = self.viewed_members(root);
+        self.rows_of(root, self.viewed_members(root))
+    }
+
+    /// The rows a class holds under the live partition, without canonicalizing
+    /// it first — what a class that is about to stop being a root still owns.
+    fn raw_rows(&self, class: ClassId) -> Rows<'_, L> {
+        self.rows_of(class, self.scope_members(class))
+    }
+
+    fn rows_of<'a>(&'a self, class: ClassId, members: &'a [ClassId]) -> Rows<'a, L> {
         Rows {
             engine: self,
-            cursor: self.class_head[members.first().copied().unwrap_or(root).index()],
+            cursor: self.class_head[members.first().copied().unwrap_or(class).index()],
             members,
             next_member: 1,
         }
@@ -352,6 +377,13 @@ impl<L: Label> Engine<L> {
             eprintln!("U {} {} -> {}", ra.0, rb.0, survivor.0);
         }
         let absorbed = if survivor == ra { rb } else { ra };
+        // A merge makes two sets of rows readable where they were not before:
+        // the absorbed class's own rows, which a query reaching the survivor now
+        // enumerates, and every row naming the absorbed class as a child, which
+        // now names the survivor. Congruence repair rewrites the second set's
+        // columns later (never, inside a scope), but the matcher may run first,
+        // and semi-naive has to see both as new either way.
+        self.mark_merged_new(absorbed);
         self.rekey_assumption(absorbed, survivor);
         if !self.in_scope() {
             self.splice_class(survivor, absorbed);
@@ -547,7 +579,7 @@ impl<L: Label> Engine<L> {
                 "A {} {:?} {:?}",
                 class.0,
                 self.node(row),
-                self.children(row)
+                self.children(row).iter().map(|c| c.0).collect::<Vec<_>>()
             );
         }
         self.log_change(class);
@@ -562,6 +594,7 @@ impl<L: Label> Engine<L> {
         self.children.extend_from_slice(node.children());
         self.row_start.push(self.children.len() as u32);
         self.row_next.push(NONE);
+        self.row_stamp.push(self.row_epoch);
         self.node.push(node);
         row
     }
@@ -577,6 +610,9 @@ impl<L: Label> Engine<L> {
                 self.children[i] = root;
                 moved = true;
             }
+        }
+        if moved {
+            self.row_stamp[row.index()] = self.row_epoch;
         }
         moved
     }
@@ -756,9 +792,36 @@ impl<L: Label> Engine<L> {
         }
     }
 
+    /// Whether `row` was appended or re-canonicalized during the round the last
+    /// [`Self::take_changed`] closed. A match all of whose rows are older than
+    /// that already existed when the round before it ran, so a rule whose match
+    /// predicate reads nothing else has applied it already.
+    pub fn row_is_new(&self, row: RowId) -> bool {
+        self.row_stamp[row.index()] + 1 == self.row_epoch
+    }
+
+    fn mark_merged_new(&mut self, absorbed: ClassId) {
+        let mut scratch = std::mem::take(&mut self.edge_scratch);
+        scratch.clear();
+        scratch.extend(
+            self.parent_edges(absorbed)
+                .map(|e| self.edge_row[e as usize]),
+        );
+        scratch.extend(self.raw_rows(absorbed).map(|row| row.0));
+        for &row in &scratch {
+            self.row_stamp[row as usize] = self.row_epoch;
+        }
+        self.edge_scratch = scratch;
+    }
+
     /// Drain the change log: the canonical classes changed since the previous
     /// call, ascending and deduplicated; `None` means "every class".
     pub fn take_changed(&mut self) -> Option<Vec<ClassId>> {
+        self.row_epoch = self.row_epoch.wrapping_add(1);
+        if self.row_epoch <= 1 {
+            self.row_stamp.fill(0);
+            self.row_epoch = 2;
+        }
         let all = std::mem::replace(&mut self.changed_all, false);
         let mut changed = std::mem::take(&mut self.changed);
         self.bump_epoch();
@@ -898,6 +961,7 @@ impl<L: Label> Engine<L> {
         self.children.truncate(self.row_start[frame.rows] as usize);
         self.node.truncate(frame.rows);
         self.row_next.truncate(frame.rows);
+        self.row_stamp.truncate(frame.rows);
         self.edge_row.truncate(frame.edges);
         self.edge_next.truncate(frame.edges);
         // The classes the scope minted keep their ids, so a caller still holding

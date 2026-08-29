@@ -267,7 +267,7 @@ impl CompiledIselPattern {
                 Some(EMatch {
                     root,
                     subst,
-                    bindings: vec![Some(source)],
+                    bindings: smallvec::smallvec![Some(source)],
                 })
             })
             .collect()

@@ -103,10 +103,14 @@ fn saturate_impl(
             if rw.post_saturation {
                 continue;
             }
+            let narrow = rw.cone_bounded && delta.is_some();
             let frontier = delta.as_mut().filter(|_| rw.cone_bounded);
             let round = rw.searcher.round_roots(eg, roots.as_deref(), frontier);
             stats.searched(round.len(), delta.as_ref());
-            for m in rw.searcher.search_roots(eg, round) {
+            for m in rw
+                .searcher
+                .search_roots_delta(eg, round, &|_, _| true, narrow)
+            {
                 matches.push((index, m));
             }
         }

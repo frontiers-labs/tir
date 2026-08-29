@@ -2285,6 +2285,7 @@ dependencies = [
  "chumsky",
  "criterion",
  "egg",
+ "smallvec",
  "tir-adt",
  "tir-graph",
  "tir-relational",

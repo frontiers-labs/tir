@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use smallvec::SmallVec;
 use tir_adt::{APFloat, APInt, FxBuildHasher};
 
 use crate::egraph::{Delta, EGraph, ENode, Id};
@@ -14,7 +15,7 @@ pub enum Var<S> {
 /// A mapping from pattern variables to the e-classes they bound to during a match.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, Hash, PartialOrd)]
 pub struct Substitution<S> {
-    pub(crate) vec: Vec<(Var<S>, Id)>,
+    pub(crate) vec: SmallVec<[(Var<S>, Id); 4]>,
 }
 
 impl<S> Default for Substitution<S> {
@@ -25,7 +26,9 @@ impl<S> Default for Substitution<S> {
 
 impl<S> Substitution<S> {
     pub fn new() -> Self {
-        Self { vec: Vec::new() }
+        Self {
+            vec: SmallVec::new(),
+        }
     }
 }
 
@@ -83,8 +86,9 @@ pub struct EMatch<S> {
     pub root: Id,
     pub subst: Substitution<S>,
     /// Per-pattern-node bound class, indexed by pattern node; `None` only for a
-    /// node unreachable from the root.
-    pub bindings: Vec<Option<Id>>,
+    /// node unreachable from the root. Inline: a round emits one of these per
+    /// match, and on `core_main.c` instcombine emits a hundred thousand.
+    pub bindings: SmallVec<[Option<Id>; 8]>,
 }
 
 impl<S> EMatch<S> {
@@ -228,77 +232,98 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
         roots: impl IntoIterator<Item = Id>,
         allowed: &dyn Fn(Id, Id) -> bool,
     ) -> Vec<EMatch<S>> {
-        let mut out = Vec::new();
-        let mut goals: Vec<(Id, Id)> = Vec::new();
-        // Bindings borrow the pattern's `Var`s; names are cloned only when a full match is emitted.
-        let mut subst: Vec<(&Var<S>, Id)> = Vec::new();
-        let mut bound: Vec<Option<Id>> = vec![None; self.nodes.len()];
+        self.search_roots_delta(eg, roots, allowed, false)
+    }
+
+    /// Like [`Self::search_roots_with_legality`], and when `only_new` is set,
+    /// emitting only the matches that bind an e-node the previous round created
+    /// or re-canonicalized.
+    ///
+    /// The rest existed one round earlier, at a root this pattern was searched
+    /// at then — the frontier holds a class as long as anything in its cone
+    /// moves — so they were applied then, and applying them again instantiates
+    /// terms that hash-cons back onto themselves. That is what the round
+    /// counters call a no-op, and on `core_main.c` it is 99 % of the matches
+    /// instcombine applies. Sound only under the same condition that licenses
+    /// narrowing the roots at all: the pattern must be the whole match
+    /// predicate ([`Rewrite::cone_bounded`](super::Rewrite::cone_bounded)).
+    pub fn search_roots_delta(
+        &self,
+        eg: &EGraph<N>,
+        roots: impl IntoIterator<Item = Id>,
+        allowed: &dyn Fn(Id, Id) -> bool,
+        only_new: bool,
+    ) -> Vec<EMatch<S>> {
+        let mut search = Search {
+            eg,
+            allowed,
+            // A pattern of nothing but holes binds no e-node, so freshness has
+            // nothing to read and the filter would drop every match. Nor is
+            // there anything to read under a scope: a scoped rebuild leaves the
+            // base rows alone by design, so a match the hypothesis newly enabled
+            // binds e-nodes that are all older than the round.
+            only_new: only_new && self.nodes.iter().any(|n| matches!(n, PatternNode::Node(_))),
+            goals: Vec::new(),
+            subst: SmallVec::new(),
+            bound: SmallVec::from_elem(None, self.nodes.len()),
+            fresh: 0,
+            out: Vec::new(),
+        };
         let mut seen: HashSet<Id, FxBuildHasher> = HashSet::default();
         for root in roots {
             let root = eg.find(root);
             if !seen.insert(root) {
                 continue;
             }
-            goals.push((self.root, root));
-            self.solve(
-                eg, root, &mut goals, &mut subst, &mut bound, allowed, &mut out,
-            );
-            goals.clear();
+            search.goals.push((self.root, root));
+            self.solve(&mut search, root);
+            search.goals.clear();
         }
-        out
+        search.out
     }
 
-    /// Depth-first backtracking e-matcher: pops one goal off the `(pattern node, e-class)` stack, explores every solution restoring `goals`/`subst`/`bound` between branches, then restores the goal for the caller.
-    #[allow(clippy::too_many_arguments)]
-    fn solve<'p>(
-        &'p self,
-        eg: &EGraph<N>,
-        root: Id,
-        goals: &mut Vec<(Id, Id)>,
-        subst: &mut Vec<(&'p Var<S>, Id)>,
-        bound: &mut Vec<Option<Id>>,
-        allowed: &dyn Fn(Id, Id) -> bool,
-        out: &mut Vec<EMatch<S>>,
-    ) {
-        let Some((pat, class)) = goals.pop() else {
-            out.push(EMatch {
-                root,
-                subst: Substitution {
-                    vec: subst.iter().map(|&(v, id)| (v.clone(), id)).collect(),
-                },
-                bindings: bound.clone(),
-            });
+    /// Depth-first backtracking e-matcher: pops one goal off the `(pattern node,
+    /// e-class)` stack, explores every solution restoring the search state
+    /// between branches, then restores the goal for the caller.
+    fn solve<'p>(&'p self, s: &mut Search<'p, '_, N, S>, root: Id) {
+        let eg = s.eg;
+        let Some((pat, class)) = s.goals.pop() else {
+            if !s.only_new || s.fresh > 0 {
+                s.out.push(EMatch {
+                    root,
+                    subst: Substitution {
+                        vec: s.subst.iter().map(|&(v, id)| (v.clone(), id)).collect(),
+                    },
+                    bindings: s.bound.clone(),
+                });
+            }
             return;
         };
         let class = eg.find(class);
         // A pattern node shared by several parents (a DAG pattern) must bind the
         // same class at every occurrence.
-        let previous = bound[pat.index()];
+        let previous = s.bound[pat.index()];
         let consistent = previous.is_none_or(|existing| eg.find(existing) == class);
-        if consistent && allowed(pat, class) {
-            bound[pat.index()] = Some(class);
-            let mark = goals.len();
+        if consistent && (s.allowed)(pat, class) {
+            s.bound[pat.index()] = Some(class);
+            let mark = s.goals.len();
             match &self.nodes[pat.index()] {
                 PatternNode::Var(var @ Var::Symbol(_)) => {
-                    match subst.iter().find(|(v, _)| *v == var).map(|&(_, id)| id) {
+                    match s.subst.iter().find(|(v, _)| *v == var).map(|&(_, id)| id) {
                         Some(prior) if eg.find(prior) != class => {}
-                        Some(_) => self.solve(eg, root, goals, subst, bound, allowed, out),
+                        Some(_) => self.solve(s, root),
                         None => {
-                            subst.push((var, class));
-                            self.solve(eg, root, goals, subst, bound, allowed, out);
-                            subst.pop();
+                            s.subst.push((var, class));
+                            self.solve(s, root);
+                            s.subst.pop();
                         }
                     }
                 }
                 PatternNode::Var(Var::Int(v)) => {
-                    if class_has_const(eg, N::from_int(v.clone()), class) {
-                        self.solve(eg, root, goals, subst, bound, allowed, out);
-                    }
+                    self.solve_const(s, root, N::from_int(v.clone()), class);
                 }
                 PatternNode::Var(Var::Float(v)) => {
-                    if class_has_const(eg, N::from_float(v.clone()), class) {
-                        self.solve(eg, root, goals, subst, bound, allowed, out);
-                    }
+                    self.solve_const(s, root, N::from_float(v.clone()), class);
                 }
                 PatternNode::Node(template) => {
                     let tchildren = template.children();
@@ -316,6 +341,8 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
                         } else {
                             1
                         };
+                        let fresh = usize::from(eg.row_is_new(row));
+                        s.fresh += fresh;
                         for order in 0..orders {
                             for (slot, pc) in tchildren.iter().enumerate().rev() {
                                 let ec = if order == 1 {
@@ -323,17 +350,49 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
                                 } else {
                                     node_children[slot]
                                 };
-                                goals.push((*pc, eg.find(ec)));
+                                s.goals.push((*pc, eg.find(ec)));
                             }
-                            self.solve(eg, root, goals, subst, bound, allowed, out);
-                            goals.truncate(mark);
+                            self.solve(s, root);
+                            s.goals.truncate(mark);
                         }
+                        s.fresh -= fresh;
                     }
                 }
             }
-            bound[pat.index()] = previous;
+            s.bound[pat.index()] = previous;
         }
-        goals.push((pat, class));
+        s.goals.push((pat, class));
+    }
+
+    /// Continue only if `class` holds `target` as a literal or is assumed to
+    /// evaluate to it. An assumption is a fact rather than an e-node, so it has
+    /// no round to be new in and always counts as fresh — a rule reading one
+    /// must never be skipped as already applied.
+    fn solve_const<'p>(
+        &'p self,
+        s: &mut Search<'p, '_, N, S>,
+        root: Id,
+        target: Option<N>,
+        class: Id,
+    ) {
+        let Some(target) = target else { return };
+        let eg = s.eg;
+        if eg.assumed_const(class).is_some_and(|n| target.matches(n)) {
+            s.fresh += 1;
+            self.solve(s, root);
+            s.fresh -= 1;
+            return;
+        }
+        let Some(row) = eg
+            .rows(class)
+            .find(|&row| eg.children(row).is_empty() && target.matches(eg.node(row)))
+        else {
+            return;
+        };
+        let fresh = usize::from(eg.row_is_new(row));
+        s.fresh += fresh;
+        self.solve(s, root);
+        s.fresh -= fresh;
     }
 
     /// Build this pattern into `eg` under `subst`, returning the root e-class.
@@ -366,14 +425,17 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
     }
 }
 
-/// Whether `class` holds constant `target` (a childless leaf) or is assumed to
-/// evaluate to it in the open scope; `false` if `target` is `None`.
-fn class_has_const<N: ENode>(eg: &EGraph<N>, target: Option<N>, class: Id) -> bool {
-    let Some(target) = target else {
-        return false;
-    };
-    eg.assumed_const(class).is_some_and(|n| target.matches(n))
-        || eg
-            .rows(class)
-            .any(|row| eg.children(row).is_empty() && target.matches(eg.node(row)))
+/// State one [`Pattern::search_roots_delta`] threads through the backtracking.
+/// Bindings borrow the pattern's `Var`s; names are cloned only when a full match
+/// is emitted.
+struct Search<'p, 'e, N: ENode, S> {
+    eg: &'e EGraph<N>,
+    allowed: &'e dyn Fn(Id, Id) -> bool,
+    only_new: bool,
+    goals: Vec<(Id, Id)>,
+    subst: SmallVec<[(&'p Var<S>, Id); 4]>,
+    bound: SmallVec<[Option<Id>; 8]>,
+    /// How many e-nodes of the partial match the previous round touched.
+    fresh: usize,
+    out: Vec<EMatch<S>>,
 }
