@@ -13,16 +13,21 @@ mod csr;
 mod engine;
 mod label;
 mod query;
+mod rule;
 mod unionfind;
 
 #[cfg(test)]
 mod testing;
 
-pub use column::{Column, Fact};
+pub use column::{Column, Fact, Join};
 pub use csr::Csr;
 pub use engine::{ClassRef, Engine, Rows, Stats};
 pub use label::Label;
-pub use query::{Atom, Match, Plan, Query, Var};
+pub use query::{
+    Atom, Cmp, ColumnId, Expr, ExternId, Externs, Field, Guard, Match, NoExterns, Plan, Query,
+    Scalar, Step, Var,
+};
+pub use rule::{HeadOp, LabelFill, Rule};
 pub use unionfind::UnionFind;
 
 /// Whether `TIR_SAT_TRACE` asked for a saturation trace on stderr: every class

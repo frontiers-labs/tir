@@ -24,10 +24,23 @@ pub enum Fact<V> {
     Conflict,
 }
 
+/// How a column combines two values proven of one class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Join {
+    /// Equal values agree, different ones conflict. The lattice a proof lives
+    /// in: two constants for one class is a refutation.
+    Agree,
+    /// The first value proven wins. For a column whose values are a property of
+    /// the class rather than a claim about it — an e-node's type, which
+    /// congruence already forces its class to agree on.
+    First,
+}
+
 impl<V: Eq> Fact<V> {
-    fn join(self, other: Self) -> Self {
-        match (self, other) {
-            (Fact::Known(a), Fact::Known(b)) if a == b => Fact::Known(a),
+    fn join(self, other: Self, how: Join) -> Self {
+        match (self, other, how) {
+            (Fact::Known(a), _, Join::First) => Fact::Known(a),
+            (Fact::Known(a), Fact::Known(b), Join::Agree) if a == b => Fact::Known(a),
             _ => Fact::Conflict,
         }
     }
@@ -36,6 +49,7 @@ impl<V: Eq> Fact<V> {
 /// One lattice column.
 #[derive(Debug)]
 pub struct Column<V> {
+    how: Join,
     fact: FxHashMap<ClassId, Entry<V>>,
     /// Value -> the classes that have held it. Entries go stale when a class
     /// rises to `Conflict` or a scope pops, so a read confirms against `fact`.
@@ -52,9 +66,10 @@ struct Entry<V> {
     stamp: u32,
 }
 
-impl<V> Default for Column<V> {
-    fn default() -> Self {
+impl<V> Column<V> {
+    pub fn new(how: Join) -> Self {
         Self {
+            how,
             fact: FxHashMap::default(),
             by_value: FxHashMap::default(),
             scopes: Vec::new(),
@@ -72,7 +87,7 @@ impl<V: Copy + Eq + Hash> Column<V> {
     fn write(&mut self, class: ClassId, fact: Fact<V>, epoch: u32) -> bool {
         let previous = self.fact.get(&class).copied();
         let joined = match previous {
-            Some(entry) => entry.fact.join(fact),
+            Some(entry) => entry.fact.join(fact, self.how),
             None => fact,
         };
         if previous.is_some_and(|entry| entry.fact == joined) {
@@ -172,9 +187,21 @@ mod tests {
         ClassId(id)
     }
 
+    fn agreeing<V>() -> Column<V> {
+        Column::new(Join::Agree)
+    }
+
+    #[test]
+    fn a_first_wins_column_keeps_what_it_was_told_first() {
+        let mut column = Column::new(Join::First);
+        column.raise(class(0), 7u32, 1);
+        column.raise(class(0), 9, 2);
+        assert_eq!(column.get(class(0)), Some(7));
+    }
+
     #[test]
     fn a_second_value_conflicts_and_reads_as_unknown() {
-        let mut column = Column::default();
+        let mut column = agreeing();
         assert!(column.raise(class(0), 7u32, 1));
         assert_eq!(column.get(class(0)), Some(7));
         assert!(!column.raise(class(0), 7, 1));
@@ -185,7 +212,7 @@ mod tests {
 
     #[test]
     fn a_merge_joins_the_absorbed_value_onto_the_survivor() {
-        let mut column = Column::default();
+        let mut column = agreeing();
         column.raise(class(1), 7u32, 1);
         assert!(column.merge(class(1), class(0), 2));
         assert_eq!(column.get(class(0)), Some(7));
@@ -194,7 +221,7 @@ mod tests {
 
     #[test]
     fn a_scope_raise_is_undone_by_the_pop() {
-        let mut column = Column::default();
+        let mut column = agreeing();
         column.raise(class(0), 1u32, 1);
         column.push_scope();
         column.raise(class(0), 0, 2);
@@ -208,7 +235,7 @@ mod tests {
 
     #[test]
     fn the_reverse_index_skips_classes_that_moved_on() {
-        let mut column = Column::default();
+        let mut column = agreeing();
         column.raise(class(0), 1u32, 1);
         column.raise(class(1), 1, 1);
         column.raise(class(1), 2, 2);
@@ -218,7 +245,7 @@ mod tests {
 
     #[test]
     fn a_raise_is_new_for_exactly_one_epoch() {
-        let mut column = Column::default();
+        let mut column = agreeing();
         column.raise(class(0), 1u32, 4);
         assert!(column.is_new(class(0), 5));
         assert!(!column.is_new(class(0), 6));

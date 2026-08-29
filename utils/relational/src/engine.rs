@@ -3,9 +3,9 @@ use std::hash::{Hash, Hasher};
 
 use tir_adt::FxHasher;
 
-use crate::column::Column;
+use crate::column::{Column, Join};
 use crate::label::{FxHashMap, Labels};
-use crate::{ClassId, Label, LabelId, RowId, UnionFind};
+use crate::{ClassId, ColumnId, Label, LabelId, RowId, UnionFind};
 
 /// Empty link in an intrusive list.
 const NONE: u32 = u32::MAX;
@@ -97,6 +97,10 @@ pub struct Engine<L: Label> {
     /// The constant a class is known to be: seeded by every literal row, raised
     /// by a scope's assumption, joined by a union.
     consts: Column<LabelId>,
+    /// The type a class's terms carry, seeded by every typed row. Congruence
+    /// already forces a class's rows to agree on it, so the first row to say
+    /// wins and a merge does not make the answer depend on merge order.
+    types: Column<u64>,
     /// Per open scope, the base reps grouped under their scoped rep; merged
     /// groups only. Cloned on push, so a nested frame keeps naming base reps.
     scope_members: Vec<FxHashMap<ClassId, Vec<ClassId>>>,
@@ -184,7 +188,8 @@ impl<L: Label> Engine<L> {
             scopes: Vec::new(),
             minted: Vec::new(),
             undo: Vec::new(),
-            consts: Column::default(),
+            consts: Column::new(Join::Agree),
+            types: Column::new(Join::First),
             scope_members: Vec::new(),
             view: FxHashMap::default(),
         }
@@ -411,7 +416,9 @@ impl<L: Label> Engine<L> {
         // columns later (never, inside a scope), but the matcher may run first,
         // and semi-naive has to see both as new either way.
         self.mark_merged_new(absorbed);
-        if self.consts.merge(absorbed, survivor, self.row_epoch) {
+        if self.consts.merge(absorbed, survivor, self.row_epoch)
+            | self.types.merge(absorbed, survivor, self.row_epoch)
+        {
             self.log_change(survivor);
         }
         if !self.in_scope() {
@@ -607,6 +614,7 @@ impl<L: Label> Engine<L> {
         let op_key = node.op_key();
         let unique = node.is_unique();
         let constant = node.is_constant();
+        let type_key = node.type_key();
         let row = self.push_row(node);
         let class = self.uf.push();
         self.class_head.push(row.0);
@@ -636,6 +644,9 @@ impl<L: Label> Engine<L> {
         if constant {
             let label = self.row_label[row.index()];
             self.consts.raise(class, label, self.row_epoch);
+        }
+        if let Some(key) = type_key {
+            self.types.raise(class, key, self.row_epoch);
         }
         self.total_nodes += 1;
         self.num_classes += 1;
@@ -937,19 +948,42 @@ impl<L: Label> Engine<L> {
         self.consts.is_conflicted(self.find(class))
     }
 
-    /// Whether the constant fact on `class` rose during the round the last
-    /// [`Self::take_changed`] closed. The row-level counterpart of
-    /// [`Self::row_is_new`], for a match a fact rather than an e-node enabled.
-    pub fn const_is_new(&self, class: ClassId) -> bool {
-        self.consts.is_new(self.find(class), self.row_epoch)
-    }
-
     /// The classes known to be `node`.
     pub fn classes_with_const<'a>(&'a self, node: &L) -> impl Iterator<Item = ClassId> + 'a {
         self.labels
             .get(node)
             .into_iter()
             .flat_map(|label| self.consts.classes_with(label))
+    }
+
+    /// The type every term of `class` carries, as the language spells it.
+    /// `None` when no row of the class is typed.
+    pub fn type_of(&self, class: ClassId) -> Option<u64> {
+        self.types.get(self.find(class))
+    }
+
+    /// A field of an interned label, as one word.
+    pub fn label_scalar(&self, label: LabelId, field: crate::Field) -> Option<u64> {
+        self.labels.node(label).scalar(field)
+    }
+
+    /// `class`'s value in `column`, as one word.
+    pub fn fact(&self, column: ColumnId, class: ClassId) -> Option<u64> {
+        let class = self.find(class);
+        match column {
+            ColumnId::Const => self.consts.get(class).map(|label| label.0 as u64),
+            ColumnId::Type => self.types.get(class),
+        }
+    }
+
+    /// Whether `class`'s value in `column` rose during the round the last
+    /// [`Self::take_changed`] closed — the fact-level [`Self::row_is_new`].
+    pub fn fact_is_new(&self, column: ColumnId, class: ClassId) -> bool {
+        let class = self.find(class);
+        match column {
+            ColumnId::Const => self.consts.is_new(class, self.row_epoch),
+            ColumnId::Type => self.types.is_new(class, self.row_epoch),
+        }
     }
 
     fn raise_const(&mut self, class: ClassId, label: LabelId) {
@@ -978,6 +1012,7 @@ impl<L: Label> Engine<L> {
         self.uf.push_scope();
         self.scope_memo.push(FxHashMap::default());
         self.consts.push_scope();
+        self.types.push_scope();
         self.scope_members.push(members);
         self.minted.push(Vec::new());
         self.refresh_view();
@@ -988,6 +1023,7 @@ impl<L: Label> Engine<L> {
     pub fn pop_context(&mut self) {
         let frame = self.scopes.pop().expect("open scope");
         self.consts.pop_scope();
+        self.types.pop_scope();
         for entry in self.undo.drain(frame.undo..).rev() {
             match entry {
                 Undo::ParentList { class, head, tail } => {

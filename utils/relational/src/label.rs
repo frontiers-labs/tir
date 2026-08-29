@@ -66,6 +66,27 @@ pub trait Label: Debug + Clone {
         false
     }
 
+    /// The type this node carries, as one word — the identity of the language's
+    /// type, not its shape. Seeds the engine's type column, so a rule reads the
+    /// type of a class it bound as a hole without scanning its rows.
+    fn type_key(&self) -> Option<u64> {
+        None
+    }
+
+    /// A field of the label read as one word: an integer payload, a type, an
+    /// attribute. The language numbers its own fields; the engine only moves
+    /// the word between an atom's read and a guard's argument.
+    fn scalar(&self, _field: u32) -> Option<u64> {
+        None
+    }
+
+    /// `template` with `fills` written into the named fields — how a head spells
+    /// a node whose payload a guard computed. `None` if the language cannot
+    /// spell it.
+    fn fill(template: &Self, fills: &[(u32, u64)]) -> Option<Self> {
+        fills.is_empty().then(|| template.clone())
+    }
+
     /// A unique node gets a fresh class on every insert and never hash-conses or
     /// congruence-merges (effectful ops, distinct unknowns); its operands still
     /// resolve through the union-find.

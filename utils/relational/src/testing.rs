@@ -75,6 +75,27 @@ impl Label for Term {
         self.op == other.op
     }
 
+    /// A leaf spelled as a number is a literal.
+    fn is_constant(&self) -> bool {
+        self.children.is_empty() && self.op.parse::<i64>().is_ok()
+    }
+
+    /// Field 0 is the literal's value.
+    fn scalar(&self, field: u32) -> Option<u64> {
+        (field == 0)
+            .then(|| self.op.parse::<i64>().ok())
+            .flatten()
+            .map(|v| v as u64)
+    }
+
+    fn fill(template: &Self, fills: &[(u32, u64)]) -> Option<Self> {
+        match fills {
+            [] => Some(template.clone()),
+            [(0, value)] => Some(Term::int(*value as i64)),
+            _ => None,
+        }
+    }
+
     fn commutative(&self) -> bool {
         self.commutative
     }
