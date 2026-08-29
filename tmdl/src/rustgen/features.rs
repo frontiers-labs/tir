@@ -50,37 +50,38 @@ fn emit_features(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLEr
 
     // One resolver block per distinct ISA parameter: the value comes from the
     // enabled ISA that defines it (widest wins if several are enabled).
+    // Parameters live in a hash map, so sort them: generated code must not
+    // depend on hash order.
+    let param_names: BTreeSet<&str> = files
+        .iter()
+        .flat_map(|f| f.isas())
+        .flat_map(|isa| isa.parameters.keys().map(String::as_str))
+        .collect();
     let mut param_blocks = vec![];
-    let mut seen_params: HashSet<&str> = HashSet::new();
-    for isa in files.iter().flat_map(|f| f.isas()) {
-        for name in isa.parameters.keys() {
-            if !seen_params.insert(name) {
-                continue;
-            }
-            let definers = isa_param_definers(files, name);
-            if definers.is_empty() {
-                continue;
-            }
-            let name_lit = proc_macro2::Literal::string(name);
-            let definer_arms = definers.iter().map(|(isa_name, value)| {
-                let feature_ident = format_ident!("{}", isa_name);
-                let value_lit = proc_macro2::Literal::i64_unsuffixed(*value);
-                quote! {
-                    if features.contains(&Feature::#feature_ident) {
-                        value = Some(value.map_or(#value_lit, |v: i64| v.max(#value_lit)));
-                    }
-                }
-            });
-            param_blocks.push(quote! {
-                {
-                    let mut value: Option<i64> = None;
-                    #(#definer_arms)*
-                    if let Some(value) = value {
-                        out.push((#name_lit, value));
-                    }
-                }
-            });
+    for name in param_names {
+        let definers = isa_param_definers(files, name);
+        if definers.is_empty() {
+            continue;
         }
+        let name_lit = proc_macro2::Literal::string(name);
+        let definer_arms = definers.iter().map(|(isa_name, value)| {
+            let feature_ident = format_ident!("{}", isa_name);
+            let value_lit = proc_macro2::Literal::i64_unsuffixed(*value);
+            quote! {
+                if features.contains(&Feature::#feature_ident) {
+                    value = Some(value.map_or(#value_lit, |v: i64| v.max(#value_lit)));
+                }
+            }
+        });
+        param_blocks.push(quote! {
+            {
+                let mut value: Option<i64> = None;
+                #(#definer_arms)*
+                if let Some(value) = value {
+                    out.push((#name_lit, value));
+                }
+            }
+        });
     }
 
     Ok(quote! {
