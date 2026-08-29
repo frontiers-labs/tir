@@ -2,24 +2,30 @@ use std::cell::Cell;
 
 use crate::ClassId;
 
-/// One partition over the class ids: parent pointers plus the set size at a root.
+/// One partition over the class ids.
+///
+/// The survivor of a merge is the smaller id, so a set's representative is the
+/// minimum of its members — a function of the set, not of the order the merges
+/// arrived in. That is what lets congruence repair visit collisions in whatever
+/// order is fastest to produce rather than in the order a worklist happened to
+/// queue them, which is the whole argument for the bulk rebuild.
+///
+/// It also gives `parent[i] <= i` invariantly, so flattening is one ascending
+/// sweep instead of pointer-jumping rounds.
 #[derive(Clone, Default)]
 struct Level {
     parent: Vec<u32>,
-    size: Vec<u32>,
 }
 
 impl Level {
     fn with_size(len: usize) -> Self {
         Self {
             parent: (0..len as u32).collect(),
-            size: vec![1; len],
         }
     }
 
     fn push(&mut self) {
         self.parent.push(self.parent.len() as u32);
-        self.size.push(1);
     }
 
     fn find(&self, mut cur: u32) -> u32 {
@@ -29,31 +35,19 @@ impl Level {
         cur
     }
 
-    /// Merge two roots, returning the survivor: the larger set's root, ties
-    /// going to `b`.
-    fn union(&mut self, mut a: u32, mut b: u32) -> u32 {
-        if self.size[a as usize] > self.size[b as usize] {
-            std::mem::swap(&mut a, &mut b);
-        }
-        self.parent[a as usize] = b;
-        self.size[b as usize] += self.size[a as usize];
-        b
+    /// Merge two roots, returning the survivor: the smaller id.
+    fn union(&mut self, a: u32, b: u32) -> u32 {
+        let (survivor, absorbed) = if a < b { (a, b) } else { (b, a) };
+        self.parent[absorbed as usize] = survivor;
+        survivor
     }
 
-    /// Pointer-jump every entry to its root, so the next round's finds are one
-    /// load: rounds of `parent[i] = parent[parent[i]]` to a fixpoint.
+    /// Rewrite every entry to its root. `parent[i] <= i`, so one ascending pass
+    /// resolves the whole array: `parent[parent[i]]` is already a root by the
+    /// time `i` is read.
     fn flatten(&mut self) {
-        let mut moved = true;
-        while moved {
-            moved = false;
-            for i in 0..self.parent.len() {
-                let p = self.parent[i] as usize;
-                let grand = self.parent[p];
-                if grand != self.parent[i] {
-                    self.parent[i] = grand;
-                    moved = true;
-                }
-            }
+        for i in 0..self.parent.len() {
+            self.parent[i] = self.parent[self.parent[i] as usize];
         }
     }
 }
@@ -62,10 +56,7 @@ impl Level {
 ///
 /// A scope is a fresh partition layered over the base one, so a pop discards its
 /// merges by dropping the layer — no undo log, and no way for a hypothesis to
-/// leave a trace in the base. The layer starts as singletons, so the size that
-/// breaks a scoped union's tie counts only what the scope itself merged: the
-/// survivor of a scoped union is *not* the one the same union would pick in the
-/// base graph, and everything keyed by canonical ids depends on that.
+/// leave a trace in the base.
 ///
 /// Unions hook immediately — a caller that merges two classes sees the survivor
 /// from the next [`Self::find`], and an applier that instantiates afterwards
@@ -193,40 +184,45 @@ mod tests {
     }
 
     #[test]
-    fn union_survivor_is_the_larger_set() {
+    fn a_set_is_represented_by_its_smallest_member() {
         let mut uf = seeded(4);
-        assert_eq!(uf.union(ClassId(0), ClassId(1)), ClassId(1));
-        assert_eq!(uf.union(ClassId(2), ClassId(3)), ClassId(3));
-        // {0,1} and {2,3} tie at size two, so the second argument's root wins.
-        assert_eq!(uf.union(ClassId(0), ClassId(2)), ClassId(3));
-        assert_eq!(uf.find(ClassId(0)), ClassId(3));
+        assert_eq!(uf.union(ClassId(3), ClassId(1)), ClassId(1));
+        assert_eq!(uf.union(ClassId(2), ClassId(0)), ClassId(0));
+        assert_eq!(uf.union(ClassId(3), ClassId(2)), ClassId(0));
+        for i in 0..4 {
+            assert_eq!(uf.find(ClassId(i)), ClassId(0));
+        }
     }
 
     #[test]
-    fn a_scope_weighs_only_its_own_merges() {
-        let mut uf = seeded(3);
-        uf.union(ClassId(0), ClassId(1));
-        uf.push_scope();
-        // In the base, the survivor's set has two members and would win; the
-        // layer sees both sides as singletons, so the tie goes to `b`.
-        assert_eq!(uf.union(ClassId(0), ClassId(2)), ClassId(2));
-        uf.pop_scope();
-        assert_eq!(uf.union(ClassId(0), ClassId(2)), ClassId(1));
+    fn the_representative_does_not_depend_on_merge_order() {
+        let orders: [[(u32, u32); 3]; 2] = [[(3, 1), (2, 0), (3, 2)], [(2, 3), (0, 1), (1, 2)]];
+        let roots: Vec<Vec<u32>> = orders
+            .iter()
+            .map(|order| {
+                let mut uf = seeded(4);
+                for &(a, b) in order {
+                    uf.union(ClassId(a), ClassId(b));
+                }
+                (0..4).map(|i| uf.find(ClassId(i)).0).collect()
+            })
+            .collect();
+        assert_eq!(roots[0], roots[1]);
     }
 
     #[test]
     fn a_scope_pop_discards_its_merges() {
         let mut uf = seeded(4);
         uf.push_scope();
-        uf.union(ClassId(0), ClassId(1));
-        uf.push_scope();
         uf.union(ClassId(1), ClassId(2));
-        assert_eq!(uf.find(ClassId(0)), uf.find(ClassId(2)));
+        uf.push_scope();
+        uf.union(ClassId(2), ClassId(3));
+        assert_eq!(uf.find(ClassId(1)), uf.find(ClassId(3)));
         uf.pop_scope();
-        assert_eq!(uf.find(ClassId(0)), ClassId(1));
-        assert_ne!(uf.find(ClassId(2)), ClassId(1));
+        assert_eq!(uf.find(ClassId(2)), ClassId(1));
+        assert_ne!(uf.find(ClassId(3)), ClassId(1));
         uf.pop_scope();
-        assert_eq!(uf.find(ClassId(0)), ClassId(0));
+        assert_eq!(uf.find(ClassId(2)), ClassId(2));
     }
 
     #[test]
@@ -257,21 +253,30 @@ mod tests {
         fn find_equals_the_reference_walk(pairs in prop::collection::vec((0u32..16, 0u32..16), 0..64)) {
             let mut uf = seeded(16);
             let mut parent: Vec<u32> = (0..16).collect();
-            let mut size = [1u32; 16];
             for (a, b) in pairs {
                 uf.union(ClassId(a), ClassId(b));
-                let mut ra = reference_find(&parent, a);
-                let mut rb = reference_find(&parent, b);
-                if ra != rb {
-                    if size[ra as usize] > size[rb as usize] {
-                        std::mem::swap(&mut ra, &mut rb);
-                    }
-                    parent[ra as usize] = rb;
-                    size[rb as usize] += size[ra as usize];
-                }
+                let ra = reference_find(&parent, a);
+                let rb = reference_find(&parent, b);
+                parent[ra.max(rb) as usize] = ra.min(rb);
             }
             for i in 0..16u32 {
                 prop_assert_eq!(uf.find(ClassId(i)).0, reference_find(&parent, i));
+            }
+        }
+
+        /// The representative is the minimum of the set, however the merges that
+        /// built it were ordered — which is what a rebuild that visits
+        /// collisions in sorted-key order relies on.
+        #[test]
+        fn a_representative_is_the_minimum_of_its_set(pairs in prop::collection::vec((0u32..16, 0u32..16), 0..64)) {
+            let mut uf = seeded(16);
+            for (a, b) in pairs {
+                uf.union(ClassId(a), ClassId(b));
+            }
+            for i in 0..16u32 {
+                let root = uf.find(ClassId(i));
+                let members = (0..16u32).filter(|&j| uf.find(ClassId(j)) == root);
+                prop_assert_eq!(root.0, members.min().expect("a set holds itself"));
             }
         }
 
@@ -294,12 +299,6 @@ mod tests {
             for i in 0..12u32 {
                 prop_assert_eq!(uf.find(ClassId(i)).0, roots[i as usize]);
             }
-            // Sizes have to come back too, or the next tie breaks the other way.
-            let mut replay = seeded(12);
-            for i in 0..12u32 {
-                replay.union(ClassId(i), ClassId(roots[i as usize]));
-            }
-            prop_assert_eq!(uf.union(ClassId(0), ClassId(1)), replay.union(ClassId(0), ClassId(1)));
         }
     }
 }

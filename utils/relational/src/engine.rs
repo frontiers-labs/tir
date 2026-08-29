@@ -68,6 +68,10 @@ pub struct Engine<L: Label> {
     marks: RefCell<Marks>,
     /// Scratch for walks that write back through `&mut self`.
     edge_scratch: Vec<u32>,
+    /// Scratch for the back-edges one rebuild pass detaches and puts back.
+    taken_parents: Vec<(ClassId, Vec<u32>)>,
+    /// Rows a rebuild pass found to be duplicates of a lower row.
+    dead_rows: Marks,
     /// Classes a union touched, awaiting congruence repair.
     pending: Vec<ClassId>,
     stats: Stats,
@@ -166,6 +170,8 @@ impl<L: Label> Engine<L> {
             op_rows: FxHashMap::default(),
             marks: RefCell::default(),
             edge_scratch: Vec::new(),
+            taken_parents: Vec::new(),
+            dead_rows: Marks::default(),
             pending: Vec::new(),
             stats: Stats::default(),
             total_nodes: 0,
@@ -338,7 +344,7 @@ impl<L: Label> Engine<L> {
         let mut out = Vec::new();
         for &row in rows {
             let root = self.find(self.row_class[row.index()]);
-            if seen.insert(root) {
+            if seen.insert(root.index()) {
                 out.push(root);
             }
         }
@@ -433,9 +439,8 @@ impl<L: Label> Engine<L> {
             return;
         }
         while !self.pending.is_empty() {
-            for id in self.drain_pending() {
-                self.repair(id);
-            }
+            let todo = self.drain_pending();
+            self.repair(&todo);
         }
         self.uf.flatten();
     }
@@ -450,58 +455,91 @@ impl<L: Label> Engine<L> {
         todo
     }
 
-    /// Congruence repair for one class: re-canonicalize the rows that name it as
-    /// a child, refresh their hash-cons entries, and union any that became
-    /// structurally equal (queueing more work through [`Self::union`]).
-    fn repair(&mut self, id: ClassId) {
-        self.stats.repairs += 1;
-        let id = self.find(id);
-        let edges = self.take_parents(id);
+    /// Congruence repair as bulk passes over the columns: canonicalize, sort,
+    /// group.
+    ///
+    /// The rows that name a repaired class as a child are gathered, their child
+    /// and class columns rewritten through the union-find in one loop, then
+    /// sorted by `(label, children)` so congruent rows land in a run. Each run
+    /// keeps its lowest row and merges the classes of the rest.
+    ///
+    /// Nothing here depends on the order the runs are visited in, or the order
+    /// within one: the class a merge leaves standing is the smallest id in the
+    /// set whichever way the merges are grouped, and the row a run keeps is its
+    /// smallest. That is what a worklist walking one class's parent list at a
+    /// time could not offer, and what a partitioned or parallel pass needs.
+    fn repair(&mut self, classes: &[ClassId]) {
+        let mut taken = std::mem::take(&mut self.taken_parents);
+        taken.clear();
+        for &class in classes {
+            self.stats.repairs += 1;
+            let edges = self.take_parents(class);
+            taken.push((class, edges));
+        }
 
-        for &edge in &edges {
-            let row = RowId(self.edge_row[edge as usize]);
+        // The hash-cons is keyed on the children a row was interned with, so the
+        // stale entries have to go before those children move.
+        // By row, not by back-edge: a row with two distinct child classes sits on
+        // both their lists, and a run that saw it twice would read it as
+        // congruent to itself and retire it.
+        let mut order: Vec<RowId> = taken
+            .iter()
+            .flat_map(|(_, edges)| edges)
+            .map(|&edge| self.row(edge))
+            .collect();
+        order.sort_unstable();
+        order.dedup();
+
+        for &row in &order {
             if !self.node[row.index()].is_unique() {
                 self.memo_remove(row);
             }
         }
-
-        let mut kept: Vec<u32> = Vec::with_capacity(edges.len());
-        let mut index: FxHashMap<u64, Vec<usize>> = FxHashMap::default();
-        for edge in edges {
-            let row = RowId(self.edge_row[edge as usize]);
+        for &row in &order {
             if self.canonicalize_row(row) {
                 self.log_change(self.row_class[row.index()]);
             }
             self.row_class[row.index()] = self.find(self.row_class[row.index()]);
-            if self.node[row.index()].is_unique() {
-                kept.push(edge);
-                continue;
+        }
+        order.retain(|&row| !self.node[row.index()].is_unique());
+        order.sort_unstable_by(|&a, &b| {
+            self.row_label[a.index()]
+                .cmp(&self.row_label[b.index()])
+                .then_with(|| self.children(a).cmp(self.children(b)))
+                .then(a.cmp(&b))
+        });
+
+        self.dead_rows.begin(self.node.len());
+        let mut run = 0;
+        while run < order.len() {
+            let first = order[run];
+            let mut next = run + 1;
+            while next < order.len() && self.rows_congruent(first, order[next]) {
+                let other = order[next];
+                self.dead_rows.insert(other.index());
+                let (a, b) = (self.row_class[first.index()], self.row_class[other.index()]);
+                self.union(a, b);
+                next += 1;
             }
-            let key = self.row_hash(row);
-            let slot = index.entry(key).or_default();
-            let congruent = slot.iter().copied().find(|&i| {
-                let other = RowId(self.edge_row[kept[i] as usize]);
-                self.rows_congruent(other, row)
-            });
-            match congruent {
-                Some(i) => {
-                    let other = RowId(self.edge_row[kept[i] as usize]);
-                    let a = self.row_class[other.index()];
-                    let b = self.row_class[row.index()];
-                    self.union(a, b);
-                }
-                None => {
-                    slot.push(kept.len());
-                    self.memo_insert(key, row);
-                    kept.push(edge);
-                }
-            }
+            let key = self.row_hash(first);
+            self.memo_insert(key, first);
+            run = next;
         }
 
-        // Extend, don't assign: a union above may have appended parents to this
-        // class; assigning would drop them. Duplicates dedup on the next pass.
-        let root = self.find(id);
-        self.append_parents(root, kept);
+        // Put each class's back-edges back, minus the rows a run absorbed, and
+        // onto whatever class it is part of now. Extend rather than assign: a
+        // union above may have spliced parents onto it already.
+        for (class, edges) in taken.iter_mut() {
+            edges.retain(|&edge| !self.dead_rows.contains(self.row(edge).index()));
+            let root = self.find(*class);
+            let edges = std::mem::take(edges);
+            self.append_parents(root, edges);
+        }
+        self.taken_parents = taken;
+    }
+
+    fn row(&self, edge: u32) -> RowId {
+        RowId(self.edge_row[edge as usize])
     }
 
     /// Congruence repair inside a scope. The base rows, hash-cons and columns
@@ -1064,7 +1102,7 @@ impl<L: Label> Engine<L> {
         let mut frontier: Vec<ClassId> = seeds
             .into_iter()
             .map(|id| self.find(id))
-            .filter(|&id| seen.insert(id))
+            .filter(|&id| seen.insert(id.index()))
             .collect();
         let mut closure = frontier.clone();
         let mut level = 0;
@@ -1074,7 +1112,7 @@ impl<L: Label> Engine<L> {
                 for edge in self.parent_edges(id) {
                     let row = RowId(self.edge_row[edge as usize]);
                     let parent = self.find(self.row_class[row.index()]);
-                    if seen.insert(parent) {
+                    if seen.insert(parent.index()) {
                         closure.push(parent);
                         next.push(parent);
                     }
@@ -1109,9 +1147,13 @@ impl Marks {
     }
 
     /// Mark `id`, reporting whether this sweep had not seen it.
-    fn insert(&mut self, id: ClassId) -> bool {
-        let slot = &mut self.stamp[id.index()];
+    fn insert(&mut self, id: usize) -> bool {
+        let slot = &mut self.stamp[id];
         std::mem::replace(slot, self.epoch) != self.epoch
+    }
+
+    fn contains(&self, id: usize) -> bool {
+        self.stamp[id] == self.epoch
     }
 }
 
@@ -1266,8 +1308,9 @@ mod tests {
         let a = eg.add(Term::leaf("a"));
         let b = eg.add(Term::leaf("b"));
         let survivor = eg.union(a, b);
+        assert_eq!(survivor, a, "the smaller id represents the merged set");
         let names: Vec<&str> = eg.nodes(survivor).map(|n| n.op.as_str()).collect();
-        assert_eq!(names, vec!["b", "a"]);
+        assert_eq!(names, vec!["a", "b"]);
         assert_eq!(eg.num_classes(), 1);
         assert_eq!(eg.total_size(), 2);
     }
@@ -1368,8 +1411,10 @@ mod tests {
     #[test]
     fn a_scoped_lookup_stays_as_incomplete_as_the_base_hash_cons() {
         let mut eg = Engine::new();
-        let a = eg.add(Term::leaf("a"));
+        // `b` first, so the merge canonicalizes `a` onto it and the probe for
+        // `f(a)` no longer spells the children `f(a)` was interned with.
         let b = eg.add(Term::leaf("b"));
+        let a = eg.add(Term::leaf("a"));
         let fa = eg.add(Term::op("f", &[a]));
         eg.rebuild();
         eg.push_context();

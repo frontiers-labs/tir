@@ -216,16 +216,19 @@ fn nested_scopes_isolate() {
 
 #[test]
 fn scope_add_then_congruence() {
-    // A node built inside a scope participates in scoped congruence.
+    // A node built inside a scope participates in scoped congruence. `b` is
+    // interned first so it represents the merged set, which is what leaves
+    // `neg(b)` a term the base hash-cons has never seen.
     let mut g = EGraph::new();
-    let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
+    let a = sym(&mut g, 0);
     let fa = neg(&mut g, a);
     g.rebuild();
 
     g.push_context();
     g.union(a, b);
     let fb = neg(&mut g, b);
+    assert_ne!(fa, fb);
     g.rebuild();
     assert!(g.connected(fa, fb));
     g.pop_context();
