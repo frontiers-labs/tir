@@ -7,6 +7,7 @@ mod extract;
 mod pattern;
 mod rewrite;
 mod runner;
+mod telemetry;
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,6 +24,48 @@ pub use extract::*;
 pub use pattern::*;
 pub use rewrite::*;
 pub use runner::*;
+pub use telemetry::{RoundStats, Timer, report_saturation};
+
+/// Per-round frontier of semi-naive saturation: the change log of the previous
+/// round closed upward, cached by the pattern heights a rule set asks for.
+pub struct Delta {
+    /// `levels[h]` is Δ_h; grown on demand, each from the one below it.
+    levels: Vec<Vec<Id>>,
+}
+
+impl Delta {
+    /// Seed from a [`EGraph::take_changed`] drain.
+    pub fn new(changed: Vec<Id>) -> Self {
+        Self {
+            levels: vec![changed],
+        }
+    }
+
+    /// Nothing changed, so no rule can match anywhere new.
+    pub fn is_empty(&self) -> bool {
+        self.levels[0].is_empty()
+    }
+
+    /// Size of the change log this frontier grew from.
+    pub fn len(&self) -> usize {
+        self.levels[0].len()
+    }
+
+    /// Size of the deepest frontier asked for so far — levels only grow, so this
+    /// is the widest set any rule searched.
+    pub fn frontier(&self) -> usize {
+        self.levels.last().expect("seeded level").len()
+    }
+
+    /// Δ_height, ascending.
+    pub fn at<L: ENode>(&mut self, eg: &EGraph<L>, height: usize) -> &[Id] {
+        while self.levels.len() <= height {
+            let below = self.levels.last().expect("seeded level");
+            self.levels.push(eg.delta(below, 1));
+        }
+        &self.levels[height]
+    }
+}
 
 /// E-class id. Non-canonical after unions — pass through [`EGraph::find`] before comparing.
 #[derive(Clone, Copy, Hash, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -76,6 +119,25 @@ pub struct EGraph<L: ENode> {
     /// overwrote, so `pop_context` restores exactly the enclosing table.
     assumed: FxHashMap<Id, L>,
     scope_assumed: Vec<Vec<(Id, Option<L>)>>,
+    /// Classes changed since the last [`Self::take_changed`], possibly
+    /// non-canonical — semi-naive saturation's frontier. A round unions and
+    /// repairs the same class many times, so entries are deduplicated as they are
+    /// logged rather than by sorting a log the size of the round's work.
+    changed: Vec<Id>,
+    /// Per class id, the [`Self::changed_epoch`] it was last logged in.
+    changed_at: Vec<u32>,
+    /// Bumped by every drain, so the stamps of earlier epochs read as absent.
+    changed_epoch: u32,
+    /// Set when something changed that `changed` cannot name (a fresh graph, or a
+    /// driver that stopped on a limit), which the drain reports as "everything".
+    changed_all: bool,
+    /// The change log as each open scope found it. A scope leaves the base graph
+    /// structurally identical — its unions are layered, the classes it mints are
+    /// reverted — so what changed since the last drain is, at the pop, exactly
+    /// what it was at the push. Saving it beats declaring "everything": the base
+    /// keeps the fixpoint it had reached, and the scope's own rounds still see
+    /// their own changes.
+    scope_changed: Vec<(Vec<Id>, bool)>,
 }
 
 /// Aggregated read view of the innermost scope, as of the last refresh. Only merged
@@ -145,7 +207,54 @@ impl<L: ENode> EGraph<L> {
             scope_created: Vec::new(),
             assumed: FxHashMap::default(),
             scope_assumed: Vec::new(),
+            changed: Vec::new(),
+            changed_at: Vec::new(),
+            changed_epoch: 1,
+            changed_all: true,
+            scope_changed: Vec::new(),
         }
+    }
+
+    /// Note that `id`'s class changed, at most once per epoch.
+    fn log_change(&mut self, id: Id) {
+        if self.changed_at.len() <= id.index() {
+            self.changed_at.resize(id.index() + 1, 0);
+        }
+        if self.changed_at[id.index()] != self.changed_epoch {
+            self.changed_at[id.index()] = self.changed_epoch;
+            self.changed.push(id);
+        }
+    }
+
+    /// Drain the change log: the canonical classes changed since the previous
+    /// call, ascending and deduplicated; `None` means "every class".
+    pub fn take_changed(&mut self) -> Option<Vec<Id>> {
+        let all = std::mem::replace(&mut self.changed_all, false);
+        let mut changed = std::mem::take(&mut self.changed);
+        // Every stamp of this epoch is now stale. Wrapping past the epoch a stamp
+        // still holds would resurrect it, so the wrap clears them instead.
+        self.changed_epoch = self.changed_epoch.wrapping_add(1);
+        if self.changed_epoch == 0 {
+            self.changed_at.fill(0);
+            self.changed_epoch = 1;
+        }
+        if all {
+            return None;
+        }
+        // Logging deduplicates by raw id; canonicalizing merges more of them.
+        for id in &mut changed {
+            *id = self.find(*id);
+        }
+        changed.sort_unstable();
+        changed.dedup();
+        Some(changed)
+    }
+
+    /// Report "everything" from the next [`Self::take_changed`]. A driver that
+    /// stopped on a limit rather than at a fixpoint calls this: the matches it
+    /// never reached are not named by the change log.
+    pub fn mark_all_changed(&mut self) {
+        self.changed_all = true;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -182,6 +291,8 @@ impl<L: ENode> EGraph<L> {
         self.scope_created.push(Vec::new());
         self.scope_assumed.push(Vec::new());
         self.scope_members.push(frame);
+        self.scope_changed
+            .push((self.changed.clone(), self.changed_all));
         self.refresh_view();
     }
 
@@ -208,11 +319,30 @@ impl<L: ENode> EGraph<L> {
             .copied()
             .filter(|&id| self.classes.contains_key(&self.find(id)))
             .collect();
+        self.restore_changed();
         if self.in_scope() {
             self.refresh_view();
         } else {
             self.view.clear();
         }
+    }
+
+    /// Put the change log back the way the just-popped scope found it, dropping
+    /// everything logged inside it. A fresh epoch invalidates the scope's stamps
+    /// in one step; the restored ids are then re-stamped, so the log and the
+    /// stamps agree again.
+    fn restore_changed(&mut self) {
+        let (changed, all) = self.scope_changed.pop().expect("open scope");
+        self.changed_epoch = self.changed_epoch.wrapping_add(1);
+        if self.changed_epoch == 0 {
+            self.changed_at.fill(0);
+            self.changed_epoch = 1;
+        }
+        for id in &changed {
+            self.changed_at[id.index()] = self.changed_epoch;
+        }
+        self.changed = changed;
+        self.changed_all = all;
     }
 
     /// Revert the base insertions logged for a just-popped scope: remove each class's
@@ -318,44 +448,68 @@ impl<L: ENode> EGraph<L> {
     /// the reachable sub-graph is the base one node for node. Ascending id, so a
     /// caller's search order is reproducible. Empty with no scope open.
     pub fn scope_dirty(&self) -> Vec<Id> {
-        let mut seen: HashSet<Id, FxBuildHasher> = HashSet::default();
-        let mut work: Vec<Id> = self
+        let seeds: Vec<Id> = self
             .scope_created
             .iter()
             .flatten()
-            .map(|created| self.find(created.id))
-            .chain(self.assumed.keys().map(|&class| self.find(class)))
+            .map(|created| created.id)
+            .chain(self.assumed.keys().copied())
             .chain(
                 self.scope_members
                     .last()
                     .into_iter()
-                    .flat_map(|frame| frame.keys().map(|&rep| self.find(rep))),
+                    .flat_map(|frame| frame.keys().copied()),
             )
+            .collect();
+        self.close_upward(seeds, None)
+    }
+
+    /// `changed` closed upward `height` times over parent edges, ascending: the
+    /// classes a pattern of that height can newly match at. A class outside it has
+    /// an unchanged downward cone to that depth, so its matches are the previous
+    /// round's and were applied then.
+    pub fn delta(&self, changed: &[Id], height: usize) -> Vec<Id> {
+        self.close_upward(changed.to_vec(), Some(height))
+    }
+
+    /// `seeds` and everything reachable upward from them over parent edges in at
+    /// most `levels` steps (unbounded when `None`), ascending. Side tables and
+    /// back-edges are keyed by base reps, so a merged group's parents are the
+    /// union of its members'.
+    fn close_upward(&self, seeds: Vec<Id>, levels: Option<usize>) -> Vec<Id> {
+        let mut seen: HashSet<Id, FxBuildHasher> = HashSet::default();
+        let mut frontier: Vec<Id> = seeds
+            .into_iter()
+            .map(|id| self.find(id))
             .filter(|&id| seen.insert(id))
             .collect();
-        let mut dirty = work.clone();
-        while let Some(id) = work.pop() {
-            // Side tables and back-edges are keyed by base reps, so a merged
-            // group's parents are the union of its members' parents.
-            let members = match self.scope_members(id) {
-                [] => std::slice::from_ref(&id),
-                members => members,
-            };
-            for member in members {
-                let Some(class) = self.classes.get(member) else {
-                    continue;
+        let mut closure = frontier.clone();
+        let mut level = 0;
+        while !frontier.is_empty() && levels.is_none_or(|max| level < max) {
+            let mut next = Vec::new();
+            for id in frontier.drain(..) {
+                let members = match self.scope_members(id) {
+                    [] => std::slice::from_ref(&id),
+                    members => members,
                 };
-                for &(_, parent) in &class.parents {
-                    let parent = self.find(parent);
-                    if seen.insert(parent) {
-                        dirty.push(parent);
-                        work.push(parent);
+                for member in members {
+                    let Some(class) = self.classes.get(member) else {
+                        continue;
+                    };
+                    for &(_, parent) in &class.parents {
+                        let parent = self.find(parent);
+                        if seen.insert(parent) {
+                            closure.push(parent);
+                            next.push(parent);
+                        }
                     }
                 }
             }
+            frontier = next;
+            level += 1;
         }
-        dirty.sort_unstable();
-        dirty
+        closure.sort_unstable();
+        closure
     }
 
     /// Assume, inside the current scope, that `class` evaluates to constant `node`.
@@ -367,6 +521,7 @@ impl<L: ENode> EGraph<L> {
         let root = Id::from_raw(self.unionfind.find(class.0));
         let previous = self.assumed.insert(root, node);
         frame.push((root, previous));
+        self.log_change(root);
     }
 
     /// The constant `class` is assumed to evaluate to in the open scopes, if any.
@@ -412,6 +567,7 @@ impl<L: ENode> EGraph<L> {
         if ra == rb {
             return ra;
         }
+        telemetry::count_merge();
         let survivor = Id::from_raw(self.unionfind.union(ra.0, rb.0));
         let absorbed = if survivor == ra { rb } else { ra };
         self.rekey_assumption(absorbed, survivor);
@@ -429,6 +585,7 @@ impl<L: ENode> EGraph<L> {
             surv.parents.append(&mut taken.parents);
         }
         self.pending.push(survivor);
+        self.log_change(survivor);
         survivor
     }
 
@@ -446,6 +603,7 @@ impl<L: ENode> EGraph<L> {
         }
         self.assumed.insert(survivor, node);
         frame.push((survivor, None));
+        self.log_change(survivor);
     }
 
     /// Saturate in place with `rules`. Each iteration searches all rules against one
@@ -460,31 +618,48 @@ impl<L: ENode> EGraph<L> {
         L: 'a,
         S: Clone + PartialEq + 'a,
     {
+        let timer = telemetry::Timer::start();
         let rules: Vec<&Rewrite<L, S>> = rules.into_iter().collect();
+        let mut delta = self.take_changed().map(Delta::new);
         let mut iters = 0;
         loop {
             let size = self.total_size();
             if iters >= iter_limit || size >= node_limit {
+                // Not a fixpoint: the matches this stop left unreached are not in
+                // the change log, so the next saturation may not trust it.
+                self.mark_all_changed();
                 break;
             }
             let before = (self.num_classes(), size);
 
+            let mut stats = RoundStats::start(delta.as_ref());
             let searched: Vec<_> = rules
                 .iter()
-                .map(|rule| (*rule, rule.lhs.search(self)))
+                .map(|rule| {
+                    let frontier = delta.as_mut().filter(|_| rule.cone_bounded());
+                    let roots = rule.lhs.round_roots(self, None, frontier);
+                    stats.searched(roots.len(), delta.as_ref());
+                    (*rule, rule.lhs.search_roots(self, roots))
+                })
                 .collect();
             for (rule, matches) in &searched {
                 for m in matches {
-                    rule.apply_match(self, m);
+                    stats.apply(self, |eg| rule.apply_match(eg, m));
                 }
             }
             self.rebuild();
+            stats.finish();
 
             iters += 1;
+            delta = self.take_changed().map(Delta::new);
+            if delta.as_ref().is_some_and(Delta::is_empty) {
+                break;
+            }
             if (self.num_classes(), self.total_size()) == before {
                 break;
             }
         }
+        timer.finish();
     }
 
     /// Restore congruence to a fixpoint after a batch of unions, re-canonicalizing
@@ -689,6 +864,8 @@ impl<L: ENode> EGraph<L> {
         }
         self.classes.insert(id, EClass::new(id, node));
         self.total_nodes += 1;
+        telemetry::count_add();
+        self.log_change(id);
         // Inside a scope, log this base insertion so `pop_context` can revert it.
         if let Some(frame) = self.scope_created.last_mut() {
             frame.push(ScopeCreated {
@@ -703,6 +880,7 @@ impl<L: ENode> EGraph<L> {
     /// Congruence repair for one class: re-canonicalize its `parents`, refresh their
     /// memo entries, and union any now structurally equal (queuing more via `union`).
     fn repair(&mut self, id: Id) {
+        telemetry::count_repair();
         let id = self.find(id);
         let parents = std::mem::take(&mut self.class_mut(id).parents);
 
@@ -715,7 +893,9 @@ impl<L: ENode> EGraph<L> {
         let mut new_parents: Vec<(L, Id)> = Vec::with_capacity(parents.len());
         let mut index: FxHashMap<u64, Vec<usize>> = FxHashMap::default();
         for (mut p_node, p_class) in parents {
-            self.canonicalize(&mut p_node);
+            if self.canonicalize(&mut p_node) {
+                self.log_change(p_class);
+            }
             let p_class = self.find(p_class);
             if p_node.is_unique() {
                 new_parents.push((p_node, p_class));

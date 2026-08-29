@@ -722,6 +722,8 @@ impl Axiom {
             name,
             searcher,
             post_saturation,
+            // The applier below reads classes only through `m.binding(..)`.
+            cone_bounded: true,
             apply: Box::new(move |ctx: &Context, eg: &mut SemEGraph, m: &EMatch<u32>| {
                 let Some(widths) = self.resolve_widths(ctx, eg, m, &holes) else {
                     return;

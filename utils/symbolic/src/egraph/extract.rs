@@ -23,6 +23,15 @@ impl<L: ENode> EGraph<L> {
     /// through its non-cyclic input. Scope-aware via
     /// [`EGraph::classes`]/[`EGraph::find`].
     pub fn extract_best(&self, cost_of: impl Fn(Id, &L) -> u64) -> Extraction<L> {
+        let started = super::telemetry::enabled().then(std::time::Instant::now);
+        let extraction = self.extract_best_inner(cost_of);
+        if let Some(started) = started {
+            super::telemetry::count_extract(started.elapsed());
+        }
+        extraction
+    }
+
+    fn extract_best_inner(&self, cost_of: impl Fn(Id, &L) -> u64) -> Extraction<L> {
         let graph = FlatGraph::new(self, cost_of);
         let mut cost: Vec<Option<u64>> = vec![None; graph.classes.len()];
         let mut best: Vec<Option<usize>> = vec![None; graph.classes.len()];

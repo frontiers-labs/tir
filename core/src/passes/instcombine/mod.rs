@@ -90,7 +90,9 @@ impl Pass for InstCombinePass {
         driver.hypothesize(loop_ports);
         let body = context.get_op(root).regions()[0];
         driver.process_region(body, rewriter)?;
-        driver.sweep(root, rewriter)
+        let result = driver.sweep(root, rewriter);
+        tir_symbolic::egraph::report_saturation("instcombine");
+        result
     }
 }
 

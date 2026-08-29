@@ -299,6 +299,50 @@ fn bench_saturate(c: &mut Criterion) {
     group.finish();
 }
 
+/// The pre-semi-naive driver: every round searches every rule over the whole
+/// graph. Kept here as the baseline [`EGraph::saturate`]'s delta rounds are
+/// measured against.
+fn saturate_naive(g: &mut EGraph<Math>, rules: &[Rewrite<Math, u32>], iters: usize) {
+    for _ in 0..iters {
+        let size = g.total_size();
+        if size >= NODE_LIMIT {
+            break;
+        }
+        let before = (g.num_classes(), size);
+        let searched: Vec<_> = rules
+            .iter()
+            .map(|rule| (rule, rule.lhs.search(g)))
+            .collect();
+        for (rule, matches) in &searched {
+            for m in matches {
+                rule.apply_match(g, m);
+            }
+        }
+        g.rebuild();
+        if (g.num_classes(), g.total_size()) == before {
+            break;
+        }
+    }
+}
+
+fn bench_saturate_naive(c: &mut Criterion) {
+    let rules = build_rules();
+    let mut group = c.benchmark_group("tir_math/saturate_naive");
+    for &iters in SAT_ITERS {
+        group.bench_with_input(BenchmarkId::from_parameter(iters), &iters, |b, &iters| {
+            b.iter_batched(
+                seed_all,
+                |mut g| {
+                    saturate_naive(&mut g, &rules, iters);
+                    g
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
 fn bench_ematch(c: &mut Criterion) {
     let (rules, g) = pre_saturated();
     let mut group = c.benchmark_group("tir_math/ematch");
@@ -323,5 +367,11 @@ fn bench_extract(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_saturate, bench_ematch, bench_extract);
+criterion_group!(
+    benches,
+    bench_saturate,
+    bench_saturate_naive,
+    bench_ematch,
+    bench_extract
+);
 criterion_main!(benches);

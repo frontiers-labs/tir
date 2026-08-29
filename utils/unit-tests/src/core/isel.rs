@@ -1128,6 +1128,8 @@ fn merged_value_classes_resolve_to_earliest_def() {
         name: "mul-equals-add".to_string(),
         searcher,
         post_saturation: false,
+        // The applier scans every class, so no frontier bounds what it reads.
+        cone_bounded: false,
         apply: Box::new(|_ctx: &Context, egraph: &mut SemEGraph, m: &EMatch<u32>| {
             let add_class = egraph
                 .classes()

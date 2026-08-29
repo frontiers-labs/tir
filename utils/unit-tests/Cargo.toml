@@ -33,4 +33,5 @@ jsonschema.workspace = true
 serde_json.workspace = true
 tir-lit.workspace = true
 logos.workspace = true
+proptest.workspace = true
 tempfile = "3.27.0"

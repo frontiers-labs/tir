@@ -388,3 +388,23 @@ fn int_leaf_matches_an_assumed_constant_under_the_scope() {
     g.pop_context();
     assert!(pattern.search(&g).is_empty());
 }
+
+#[test]
+fn height_counts_template_levels_below_the_root() {
+    let mut p: Pattern<Math, &'static str> = Pattern::new();
+    let x = p.var(Var::Symbol("x"));
+    assert_eq!(p.height(), 0);
+
+    let leaf = p.add(Math::Num(0));
+    assert_eq!(p.height(), 0);
+
+    let inner = p.add(Math::Add([x, leaf]));
+    assert_eq!(p.height(), 1);
+
+    // A DAG-shared child counts once, at its own depth.
+    p.add(Math::Add([inner, inner]));
+    assert_eq!(p.height(), 2);
+
+    p.set_root(x);
+    assert_eq!(p.height(), 0);
+}

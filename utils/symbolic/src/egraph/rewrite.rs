@@ -16,13 +16,39 @@ pub struct Rewrite<N: ENode, S> {
     pub name: String,
     pub lhs: Pattern<N, S>,
     pub rhs: Rhs<N, S>,
+    cone_bounded: bool,
 }
 
 impl<N: ENode, S: Clone + PartialEq> Rewrite<N, S> {
+    /// Whether a saturation round may narrow this rule's roots to the change
+    /// frontier. Sound only when the pattern is the whole match predicate, so
+    /// that [`Pattern::height`] bounds every class the rule reads. A template RHS
+    /// gets it for free; an applier closure may decline a match on anything it
+    /// likes — instcombine's memory laws walk address and state chains far below
+    /// the class their pattern binds — so one is searched everywhere, every
+    /// round, unless it claims otherwise via [`Self::reads_only_its_match`].
+    pub fn cone_bounded(&self) -> bool {
+        self.cone_bounded
+    }
+
+    /// Claim that this rule's applier reads no class more than
+    /// [`Pattern::height`] parent-edges below the matched root, so a round may
+    /// narrow its roots as if the RHS were a template. The bound is on *depth*,
+    /// not on what the match bound: an applier may read the other nodes of the
+    /// root's class and their operands, which no substitution names, because a
+    /// change to any of them still lands the root in the frontier. Nothing checks
+    /// this — an applier that reads deeper is silently starved of matches — so
+    /// state the read depth where you call it.
+    pub fn reads_only_its_match(mut self) -> Self {
+        self.cone_bounded = true;
+        self
+    }
+
     pub fn new(name: impl Into<String>, lhs: Pattern<N, S>, rhs: Rhs<N, S>) -> Self {
         Self {
             name: name.into(),
             lhs,
+            cone_bounded: matches!(rhs, Rhs::Pattern(_)),
             rhs,
         }
     }

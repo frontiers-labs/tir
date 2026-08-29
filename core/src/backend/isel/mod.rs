@@ -2894,6 +2894,7 @@ mod telemetry {
         if !crate::pass::timing::enabled() {
             return;
         }
+        tir_symbolic::egraph::report_saturation("isel");
         let c = COUNTS.replace([0; 7]);
         let dirty_avg = c[DIRTY_SUM].checked_div(c[SCOPED]).unwrap_or(0);
         eprintln!(

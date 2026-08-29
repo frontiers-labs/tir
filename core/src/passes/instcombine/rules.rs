@@ -159,6 +159,11 @@ fn const_fold(context: Context, template: &Node) -> Rule {
             }
         })),
     )
+    // `fold_class` reads every node of the root's class and `const_value` of
+    // their operands — one edge below the root, which is this pattern's height.
+    // The rest of what it consults is the `Context`, which saturation never
+    // changes.
+    .reads_only_its_match()
 }
 
 fn fold_class(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<(APInt, TypeId)> {
@@ -227,6 +232,10 @@ fn decided_gamma(context: Context, arity: usize) -> Rule {
             }
         })),
     )
+    // `decided_arm` reads every node of the root's class and the constant of
+    // their decision operands — one edge below the root, which is this pattern's
+    // height. `gate_cases` reads only the `Context`.
+    .reads_only_its_match()
 }
 
 fn decided_arm(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<Id> {

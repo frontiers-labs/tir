@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use tir_symbolic::egraph::{EMatch, ENode, Id, Pattern};
+use tir_symbolic::egraph::{Delta, EMatch, ENode, Id, Pattern, RoundStats, Timer};
 
 use super::egraph::SemEGraph;
 use super::node::SemNode;
@@ -26,6 +26,13 @@ pub struct IselRewrite {
     pub apply: Box<IselApplier>,
     /// Apply once after iterative saturation reaches a fixpoint.
     pub post_saturation: bool,
+    /// Whether a saturation round may narrow this rule's roots to the change
+    /// frontier. Sound only when `apply` reads no class the `searcher` did not
+    /// bind, so that the pattern's height bounds everything the rule looks at.
+    /// [`Axiom::compile`](super::theory::Axiom) sets it, because it generates an
+    /// applier that only ever reads `m.binding(..)`; a hand-written one must
+    /// leave it false and be searched everywhere, every round.
+    pub cone_bounded: bool,
 }
 
 /// Saturation budget: a cap on iterations and on e-class count.
@@ -79,29 +86,43 @@ fn saturate_impl(
     limits: SaturationLimits,
     mut roots: Option<Vec<Id>>,
 ) {
-    let search = |eg: &SemEGraph, rewrite: &IselRewrite, roots: &Option<Vec<Id>>| match roots {
-        Some(roots) => rewrite.searcher.search_roots(eg, roots.iter().copied()),
-        None => rewrite.searcher.search(eg),
-    };
+    // Round 0 searches everything the caller asked for; from there on only the
+    // classes the previous round changed, and their parents up to each pattern's
+    // height, can hold a match the round before did not already apply.
+    let timer = Timer::start();
+    eg.take_changed();
+    let mut delta: Option<Delta> = None;
+    // Cleared by every exit that reached a fixpoint; a stop on a limit leaves it
+    // set, since the matches such a stop never reached are not in the change log
+    // and the next saturation of this graph may not trust it.
+    let mut on_a_limit = true;
     for _ in 0..limits.max_iterations {
+        let mut stats = RoundStats::start(delta.as_ref());
         let mut matches = Vec::new();
         for (index, rw) in rewrites.iter().enumerate() {
             if rw.post_saturation {
                 continue;
             }
-            for m in search(eg, rw, &roots) {
+            let frontier = delta.as_mut().filter(|_| rw.cone_bounded);
+            let round = rw.searcher.round_roots(eg, roots.as_deref(), frontier);
+            stats.searched(round.len(), delta.as_ref());
+            for m in rw.searcher.search_roots(eg, round) {
                 matches.push((index, m));
             }
         }
         if matches.is_empty() {
+            stats.finish();
+            on_a_limit = false;
             break;
         }
 
         let before = (eg.num_classes(), eg.total_size());
         for (index, m) in &matches {
-            (rewrites[*index].apply)(ctx, eg, m);
+            stats.apply(eg, |eg| (rewrites[*index].apply)(ctx, eg, m));
         }
         eg.rebuild();
+        stats.finish();
+        delta = eg.take_changed().map(Delta::new);
         if let Some(roots) = &mut roots {
             let dirty: HashSet<Id> = eg.scope_dirty().into_iter().collect();
             *roots = reachable_roots(eg, std::mem::take(roots))
@@ -110,9 +131,16 @@ fn saturate_impl(
                 .collect();
         }
 
-        if (eg.num_classes(), eg.total_size()) == before || eg.num_classes() >= limits.max_classes {
+        if (eg.num_classes(), eg.total_size()) == before {
+            on_a_limit = false;
             break;
         }
+        if eg.num_classes() >= limits.max_classes {
+            break;
+        }
+    }
+    if on_a_limit {
+        eg.mark_all_changed();
     }
     eg.rebuild();
 
@@ -121,7 +149,10 @@ fn saturate_impl(
         .enumerate()
         .filter(|(_, rewrite)| rewrite.post_saturation)
         .flat_map(|(index, rewrite)| {
-            search(eg, rewrite, &roots)
+            let roots = rewrite.searcher.round_roots(eg, roots.as_deref(), None);
+            rewrite
+                .searcher
+                .search_roots(eg, roots)
                 .into_iter()
                 .map(move |matched| (index, matched))
         })
@@ -130,6 +161,7 @@ fn saturate_impl(
         (rewrites[*index].apply)(ctx, eg, matched);
     }
     eg.rebuild();
+    timer.finish();
 }
 
 /// Discovery order is deterministic (DFS from `roots` in the given order):

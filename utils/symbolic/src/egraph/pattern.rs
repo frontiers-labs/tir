@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use tir_adt::{APFloat, APInt, FxBuildHasher};
 
-use crate::egraph::{EGraph, ENode, Id};
+use crate::egraph::{Delta, EGraph, ENode, Id};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub enum Var<S> {
@@ -68,6 +68,9 @@ pub enum PatternNode<N: ENode, S> {
 #[derive(Debug, Clone)]
 pub struct Pattern<N: ENode, S> {
     nodes: Vec<PatternNode<N, S>>,
+    /// Template levels below each node; children precede their parents, so it is
+    /// filled in one pass as nodes are pushed.
+    heights: Vec<usize>,
     root: Id,
 }
 
@@ -101,6 +104,7 @@ impl<N: ENode, S> Pattern<N, S> {
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
+            heights: Vec::new(),
             root: Id::from_raw(0),
         }
     }
@@ -135,9 +139,56 @@ impl<N: ENode, S> Pattern<N, S> {
         &self.nodes[id.index()]
     }
 
+    /// Template levels below the root: how deep under a matched class this pattern
+    /// binds. A hole or a childless template has height 0.
+    pub fn height(&self) -> usize {
+        self.heights[self.root.index()]
+    }
+
+    /// The classes a saturation round searches this pattern at: `scope` when the
+    /// caller narrowed the saturation, otherwise everything [`Self::search`] would
+    /// visit — then, once a round has a frontier, only the classes in it at this
+    /// pattern's height. A class outside the frontier has an unchanged cone down to
+    /// the pattern's depth, so its matches are the previous round's, applied then.
+    pub fn round_roots(
+        &self,
+        eg: &EGraph<N>,
+        scope: Option<&[Id]>,
+        delta: Option<&mut Delta>,
+    ) -> Vec<Id> {
+        let mut roots = match scope {
+            Some(scope) => scope.to_vec(),
+            None => self.roots_all(eg),
+        };
+        if let Some(delta) = delta {
+            let frontier = delta.at(eg, self.height());
+            roots.retain(|&root| frontier.binary_search(&eg.find(root)).is_ok());
+        }
+        roots
+    }
+
+    /// The classes [`Self::search`] visits: those holding the root operator, or
+    /// every class for a bare-variable root.
+    fn roots_all(&self, eg: &EGraph<N>) -> Vec<Id> {
+        match &self.nodes[self.root.index()] {
+            PatternNode::Node(template) => eg.classes_with_op(template.op_key()),
+            _ => eg.classes().map(|c| c.id()).collect(),
+        }
+    }
+
     fn push(&mut self, node: PatternNode<N, S>) -> Id {
         let id = Id::from_raw(self.nodes.len() as u32);
+        let height = match &node {
+            PatternNode::Var(_) => 0,
+            PatternNode::Node(template) => template
+                .children()
+                .iter()
+                .map(|child| self.heights[child.index()] + 1)
+                .max()
+                .unwrap_or(0),
+        };
         self.nodes.push(node);
+        self.heights.push(height);
         self.root = id;
         id
     }
@@ -158,11 +209,7 @@ impl<N: ENode, S: Clone + PartialEq> Pattern<N, S> {
         eg: &EGraph<N>,
         allowed: &dyn Fn(Id, Id) -> bool,
     ) -> Vec<EMatch<S>> {
-        let roots: Vec<Id> = match &self.nodes[self.root.index()] {
-            PatternNode::Node(template) => eg.classes_with_op(template.op_key()),
-            _ => eg.classes().map(|c| c.id()).collect(),
-        };
-        self.search_roots_with_legality(eg, roots, allowed)
+        self.search_roots_with_legality(eg, self.roots_all(eg), allowed)
     }
 
     /// Match only the requested root classes.

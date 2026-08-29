@@ -640,3 +640,152 @@ fn assume_const_without_a_scope_panics() {
     let a = sym(&mut g, 0);
     g.assume_const(a, Math::Num(1));
 }
+
+// ── Change log ─────────────────────────────────────────────────────────────
+
+#[test]
+fn take_changed_starts_as_everything() {
+    let mut g: EGraph<Math> = EGraph::new();
+    assert!(g.take_changed().is_none());
+    assert_eq!(g.take_changed(), Some(Vec::new()));
+}
+
+#[test]
+fn added_classes_are_changed() {
+    let mut g = EGraph::new();
+    g.take_changed();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let sum = add(&mut g, a, b);
+    assert_eq!(g.take_changed(), Some(sorted(&g, [a, b, sum])));
+    assert_eq!(g.take_changed(), Some(Vec::new()));
+}
+
+#[test]
+fn union_survivor_is_changed() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    g.take_changed();
+    let survivor = g.union(a, b);
+    assert_eq!(g.take_changed(), Some(vec![survivor]));
+}
+
+#[test]
+fn repair_reports_re_canonicalized_parents() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let na = neg(&mut g, a);
+    let nb = neg(&mut g, b);
+    g.rebuild();
+    g.take_changed();
+
+    g.union(a, b);
+    g.rebuild();
+    // The merge itself, and the parents congruence then merged: one of them was
+    // re-canonicalized onto the other.
+    assert_eq!(g.take_changed(), Some(sorted(&g, [a, na, nb])));
+}
+
+#[test]
+fn assumed_constants_change_their_class() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    g.take_changed();
+    g.push_context();
+    g.assume_const(a, Math::Num(1));
+    assert_eq!(g.take_changed(), Some(vec![g.find(a)]));
+    g.pop_context();
+    // The assumption went with the scope, so nothing is left to re-search.
+    assert_eq!(g.take_changed(), Some(Vec::new()));
+}
+
+#[test]
+fn a_scope_leaves_the_change_log_as_it_found_it() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let na = neg(&mut g, a);
+    g.rebuild();
+    g.take_changed();
+
+    // One base change the enclosing driver has not drained yet.
+    let c = sym(&mut g, 2);
+
+    g.push_context();
+    g.assume_const(a, Math::Num(1));
+    g.union(a, b);
+    g.rebuild();
+    // The scope's own rounds still see what the scope changed.
+    let inside = g.take_changed().expect("scope changes are nameable");
+    assert!(inside.contains(&g.find(a)));
+    g.pop_context();
+
+    // The base is structurally back where it was, so its pending change is too —
+    // and the scope's merges, which no longer hold, are gone.
+    assert_eq!(g.take_changed(), Some(vec![c]));
+    assert!(!g.connected(a, b));
+    assert!(g.nodes(g.find(na)).len() == 1);
+}
+
+#[test]
+fn nested_scopes_restore_one_layer_at_a_time() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    g.rebuild();
+    g.take_changed();
+
+    g.push_context();
+    let outer = g.union(a, b);
+    g.push_context();
+    let inner = sym(&mut g, 2);
+    g.take_changed();
+    g.pop_context();
+    // Popping the inner scope restores the outer scope's log, not the base's.
+    assert_eq!(g.take_changed(), Some(vec![g.find(outer)]));
+    let _ = inner;
+    g.pop_context();
+    assert_eq!(g.take_changed(), Some(Vec::new()));
+}
+
+#[test]
+fn delta_closes_upward_by_height() {
+    let mut g = EGraph::new();
+    let x = sym(&mut g, 0);
+    let hx = neg(&mut g, x);
+    let ghx = neg(&mut g, hx);
+    let fghx = neg(&mut g, ghx);
+    g.rebuild();
+
+    let changed = vec![g.find(x)];
+    assert_eq!(g.delta(&changed, 0), sorted(&g, [x]));
+    assert_eq!(g.delta(&changed, 1), sorted(&g, [x, hx]));
+    assert_eq!(g.delta(&changed, 2), sorted(&g, [x, hx, ghx]));
+    assert_eq!(g.delta(&changed, 3), sorted(&g, [x, hx, ghx, fghx]));
+}
+
+#[test]
+fn delta_covers_a_merged_group_parents_under_a_scope() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let na = neg(&mut g, a);
+    let nb = neg(&mut g, b);
+    g.rebuild();
+
+    g.push_context();
+    let survivor = g.union(a, b);
+    let changed = vec![survivor];
+    // Both members' parents are reachable from the merged group.
+    assert_eq!(g.delta(&changed, 1), sorted(&g, [survivor, na, nb]));
+    g.pop_context();
+}
+
+fn sorted(g: &EGraph<Math>, ids: impl IntoIterator<Item = Id>) -> Vec<Id> {
+    let mut ids: Vec<Id> = ids.into_iter().map(|id| g.find(id)).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
