@@ -566,3 +566,73 @@ fn an_applier_that_declines_is_re_offered_when_its_operand_class_grows() {
         "the fold its operand enabled one round earlier was never applied"
     );
 }
+
+/// A rule reaching an atom sideways cannot have its roots narrowed to the change
+/// frontier: the row it reaches sits in a sibling class of the root, so nothing
+/// the log closes upward names the root when that row is minted.
+#[test]
+fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
+    use smallvec::smallvec;
+    use tir_relational::{Atom, HeadOp, LabelFill, Plan, Query, Rule};
+    use tir_symbolic::egraph::Law;
+
+    let mut g: EGraph<Math> = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let sum = add(&mut g, a, b);
+    g.add(Math::Effect(0, [a]));
+    g.rebuild();
+
+    // `effect(x)` proves `neg(x)` worth having; it is minted in round 0's apply
+    // phase, so round 1 is the first that can see it.
+    let mint = Rule {
+        name: "mint-neg".into(),
+        plan: Plan::compile(Query::tree(
+            3,
+            0,
+            vec![Atom::Node {
+                template: Math::Effect(0, [Id::from_raw(1)]),
+                args: smallvec![1],
+                class: 0,
+                row: None,
+            }],
+        )),
+        head: vec![HeadOp::Insert {
+            label: LabelFill::plain(Math::Neg([Id::from_raw(0)])),
+            args: smallvec![1],
+            into: 2,
+        }],
+    };
+    // `add(x, y)` with a `neg(x)` anywhere in the graph proves the two equal —
+    // nonsense as algebra, and exactly the shape of a law relating two spellings.
+    let relate = Rule {
+        name: "relate".into(),
+        plan: Plan::compile(Query::tree(
+            4,
+            0,
+            vec![
+                Atom::Node {
+                    template: Math::Add([Id::from_raw(1), Id::from_raw(2)]),
+                    args: smallvec![1, 2],
+                    class: 0,
+                    row: None,
+                },
+                Atom::Node {
+                    template: Math::Neg([Id::from_raw(1)]),
+                    args: smallvec![1],
+                    class: 3,
+                    row: None,
+                },
+            ],
+        )),
+        head: vec![HeadOp::Union(0, 3)],
+    };
+    assert!(relate.plan.sideways());
+
+    let laws: Vec<Law<Math, &'static str>> =
+        vec![Law::Query(Box::new(mint)), Law::Query(Box::new(relate))];
+    g.saturate_laws(&laws, &tir_relational::NoExterns, 10, 1000);
+
+    let negated = g.add(Math::Neg([a]));
+    assert!(g.connected(sum, negated));
+}

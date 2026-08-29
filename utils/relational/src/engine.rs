@@ -3,12 +3,19 @@ use std::hash::{Hash, Hasher};
 
 use tir_adt::FxHasher;
 
-use crate::column::{Column, Join};
+use crate::column::{Column, Fact, Join};
 use crate::label::{FxHashMap, Labels};
 use crate::{ClassId, ColumnId, Label, LabelId, RowId, UnionFind};
 
 /// Empty link in an intrusive list.
 const NONE: u32 = u32::MAX;
+
+/// A class read as a distance from another class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Object {
+    base: ClassId,
+    offset: i64,
+}
 
 /// The e-graph as a database.
 ///
@@ -101,6 +108,12 @@ pub struct Engine<L: Label> {
     /// already forces a class's rows to agree on it, so the first row to say
     /// wins and a merge does not make the answer depend on merge order.
     types: Column<u64>,
+    /// The class a class is derived from and the distance to it: pointer
+    /// provenance, for the vocabulary that has any. A fact naming a class is
+    /// canonicalized like a child, and two derivations that disagree conflict —
+    /// which reads back as "derived from nothing known", the conservative
+    /// answer.
+    objects: Column<Object>,
     /// Per open scope, the base reps grouped under their scoped rep; merged
     /// groups only. Cloned on push, so a nested frame keeps naming base reps.
     scope_members: Vec<FxHashMap<ClassId, Vec<ClassId>>>,
@@ -119,6 +132,9 @@ pub struct Stats {
     pub merges: usize,
     pub adds: usize,
     pub repairs: usize,
+    /// Column entries that rose. A round that only raised a fact changed
+    /// nothing the class and node counts see, and is not a fixpoint.
+    pub raises: usize,
 }
 
 /// What a scope's state was when it opened; everything after it is truncated.
@@ -190,6 +206,7 @@ impl<L: Label> Engine<L> {
             undo: Vec::new(),
             consts: Column::new(Join::Agree),
             types: Column::new(Join::First),
+            objects: Column::new(Join::Agree),
             scope_members: Vec::new(),
             view: FxHashMap::default(),
         }
@@ -421,9 +438,10 @@ impl<L: Label> Engine<L> {
         // columns later (never, inside a scope), but the matcher may run first,
         // and semi-naive has to see both as new either way.
         self.mark_merged_new(absorbed);
-        if self.consts.merge(absorbed, survivor, self.row_epoch)
+        let moved = self.consts.merge(absorbed, survivor, self.row_epoch)
             | self.types.merge(absorbed, survivor, self.row_epoch)
-        {
+            | self.merge_object(absorbed, survivor);
+        if moved {
             self.log_change(survivor);
         }
         if !self.in_scope() {
@@ -618,7 +636,7 @@ impl<L: Label> Engine<L> {
     fn make_class(&mut self, node: L) -> ClassId {
         let op_key = node.op_key();
         let unique = node.is_unique();
-        let constant = node.is_constant();
+        let constant = node.constant();
         let type_key = node.type_key();
         let row = self.push_row(node);
         let class = self.uf.push();
@@ -646,9 +664,9 @@ impl<L: Label> Engine<L> {
             minted.push(class);
             self.undo.push(Undo::OpBucket { op: op_key });
         }
-        if constant {
-            let label = self.row_label[row.index()];
-            self.consts.raise(class, label, self.row_epoch);
+        if let Some(constant) = constant {
+            let label = self.labels.intern(&constant);
+            self.raise_const(class, label);
         }
         if let Some(key) = type_key {
             self.types.raise(class, key, self.row_epoch);
@@ -957,6 +975,23 @@ impl<L: Label> Engine<L> {
             .map(|label| self.labels.node(label))
     }
 
+    /// The constant an *open scope* assumed of `class`, as opposed to the one
+    /// the class states about itself. A reader that acts on a hypothesis rather
+    /// than on the program asks this.
+    pub fn assumed_const(&self, class: ClassId) -> Option<&L> {
+        let class = self.find(class);
+        self.consts
+            .written_in_scope(class)
+            .then(|| self.const_of(class))
+            .flatten()
+    }
+
+    /// The classes an open scope assumed to be `node`.
+    pub fn classes_assumed_const<'a>(&'a self, node: &L) -> impl Iterator<Item = ClassId> + 'a {
+        self.classes_with_const(node)
+            .filter(|&class| self.consts.written_in_scope(class))
+    }
+
     /// Whether `class` was proven two different constants — a refuted scope.
     pub fn const_conflicted(&self, class: ClassId) -> bool {
         self.consts.is_conflicted(self.find(class))
@@ -964,8 +999,8 @@ impl<L: Label> Engine<L> {
 
     /// The classes known to be `node`.
     pub fn classes_with_const<'a>(&'a self, node: &L) -> impl Iterator<Item = ClassId> + 'a {
-        self.labels
-            .get(node)
+        node.constant()
+            .and_then(|constant| self.labels.get(&constant))
             .into_iter()
             .flat_map(|label| self.consts.classes_with(label))
     }
@@ -981,12 +1016,106 @@ impl<L: Label> Engine<L> {
         (label.index() < self.labels.len()).then(|| self.labels.node(label))
     }
 
+    /// Raise "`class` is `base` plus `offset`". The value is resolved to the end
+    /// of its chain first, so a rule that learns the same location by two routes
+    /// — `q` from `p + 4`, then `q` from `(p + 4) + 0` — states one fact rather
+    /// than two that disagree. Reports whether the column moved.
+    pub fn raise_object(&mut self, class: ClassId, base: ClassId, offset: i64) -> bool {
+        let class = self.find(class);
+        let raised = match self.resolve(base, offset) {
+            // A class derived from itself at no distance is not derived at all;
+            // at a distance it is a contradiction.
+            Some((base, 0)) if base == class => return false,
+            Some((base, offset)) => Fact::Known(Object { base, offset }),
+            None => Fact::Conflict,
+        };
+        let joined = match self.canonical_object(class) {
+            Some(known) => known.join(raised, Join::Agree),
+            None => raised,
+        };
+        let moved = self.objects.write(class, joined, self.row_epoch);
+        if moved {
+            self.stats.raises += 1;
+            self.log_change(class);
+        }
+        moved
+    }
+
+    /// What `class` is derived from: the end of its derivation chain, or itself
+    /// at offset zero when nothing derived it. `None` once two derivations have
+    /// disagreed, and for a chain that does not end — a class derived from
+    /// itself is a contradiction, and "nowhere known" is the conservative
+    /// reading of one.
+    pub fn object_of(&self, class: ClassId) -> Option<(ClassId, i64)> {
+        self.resolve(class, 0)
+    }
+
+    /// Follow the chain from `base` to the class nothing derives, adding the
+    /// distances. Bounded: the chain is flattened as it is written, so anything
+    /// this long is a cycle.
+    fn resolve(&self, base: ClassId, offset: i64) -> Option<(ClassId, i64)> {
+        const CHAIN_LIMIT: usize = 64;
+        let mut base = self.find(base);
+        let mut offset = offset;
+        for _ in 0..CHAIN_LIMIT {
+            match self.canonical_object(base) {
+                // Nothing derives it: the end of the chain.
+                None => return Some((base, offset)),
+                // A class that derives itself ends the chain when it adds
+                // nothing, and contradicts itself when it adds something.
+                Some(Fact::Known(object)) if object.base == base => {
+                    return (object.offset == 0).then_some((base, offset));
+                }
+                Some(Fact::Known(object)) => {
+                    base = object.base;
+                    offset = offset.checked_add(object.offset)?;
+                }
+                Some(Fact::Conflict) => return None,
+            }
+        }
+        None
+    }
+
+    /// The stored entry with its base read through the union-find, or `None`
+    /// when nothing derived the class. A class the entry names may have been
+    /// absorbed since it was written.
+    fn canonical_object(&self, class: ClassId) -> Option<Fact<Object>> {
+        Some(match self.objects.entry(class)? {
+            Fact::Known(object) => Fact::Known(Object {
+                base: self.find(object.base),
+                offset: object.offset,
+            }),
+            Fact::Conflict => Fact::Conflict,
+        })
+    }
+
+    fn merge_object(&mut self, absorbed: ClassId, survivor: ClassId) -> bool {
+        let Some(fact) = self.objects.detach(absorbed) else {
+            return false;
+        };
+        match fact {
+            Fact::Known(object) => self.raise_object(survivor, object.base, object.offset),
+            Fact::Conflict => self.objects.write(survivor, Fact::Conflict, self.row_epoch),
+        }
+    }
+
     /// `class`'s value in `column`, as one word.
     pub fn fact(&self, column: ColumnId, class: ClassId) -> Option<u64> {
         let class = self.find(class);
         match column {
             ColumnId::Const => self.consts.get(class).map(|label| label.0 as u64),
             ColumnId::Type => self.types.get(class),
+            ColumnId::Object => self.objects.get(class).map(|object| object.offset as u64),
+        }
+    }
+
+    /// Raise the type `class`'s terms carry, for a term whose type the language
+    /// keeps outside the node.
+    pub fn raise_type(&mut self, class: ClassId, key: u64) {
+        let class = self.find(class);
+        if self.types.raise(class, key, self.row_epoch) {
+            self.stats.raises += 1;
+            self.log_change(class);
         }
     }
 
@@ -997,11 +1126,13 @@ impl<L: Label> Engine<L> {
         match column {
             ColumnId::Const => self.consts.is_new(class, self.row_epoch),
             ColumnId::Type => self.types.is_new(class, self.row_epoch),
+            ColumnId::Object => self.objects.is_new(class, self.row_epoch),
         }
     }
 
     fn raise_const(&mut self, class: ClassId, label: LabelId) {
         if self.consts.raise(class, label, self.row_epoch) {
+            self.stats.raises += 1;
             self.log_change(class);
         }
     }
@@ -1027,6 +1158,7 @@ impl<L: Label> Engine<L> {
         self.scope_memo.push(FxHashMap::default());
         self.consts.push_scope();
         self.types.push_scope();
+        self.objects.push_scope();
         self.scope_members.push(members);
         self.minted.push(Vec::new());
         self.refresh_view();
@@ -1038,6 +1170,7 @@ impl<L: Label> Engine<L> {
         let frame = self.scopes.pop().expect("open scope");
         self.consts.pop_scope();
         self.types.pop_scope();
+        self.objects.pop_scope();
         for entry in self.undo.drain(frame.undo..).rev() {
             match entry {
                 Undo::ParentList { class, head, tail } => {

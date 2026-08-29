@@ -165,7 +165,7 @@ impl<L: ENode> EGraph<L> {
                 self.mark_all_changed();
                 break;
             }
-            let before = (self.num_classes(), size);
+            let before = (self.num_classes(), size, self.stats().raises);
 
             let mut stats = RoundStats::start(self, delta.as_ref());
             let mut found: Vec<Found<'_, L, S>> = Vec::new();
@@ -183,11 +183,13 @@ impl<L: ENode> EGraph<L> {
                     }
                     LawRef::Query(rule) => {
                         // Everything the rule reads is an atom or a guard over
-                        // what an atom bound, so both narrowings are free: no
-                        // hand-asserted licence, and a match with no new row or
-                        // fact is one the previous round applied.
+                        // what an atom bound, so skipping a match with no new row
+                        // or fact is free — no hand-asserted licence. Narrowing
+                        // the roots needs more: the change log closed upward only
+                        // names a root whose own cone moved, which is every atom
+                        // a plan walks down to and none it reaches sideways.
                         let mut roots = rule.plan.roots(self);
-                        if let Some(delta) = delta.as_mut() {
+                        if let Some(delta) = delta.as_mut().filter(|_| !rule.plan.sideways()) {
                             let frontier = delta.at(self, rule.plan.height());
                             roots.retain(|&root| frontier.binary_search(&self.find(root)).is_ok());
                         }
@@ -227,7 +229,7 @@ impl<L: ENode> EGraph<L> {
             if delta.as_ref().is_some_and(Delta::is_empty) {
                 break;
             }
-            if (self.num_classes(), self.total_size()) == before {
+            if (self.num_classes(), self.total_size(), self.stats().raises) == before {
                 // The counts held, but a round that changed only facts changed
                 // nothing they count — and the matches it never reached are not
                 // named by a log this break is about to drop. `None` is the

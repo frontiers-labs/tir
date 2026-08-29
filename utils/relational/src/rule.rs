@@ -8,7 +8,7 @@
 
 use smallvec::SmallVec;
 
-use crate::query::{Field, Match, Plan, Scalar, Var};
+use crate::query::{Expr, Field, Match, Plan, Scalar, Var};
 use crate::{ClassId, Engine, Label};
 
 /// A node a head builds: a template with scalars written into named fields.
@@ -37,6 +37,12 @@ pub enum HeadOp<L> {
         into: Var,
     },
     Union(Var, Var),
+    /// Record that `key` is `base` plus `offset`.
+    RaiseObject {
+        key: Var,
+        base: Var,
+        offset: Expr,
+    },
     /// Union `class` with the variable `offset + scalars[index]` — the one head
     /// that chooses among bound variables, for a rule that picks an operand by
     /// a guard's answer (which arm of a decided gate).
@@ -88,6 +94,16 @@ impl<L: Label> Engine<L> {
                     };
                     self.union(a, b);
                 }
+                HeadOp::RaiseObject { key, base, offset } => {
+                    let (Some(key), Some(base), Some(offset)) = (
+                        bound[*key as usize],
+                        bound[*base as usize],
+                        offset.eval(&matched.scalars),
+                    ) else {
+                        return;
+                    };
+                    self.raise_object(key, base, offset);
+                }
                 HeadOp::UnionIndexed {
                     class,
                     offset,
@@ -134,6 +150,88 @@ mod tests {
                 HeadOp::Union(0, 3),
             ],
         }
+    }
+
+    /// `add(p, k)` with `k` a literal is `p` plus `k` — a rule whose head raises
+    /// the column its own atoms read, so a chain of them reaches a fixpoint.
+    fn derivation() -> Rule<Term> {
+        Rule {
+            name: "derivation".into(),
+            plan: Plan::compile(Query {
+                vars: 4,
+                scalars: 3,
+                root: 0,
+                atoms: vec![
+                    Atom::Node {
+                        template: Term::op("add", &[ClassId(0), ClassId(0)]),
+                        args: SmallVec::from_slice(&[1, 2]),
+                        class: 0,
+                        row: None,
+                    },
+                    Atom::Fact {
+                        column: crate::ColumnId::Const,
+                        key: 2,
+                        value: 0,
+                    },
+                    Atom::Object {
+                        key: 1,
+                        base: 3,
+                        offset: 1,
+                    },
+                ],
+                guards: vec![crate::Guard::Read {
+                    term: crate::Source::Label(0),
+                    field: 0,
+                    out: 2,
+                }],
+            }),
+            head: vec![HeadOp::RaiseObject {
+                key: 0,
+                base: 3,
+                offset: crate::Expr::Add(
+                    Box::new(crate::Expr::Scalar(1)),
+                    Box::new(crate::Expr::Scalar(2)),
+                ),
+            }],
+        }
+    }
+
+    #[test]
+    fn a_chain_of_derivations_reaches_one_base_and_one_offset() {
+        let mut eg = Engine::new();
+        let p = eg.add(Term::leaf("p"));
+        let four = eg.add(Term::int(4));
+        let first = eg.add(Term::op("add", &[p, four]));
+        let second = eg.add(Term::op("add", &[first, four]));
+        eg.rebuild();
+
+        let rule = derivation();
+        for _ in 0..2 {
+            let found = rule.plan.search(
+                &eg,
+                eg.class_ids().collect::<Vec<_>>(),
+                &|_, _| true,
+                false,
+                &NoExterns,
+            );
+            for matched in &found {
+                eg.apply_head(&rule.head, matched);
+            }
+        }
+        assert_eq!(eg.object_of(p), Some((p, 0)));
+        assert_eq!(eg.object_of(first), Some((p, 4)));
+        assert_eq!(eg.object_of(second), Some((p, 8)));
+    }
+
+    #[test]
+    fn two_derivations_that_disagree_leave_the_class_unplaceable() {
+        let mut eg = Engine::new();
+        let p = eg.add(Term::leaf("p"));
+        let q = eg.add(Term::leaf("q"));
+        eg.rebuild();
+        assert!(eg.raise_object(p, q, 4));
+        assert!(eg.raise_object(p, q, 8));
+        assert_eq!(eg.object_of(p), None);
     }
 
     #[test]

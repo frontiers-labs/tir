@@ -351,6 +351,9 @@ pub mod field {
     pub const INT_VALUE: u32 = 1;
     /// An integer literal's width.
     pub const INT_WIDTH: u32 = 2;
+    /// An integer literal read as two's complement at its own width, so a
+    /// negative step in a pointer chain is a negative distance.
+    pub const INT_SIGNED: u32 = 3;
 }
 
 pub fn template_node(
@@ -447,10 +450,13 @@ impl ENode for SemNode {
         }
     }
 
-    /// An integer literal: its class is *known to be* that value, which is what
-    /// seeds the engine's constant column.
-    fn is_constant(&self) -> bool {
-        self.sym() == Some(SymKind::Constant) && self.int().is_some()
+    /// An integer literal, spelled untyped: the value is what the class is known
+    /// to be, and the same number carried at a type and without one is one fact.
+    fn constant(&self) -> Option<Self> {
+        (self.sym() == Some(SymKind::Constant))
+            .then(|| self.int())
+            .flatten()
+            .map(|value| SemNode::constant(value.clone(), Prov::None))
     }
 
     fn type_key(&self) -> Option<u64> {
@@ -462,6 +468,7 @@ impl ENode for SemNode {
             field::TY => self.type_key(),
             field::INT_VALUE => self.int().map(APInt::to_u64),
             field::INT_WIDTH => self.int().map(|value| value.width() as u64),
+            field::INT_SIGNED => self.int().map(|value| value.to_i64() as u64),
             _ => None,
         }
     }

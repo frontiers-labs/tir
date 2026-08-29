@@ -166,7 +166,8 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
     for (predicate, complement) in COMPLEMENTS {
         ruleset.push_query(cmp_complement(context, predicate, complement));
     }
-    ruleset.push(state::forward_load(context.clone()), None);
+    ruleset.push_query(state::pointer_derivation());
+    ruleset.push_query(state::forward_load());
     ruleset.push(
         state::eliminate_dead_store(seeded.exported_states.clone()),
         None,

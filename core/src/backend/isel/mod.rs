@@ -856,14 +856,14 @@ impl FunctionSelection {
         // the one place that congruence was worth a register.
         let literal = self
             .egraph
-            .const_of(class)
+            .assumed_const(class)
             .and_then(|node| self.egraph.lookup(node))
             .map(|id| self.egraph.find(id));
         let equal: Vec<Id> = self
             .egraph
             .nodes(class)
             .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
-            .map(|node| self.egraph.classes_with_const(node).collect())
+            .map(|node| self.egraph.classes_assumed_const(node).collect())
             .unwrap_or_default();
         let mut best: Option<((u8, usize, u32), ValueId)> = None;
         for member in self.base_members(class).chain(literal).chain(equal) {

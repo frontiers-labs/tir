@@ -58,12 +58,16 @@ pub trait Label: Debug + Clone {
         false
     }
 
-    /// Whether the node is a ground constant: a childless term whose class is
-    /// therefore *known to be* that value, not merely to hold it. Seeds the
-    /// engine's constant column, so a rule reads a class's constant as a fact
-    /// rather than by scanning its rows.
-    fn is_constant(&self) -> bool {
-        false
+    /// This node's constant, spelled the one way the language spells that value
+    /// — `None` for a node that is not a ground constant. The *value*, not the
+    /// spelling, is what a class is known to be, so a typed and an untyped
+    /// spelling of one number must answer with the same term; otherwise a class
+    /// proven the number twice would look like a class proven two things.
+    ///
+    /// Seeds the engine's constant column, so a rule reads a class's constant as
+    /// a fact rather than by scanning its rows.
+    fn constant(&self) -> Option<Self> {
+        None
     }
 
     /// The type this node carries, as one word — the identity of the language's

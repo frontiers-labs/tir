@@ -30,6 +30,8 @@ pub enum ColumnId {
     Const,
     /// The type its terms carry.
     Type,
+    /// The class it is derived from and the distance to it.
+    Object,
 }
 
 /// The host's primitive functions over what a match bound: labels an atom
@@ -67,7 +69,7 @@ pub enum Expr {
 }
 
 impl Expr {
-    fn eval(&self, scalars: &[u64]) -> Option<i64> {
+    pub(crate) fn eval(&self, scalars: &[u64]) -> Option<i64> {
         Some(match self {
             Expr::Lit(value) => *value,
             Expr::Scalar(slot) => scalars[*slot as usize] as i64,
@@ -195,6 +197,11 @@ pub enum Atom<L> {
         key: Var,
         value: Scalar,
     },
+    /// What `key` is derived from: `base` and the distance `offset`. A class
+    /// nothing derived is its own base at zero — the reading that makes two
+    /// unrelated addresses overlap rather than not — and a class whose
+    /// derivations disagree satisfies nothing.
+    Object { key: Var, base: Var, offset: Scalar },
 }
 
 impl<L> Atom<L> {
@@ -203,7 +210,7 @@ impl<L> Atom<L> {
     pub fn class(&self) -> Var {
         match self {
             Atom::Node { class, .. } | Atom::Literal { class, .. } => *class,
-            Atom::Fact { key, .. } => *key,
+            Atom::Fact { key, .. } | Atom::Object { key, .. } => *key,
         }
     }
 
@@ -213,6 +220,7 @@ impl<L> Atom<L> {
             Atom::Node { row, .. } => row.iter().copied().collect(),
             Atom::Literal { .. } => SmallVec::new(),
             Atom::Fact { value, .. } => SmallVec::from_slice(&[*value]),
+            Atom::Object { offset, .. } => SmallVec::from_slice(&[*offset]),
         }
     }
 }
@@ -330,14 +338,18 @@ impl<L: Label> Plan<L> {
             steps.push(step);
             bound[query.atoms[next].class() as usize] = true;
             let below = depth[query.atoms[next].class() as usize] + 1;
-            if let Atom::Node { args, .. } = &query.atoms[next] {
-                height = height.max(below);
-                for &arg in args {
-                    if !bound[arg as usize] {
-                        bound[arg as usize] = true;
-                        depth[arg as usize] = below;
+            match &query.atoms[next] {
+                Atom::Node { args, .. } => {
+                    height = height.max(below);
+                    for &arg in args {
+                        if !bound[arg as usize] {
+                            bound[arg as usize] = true;
+                            depth[arg as usize] = below;
+                        }
                     }
                 }
+                Atom::Object { base, .. } => bound[*base as usize] = true,
+                _ => {}
             }
             for slot in query.atoms[next].writes() {
                 known[slot as usize] = true;
@@ -366,8 +378,22 @@ impl<L: Label> Plan<L> {
     /// Template levels below the root this plan binds. A class outside the
     /// frontier at this depth has an unchanged cone down to it, so its matches
     /// are the previous round's.
+    ///
+    /// Only meaningful for a plan that walks down: see [`Self::sideways`].
     pub fn height(&self) -> usize {
         self.height
+    }
+
+    /// Whether the plan reaches an atom through an operand rather than down from
+    /// the root. Such a row is not in the root's cone at any depth — it sits in a
+    /// sibling class sharing a child — so no upward closure of the change log
+    /// names the root when the row is minted, and the roots may not be narrowed
+    /// to one. [`Self::search`]'s `only_new` still holds: the fresh row is in the
+    /// match.
+    pub fn sideways(&self) -> bool {
+        self.steps
+            .iter()
+            .any(|step| matches!(step, Step::Parents { .. }))
     }
 
     /// The classes the root atom can match at: those holding its operator, or
@@ -470,6 +496,9 @@ impl<L: Label> Plan<L> {
             Atom::Fact { column, value, .. } => {
                 self.fact(eval, root, index, *column, *value, class)
             }
+            Atom::Object { base, offset, .. } => {
+                self.object(eval, root, index, *base, *offset, class)
+            }
             Atom::Node {
                 template,
                 args,
@@ -559,6 +588,29 @@ impl<L: Label> Plan<L> {
             }
             eval.fresh -= fresh;
         }
+    }
+
+    fn object(
+        &self,
+        eval: &mut Eval<'_, L>,
+        root: ClassId,
+        index: usize,
+        base: Var,
+        offset: Scalar,
+        class: ClassId,
+    ) {
+        let Some((from, distance)) = eval.eg.object_of(class) else {
+            return;
+        };
+        eval.scalars[offset as usize] = distance as u64;
+        let mark = eval.trail.len();
+        if eval.bind(&[base], &[from], 0) {
+            let fresh = usize::from(eval.eg.fact_is_new(ColumnId::Object, class));
+            eval.fresh += fresh;
+            self.step(eval, root, index + 1);
+            eval.fresh -= fresh;
+        }
+        eval.unbind(mark);
     }
 
     /// A literal reads the constant column rather than the class's rows: what a
@@ -800,6 +852,9 @@ mod tests {
                 eg.const_of(class).is_some_and(|known| value.matches(known))
             }
             Atom::Fact { column, .. } => eg.fact(*column, class).is_some(),
+            Atom::Object { base, .. } => {
+                eg.object_of(class) == Some((assignment[*base as usize], 0))
+            }
             Atom::Node { template, args, .. } => eg.rows(class).any(|row| {
                 let children: Vec<ClassId> = eg.children(row).iter().map(|&c| eg.find(c)).collect();
                 if children.len() != args.len() || !template.matches_template(eg.node(row)) {

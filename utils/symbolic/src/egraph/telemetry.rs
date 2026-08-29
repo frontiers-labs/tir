@@ -103,7 +103,9 @@ impl RoundStats {
         let before = eg.stats();
         apply(eg);
         let after = eg.stats();
-        round.noop += usize::from((after.merges, after.adds) == (before.merges, before.adds));
+        round.noop += usize::from(
+            (after.merges, after.adds, after.raises) == (before.merges, before.adds, before.raises),
+        );
     }
 
     /// Close the round; call after the rebuild, whose merges and repairs it counts.

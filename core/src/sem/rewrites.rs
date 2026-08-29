@@ -120,7 +120,7 @@ fn saturate_impl(
             break;
         }
 
-        let before = (eg.num_classes(), eg.total_size());
+        let before = (eg.num_classes(), eg.total_size(), eg.stats().raises);
         for (index, m) in &matches {
             if trace_enabled() {
                 eprintln!("M {} {}", rewrites[*index].name, eg.find(m.root).index());
@@ -138,7 +138,7 @@ fn saturate_impl(
                 .collect();
         }
 
-        if (eg.num_classes(), eg.total_size()) == before {
+        if (eg.num_classes(), eg.total_size(), eg.stats().raises) == before {
             // The counts held, but a round that changed only facts changed
             // nothing they count, and is not a fixpoint. `None` is the widest
             // such log there is, so it counts too.

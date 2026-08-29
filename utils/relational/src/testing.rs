@@ -76,8 +76,8 @@ impl Label for Term {
     }
 
     /// A leaf spelled as a number is a literal.
-    fn is_constant(&self) -> bool {
-        self.children.is_empty() && self.op.parse::<i64>().is_ok()
+    fn constant(&self) -> Option<Self> {
+        (self.children.is_empty() && self.op.parse::<i64>().is_ok()).then(|| self.clone())
     }
 
     /// Field 0 is the literal's value.

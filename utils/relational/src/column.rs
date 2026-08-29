@@ -37,7 +37,7 @@ pub enum Join {
 }
 
 impl<V: Eq> Fact<V> {
-    fn join(self, other: Self, how: Join) -> Self {
+    pub fn join(self, other: Self, how: Join) -> Self {
         match (self, other, how) {
             (Fact::Known(a), _, Join::First) => Fact::Known(a),
             (Fact::Known(a), Fact::Known(b), Join::Agree) if a == b => Fact::Known(a),
@@ -84,7 +84,9 @@ impl<V: Copy + Eq + Hash> Column<V> {
         self.write(class, Fact::Known(value), epoch)
     }
 
-    fn write(&mut self, class: ClassId, fact: Fact<V>, epoch: u32) -> bool {
+    /// Join `fact` onto what `class` is known to be. The caller that keeps
+    /// class-naming values canonical joins them itself and writes the result.
+    pub fn write(&mut self, class: ClassId, fact: Fact<V>, epoch: u32) -> bool {
         let previous = self.fact.get(&class).copied();
         let joined = match previous {
             Some(entry) => entry.fact.join(fact, self.how),
@@ -111,10 +113,24 @@ impl<V: Copy + Eq + Hash> Column<V> {
 
     /// What `class` is known to be, or `None` for unknown and for a conflict.
     pub fn get(&self, class: ClassId) -> Option<V> {
-        match self.fact.get(&class)?.fact {
+        match self.entry(class)? {
             Fact::Known(value) => Some(value),
             Fact::Conflict => None,
         }
+    }
+
+    /// The whole entry, telling unknown from conflicted.
+    pub fn entry(&self, class: ClassId) -> Option<Fact<V>> {
+        self.fact.get(&class).map(|entry| entry.fact)
+    }
+
+    /// Remove `class`'s entry, logging it for the scope to put back.
+    pub fn detach(&mut self, class: ClassId) -> Option<Fact<V>> {
+        let entry = self.fact.remove(&class)?;
+        if let Some(frame) = self.scopes.last_mut() {
+            frame.push((class, Some(entry)));
+        }
+        Some(entry.fact)
     }
 
     /// Whether the entry for `class` rose in the epoch that just ended.
@@ -148,20 +164,22 @@ impl<V: Copy + Eq + Hash> Column<V> {
     /// Move `absorbed`'s value onto `survivor`, joining with whatever is there.
     /// Reports whether the survivor's entry moved.
     pub fn merge(&mut self, absorbed: ClassId, survivor: ClassId, epoch: u32) -> bool {
-        let Some(entry) = self.fact.get(&absorbed).copied() else {
-            return false;
-        };
-        if let Some(frame) = self.scopes.last_mut() {
-            frame.push((absorbed, Some(entry)));
+        match self.detach(absorbed) {
+            Some(fact) => self.write(survivor, fact, epoch),
+            None => false,
         }
-        self.fact.remove(&absorbed);
-        self.write(survivor, entry.fact, epoch)
     }
 
     /// The classes the open scopes have written. Duplicated across frames, and
     /// not canonicalized: a caller closing over them does both.
     pub fn scoped_keys(&self) -> impl Iterator<Item = ClassId> + '_ {
         self.scopes.iter().flatten().map(|&(class, _)| class)
+    }
+
+    /// Whether an open scope wrote `class`'s entry — an assumption, as opposed
+    /// to what the class states about itself.
+    pub fn written_in_scope(&self, class: ClassId) -> bool {
+        self.scoped_keys().any(|written| written == class)
     }
 
     pub fn push_scope(&mut self) {

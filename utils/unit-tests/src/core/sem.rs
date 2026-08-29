@@ -120,6 +120,24 @@ fn graph_operation_controls_commutative_matching() {
     assert_eq!(matches[0].subst.get(&Var::Symbol(0)), Some(g.find(x)));
 }
 
+/// A class proven one number twice — once typed, once not — is proven one thing.
+/// The constant column keys on the value, so the two spellings are one fact
+/// rather than two that would conflict and leave the class knowing nothing.
+#[test]
+fn two_spellings_of_one_constant_are_one_fact() {
+    let mut g: EGraph<SemNode> = EGraph::new();
+    let untyped = g.add(konst(32, 5));
+    let typed = g.add(konst(32, 5).typed(ty(32)));
+    assert_ne!(g.find(untyped), g.find(typed));
+
+    g.union(untyped, typed);
+    g.rebuild();
+    assert_eq!(
+        g.const_of(typed).and_then(SemNode::int),
+        Some(&APInt::new(32, 5))
+    );
+}
+
 fn assert_same_graph(actual: &SemGraph, expected: &SemGraph, root: tir::graph::NodeId) {
     for node in expected.postorder(root) {
         assert_eq!(actual.get_node(node), expected.get_node(node));

@@ -128,6 +128,10 @@ impl Seeder<'_> {
             return id;
         }
         let id = self.eg.add(Node::input(value));
+        // A leaf standing for an IR value carries no type of its own; the value
+        // it stands for has one, and that is the type its class's terms carry.
+        let ty = self.context.get_value(value).ty();
+        self.eg.raise_type(id, ty.number() as u64);
         self.value_class.insert(value, id);
         id
     }

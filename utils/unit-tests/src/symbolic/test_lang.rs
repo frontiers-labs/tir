@@ -52,8 +52,8 @@ impl ENode for Math {
         }
     }
 
-    fn is_constant(&self) -> bool {
-        matches!(self, Math::Num(_) | Math::FNum(_))
+    fn constant(&self) -> Option<Self> {
+        matches!(self, Math::Num(_) | Math::FNum(_)).then(|| self.clone())
     }
 
     fn matches(&self, other: &Self) -> bool {
