@@ -1433,6 +1433,12 @@ impl<'a> Lowering<'a> {
     /// The value and width a pure op takes over operands the axiom's text
     /// already says are constants; `None` when it is not such an op, or an
     /// operand is not one.
+    ///
+    /// The fold is a guard, so a right-hand side all of whose operands the text
+    /// fixes has no structural reading to fall back on: if the fold fails the
+    /// match dies. No axiom is written that way — every foldable node has at
+    /// least one operand the graph supplies — and one that were would need the
+    /// two readings the assumption gives it.
     fn fold_operands(&mut self, kind: SymKind, children: &[Built]) -> Option<(u32, u32)> {
         if !FOLDABLE.contains(&kind) {
             return None;

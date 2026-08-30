@@ -485,18 +485,23 @@ pub(crate) fn eliminate_dead_store() -> tir_relational::Rule<Node> {
             }],
             guards: Vec::new(),
         },
-        // A loop's carried port is one class read at more than one point of the
-        // program — the head of an iteration, and where the loop was left. A
-        // store node landing in it answers for both, so a read after the loop
-        // would forward the value the body overwrote.
-        Nested {
+    ];
+    // A loop's carried port is one class read at more than one point of the
+    // program — the head of an iteration, and where the loop was left. A store
+    // node landing in it answers for both, so a read after the loop would
+    // forward the value the body overwrote. Neither side of the merge may be
+    // one: a round finds every match before it applies any, so a law that only
+    // looked at the state it was handed would be told about a theta another
+    // match of the same round had just merged in one round too late.
+    for state in [state, before] {
+        nots.push(Nested {
             atoms: vec![Atom::Holds {
-                key: before,
+                key: state,
                 op: Node::sym_pattern(SymKind::Theta, Vec::new()).op_key(),
             }],
             guards: Vec::new(),
-        },
-    ];
+        });
+    }
 
     // A second write to the same extent on the state before becomes congruent to
     // the survivor one round later — the survivor names it, and the store that
