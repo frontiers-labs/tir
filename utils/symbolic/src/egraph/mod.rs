@@ -182,21 +182,25 @@ impl<L: ENode> EGraph<L> {
                         found.push(Found::Rewrite(rule, matches));
                     }
                     LawRef::Query(rule) => {
-                        // Everything the rule reads is an atom or a guard over
-                        // what an atom bound, so skipping a match with no new row
-                        // or fact is free — no hand-asserted licence. Narrowing
-                        // the roots needs more: the change log closed upward only
-                        // names a root whose own cone moved, which is every atom
-                        // a plan walks down to and none it reaches sideways.
+                        // Everything a rule reads is an atom or a guard over what
+                        // an atom bound, so both narrowings come free of any
+                        // hand-asserted licence — for a rule the change log can
+                        // speak for. It cannot speak for one whose match depends
+                        // on rows outside the root's cone.
+                        let bounded = !rule.plan.unbounded();
                         let mut roots = rule.plan.roots(self);
-                        if let Some(delta) = delta.as_mut().filter(|_| !rule.plan.sideways()) {
+                        if let Some(delta) = delta.as_mut().filter(|_| bounded) {
                             let frontier = delta.at(self, rule.plan.height());
                             roots.retain(|&root| frontier.binary_search(&self.find(root)).is_ok());
                         }
                         stats.searched(roots.len(), delta.as_ref());
-                        let matches =
-                            rule.plan
-                                .search(self, roots, &|_, _| true, delta.is_some(), externs);
+                        let matches = rule.plan.search(
+                            self,
+                            roots,
+                            &|_, _| true,
+                            delta.is_some() && bounded,
+                            externs,
+                        );
                         found.push(Found::Query(rule, matches));
                     }
                 }

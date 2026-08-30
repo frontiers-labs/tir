@@ -104,6 +104,9 @@ pub struct Engine<L: Label> {
     /// The constant a class is known to be: seeded by every literal row, raised
     /// by a scope's assumption, joined by a union.
     consts: Column<LabelId>,
+    /// Tags the host put on classes, for a property the terms do not carry —
+    /// a state something outside the term graph observes, say.
+    tags: Column<u64>,
     /// The type a class's terms carry, seeded by every typed row. Congruence
     /// already forces a class's rows to agree on it, so the first row to say
     /// wins and a merge does not make the answer depend on merge order.
@@ -205,6 +208,7 @@ impl<L: Label> Engine<L> {
             minted: Vec::new(),
             undo: Vec::new(),
             consts: Column::new(Join::Agree),
+            tags: Column::new(Join::First),
             types: Column::new(Join::First),
             objects: Column::new(Join::Agree),
             scope_members: Vec::new(),
@@ -440,6 +444,7 @@ impl<L: Label> Engine<L> {
         self.mark_merged_new(absorbed);
         let moved = self.consts.merge(absorbed, survivor, self.row_epoch)
             | self.types.merge(absorbed, survivor, self.row_epoch)
+            | self.tags.merge(absorbed, survivor, self.row_epoch)
             | self.merge_object(absorbed, survivor);
         if moved {
             self.log_change(survivor);
@@ -1131,9 +1136,21 @@ impl<L: Label> Engine<L> {
         match column {
             ColumnId::Const => self.consts.get(class).map(|label| label.0 as u64),
             ColumnId::Type => self.types.get(class),
+            ColumnId::Mark => self.tags.get(class),
             // Not a word: a derivation is a class and a distance, which
             // [`crate::Atom::Object`] binds as a variable and a scalar.
             ColumnId::Object => None,
+        }
+    }
+
+    /// Tag `class` with `tag`. What the tag means is the host's business; the
+    /// engine only carries it through unions and scopes so a rule can read it
+    /// as a fact instead of consulting a side table it never declared.
+    pub fn mark(&mut self, class: ClassId, tag: u64) {
+        let class = self.find(class);
+        if self.tags.raise(class, tag, self.row_epoch) {
+            self.stats.raises += 1;
+            self.log_change(class);
         }
     }
 
@@ -1154,6 +1171,7 @@ impl<L: Label> Engine<L> {
         match column {
             ColumnId::Const => self.consts.is_new(class, self.row_epoch),
             ColumnId::Type => self.types.is_new(class, self.row_epoch),
+            ColumnId::Mark => self.tags.is_new(class, self.row_epoch),
             ColumnId::Object => self.objects.is_new(class, self.row_epoch),
         }
     }
@@ -1185,6 +1203,7 @@ impl<L: Label> Engine<L> {
         self.uf.push_scope();
         self.scope_memo.push(FxHashMap::default());
         self.consts.push_scope();
+        self.tags.push_scope();
         self.types.push_scope();
         self.objects.push_scope();
         self.scope_members.push(members);
@@ -1197,6 +1216,7 @@ impl<L: Label> Engine<L> {
     pub fn pop_context(&mut self) {
         let frame = self.scopes.pop().expect("open scope");
         self.consts.pop_scope();
+        self.tags.pop_scope();
         self.types.pop_scope();
         self.objects.pop_scope();
         for entry in self.undo.drain(frame.undo..).rev() {

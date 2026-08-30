@@ -184,6 +184,7 @@ mod tests {
                     field: 0,
                     out: 2,
                 }],
+                nots: Vec::new(),
             }),
             head: vec![HeadOp::RaiseObject {
                 key: 0,

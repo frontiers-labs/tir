@@ -31,7 +31,6 @@ pub struct Seeded {
     pub eg: EGraph<Node>,
     pub value_class: HashMap<ValueId, Id>,
     pub arg_block: HashMap<ValueId, BlockId>,
-    pub exported_states: Vec<Id>,
     pub loop_ports: Vec<LoopPorts>,
 }
 
@@ -65,7 +64,6 @@ pub fn seed(context: &Context, root: OpId) -> Seeded {
         state_ty: StateType::new(context),
         pointer_width: crate::DataLayout::for_op(context, root)
             .and_then(|layout| layout.pointer_size()),
-        exported_states: Vec::new(),
         loop_ports: Vec::new(),
     };
     for region in context.get_op(root).regions().to_vec() {
@@ -75,7 +73,6 @@ pub fn seed(context: &Context, root: OpId) -> Seeded {
         eg: seeder.eg,
         value_class: seeder.value_class,
         arg_block: seeder.arg_block,
-        exported_states: seeder.exported_states,
         loop_ports: seeder.loop_ports,
     }
 }
@@ -88,7 +85,6 @@ struct Seeder<'a> {
     seeded: HashSet<OpId>,
     state_ty: TypeId,
     pointer_width: Option<u32>,
-    exported_states: Vec<Id>,
     loop_ports: Vec<LoopPorts>,
 }
 
@@ -385,7 +381,7 @@ impl Seeder<'_> {
         for operand in instance.operands().to_vec() {
             if self.context.get_value(operand).ty() == self.state_ty {
                 let id = self.class_of(operand);
-                self.exported_states.push(id);
+                self.eg.mark(id, super::state::EXPORTED);
             }
         }
     }

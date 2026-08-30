@@ -32,6 +32,8 @@ pub enum ColumnId {
     Type,
     /// The class it is derived from and the distance to it.
     Object,
+    /// A tag the host put on the class, for a property the terms do not carry.
+    Mark,
 }
 
 /// The host's primitive functions over what a match bound: labels an atom
@@ -131,6 +133,9 @@ pub enum Guard {
         out: Scalar,
         value: Expr,
     },
+    /// The pairs are not all bound to the same class. One pair is plain
+    /// disequality; several say "these two terms are not the same term".
+    Distinct(SmallVec<[(Var, Var); 4]>),
     /// Read `field` off the label a fact column bound, so a constant's value and
     /// width reach the guards as words. The engine owns the label table; this is
     /// a decode, not a look at the graph.
@@ -158,6 +163,7 @@ impl Guard {
                 b.reads(&mut out);
             }
             Guard::Let { value, .. } => value.reads(&mut out),
+            Guard::Distinct(..) => {}
             Guard::Read { term, .. } => out.push(term.slot()),
             Guard::Extern { terms, args, .. } => {
                 out.extend(terms.iter().map(|term| term.slot()));
@@ -169,9 +175,18 @@ impl Guard {
         out
     }
 
+    /// The class variables the guard reads. Only a disequality has any: the
+    /// rest work on words.
+    fn vars(&self) -> SmallVec<[Var; 8]> {
+        match self {
+            Guard::Distinct(pairs) => pairs.iter().flat_map(|&(a, b)| [a, b]).collect(),
+            _ => SmallVec::new(),
+        }
+    }
+
     fn writes(&self) -> SmallVec<[Scalar; 2]> {
         match self {
-            Guard::Cmp(..) => SmallVec::new(),
+            Guard::Cmp(..) | Guard::Distinct(..) => SmallVec::new(),
             Guard::Let { out, .. } | Guard::Read { out, .. } => SmallVec::from_slice(&[*out]),
             Guard::Extern { out, .. } => out.clone(),
         }
@@ -202,6 +217,31 @@ pub enum Atom<L> {
     /// unrelated addresses overlap rather than not — and a class whose
     /// derivations disagree satisfies nothing.
     Object { key: Var, base: Var, offset: Scalar },
+    /// The terms derive `key` two ways at once, so it is placed nowhere. The
+    /// complement of [`Atom::Object`], which a negated conjunction needs: a law
+    /// that refuses an access it cannot place must be able to *match* one.
+    Unplaceable { key: Var },
+    /// `key` holds a row of operator `op`, whatever its operands — the one
+    /// reading that does not fix an arity.
+    Holds { key: Var, op: u64 },
+    /// `key` has no value in `column`. The complement of [`Atom::Fact`], for the
+    /// negated conjunction that must match an access it cannot measure.
+    Unknown { column: ColumnId, key: Var },
+}
+
+/// A negated sub-conjunction: no solution of it exists, given what the outer
+/// match bound.
+///
+/// Evaluated against the whole relation, never a delta. Rows and facts only
+/// accumulate and classes only merge, so the conjunction can only go from
+/// unsatisfied to satisfied over rounds: a match blocked once stays blocked and
+/// needs no re-check, and a match that fired cannot be un-fired. The second half
+/// is the contract the memory laws already live with — a law that has fired
+/// cannot be taken back — stated by the engine rather than left to a comment.
+#[derive(Clone, Debug)]
+pub struct Nested<L> {
+    pub atoms: Vec<Atom<L>>,
+    pub guards: Vec<Guard>,
 }
 
 impl<L> Atom<L> {
@@ -210,7 +250,11 @@ impl<L> Atom<L> {
     pub fn class(&self) -> Var {
         match self {
             Atom::Node { class, .. } | Atom::Literal { class, .. } => *class,
-            Atom::Fact { key, .. } | Atom::Object { key, .. } => *key,
+            Atom::Fact { key, .. }
+            | Atom::Object { key, .. }
+            | Atom::Unplaceable { key }
+            | Atom::Holds { key, .. }
+            | Atom::Unknown { key, .. } => *key,
         }
     }
 
@@ -221,6 +265,7 @@ impl<L> Atom<L> {
             Atom::Literal { .. } => SmallVec::new(),
             Atom::Fact { value, .. } => SmallVec::from_slice(&[*value]),
             Atom::Object { offset, .. } => SmallVec::from_slice(&[*offset]),
+            Atom::Unplaceable { .. } | Atom::Holds { .. } | Atom::Unknown { .. } => SmallVec::new(),
         }
     }
 }
@@ -235,6 +280,9 @@ pub struct Query<L> {
     pub root: Var,
     pub atoms: Vec<Atom<L>>,
     pub guards: Vec<Guard>,
+    /// Sub-conjunctions that must have no solution. Placed once everything they
+    /// read is bound, and so last.
+    pub nots: Vec<Nested<L>>,
 }
 
 impl<L> Query<L> {
@@ -246,6 +294,7 @@ impl<L> Query<L> {
             root,
             atoms,
             guards: Vec::new(),
+            nots: Vec::new(),
         }
     }
 }
@@ -267,11 +316,15 @@ pub struct Plan<L> {
     query: Query<L>,
     steps: Vec<Step>,
     height: usize,
+    /// One compiled plan per negated sub-conjunction, in the query's order.
+    nots: Vec<Plan<L>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     Atom(usize),
+    /// A negated sub-conjunction, by index into the plan's nested plans.
+    Not(usize),
     /// A sideways atom: its class is not bound, but its operand `slot` is, so it
     /// is reached through that class's parent back-edges rather than by walking
     /// down from the root.
@@ -292,15 +345,26 @@ impl<L: Label> Plan<L> {
     pub fn compile(query: Query<L>) -> Self {
         let mut bound = vec![false; query.vars as usize];
         bound[query.root as usize] = true;
-        let mut known = vec![false; query.scalars as usize];
+        let known = vec![false; query.scalars as usize];
+        Self::compile_from(query, bound, known).expect("every atom is reached and every guard read")
+    }
+
+    /// Order what `bound` and `known` do not already give. `None` when an atom
+    /// is reachable neither down from a bound class nor sideways from a bound
+    /// operand, or a guard reads a scalar nothing binds.
+    fn compile_from(query: Query<L>, mut bound: Vec<bool>, mut known: Vec<bool>) -> Option<Self> {
         let mut steps = Vec::with_capacity(query.atoms.len() + query.guards.len());
         let mut taken = vec![false; query.atoms.len()];
         let mut checked = vec![false; query.guards.len()];
+        let mut nots: Vec<Plan<L>> = Vec::new();
+        let mut placed = vec![false; query.nots.len()];
         let mut depth = vec![0usize; query.vars as usize];
         let mut height = 0usize;
         loop {
             let guard = (0..query.guards.len()).find(|&i| {
-                !checked[i] && query.guards[i].reads().iter().all(|&s| known[s as usize])
+                !checked[i]
+                    && query.guards[i].reads().iter().all(|&s| known[s as usize])
+                    && query.guards[i].vars().iter().all(|&v| bound[v as usize])
             });
             if let Some(guard) = guard {
                 checked[guard] = true;
@@ -308,6 +372,28 @@ impl<L: Label> Plan<L> {
                     known[out as usize] = true;
                 }
                 steps.push(Step::Guard(guard));
+                continue;
+            }
+            // A negated conjunction reads and never writes, so it goes as soon
+            // as everything it names is bound — the earliest it can prune.
+            let not = (0..query.nots.len()).find_map(|i| {
+                if placed[i] {
+                    return None;
+                }
+                let nested = Query {
+                    vars: query.vars,
+                    scalars: query.scalars,
+                    root: query.root,
+                    atoms: query.nots[i].atoms.clone(),
+                    guards: query.nots[i].guards.clone(),
+                    nots: Vec::new(),
+                };
+                Plan::compile_from(nested, bound.clone(), known.clone()).map(|plan| (i, plan))
+            });
+            if let Some((index, plan)) = not {
+                placed[index] = true;
+                steps.push(Step::Not(nots.len()));
+                nots.push(plan);
                 continue;
             }
             if taken.iter().all(|&t| t) {
@@ -321,16 +407,16 @@ impl<L: Label> Plan<L> {
             let (next, step) = match downward {
                 Some(next) => (next, Step::Atom(next)),
                 None => {
-                    let (next, slot) = (0..query.atoms.len())
-                        .filter(|&i| !taken[i])
-                        .find_map(|i| match &query.atoms[i] {
-                            Atom::Node { args, .. } => args
-                                .iter()
-                                .position(|&arg| bound[arg as usize])
-                                .map(|slot| (i, slot as u8)),
-                            _ => None,
-                        })
-                        .expect("every atom is reached from the root or from an operand");
+                    let (next, slot) =
+                        (0..query.atoms.len())
+                            .filter(|&i| !taken[i])
+                            .find_map(|i| match &query.atoms[i] {
+                                Atom::Node { args, .. } => args
+                                    .iter()
+                                    .position(|&arg| bound[arg as usize])
+                                    .map(|slot| (i, slot as u8)),
+                                _ => None,
+                            })?;
                     (next, Step::Parents { atom: next, slot })
                 }
             };
@@ -355,15 +441,12 @@ impl<L: Label> Plan<L> {
                 known[slot as usize] = true;
             }
         }
-        assert!(
-            checked.iter().all(|&c| c),
-            "every guard reads scalars the atoms bind"
-        );
-        Self {
+        (checked.iter().all(|&c| c) && placed.iter().all(|&p| p)).then_some(Self {
             query,
             steps,
             height,
-        }
+            nots,
+        })
     }
 
     pub fn query(&self) -> &Query<L> {
@@ -384,16 +467,20 @@ impl<L: Label> Plan<L> {
         self.height
     }
 
-    /// Whether the plan reaches an atom through an operand rather than down from
-    /// the root. Such a row is not in the root's cone at any depth — it sits in a
-    /// sibling class sharing a child — so no upward closure of the change log
-    /// names the root when the row is minted, and the roots may not be narrowed
-    /// to one. [`Self::search`]'s `only_new` still holds: the fresh row is in the
-    /// match.
-    pub fn sideways(&self) -> bool {
+    /// Whether the match depends on rows the root's downward cone does not
+    /// contain, so neither narrowing a round's roots to the change frontier nor
+    /// skipping a match with no new row of its own is licensed.
+    ///
+    /// Two shapes do this. A sideways atom sits in a sibling class sharing a
+    /// child, which no upward closure of the change log reaches from the root.
+    /// And a negated conjunction is read against the whole relation: what
+    /// satisfies it can change — a class placed nowhere in one round is placed
+    /// in the next — without anything in the match moving at all.
+    pub fn unbounded(&self) -> bool {
         self.steps
             .iter()
-            .any(|step| matches!(step, Step::Parents { .. }))
+            .any(|step| matches!(step, Step::Parents { .. } | Step::Not(_)))
+            || self.nots.iter().any(Plan::unbounded)
     }
 
     /// The classes the root atom can match at: those holding its operator, or
@@ -435,6 +522,8 @@ impl<L: Label> Plan<L> {
                     .atoms
                     .iter()
                     .any(|atom| matches!(atom, Atom::Node { .. })),
+            counting: false,
+            hits: 0,
             bound: SmallVec::from_elem(None, self.query.vars as usize),
             scalars: SmallVec::from_elem(0, self.query.scalars as usize),
             trail: SmallVec::new(),
@@ -456,6 +545,11 @@ impl<L: Label> Plan<L> {
 
     fn step(&self, eval: &mut Eval<'_, L>, root: ClassId, index: usize) {
         let Some(&step) = self.steps.get(index) else {
+            // A negated conjunction asks only whether a solution exists.
+            if eval.counting {
+                eval.hits += 1;
+                return;
+            }
             if !eval.only_new || eval.fresh > 0 {
                 eval.out.push(Match {
                     root,
@@ -465,6 +559,9 @@ impl<L: Label> Plan<L> {
             }
             return;
         };
+        if eval.counting && eval.hits > 0 {
+            return;
+        }
         let atom = match step {
             Step::Parents { atom, slot } => {
                 let Atom::Node {
@@ -478,6 +575,20 @@ impl<L: Label> Plan<L> {
                 };
                 let child = eval.bound[args[slot as usize] as usize].expect("bound operand");
                 self.parents(eval, root, index, template, args, *class, *row, child);
+                return;
+            }
+            Step::Not(not) => {
+                let outer = std::mem::replace(&mut eval.counting, true);
+                let hits = std::mem::replace(&mut eval.hits, 0);
+                let mark = eval.trail.len();
+                self.nots[not].step(eval, root, 0);
+                eval.unbind(mark);
+                let blocked = eval.hits > 0;
+                eval.counting = outer;
+                eval.hits = hits;
+                if !blocked {
+                    self.step(eval, root, index + 1);
+                }
                 return;
             }
             Step::Guard(guard) => {
@@ -498,6 +609,28 @@ impl<L: Label> Plan<L> {
             }
             Atom::Object { base, offset, .. } => {
                 self.object(eval, root, index, *base, *offset, class)
+            }
+            // The complement of `Object`: no reading of the chain, so no
+            // freshness either — a class stops being placed once and for all.
+            Atom::Unplaceable { .. } => {
+                if eval.eg.object_of(class).is_none() {
+                    self.step(eval, root, index + 1);
+                }
+            }
+            Atom::Unknown { column, .. } => {
+                if eval.eg.fact(*column, class).is_none() {
+                    self.step(eval, root, index + 1);
+                }
+            }
+            Atom::Holds { op, .. } => {
+                let eg = eval.eg;
+                let Some(row) = eg.rows(class).find(|&row| eg.node(row).op_key() == *op) else {
+                    return;
+                };
+                let fresh = usize::from(eg.row_is_new(row));
+                eval.fresh += fresh;
+                self.step(eval, root, index + 1);
+                eval.fresh -= fresh;
             }
             Atom::Node {
                 template,
@@ -660,6 +793,10 @@ struct Eval<'a, L: Label> {
     externs: &'a dyn Externs<L>,
     allowed: &'a dyn Fn(Var, ClassId) -> bool,
     only_new: bool,
+    /// Inside a negated conjunction: count solutions and stop at the first,
+    /// rather than emit them.
+    counting: bool,
+    hits: usize,
     bound: SmallVec<[Option<ClassId>; 8]>,
     scalars: SmallVec<[u64; 4]>,
     /// Variables this branch bound, to undo on the way out.
@@ -719,6 +856,9 @@ impl<'a, L: Label> Eval<'a, L> {
                     Cmp::Ne => a != b,
                 }
             }
+            Guard::Distinct(pairs) => !pairs
+                .iter()
+                .all(|&(a, b)| self.bound[a as usize] == self.bound[b as usize]),
             Guard::Let { out, value } => {
                 let Some(value) = value.eval(&self.scalars) else {
                     return false;
@@ -773,6 +913,7 @@ impl<'a, L: Label> Eval<'a, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::Nested;
     use crate::testing::Term;
     use proptest::prelude::*;
 
@@ -806,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "reached from the root or from an operand")]
+    #[should_panic(expected = "every atom is reached")]
     fn plan_rejects_an_atom_no_operand_reaches() {
         Plan::compile(Query::tree(2, 0, vec![node(Term::leaf("x"), &[], 1)]));
     }
@@ -857,6 +998,9 @@ mod tests {
             Atom::Object { base, .. } => {
                 eg.object_of(class).map(|(from, _)| from) == Some(assignment[*base as usize])
             }
+            Atom::Unplaceable { .. } => eg.object_of(class).is_none(),
+            Atom::Holds { op, .. } => eg.rows(class).any(|row| eg.node(row).op_key() == *op),
+            Atom::Unknown { column, .. } => eg.fact(*column, class).is_none(),
             Atom::Node { template, args, .. } => eg.rows(class).any(|row| {
                 let children: Vec<ClassId> = eg.children(row).iter().map(|&c| eg.find(c)).collect();
                 if children.len() != args.len() || !template.matches_template(eg.node(row)) {
@@ -869,6 +1013,36 @@ mod tests {
                         && children == [want[1], want[0]])
             }),
         }
+    }
+
+    /// A negated conjunction blocks a match whose blocker no round created —
+    /// it is read against the whole relation, never a delta.
+    #[test]
+    fn a_negated_atom_blocks_a_match_whatever_round_made_it() {
+        let mut eg = Engine::new();
+        let a = eg.add(Term::leaf("a"));
+        let b = eg.add(Term::leaf("b"));
+        let blocked = eg.add(Term::op("f", &[a, b]));
+        let free = eg.add(Term::op("f", &[b, a]));
+        eg.add(Term::op("g", &[a]));
+        eg.rebuild();
+
+        let query = Query {
+            vars: 4,
+            scalars: 0,
+            root: 0,
+            atoms: vec![node(Term::op("f", &[ClassId(0), ClassId(0)]), &[1, 2], 0)],
+            guards: Vec::new(),
+            nots: vec![Nested {
+                atoms: vec![node(Term::op("g", &[ClassId(0)]), &[1], 3)],
+                guards: Vec::new(),
+            }],
+        };
+        let plan = Plan::compile(query);
+        assert_eq!(plan.steps(), &[Step::Atom(0), Step::Not(0)]);
+        let found = plan.search(&eg, [blocked, free], &|_, _| true, false, &NoExterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, free);
     }
 
     /// A second root reached from an operand the first bound.
@@ -931,6 +1105,7 @@ mod tests {
                 },
                 Guard::Cmp(Cmp::Lt, Expr::Scalar(1), Expr::Lit(10)),
             ],
+            nots: Vec::new(),
         };
         let plan = Plan::compile(query);
         assert_eq!(

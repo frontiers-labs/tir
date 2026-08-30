@@ -627,7 +627,7 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
         )),
         head: vec![HeadOp::Union(0, 3)],
     };
-    assert!(relate.plan.sideways());
+    assert!(relate.plan.unbounded());
 
     let laws: Vec<Law<Math, &'static str>> =
         vec![Law::Query(Box::new(mint)), Law::Query(Box::new(relate))];

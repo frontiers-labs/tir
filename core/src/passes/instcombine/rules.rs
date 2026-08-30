@@ -168,10 +168,7 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
     }
     ruleset.push_query(state::pointer_derivation());
     ruleset.push_query(state::forward_load());
-    ruleset.push(
-        state::eliminate_dead_store(seeded.exported_states.clone()),
-        None,
-    );
+    ruleset.push_query(state::eliminate_dead_store());
     ruleset
 }
 
@@ -298,6 +295,7 @@ fn const_fold(template: &Node) -> tir_relational::Rule<Node> {
             root: 0,
             atoms,
             guards,
+            nots: Vec::new(),
         }),
         head: vec![
             HeadOp::Insert {
@@ -384,6 +382,7 @@ fn decided_gamma(arity: usize) -> tir_relational::Rule<Node> {
                     out: smallvec![Scalars::ARM],
                 },
             ],
+            nots: Vec::new(),
         }),
         head: vec![HeadOp::UnionIndexed {
             class: 0,
@@ -503,6 +502,7 @@ fn cmp_complement(
                     Expr::Scalar(Complement::OTHER_TY),
                 ),
             ],
+            nots: Vec::new(),
         }),
         head: vec![
             HeadOp::Insert {

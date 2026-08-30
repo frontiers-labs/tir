@@ -36,10 +36,9 @@
 //! address class alone, so `p + 4` and `p + 2 + 2` are the one extent they are.
 
 use smallvec::smallvec;
-use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, HeadOp, Plan, Query, Source};
-use tir_symbolic::egraph::{EGraph, ENode, Id, Pattern, Rewrite, Rhs, Var};
+use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, HeadOp, Nested, Plan, Query, Source};
+use tir_symbolic::egraph::{ENode, Id};
 
-use super::rules::{Rule, Sym, operand};
 use crate::sem::{SemNode as Node, SymKind, node::field};
 
 /// `Load(address, bytes, metadata, state)`.
@@ -93,6 +92,7 @@ pub(crate) fn pointer_derivation() -> tir_relational::Rule<Node> {
                 field: field::INT_SIGNED,
                 out: Derivation::STEP,
             }],
+            nots: Vec::new(),
         }),
         head: vec![HeadOp::RaiseObject {
             key: 0,
@@ -206,6 +206,7 @@ pub(crate) fn forward_load() -> tir_relational::Rule<Node> {
                     Expr::Scalar(Access::VALUE_TY),
                 ),
             ],
+            nots: Vec::new(),
         }),
         head: vec![HeadOp::Union(0, 6 + STORE_VALUE as u32)],
     }
@@ -226,218 +227,334 @@ impl Access {
     const VALUE_TY: u32 = 8;
 }
 
+/// Where a rule's next variable and next scalar come from, so a law of twenty
+/// negated conjunctions can name what it needs without counting slots by hand.
+#[derive(Default)]
+struct Slots {
+    vars: u32,
+    scalars: u32,
+}
+
+impl Slots {
+    fn var(&mut self) -> u32 {
+        self.vars += 1;
+        self.vars - 1
+    }
+
+    fn vars(&mut self, count: usize) -> Vec<u32> {
+        (0..count).map(|_| self.var()).collect()
+    }
+
+    fn scalar(&mut self) -> u32 {
+        self.scalars += 1;
+        self.scalars - 1
+    }
+}
+
+/// The tag the pass puts on a state something outside the term graph observes.
+pub(crate) const EXPORTED: u64 = 1;
+
+/// What an access on a state has to name for the two memories a law would merge
+/// to be tellable apart.
+#[derive(Clone, Copy)]
+enum Tells {
+    /// Any byte in common — what a read of the memory the dead store left can
+    /// notice.
+    Overlaps,
+    /// Exactly the bytes a store covers — what forwarding answers, and so the
+    /// one reading the union would change on the state the dead store was
+    /// handed.
+    Same,
+}
+
+/// An access of `kind` reached through the state class it names.
+fn access(arity: usize, state_slot: usize, on: u32, slots: &mut Slots) -> (u32, Vec<u32>) {
+    let class = slots.var();
+    let mut operands = slots.vars(arity);
+    operands[state_slot] = on;
+    (class, operands)
+}
+
+fn access_atom(kind: SymKind, class: u32, operands: &[u32]) -> Atom<Node> {
+    Atom::Node {
+        template: Node::sym_pattern(
+            kind,
+            operands.iter().map(|&var| Id::from_raw(var)).collect(),
+        ),
+        args: operands.iter().copied().collect(),
+        class,
+        row: None,
+    }
+}
+
+fn read_signed(label: u32, out: u32) -> Guard {
+    Guard::Read {
+        term: Source::Label(label),
+        field: field::INT_SIGNED,
+        out,
+    }
+}
+
+/// The four ways an access on `on` other than `spared` can tell apart the two
+/// memories a law would merge: it cannot be placed, its byte count is not known,
+/// it names another object, or it names bytes `tells` says it notices.
+///
+/// Each is a conjunction the law must have no solution of, and the four together
+/// are the negation of one disjunction — which is what `observed` computed by
+/// sweeping every class holding a memory operator.
+#[allow(clippy::too_many_arguments)]
+fn undisturbed(
+    on: u32,
+    spared: u32,
+    object: u32,
+    offset: u32,
+    bytes: u32,
+    tells: Tells,
+    slots: &mut Slots,
+) -> Vec<Nested<Node>> {
+    let mut out = Vec::new();
+    for (kind, arity, state_slot) in [
+        (SymKind::LoadMemory, LOAD_ARITY, LOAD_STATE),
+        (SymKind::StoreMemory, STORE_ARITY, STORE_STATE),
+    ] {
+        let elsewhere = |class: u32| Guard::Distinct(smallvec![(class, spared)]);
+
+        let (class, operands) = access(arity, state_slot, on, slots);
+        out.push(Nested {
+            atoms: vec![
+                access_atom(kind, class, &operands),
+                Atom::Unplaceable {
+                    key: operands[ADDRESS],
+                },
+            ],
+            guards: vec![elsewhere(class)],
+        });
+
+        let (class, operands) = access(arity, state_slot, on, slots);
+        out.push(Nested {
+            atoms: vec![
+                access_atom(kind, class, &operands),
+                Atom::Unknown {
+                    column: ColumnId::Const,
+                    key: operands[BYTES],
+                },
+            ],
+            guards: vec![elsewhere(class)],
+        });
+
+        let (class, operands) = access(arity, state_slot, on, slots);
+        let other = slots.var();
+        out.push(Nested {
+            atoms: vec![
+                access_atom(kind, class, &operands),
+                Atom::Object {
+                    key: operands[ADDRESS],
+                    base: other,
+                    offset: slots.scalar(),
+                },
+            ],
+            guards: vec![
+                elsewhere(class),
+                Guard::Distinct(smallvec![(other, object)]),
+            ],
+        });
+
+        let (class, operands) = access(arity, state_slot, on, slots);
+        let (read_offset, read_label, read_bytes) =
+            (slots.scalar(), slots.scalar(), slots.scalar());
+        let noticed = match tells {
+            Tells::Overlaps => vec![
+                Guard::Cmp(
+                    Cmp::Lt,
+                    Expr::Scalar(read_offset),
+                    Expr::Add(
+                        Box::new(Expr::Scalar(offset)),
+                        Box::new(Expr::Scalar(bytes)),
+                    ),
+                ),
+                Guard::Cmp(
+                    Cmp::Lt,
+                    Expr::Scalar(offset),
+                    Expr::Add(
+                        Box::new(Expr::Scalar(read_offset)),
+                        Box::new(Expr::Scalar(read_bytes)),
+                    ),
+                ),
+            ],
+            Tells::Same => vec![
+                Guard::Cmp(Cmp::Eq, Expr::Scalar(read_offset), Expr::Scalar(offset)),
+                Guard::Cmp(Cmp::Eq, Expr::Scalar(read_bytes), Expr::Scalar(bytes)),
+            ],
+        };
+        let mut guards = vec![elsewhere(class), read_signed(read_label, read_bytes)];
+        guards.extend(noticed);
+        out.push(Nested {
+            atoms: vec![
+                access_atom(kind, class, &operands),
+                Atom::Object {
+                    key: operands[ADDRESS],
+                    base: object,
+                    offset: read_offset,
+                },
+                Atom::Fact {
+                    column: ColumnId::Const,
+                    key: operands[BYTES],
+                    value: read_label,
+                },
+            ],
+            guards,
+        });
+    }
+    out
+}
+
 /// S2: a store the next one overwrites unobserved leaves the state it was handed.
-pub(crate) fn eliminate_dead_store(exported: Vec<Id>) -> Rule {
-    access_law(
-        "dead-store",
-        SymKind::StoreMemory,
-        STORE_ARITY,
-        move |eg, written, root| {
-            let Some(over) = extent(eg, written[ADDRESS], written[BYTES]) else {
-                return;
-            };
-            let state = written[STORE_STATE];
-            let Some(before) = overwritten_state(eg, state, written, over) else {
-                return;
-            };
-            if exported
-                .iter()
-                .any(|&class| eg.find(class) == state || eg.find(class) == before)
-            {
-                return;
-            }
-            // Nothing but the overwriting store may read the bytes the dead
-            // store left: the union hands such a read the memory before that
-            // write, and a store there covering other bytes too would answer it.
-            if observed(eg, state, over, eg.find(root), Extent::overlaps) {
-                return;
-            }
-            // And nothing but the dead store may read those bytes on the state it
-            // was handed: forwarding answers an access naming exactly the extent
-            // a store left, so that is the reading the union would change.
-            if observed(eg, before, over, state, Extent::reads) {
-                return;
-            }
-            // A second write to the same extent on `before` becomes congruent to
-            // the survivor one round later — the survivor names `before`, and the
-            // store that left `before` names the state before *it* — and the
-            // chain folds back to where it started: both writes gone, not one.
-            if writes_over(eg, before, over) {
-                return;
-            }
-            // A loop's carried port is one class read at more than one point of the
-            // program — the head of an iteration, and where the loop was left. A
-            // store node landing in it answers for both, so a read after the loop
-            // would forward the value the body overwrote.
-            if eg
-                .nodes(before)
-                .any(|node| node.sym() == Some(SymKind::Theta))
-            {
-                return;
-            }
-            eg.union(state, before);
+pub(crate) fn eliminate_dead_store() -> tir_relational::Rule<Node> {
+    let mut slots = Slots::default();
+    let root = slots.var();
+    let store = slots.vars(STORE_ARITY);
+    let object = slots.var();
+    let dead = slots.vars(STORE_ARITY);
+    let state = store[STORE_STATE];
+    let before = dead[STORE_STATE];
+
+    let (offset, bytes_label, bytes) = (slots.scalar(), slots.scalar(), slots.scalar());
+    let (dead_offset, dead_bytes_label, dead_bytes) =
+        (slots.scalar(), slots.scalar(), slots.scalar());
+    let tag = slots.scalar();
+
+    let atoms = vec![
+        access_atom(SymKind::StoreMemory, root, &store),
+        Atom::Object {
+            key: store[ADDRESS],
+            base: object,
+            offset,
         },
-    )
-}
+        Atom::Fact {
+            column: ColumnId::Const,
+            key: store[BYTES],
+            value: bytes_label,
+        },
+        access_atom(SymKind::StoreMemory, state, &dead),
+        Atom::Object {
+            key: dead[ADDRESS],
+            base: object,
+            offset: dead_offset,
+        },
+        Atom::Fact {
+            column: ColumnId::Const,
+            key: dead[BYTES],
+            value: dead_bytes_label,
+        },
+    ];
+    let guards = vec![
+        read_signed(bytes_label, bytes),
+        read_signed(dead_bytes_label, dead_bytes),
+        Guard::Cmp(Cmp::Eq, Expr::Scalar(offset), Expr::Scalar(dead_offset)),
+        Guard::Cmp(Cmp::Eq, Expr::Scalar(bytes), Expr::Scalar(dead_bytes)),
+        // Two stores agreeing on everything but the state they take are one node
+        // apart from it, so the law leaves them alone: the term does not say the
+        // state before already holds the value.
+        Guard::Distinct(
+            (0..STORE_STATE)
+                .map(|slot| (dead[slot], store[slot]))
+                .collect(),
+        ),
+    ];
 
-/// A law over every access of `kind`, handed the canonical classes of the term's
-/// `arity` operands and the class the access itself stands for.
-fn access_law(
-    name: &'static str,
-    kind: SymKind,
-    arity: usize,
-    fire: impl Fn(&mut EGraph<Node>, &[Id], Id) + Send + Sync + 'static,
-) -> Rule {
-    let mut lhs = Pattern::new();
-    let args = (0..arity)
-        .map(|index| lhs.var(Var::Symbol(index as Sym)))
-        .collect();
-    lhs.add(Node::sym_pattern(kind, args));
-    Rewrite::new(
-        name,
-        lhs,
-        Rhs::Apply(Box::new(move |eg, substitution, root| {
-            let operands: Vec<Id> = (0..arity)
-                .map(|index| eg.find(operand(substitution, index as Sym)))
-                .collect();
-            fire(eg, &operands, root);
-        })),
-    )
-}
+    let mut nots = vec![
+        // A state something outside the term graph observes is not ours to
+        // rewrite, on either side of the merge.
+        Nested {
+            atoms: vec![Atom::Fact {
+                column: ColumnId::Mark,
+                key: state,
+                value: tag,
+            }],
+            guards: Vec::new(),
+        },
+        Nested {
+            atoms: vec![Atom::Fact {
+                column: ColumnId::Mark,
+                key: before,
+                value: tag,
+            }],
+            guards: Vec::new(),
+        },
+        // A loop's carried port is one class read at more than one point of the
+        // program — the head of an iteration, and where the loop was left. A
+        // store node landing in it answers for both, so a read after the loop
+        // would forward the value the body overwrote.
+        Nested {
+            atoms: vec![Atom::Holds {
+                key: before,
+                op: Node::sym_pattern(SymKind::Theta, Vec::new()).op_key(),
+            }],
+            guards: Vec::new(),
+        },
+    ];
 
-/// The bytes an access names: the object its address is derived from, the byte
-/// offset into it, and how many bytes it covers.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Extent {
-    base: Id,
-    offset: i64,
-    bytes: i64,
-}
+    // A second write to the same extent on the state before becomes congruent to
+    // the survivor one round later — the survivor names it, and the store that
+    // left it names the state before *that* — and the chain folds back to where
+    // it started: both writes gone, not one.
+    let over = slots.vars(STORE_ARITY);
+    let (over_offset, over_label, over_bytes) = (slots.scalar(), slots.scalar(), slots.scalar());
+    nots.push(Nested {
+        atoms: vec![
+            access_atom(SymKind::StoreMemory, before, &over),
+            Atom::Object {
+                key: over[ADDRESS],
+                base: object,
+                offset: over_offset,
+            },
+            Atom::Fact {
+                column: ColumnId::Const,
+                key: over[BYTES],
+                value: over_label,
+            },
+        ],
+        guards: vec![
+            read_signed(over_label, over_bytes),
+            Guard::Cmp(Cmp::Eq, Expr::Scalar(over_offset), Expr::Scalar(offset)),
+            Guard::Cmp(Cmp::Eq, Expr::Scalar(over_bytes), Expr::Scalar(bytes)),
+        ],
+    });
 
-impl Extent {
-    /// Whether the two name a byte in common. Two extents of different objects
-    /// are not comparable here — the term graph does not know an allocation from
-    /// a parameter, and an address it cannot read back to `other`'s object is its
-    /// own object — so they are taken to overlap. What tells objects apart is the
-    /// chain they sit on, and a law only ever sees one chain.
-    fn overlaps(self, other: Extent) -> bool {
-        !self.comparable(other)
-            || (self.offset < other.offset + other.bytes && other.offset < self.offset + self.bytes)
-    }
-
-    /// Whether an access naming these bytes reads what a write of `other` left.
-    /// Forwarding answers exactly the extent a store covers, so that is the one
-    /// reading a law changes — but only where the two are placed on one object
-    /// at all. An address the walk cannot read back to `other`'s is its own
-    /// object *for now*: an offset that becomes a literal later moves it onto
-    /// `other`'s, and a law that has already fired cannot be taken back.
-    fn reads(self, other: Extent) -> bool {
-        !self.comparable(other) || self == other
-    }
-
-    fn comparable(self, other: Extent) -> bool {
-        self.base == other.base
-    }
-}
-
-/// How far a chain of `ptradd`s is read back for the object an address names.
-const DERIVATION_LIMIT: usize = 8;
-
-/// The extent an access over `address` covering `bytes` names.
-fn extent(eg: &EGraph<Node>, address: Id, bytes: Id) -> Option<Extent> {
-    let bytes = eg.nodes(bytes).find_map(Node::int)?.to_i64();
-    let (base, offset) = derivation(eg, eg.find(address), 0, 0);
-    Some(Extent {
-        base,
+    // Nothing but the overwriting store may read the bytes the dead store left:
+    // the union hands such a read the memory before that write.
+    nots.extend(undisturbed(
+        state,
+        root,
+        object,
         offset,
         bytes,
-    })
-}
+        Tells::Overlaps,
+        &mut slots,
+    ));
+    // And nothing but the dead store may read those bytes on the state it was
+    // handed: forwarding answers an access naming exactly the extent a store
+    // left, so that is the reading the union would change.
+    nots.extend(undisturbed(
+        before,
+        state,
+        object,
+        offset,
+        bytes,
+        Tells::Same,
+        &mut slots,
+    ));
 
-/// The object an address is derived from and the offset into it: arithmetic on a
-/// pointer points into the object it started from, so the `ptradd`s over
-/// literals read back to that object and one offset. An address the walk cannot
-/// read back is its own object at offset zero, which is what makes two
-/// unrelated addresses overlap rather than not.
-fn derivation(eg: &EGraph<Node>, address: Id, offset: i64, depth: usize) -> (Id, i64) {
-    if depth == DERIVATION_LIMIT {
-        return (address, offset);
+    tir_relational::Rule {
+        name: "dead-store".into(),
+        plan: Plan::compile(Query {
+            vars: slots.vars,
+            scalars: slots.scalars,
+            root,
+            atoms,
+            guards,
+            nots,
+        }),
+        head: vec![HeadOp::Union(state, before)],
     }
-    for node in eg.nodes(address) {
-        let Some(op) = node.kind.ir() else {
-            continue;
-        };
-        if (op.dialect, op.name) != ("ptr", "ptradd") {
-            continue;
-        }
-        let [base, added] = node.children[..] else {
-            continue;
-        };
-        let Some(step) = eg.nodes(eg.find(added)).find_map(Node::int) else {
-            continue;
-        };
-        return derivation(eg, eg.find(base), offset + step.to_i64(), depth + 1);
-    }
-    (address, offset)
-}
-
-/// The state a store in `state` was handed, when it wrote the extent `over` and
-/// is not the very store overwriting it.
-fn overwritten_state(eg: &EGraph<Node>, state: Id, written: &[Id], over: Extent) -> Option<Id> {
-    eg.nodes(state)
-        .filter(|node| node.sym() == Some(SymKind::StoreMemory))
-        .find_map(|node| {
-            let dead = canonical(eg, node);
-            (extent(eg, dead[ADDRESS], dead[BYTES]) == Some(over)
-                && dead[..STORE_STATE] != written[..STORE_STATE])
-                .then_some(dead[STORE_STATE])
-        })
-}
-
-/// Whether `state` is the memory a store to the extent `over` names left.
-fn writes_over(eg: &EGraph<Node>, state: Id, over: Extent) -> bool {
-    eg.nodes(state).any(|node| {
-        node.sym() == Some(SymKind::StoreMemory) && {
-            let written = canonical(eg, node);
-            extent(eg, written[ADDRESS], written[BYTES]) == Some(over)
-        }
-    })
-}
-
-/// Whether an access other than `spared` reads `state` at bytes `tells` says it
-/// can tell the memory `over` names apart by. An access whose extent the terms
-/// cannot place may name any of them.
-fn observed(
-    eg: &EGraph<Node>,
-    state: Id,
-    over: Extent,
-    spared: Id,
-    tells: impl Fn(Extent, Extent) -> bool,
-) -> bool {
-    for (kind, slot) in [
-        (SymKind::LoadMemory, LOAD_STATE),
-        (SymKind::StoreMemory, STORE_STATE),
-    ] {
-        let key = Node::sym_pattern(kind, Vec::new()).op_key();
-        for class in eg.classes_with_op(key) {
-            if class == spared {
-                continue;
-            }
-            for node in eg.nodes(class) {
-                if node.sym() != Some(kind) || eg.find(node.children[slot]) != state {
-                    continue;
-                }
-                let read = canonical(eg, node);
-                match extent(eg, read[ADDRESS], read[BYTES]) {
-                    Some(read) if !tells(read, over) => {}
-                    _ => return true,
-                }
-            }
-        }
-    }
-    false
-}
-
-fn canonical(eg: &EGraph<Node>, node: &Node) -> Vec<Id> {
-    node.children.iter().map(|&child| eg.find(child)).collect()
 }
