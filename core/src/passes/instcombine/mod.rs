@@ -88,8 +88,13 @@ impl Pass for InstCombinePass {
             replacing: std::cell::Cell::new(None),
         };
         driver.hypothesize(loop_ports);
+        driver.saturate();
+        // One extraction per fixpoint, not per region: the rewrites read the
+        // e-graph and never write it, so the base graph a region is rewritten
+        // from is the one this pass extracted.
+        let extraction = driver.eg.extract_best(|_, node| cost(node));
         let body = context.get_op(root).regions()[0];
-        driver.process_region(body, rewriter)?;
+        driver.process_region(body, &extraction, rewriter)?;
         let result = driver.sweep(root, rewriter);
         tir_symbolic::egraph::report_saturation("instcombine");
         result
@@ -112,11 +117,8 @@ struct Driver<'a> {
 }
 
 impl Driver<'_> {
-    fn process_region(
-        &mut self,
-        region: RegionId,
-        rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+    /// Saturate under whatever assumptions are open.
+    fn saturate(&mut self) {
         self.eg.saturate_rules(
             &self.ruleset.rewrites,
             &self.ruleset.interpretation,
@@ -124,8 +126,14 @@ impl Driver<'_> {
             NODE_LIMIT,
         );
         crate::memstats::egraph_census("instcombine", &self.eg);
-        let extraction = self.eg.extract_best(|_, node| cost(node));
+    }
 
+    fn process_region(
+        &mut self,
+        region: RegionId,
+        extraction: &Extraction<'_, Node>,
+        rewriter: &mut Rewriter,
+    ) -> Result<(), PassError> {
         let blocks: Vec<crate::BlockHandle> = self
             .context
             .get_region(region)
@@ -139,14 +147,14 @@ impl Driver<'_> {
             };
             let target = self.at(first);
             for argument in block.arguments() {
-                self.rewire(argument.id(), &extraction, &target, rewriter)?;
+                self.rewire(argument.id(), extraction, &target, rewriter)?;
             }
         }
         let op_ids: Vec<OpId> = blocks.iter().flat_map(|block| block.op_ids()).collect();
         for &op_id in &op_ids {
-            self.rewrite_op(op_id, &extraction, rewriter)?;
+            self.rewrite_op(op_id, extraction, rewriter)?;
         }
-        self.recurse(&op_ids, rewriter)
+        self.recurse(&op_ids, extraction, rewriter)
     }
 
     /// Erase what the rewrites left behind. A rewrite reroutes the readers of a
@@ -165,7 +173,7 @@ impl Driver<'_> {
     fn rewire(
         &self,
         value: ValueId,
-        extraction: &Extraction<Node>,
+        extraction: &Extraction<'_, Node>,
         target: &OperationRef,
         rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
@@ -234,7 +242,7 @@ impl Driver<'_> {
     fn rewrite_op(
         &self,
         op_id: OpId,
-        extraction: &Extraction<Node>,
+        extraction: &Extraction<'_, Node>,
         rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
         if !self.context.has_operation(op_id) {
@@ -343,8 +351,15 @@ impl Driver<'_> {
         }
     }
 
-    /// Recurse into each nested region, assuming its guard's fact inside it.
-    fn recurse(&mut self, op_ids: &[OpId], rewriter: &mut Rewriter) -> Result<(), PassError> {
+    /// Recurse into each nested region, assuming its guard's fact inside it. An
+    /// unguarded region reads the extraction it was given; a guarded one
+    /// re-extracts only the classes its assumption dirtied.
+    fn recurse(
+        &mut self,
+        op_ids: &[OpId],
+        extraction: &Extraction<'_, Node>,
+        rewriter: &mut Rewriter,
+    ) -> Result<(), PassError> {
         for &op_id in op_ids {
             if !self.context.has_operation(op_id) {
                 continue;
@@ -359,10 +374,13 @@ impl Driver<'_> {
                     Some(&(_, value, holds)) => {
                         self.eg.push_context();
                         self.inject(value, holds);
-                        self.process_region(sub, rewriter)?;
+                        self.saturate();
+                        let dirty = self.eg.scope_dirty();
+                        let scoped = extraction.refresh(&self.eg, &dirty, |_, node| cost(node));
+                        self.process_region(sub, &scoped, rewriter)?;
                         self.eg.pop_context();
                     }
-                    None => self.process_region(sub, rewriter)?,
+                    None => self.process_region(sub, extraction, rewriter)?,
                 }
             }
         }
@@ -535,7 +553,7 @@ impl Driver<'_> {
     /// rewrite is then skipped and the operation it would have replaced stays.
     fn materialize(
         &self,
-        extraction: &Extraction<Node>,
+        extraction: &Extraction<'_, Node>,
         class: Id,
         expected_ty: TypeId,
         target: &OperationRef,

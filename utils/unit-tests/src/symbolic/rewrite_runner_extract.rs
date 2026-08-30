@@ -316,7 +316,7 @@ fn build(g: &mut EGraph<Math>, e: &Expr) -> Id {
 /// of equivalent spellings, so they break a cost tie differently.
 fn extracted_cost(
     g: &EGraph<Math>,
-    e: &tir_symbolic::egraph::Extraction<Math>,
+    e: &tir_symbolic::egraph::Extraction<'_, Math>,
     id: Id,
     seen: &mut Vec<Id>,
 ) -> Option<u64> {
@@ -471,4 +471,44 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
 
     let negated = g.add(Math::Neg([a]));
     assert!(g.connected(sum, negated));
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(200))]
+
+    /// A scope extracts by recomputing the classes its assumption dirtied and
+    /// reading the rest off the base extraction. The answer must be the one a
+    /// full pass over the scoped graph gives, node for node.
+    #[test]
+    fn refresh_equals_full_extraction(
+        exprs in proptest::collection::vec(expr_strategy(), 1..4),
+        pairs in proptest::collection::vec((0usize..64, 0usize..64), 0..4),
+    ) {
+        let rules = math_rules();
+        let mut g = EGraph::new();
+        for e in &exprs {
+            build(&mut g, e);
+        }
+        g.rebuild();
+        g.saturate_rules(&rules, &NoExterns, 30, 10_000);
+        let base = g.extract_best(|_, node| unit(node));
+
+        let classes: Vec<Id> = g.class_ids().collect();
+        g.push_context();
+        for &(a, b) in &pairs {
+            g.union(classes[a % classes.len()], classes[b % classes.len()]);
+        }
+        g.rebuild();
+        g.saturate_rules(&rules, &NoExterns, 30, 10_000);
+
+        let refreshed = base.refresh(&g, &g.scope_dirty(), |_, node| unit(node));
+        let full = g.extract_best(|_, node| unit(node));
+        for id in g.class_ids() {
+            proptest::prop_assert_eq!(
+                refreshed.node(id).map(|node| format!("{node:?}")),
+                full.node(id).map(|node| format!("{node:?}"))
+            );
+        }
+        g.pop_context();
+    }
 }

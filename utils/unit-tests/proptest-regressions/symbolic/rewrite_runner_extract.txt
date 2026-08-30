@@ -7,3 +7,4 @@
 cc e3dd1abb01392ac7b22114293385f38ed31d6d07ff2c5f3845aa8eeff7340de5 # shrinks to exprs = [Add(Add(Leaf(0), Zero), Leaf(0))], mask = 54
 cc 748c6a9fa0ae4b04a224335b1cf732c0f03992c1db23d3b561eb57c406ca0529 # shrinks to exprs = [Add(Add(Zero, Zero), Neg(Zero)), Neg(Neg(Neg(Zero)))], mask = 27
 cc 790721e35023173bd79562c20a84f3fbe926b88bc6a83ff55d4572867e01b703 # shrinks to exprs = [Add(Add(Add(Leaf(0), Leaf(0)), Leaf(0)), Leaf(0)), Add(Add(Add(Leaf(1), Leaf(1)), Neg(Leaf(0))), Add(Zero, Zero))], mask = 57
+cc 12ca63454a855ee1b150aa8ace388a428ec769ce46b702e4a2ca2bbf7d38a7de # shrinks to exprs = [Neg(Add(Leaf(1), Add(Add(Leaf(0), Leaf(0)), Leaf(0))))], pairs = [(6, 2)]
