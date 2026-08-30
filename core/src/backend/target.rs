@@ -11,11 +11,11 @@
 use linkme::distributed_slice;
 use tir::Context;
 
-use crate::backend::binary::{BinaryWriter, ObjectFormatInfo};
+use crate::backend::AsmParser;
+use crate::backend::binary::ObjectFormatInfo;
 use crate::backend::isel::{InstructionSelectPass, OpLowering};
 use crate::backend::regalloc::{RegisterInfo, TargetRegAlloc};
 use crate::backend::sched::MachineModel;
-use crate::backend::{AsmParser, AsmPrinter};
 
 /// TMDL inputs and selected ISA features needed to build a retirement checker.
 pub struct ModelCheckTarget {
@@ -94,13 +94,6 @@ pub trait TargetMachine {
     /// An assembly parser for this target's textual `.s`/`.S` syntax.
     fn asm_parser(&self, context: &Context) -> AsmParser;
 
-    /// An assembly printer for this target's textual `.s`/`.S` syntax. Every
-    /// instruction's syntax is a field of its `InstrInfo`, so the printer is the
-    /// same for every target.
-    fn asm_printer(&self, _context: &Context) -> AsmPrinter {
-        AsmPrinter::new()
-    }
-
     /// A cycle-approximate machine model by name, or `None` if this target has no
     /// model under that name compatible with the selected features. Names are
     /// globally unique (e.g. `rv64-ooo`).
@@ -172,13 +165,6 @@ pub trait TargetMachine {
         None
     }
 
-    /// The instruction encoder registry driving object emission, or `None`
-    /// if this target cannot emit object files yet.
-    fn binary_writer(&self, context: &Context) -> Option<BinaryWriter> {
-        let _ = context;
-        None
-    }
-
     /// The machine-code decoder (bytes → op) that lets the simulator execute a
     /// raw ELF image, or `None` if this target has no decoder yet.
     fn instruction_decoder(&self) -> Option<crate::backend::InstructionDecoder> {
@@ -208,8 +194,8 @@ pub trait TargetMachine {
 
     /// Print a module as target-specific assembly text, the counterpart of
     /// [`parse_asm_text`](Self::parse_asm_text). `None` (the default) means the
-    /// target uses the shared [`AsmPrinter`] via
-    /// [`asm_printer`](Self::asm_printer).
+    /// target uses the shared [`AsmPrinter`], whose syntax comes from each
+    /// instruction's `InstrInfo`.
     fn print_asm_text(
         &self,
         context: &Context,

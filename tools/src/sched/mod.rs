@@ -101,7 +101,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
 
     // Collect the region's machine instructions in program order, resolving each to
     // its scheduling class and the physical registers it reads/writes.
-    let asm_printer = target.asm_printer(&context);
+    let asm_printer = tir::backend::AsmPrinter::new();
     let abi = (!target.abis().is_empty()).then(|| target.abi());
     let prf = Prf::for_target(&target.register_info(), &model, abi);
     let mut op_ids = Vec::new();
@@ -125,7 +125,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             .unwrap_or((0, u16::from(info.width_bytes.max(1))));
         base.push(ScoreboardInstr {
             text,
-            key: info.name.to_string(),
+            op_name: info.name.to_string(),
             class: info.sched_on(&model),
             defs: phys_regs(&regs.phys_defs, Some(&prf)),
             uses: phys_regs(&regs.phys_uses, Some(&prf)),
@@ -180,10 +180,10 @@ fn encoded_instruction_layout(
     module: &ModuleOp,
     expected: usize,
 ) -> Result<Option<InstructionLayout>, Box<dyn Error>> {
-    let (Some(format), Some(writer)) = (target.object_format(), target.binary_writer(context))
-    else {
+    let Some(format) = target.object_format() else {
         return Ok(None);
     };
+    let writer = tir::backend::binary::BinaryWriter::new();
     let object = writer
         .write_module(context, module, &format)
         .map_err(|error| format!("failed to encode scheduling input: {error}"))?;

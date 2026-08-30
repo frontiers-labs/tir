@@ -40,7 +40,7 @@ impl Display for BinaryEmitError {
         match self {
             BinaryEmitError::MissingSymbolName => write!(f, "asm symbol is missing name"),
             BinaryEmitError::MissingEncoder { op } => {
-                write!(f, "no instruction encoder registered for '{op}'")
+                write!(f, "'{op}' has no encoding")
             }
             BinaryEmitError::CannotEncode { op } => {
                 write!(f, "instruction encoder rejected '{op}'")
@@ -58,7 +58,7 @@ impl Display for BinaryEmitError {
                 write!(f, "branch target of '{op}' is out of range (value {value})")
             }
             BinaryEmitError::MissingPatcher { op } => {
-                write!(f, "no fixup patcher registered for '{op}'")
+                write!(f, "'{op}' has no fixup patcher")
             }
             BinaryEmitError::SymbolOperandUnsupported { op } => {
                 write!(f, "instruction '{op}' cannot take a symbol operand")
@@ -269,13 +269,13 @@ impl BinaryWriter {
         data.extend_from_slice(&encoded.bytes);
         state.obj.sections[section].insn_spans.push((offset, len));
 
-        for fixup in encoded.fixups {
+        for target in encoded.fixups {
             state.fixups.push(PendingFixup {
                 section,
                 offset,
                 len,
                 info,
-                target: fixup.target,
+                target,
             });
         }
         Ok(())

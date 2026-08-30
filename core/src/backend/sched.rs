@@ -208,13 +208,13 @@ pub struct MachineModel {
     /// Physical register-file sizes for renaming, keyed by physical-file name. A
     /// file absent here defaults to its architectural register count.
     pub reg_files: &'static [RegFile],
-    /// Macro-fusion rules: an instruction whose key is in a group's `first`,
-    /// immediately followed by one whose key is in its `second`, decodes and
+    /// Macro-fusion rules: an instruction whose name is in a group's `first`,
+    /// immediately followed by one whose name is in its `second`, decodes and
     /// executes as a single micro-op.
     pub fusions: &'static [FusionGroup],
 }
 
-/// One macro-fusion rule, over scheduling keys (see [`MachineModel::fusions`]).
+/// One macro-fusion rule, over op names (see [`MachineModel::fusions`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FusionGroup {
     pub first: &'static [&'static str],

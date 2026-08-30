@@ -110,9 +110,7 @@ impl Jit {
         let fmt = target
             .object_format()
             .ok_or_else(|| JitError::NoObjectSupport(self.march.clone()))?;
-        let writer = target
-            .binary_writer(context)
-            .ok_or_else(|| JitError::NoObjectSupport(self.march.clone()))?;
+        let writer = tir::backend::binary::BinaryWriter::new();
         let obj = writer
             .write_module(context, module, &fmt)
             .map_err(|e| JitError::Emit {

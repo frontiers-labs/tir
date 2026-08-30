@@ -8,7 +8,7 @@ use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
 use tir::backend::{RegAssignment, reg_slot, slot_register};
 use tir::{Context, OpHandle, OpId, OpInstance};
 
-use crate::backend::binary::{EncodedInst, FixupTarget, InstFixup};
+use crate::backend::binary::{EncodedInst, FixupTarget};
 use crate::backend::regalloc::RegClassId;
 
 /// One contiguous run of an operand's bits placed into the encoded word.
@@ -97,14 +97,8 @@ pub fn encode_with(
                 }
                 scatter(&mut word, v as u128, field.runs);
             }
-            AttributeValue::Str(s) => fixups.push(InstFixup {
-                operand: field.attr,
-                target: FixupTarget::Symbol(s.to_string()),
-            }),
-            AttributeValue::Block(b) => fixups.push(InstFixup {
-                operand: field.attr,
-                target: FixupTarget::Block(b),
-            }),
+            AttributeValue::Str(s) => fixups.push(FixupTarget::Symbol(s.to_string())),
+            AttributeValue::Block(b) => fixups.push(FixupTarget::Block(b)),
             _ => return None,
         }
     }

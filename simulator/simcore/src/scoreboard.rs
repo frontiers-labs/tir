@@ -31,10 +31,10 @@ use crate::predictor::BranchPredictor;
 pub struct ScoreboardInstr {
     /// Rendered text for report views; empty when no report is produced.
     pub text: String,
-    /// Scheduling key (TMDL operation name), for macro-fusion matching. Empty
-    /// when the producer has no key (synthetic instructions); such instructions
-    /// never fuse.
-    pub key: String,
+    /// The instruction's op name, for macro-fusion matching. Empty when the
+    /// producer has no name (synthetic instructions); such instructions never
+    /// fuse.
+    pub op_name: String,
     pub class: InstrSchedClass,
     pub defs: Vec<(String, u16)>,
     pub uses: Vec<(String, u16)>,
@@ -500,10 +500,10 @@ fn instr_latency(slot: &ScoreboardInstr) -> u64 {
 /// keeps the second's branch outcome.
 fn fuse_macro_ops(model: &MachineModel, base: &[ScoreboardInstr]) -> Vec<ScoreboardInstr> {
     let fusable = |first: &ScoreboardInstr, second: &ScoreboardInstr| {
-        !first.key.is_empty()
+        !first.op_name.is_empty()
             && model.fusions.iter().any(|group| {
-                group.first.contains(&first.key.as_str())
-                    && group.second.contains(&second.key.as_str())
+                group.first.contains(&first.op_name.as_str())
+                    && group.second.contains(&second.op_name.as_str())
             })
     };
     let mut fused = Vec::with_capacity(base.len());
@@ -545,7 +545,7 @@ fn fuse_pair(first: &ScoreboardInstr, second: &ScoreboardInstr) -> ScoreboardIns
             (true, true) => String::new(),
             _ => format!("{}; {}", first.text, second.text),
         },
-        key: second.key.clone(),
+        op_name: second.op_name.clone(),
         class,
         defs,
         uses,

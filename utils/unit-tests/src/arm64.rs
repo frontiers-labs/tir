@@ -193,7 +193,7 @@ fn decoder_round_trips_golden_words() {
         .body()
         .append_op(tir::builtin::ops::module_end(&context).build());
 
-    let writer = target.binary_writer(&context).unwrap();
+    let writer = tir::backend::binary::BinaryWriter::new();
     let format = target.object_format().unwrap();
     let obj = writer.write_module(&context, &module, &format).unwrap();
     let text = obj

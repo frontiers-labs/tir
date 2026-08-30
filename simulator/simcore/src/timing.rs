@@ -57,7 +57,7 @@ pub fn simulate(
     for (i, (id, pc)) in trace.iter().enumerate() {
         let op = context.get_op(*id);
         let mi = op.clone().as_interface::<dyn MachineInstruction>();
-        let (key, class, width, is_branch) = match &mi {
+        let (op_name, class, width, is_branch) = match &mi {
             Some(mi) => {
                 let info = mi.info();
                 (
@@ -77,7 +77,7 @@ pub fn simulate(
         });
         slots.push(ScoreboardInstr {
             text: String::new(),
-            key: key.to_string(),
+            op_name: op_name.to_string(),
             class,
             defs: phys_regs(&regs.phys_defs, prf),
             uses: phys_regs(&regs.phys_uses, prf),

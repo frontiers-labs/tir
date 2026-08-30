@@ -3,7 +3,7 @@
 use tir::attributes::{AttributeValue, RegisterAttr};
 use tir::backend::binary::{
     decode_with, encode_with, patch_with, DecodeField, DecodeFieldKind, DecodeSpec, EncodeField,
-    EncodeSpec, FieldRun, FixupTarget, InstFixup, PatchSpec,
+    EncodeSpec, FieldRun, FixupTarget, PatchSpec,
 };
 use tir::backend::{
     ControlFlow, InstrInfo, MachineInstruction, RegAssignment, RegClassType, RegPort,
@@ -150,13 +150,7 @@ fn encode_leaves_symbol_operand_as_fixup() {
     ]);
     let encoded = encode_with(&op, &LUI, &RegAssignment::default()).unwrap();
     assert_eq!(encoded.bytes, (55u32 | (5 << 7)).to_le_bytes());
-    assert_eq!(
-        encoded.fixups,
-        vec![InstFixup {
-            operand: "imm",
-            target: FixupTarget::Symbol("g".to_string()),
-        }]
-    );
+    assert_eq!(encoded.fixups, vec![FixupTarget::Symbol("g".to_string())]);
 }
 
 // `beq rs1, rs2, imm`: 99 | 0 << 12 | rs1 << 15 | rs2 << 20, imm scattered.

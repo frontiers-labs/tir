@@ -1215,13 +1215,6 @@ mod isa {
         fn object_format(&self) -> Option<tir::backend::binary::ObjectFormatInfo> {
             Some(object_format())
         }
-
-        fn binary_writer(
-            &self,
-            _context: &tir::Context,
-        ) -> Option<tir::backend::binary::BinaryWriter> {
-            Some(tir::backend::binary::BinaryWriter::new())
-        }
     }
 
     fn select_x86_64(

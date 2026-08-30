@@ -1089,10 +1089,6 @@ impl tir::backend::TargetMachine for RiscvTarget {
     fn object_format(&self) -> Option<tir::backend::binary::ObjectFormatInfo> {
         Some(obj::object_format(self.config.xlen, &self.config.features))
     }
-
-    fn binary_writer(&self, _context: &tir::Context) -> Option<tir::backend::binary::BinaryWriter> {
-        Some(tir::backend::binary::BinaryWriter::new())
-    }
 }
 
 fn select_riscv(

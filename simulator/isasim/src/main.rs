@@ -263,7 +263,7 @@ fn report_timing(
     let config = TimingConfig::for_model(model);
     let abi = (!target.abis().is_empty()).then(|| target.abi());
     let prf = Prf::for_target(register_info, model, abi);
-    let printer = target.asm_printer(context);
+    let printer = tir::backend::AsmPrinter::new();
     let disasm = |id: tir::OpId, pc: u64| {
         let op = context.get_op(id);
         let text = printer

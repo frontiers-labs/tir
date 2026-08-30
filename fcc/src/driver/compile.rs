@@ -244,7 +244,7 @@ pub(super) fn emit_machine_code(
     };
 
     if emit_assembly {
-        let printer = target.asm_printer(&context);
+        let printer = tir::backend::AsmPrinter::new();
         let mut rendered = String::new();
         lower_and_emit(target.as_ref(), &context, &module, |context, op| {
             printer
@@ -255,11 +255,11 @@ pub(super) fn emit_machine_code(
         return rendered.into_bytes();
     }
 
-    let (Some(format), Some(writer)) = (target.object_format(), target.binary_writer(&context))
-    else {
+    let Some(format) = target.object_format() else {
         eprintln!("fcc: error: target '{march}' does not support object emission");
         std::process::exit(1);
     };
+    let writer = tir::backend::binary::BinaryWriter::new();
     let mut emission = ObjectEmission::default();
     lower_and_emit(target.as_ref(), &context, &module, |context, op| {
         writer

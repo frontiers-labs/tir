@@ -635,10 +635,6 @@ impl tir::backend::TargetMachine for Arm64Target {
         Some(obj::object_format())
     }
 
-    fn binary_writer(&self, _context: &tir::Context) -> Option<tir::backend::binary::BinaryWriter> {
-        Some(tir::backend::binary::BinaryWriter::new())
-    }
-
     fn instruction_decoder(&self) -> Option<tir::backend::InstructionDecoder> {
         Some(decode_instruction)
     }

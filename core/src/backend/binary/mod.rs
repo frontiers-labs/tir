@@ -36,20 +36,13 @@ pub enum FixupTarget {
     Symbol(String),
 }
 
-/// An operand left as zero bits in the encoded instruction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InstFixup {
-    /// TMDL operand name the fixup applies to (e.g. `"imm"`).
-    pub operand: &'static str,
-    pub target: FixupTarget,
-}
-
 /// One encoded machine instruction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodedInst {
     /// Little-endian instruction bytes; fixup bits are zero.
     pub bytes: Vec<u8>,
-    pub fixups: Vec<InstFixup>,
+    /// Operands left as zero bits, to be resolved at layout time.
+    pub fixups: Vec<FixupTarget>,
 }
 
 /// A relocatable object in format-neutral form.

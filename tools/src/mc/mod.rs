@@ -137,7 +137,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
 
     let output = match filetype {
         Some(FileType::Asm) if per_symbol => {
-            let printer = target.asm_printer(&context);
+            let printer = tir::backend::AsmPrinter::new();
             let mut rendered = String::new();
             lower_and_emit(target.as_ref(), &context, &module, |context, op| {
                 printer
@@ -150,8 +150,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             Some(result) => result
                 .map_err(|e| format!("failed to print assembly: {e}"))?
                 .into_bytes(),
-            None => target
-                .asm_printer(&context)
+            None => tir::backend::AsmPrinter::new()
                 .print_module(&context, &module)
                 .map_err(|e| format!("failed to print assembly: {e}"))?
                 .into_bytes(),
@@ -163,12 +162,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
                     target.name()
                 )
             })?;
-            let writer = target.binary_writer(&context).ok_or_else(|| {
-                format!(
-                    "target '{}' does not support object emission",
-                    target.name()
-                )
-            })?;
+            let writer = tir::backend::binary::BinaryWriter::new();
             let obj = if per_symbol {
                 let mut emission = ObjectEmission::default();
                 lower_and_emit(target.as_ref(), &context, &module, |context, op| {

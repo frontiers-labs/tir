@@ -345,7 +345,7 @@ fn gen_program(rng: &mut Lcg, len: usize) -> Vec<ScoreboardInstr> {
             };
             ScoreboardInstr {
                 text: String::new(),
-                key: String::new(),
+                op_name: String::new(),
                 class,
                 defs,
                 uses,
@@ -460,7 +460,7 @@ fn resource_test_model(resources: &'static [ProcUnit]) -> MachineModel {
 fn resource_test_instr(class: InstrSchedClass) -> ScoreboardInstr {
     ScoreboardInstr {
         text: String::new(),
-        key: String::new(),
+        op_name: String::new(),
         class,
         defs: vec![],
         uses: vec![],
@@ -527,7 +527,7 @@ fn frontend_test_model(slots: &'static [&'static str], uops_per_cycle: u16) -> M
     model
 }
 
-/// A fused pair (`cmp` + `jne` by scheduling key) decodes and executes as
+/// A fused pair (`cmp` + `jne` by op name) decodes and executes as
 /// one micro-op: on a single-unit, single-issue core the pair sustains one
 /// iteration per cycle where the unfused pair needs two.
 #[test]
@@ -555,9 +555,9 @@ fn macro_fused_pair_costs_one_micro_op() {
         ..InstrSchedClass::DEFAULT
     };
     let mut cmp = resource_test_instr(class);
-    cmp.key = "cmp".to_string();
+    cmp.op_name = "cmp".to_string();
     let mut jne = resource_test_instr(class);
-    jne.key = "jne".to_string();
+    jne.op_name = "jne".to_string();
 
     let result = run(
         &model,
@@ -1271,7 +1271,7 @@ fn probe_stream_throughput() {
 fn idiom_clone(instruction: &ScoreboardInstr) -> ScoreboardInstr {
     ScoreboardInstr {
         text: instruction.text.clone(),
-        key: instruction.key.clone(),
+        op_name: instruction.op_name.clone(),
         class: instruction.class,
         defs: instruction.defs.clone(),
         uses: instruction.uses.clone(),
