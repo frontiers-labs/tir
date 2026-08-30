@@ -1,0 +1,22 @@
+// RUN: tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+
+// The oracle: every machine block is re-linearized by a seeded random
+// topological order of its dependence graph. The program is the same one, so
+// the memory order has to come out the same — the chain the mid-end drew is
+// what says which load reads the store and which one does not.
+
+module {
+  %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !ptr.p<!i32>, %2: !i32) -> !i32 {
+    %3 = ptr.load %0 : !i32
+    ptr.store %2, %1
+    %4 = ptr.load %0 : !i32
+    %5 = addi %3, %4 : !i32
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK: x86_64.mov_load32_norex {{.*}} state(%[[ENTRY]] -> %[[READ:[0-9]+]])
+// CHECK: x86_64.mov_store32_norex {{.*}} state(%[[READ]] -> %[[WRITTEN:[0-9]+]])
+// CHECK: x86_64.mov_load32_norex {{.*}} state(%[[WRITTEN]] -> %{{[0-9]+}})

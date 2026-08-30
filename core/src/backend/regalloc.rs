@@ -1406,7 +1406,8 @@ impl SlotChain {
         reload: &dyn Operation,
     ) -> Result<(), PassError> {
         let observed = self.root(context, rewriter, before)?;
-        self.read.push(put_on_chain(context, reload, observed));
+        self.read
+            .push(tir::builtin::put_on_chain(context, reload, observed));
         Ok(())
     }
 
@@ -1435,7 +1436,7 @@ impl SlotChain {
                 merged
             }
         };
-        self.written = Some(put_on_chain(context, store, taken));
+        self.written = Some(tir::builtin::put_on_chain(context, store, taken));
         Ok(())
     }
 
@@ -1458,18 +1459,6 @@ impl SlotChain {
         self.written = Some(state);
         Ok(state)
     }
-}
-
-/// Put `op` on `state`'s chain and hand back the state it leaves behind. Spill
-/// code is built by the target's own opcode builders, which know nothing of the
-/// slot it lands in, so the ports are grown onto the instruction here.
-fn put_on_chain(context: &Context, op: &dyn Operation, state: ValueId) -> ValueId {
-    context.append_operand(op.id(), state);
-    let published = context
-        .create_value(tir::builtin::StateType::new(context), None)
-        .id();
-    context.adopt_result(op.id(), published);
-    published
 }
 
 /// Insert `new_op` immediately after `op_id` in its block (before the following op,

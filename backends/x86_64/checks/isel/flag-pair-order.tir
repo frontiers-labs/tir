@@ -1,0 +1,23 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+// RUN: tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+
+// The flags are a register, and the graph carries them. A comparison the target
+// materializes as a compare that writes them and a `setcc` that reads them is
+// two instructions with no value between them: only the flag edge says the
+// second must follow the first. The addition here writes the flags too, so any
+// order that lets it fall between the pair reads the wrong ones. Re-linearizing
+// the block by another order of the same graph does not move them apart either.
+
+module {
+  %fn_f = func.func @f(%0: !i64, %1: !i64) -> !i64 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    %3 = addi %0, %1 : !i64
+    %4 = extui %2 : !i64
+    %5 = addi %3, %4 : !i64
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK: x86_64.cmp {dst = %[[LHS:[0-9]+]]:GPR, src = %[[RHS:[0-9]+]]:GPR}
+// CHECK-NEXT: x86_64.setl_norex {dst = %{{[0-9]+}}:GPR8low}

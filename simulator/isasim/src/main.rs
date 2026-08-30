@@ -195,14 +195,7 @@ fn main() {
         .expect("program execution failed");
 
     if let Some(model) = model {
-        report_timing(
-            &args,
-            target.as_ref(),
-            &context,
-            &register_info,
-            &model,
-            &executor,
-        );
+        report_timing(&args, &context, &register_info, &model, &executor);
     }
 
     if let Some(path) = &args.dump_state {
@@ -249,7 +242,6 @@ fn select_timing_model(
 /// timing summary (plus an optional Konata pipeline log).
 fn report_timing(
     args: &Cli,
-    target: &dyn tir::backend::TargetMachine,
     context: &tir::Context,
     register_info: &tir::backend::regalloc::RegisterInfo,
     model: &tir::backend::sched::MachineModel,
@@ -261,8 +253,7 @@ fn report_timing(
             std::process::exit(2);
         });
     let config = TimingConfig::for_model(model);
-    let abi = (!target.abis().is_empty()).then(|| target.abi());
-    let prf = Prf::for_target(register_info, model, abi);
+    let prf = Prf::for_target(register_info, model);
     let printer = tir::backend::AsmPrinter::new();
     let disasm = |id: tir::OpId, pc: u64| {
         let op = context.get_op(id);
@@ -586,7 +577,7 @@ fn run_elf(
     println!("exit: {}", exit_code.get());
 
     if let Some(model) = model {
-        report_timing(args, target, context, &register_info, &model, &executor);
+        report_timing(args, context, &register_info, &model, &executor);
     }
 
     if let Some(path) = &args.dump_state {

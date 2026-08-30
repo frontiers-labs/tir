@@ -13,8 +13,8 @@ use tir::{
     func::FuncOp,
 };
 
-use crate::backend::TargetMachine;
 use crate::backend::lower::OpLoweringPass;
+use crate::backend::{ShuffleMachineOrderPass, TargetMachine};
 use crate::passes::{
     CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass,
     LowerPtrDisjointPass, MaterializeSymbolAddressesPass, RestructurePass, ThreadStatePass,
@@ -25,6 +25,17 @@ pub enum StopAfter {
     ISel,
     RegAlloc,
     Finalize,
+}
+
+/// The oracles a differential-testing variant turns on. All of them are
+/// semantics-preserving by construction, so a divergence under one is a fact the
+/// form does not carry; none is on in production.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Oracles {
+    /// Re-linearize every machine block by a seeded random topological order of
+    /// its dependence graph, once after selection and once after allocation
+    /// (see [`ShuffleMachineOrderPass`]).
+    pub shuffle_machine_order: bool,
 }
 
 struct TargetIntegerLegalizer {
@@ -102,9 +113,10 @@ pub fn build_pipeline(
     target: &dyn TargetMachine,
     context: &Context,
     stop: StopAfter,
+    oracles: Oracles,
 ) -> PassManager {
     let mut pm = module_prologue();
-    add_function_passes(&mut pm, target, context, stop);
+    add_function_passes(&mut pm, target, context, stop, oracles);
     pm
 }
 
@@ -146,6 +158,7 @@ fn add_function_passes(
     target: &dyn TargetMachine,
     context: &Context,
     stop: StopAfter,
+    oracles: Oracles,
 ) {
     pm.add_pass(TargetIntegerLegalizer::new(target));
     let function_pipeline = pm.nest::<FuncOp>();
@@ -154,6 +167,9 @@ fn add_function_passes(
     // a consumer's block by cross-block fusion). Runs while results are still
     // virtual registers, so it must precede register allocation.
     pm.add_pass(DeadCodeEliminationPass::new());
+    if oracles.shuffle_machine_order {
+        pm.add_pass(ShuffleMachineOrderPass::new());
+    }
     if stop == StopAfter::ISel {
         return;
     }
@@ -167,6 +183,11 @@ fn add_function_passes(
     }
     for pass in target.regalloc_stage() {
         pm.add_boxed_pass(pass);
+    }
+    // Post-allocation the map is what makes two values one register, so this is
+    // the run that exercises the anti- and output edges derived from it.
+    if oracles.shuffle_machine_order {
+        pm.add_pass(ShuffleMachineOrderPass::new());
     }
     if stop == StopAfter::RegAlloc {
         return;
@@ -188,6 +209,7 @@ pub fn lower_and_emit(
     target: &dyn TargetMachine,
     context: &Context,
     module: &ModuleOp,
+    oracles: Oracles,
     mut emit: impl FnMut(&Context, &tir::OpHandle) -> Result<(), String>,
 ) -> Result<(), String> {
     let failed = |error: PassError| format!("backend pipeline failed: {error}");
@@ -201,7 +223,7 @@ pub fn lower_and_emit(
         .map_err(failed)?;
 
     let mut pipeline = PassManager::new();
-    add_function_passes(&mut pipeline, target, context, StopAfter::Finalize);
+    add_function_passes(&mut pipeline, target, context, StopAfter::Finalize, oracles);
     let mut rewriter = Rewriter::new(context.clone());
     let mut index = 0;
     while let Some(&op_id) = context.get_block(body).op_ids().get(index) {

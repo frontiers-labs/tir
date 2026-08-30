@@ -24,5 +24,7 @@ module {data_layout = #data_layout} {
 // The counter is minted as a 32-bit body argument, advanced and tested 32 bits wide.
 // CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !arm64.GPR, %[[IV:[0-9]+]]: !arm64.GPR):
 // CHECK: arm64.add_w {rd = %[[NEXT:[0-9]+]]:GPR32, rn = %[[IV]]:GPR, rm = %[[V2:[0-9]+]]:GPR}
-// CHECK-NEXT: arm64.cmp_w {rn = %[[NEXT]]:GPR32, rm = %[[V1]]:GPR}
+// The accumulator's tile falls between the two: no dependence orders the
+// counter's advance against it, so neither claims the other's place.
+// CHECK: arm64.cmp_w {rn = %[[NEXT]]:GPR32, rm = %[[V1]]:GPR}
 // CHECK-NOT: scf.

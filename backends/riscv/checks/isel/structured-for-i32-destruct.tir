@@ -25,6 +25,8 @@ module {data_layout = #data_layout} {
 // is tested against the same bound on the back edge.
 // CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !riscv.GPR, %[[IV:[0-9]+]]: !riscv.GPR):
 // CHECK: riscv.add {rd = %[[NEXT:[0-9]+]]:GPR, rs1 = %[[IV]]:GPR, rs2 = %[[V2:[0-9]+]]:GPR}
-// CHECK-NEXT: riscv.blt {rs1 = %[[NEXT]]:GPR, rs2 = %[[V1]]:GPR, imm = ^{{bb[0-9]+}}}
+// The accumulator's tile falls between the two: no dependence orders the
+// counter's advance against it, so neither claims the other's place.
+// CHECK: riscv.blt {rs1 = %[[NEXT]]:GPR, rs2 = %[[V1]]:GPR, imm = ^{{bb[0-9]+}}}
 // CHECK: ^[[ENTER]]:
 // CHECK-NOT: scf.

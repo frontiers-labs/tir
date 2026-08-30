@@ -102,8 +102,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     // Collect the region's machine instructions in program order, resolving each to
     // its scheduling class and the physical registers it reads/writes.
     let asm_printer = tir::backend::AsmPrinter::new();
-    let abi = (!target.abis().is_empty()).then(|| target.abi());
-    let prf = Prf::for_target(&target.register_info(), &model, abi);
+    let prf = Prf::for_target(&target.register_info(), &model);
     let mut op_ids = Vec::new();
     collect_instructions(&context, module.body(), &mut op_ids);
     let layout = encoded_instruction_layout(target.as_ref(), &context, &module, op_ids.len())?;

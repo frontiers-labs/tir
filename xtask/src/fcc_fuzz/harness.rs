@@ -18,22 +18,91 @@ pub struct Variant {
 
 #[derive(Clone)]
 enum Backend {
-    /// `fcc` with an optional mid-end pipeline override.
-    Fcc {
-        pipeline: Option<String>,
-    },
+    Fcc(FccVariant),
     Gcc,
     Clang,
 }
 
+/// What makes one fcc variant different from the default: a mid-end pipeline
+/// override, a backend oracle, or both. Every one of them is a
+/// semantics-preserving change, so a divergence names a defect rather than a
+/// difference of opinion.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FccVariant {
+    /// Replaces fcc's default mid-end pipeline.
+    pub pipeline: Option<String>,
+    /// `--shuffle-machine-order`: every machine block re-linearized by another
+    /// topological order of its dependence graph, after selection and again
+    /// after allocation.
+    pub shuffle_machine_order: bool,
+}
+
+/// How the oracle is named in a variant's name and in a record's identity,
+/// ahead of any pipeline.
+const SHUFFLE_MACHINE_ORDER: &str = "shuffle-machine-order";
+
+impl FccVariant {
+    pub fn pipeline(pipeline: &str) -> Self {
+        Self {
+            pipeline: Some(pipeline.to_string()),
+            shuffle_machine_order: false,
+        }
+    }
+
+    pub fn shuffle_machine_order() -> Self {
+        Self {
+            pipeline: None,
+            shuffle_machine_order: true,
+        }
+    }
+
+    /// The one line a record names this variant by, and the suffix of the
+    /// variant's own name. `None` for the default, which has nothing to name.
+    pub fn tag(&self) -> Option<String> {
+        match (&self.pipeline, self.shuffle_machine_order) {
+            (None, false) => None,
+            (Some(pipeline), false) => Some(pipeline.clone()),
+            (None, true) => Some(SHUFFLE_MACHINE_ORDER.to_string()),
+            (Some(pipeline), true) => Some(format!("{SHUFFLE_MACHINE_ORDER} {pipeline}")),
+        }
+    }
+
+    /// The variant a tag denotes, so a filed record replays as what it was
+    /// filed against.
+    pub fn from_tag(tag: &str) -> Self {
+        match tag.strip_prefix(SHUFFLE_MACHINE_ORDER) {
+            Some(rest) => Self {
+                pipeline: Some(rest.trim())
+                    .filter(|rest| !rest.is_empty())
+                    .map(str::to_string),
+                shuffle_machine_order: true,
+            },
+            None => Self::pipeline(tag),
+        }
+    }
+
+    /// The `fcc compile` arguments this variant adds.
+    pub fn args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Some(pipeline) = &self.pipeline {
+            args.push("--pipeline".to_string());
+            args.push(pipeline.clone());
+        }
+        if self.shuffle_machine_order {
+            args.push("--shuffle-machine-order".to_string());
+        }
+        args
+    }
+}
+
 impl Variant {
-    pub fn fcc(pipeline: Option<String>) -> Self {
-        let name = pipeline
-            .as_deref()
-            .map_or_else(|| "fcc-default".to_string(), |p| format!("fcc:{p}"));
+    pub fn fcc(spec: FccVariant) -> Self {
+        let name = spec
+            .tag()
+            .map_or_else(|| "fcc-default".to_string(), |tag| format!("fcc:{tag}"));
         Self {
             name,
-            backend: Backend::Fcc { pipeline },
+            backend: Backend::Fcc(spec),
         }
     }
 
@@ -53,7 +122,7 @@ impl Variant {
 
     fn compiler(&self) -> &'static str {
         match self.backend {
-            Backend::Fcc { .. } => "fcc",
+            Backend::Fcc(_) => "fcc",
             Backend::Gcc => "gcc",
             Backend::Clang => "clang",
         }
@@ -136,16 +205,14 @@ fn compile_and_run(
     let executable = work_dir.join(format!("{stem}-{tag}.bin"));
 
     let mut command = match &variant.backend {
-        Backend::Fcc { pipeline } => {
+        Backend::Fcc(spec) => {
             let object = work_dir.join(format!("{stem}-{tag}.o"));
             let mut compile = Command::new(fcc);
             compile
                 .args(["compile", "--stage", "obj", "--march", "x86_64"])
                 .arg("-o")
-                .arg(&object);
-            if let Some(pipeline) = pipeline {
-                compile.arg("--pipeline").arg(pipeline);
-            }
+                .arg(&object)
+                .args(spec.args());
             compile.arg(source);
             run_command(&mut compile, "fcc")?;
 

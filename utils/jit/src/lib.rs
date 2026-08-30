@@ -103,7 +103,12 @@ impl Jit {
         pm.run(context, module_op.clone())
             .map_err(|e| JitError::Pipeline(format!("mid-end: {e}")))?;
 
-        let mut pm = build_pipeline(target.as_ref(), context, StopAfter::Finalize);
+        let mut pm = build_pipeline(
+            target.as_ref(),
+            context,
+            StopAfter::Finalize,
+            Default::default(),
+        );
         pm.run(context, module_op)
             .map_err(|e| JitError::Pipeline(e.to_string()))?;
 

@@ -67,6 +67,12 @@ pub struct CompileArgs {
     /// pipeline; frontend lowering and the backend are unaffected.
     #[arg(long = "pipeline", value_name = "PIPELINE")]
     pipeline: Option<String>,
+    /// Re-linearize every machine block by a seeded random topological order of
+    /// its dependence graph, after selection and again after allocation. A
+    /// differential-testing oracle: the program is the same one, so a change in
+    /// behavior is a dependence the machine form does not carry.
+    #[arg(long = "shuffle-machine-order")]
+    shuffle_machine_order: bool,
     /// C source files, or `-` for stdin.
     inputs: Vec<OsString>,
 }
@@ -141,6 +147,7 @@ pub(super) fn lower(args: CompileArgs) -> DriverOptions {
         lib_dirs: Vec::new(),
         libs: Vec::new(),
         pipeline: args.pipeline,
+        shuffle_machine_order: args.shuffle_machine_order,
         dry_run: false,
     }
 }

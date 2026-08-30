@@ -1339,6 +1339,22 @@ impl Context {
         true
     }
 
+    /// Reorder the operations `block` holds. `ops` must be a permutation of
+    /// them: an order is chosen, nothing is added or removed, and no parent
+    /// changes.
+    pub(crate) fn set_block_ops(&self, block: BlockId, ops: Vec<OpId>) {
+        let mut inner = self.0.write();
+        if let Some(entry) = inner.block_mut(block) {
+            debug_assert_eq!(
+                entry.operations().len(),
+                ops.len(),
+                "a reordering holds the block's own operations",
+            );
+            *entry.operations_mut() = ops;
+        }
+        inner.edit_block(block);
+    }
+
     pub(crate) fn remove_op_from_block(&self, block: BlockId, op: OpId) -> bool {
         let mut inner = self.0.write();
         let Some(entry) = inner.block_mut(block) else {

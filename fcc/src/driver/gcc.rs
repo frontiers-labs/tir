@@ -137,6 +137,7 @@ where
         lib_dirs,
         libs,
         pipeline: None,
+        shuffle_machine_order: false,
         dry_run,
     })
 }

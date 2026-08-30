@@ -5,6 +5,7 @@ pub mod asm_desc;
 pub mod asm_syntax;
 pub mod binary;
 pub mod call_lowering;
+pub mod dependence;
 pub mod exec;
 pub mod isel;
 mod lexer;
@@ -18,6 +19,7 @@ mod printer;
 pub mod regalloc;
 mod registers;
 pub mod sched;
+pub mod shuffle_order;
 pub mod target;
 mod verify;
 
@@ -38,6 +40,8 @@ pub use registers::{
     slot_register, type_class, value_class,
 };
 
+pub use dependence::{Dependences, verify_block_order};
+pub use shuffle_order::ShuffleMachineOrderPass;
 pub use verify::verify_machine_ir;
 
 pub use lexer::Token;

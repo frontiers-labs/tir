@@ -66,6 +66,21 @@ pub fn trailing_state_result(context: &Context, op: &crate::OpHandle) -> Option<
     trailing_state(context, &op.results())
 }
 
+/// Put `op` on `state`'s chain and hand back the state it leaves behind.
+/// Machine instructions built by a target's own opcode builders — spill code,
+/// the stores that place a call's stack arguments — know nothing of the memory
+/// they land in, so the ports are grown onto the instruction here.
+pub fn put_on_chain(
+    context: &Context,
+    op: &dyn crate::Operation,
+    state: crate::ValueId,
+) -> crate::ValueId {
+    context.append_operand(op.id(), state);
+    let published = context.create_value(StateType::new(context), None).id();
+    context.adopt_result(op.id(), published);
+    published
+}
+
 fn trailing_state(context: &Context, values: &[crate::ValueId]) -> Option<crate::ValueId> {
     let state = StateType::new(context);
     values

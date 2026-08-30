@@ -18,7 +18,7 @@ use fcc::parser::parse;
 use fcc::passes::LowerCirStructsPass;
 use fcc::sema::{TypedAst, analyze};
 use tir::backend::TargetMachine;
-use tir::backend::pipeline::{StopAfter, build_pipeline};
+use tir::backend::pipeline::{Oracles, StopAfter, build_pipeline};
 use tir::func::FuncOp;
 use tir::passes::{InstCombinePass, PromotePass, RestructurePass, ThreadStatePass};
 use tir::{Context, Operation, PassManager};
@@ -241,7 +241,12 @@ fn bench_gcc_20011219_1(c: &mut Criterion) {
         b.iter_batched(
             || lower_before_isel(&ast),
             |(context, module, target)| {
-                let mut pm = build_pipeline(target.as_ref(), &context, StopAfter::ISel);
+                let mut pm = build_pipeline(
+                    target.as_ref(),
+                    &context,
+                    StopAfter::ISel,
+                    Oracles::default(),
+                );
                 pm.run(&context, context.get_op(module.id())).unwrap();
             },
             BatchSize::SmallInput,
@@ -251,7 +256,12 @@ fn bench_gcc_20011219_1(c: &mut Criterion) {
         b.iter_batched(
             || lower_before_isel(&ast),
             |(context, module, target)| {
-                let mut pm = build_pipeline(target.as_ref(), &context, StopAfter::Finalize);
+                let mut pm = build_pipeline(
+                    target.as_ref(),
+                    &context,
+                    StopAfter::Finalize,
+                    Oracles::default(),
+                );
                 pm.run(&context, context.get_op(module.id())).unwrap();
             },
             BatchSize::SmallInput,

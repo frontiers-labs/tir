@@ -26,6 +26,12 @@ pub type PhysReg = (RegClassId, u16);
 /// physical registers, which are not values and so are not in its operands.
 pub const CLOBBERS_ATTR: &str = "clobbers";
 
+/// The attribute an operation carries the physical registers it reads without
+/// naming them in an operand: a call's argument registers and the stack pointer
+/// it pushes the return address on. A placement is not a value, so nothing else
+/// would keep the copy that made it alive to the operation that reads it.
+pub const USES_ATTR: &str = "uses";
+
 /// The registers of a single operation, split by direction. Values are SSA
 /// operands and results; physical registers are the ones the instruction names
 /// directly and are not SSA.
@@ -82,18 +88,22 @@ pub fn op_regs_from(op: &OpHandle, slots: &[crate::backend::SlotRef]) -> OpRegs 
             None => {}
         }
     }
-    op.context
-        .upgrade()
-        .with_attr(op.id, CLOBBERS_ATTR, |clobbers| {
-            let AttributeValue::Array(clobbers) = clobbers else {
+    let context = op.context.upgrade();
+    let physical = |attr: &str, into: &mut Vec<PhysReg>| {
+        context.with_attr(op.id, attr, |registers| {
+            let AttributeValue::Array(registers) = registers else {
                 return;
             };
-            for clobber in clobbers.iter() {
-                if let AttributeValue::Register(RegisterAttr::Physical { class, index }) = clobber {
-                    regs.phys_defs.push((*class, *index));
+            for register in registers.iter() {
+                if let AttributeValue::Register(RegisterAttr::Physical { class, index }) = register
+                {
+                    into.push((*class, *index));
                 }
             }
         });
+    };
+    physical(CLOBBERS_ATTR, &mut regs.phys_defs);
+    physical(USES_ATTR, &mut regs.phys_uses);
     regs
 }
 

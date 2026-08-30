@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use super::harness::{self, Behavior, Outcome, Variant};
+use super::harness::{self, Behavior, FccVariant, Outcome, Variant};
 use super::reduce::{self, STRUCTURAL_PASSES};
 use super::report::Failure;
 use super::ub;
@@ -22,9 +22,10 @@ pub struct Reduced {
     /// What makes this the same defect when it turns up again. The minimal
     /// program for a generated case, the path for a corpus one. Never a seed.
     pub subject: String,
-    /// The shortest pipeline that still miscompiles. `None` when fcc's default
-    /// disagrees with a reference compiler, where there is no pass to blame.
-    pub pipeline: Option<String>,
+    /// The smallest variant that still miscompiles: the shortest pipeline, and
+    /// whichever oracles were on. The default when fcc's own output disagrees
+    /// with a reference compiler, where there is nothing to blame.
+    pub variant: FccVariant,
     /// How many lines the case had before shrinking, where it was shrunk.
     pub shrunk_from: Option<usize>,
 }
@@ -33,18 +34,19 @@ impl Reduced {
     pub fn identity(&self) -> String {
         format!(
             "{}\n{}",
-            self.pipeline.as_deref().unwrap_or("fcc-default"),
+            self.variant.tag().as_deref().unwrap_or("fcc-default"),
             self.subject
         )
     }
 
-    /// The passes left after bisection: what to go and look at.
+    /// What is left after bisection: the passes to go and look at, and the
+    /// oracle that exposed them.
     pub fn culprit(&self) -> String {
-        let Some(pipeline) = &self.pipeline else {
-            return "fcc's default pipeline".to_string();
-        };
-        let passes: Vec<&str> = pipeline
-            .split_once('(')
+        let mut named: Vec<&str> = self
+            .variant
+            .pipeline
+            .as_deref()
+            .and_then(|pipeline| pipeline.split_once('('))
             .and_then(|(_, rest)| rest.strip_suffix(')'))
             .map(|inner| {
                 inner
@@ -53,10 +55,16 @@ impl Reduced {
                     .collect()
             })
             .unwrap_or_default();
-        if passes.is_empty() {
-            return "pass scheduling alone".to_string();
+        if self.variant.shuffle_machine_order {
+            named.push("machine-order shuffling");
         }
-        passes.join(" + ")
+        if !named.is_empty() {
+            return named.join(" + ");
+        }
+        match self.variant.pipeline {
+            Some(_) => "pass scheduling alone".to_string(),
+            None => "fcc's default pipeline".to_string(),
+        }
     }
 }
 
@@ -66,44 +74,52 @@ impl Reduced {
 pub fn triage(
     fcc: &Path,
     source: &str,
-    pipeline: Option<&str>,
+    variant: &FccVariant,
     references: &[Variant],
     work_dir: &Path,
 ) -> Reduced {
     let original_lines = source.lines().count();
     let mut spent = 0;
-    let mut still_fails = |source: &str, pipeline: Option<&str>| {
+    let mut still_fails = |source: &str, variant: &FccVariant| {
         if spent >= BUDGET {
             return false;
         }
         spent += 1;
-        diverges(fcc, source, pipeline, references, work_dir)
+        diverges(fcc, source, variant, references, work_dir)
     };
 
     // Shrink the pipeline first: it costs a handful of runs, and every pass it
-    // drops makes each of the many reduction runs cheaper.
-    let pipeline = bisect(pipeline, &mut |candidate| {
-        still_fails(source, Some(candidate))
-    });
-    let source = reduce::reduce(source, &mut |candidate| {
-        still_fails(candidate, pipeline.as_deref())
-    });
+    // drops makes each of the many reduction runs cheaper. An oracle is one
+    // switch and has nothing to shrink.
+    let variant = bisect(variant, &mut |candidate| still_fails(source, candidate));
+    let source = reduce::reduce(source, &mut |candidate| still_fails(candidate, &variant));
 
     Reduced {
         shrunk_from: Some(original_lines),
         subject: source.clone(),
         artifact: source,
-        pipeline,
+        variant,
     }
 }
 
 /// Shrink the pipeline alone, for cases whose program is curated and must not
 /// be rewritten.
 pub fn bisect(
-    pipeline: Option<&str>,
-    still_diverges: &mut dyn FnMut(&str) -> bool,
-) -> Option<String> {
-    pipeline.map(|pipeline| reduce::bisect_pipeline(pipeline, still_diverges))
+    variant: &FccVariant,
+    still_diverges: &mut dyn FnMut(&FccVariant) -> bool,
+) -> FccVariant {
+    let Some(pipeline) = variant.pipeline.as_deref() else {
+        return variant.clone();
+    };
+    let mut candidate = variant.clone();
+    let shortest = reduce::bisect_pipeline(pipeline, &mut |pipeline| {
+        candidate.pipeline = Some(pipeline.to_string());
+        still_diverges(&candidate)
+    });
+    FccVariant {
+        pipeline: Some(shortest),
+        ..variant.clone()
+    }
 }
 
 /// Does this candidate still expose the defect? A divergence only counts on a
@@ -113,7 +129,7 @@ pub fn bisect(
 pub fn diverges(
     fcc: &Path,
     source: &str,
-    pipeline: Option<&str>,
+    variant: &FccVariant,
     references: &[Variant],
     work_dir: &Path,
 ) -> bool {
@@ -122,9 +138,9 @@ pub fn diverges(
         return false;
     }
 
-    let mut variants = vec![Variant::fcc(None)];
-    if let Some(pipeline) = pipeline {
-        variants.push(Variant::fcc(Some(pipeline.to_string())));
+    let mut variants = vec![Variant::fcc(FccVariant::default())];
+    if variant.tag().is_some() {
+        variants.push(Variant::fcc(variant.clone()));
     }
     variants.extend(references.iter().cloned());
 

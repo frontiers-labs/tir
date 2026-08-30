@@ -10,7 +10,6 @@ use super::{
     FunctionSelection, RuleMatch,
     builder::AuxSlot,
     cover::{BoundaryDemand, PbqpIselMatch},
-    node::class_is_pure,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -40,12 +39,6 @@ pub(crate) struct ScheduledEmit {
     pub(crate) source_op: Option<OpId>,
     /// The state ports of the access this tile covers, where it covers one.
     pub(crate) state: Option<super::StatePorts>,
-    /// The original op to insert this instruction before: the source op's
-    /// position, pulled earlier for pure tiles whose consumers precede it
-    /// (a constant read by an earlier op through class merging), so surviving
-    /// mid-block ops (calls) still read their operands in order. `None` inserts
-    /// before the terminator.
-    pub(crate) anchor: Option<OpId>,
     pub(crate) results: Vec<ValueId>,
     pub(crate) result_ty: Option<TypeId>,
 }
@@ -59,11 +52,20 @@ pub(crate) enum GuardBranch {
     Nonzero { condition: ValueId },
 }
 
-pub(crate) fn schedule_tiles(
+/// The order the cover's tiles are emitted in: a topological order of the
+/// registers they pass each other, ties broken by `rank` — the place of the
+/// operation each tile is rooted at, and `None` for one this block roots at no
+/// operation of its own, which is a pure value and goes first.
+///
+/// This is a reference order, not the block's: commit merges the surviving
+/// operations into it and derives the block's own order from the whole
+/// dependence graph. What it has to be is an order the values admit, because
+/// anti- and output edges are read off it.
+pub(crate) fn order_tiles(
     egraph: &super::SemEGraph,
     matches: &[PbqpIselMatch],
     selected: &HashMap<Id, usize>,
-    positions: &HashMap<Id, usize>,
+    rank: impl Fn(Id) -> Option<usize>,
 ) -> Option<Vec<(Id, usize)>> {
     let mut dependencies: HashMap<Id, HashSet<Id>> = HashMap::new();
     for (&class, &match_id) in selected {
@@ -78,29 +80,9 @@ pub(crate) fn schedule_tiles(
             }
         }
     }
-    let mut effects: Vec<_> = selected
-        .iter()
-        .filter(|(_, matched)| {
-            matches[**matched]
-                .bindings
-                .pattern_nodes
-                .iter()
-                .any(|binding| {
-                    !binding.is_boundary
-                        && !binding.is_state
-                        && !class_is_pure(egraph, binding.class)
-                })
-        })
-        .map(|(&class, _)| class)
-        .collect();
-    effects.sort_by_key(|class| (positions.get(class).copied(), *class));
-    for pair in effects.windows(2) {
-        dependencies.entry(pair[1]).or_default().insert(pair[0]);
-    }
-
     let mut emitted = HashSet::new();
-    let mut schedule = Vec::with_capacity(selected.len());
-    while schedule.len() < selected.len() {
+    let mut order = Vec::with_capacity(selected.len());
+    while order.len() < selected.len() {
         let class = selected
             .keys()
             .copied()
@@ -110,11 +92,11 @@ pub(crate) fn schedule_tiles(
                     .get(class)
                     .is_none_or(|deps| deps.is_subset(&emitted))
             })
-            .min_by_key(|class| (positions.get(class).copied(), *class))?;
+            .min_by_key(|class| (rank(*class), *class))?;
         emitted.insert(class);
-        schedule.push((class, selected[&class]));
+        order.push((class, selected[&class]));
     }
-    Some(schedule)
+    Some(order)
 }
 
 pub(crate) fn resolve_match(

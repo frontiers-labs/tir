@@ -15,17 +15,12 @@
 
 use crate::builtin::StateType;
 use crate::func::FuncOp;
+use crate::utils::Rng;
 use crate::{
     AnalysisManager, BlockHandle, Context, OpHandle, OpId, OperationRef, Pass, PassError,
     PassTarget, RegionId, Rewriter, TypeId, ValueId,
 };
 use std::collections::HashMap;
-
-/// The environment variable seeding the order. One compiler process compiles one
-/// program, so the default already gives every program an order of its own and a
-/// divergence reproduces from the pipeline alone; setting it sweeps several orders
-/// over one corpus.
-const SEED_VARIABLE: &str = "TIR_SHUFFLE_SEED";
 
 pub struct ShuffleStatePass {
     rng: Rng,
@@ -33,11 +28,9 @@ pub struct ShuffleStatePass {
 
 impl ShuffleStatePass {
     pub fn new() -> Self {
-        let seed = std::env::var(SEED_VARIABLE)
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0);
-        Self { rng: Rng(seed) }
+        Self {
+            rng: Rng::from_environment(),
+        }
     }
 }
 
@@ -208,21 +201,4 @@ fn ordered_by_edges(context: &Context, op: &OpHandle, state: TypeId) -> bool {
                         .all(|&nested| ordered_by_edges(context, &context.get_op(nested), state))
                 })
         })
-}
-
-/// splitmix64, so one seed gives one order on every host.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn below(&mut self, bound: usize) -> usize {
-        (self.next() % bound as u64) as usize
-    }
 }

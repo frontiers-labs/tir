@@ -1,0 +1,30 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A module's own block lists definitions; it is not a machine block. A caller
+// may stand ahead of the callee whose λ it names, so the order rule that holds
+// inside a machine block must not be read across the module. The data symbol
+// puts the module in the machine layer while the functions are still mid-end,
+// which is where the module-scope passes verify it.
+
+module {
+  asm.section {name = ".data"} {
+    asm.symbol {name = "g"} {
+      asm.literal {kind = "dword", value = 0}
+      asm.symbol_end
+    }
+    asm.section_end
+  }
+  %fn_caller = func.func @caller() -> !i64 {
+    %0 = func.call %fn_callee() -> !i64
+    func.return %0
+  }
+  %fn_callee = func.func @callee() -> !i64 {
+    %1 = constant {value = 7} : !i64
+    func.return %1
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {{.*}}caller
+// CHECK: asm.vcall {callee = "callee"
+// CHECK: asm.symbol {{.*}}callee

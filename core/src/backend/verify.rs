@@ -14,7 +14,11 @@
 //! - a register assignment must place a value in a register of a class sharing
 //!   its own view;
 //! - once a function carries an assignment, it is total: every register-typed
-//!   value some instruction names has an entry.
+//!   value some instruction names has an entry;
+//! - a symbol's own blocks are ordered by their dependences. Only those: a
+//!   module or a section lists definitions, and a definition is reachable from
+//!   the whole module however the list is spelled, so a caller may stand ahead
+//!   of the λ it names.
 
 use std::collections::HashSet;
 
@@ -41,11 +45,15 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
         verify_state_operands(context, &op)?;
         verify_views(context, &RegAssignment::of_op(&op, ARG_PINS_ATTR))?;
         verify_slot_pins(context, &op)?;
-        if op.is::<SymbolOp>() {
+        let symbol = op.is::<SymbolOp>();
+        if symbol {
             verify_assignment(context, &op)?;
         }
         for region in op.regions().iter().copied() {
             for block in context.get_region(region).iter(context.clone()) {
+                if symbol {
+                    crate::backend::verify_block_order(context, &block)?;
+                }
                 stack.extend(block.op_ids());
             }
         }

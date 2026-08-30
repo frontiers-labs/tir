@@ -111,6 +111,7 @@ mod core {
     mod backend;
     mod binary;
     mod context;
+    mod dependence;
     mod dialects;
     mod dominance;
     mod encodings;

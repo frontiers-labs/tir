@@ -22,8 +22,7 @@ use std::collections::{HashMap, HashSet};
 use tir::BlockHandle;
 use tir::{
     AnalysisManager, BlockId, Conditional, Context, EntryGuard, GuardedLoop, OpHandle, OpId,
-    Operation, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, Terminator, TypeId,
-    ValueId,
+    Operation, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
     analysis::{DefUse, DominatorTree, scopes},
     builtin::{trailing_state_operand, trailing_state_result},
     graph::{Dag, MutDag, NodeId, OperandConstraint},
@@ -49,7 +48,7 @@ use cover::{
     BoundaryDemand, CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative,
     PbqpIselMatch, build_eclass_cover, completeness_error, prune_dominated_matches,
 };
-use emit::{AuxEmit, BlockPlan, GuardBranch, ScheduledEmit, resolve_match, schedule_tiles};
+use emit::{AuxEmit, BlockPlan, GuardBranch, ScheduledEmit, order_tiles, resolve_match};
 use node::{is_low_extract_view, low_extract_source};
 use pattern::{CompiledIselPattern, PatternNode, compile_isel_pattern};
 use tir::sem::axioms::{self, verify_axioms};
@@ -1853,16 +1852,19 @@ impl InstructionSelectPass {
         };
 
         let block_arc = context.get_block(block.id());
-        let anchor = block_arc
+        // The place each surviving operation holds, and — as each tile is
+        // emitted — the place it inherits: its root operation's, clamped so the
+        // plan's own order is never broken, since that is the order the values
+        // the tiles pass each other admit. A tile rooted at no operation of this
+        // block is a pure value and takes the head.
+        let position: HashMap<OpId, usize> = block_arc
             .op_ids()
             .into_iter()
-            .find(|op| {
-                context
-                    .get_op(*op)
-                    .as_interface::<dyn Terminator>()
-                    .is_some()
-            })
-            .map(|op| OperationRef::new(context.get_op(op), Some(block_arc.clone()), None));
+            .enumerate()
+            .map(|(position, op)| (op, position))
+            .collect();
+        let mut emitted: Vec<(OpId, usize)> = Vec::with_capacity(plan.schedule.len());
+        let mut cursor = 0;
         for scheduled in &plan.schedule {
             let source = scheduled
                 .source_op
@@ -1876,24 +1878,20 @@ impl InstructionSelectPass {
                 state: scheduled.state,
             };
             let rule = &self.rules[scheduled.rule_index];
-            let tile_anchor = scheduled
-                .anchor
-                .map(|op| OperationRef::new(context.get_op(op), Some(block_arc.clone()), None))
-                .or_else(|| anchor.clone());
+            cursor = cursor.max(
+                scheduled
+                    .source_op
+                    .and_then(|op| position.get(&op).copied())
+                    .unwrap_or(0),
+            );
             if let Some(prelude) = rule.prelude_emit {
                 let op = prelude(context, &request, &m)?;
-                if let Some(anchor) = &tile_anchor {
-                    rewriter.insert_op_before(anchor, op.as_ref())?;
-                } else {
-                    block_arc.append(op.id());
-                }
+                block_arc.append(op.id());
+                emitted.push((op.id(), cursor));
             }
             let op = (rule.emit_fn)(context, &request, &m)?;
-            if let Some(anchor) = &tile_anchor {
-                rewriter.insert_op_before(anchor, op.as_ref())?;
-            } else {
-                block_arc.append(op.id());
-            }
+            block_arc.append(op.id());
+            emitted.push((op.id(), cursor));
             // The tile's results are born register-class-typed; the mid-end
             // values they stand for are replaced by them.
             for (&old, new) in scheduled
@@ -1966,6 +1964,41 @@ impl InstructionSelectPass {
             let op = OperationRef::new(instance, Some(block_arc.clone()), None);
             rewriter.erase_op_keeping_results(&op)?;
         }
+
+        // Order is derived. What the block holds now is the survivors and the
+        // tiles; every dependence between them is an edge, so any topological
+        // order of the graph is a legal block. The one handed in is the order
+        // selection meant: the tiles as the cover ordered them, each at the
+        // place its root operation held, and the survivors between them. With no
+        // scheduler yet, that is the order that comes back.
+        let tiles: HashSet<OpId> = emitted.iter().map(|&(op, _)| op).collect();
+        let survivors: Vec<OpId> = block_arc
+            .op_ids()
+            .into_iter()
+            .filter(|op| !tiles.contains(op))
+            .collect();
+        let mut reference = Vec::with_capacity(survivors.len() + emitted.len());
+        let mut next = 0;
+        for (op, at) in emitted {
+            while next < survivors.len() && position[&survivors[next]] < at {
+                reference.push(survivors[next]);
+                next += 1;
+            }
+            reference.push(op);
+        }
+        reference.extend(survivors[next..].iter().copied());
+        let graph = crate::backend::Dependences::of_ops(
+            context,
+            &reference,
+            &crate::backend::RegAssignment::default(),
+        );
+        let order = graph.linearize().ok_or_else(|| {
+            PassError::InvalidRuleSet(format!(
+                "cyclic instruction dependences in {block:?}",
+                block = block.id()
+            ))
+        })?;
+        block_arc.set_ops(order);
 
         Ok(())
     }
@@ -2156,59 +2189,12 @@ impl InstructionSelectPass {
             .map(|binding| fs.egraph.find(binding.class))
             .filter(|class| !root_match.contains_key(class))
             .collect();
-        let mut positions: HashMap<Id, usize> = block_op_by_root
-            .iter()
-            .filter_map(|(&class, op)| {
-                op_ids
-                    .iter()
-                    .position(|candidate| candidate == op)
-                    .map(|position| (class, position))
-            })
-            .collect();
-        // A destruction's values are read by a branch that replaces something: the
-        // structured operation itself, where this block holds it (its zero-trip
-        // guard runs before it), or else this block's own terminator.
-        for &(op, _, class) in fs.region_aux.get(&block_id).into_iter().flatten() {
-            let position = op_ids
-                .iter()
-                .position(|candidate| *candidate == op)
-                .unwrap_or(op_ids.len() - 1);
-            positions
-                .entry(fs.chase_low_extract(fs.egraph.find(class)))
-                .or_insert(position);
-        }
-        // Pull each pure tile up to its earliest consumer's position: surviving
-        // mid-block ops (calls) and other tiles read their operands in block
-        // order, so a tile must precede every consumer even when its original op
-        // (a constant merged into an earlier class) sits after one.
-        loop {
-            let mut changed = false;
-            for (&class, &match_id) in &root_match {
-                let Some(&consumer_pos) = positions.get(&class) else {
-                    continue;
-                };
-                for binding in &matches[match_id].bindings.pattern_nodes {
-                    let leaf = fs.egraph.find(binding.class);
-                    if leaf == class
-                        || !binding.is_boundary
-                        || binding.demand != BoundaryDemand::Register
-                        || !root_match.contains_key(&leaf)
-                        || !node::class_is_pure(&fs.egraph, leaf)
-                    {
-                        continue;
-                    }
-                    if positions.get(&leaf).is_none_or(|p| *p > consumer_pos) {
-                        positions.insert(leaf, consumer_pos);
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let tiles = schedule_tiles(&fs.egraph, &matches, &root_match, &positions)
-            .ok_or_else(|| format!("cyclic instruction schedule for {block_id:?}"))?;
+        let tiles = order_tiles(&fs.egraph, &matches, &root_match, |class| {
+            block_op_by_root
+                .get(&class)
+                .and_then(|op| op_ids.iter().position(|candidate| candidate == op))
+        })
+        .ok_or_else(|| format!("cyclic instruction cover for {block_id:?}"))?;
 
         // The state ports of every access this block holds, by the class the
         // access is rooted at: what a tile covering it must read and publish.
@@ -2286,7 +2272,6 @@ impl InstructionSelectPass {
                     ),
                     source_op,
                     state,
-                    anchor: positions.get(&class).map(|&position| op_ids[position]),
                     results,
                     result_ty,
                 }

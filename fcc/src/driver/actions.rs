@@ -37,6 +37,9 @@ pub struct DriverOptions {
     pub lib_dirs: Vec<PathBuf>,
     pub libs: Vec<String>,
     pub pipeline: Option<String>,
+    /// The `shuffle-machine-order` oracle (see
+    /// [`tir::backend::pipeline::Oracles`]).
+    pub shuffle_machine_order: bool,
     pub dry_run: bool,
 }
 

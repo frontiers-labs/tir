@@ -198,7 +198,20 @@ fn emit_abi_info(
         for class in files.iter().flat_map(|file| file.register_classes()) {
             let class_id = reg_class_id(&class.name);
             let file = class.register_file(&classes).to_string();
-            for (index, _) in class.indexed_registers() {
+            // A status flag carries no encoding slot and is never allocated, so
+            // it is not one of `indexed_registers`; a call destroys it all the
+            // same — the flags a compare left behind do not survive the callee,
+            // and that is the edge that keeps a call out from between a compare
+            // and the branch reading it. Its index is its position in the class,
+            // which is how the implicit-register facts name it.
+            for (position, register) in class.resolve_registers().enumerate() {
+                let index = match register.encoding_index() {
+                    Some(index) => index,
+                    None if register.traits.contains(&ast::RegisterTrait::StatusFlag) => {
+                        position as u16
+                    }
+                    None => continue,
+                };
                 let identity = (file.clone(), index);
                 if !excluded.contains(&identity) && seen.insert(identity) {
                     caller_saved.push(quote! { (#class_id, #index) });

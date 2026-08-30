@@ -106,7 +106,7 @@ pub unsafe extern "C" fn tir_context_run_target_pipeline(
         let Some(op) = op_instance(ctx, root) else {
             return false;
         };
-        let mut pm = build_pipeline(target.as_ref(), ctx, stop);
+        let mut pm = build_pipeline(target.as_ref(), ctx, stop, Default::default());
         match pm.run(ctx, op) {
             Ok(()) => true,
             Err(e) => {

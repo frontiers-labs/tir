@@ -5,7 +5,7 @@ use std::{error::Error, ffi::OsString};
 
 use clap::{Args, ValueEnum};
 use tir::backend::binary::{ObjectEmission, render_ascii, write_elf};
-use tir::backend::pipeline::{StopAfter, build_pipeline, lower_and_emit};
+use tir::backend::pipeline::{Oracles, StopAfter, build_pipeline, lower_and_emit};
 use tir::{Context, IRFormatter, Operation};
 
 use crate::common::{InputKind, parse_module, parse_tir, read_input, resolve_kind};
@@ -31,6 +31,12 @@ pub struct ToolArgs {
     /// Output kind: textual assembly or an ELF object (binary or as text)
     #[arg(value_enum, long)]
     filetype: Option<FileType>,
+    /// Re-linearize every machine block by a seeded random topological order of
+    /// its dependence graph, after selection and again after allocation. A
+    /// differential-testing oracle: the program is the same one, so a change in
+    /// behavior is a dependence the machine form does not carry.
+    #[arg(long)]
+    shuffle_machine_order: bool,
     /// Output path; `-` writes to stdout.
     #[arg(short = 'o', default_value = "-")]
     output: OsString,
@@ -103,6 +109,9 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             .map_err(|e| format!("verification failed: {e}"))?;
     }
 
+    let oracles = Oracles {
+        shuffle_machine_order: args.shuffle_machine_order,
+    };
     let stop_after = match (args.stage, args.filetype) {
         (Some(Stage::ISel), _) => StopAfter::ISel,
         (Some(Stage::RegAlloc), _) | (None, None) => StopAfter::RegAlloc,
@@ -130,7 +139,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         };
 
     if needs_lowering && !per_symbol {
-        let mut pm = build_pipeline(target.as_ref(), &context, stop_after);
+        let mut pm = build_pipeline(target.as_ref(), &context, stop_after, oracles);
         pm.run(&context, context.get_op(module.id()))
             .map_err(|e| format!("pass pipeline failed: {e}"))?;
     }
@@ -139,11 +148,17 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         Some(FileType::Asm) if per_symbol => {
             let printer = tir::backend::AsmPrinter::new();
             let mut rendered = String::new();
-            lower_and_emit(target.as_ref(), &context, &module, |context, op| {
-                printer
-                    .print_op(context, op, &mut rendered)
-                    .map_err(|e| format!("failed to print assembly: {e}"))
-            })?;
+            lower_and_emit(
+                target.as_ref(),
+                &context,
+                &module,
+                oracles,
+                |context, op| {
+                    printer
+                        .print_op(context, op, &mut rendered)
+                        .map_err(|e| format!("failed to print assembly: {e}"))
+                },
+            )?;
             rendered.into_bytes()
         }
         Some(FileType::Asm) => match target.print_asm_text(&context, &module) {
@@ -165,11 +180,17 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             let writer = tir::backend::binary::BinaryWriter::new();
             let obj = if per_symbol {
                 let mut emission = ObjectEmission::default();
-                lower_and_emit(target.as_ref(), &context, &module, |context, op| {
-                    writer
-                        .write_op(context, op, &mut emission, &fmt)
-                        .map_err(|e| format!("failed to emit object: {e}"))
-                })?;
+                lower_and_emit(
+                    target.as_ref(),
+                    &context,
+                    &module,
+                    oracles,
+                    |context, op| {
+                        writer
+                            .write_op(context, op, &mut emission, &fmt)
+                            .map_err(|e| format!("failed to emit object: {e}"))
+                    },
+                )?;
                 writer
                     .finish(emission, &fmt)
                     .map_err(|e| format!("failed to emit object: {e}"))?

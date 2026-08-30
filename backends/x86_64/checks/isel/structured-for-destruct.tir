@@ -27,11 +27,12 @@ module {data_layout = #data_layout} {
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[EXIT:bb[0-9]+]]
 // The body carries the accumulator and the counter.
 // CHECK: ^[[BODY:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR, %[[IV:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.add_imm8s {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, imm = 5}
 // The counter advances by the step and is tested against the same bound; the
 // test fuses into the back edge's branch even though the advance names no value
-// of the IR.
+// of the IR. The advance leads the body: rooted at no operation of its own, it
+// takes the head of the order the cover spells.
 // CHECK-NEXT: x86_64.add {dst = %[[NEXT:[0-9]+]]:GPR, dst_tied = %[[IV]]:GPR, src = %[[V2:[0-9]+]]:GPR}
+// CHECK-NEXT: x86_64.add_imm8s {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, imm = 5}
 // CHECK-NEXT: x86_64.cmp {dst = %[[NEXT]]:GPR, src = %[[V1]]:GPR}
 // CHECK-NEXT: x86_64.jl {imm = ^[[LATCH:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[EXIT]]

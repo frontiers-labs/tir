@@ -377,6 +377,7 @@ mod isa {
             "src",
             4
         );
+        escape!(sib LeaBaseDisp32Op, LeaBaseDisp32SibOp);
         escape!(sib MovLoadDispOp, MovLoadDispSibOp);
         escape!(sib MovStoreDispOp, MovStoreDispSibOp);
         escape!(sib Mov32LoadDispOp, Mov32LoadDispSibOp);
@@ -905,24 +906,24 @@ mod isa {
                     class.name()
                 )));
             }
-            // Allocation runs after tied operands are lowered, so the `add`
-            // is emitted already tied: it reads and writes the one register the
-            // frame address is materialized in.
-            let mut ops = vec![mv(
-                context,
-                RegSlot::Value(dst),
-                RegSlot::Phys((frame.0, frame.1)),
-            )];
-            if offset != 0 {
-                ops.push(Box::new(
-                    AddImmOpBuilder::new(context)
-                        .result_values(vec![dst])
-                        .dst_tied(dst)
-                        .attr("imm", AttributeValue::Int(offset))
-                        .build(),
-                ));
+            // `lea`, not `mov` plus `add`: a frame address is materialized
+            // wherever the value is read, and `add` would leave the flags of
+            // whatever compare stands there destroyed. `lea` computes the same
+            // address in one instruction and writes no flags.
+            if offset == 0 {
+                return Ok(vec![mv(
+                    context,
+                    RegSlot::Value(dst),
+                    RegSlot::Phys((frame.0, frame.1)),
+                )]);
             }
-            Ok(ops)
+            Ok(vec![Box::new(
+                LeaBaseDisp32OpBuilder::new(context)
+                    .result_values(vec![dst])
+                    .attr("base", phys(frame.0, frame.1))
+                    .attr("imm", AttributeValue::Int(offset))
+                    .build(),
+            )])
         }
     }
 

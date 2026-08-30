@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use xshell::{cmd, Shell};
 
-use harness::Outcome;
+use harness::{FccVariant, Outcome};
 
 /// Mid-end pipelines exercised besides the default. All are semantically
 /// neutral orderings of the registered passes; a correct compiler must give
@@ -133,7 +133,7 @@ pub fn run(sh: &Shell, root: &Path, options: &Options) -> anyhow::Result<()> {
                     let reduced = triage::triage(
                         &fcc,
                         &source_text,
-                        variant.strip_prefix("fcc:"),
+                        &blamed(&variant),
                         &references,
                         &triage_dir,
                     );
@@ -166,15 +166,32 @@ pub fn run(sh: &Shell, root: &Path, options: &Options) -> anyhow::Result<()> {
 /// Both ways back to this one failure: the seed that generated it, and the
 /// minimal case on its own for when the generator has moved on.
 fn reproduce_command(seed: u64, reduced: &triage::Reduced) -> String {
-    let pipeline = match &reduced.pipeline {
-        Some(pipeline) => format!(" --pipeline '{pipeline}'"),
-        None => String::new(),
-    };
+    let flags = fcc_flags(&reduced.variant);
     format!(
         "cargo xtask fcc-fuzz --seed {seed} --iterations 1\n\n\
          # ...or straight at the minimal case above, saved as case.c:\n\
-         fcc compile --stage obj --march x86_64{pipeline} -o case.o case.c"
+         fcc compile --stage obj --march x86_64{flags} -o case.o case.c"
     )
+}
+
+/// The fcc variant a divergence names, recovered from the variant's own name.
+fn blamed(variant: &str) -> FccVariant {
+    variant
+        .strip_prefix("fcc:")
+        .map(FccVariant::from_tag)
+        .unwrap_or_default()
+}
+
+/// The variant as it is typed on a command line.
+fn fcc_flags(variant: &FccVariant) -> String {
+    let mut flags = String::new();
+    if let Some(pipeline) = &variant.pipeline {
+        flags.push_str(&format!(" --pipeline '{pipeline}'"));
+    }
+    if variant.shuffle_machine_order {
+        flags.push_str(" --shuffle-machine-order");
+    }
+    flags
 }
 
 /// Hand one defect to the reporter. Signatures repeat within a run whenever two
@@ -198,9 +215,13 @@ fn record(
 
 fn variants(seed: u64) -> Vec<harness::Variant> {
     let mut variants = vec![
-        harness::Variant::fcc(None),
-        harness::Variant::fcc(Some(extra_pipeline(seed).to_string())),
-        harness::Variant::fcc(Some(SHUFFLE_PIPELINE.to_string())),
+        harness::Variant::fcc(FccVariant::default()),
+        harness::Variant::fcc(FccVariant::pipeline(extra_pipeline(seed))),
+        harness::Variant::fcc(FccVariant::pipeline(SHUFFLE_PIPELINE)),
+        // The backend half of the same question: order inside a machine block
+        // is a linearization of its dependence graph, so another one is the
+        // same program.
+        harness::Variant::fcc(FccVariant::shuffle_machine_order()),
     ];
     variants.extend(reference_variants());
     variants
@@ -274,21 +295,14 @@ fn run_corpus(
                         // A corpus case is curated, so only the pipeline is
                         // shrunk: the path is what names the defect, and the
                         // file is what the reader wants to open.
-                        let pipeline =
-                            triage::bisect(variant.strip_prefix("fcc:"), &mut |candidate| {
-                                triage::diverges(
-                                    fcc,
-                                    &source,
-                                    Some(candidate),
-                                    &references,
-                                    &program_dir,
-                                )
-                            });
+                        let shrunk = triage::bisect(&blamed(&variant), &mut |candidate| {
+                            triage::diverges(fcc, &source, candidate, &references, &program_dir)
+                        });
                         let path = relative(root, file);
                         let reduced = triage::Reduced {
                             artifact: source.clone(),
                             subject: path.clone(),
-                            pipeline,
+                            variant: shrunk,
                             shrunk_from: None,
                         };
                         failures.push(triage::failure(
@@ -326,11 +340,8 @@ fn run_corpus(
 }
 
 fn corpus_reproduce_command(path: &str, reduced: &triage::Reduced) -> String {
-    let pipeline = match &reduced.pipeline {
-        Some(pipeline) => format!(" --pipeline '{pipeline}'"),
-        None => String::new(),
-    };
-    format!("fcc compile --stage obj --march x86_64{pipeline} -o case.o {path}")
+    let flags = fcc_flags(&reduced.variant);
+    format!("fcc compile --stage obj --march x86_64{flags} -o case.o {path}")
 }
 
 /// Corpus paths are reported relative to the checkout so they are clickable;
@@ -389,7 +400,10 @@ fn self_test(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<()> 
 
     let saved_path = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{saved_path}", stub_dir.display()));
-    let variants = vec![harness::Variant::fcc(None), harness::Variant::gcc()];
+    let variants = vec![
+        harness::Variant::fcc(FccVariant::default()),
+        harness::Variant::gcc(),
+    ];
     let outcomes = harness::run_variants(&fcc, &source, &variants, &work_dir);
     // Reduction is exercised on a small hand-written program rather than a
     // generated one: it costs a harness run per candidate deletion, and the
@@ -397,7 +411,7 @@ fn self_test(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<()> 
     let reduced = triage::triage(
         &fcc,
         SELF_TEST_PROGRAM,
-        None,
+        &FccVariant::default(),
         &[harness::Variant::gcc()],
         &work_dir,
     );

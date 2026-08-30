@@ -169,7 +169,7 @@ pub(super) fn emit_machine_code(
 ) -> Vec<u8> {
     use tir::Operation;
     use tir::backend::binary::ObjectEmission;
-    use tir::backend::pipeline::lower_and_emit;
+    use tir::backend::pipeline::{Oracles, lower_and_emit};
 
     let Some(march) = opts.march.as_deref() else {
         eprintln!("fcc: error: --march is required for the asm and obj stages");
@@ -242,15 +242,24 @@ pub(super) fn emit_machine_code(
         eprintln!("fcc: error: {e}");
         std::process::exit(1);
     };
+    let oracles = Oracles {
+        shuffle_machine_order: opts.shuffle_machine_order,
+    };
 
     if emit_assembly {
         let printer = tir::backend::AsmPrinter::new();
         let mut rendered = String::new();
-        lower_and_emit(target.as_ref(), &context, &module, |context, op| {
-            printer
-                .print_op(context, op, &mut rendered)
-                .map_err(|e| format!("failed to print assembly: {e}"))
-        })
+        lower_and_emit(
+            target.as_ref(),
+            &context,
+            &module,
+            oracles,
+            |context, op| {
+                printer
+                    .print_op(context, op, &mut rendered)
+                    .map_err(|e| format!("failed to print assembly: {e}"))
+            },
+        )
         .unwrap_or_else(|e| die(e));
         return rendered.into_bytes();
     }
@@ -261,11 +270,17 @@ pub(super) fn emit_machine_code(
     };
     let writer = tir::backend::binary::BinaryWriter::new();
     let mut emission = ObjectEmission::default();
-    lower_and_emit(target.as_ref(), &context, &module, |context, op| {
-        writer
-            .write_op(context, op, &mut emission, &format)
-            .map_err(|e| format!("failed to emit object: {e}"))
-    })
+    lower_and_emit(
+        target.as_ref(),
+        &context,
+        &module,
+        oracles,
+        |context, op| {
+            writer
+                .write_op(context, op, &mut emission, &format)
+                .map_err(|e| format!("failed to emit object: {e}"))
+        },
+    )
     .unwrap_or_else(|e| die(e));
     let object = writer.finish(emission, &format).unwrap_or_else(|e| {
         eprintln!("fcc: error: failed to emit object: {e}");

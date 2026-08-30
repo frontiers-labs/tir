@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::harness::Variant;
+use super::harness::{FccVariant, Variant};
 use super::report::Failure;
 use super::triage;
 
@@ -65,11 +65,10 @@ pub fn replay(
         if failure.language != "c" {
             continue;
         }
-        let pipeline = pipeline_of(&failure);
         let still = triage::diverges(
             fcc,
             &failure.artifact,
-            pipeline.as_deref(),
+            &variant_of(&failure),
             references,
             work_dir,
         );
@@ -85,11 +84,13 @@ pub fn replay(
     Ok(())
 }
 
-/// The pipeline a record was filed against, recovered from its identity, whose
-/// first line is the minimal pipeline or `fcc-default`.
-fn pipeline_of(failure: &Failure) -> Option<String> {
-    let first = failure.identity.lines().next()?;
-    (first != "fcc-default").then(|| first.to_string())
+/// The variant a record was filed against, recovered from its identity, whose
+/// first line is the variant's tag or `fcc-default`.
+fn variant_of(failure: &Failure) -> FccVariant {
+    match failure.identity.lines().next() {
+        Some(first) if first != "fcc-default" => FccVariant::from_tag(first),
+        _ => FccVariant::default(),
+    }
 }
 
 fn records(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {

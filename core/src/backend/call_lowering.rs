@@ -370,6 +370,11 @@ impl CallLowering {
             None
         };
 
+        // The memory the call observes. An argument the convention places on the
+        // stack is written into memory the callee reads, so those stores go on
+        // this very chain: the call takes what the last of them left, and
+        // nothing may put the call ahead of one.
+        let mut observed = call.state_operand();
         for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
             match *location {
                 ArgumentLocation::Register(register) => {
@@ -383,6 +388,8 @@ impl CallLowering {
                         .emitter
                         .stack_arg_store(context, self.abi, fresh, class, offset)?;
                     rewriter.insert_op_before(op, store.as_ref())?;
+                    observed = observed
+                        .map(|state| tir::builtin::put_on_chain(context, store.as_ref(), state));
                 }
             }
         }
@@ -393,6 +400,25 @@ impl CallLowering {
             rewriter.insert_op_before(op, copy.as_ref())?;
         }
 
+        // What the call reads: the registers the convention placed the arguments
+        // in, the result address where there is one, and the stack pointer it
+        // pushes the return address on. None of them is an operand — a
+        // placement is not a value — so without saying so nothing keeps the copy
+        // that made it alive to the call, and nothing keeps the frame's own
+        // adjustment on the right side of it.
+        let uses = AttributeValue::Array(
+            argument_locations
+                .iter()
+                .filter_map(|location| match location {
+                    ArgumentLocation::Register(register) => Some(*register),
+                    ArgumentLocation::Stack { .. } => None,
+                })
+                .chain(fresh_result_address.map(|(_, register)| register))
+                .chain(std::iter::once(self.abi.sp))
+                .map(crate::backend::phys_attr)
+                .collect::<Vec<_>>()
+                .into(),
+        );
         let clobbers = AttributeValue::Array(
             self.abi
                 .caller_saved
@@ -405,14 +431,14 @@ impl CallLowering {
         // The call runs a function, so the memory it observes and the one it
         // leaves behind are the chain the mid-end put it on: the virtual call
         // takes both ports over from `func.call`.
-        let observed = call.state_operand();
         let published = call.state_result();
         let call: Box<dyn Operation> = match callee {
             Callee::Direct(name) => {
                 let mut builder = super::VirtualCallOpBuilder::new(context)
                     .attr("callee", AttributeValue::Str(name.into()))
                     .outgoing_stack_size(u64::from(outgoing_size))
-                    .attr("clobbers", clobbers);
+                    .attr("clobbers", clobbers)
+                    .attr("uses", uses);
                 if let Some(observed) = observed {
                     builder = builder.state(observed).state_result();
                 }
@@ -422,7 +448,8 @@ impl CallLowering {
                 let mut builder = super::VirtualIndirectCallOpBuilder::new(context)
                     .callee(fresh_callee.expect("indirect callee was detached"))
                     .outgoing_stack_size(u64::from(outgoing_size))
-                    .attr("clobbers", clobbers);
+                    .attr("clobbers", clobbers)
+                    .attr("uses", uses);
                 if let Some(observed) = observed {
                     builder = builder.state(observed).state_result();
                 }

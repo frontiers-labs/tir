@@ -166,6 +166,14 @@ impl BlockHandle {
             .replace_op_in_block(self.id, old, new)
     }
 
+    /// Choose another order for the operations the block already holds; `ops`
+    /// must be a permutation of [`op_ids`](Self::op_ids). Order inside a machine
+    /// block is a linearization of its dependence graph, and this is how one is
+    /// installed.
+    pub fn set_ops(&self, ops: Vec<OpId>) {
+        self.context.upgrade().set_block_ops(self.id, ops);
+    }
+
     pub fn remove_op(&self, id: OpId) -> bool {
         self.context.upgrade().remove_op_from_block(self.id, id)
     }
