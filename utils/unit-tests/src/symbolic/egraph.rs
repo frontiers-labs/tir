@@ -272,7 +272,7 @@ fn rewrite_under_scope_is_discarded_on_pop() {
     assert!(!g.connected(ab, ba));
 
     g.push_context();
-    comm.apply_all(&mut g);
+    apply_all(&mut g, &[comm]);
     assert!(g.connected(ab, ba));
     g.pop_context();
     assert!(!g.connected(ab, ba));
@@ -352,7 +352,7 @@ fn scoped_saturate_leaves_base_identical() {
     let base_size = g.total_size();
 
     g.push_context();
-    g.saturate([&comm], 10, 1000);
+    g.saturate_rules(&[comm], &tir_relational::NoExterns, 10, 1000);
     assert!(g.total_size() > base_size);
     g.pop_context();
 

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use smallvec::SmallVec;
 use tir::{
     Context,
     graph::{Dag, MetaDag, NodeId, OperandConstraint},
@@ -11,16 +12,39 @@ use tir::{
         infer_types, template_node,
     },
 };
-use tir_symbolic::egraph::{EMatch, Id, Pattern, PatternNode, Substitution, Var};
+use tir_relational::{Atom, Match, NoExterns, Plan, Query};
+use tir_symbolic::egraph::Id;
 
 use super::node::{class_register_type, is_memory_kind, low_extract_source, low_extract_width};
 use super::{ImmRange, RegisterRequirement};
 
-/// A rule's pattern compiled for e-matching: the [`Pattern`] itself plus the
-/// per-pattern-node metadata the matcher and the PBQP cover consult.
+/// One node of a rule's pattern: a template operator, or an operand the rule
+/// names.
+#[derive(Clone)]
+pub(crate) enum PatternNode {
+    Template(SemNode),
+    Capture(u32),
+}
+
+impl PatternNode {
+    pub(crate) fn symbol(&self) -> Option<u32> {
+        match self {
+            PatternNode::Capture(symbol) => Some(*symbol),
+            PatternNode::Template(_) => None,
+        }
+    }
+}
+
+/// A rule's pattern compiled for matching: the query it is, the nodes it was
+/// written as, and the per-node metadata the cover consults.
 pub(crate) struct CompiledIselPattern {
     pub(crate) rule_index: usize,
-    pub(crate) pattern: Pattern<SemNode, u32>,
+    /// One entry per pattern node; a match binds one class variable per entry.
+    pub(crate) nodes: Vec<PatternNode>,
+    root: u32,
+    plan: Plan<SemNode>,
+    /// The capture nodes in the order a match reaches them.
+    pub(crate) captures: Vec<u32>,
     /// Matching metadata for each pattern node (indexed by pattern node id).
     pub(crate) node_meta: Vec<PatternNodeMeta>,
     /// Number of type-constrained pattern nodes — how "specific" this pattern is.
@@ -70,22 +94,29 @@ impl CompiledIselPattern {
         self.copy
     }
 
+    /// The pattern node the match roots on.
+    pub(crate) fn root(&self) -> usize {
+        self.root as usize
+    }
+
     pub(crate) fn constant_materializer_range(&self) -> Option<ImmRange> {
-        let root = self.pattern.root();
-        if let PatternNode::Var(Var::Symbol(_)) = self.pattern.node(root) {
-            let meta = &self.node_meta[root.index()];
-            return (meta.constraint == Some(OperandConstraint::Immediate))
-                .then_some(meta.imm_range)
-                .flatten();
-        }
-        None
+        self.nodes[self.root as usize].symbol()?;
+        let meta = &self.node_meta[self.root as usize];
+        (meta.constraint == Some(OperandConstraint::Immediate))
+            .then_some(meta.imm_range)
+            .flatten()
+    }
+
+    /// The class a match bound to pattern node `index`.
+    pub(crate) fn binding(matched: &Match, index: usize) -> Id {
+        matched.bindings[index].expect("every pattern node is reached from the root")
     }
 
     fn match_types(
         &self,
         egraph: &SemEGraph,
         ctx: &Context,
-        matched: &tir_symbolic::egraph::EMatch<u32>,
+        matched: &Match,
         pointer_width: Option<u32>,
     ) -> bool {
         let mut unifier = TypeUnifier::default();
@@ -96,7 +127,7 @@ impl CompiledIselPattern {
             let Some(expected) = &meta.semantic_type else {
                 return true;
             };
-            let class = matched.binding(Id::from_raw(index as u32));
+            let class = Self::binding(matched, index);
             class_semantic_type(ctx, egraph, class)
                 .is_none_or(|actual| unifier.unify(expected, &actual).is_ok())
         });
@@ -115,25 +146,17 @@ impl CompiledIselPattern {
     /// memory node rather than an operand the rule declares. A chain is matched
     /// to name the access, never handed to an emitter.
     pub(crate) fn is_state_symbol(&self, symbol: u32) -> bool {
-        (0..self.pattern.len()).any(|index| {
-            self.node_meta[index].is_state
-                && matches!(
-                    self.pattern.node(Id::from_raw(index as u32)),
-                    PatternNode::Var(Var::Symbol(bound)) if *bound == symbol
-                )
+        (0..self.nodes.len()).any(|index| {
+            self.node_meta[index].is_state && self.nodes[index].symbol() == Some(symbol)
         })
     }
 
     /// The operand symbols the pattern reads as registers.
     pub(crate) fn register_symbols(&self) -> HashSet<u32> {
-        (0..self.pattern.len())
+        (0..self.nodes.len())
             .filter_map(|index| {
-                let PatternNode::Var(Var::Symbol(symbol)) =
-                    self.pattern.node(Id::from_raw(index as u32))
-                else {
-                    return None;
-                };
-                self.node_meta[index].demands_register().then_some(*symbol)
+                let symbol = self.nodes[index].symbol()?;
+                self.node_meta[index].demands_register().then_some(symbol)
             })
             .collect()
     }
@@ -183,15 +206,12 @@ impl CompiledIselPattern {
         ctx: &Context,
         pointer_width: Option<u32>,
         allowed: &dyn Fn(Id, Id) -> bool,
-    ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
+    ) -> Vec<Match> {
         if self.copy {
             return self.search_low_bit_copies(egraph, ctx);
         }
-        self.pattern
-            .search_with_legality(egraph, allowed)
-            .into_iter()
-            .filter(|matched| self.match_types(egraph, ctx, matched, pointer_width))
-            .collect()
+        let roots = self.plan.roots(egraph);
+        self.search_roots_with_legality(egraph, ctx, roots, pointer_width, allowed)
     }
 
     pub(crate) fn search_roots_with_legality(
@@ -201,12 +221,13 @@ impl CompiledIselPattern {
         roots: impl IntoIterator<Item = Id>,
         pointer_width: Option<u32>,
         allowed: &dyn Fn(Id, Id) -> bool,
-    ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
+    ) -> Vec<Match> {
         if self.copy {
             return self.search_low_bit_copies_at(egraph, ctx, roots);
         }
-        self.pattern
-            .search_roots_with_legality(egraph, roots, allowed)
+        let allowed = |var: u32, class: Id| allowed(Id::from_raw(var), class);
+        self.plan
+            .search(egraph, roots, &allowed, false, &NoExterns)
             .into_iter()
             .filter(|matched| self.match_types(egraph, ctx, matched, pointer_width))
             .collect()
@@ -218,7 +239,7 @@ impl CompiledIselPattern {
         ctx: &Context,
         roots: impl IntoIterator<Item = Id>,
         pointer_width: Option<u32>,
-    ) -> Vec<tir_symbolic::egraph::EMatch<u32>> {
+    ) -> Vec<Match> {
         self.search_roots_with_legality(egraph, ctx, roots, pointer_width, &|node, class| {
             self.boundary_ok(egraph, ctx, node, class, pointer_width)
         })
@@ -227,7 +248,7 @@ impl CompiledIselPattern {
     /// A copy rule roots on the low-bit `Extract` view of a wider class, binding
     /// its bare symbol to the view's source — rooting on the source class itself
     /// would make the copy self-referential.
-    fn search_low_bit_copies(&self, egraph: &SemEGraph, ctx: &Context) -> Vec<EMatch<u32>> {
+    fn search_low_bit_copies(&self, egraph: &SemEGraph, ctx: &Context) -> Vec<Match> {
         let roots: Vec<_> = egraph.classes().map(|class| class.id()).collect();
         self.search_low_bit_copies_at(egraph, ctx, roots)
     }
@@ -237,12 +258,8 @@ impl CompiledIselPattern {
         egraph: &SemEGraph,
         ctx: &Context,
         roots: impl IntoIterator<Item = Id>,
-    ) -> Vec<EMatch<u32>> {
-        let root_node = self.pattern.root();
-        let PatternNode::Var(var @ Var::Symbol(_)) = self.pattern.node(root_node) else {
-            unreachable!("copy pattern is a bare symbol")
-        };
-        let meta = &self.node_meta[root_node.index()];
+    ) -> Vec<Match> {
+        let meta = &self.node_meta[self.root as usize];
         if meta.constraint == Some(OperandConstraint::Immediate) {
             return Vec::new();
         }
@@ -262,12 +279,10 @@ impl CompiledIselPattern {
                 if !writes_the_view || !reads_the_source {
                     return None;
                 }
-                let mut subst = Substitution::new();
-                subst.insert(var.clone(), source);
-                Some(EMatch {
+                Some(Match {
                     root,
-                    subst,
-                    bindings: smallvec::smallvec![Some(source)],
+                    bindings: SmallVec::from_slice(&[Some(source)]),
+                    scalars: SmallVec::new(),
                 })
             })
             .collect()
@@ -284,13 +299,13 @@ pub(crate) fn compile_isel_pattern(
 ) -> Option<CompiledIselPattern> {
     let root = canonical_pattern_root(expr, expr.root()?);
     let inferred_types = infer_types(expr, |_| None).ok()?;
-    let mut pattern = Pattern::new();
+    let mut nodes: Vec<PatternNode> = Vec::new();
     let mut node_meta = Vec::new();
     let mut memo = HashMap::new();
     let pattern_root = compile_isel_pattern_node(
         expr,
         root,
-        &mut pattern,
+        &mut nodes,
         &mut node_meta,
         &mut memo,
         &inferred_types,
@@ -298,26 +313,76 @@ pub(crate) fn compile_isel_pattern(
         operand_registers,
         operand_imm_ranges,
     )?;
-    pattern.set_root(pattern_root);
 
     // A bare register-to-register copy cannot root on its own operand class
     // without becoming self-referential. A bare immediate rule is different:
     // it encodes the captured constant and therefore materializes that class.
-    let copy = pattern.len() == 1 && node_meta[0].demands_register();
+    let copy = nodes.len() == 1 && node_meta[0].demands_register();
 
-    let specificity = (0..pattern.len())
-        .map(|index| Id::from_raw(index as u32))
-        .filter(|&n| matches!(pattern.node(n), PatternNode::Node(node) if node.ty.is_some()))
+    let specificity = nodes
+        .iter()
+        .filter(|node| matches!(node, PatternNode::Template(node) if node.ty.is_some()))
         .count();
+    let (plan, captures) = lower(&nodes, pattern_root);
 
     Some(CompiledIselPattern {
         rule_index,
-        pattern,
+        nodes,
+        root: pattern_root.0,
+        plan,
+        captures,
         node_meta,
         specificity,
         result_register,
         copy,
     })
+}
+
+/// Append a pattern node, returning the class variable it binds.
+fn push(nodes: &mut Vec<PatternNode>, node: PatternNode) -> Id {
+    nodes.push(node);
+    Id::from_raw(nodes.len() as u32 - 1)
+}
+
+/// The query a pattern is, plus its captures in the order the nest reaches them.
+/// Atoms go in the order a depth-first walk from the root meets them, which is
+/// the order the matcher used to pop its goals in and so the order matches come
+/// out in.
+fn lower(nodes: &[PatternNode], root: Id) -> (Plan<SemNode>, Vec<u32>) {
+    let mut atoms = Vec::new();
+    let mut captures = Vec::new();
+    let mut seen = vec![false; nodes.len()];
+    visit(nodes, root, &mut seen, &mut atoms, &mut captures);
+    (
+        Plan::compile(Query::tree(nodes.len() as u32, root.0, atoms)),
+        captures,
+    )
+}
+
+fn visit(
+    nodes: &[PatternNode],
+    node: Id,
+    seen: &mut [bool],
+    atoms: &mut Vec<Atom<SemNode>>,
+    captures: &mut Vec<u32>,
+) {
+    if std::mem::replace(&mut seen[node.index()], true) {
+        return;
+    }
+    match &nodes[node.index()] {
+        PatternNode::Capture(_) => captures.push(node.0),
+        PatternNode::Template(template) => {
+            atoms.push(Atom::Node {
+                template: template.clone(),
+                args: template.children.iter().map(|child| child.0).collect(),
+                class: node.0,
+                row: None,
+            });
+            for &child in &template.children {
+                visit(nodes, child, seen, atoms, captures);
+            }
+        }
+    }
 }
 
 /// The symbol naming the state operand of the memory node at `node`. Rule
@@ -363,7 +428,7 @@ fn is_extended_zero(expr: &SemGraph, node: NodeId) -> bool {
 fn compile_isel_pattern_node(
     expr: &SemGraph,
     node: NodeId,
-    pattern: &mut Pattern<SemNode, u32>,
+    nodes: &mut Vec<PatternNode>,
     node_meta: &mut Vec<PatternNodeMeta>,
     memo: &mut HashMap<NodeId, Id>,
     inferred_types: &[SemType],
@@ -380,7 +445,7 @@ fn compile_isel_pattern_node(
             let Some(SymPayload::SymbolId(symbol)) = expr.get_leaf_data(node) else {
                 return None;
             };
-            let compiled = pattern.var(Var::Symbol(*symbol));
+            let compiled = push(nodes, PatternNode::Capture(*symbol));
             node_meta.push(PatternNodeMeta {
                 is_boundary: true,
                 duplicable: true,
@@ -403,11 +468,14 @@ fn compile_isel_pattern_node(
         }
         SymKind::Constant => match expr.get_leaf_data(node) {
             Some(SymPayload::Int(value)) => {
-                let compiled = pattern.add(template_node(
-                    SymKind::Constant,
-                    Some(SymPayload::Int(value.clone())),
-                    expr.get_actual_type(node),
-                ));
+                let compiled = push(
+                    nodes,
+                    PatternNode::Template(template_node(
+                        SymKind::Constant,
+                        Some(SymPayload::Int(value.clone())),
+                        expr.get_actual_type(node),
+                    )),
+                );
                 // A constant is pure and folds into the encoding, so any number of
                 // matches may embed the same constant class.
                 node_meta.push(PatternNodeMeta {
@@ -429,7 +497,7 @@ fn compile_isel_pattern_node(
                     compile_isel_pattern_node(
                         expr,
                         child,
-                        pattern,
+                        nodes,
                         node_meta,
                         memo,
                         inferred_types,
@@ -444,7 +512,7 @@ fn compile_isel_pattern_node(
             // whole of its identity. The chain is matched and ignored, so the
             // two arities meet without the rule saying anything about state.
             if is_memory_kind(*kind) {
-                let state = pattern.var(Var::Symbol(memory_state_symbol(node)));
+                let state = push(nodes, PatternNode::Capture(memory_state_symbol(node)));
                 node_meta.push(PatternNodeMeta {
                     is_state: true,
                     duplicable: true,
@@ -454,7 +522,7 @@ fn compile_isel_pattern_node(
             }
             let mut compiled = template_node(*kind, None, expr.get_actual_type(node));
             compiled.children = children;
-            let compiled = pattern.add(compiled);
+            let compiled = push(nodes, PatternNode::Template(compiled));
             node_meta.push(PatternNodeMeta {
                 semantic_type: Some(inferred_types[node.index()].clone()),
                 ..Default::default()

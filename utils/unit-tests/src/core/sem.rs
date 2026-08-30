@@ -7,7 +7,22 @@ use tir::sem::{
 };
 use tir::{attributes::NamedAttribute, Context, TypeId};
 use tir_adt::APInt;
-use tir_symbolic::egraph::{EGraph, Id, Pattern, Var};
+use tir_relational::{Atom, ClassId, NoExterns, Plan, Query};
+use tir_symbolic::egraph::{EGraph, Id};
+
+/// A one-level query over `template`, binding its two operands.
+fn addi_plan(template: SemNode) -> Plan<SemNode> {
+    Plan::compile(Query::tree(
+        3,
+        0,
+        vec![Atom::Node {
+            template,
+            args: smallvec::smallvec![1, 2],
+            class: 0,
+            row: None,
+        }],
+    ))
+}
 
 fn konst(width: u32, value: u64) -> SemNode {
     SemNode::constant(APInt::new(width, value), Prov::None)
@@ -84,12 +99,12 @@ fn wildcard_search_groups_result_types_without_merging_them() {
 
     assert_ne!(g.find(a32), g.find(a64));
 
-    let mut p: Pattern<SemNode, u32> = Pattern::new();
-    let v0 = p.var(Var::Symbol(0));
-    let v1 = p.var(Var::Symbol(1));
-    p.add(op_pattern("addi", vec![v0, v1]));
-    let roots: std::collections::HashSet<Id> =
-        p.search(&g).iter().map(|m| g.find(m.root)).collect();
+    let plan = addi_plan(op_pattern(
+        "addi",
+        vec![ClassId::from_raw(1), ClassId::from_raw(2)],
+    ));
+    let found = plan.search(&g, plan.roots(&g), &|_, _| true, false, &NoExterns);
+    let roots: std::collections::HashSet<Id> = found.iter().map(|m| g.find(m.root)).collect();
     assert_eq!(roots.len(), 2);
     assert!(roots.contains(&g.find(a32)) && roots.contains(&g.find(a64)));
 
@@ -109,15 +124,28 @@ fn graph_operation_controls_commutative_matching() {
     ir.commutative = true;
     let root = g.add(addi);
 
-    let mut pattern: Pattern<SemNode, u32> = Pattern::new();
-    let variable = pattern.var(Var::Symbol(0));
-    let literal = pattern.var(Var::Int(APInt::new(32, 0)));
-    pattern.add(op_pattern("addi", vec![variable, literal]));
-
-    let matches = pattern.search(&g);
+    // `addi(?0, 0)`: the literal operand is what the class is known to be, and
+    // the commutative flag is what lets it match on either side.
+    let plan = Plan::compile(Query::tree(
+        3,
+        0,
+        vec![
+            Atom::Node {
+                template: op_pattern("addi", vec![ClassId::from_raw(1), ClassId::from_raw(2)]),
+                args: smallvec::smallvec![1, 2],
+                class: 0,
+                row: None,
+            },
+            Atom::Literal {
+                value: konst(32, 0),
+                class: 2,
+            },
+        ],
+    ));
+    let matches = plan.search(&g, plan.roots(&g), &|_, _| true, false, &NoExterns);
     assert_eq!(matches.len(), 1);
     assert_eq!(g.find(matches[0].root), g.find(root));
-    assert_eq!(matches[0].subst.get(&Var::Symbol(0)), Some(g.find(x)));
+    assert_eq!(matches[0].bindings[1], Some(g.find(x)));
 }
 
 /// A class proven one number twice — once typed, once not — is proven one thing.

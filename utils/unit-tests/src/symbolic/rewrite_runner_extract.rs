@@ -1,21 +1,22 @@
-use tir_symbolic::egraph::{EGraph, ENode, Id, Pattern, Rewrite, Rhs, Runner, Substitution, Var};
+use tir_relational::{Atom, HeadOp, NoExterns, Rule};
+use tir_symbolic::egraph::{EGraph, ENode, Id};
 
 use super::test_lang::*;
 
-// ── Rewrites ───────────────────────────────────────────────────────────────
+// ── Rules ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn double_negation_eliminates_via_declarative_rhs() {
+fn double_negation_eliminates() {
     // neg(neg(x)) => x
-    let mut lhs: Pattern<Math, &'static str> = Pattern::new();
-    let x = lhs.var(Var::Symbol("x"));
-    let inner = lhs.add(Math::Neg([x]));
-    lhs.add(Math::Neg([inner]));
-
-    let mut rhs: Pattern<Math, &'static str> = Pattern::new();
-    rhs.var(Var::Symbol("x"));
-
-    let rule = Rewrite::new("double-neg", lhs, Rhs::Pattern(rhs));
+    let double_neg = rule(
+        "double-neg",
+        3,
+        vec![
+            node(Math::Neg([Id::from_raw(1)]), &[1], 0),
+            node(Math::Neg([Id::from_raw(2)]), &[2], 1),
+        ],
+        vec![HeadOp::Union(0, 2)],
+    );
 
     let mut g = EGraph::new();
     let a = sym(&mut g, 0);
@@ -23,15 +24,12 @@ fn double_negation_eliminates_via_declarative_rhs() {
     let nna = neg(&mut g, nn);
     assert!(!g.connected(nna, a));
 
-    rule.apply_all(&mut g);
+    apply_all(&mut g, &[double_neg]);
     assert!(g.connected(nna, a));
 }
 
 #[test]
 fn commutativity_unions_swapped_form() {
-    // add(x, y) => add(y, x)
-    let rule = comm_rule();
-
     let mut g = EGraph::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
@@ -39,51 +37,23 @@ fn commutativity_unions_swapped_form() {
     let ba = add(&mut g, b, a);
     assert!(!g.connected(ab, ba));
 
-    rule.apply_all(&mut g);
+    apply_all(&mut g, &[comm_rule()]);
     assert!(g.connected(ab, ba));
 }
 
 #[test]
 fn additive_identity_via_integer_literal() {
-    // add(x, 0) => x
-    let rule = add_zero_rule();
-
     let mut g = EGraph::new();
     let a = sym(&mut g, 0);
     let z = num(&mut g, 0);
     let root = add(&mut g, a, z);
     assert!(!g.connected(root, a));
 
-    rule.apply_all(&mut g);
+    apply_all(&mut g, &[add_zero_rule()]);
     assert!(g.connected(root, a));
 }
 
-#[test]
-fn imperative_applier_unions_root_with_binding() {
-    // neg(x) => x via a closure (degenerate; just exercises the escape hatch).
-    let mut lhs: Pattern<Math, &'static str> = Pattern::new();
-    let x = lhs.var(Var::Symbol("x"));
-    lhs.add(Math::Neg([x]));
-
-    let rule = Rewrite::new(
-        "neg-id",
-        lhs,
-        Rhs::Apply(Box::new(|eg, subst, root| {
-            let x = subst.get(&Var::Symbol("x")).unwrap();
-            eg.union(root, x);
-        })),
-    );
-
-    let mut g = EGraph::new();
-    let a = sym(&mut g, 0);
-    let na = neg(&mut g, a);
-    assert!(!g.connected(na, a));
-
-    rule.apply_all(&mut g);
-    assert!(g.connected(na, a));
-}
-
-// ── Runner ─────────────────────────────────────────────────────────────────
+// ── Saturation ─────────────────────────────────────────────────────────────
 
 #[test]
 fn saturates_and_applies_a_rule() {
@@ -94,9 +64,8 @@ fn saturates_and_applies_a_rule() {
     let ba = add(&mut g, b, a);
     assert!(!g.connected(ab, ba));
 
-    let mut runner = Runner::new(g, vec![]);
-    runner.run(&[comm_rule()]);
-    assert!(runner.egraph().connected(ab, ba));
+    g.saturate_rules(&[comm_rule()], &NoExterns, 30, 100_000);
+    assert!(g.connected(ab, ba));
 }
 
 #[test]
@@ -108,9 +77,8 @@ fn combines_rules_across_iterations() {
     let root = add(&mut g, z, a);
     assert!(!g.connected(root, a));
 
-    let mut runner = Runner::new(g, vec![]);
-    runner.run(&[comm_rule(), add_zero_rule()]);
-    assert!(runner.egraph().connected(root, a));
+    g.saturate_rules(&[comm_rule(), add_zero_rule()], &NoExterns, 30, 100_000);
+    assert!(g.connected(root, a));
 }
 
 #[test]
@@ -122,10 +90,9 @@ fn iter_limit_zero_does_nothing() {
     let ba = add(&mut g, b, a);
     let classes = g.num_classes();
 
-    let mut runner = Runner::new(g, vec![]).with_iter_limit(0);
-    runner.run(&[comm_rule()]);
-    assert!(!runner.egraph().connected(ab, ba));
-    assert_eq!(runner.egraph().num_classes(), classes);
+    g.saturate_rules(&[comm_rule()], &NoExterns, 0, 100_000);
+    assert!(!g.connected(ab, ba));
+    assert_eq!(g.num_classes(), classes);
 }
 
 #[test]
@@ -137,9 +104,8 @@ fn node_limit_halts_before_growth() {
     add(&mut g, a, b);
     let size = g.total_size();
 
-    let mut runner = Runner::new(g, vec![]).with_node_limit(size);
-    runner.run(&[comm_rule()]);
-    assert_eq!(runner.egraph().total_size(), size);
+    g.saturate_rules(&[comm_rule()], &NoExterns, 30, size);
+    assert_eq!(g.total_size(), size);
 }
 
 #[test]
@@ -150,10 +116,8 @@ fn roots_canonicalize_after_saturation() {
     let ab = add(&mut g, a, b);
     let ba = add(&mut g, b, a);
 
-    let mut runner = Runner::new(g, vec![ab, ba]);
-    runner.run(&[comm_rule()]);
-    let roots = runner.roots();
-    assert_eq!(roots[0], roots[1]);
+    g.saturate_rules(&[comm_rule()], &NoExterns, 30, 100_000);
+    assert_eq!(g.find(ab), g.find(ba));
 }
 
 // ── Extraction ─────────────────────────────────────────────────────────────
@@ -225,85 +189,72 @@ fn terminates_on_a_cycle() {
 
 /// The rules the property test draws subsets from: heights 1 and 2, growing and
 /// shrinking, so a round's delta is neither always empty nor always everything.
-fn math_rules() -> Vec<Rewrite<Math, &'static str>> {
-    fn pattern(build: impl Fn(&mut Pattern<Math, &'static str>)) -> Pattern<Math, &'static str> {
-        let mut p = Pattern::new();
-        build(&mut p);
-        p
-    }
-    let rule = |name, lhs, rhs| Rewrite::new(name, lhs, Rhs::Pattern(rhs));
+fn math_rules() -> Vec<Rule<Math>> {
     vec![
         comm_rule(),
         add_zero_rule(),
         // neg(neg(x)) => x
         rule(
             "neg-neg",
-            pattern(|p| {
-                let x = p.var(Var::Symbol("x"));
-                let inner = p.add(Math::Neg([x]));
-                p.add(Math::Neg([inner]));
-            }),
-            pattern(|p| {
-                p.var(Var::Symbol("x"));
-            }),
+            3,
+            vec![
+                node(Math::Neg([Id::from_raw(1)]), &[1], 0),
+                node(Math::Neg([Id::from_raw(2)]), &[2], 1),
+            ],
+            vec![HeadOp::Union(0, 2)],
         ),
         // neg(add(x, y)) => add(neg(x), neg(y))
         rule(
             "neg-add",
-            pattern(|p| {
-                let x = p.var(Var::Symbol("x"));
-                let y = p.var(Var::Symbol("y"));
-                let sum = p.add(Math::Add([x, y]));
-                p.add(Math::Neg([sum]));
-            }),
-            pattern(|p| {
-                let x = p.var(Var::Symbol("x"));
-                let y = p.var(Var::Symbol("y"));
-                let nx = p.add(Math::Neg([x]));
-                let ny = p.add(Math::Neg([y]));
-                p.add(Math::Add([nx, ny]));
-            }),
+            7,
+            vec![
+                node(Math::Neg([Id::from_raw(1)]), &[1], 0),
+                node(Math::Add([Id::from_raw(2), Id::from_raw(3)]), &[2, 3], 1),
+            ],
+            vec![
+                insert(Math::Neg([Id::from_raw(2)]), &[2], 4),
+                insert(Math::Neg([Id::from_raw(3)]), &[3], 5),
+                insert(Math::Add([Id::from_raw(4), Id::from_raw(5)]), &[4, 5], 6),
+                HeadOp::Union(0, 6),
+            ],
         ),
         // add(add(x, y), z) => add(x, add(y, z))
         rule(
             "add-assoc",
-            pattern(|p| {
-                let x = p.var(Var::Symbol("x"));
-                let y = p.var(Var::Symbol("y"));
-                let z = p.var(Var::Symbol("z"));
-                let inner = p.add(Math::Add([x, y]));
-                p.add(Math::Add([inner, z]));
-            }),
-            pattern(|p| {
-                let x = p.var(Var::Symbol("x"));
-                let y = p.var(Var::Symbol("y"));
-                let z = p.var(Var::Symbol("z"));
-                let inner = p.add(Math::Add([y, z]));
-                p.add(Math::Add([x, inner]));
-            }),
+            7,
+            vec![
+                node(Math::Add([Id::from_raw(1), Id::from_raw(2)]), &[1, 2], 0),
+                node(Math::Add([Id::from_raw(3), Id::from_raw(4)]), &[3, 4], 1),
+            ],
+            vec![
+                insert(Math::Add([Id::from_raw(4), Id::from_raw(2)]), &[4, 2], 5),
+                insert(Math::Add([Id::from_raw(3), Id::from_raw(5)]), &[3, 5], 6),
+                HeadOp::Union(0, 6),
+            ],
         ),
         // add(x, x) => neg(neg(add(x, x)))
         rule(
             "double-wrap",
-            pattern(|p| {
-                let x = p.var(Var::Symbol("x"));
-                p.add(Math::Add([x, x]));
-            }),
-            pattern(|p| {
-                let x = p.var(Var::Symbol("x"));
-                let sum = p.add(Math::Add([x, x]));
-                let inner = p.add(Math::Neg([sum]));
-                p.add(Math::Neg([inner]));
-            }),
+            4,
+            vec![node(
+                Math::Add([Id::from_raw(1), Id::from_raw(1)]),
+                &[1, 1],
+                0,
+            )],
+            vec![
+                insert(Math::Neg([Id::from_raw(0)]), &[0], 2),
+                insert(Math::Neg([Id::from_raw(2)]), &[2], 3),
+                HeadOp::Union(0, 3),
+            ],
         ),
     ]
 }
 
-/// Today's driver: every round searches every rule over the whole graph. The
-/// reference semi-naive saturation must agree with.
+/// The pre-semi-naive driver: every round searches every rule over the whole
+/// graph. The reference the delta rounds must agree with.
 fn saturate_naive(
     g: &mut EGraph<Math>,
-    rules: &[&Rewrite<Math, &'static str>],
+    rules: &[&Rule<Math>],
     iter_limit: usize,
     node_limit: usize,
 ) {
@@ -312,18 +263,24 @@ fn saturate_naive(
         if size >= node_limit {
             break;
         }
-        let before = (g.num_classes(), size);
+        let before = (g.num_classes(), size, g.stats().raises);
         let searched: Vec<_> = rules
             .iter()
-            .map(|rule| (*rule, rule.lhs.search(g)))
+            .map(|rule| {
+                let roots = rule.plan.roots(g);
+                (
+                    *rule,
+                    rule.plan.search(g, roots, &|_, _| true, false, &NoExterns),
+                )
+            })
             .collect();
         for (rule, matches) in &searched {
             for m in matches {
-                rule.apply_match(g, m);
+                g.apply_head(&rule.head, m);
             }
         }
         g.rebuild();
-        if (g.num_classes(), g.total_size()) == before {
+        if (g.num_classes(), g.total_size(), g.stats().raises) == before {
             break;
         }
     }
@@ -399,7 +356,7 @@ proptest::proptest! {
         mask in 1u32..64,
     ) {
         let all = math_rules();
-        let rules: Vec<&Rewrite<Math, &'static str>> = all
+        let rules: Vec<&Rule<Math>> = all
             .iter()
             .enumerate()
             .filter(|(index, _)| mask & (1 << index) != 0)
@@ -418,7 +375,8 @@ proptest::proptest! {
         let mut semi = EGraph::new();
         let semi_roots = seed(&mut semi);
         semi.rebuild();
-        semi.saturate(rules.iter().copied(), 30, 10_000);
+        let owned: Vec<Rule<Math>> = rules.iter().map(|&rule| rule.clone()).collect();
+        semi.saturate_rules(&owned, &NoExterns, 30, 10_000);
 
         // Not the class count: a driver that stops on the iteration limit
         // rather than at a fixpoint stops wherever its own round schedule put
@@ -444,136 +402,13 @@ proptest::proptest! {
     }
 }
 
-/// A rule whose left-hand side binds one level but whose applier reads three:
-/// the shape of instcombine's memory laws, where the pattern is a bare
-/// `Load(..)`/`Store(..)` and the applier walks the address and state chains
-/// below it. The applier declines until `deep` holds the marker constant.
-fn deep_read_rule() -> Rewrite<Math, &'static str> {
-    let mut lhs: Pattern<Math, &'static str> = Pattern::new();
-    let x = lhs.var(Var::Symbol("x"));
-    lhs.add(Math::Neg([x]));
-
-    let apply = move |g: &mut EGraph<Math>, subst: &Substitution<&'static str>, root: Id| {
-        let x = subst.get(&Var::Symbol("x")).expect("bound x");
-        // root -> x -> left -> deep: two levels past what the pattern binds.
-        let Some(left) = child_of_add(g, g.find(x), 0) else {
-            return;
-        };
-        let Some(deep) = child_of_add(g, left, 0) else {
-            return;
-        };
-        if !g.nodes(deep).any(|n| matches!(n, Math::Num(7))) {
-            return;
-        }
-        let marker = g.add(Math::Num(99));
-        g.union(root, marker);
-    };
-    Rewrite::new("deep-read", lhs, Rhs::Apply(Box::new(apply)))
-}
-
-fn child_of_add(g: &EGraph<Math>, class: Id, slot: usize) -> Option<Id> {
-    g.nodes(class).find_map(|node| match node {
-        Math::Add(kids) => Some(g.find(kids[slot])),
-        _ => None,
-    })
-}
-
-/// `sym(1) => 7`, which is what lets a declining applier stop declining — one
-/// round late.
-fn sym_becomes_seven() -> Rewrite<Math, &'static str> {
-    let mut lhs: Pattern<Math, &'static str> = Pattern::new();
-    lhs.add(Math::Sym(1));
-    let mut rhs: Pattern<Math, &'static str> = Pattern::new();
-    rhs.add(Math::Num(7));
-    Rewrite::new("sym1-is-7", lhs, Rhs::Pattern(rhs))
-}
-
-#[test]
-fn applier_reading_past_the_pattern_is_still_re_searched() {
-    // neg(add(add(sym1, sym2), sym0)): the class `deep-read` inspects sits three
-    // levels under the root it rewrites.
-    let seed = |g: &mut EGraph<Math>| {
-        let s0 = sym(g, 0);
-        let s1 = sym(g, 1);
-        let s2 = sym(g, 2);
-        let inner = add(g, s1, s2);
-        let outer = add(g, inner, s0);
-        neg(g, outer)
-    };
-    let rules = [deep_read_rule(), sym_becomes_seven()];
-    let borrowed: Vec<&Rewrite<Math, &'static str>> = rules.iter().collect();
-
-    let mut naive = EGraph::new();
-    let naive_root = seed(&mut naive);
-    naive.rebuild();
-    saturate_naive(&mut naive, &borrowed, 30, 10_000);
-
-    let mut semi = EGraph::new();
-    let semi_root = seed(&mut semi);
-    semi.rebuild();
-    semi.saturate(borrowed.iter().copied(), 30, 10_000);
-
-    let holds_marker =
-        |g: &EGraph<Math>, root: Id| g.nodes(g.find(root)).any(|n| matches!(n, Math::Num(99)));
-    assert!(holds_marker(&naive, naive_root), "naive must fire the rule");
-    assert!(
-        holds_marker(&semi, semi_root),
-        "semi-naive skipped a rule whose applier reads past its pattern"
-    );
-}
-
-/// `neg(x)` where the applier declines until `x`'s class holds `7`, claiming
-/// [`Rewrite::reads_only_its_match`] — truthfully, since `x` is the operand the
-/// pattern binds, one edge below the root.
-fn operand_reading_rule() -> Rewrite<Math, &'static str> {
-    let mut lhs: Pattern<Math, &'static str> = Pattern::new();
-    let x = lhs.var(Var::Symbol("x"));
-    lhs.add(Math::Neg([x]));
-
-    let apply = move |g: &mut EGraph<Math>, subst: &Substitution<&'static str>, root: Id| {
-        let x = subst.get(&Var::Symbol("x")).expect("bound x");
-        if !g.nodes(g.find(x)).any(|n| matches!(n, Math::Num(7))) {
-            return;
-        }
-        let marker = g.add(Math::Num(99));
-        g.union(root, marker);
-    };
-    Rewrite::new("operand-read", lhs, Rhs::Apply(Box::new(apply))).reads_only_its_match()
-}
-
-#[test]
-fn an_applier_that_declines_is_re_offered_when_its_operand_class_grows() {
-    // The operand's class outweighs the constant's, so it is the survivor: the
-    // `neg` row still names the same class after the merge and nothing about it
-    // moved. Only the class it names *holds* something new, which no e-node the
-    // pattern binds records — so a round may not conclude it has already applied
-    // this match.
-    let mut g = EGraph::new();
-    let s0 = sym(&mut g, 0);
-    let s1 = sym(&mut g, 1);
-    let s2 = sym(&mut g, 2);
-    g.union(s0, s1);
-    g.union(s0, s2);
-    let root = neg(&mut g, s0);
-    g.rebuild();
-
-    let rules = [operand_reading_rule(), sym_becomes_seven()];
-    g.saturate(rules.iter(), 30, 10_000);
-
-    let marker = g.add(Math::Num(99));
-    assert!(
-        g.connected(root, marker),
-        "the fold its operand enabled one round earlier was never applied"
-    );
-}
-
 /// A rule reaching an atom sideways cannot have its roots narrowed to the change
 /// frontier: the row it reaches sits in a sibling class of the root, so nothing
 /// the log closes upward names the root when that row is minted.
 #[test]
 fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
     use smallvec::smallvec;
-    use tir_relational::{Atom, HeadOp, LabelFill, Plan, Query, Rule};
+    use tir_relational::{LabelFill, Plan, Query};
 
     let mut g: EGraph<Math> = EGraph::new();
     let a = sym(&mut g, 0);

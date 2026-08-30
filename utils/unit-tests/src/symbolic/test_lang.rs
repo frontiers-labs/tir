@@ -2,7 +2,8 @@
 
 use tir_adt::{APFloat, APInt};
 
-use tir_symbolic::egraph::{EGraph, ENode, Id, Pattern, Rewrite, Rhs, Var};
+use tir_relational::{Atom, HeadOp, LabelFill, NoExterns, Plan, Query, Rule};
+use tir_symbolic::egraph::{EGraph, ENode, Id};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Math {
@@ -97,30 +98,81 @@ pub(crate) fn add(g: &mut EGraph<Math>, a: Id, b: Id) -> Id {
     g.add(Math::Add([a, b]))
 }
 
+/// A rule over `Math`, spelled as the atoms of its left-hand side and the
+/// writes of its right.
+pub(crate) fn rule(
+    name: &str,
+    vars: u32,
+    atoms: Vec<Atom<Math>>,
+    head: Vec<HeadOp<Math>>,
+) -> Rule<Math> {
+    Rule {
+        name: name.to_string(),
+        plan: Plan::compile(Query::tree(vars, 0, atoms)),
+        head,
+        post_saturation: false,
+    }
+}
+
+/// A row atom over `template`, binding `args` and owned by `class`.
+pub(crate) fn node(template: Math, args: &[u32], class: u32) -> Atom<Math> {
+    Atom::Node {
+        template,
+        args: args.iter().copied().collect(),
+        class,
+        row: None,
+    }
+}
+
+/// A head that hash-conses `template` over `args` into `into`.
+pub(crate) fn insert(template: Math, args: &[u32], into: u32) -> HeadOp<Math> {
+    HeadOp::Insert {
+        label: LabelFill::plain(template),
+        args: args.iter().copied().collect(),
+        into,
+    }
+}
+
+/// Apply every match of `rules` once, then restore congruence.
+pub(crate) fn apply_all(g: &mut EGraph<Math>, rules: &[Rule<Math>]) {
+    for rule in rules {
+        let roots = rule.plan.roots(g);
+        for m in rule.plan.search(g, roots, &|_, _| true, false, &NoExterns) {
+            g.apply_head(&rule.head, &m);
+        }
+    }
+    g.rebuild();
+}
+
 /// `add(x, y) => add(y, x)`.
-pub(crate) fn comm_rule() -> Rewrite<Math, &'static str> {
-    let mut lhs: Pattern<Math, &'static str> = Pattern::new();
-    let x = lhs.var(Var::Symbol("x"));
-    let y = lhs.var(Var::Symbol("y"));
-    lhs.add(Math::Add([x, y]));
-
-    let mut rhs: Pattern<Math, &'static str> = Pattern::new();
-    let rx = rhs.var(Var::Symbol("x"));
-    let ry = rhs.var(Var::Symbol("y"));
-    rhs.add(Math::Add([ry, rx]));
-
-    Rewrite::new("add-comm", lhs, Rhs::Pattern(rhs))
+pub(crate) fn comm_rule() -> Rule<Math> {
+    rule(
+        "add-comm",
+        4,
+        vec![node(
+            Math::Add([Id::from_raw(1), Id::from_raw(2)]),
+            &[1, 2],
+            0,
+        )],
+        vec![
+            insert(Math::Add([Id::from_raw(2), Id::from_raw(1)]), &[2, 1], 3),
+            HeadOp::Union(0, 3),
+        ],
+    )
 }
 
 /// `add(x, 0) => x`.
-pub(crate) fn add_zero_rule() -> Rewrite<Math, &'static str> {
-    let mut lhs: Pattern<Math, &'static str> = Pattern::new();
-    let x = lhs.var(Var::Symbol("x"));
-    let zero = lhs.var(Var::Int(APInt::from_i64(0)));
-    lhs.add(Math::Add([x, zero]));
-
-    let mut rhs: Pattern<Math, &'static str> = Pattern::new();
-    rhs.var(Var::Symbol("x"));
-
-    Rewrite::new("add-zero", lhs, Rhs::Pattern(rhs))
+pub(crate) fn add_zero_rule() -> Rule<Math> {
+    rule(
+        "add-zero",
+        3,
+        vec![
+            node(Math::Add([Id::from_raw(1), Id::from_raw(2)]), &[1, 2], 0),
+            Atom::Literal {
+                value: Math::Num(0),
+                class: 2,
+            },
+        ],
+        vec![HeadOp::Union(0, 1)],
+    )
 }

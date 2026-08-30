@@ -8,8 +8,10 @@ use std::hint::black_box;
 use std::sync::{Mutex, OnceLock};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+use smallvec::{SmallVec, smallvec};
 use tir_adt::{APInt, FxHasher};
-use tir_symbolic::egraph::{EGraph, ENode, Id, Pattern, Rewrite, Rhs, Substitution, Var};
+use tir_relational::{Atom, Guard, HeadOp, LabelFill, Match, Nested, NoExterns, Plan, Query, Rule};
+use tir_symbolic::egraph::{EGraph, ENode, Id};
 
 #[path = "math_shared.rs"]
 mod shared;
@@ -93,6 +95,10 @@ impl ENode for Math {
 
     fn from_int(value: APInt) -> Option<Self> {
         Some(Math::Constant(value.to_i64()))
+    }
+
+    fn constant(&self) -> Option<Self> {
+        matches!(self, Math::Constant(_)).then(|| self.clone())
     }
 }
 
@@ -186,77 +192,185 @@ fn add_expr(g: &mut EGraph<Math>, e: &Sexp) -> Id {
     }
 }
 
-/// Build a pattern from `e`, reusing one hole per `?var` name.
-fn build_pattern(e: &Sexp) -> Pattern<Math, u32> {
-    let mut p = Pattern::new();
-    let mut vars = HashMap::new();
-    let root = add_pat(&mut p, e, &mut vars);
-    p.set_root(root);
-    p
+/// One rule's variables, atoms and head as it is built out of the s-expressions.
+#[derive(Default)]
+struct Build {
+    vars: u32,
+    atoms: Vec<Atom<Math>>,
+    head: Vec<HeadOp<Math>>,
+    holes: HashMap<String, u32>,
 }
 
-fn add_pat(p: &mut Pattern<Math, u32>, e: &Sexp, vars: &mut HashMap<String, Id>) -> Id {
-    match e {
-        Sexp::Atom(a) => {
-            if is_var(a) {
-                *vars
-                    .entry(a.clone())
-                    .or_insert_with(|| p.var(Var::Symbol(intern(a))))
-            } else if let Ok(n) = a.parse::<i64>() {
-                p.var(Var::Int(APInt::from_i64(n)))
-            } else {
-                p.add(Math::Symbol(intern(a)))
+impl Build {
+    fn var(&mut self) -> u32 {
+        self.vars += 1;
+        self.vars - 1
+    }
+
+    /// The left-hand side: one atom per operator, one variable per `?var`, and a
+    /// constant operand as a literal the class must be known to be.
+    fn left(&mut self, e: &Sexp) -> u32 {
+        match e {
+            Sexp::Atom(a) if is_var(a) => {
+                if let Some(&var) = self.holes.get(a) {
+                    return var;
+                }
+                let var = self.var();
+                self.holes.insert(a.clone(), var);
+                var
+            }
+            Sexp::Atom(a) => {
+                let class = self.var();
+                let atom = match a.parse::<i64>() {
+                    Ok(n) => Atom::Literal {
+                        value: Math::Constant(n),
+                        class,
+                    },
+                    Err(_) => Atom::Node {
+                        template: Math::Symbol(intern(a)),
+                        args: SmallVec::new(),
+                        class,
+                        row: None,
+                    },
+                };
+                self.atoms.push(atom);
+                class
+            }
+            Sexp::List(items) => {
+                let class = self.var();
+                let children: Vec<u32> = items[1..].iter().map(|c| self.left(c)).collect();
+                let ids: Vec<Id> = children.iter().map(|&var| Id::from_raw(var)).collect();
+                self.atoms.push(Atom::Node {
+                    template: make_node(atom_str(&items[0]), &ids),
+                    args: children.iter().copied().collect(),
+                    class,
+                    row: None,
+                });
+                class
             }
         }
-        Sexp::List(items) => {
-            let children: Vec<Id> = items[1..].iter().map(|c| add_pat(p, c, vars)).collect();
-            p.add(make_node(atom_str(&items[0]), &children))
+    }
+
+    /// The right-hand side: an insert per operator, and the variable a `?var`
+    /// already bound.
+    fn right(&mut self, e: &Sexp) -> u32 {
+        match e {
+            Sexp::Atom(a) if is_var(a) => self.holes[a],
+            Sexp::Atom(a) => {
+                let into = self.var();
+                let template = match a.parse::<i64>() {
+                    Ok(n) => Math::Constant(n),
+                    Err(_) => Math::Symbol(intern(a)),
+                };
+                self.head.push(HeadOp::Insert {
+                    label: LabelFill::plain(template),
+                    args: SmallVec::new(),
+                    into,
+                });
+                into
+            }
+            Sexp::List(items) => {
+                let children: Vec<u32> = items[1..].iter().map(|c| self.right(c)).collect();
+                let ids: Vec<Id> = children.iter().map(|&var| Id::from_raw(var)).collect();
+                let into = self.var();
+                self.head.push(HeadOp::Insert {
+                    label: LabelFill::plain(make_node(atom_str(&items[0]), &ids)),
+                    args: children.iter().copied().collect(),
+                    into,
+                });
+                into
+            }
         }
     }
 }
 
-fn class_has(g: &EGraph<Math>, class: Id, pred: impl Fn(&Math) -> bool) -> bool {
-    g.nodes(class).any(pred)
-}
-
-fn var_class(subst: &Substitution<u32>, v: &str) -> Id {
-    subst
-        .get(&Var::Symbol(intern(v)))
-        .expect("condition variable is bound by the searcher")
-}
-
-fn eval_cond(c: &Cond, g: &EGraph<Math>, subst: &Substitution<u32>) -> bool {
-    match *c {
-        Cond::NotZero(v) => !class_has(g, var_class(subst, v), |n| matches!(n, Math::Constant(0))),
-        Cond::Sym(v) => class_has(g, var_class(subst, v), |n| matches!(n, Math::Symbol(_))),
-        Cond::Const(v) => class_has(g, var_class(subst, v), |n| matches!(n, Math::Constant(_))),
+/// A rule's side conditions as negated conjunctions and atoms. `ConstOrDistinct`
+/// is a disjunction, so it is two rules rather than one.
+fn conditions(
+    build: &mut Build,
+    cond: &Cond,
+    symbol: bool,
+) -> (Vec<Atom<Math>>, Vec<Nested<Math>>, Vec<Guard>) {
+    let mut atoms = Vec::new();
+    let mut nots = Vec::new();
+    let mut guards = Vec::new();
+    let holds = |op: u64, key: u32| Atom::Holds { key, op };
+    match *cond {
+        Cond::NotZero(v) => nots.push(Nested {
+            atoms: vec![Atom::Literal {
+                value: Math::Constant(0),
+                class: build.holes[v],
+            }],
+            guards: Vec::new(),
+        }),
+        Cond::Sym(v) => atoms.push(holds(Math::Symbol(0).op_key(), build.holes[v])),
+        Cond::Const(v) => atoms.push(Atom::Fact {
+            column: tir_relational::ColumnId::Const,
+            key: build.holes[v],
+            value: 0,
+        }),
         Cond::ConstOrDistinct(cv, xv) => {
-            let cc = var_class(subst, cv);
-            g.find(cc) != g.find(var_class(subst, xv))
-                && (class_has(g, cc, |n| matches!(n, Math::Constant(_)))
-                    || class_has(g, cc, |n| matches!(n, Math::Symbol(_))))
+            let (c, x) = (build.holes[cv], build.holes[xv]);
+            guards.push(Guard::Distinct(smallvec![(c, x)]));
+            atoms.push(if symbol {
+                holds(Math::Symbol(0).op_key(), c)
+            } else {
+                Atom::Fact {
+                    column: tir_relational::ColumnId::Const,
+                    key: c,
+                    value: 0,
+                }
+            });
         }
+    }
+    (atoms, nots, guards)
+}
+
+fn build_rule(spec: &RuleSpec, symbol: bool) -> Rule<Math> {
+    let mut build = Build::default();
+    let root = build.left(&parse_sexp(spec.lhs));
+    let mut atoms = std::mem::take(&mut build.atoms);
+    let mut nots = Vec::new();
+    let mut guards = Vec::new();
+    for cond in spec.conds {
+        let (a, n, g) = conditions(&mut build, cond, symbol);
+        atoms.extend(a);
+        nots.extend(n);
+        guards.extend(g);
+    }
+    let replacement = build.right(&parse_sexp(spec.rhs));
+    let mut head = std::mem::take(&mut build.head);
+    head.push(HeadOp::Union(root, replacement));
+    Rule {
+        name: spec.name.to_string(),
+        plan: Plan::compile(Query {
+            vars: build.vars,
+            scalars: 1,
+            root,
+            atoms,
+            guards,
+            nots,
+        }),
+        head,
+        post_saturation: false,
     }
 }
 
-fn build_rule(spec: &RuleSpec) -> Rewrite<Math, u32> {
-    let lhs = build_pattern(&parse_sexp(spec.lhs));
-    let rhs = build_pattern(&parse_sexp(spec.rhs));
-    let conds = spec.conds;
-    let apply = Box::new(
-        move |g: &mut EGraph<Math>, subst: &Substitution<u32>, root: Id| {
-            if !conds.iter().all(|c| eval_cond(c, g, subst)) {
-                return;
+fn build_rules() -> Vec<Rule<Math>> {
+    RULES
+        .iter()
+        .flat_map(|spec| {
+            let disjunctive = spec
+                .conds
+                .iter()
+                .any(|cond| matches!(cond, Cond::ConstOrDistinct(..)));
+            let mut rules = vec![build_rule(spec, false)];
+            if disjunctive {
+                rules.push(build_rule(spec, true));
             }
-            let new = rhs.instantiate(g, subst);
-            g.union(root, new);
-        },
-    );
-    Rewrite::new(spec.name, lhs, Rhs::Apply(apply))
-}
-
-fn build_rules() -> Vec<Rewrite<Math, u32>> {
-    RULES.iter().map(build_rule).collect()
+            rules
+        })
+        .collect()
 }
 
 fn seed_all() -> EGraph<Math> {
@@ -267,10 +381,10 @@ fn seed_all() -> EGraph<Math> {
     g
 }
 
-fn pre_saturated() -> (Vec<Rewrite<Math, u32>>, EGraph<Math>) {
+fn pre_saturated() -> (Vec<Rule<Math>>, EGraph<Math>) {
     let rules = build_rules();
     let mut g = seed_all();
-    g.saturate(&rules, PRE_SAT_ITERS, NODE_LIMIT);
+    g.saturate_rules(&rules, &NoExterns, PRE_SAT_ITERS, NODE_LIMIT);
     (rules, g)
 }
 
@@ -289,7 +403,7 @@ fn bench_saturate(c: &mut Criterion) {
             b.iter_batched(
                 seed_all,
                 |mut g| {
-                    g.saturate(&rules, iters, NODE_LIMIT);
+                    g.saturate_rules(&rules, &NoExterns, iters, NODE_LIMIT);
                     g
                 },
                 BatchSize::SmallInput,
@@ -302,20 +416,24 @@ fn bench_saturate(c: &mut Criterion) {
 /// The pre-semi-naive driver: every round searches every rule over the whole
 /// graph. Kept here as the baseline [`EGraph::saturate`]'s delta rounds are
 /// measured against.
-fn saturate_naive(g: &mut EGraph<Math>, rules: &[Rewrite<Math, u32>], iters: usize) {
+fn saturate_naive(g: &mut EGraph<Math>, rules: &[Rule<Math>], iters: usize) {
     for _ in 0..iters {
         let size = g.total_size();
         if size >= NODE_LIMIT {
             break;
         }
         let before = (g.num_classes(), size);
-        let searched: Vec<_> = rules
+        let searched: Vec<(&Rule<Math>, Vec<Match>)> = rules
             .iter()
-            .map(|rule| (rule, rule.lhs.search(g)))
+            .map(|rule| {
+                let roots = rule.plan.roots(g);
+                let found = rule.plan.search(g, roots, &|_, _| true, false, &NoExterns);
+                (rule, found)
+            })
             .collect();
         for (rule, matches) in &searched {
             for m in matches {
-                rule.apply_match(g, m);
+                g.apply_head(&rule.head, m);
             }
         }
         g.rebuild();
@@ -350,7 +468,9 @@ fn bench_ematch(c: &mut Criterion) {
         b.iter(|| {
             let mut total = 0usize;
             for rule in &rules {
-                total += black_box(rule.lhs.search(&g)).len();
+                let roots = rule.plan.roots(&g);
+                total +=
+                    black_box(rule.plan.search(&g, roots, &|_, _| true, false, &NoExterns)).len();
             }
             total
         });

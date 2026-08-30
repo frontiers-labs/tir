@@ -6,9 +6,6 @@
 //! matcher, rewrites, extraction and the round counters.
 
 mod extract;
-mod pattern;
-mod rewrite;
-mod runner;
 mod telemetry;
 
 use std::ops::{Deref, DerefMut};
@@ -17,9 +14,6 @@ pub use tir_relational::trace_enabled;
 pub use tir_relational::{ClassId as Id, ClassRef as EClass, Label as ENode};
 
 pub use extract::*;
-pub use pattern::*;
-pub use rewrite::*;
-pub use runner::*;
 pub use telemetry::{RoundStats, Timer, report_saturation};
 
 /// Per-round frontier of semi-naive saturation: the change log of the previous
@@ -63,19 +57,6 @@ impl Delta {
     }
 }
 
-/// A law the driver can run: a rule stated as a query with a head, or — until
-/// every source is lowered — a pattern with an applier.
-enum LawRef<'a, N: ENode, S> {
-    Query(&'a tir_relational::Rule<N>),
-    Rewrite(&'a Rewrite<N, S>),
-}
-
-/// What one law found in one round.
-enum Found<'a, N: ENode, S> {
-    Query(&'a tir_relational::Rule<N>, Vec<tir_relational::Match>),
-    Rewrite(&'a Rewrite<N, S>, Vec<EMatch<S>>),
-}
-
 /// The saturating e-graph: [`tir_relational::Engine`] plus a rule driver.
 pub struct EGraph<L: ENode>(tir_relational::Engine<L>);
 
@@ -104,38 +85,14 @@ impl<L: ENode> EGraph<L> {
         Self(tir_relational::Engine::new())
     }
 
-    /// Saturate in place with `rules`. Each iteration searches all rules against
-    /// one snapshot, then applies and rebuilds — a node born this iteration is
-    /// visible only to the next. Stops at a fixpoint (no class/node-count
-    /// change, or an empty change log) or at a limit.
-    pub fn saturate<'a, S>(
-        &mut self,
-        rules: impl IntoIterator<Item = &'a Rewrite<L, S>>,
-        iter_limit: usize,
-        node_limit: usize,
-    ) where
-        L: 'a,
-        S: Clone + PartialEq + 'a,
-    {
-        let laws: Vec<LawRef<'_, L, S>> = rules.into_iter().map(LawRef::Rewrite).collect();
-        self.run(&laws, &tir_relational::NoExterns, iter_limit, node_limit);
-    }
-
-    /// The same over rules, with the host functions their guards call.
+    /// Saturate in place with `rules`, and the host functions their guards call.
+    /// Each iteration searches every rule against one snapshot, then applies and
+    /// rebuilds — a node born this iteration is visible only to the next. Stops
+    /// at a fixpoint (nothing the class and node counts or the fact columns see
+    /// changed, or an empty change log) or at a limit.
     pub fn saturate_rules(
         &mut self,
         rules: &[tir_relational::Rule<L>],
-        externs: &dyn tir_relational::Externs<L>,
-        iter_limit: usize,
-        node_limit: usize,
-    ) {
-        let laws: Vec<LawRef<'_, L, ()>> = rules.iter().map(LawRef::Query).collect();
-        self.run(&laws, externs, iter_limit, node_limit);
-    }
-
-    fn run<S: Clone + PartialEq>(
-        &mut self,
-        laws: &[LawRef<'_, L, S>],
         externs: &dyn tir_relational::Externs<L>,
         iter_limit: usize,
         node_limit: usize,
@@ -154,61 +111,35 @@ impl<L: ENode> EGraph<L> {
             let before = (self.num_classes(), size, self.stats().raises);
 
             let mut stats = RoundStats::start(self, delta.as_ref());
-            let mut found: Vec<Found<'_, L, S>> = Vec::new();
-            for law in laws {
-                match law {
-                    LawRef::Rewrite(rule) => {
-                        let narrow = rule.unconditional() && delta.is_some();
-                        let frontier = delta.as_mut().filter(|_| rule.cone_bounded());
-                        let roots = rule.lhs.round_roots(self, None, frontier);
-                        stats.searched(roots.len(), delta.as_ref());
-                        let matches =
-                            rule.lhs
-                                .search_roots_delta(self, roots, &|_, _| true, narrow);
-                        found.push(Found::Rewrite(rule, matches));
-                    }
-                    LawRef::Query(rule) => {
-                        // Everything a rule reads is an atom or a guard over what
-                        // an atom bound, so both narrowings come free of any
-                        // hand-asserted licence — for a rule the change log can
-                        // speak for. It cannot speak for one whose match depends
-                        // on rows outside the root's cone.
-                        let bounded = !rule.plan.unbounded();
-                        let mut roots = rule.plan.roots(self);
-                        if let Some(delta) = delta.as_mut().filter(|_| bounded) {
-                            let frontier = delta.at(self, rule.plan.height());
-                            roots.retain(|&root| frontier.binary_search(&self.find(root)).is_ok());
-                        }
-                        stats.searched(roots.len(), delta.as_ref());
-                        let matches = rule.plan.search(
-                            self,
-                            roots,
-                            &|_, _| true,
-                            delta.is_some() && bounded,
-                            externs,
-                        );
-                        found.push(Found::Query(rule, matches));
-                    }
+            let mut found: Vec<(&tir_relational::Rule<L>, Vec<tir_relational::Match>)> = Vec::new();
+            for rule in rules {
+                // Everything a rule reads is an atom or a guard over what an atom
+                // bound, so both narrowings come free of any hand-asserted
+                // licence — for a rule the change log can speak for. It cannot
+                // speak for one whose match depends on rows outside the root's
+                // cone.
+                let bounded = !rule.plan.unbounded();
+                let mut roots = rule.plan.roots(self);
+                if let Some(delta) = delta.as_mut().filter(|_| bounded) {
+                    let frontier = delta.at(self, rule.plan.height());
+                    roots.retain(|&root| frontier.binary_search(&self.find(root)).is_ok());
                 }
+                stats.searched(roots.len(), delta.as_ref());
+                let matches = rule.plan.search(
+                    self,
+                    roots,
+                    &|_, _| true,
+                    delta.is_some() && bounded,
+                    externs,
+                );
+                found.push((rule, matches));
             }
-            for law in &found {
-                match law {
-                    Found::Rewrite(rule, matches) => {
-                        for m in matches {
-                            if trace_enabled() {
-                                eprintln!("M {} {}", rule.name, self.find(m.root).index());
-                            }
-                            stats.apply(self, |eg| rule.apply_match(eg, m));
-                        }
+            for (rule, matches) in &found {
+                for m in matches {
+                    if trace_enabled() {
+                        eprintln!("M {} {}", rule.name, self.find(m.root).index());
                     }
-                    Found::Query(rule, matches) => {
-                        for m in matches {
-                            if trace_enabled() {
-                                eprintln!("M {} {}", rule.name, self.find(m.root).index());
-                            }
-                            stats.apply(self, |eg| eg.apply_head(&rule.head, m));
-                        }
-                    }
+                    stats.apply(self, |eg| eg.apply_head(&rule.head, m));
                 }
             }
             self.rebuild();
@@ -220,8 +151,7 @@ impl<L: ENode> EGraph<L> {
                 break;
             }
             if (self.num_classes(), self.total_size(), self.stats().raises) == before {
-                // The counts held, but a round that changed only facts changed
-                // nothing they count — and the matches it never reached are not
+                // The counts held, but the matches a stop never reached are not
                 // named by a log this break is about to drop. `None` is the
                 // widest such log there is, so it marks too.
                 if delta.as_ref().is_none_or(|delta| !delta.is_empty()) {
