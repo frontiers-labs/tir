@@ -86,8 +86,16 @@ pub fn assert_fcc_object_executes_with_host(source: &str, host: &str) {
 /// The compiler must be reproducible: the same input compiled by separate
 /// processes must produce byte-identical assembly.
 pub fn compile_asm(source: &Path) -> String {
+    compile_asm_with_pipeline(source, None)
+}
+
+pub fn compile_asm_with_pipeline(source: &Path, pipeline: Option<&str>) -> String {
+    let mut args = vec!["compile", "--march", "x86_64", "--stage", "asm", "-o", "-"];
+    if let Some(pipeline) = pipeline {
+        args.extend(["--pipeline", pipeline]);
+    }
     let output = Command::new(fcc_binary())
-        .args(["compile", "--march", "x86_64", "--stage", "asm", "-o", "-"])
+        .args(args)
         .arg(source)
         .output()
         .expect("fcc should run");

@@ -211,6 +211,12 @@ pub(super) fn emit_machine_code(
             eprintln!("fcc: error: {e}");
             std::process::exit(1);
         });
+        // Keep the IR in the canonical form required by the backend even when
+        // callers select a reduced mid-end pipeline. Without this final
+        // cleanup, unfolded address arithmetic can reach instruction
+        // selection and change the program's observable behavior.
+        pm.nest::<tir::func::FuncOp>()
+            .add_pass(tir::passes::InstCombinePass::new());
     } else {
         let function_pipeline = pm.nest::<tir::func::FuncOp>();
         // Construction's last step: the locals the frontend spelled as slots
