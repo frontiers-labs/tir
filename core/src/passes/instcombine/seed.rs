@@ -118,17 +118,22 @@ impl Seeder<'_> {
         self.anchor(value)
     }
 
+    /// Record that `id` is the class of `value`, and that its terms carry the
+    /// value's type — a term standing for an IR value keeps no type of its own,
+    /// and the value has one.
+    fn bind_value(&mut self, value: ValueId, id: Id) {
+        let ty = self.context.get_value(value).ty();
+        self.eg.raise_type(id, ty.number() as u64);
+        self.value_class.insert(value, id);
+    }
+
     /// The leaf standing for `value`, unless something already seeded a class for it.
     fn anchor(&mut self, value: ValueId) -> Id {
         if let Some(&id) = self.value_class.get(&value) {
             return id;
         }
         let id = self.eg.add(Node::input(value));
-        // A leaf standing for an IR value carries no type of its own; the value
-        // it stands for has one, and that is the type its class's terms carry.
-        let ty = self.context.get_value(value).ty();
-        self.eg.raise_type(id, ty.number() as u64);
-        self.value_class.insert(value, id);
+        self.bind_value(value, id);
         id
     }
 
@@ -165,7 +170,7 @@ impl Seeder<'_> {
             let id = self
                 .eg
                 .add(Node::constant(constant.constant_value(), Prov::Op(op)).typed(ty));
-            self.value_class.insert(*result, id);
+            self.bind_value(*result, id);
             return;
         } else if instance.is::<JoinOp>() {
             self.seed_join(&instance);
@@ -186,7 +191,7 @@ impl Seeder<'_> {
                 args.sort_by_key(|id| id.index());
             }
             let id = self.eg.add(Node::seeded(&instance, ty, commutative, args));
-            self.value_class.insert(value, id);
+            self.bind_value(value, id);
             return;
         } else {
             self.export_states(&instance);
@@ -224,7 +229,7 @@ impl Seeder<'_> {
             match yields.as_deref() {
                 Some(&[value]) => {
                     let id = self.class_of(value);
-                    self.value_class.insert(result, id);
+                    self.bind_value(result, id);
                 }
                 // Every arm answers, so the γ is the choice between them, one
                 // child per arm in the order the cases are reported — the order
@@ -235,7 +240,7 @@ impl Seeder<'_> {
                         args.push(self.class_of(value));
                     }
                     let id = self.eg.add(Node::gamma(result, args));
-                    self.value_class.insert(result, id);
+                    self.bind_value(result, id);
                 }
                 _ => {
                     self.anchor(result);
@@ -259,7 +264,7 @@ impl Seeder<'_> {
         let first = instance.operands().len().saturating_sub(arguments.len());
         for (&argument, &input) in arguments.iter().zip(&instance.operands()[first..]) {
             let id = self.class_of(input);
-            self.value_class.insert(argument, id);
+            self.bind_value(argument, id);
         }
     }
 
@@ -290,7 +295,7 @@ impl Seeder<'_> {
             self.seed_region(region);
             for (port, &argument) in carried.iter().enumerate() {
                 let id = self.class_of(forwarded[port]);
-                self.value_class.insert(argument, id);
+                self.bind_value(argument, id);
             }
         }
         for region in instance.regions().to_vec() {
@@ -333,7 +338,7 @@ impl Seeder<'_> {
                 None => head,
             };
             if state || invariant {
-                self.value_class.insert(finals[port], published);
+                self.bind_value(finals[port], published);
             } else {
                 let result = self.anchor(finals[port]);
                 ports.push(Port {
@@ -404,7 +409,7 @@ impl Seeder<'_> {
             Some((&first, rest)) if rest.iter().all(|&other| other == first) => first,
             _ => self.eg.add(Node::seeded(instance, ty, true, args)),
         };
-        self.value_class.insert(result, id);
+        self.bind_value(result, id);
     }
 
     /// Seed a memory access over the state it reads, if it is one that names a state.
@@ -439,9 +444,9 @@ impl Seeder<'_> {
             )
             .typed(ty),
         );
-        self.value_class.insert(value, id);
+        self.bind_value(value, id);
         if let Some(published) = read.state_result() {
-            self.value_class.insert(published, state);
+            self.bind_value(published, state);
         }
         true
     }
@@ -473,7 +478,7 @@ impl Seeder<'_> {
             published,
             vec![address, bytes, value, address_space, state],
         ));
-        self.value_class.insert(published, id);
+        self.bind_value(published, id);
         true
     }
 

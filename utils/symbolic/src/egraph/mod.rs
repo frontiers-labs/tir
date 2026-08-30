@@ -65,12 +65,6 @@ impl Delta {
 
 /// A law the driver can run: a rule stated as a query with a head, or — until
 /// every source is lowered — a pattern with an applier.
-pub enum Law<N: ENode, S> {
-    Query(Box<tir_relational::Rule<N>>),
-    Rewrite(Box<Rewrite<N, S>>),
-}
-
-/// The same, borrowed: what the round loop iterates.
 enum LawRef<'a, N: ENode, S> {
     Query(&'a tir_relational::Rule<N>),
     Rewrite(&'a Rewrite<N, S>),
@@ -127,23 +121,15 @@ impl<L: ENode> EGraph<L> {
         self.run(&laws, &tir_relational::NoExterns, iter_limit, node_limit);
     }
 
-    /// The same over a mixed rule set, with the host functions its guards call.
-    pub fn saturate_laws<S>(
+    /// The same over rules, with the host functions their guards call.
+    pub fn saturate_rules(
         &mut self,
-        laws: &[Law<L, S>],
+        rules: &[tir_relational::Rule<L>],
         externs: &dyn tir_relational::Externs<L>,
         iter_limit: usize,
         node_limit: usize,
-    ) where
-        S: Clone + PartialEq,
-    {
-        let laws: Vec<LawRef<'_, L, S>> = laws
-            .iter()
-            .map(|law| match law {
-                Law::Query(rule) => LawRef::Query(rule),
-                Law::Rewrite(rewrite) => LawRef::Rewrite(rewrite),
-            })
-            .collect();
+    ) {
+        let laws: Vec<LawRef<'_, L, ()>> = rules.iter().map(LawRef::Query).collect();
         self.run(&laws, externs, iter_limit, node_limit);
     }
 

@@ -117,7 +117,7 @@ impl Driver<'_> {
         region: RegionId,
         rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
-        self.eg.saturate_laws(
+        self.eg.saturate_rules(
             &self.ruleset.rewrites,
             &self.ruleset.interpretation,
             ITER_LIMIT,
@@ -408,7 +408,7 @@ impl Driver<'_> {
                     self.eg.union(port.head, port.init);
                 }
                 self.eg.rebuild();
-                self.eg.saturate_laws(
+                self.eg.saturate_rules(
                     &self.ruleset.rewrites,
                     &self.ruleset.interpretation,
                     ITER_LIMIT,

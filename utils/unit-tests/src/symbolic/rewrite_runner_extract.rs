@@ -574,7 +574,6 @@ fn an_applier_that_declines_is_re_offered_when_its_operand_class_grows() {
 fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
     use smallvec::smallvec;
     use tir_relational::{Atom, HeadOp, LabelFill, Plan, Query, Rule};
-    use tir_symbolic::egraph::Law;
 
     let mut g: EGraph<Math> = EGraph::new();
     let a = sym(&mut g, 0);
@@ -631,9 +630,7 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
     };
     assert!(relate.plan.unbounded());
 
-    let laws: Vec<Law<Math, &'static str>> =
-        vec![Law::Query(Box::new(mint)), Law::Query(Box::new(relate))];
-    g.saturate_laws(&laws, &tir_relational::NoExterns, 10, 1000);
+    g.saturate_rules(&[mint, relate], &tir_relational::NoExterns, 10, 1000);
 
     let negated = g.add(Math::Neg([a]));
     assert!(g.connected(sum, negated));

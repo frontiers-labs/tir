@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use smallvec::{SmallVec, smallvec};
 use tir_relational::{
-    Atom, ColumnId, Expr, Externs, Guard, HeadOp, LabelFill, Plan, Query, Source,
+    Atom, Cmp, ColumnId, Expr, Externs, Guard, HeadOp, LabelFill, Plan, Query, Source,
 };
-use tir_symbolic::egraph::{EGraph, ENode, Id, Law, Pattern, Rewrite, Rhs, Substitution, Var};
+use tir_symbolic::egraph::{EGraph, ENode, Id};
 
 use super::seed::Seeded;
 use super::state;
@@ -17,15 +15,16 @@ use crate::{
     sem::{IrOp, Kind, Prov, SemNode as Node, SymKind, Value, node::field},
 };
 
-pub(crate) type Sym = u32;
-pub(crate) type Rule = Rewrite<Node, Sym>;
-
 /// The host functions instcombine's guards call. Both read the IR — an op's
 /// constant folding, a gate's case values — which saturation never changes, so
 /// a guard reading one filters the match rather than looking at the graph.
 mod call {
     pub(super) const FOLD: u32 = 0;
     pub(super) const DECIDED_ARM: u32 = 1;
+    /// The width of an integer type, for a rule that binds one by name.
+    pub(super) const INT_WIDTH_OF: u32 = 2;
+    /// Where the generated rules' own host functions start.
+    pub(super) const PDL: u32 = 16;
 }
 
 /// Fields of the scalars the two rules below pass around.
@@ -49,6 +48,14 @@ impl Externs<Node> for Interpretation {
         match id {
             call::FOLD => self.fold(terms, out),
             call::DECIDED_ARM => self.decided_arm(terms, args, out),
+            call::INT_WIDTH_OF => match class_int_width_of(&self.context, args[0] as u32) {
+                Some(width) => {
+                    out[0] = width as u64;
+                    true
+                }
+                None => false,
+            },
+            generated if generated >= call::PDL => pdl_extern(generated - call::PDL, args, out),
             _ => false,
         }
     }
@@ -126,7 +133,7 @@ pub type EmitFn = Box<
 >;
 
 pub struct Ruleset {
-    pub rewrites: Vec<Law<Node, Sym>>,
+    pub rewrites: Vec<tir_relational::Rule<Node>>,
     pub emits: Vec<Option<EmitFn>>,
     /// What the rules' guards ask the IR.
     pub interpretation: Interpretation,
@@ -143,14 +150,9 @@ impl Ruleset {
         }
     }
 
-    fn push(&mut self, rewrite: Rule, emit: Option<EmitFn>) {
-        self.rewrites.push(Law::Rewrite(Box::new(rewrite)));
+    fn push_query(&mut self, rule: tir_relational::Rule<Node>, emit: Option<EmitFn>) {
+        self.rewrites.push(rule);
         self.emits.push(emit);
-    }
-
-    fn push_query(&mut self, rule: tir_relational::Rule<Node>) {
-        self.rewrites.push(Law::Query(Box::new(rule)));
-        self.emits.push(None);
     }
 }
 
@@ -158,66 +160,18 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
     let eg = &seeded.eg;
     let mut ruleset = generated_ruleset(context);
     for template in fold_templates(eg) {
-        ruleset.push_query(const_fold(&template));
+        ruleset.push_query(const_fold(&template), None);
     }
     for arity in gamma_arities(eg) {
-        ruleset.push_query(decided_gamma(arity));
+        ruleset.push_query(decided_gamma(arity), None);
     }
     for (predicate, complement) in COMPLEMENTS {
-        ruleset.push_query(cmp_complement(context, predicate, complement));
+        ruleset.push_query(cmp_complement(context, predicate, complement), None);
     }
-    ruleset.push_query(state::pointer_derivation());
-    ruleset.push_query(state::forward_load());
-    ruleset.push_query(state::eliminate_dead_store());
+    ruleset.push_query(state::pointer_derivation(), None);
+    ruleset.push_query(state::forward_load(), None);
+    ruleset.push_query(state::eliminate_dead_store(), None);
     ruleset
-}
-
-pub(crate) fn operand(substitution: &Substitution<Sym>, index: u32) -> Id {
-    substitution
-        .get(&Var::Symbol(index))
-        .expect("bound operand")
-}
-
-fn const_value(eg: &EGraph<Node>, class: Id) -> Option<APInt> {
-    eg.nodes(eg.find(class))
-        .find_map(|node| node.int().cloned())
-}
-
-fn class_type(eg: &EGraph<Node>, class: Id) -> Option<TypeId> {
-    eg.nodes(eg.find(class)).find_map(Node::op_type)
-}
-
-fn class_int_width(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<u32> {
-    class_value_type(context, eg, class).and_then(|ty| {
-        (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-            .downcast_ref::<IntegerType>()
-            .map(IntegerType::width)
-    })
-}
-
-pub(crate) fn class_value_type(context: &Context, eg: &EGraph<Node>, class: Id) -> Option<TypeId> {
-    eg.nodes(eg.find(class)).find_map(|node| {
-        node.ty
-            .or_else(|| node.value().map(|value| context.get_value(value).ty()))
-    })
-}
-
-fn bind_width(widths: &mut HashMap<&'static str, u32>, name: &'static str, width: u32) -> bool {
-    widths.get(name).is_none_or(|bound| *bound == width) && {
-        widths.insert(name, width);
-        true
-    }
-}
-
-fn class_is_literal(eg: &EGraph<Node>, class: Id, literal: i64) -> bool {
-    const_value(eg, class).is_some_and(|value| {
-        let mask = if value.width() == 64 {
-            u64::MAX
-        } else {
-            (1u64 << value.width()) - 1
-        };
-        value.to_u64() == literal as u64 & mask
-    })
 }
 
 fn emit_shl() -> EmitFn {
@@ -566,6 +520,14 @@ fn produces_integer(context: &Context, op: crate::OpId) -> bool {
             .downcast_ref::<IntegerType>()
             .is_some()
     })
+}
+
+/// The width of an integer type, by number; `None` for anything else.
+fn class_int_width_of(context: &Context, ty: u32) -> Option<u32> {
+    let ty = TypeId::from_number(ty);
+    (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
+        .downcast_ref::<IntegerType>()
+        .map(IntegerType::width)
 }
 
 fn konst(value: APInt) -> Node {

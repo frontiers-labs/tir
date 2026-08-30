@@ -64,6 +64,9 @@ pub enum Expr {
     Add(Box<Expr>, Box<Expr>),
     /// `2^e - 1`, the all-ones value of `e` bits.
     Ones(Box<Expr>),
+    /// Bitwise conjunction, for masking a literal to the width the class spells
+    /// it at.
+    And(Box<Expr>, Box<Expr>),
     /// One when the operand is zero, zero otherwise — a comparison's negation,
     /// which is what a rule proving the complement of a settled comparison
     /// needs to spell.
@@ -82,6 +85,7 @@ impl Expr {
                 bits @ 0..64 => ((1u64 << bits) - 1) as i64,
                 _ => return None,
             },
+            Expr::And(a, b) => a.eval(scalars)? & b.eval(scalars)?,
             Expr::IsZero(e) => i64::from(e.eval(scalars)? == 0),
         })
     }
@@ -90,7 +94,7 @@ impl Expr {
         match self {
             Expr::Lit(_) => {}
             Expr::Scalar(slot) => out.push(*slot),
-            Expr::Sub(a, b) | Expr::Add(a, b) => {
+            Expr::Sub(a, b) | Expr::Add(a, b) | Expr::And(a, b) => {
                 a.reads(out);
                 b.reads(out);
             }

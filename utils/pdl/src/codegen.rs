@@ -47,6 +47,9 @@ pub fn generate(file: &File) -> Result<String, Vec<Diagnostic>> {
         return Err(diagnostics);
     }
 
+    /// How many host functions one generated rule may name.
+    const PDL_EXTERN_STRIDE: u32 = 64;
+
     let mut initializers = Vec::new();
     let mut generated_rules = Vec::new();
     for (rule_index, rule) in file
@@ -65,9 +68,10 @@ pub fn generate(file: &File) -> Result<String, Vec<Diagnostic>> {
             .map_or_else(|| quote! { None }, |emitter| quote! { Some(#emitter()) });
         initializers.push(quote! {
             let index = ruleset.rewrites.len();
-            ruleset.push(#function(context.clone(), index), #emit);
+            ruleset.push_query(#function(context, index), #emit);
         });
-        let Some(generated_rule) = generate_rule(rule, function) else {
+        let base = rule_index as u32 * PDL_EXTERN_STRIDE;
+        let Some(generated_rule) = generate_rule(rule, function, base) else {
             diagnostics.push(Diagnostic::new(
                 format!("failed to lower rule '{}'", rule.name),
                 "this rule uses a construct that cannot be lowered safely",
@@ -82,11 +86,32 @@ pub fn generate(file: &File) -> Result<String, Vec<Diagnostic>> {
         return Err(diagnostics);
     }
 
+    let count = file
+        .items
+        .iter()
+        .filter(|item| matches!(item, Item::Rule(_)))
+        .count();
+    let tables = (0..count).map(|index| {
+        let table = format_ident!("{}_extern", function_name(index));
+        let base = index as u32 * PDL_EXTERN_STRIDE;
+        quote! { #base => #table(id % PDL_EXTERN_STRIDE, args, &mut *out), }
+    });
     format_rust(quote! {
         pub(super) fn generated_ruleset(context: &Context) -> Ruleset {
             let mut ruleset = Ruleset::new(context);
             #(#initializers)*
             ruleset
+        }
+
+        /// How many host functions one rule may name.
+        const PDL_EXTERN_STRIDE: u32 = 64;
+        /// The host functions the generated rules' guards and heads call: PDL's
+        /// own arithmetic over the words its atoms bound.
+        pub(super) fn pdl_extern(id: u32, args: &[u64], out: &mut [u64]) -> bool {
+            match id - id % PDL_EXTERN_STRIDE {
+                #(#tables)*
+                _ => false,
+            }
         }
 
         #(#generated_rules)*
@@ -389,93 +414,91 @@ fn root_operator(term: &Term) -> Option<&Operator> {
     }
 }
 
-fn generate_rule(rule: &Rule, function: Ident) -> Option<TokenStream> {
+fn generate_rule(rule: &Rule, function: Ident, base: u32) -> Option<TokenStream> {
     let rule_name = &rule.name;
-    let mut generator = PatternGenerator::default();
-    let lhs_root = generator.term(&rule.lhs)?;
-    let lhs_statements = &generator.statements;
+    let mut pattern = PatternGenerator::default();
+    let root = pattern.term(&rule.lhs)?;
 
-    let binder_declarations: Vec<_> = generator
-        .binders
-        .values()
-        .map(|index| {
-            let binding = binding_ident(*index);
-            quote! {
-                let #binding = operand(subst, #index);
-                let _ = #binding;
-            }
-        })
-        .collect();
-    let literal_checks: Vec<_> = generator
-        .literals
-        .iter()
-        .map(|literal| {
-            let name = &literal.name;
-            let index = literal.index;
-            let value = literal.value;
-            quote! {
-                let #name = operand(subst, #index);
-                if !class_is_literal(eg, #name, #value) {
-                    return;
-                }
-            }
-        })
-        .collect();
-    let width_declaration = generator
-        .constraints
-        .iter()
-        .any(constraint_binds_width)
-        .then(|| quote! { let mut widths = std::collections::HashMap::new(); });
-    let constraints: Vec<_> = generator
-        .constraints
-        .iter()
-        .map(generate_constraint)
-        .collect::<Option<_>>()?;
-    let guards: Vec<_> = rule
-        .guards
-        .iter()
-        .map(|guard| {
-            let guard = bool_expr(guard, &generator.binders)?;
-            Some(quote! {
-                if !(#guard) {
-                    return;
-                }
-            })
-        })
-        .collect::<Option<_>>()?;
-    let rhs = generate_rhs(&rule.rhs, &generator.binders)?;
-
-    Some(quote! {
-        fn #function(context: Context, index: usize) -> Rule {
-            let mut lhs = Pattern::new();
-            #(#lhs_statements)*
-            let _ = #lhs_root;
-            Rewrite::new(
-                #rule_name,
-                lhs,
-                Rhs::Apply(Box::new(move |eg, subst, root| {
-                    let _ = (&context, index);
-                    #(#binder_declarations)*
-                    #(#literal_checks)*
-                    #width_declaration
-                    #(#constraints)*
-                    #(#guards)*
-                    #rhs
-                    eg.union(root, replacement);
-                })),
+    let mut build = RuleBuilder {
+        vars: pattern.vars,
+        atoms: std::mem::take(&mut pattern.atoms),
+        base,
+        ..RuleBuilder::default()
+    };
+    // An operand written as a number is that number, at whatever width the class
+    // spells it — the reading `class_is_literal` took.
+    for literal in &pattern.literals {
+        let (value, width) = build.constant(literal.var);
+        let expected = literal.value;
+        build.guards.push(quote! {
+            Guard::Cmp(
+                Cmp::Eq,
+                Expr::Scalar(#value),
+                Expr::And(
+                    Box::new(Expr::Lit(#expected)),
+                    Box::new(Expr::Ones(Box::new(Expr::Scalar(#width)))),
+                ),
             )
+        });
+    }
+    for constraint in &pattern.constraints {
+        generate_constraint(constraint, &mut build)?;
+    }
+    for guard in &rule.guards {
+        let body = bool_expr(guard, &pattern.binders, &mut build)?;
+        build.call(quote! { #body }, None);
+    }
+    let replacement = generate_rhs(&rule.rhs, root, &pattern.binders, &mut build)?;
+    build
+        .head
+        .push(quote! { HeadOp::Union(#root, #replacement) });
+
+    let (vars, scalars) = (build.vars, build.scalars);
+    let (atoms, guards, head) = (&build.atoms, &build.guards, &build.head);
+    let externs = build.externs.iter().enumerate().map(|(id, body)| {
+        let id = id as u32;
+        quote! { #id => #body, }
+    });
+    let table = format_ident!("{function}_extern");
+    Some(quote! {
+        fn #function(context: &Context, index: usize) -> tir_relational::Rule<Node> {
+            let _ = (context, index);
+            tir_relational::Rule {
+                name: #rule_name.to_string(),
+                plan: Plan::compile(Query {
+                    vars: #vars,
+                    scalars: #scalars,
+                    root: #root,
+                    atoms: vec![#(#atoms),*],
+                    guards: vec![#(#guards),*],
+                    nots: Vec::new(),
+                }),
+                head: vec![#(#head),*],
+                post_saturation: false,
+            }
+        }
+
+        #[allow(clippy::match_single_binding, unused_variables)]
+        fn #table(id: u32, args: &[u64], out: &mut [u64]) -> bool {
+            match id {
+                #(#externs)*
+                _ => false,
+            }
         }
     })
 }
 
+/// Lowers a rule's left-hand side into query atoms: one class variable per
+/// pattern node, one atom per operation, and a note of what each binder must
+/// turn out to be.
 #[derive(Default)]
 struct PatternGenerator {
+    /// Binder name -> the class variable it binds.
     binders: BTreeMap<String, u32>,
     constraints: Vec<Constraint>,
     literals: Vec<Literal>,
-    statements: Vec<TokenStream>,
-    next_symbol: u32,
-    next_node: usize,
+    atoms: Vec<TokenStream>,
+    vars: u32,
 }
 
 struct Constraint {
@@ -484,283 +507,392 @@ struct Constraint {
 }
 
 struct Literal {
-    name: Ident,
-    index: u32,
+    var: u32,
     value: i64,
 }
 
 impl PatternGenerator {
-    fn term(&mut self, term: &Term) -> Option<Ident> {
+    fn var(&mut self) -> u32 {
+        self.vars += 1;
+        self.vars - 1
+    }
+
+    fn term(&mut self, term: &Term) -> Option<u32> {
         match &term.kind {
             TermKind::Binder { name, ty } => {
-                let index = if let Some(index) = self.binders.get(name) {
-                    *index
-                } else {
-                    let index = self.symbol();
-                    self.binders.insert(name.clone(), index);
-                    if let Some(ty) = ty {
-                        self.constraints.push(Constraint {
-                            binder: index,
-                            ty: ty.clone(),
-                        });
-                    }
-                    index
-                };
-                Some(self.pattern_var(index))
+                if let Some(&var) = self.binders.get(name) {
+                    return Some(var);
+                }
+                let var = self.var();
+                self.binders.insert(name.clone(), var);
+                if let Some(ty) = ty {
+                    self.constraints.push(Constraint {
+                        binder: var,
+                        ty: ty.clone(),
+                    });
+                }
+                Some(var)
             }
             TermKind::Integer(value) => {
-                let index = self.symbol();
-                let name = format_ident!("literal_{index}");
-                self.literals.push(Literal {
-                    name,
-                    index,
-                    value: *value,
-                });
-                Some(self.pattern_var(index))
+                let var = self.var();
+                self.literals.push(Literal { var, value: *value });
+                Some(var)
             }
             TermKind::Operation {
                 operator, operands, ..
             } => {
-                let operands: Vec<_> = operands
+                let operands: Vec<u32> = operands
                     .iter()
                     .map(|operand| self.term(operand))
                     .collect::<Option<_>>()?;
-                let name = self.node();
+                let class = self.var();
+                let children = operands.iter().map(|&var| quote! { Id::from_raw(#var) });
                 let constructor = match operator {
                     Operator::Dialect { .. } => {
-                        let operation = rust_operation(operator)?;
-                        let path = operation.path;
-                        quote! { Node::pattern::<#path>(vec![#(#operands),*]) }
+                        let path = rust_operation(operator)?.path;
+                        quote! { Node::pattern::<#path>(vec![#(#children),*]) }
                     }
-                    Operator::Gate(_) => quote! { Node::gamma_pattern(vec![#(#operands),*]) },
+                    Operator::Gate(_) => quote! { Node::gamma_pattern(vec![#(#children),*]) },
                 };
-                self.statements.push(quote! {
-                    let #name = lhs.add(#constructor);
+                self.atoms.push(quote! {
+                    Atom::Node {
+                        template: #constructor,
+                        args: smallvec![#(#operands),*],
+                        class: #class,
+                        row: None,
+                    }
                 });
-                Some(name)
+                Some(class)
             }
             TermKind::Constant { .. } | TermKind::String(_) => None,
         }
     }
+}
 
-    fn pattern_var(&mut self, index: u32) -> Ident {
-        let name = self.node();
-        self.statements.push(quote! {
-            let #name = lhs.var(Var::Symbol(#index));
+/// What one rule's atoms, guards and head are built out of, plus the host
+/// functions its expressions become.
+#[derive(Default)]
+struct RuleBuilder {
+    atoms: Vec<TokenStream>,
+    guards: Vec<TokenStream>,
+    head: Vec<TokenStream>,
+    /// The Rust bodies the extern table dispatches to, in id order.
+    externs: Vec<TokenStream>,
+    scalars: u32,
+    vars: u32,
+    /// Scalars holding a binder's constant value and its width.
+    values: BTreeMap<u32, (u32, u32)>,
+    /// Scalars holding each named width.
+    widths: BTreeMap<String, u32>,
+    /// The scalars an extern body reads, as `args`, in order.
+    inputs: Vec<u32>,
+    /// Where this rule's host-function ids start.
+    base: u32,
+}
+
+impl RuleBuilder {
+    fn scalar(&mut self) -> u32 {
+        self.scalars += 1;
+        self.scalars - 1
+    }
+
+    fn var(&mut self) -> u32 {
+        self.vars += 1;
+        self.vars - 1
+    }
+
+    /// Require `binder` to be a constant, binding its value and width.
+    fn constant(&mut self, binder: u32) -> (u32, u32) {
+        if let Some(&known) = self.values.get(&binder) {
+            return known;
+        }
+        let (label, value, width) = (self.scalar(), self.scalar(), self.scalar());
+        self.atoms.push(quote! {
+            Atom::Fact { column: ColumnId::Const, key: #binder, value: #label }
         });
-        name
+        self.guards.push(quote! {
+            Guard::Read { term: Source::Label(#label), field: field::INT_VALUE, out: #value }
+        });
+        self.guards.push(quote! {
+            Guard::Read { term: Source::Label(#label), field: field::INT_WIDTH, out: #width }
+        });
+        self.values.insert(binder, (value, width));
+        (value, width)
     }
 
-    fn symbol(&mut self) -> u32 {
-        let symbol = self.next_symbol;
-        self.next_symbol += 1;
-        symbol
+    /// Bind a width name to `actual`, or require the two to agree.
+    fn bind_width(&mut self, name: &str, actual: u32) {
+        match self.widths.get(name) {
+            Some(&bound) => self.guards.push(quote! {
+                Guard::Cmp(Cmp::Eq, Expr::Scalar(#actual), Expr::Scalar(#bound))
+            }),
+            None => {
+                self.widths.insert(name.to_string(), actual);
+            }
+        }
     }
 
-    fn node(&mut self) -> Ident {
-        let node = format_ident!("pattern_{}", self.next_node);
-        self.next_node += 1;
-        node
+    /// Read a binder's constant inside a host function's body, adding the two
+    /// scalars it takes to that function's arguments.
+    fn read(&mut self, value: u32, width: u32) -> TokenStream {
+        let value = self.word(value);
+        let width = self.word(width);
+        quote! { APInt::new(#width as u32, #value) }
+    }
+
+    /// The `args` slot a scalar arrives in.
+    fn word(&mut self, slot: u32) -> TokenStream {
+        let position = match self.inputs.iter().position(|&seen| seen == slot) {
+            Some(position) => position,
+            None => {
+                self.inputs.push(slot);
+                self.inputs.len() - 1
+            }
+        };
+        quote! { args[#position] }
+    }
+
+    /// An expression over bound scalars, as a host function: PDL's arithmetic is
+    /// its own, and the engine only moves the words in and the answer out.
+    fn call(&mut self, body: TokenStream, out: Option<u32>) -> u32 {
+        let id = self.base + self.externs.len() as u32;
+        self.externs.push(body);
+        let inputs = std::mem::take(&mut self.inputs);
+        let args = inputs.iter().map(|&slot| quote! { Expr::Scalar(#slot) });
+        let outs: Vec<TokenStream> = out.iter().map(|&slot| quote! { #slot }).collect();
+        self.guards.push(quote! {
+            Guard::Extern {
+                call: call::PDL + #id,
+                terms: SmallVec::new(),
+                args: smallvec![#(#args),*],
+                out: smallvec![#(#outs),*],
+            }
+        });
+        id
     }
 }
 
-fn generate_constraint(constraint: &Constraint) -> Option<TokenStream> {
-    let binding = binding_ident(constraint.binder);
+/// A binder's declared type: a constant at a width, or an integer whose width a
+/// name binds.
+fn generate_constraint(constraint: &Constraint, build: &mut RuleBuilder) -> Option<()> {
+    let binder = constraint.binder;
     match &constraint.ty {
         BindingType::Constant(width) => {
-            let value = binding_value_ident(constraint.binder);
-            let width_check = match width.as_ref().map(|width| &width.kind) {
-                None => quote! {},
-                Some(ExprKind::Name(name)) if name == "_" => quote! {},
-                Some(ExprKind::Integer(width)) => {
-                    let width = u32::try_from(*width).ok()?;
-                    quote! {
-                        if #value.width() != #width {
-                            return;
-                        }
-                    }
+            let (_, actual) = build.constant(binder);
+            match width.as_ref().map(|width| &width.kind) {
+                None => {}
+                Some(ExprKind::Name(name)) if name == "_" => {}
+                Some(ExprKind::Integer(bits)) => {
+                    let bits = u32::try_from(*bits).ok()? as i64;
+                    build.guards.push(quote! {
+                        Guard::Cmp(Cmp::Eq, Expr::Scalar(#actual), Expr::Lit(#bits))
+                    });
                 }
-                Some(ExprKind::Name(width)) => quote! {
-                    if !bind_width(&mut widths, #width, #value.width()) {
-                        return;
-                    }
-                },
+                Some(ExprKind::Name(name)) => build.bind_width(name, actual),
                 Some(_) => return None,
-            };
-            Some(quote! {
-                let Some(#value) = const_value(eg, #binding) else { return; };
-                #width_check
-            })
+            }
+            Some(())
         }
-        BindingType::Type(Type::Integer(Width::Named(width))) => {
-            let value = format_ident!("binding_{}_width", constraint.binder);
-            Some(quote! {
-                let Some(#value) = class_int_width(&context, eg, #binding) else { return; };
-                if !bind_width(&mut widths, #width, #value) {
-                    return;
+        BindingType::Type(Type::Integer(Width::Named(name))) => {
+            let ty = build.scalar();
+            let width = build.scalar();
+            build.atoms.push(quote! {
+                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
+            });
+            build.guards.push(quote! {
+                Guard::Extern {
+                    call: call::INT_WIDTH_OF,
+                    terms: SmallVec::new(),
+                    args: smallvec![Expr::Scalar(#ty)],
+                    out: smallvec![#width],
                 }
-            })
+            });
+            build.bind_width(name, width);
+            Some(())
         }
-        BindingType::Type(Type::Integer(Width::Concrete(width))) => Some(quote! {
-            if class_int_width(&context, eg, #binding) != Some(#width) {
-                return;
-            }
-        }),
-        BindingType::Type(Type::Integer(Width::Any)) => Some(quote! {
-            if class_int_width(&context, eg, #binding).is_none() {
-                return;
-            }
-        }),
-        BindingType::Type(Type::Named(_)) => None,
+        _ => None,
     }
 }
 
-fn constraint_binds_width(constraint: &Constraint) -> bool {
-    match &constraint.ty {
-        BindingType::Type(Type::Integer(Width::Named(_))) => true,
-        BindingType::Constant(Some(width)) => {
-            matches!(&width.kind, ExprKind::Name(name) if name != "_")
-        }
-        _ => false,
-    }
-}
-
-fn generate_rhs(term: &Term, binders: &BTreeMap<String, u32>) -> Option<TokenStream> {
+/// The class the head unions the matched root with.
+fn generate_rhs(
+    term: &Term,
+    root: u32,
+    binders: &BTreeMap<String, u32>,
+    build: &mut RuleBuilder,
+) -> Option<u32> {
     match &term.kind {
-        TermKind::Binder { name, .. } => {
-            let binding = binding_ident(*binders.get(name)?);
-            Some(quote! { let replacement = #binding; })
-        }
-        TermKind::Constant { width, value } => {
-            let width = number_expr(width, binders)?;
-            let value = number_expr(value, binders)?;
-            Some(quote! {
-                let replacement_width = (#width) as u32;
-                if !(1..=64).contains(&replacement_width) {
-                    return;
-                }
-                let replacement = eg.add(konst(APInt::new(replacement_width, (#value) as u64)));
-            })
-        }
+        TermKind::Binder { name, .. } => binders.get(name).copied(),
+        TermKind::Constant { .. } => rhs_operand(term, binders, build),
         TermKind::Operation {
             operator, operands, ..
         } => {
-            let operation = rust_operation(operator)?;
-            let path = operation.path;
-            let mut prelude = Vec::new();
-            let operands: Vec<_> = operands
+            let path = rust_operation(operator)?.path;
+            let operands: Vec<u32> = operands
                 .iter()
-                .map(|operand| rhs_operand(operand, binders, &mut prelude))
+                .map(|operand| rhs_operand(operand, binders, build))
                 .collect::<Option<_>>()?;
-            Some(quote! {
-                #(#prelude)*
-                let Some(result_type) = class_type(eg, root) else { return; };
-                let replacement = eg.add(Node::introduced::<#path>(
-                    result_type,
-                    1,
-                    index,
-                    vec![#(#operands),*],
-                ));
-            })
+            // An introduced op answers at the type the class already has.
+            let ty = build.scalar();
+            build.atoms.push(quote! {
+                Atom::Fact { column: ColumnId::Type, key: #root, value: #ty }
+            });
+            let into = build.var();
+            let children = operands.iter().map(|&var| quote! { Id::from_raw(#var) });
+            build.head.push(quote! {
+                HeadOp::Insert {
+                    label: LabelFill {
+                        template: Node::introduced::<#path>(
+                            TypeId::from_number(0),
+                            1,
+                            index,
+                            vec![#(#children),*],
+                        ),
+                        fills: smallvec![(field::TY, #ty)],
+                    },
+                    args: smallvec![#(#operands),*],
+                    into: #into,
+                }
+            });
+            Some(into)
         }
         TermKind::Integer(_) | TermKind::String(_) => None,
     }
 }
 
+/// An operand of the right-hand side: a bound class, or a constant the rule
+/// spells out.
 fn rhs_operand(
     term: &Term,
     binders: &BTreeMap<String, u32>,
-    prelude: &mut Vec<TokenStream>,
-) -> Option<TokenStream> {
+    build: &mut RuleBuilder,
+) -> Option<u32> {
     match &term.kind {
-        TermKind::Binder { name, .. } => {
-            let binding = binding_ident(*binders.get(name)?);
-            Some(quote! { #binding })
-        }
+        TermKind::Binder { name, .. } => binders.get(name).copied(),
         TermKind::Constant { width, value } => {
-            let name = format_ident!("rhs_constant_{}", term.span.start);
-            let width_name = format_ident!("rhs_constant_{}_width", term.span.start);
-            let width = number_expr(width, binders)?;
-            let value = number_expr(value, binders)?;
-            prelude.push(quote! {
-                let #width_name = (#width) as u32;
-                if !(1..=64).contains(&#width_name) {
-                    return;
+            let width_body = number_expr(width, binders, build)?;
+            let bits = build.scalar();
+            build.call(
+                quote! {{
+                    let width = #width_body;
+                    if !(1..=64).contains(&(width as u32)) {
+                        return false;
+                    }
+                    out[0] = width as u64;
+                    true
+                }},
+                Some(bits),
+            );
+            let value_body = number_expr(value, binders, build)?;
+            let literal = build.scalar();
+            build.call(
+                quote! {{
+                    out[0] = (#value_body) as u64;
+                    true
+                }},
+                Some(literal),
+            );
+            let into = build.var();
+            build.head.push(quote! {
+                HeadOp::Insert {
+                    label: LabelFill {
+                        template: konst(APInt::new(1, 0)),
+                        fills: smallvec![(field::INT_VALUE, #literal), (field::INT_WIDTH, #bits)],
+                    },
+                    args: SmallVec::new(),
+                    into: #into,
                 }
-                let #name = eg.add(konst(APInt::new(#width_name, (#value) as u64)));
             });
-            Some(quote! { #name })
+            Some(into)
         }
-        TermKind::Operation { .. } | TermKind::Integer(_) | TermKind::String(_) => None,
+        TermKind::Integer(_) | TermKind::Operation { .. } | TermKind::String(_) => None,
     }
 }
 
-fn bool_expr(expr: &Expr, binders: &BTreeMap<String, u32>) -> Option<TokenStream> {
+/// A PDL boolean over bound scalars, as the body of a host function.
+fn bool_expr(
+    expr: &Expr,
+    binders: &BTreeMap<String, u32>,
+    build: &mut RuleBuilder,
+) -> Option<TokenStream> {
     match &expr.kind {
         ExprKind::Unary {
             op: UnaryOp::Not,
             value,
         } => {
-            let value = bool_expr(value, binders)?;
+            let value = bool_expr(value, binders, build)?;
             Some(quote! { !(#value) })
         }
         ExprKind::Binary { op, lhs, rhs } => match op {
-            BinaryOp::Equal => comparison(quote! { == }, lhs, rhs, binders),
-            BinaryOp::NotEqual => comparison(quote! { != }, lhs, rhs, binders),
-            BinaryOp::Less => comparison(quote! { < }, lhs, rhs, binders),
-            BinaryOp::LessEqual => comparison(quote! { <= }, lhs, rhs, binders),
-            BinaryOp::Greater => comparison(quote! { > }, lhs, rhs, binders),
-            BinaryOp::GreaterEqual => comparison(quote! { >= }, lhs, rhs, binders),
+            BinaryOp::Equal => comparison(quote! { == }, lhs, rhs, binders, build),
+            BinaryOp::NotEqual => comparison(quote! { != }, lhs, rhs, binders, build),
+            BinaryOp::Less => comparison(quote! { < }, lhs, rhs, binders, build),
+            BinaryOp::LessEqual => comparison(quote! { <= }, lhs, rhs, binders, build),
+            BinaryOp::Greater => comparison(quote! { > }, lhs, rhs, binders, build),
+            BinaryOp::GreaterEqual => comparison(quote! { >= }, lhs, rhs, binders, build),
             BinaryOp::LogicalAnd => {
-                let lhs = bool_expr(lhs, binders)?;
-                let rhs = bool_expr(rhs, binders)?;
+                let lhs = bool_expr(lhs, binders, build)?;
+                let rhs = bool_expr(rhs, binders, build)?;
                 Some(quote! { (#lhs) && (#rhs) })
             }
             BinaryOp::LogicalOr => {
-                let lhs = bool_expr(lhs, binders)?;
-                let rhs = bool_expr(rhs, binders)?;
+                let lhs = bool_expr(lhs, binders, build)?;
+                let rhs = bool_expr(rhs, binders, build)?;
                 Some(quote! { (#lhs) || (#rhs) })
             }
             _ => {
-                let value = number_expr(expr, binders)?;
+                let value = number_expr(expr, binders, build)?;
                 Some(quote! { (#value) != 0 })
             }
         },
         _ => {
-            let value = number_expr(expr, binders)?;
+            let value = number_expr(expr, binders, build)?;
             Some(quote! { (#value) != 0 })
         }
     }
 }
 
 fn comparison(
-    operator: TokenStream,
+    op: TokenStream,
     lhs: &Expr,
     rhs: &Expr,
     binders: &BTreeMap<String, u32>,
+    build: &mut RuleBuilder,
 ) -> Option<TokenStream> {
-    let lhs = number_expr(lhs, binders)?;
-    let rhs = number_expr(rhs, binders)?;
-    Some(quote! { (#lhs) #operator (#rhs) })
+    let lhs = number_expr(lhs, binders, build)?;
+    let rhs = number_expr(rhs, binders, build)?;
+    Some(quote! { (#lhs) #op (#rhs) })
 }
 
-fn number_expr(expr: &Expr, binders: &BTreeMap<String, u32>) -> Option<TokenStream> {
+/// A PDL number over bound scalars. Reading a binder or a width name adds it to
+/// the host function's arguments; the arithmetic stays PDL's own.
+fn number_expr(
+    expr: &Expr,
+    binders: &BTreeMap<String, u32>,
+    build: &mut RuleBuilder,
+) -> Option<TokenStream> {
     match &expr.kind {
         ExprKind::Integer(value) => Some(quote! { #value }),
         ExprKind::Name(name) if binders.contains_key(name) => {
-            let value = binding_value_ident(*binders.get(name)?);
-            Some(quote! { #value.to_u64() as i64 })
+            let (value, width) = build.constant(*binders.get(name)?);
+            let read = build.read(value, width);
+            Some(quote! { #read.to_u64() as i64 })
         }
-        ExprKind::Name(name) => Some(quote! { widths[#name] as i64 }),
+        ExprKind::Name(name) => {
+            let width = *build.widths.get(name)?;
+            let read = build.word(width);
+            Some(quote! { #read as i64 })
+        }
         ExprKind::Call { name, args } => {
             let ExprKind::Name(argument) = &args.first()?.kind else {
                 return None;
             };
-            let value = binding_value_ident(*binders.get(argument)?);
+            let (value, width) = build.constant(*binders.get(argument)?);
+            let read = build.read(value, width);
             match name.as_str() {
-                "popcount" => Some(quote! { #value.count_ones() as i64 }),
-                "ctz" => Some(quote! { #value.count_trailing_zeros() as i64 }),
-                "clz" => Some(quote! { #value.count_leading_zeros() as i64 }),
+                "popcount" => Some(quote! { #read.count_ones() as i64 }),
+                "ctz" => Some(quote! { #read.count_trailing_zeros() as i64 }),
+                "clz" => Some(quote! { #read.count_leading_zeros() as i64 }),
                 _ => None,
             }
         }
@@ -768,12 +900,12 @@ fn number_expr(expr: &Expr, binders: &BTreeMap<String, u32>) -> Option<TokenStre
             op: UnaryOp::Negate,
             value,
         } => {
-            let value = number_expr(value, binders)?;
+            let value = number_expr(value, binders, build)?;
             Some(quote! { -(#value) })
         }
         ExprKind::Binary { op, lhs, rhs } => {
-            let lhs = number_expr(lhs, binders)?;
-            let rhs = number_expr(rhs, binders)?;
+            let lhs = number_expr(lhs, binders, build)?;
+            let rhs = number_expr(rhs, binders, build)?;
             match op {
                 BinaryOp::Multiply => Some(quote! { (#lhs) * (#rhs) }),
                 BinaryOp::Divide => Some(quote! { (#lhs) / (#rhs) }),
@@ -788,20 +920,10 @@ fn number_expr(expr: &Expr, binders: &BTreeMap<String, u32>) -> Option<TokenStre
                 _ => None,
             }
         }
-        ExprKind::Unary {
-            op: UnaryOp::Not, ..
-        } => None,
+        _ => None,
     }
 }
 
 fn function_name(index: usize) -> Ident {
     format_ident!("pdl_rule_{index}")
-}
-
-fn binding_ident(index: u32) -> Ident {
-    format_ident!("binding_{index}")
-}
-
-fn binding_value_ident(index: u32) -> Ident {
-    format_ident!("binding_{index}_value")
 }

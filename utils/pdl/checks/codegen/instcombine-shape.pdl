@@ -1,5 +1,5 @@
-// Instcombine-style rules lower to executable Rust: typed pattern/introduced
-// nodes, no legacy helper entry points.
+// Instcombine-style rules lower to query tables: atoms, guards and a head, with
+// typed pattern and introduced nodes and no applier closure.
 // RUN: tir-pdl %s --emit rust | filecheck %s
 
 rule add-zero: builtin.addi(x: int<W>, 0) => x;
@@ -7,13 +7,11 @@ rule mul-pow2-to-shl:
   builtin.muli(x: int<W>, c: const) => builtin.shli(x, const<W>(ctz(c)))
   where popcount(c) == 1, c != 1;
 
-// CHECK-NOT: commutative_pattern
-// CHECK-NOT: pattern_named
-// CHECK-NOT: introduced_named
+// CHECK-NOT: Rhs::Apply
+// CHECK-NOT: Box::new(move
 // CHECK: fn generated_ruleset
-// CHECK-NOT: commutative_pattern
-// CHECK: Node::pattern::<crate::builtin::AddIOp>
-// CHECK: Node::introduced::<
-// CHECK: crate::builtin::ShlIOp
-// CHECK-NOT: pattern_named
-// CHECK-NOT: introduced_named
+// CHECK: Node::pattern:: < crate ::builtin::AddIOp >
+// CHECK: HeadOp::Union
+// CHECK: HeadOp::Insert
+// CHECK: Node::introduced:: < crate ::builtin::ShlIOp >
+// CHECK-NOT: Rhs::Apply
