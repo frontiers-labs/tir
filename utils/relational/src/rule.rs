@@ -59,6 +59,9 @@ pub struct Rule<L> {
     pub name: String,
     pub plan: Plan<L>,
     pub head: Vec<HeadOp<L>>,
+    /// Variables the head binds, numbered above the query's. A match carries
+    /// only what it matched; a head's own classes exist for as long as it runs.
+    pub head_vars: u32,
     /// Applied once after the iterative fixpoint rather than in it, for a law
     /// whose right-hand side would feed back through the others.
     pub post_saturation: bool,
@@ -68,8 +71,9 @@ impl<L: Label> Engine<L> {
     /// Run `head` on one match. A head that cannot be spelled — a fill the
     /// language has no term for — writes nothing; everything before it stands,
     /// which is sound because a head only ever adds.
-    pub fn apply_head(&mut self, head: &[HeadOp<L>], matched: &Match) {
+    pub fn apply_head(&mut self, head: &[HeadOp<L>], head_vars: u32, matched: &Match) {
         let mut bound: SmallVec<[Option<ClassId>; 8]> = matched.bindings.clone();
+        bound.resize(bound.len() + head_vars as usize, None);
         for op in head {
             match op {
                 HeadOp::Insert { label, args, into } => {
@@ -152,6 +156,7 @@ mod tests {
                 },
                 HeadOp::Union(0, 3),
             ],
+            head_vars: 0,
             post_saturation: false,
         }
     }
@@ -198,6 +203,7 @@ mod tests {
                     Box::new(crate::Expr::Scalar(2)),
                 ),
             }],
+            head_vars: 0,
             post_saturation: false,
         }
     }
@@ -221,7 +227,7 @@ mod tests {
                 &NoExterns,
             );
             for matched in &found {
-                eg.apply_head(&rule.head, matched);
+                eg.apply_head(&rule.head, rule.head_vars, matched);
             }
         }
         assert_eq!(eg.object_of(p), Some((p, 0)));
@@ -285,7 +291,7 @@ mod tests {
         let found = rule.plan.search(&eg, [f], &|_, _| true, false, &NoExterns);
         assert_eq!(found.len(), 1);
         for matched in &found {
-            eg.apply_head(&rule.head, matched);
+            eg.apply_head(&rule.head, rule.head_vars, matched);
         }
         eg.rebuild();
 

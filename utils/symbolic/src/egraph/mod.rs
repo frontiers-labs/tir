@@ -139,7 +139,7 @@ impl<L: ENode> EGraph<L> {
                     if trace_enabled() {
                         eprintln!("M {} {}", rule.name, self.find(m.root).index());
                     }
-                    stats.apply(self, |eg| eg.apply_head(&rule.head, m));
+                    stats.apply(self, |eg| eg.apply_head(&rule.head, rule.head_vars, m));
                 }
             }
             self.rebuild();

@@ -144,7 +144,13 @@ fn saturate_impl(
                     eg.find(m.root).index()
                 );
             }
-            stats.apply(eg, |eg| eg.apply_head(&theory.rules[*index].head, m));
+            stats.apply(eg, |eg| {
+                eg.apply_head(
+                    &theory.rules[*index].head,
+                    theory.rules[*index].head_vars,
+                    m,
+                )
+            });
         }
         eg.rebuild();
         stats.finish(eg);
@@ -187,7 +193,11 @@ fn saturate_impl(
         })
         .collect();
     for (index, matched) in &matches {
-        eg.apply_head(&theory.rules[*index].head, matched);
+        eg.apply_head(
+            &theory.rules[*index].head,
+            theory.rules[*index].head_vars,
+            matched,
+        );
     }
     eg.rebuild();
     timer.finish();

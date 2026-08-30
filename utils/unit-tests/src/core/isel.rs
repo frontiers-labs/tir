@@ -1138,6 +1138,7 @@ fn merged_value_classes_resolve_to_earliest_def() {
             vec![template(SymKind::Mul, 0), template(SymKind::Add, 3)],
         )),
         head: vec![HeadOp::Union(0, 3)],
+        head_vars: 0,
         post_saturation: false,
     };
 

@@ -276,7 +276,7 @@ fn saturate_naive(
             .collect();
         for (rule, matches) in &searched {
             for m in matches {
-                g.apply_head(&rule.head, m);
+                g.apply_head(&rule.head, rule.head_vars, m);
             }
         }
         g.rebuild();
@@ -436,6 +436,7 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
             args: smallvec![1],
             into: 2,
         }],
+        head_vars: 0,
         post_saturation: false,
     };
     // `add(x, y)` with a `neg(x)` anywhere in the graph proves the two equal —
@@ -461,6 +462,7 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
             ],
         )),
         head: vec![HeadOp::Union(0, 3)],
+        head_vars: 0,
         post_saturation: false,
     };
     assert!(relate.plan.unbounded());

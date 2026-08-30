@@ -352,6 +352,7 @@ fn build_rule(spec: &RuleSpec, symbol: bool) -> Rule<Math> {
             nots,
         }),
         head,
+        head_vars: 0,
         post_saturation: false,
     }
 }
@@ -433,7 +434,7 @@ fn saturate_naive(g: &mut EGraph<Math>, rules: &[Rule<Math>], iters: usize) {
             .collect();
         for (rule, matches) in &searched {
             for m in matches {
-                g.apply_head(&rule.head, m);
+                g.apply_head(&rule.head, rule.head_vars, m);
             }
         }
         g.rebuild();

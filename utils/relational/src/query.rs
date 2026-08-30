@@ -309,7 +309,7 @@ impl<L> Query<L> {
 pub struct Match {
     pub root: ClassId,
     pub bindings: SmallVec<[Option<ClassId>; 8]>,
-    pub scalars: SmallVec<[u64; 4]>,
+    pub scalars: SmallVec<[u64; 8]>,
 }
 
 /// A query with its atoms ordered for evaluation: each step's class variable is
@@ -802,7 +802,7 @@ struct Eval<'a, L: Label> {
     counting: bool,
     hits: usize,
     bound: SmallVec<[Option<ClassId>; 8]>,
-    scalars: SmallVec<[u64; 4]>,
+    scalars: SmallVec<[u64; 8]>,
     /// Variables this branch bound, to undo on the way out.
     trail: SmallVec<[Var; 8]>,
     /// How many rows and facts of the partial match the previous round touched.

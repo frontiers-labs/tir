@@ -110,6 +110,7 @@ pub(crate) fn rule(
         name: name.to_string(),
         plan: Plan::compile(Query::tree(vars, 0, atoms)),
         head,
+        head_vars: 0,
         post_saturation: false,
     }
 }
@@ -138,7 +139,7 @@ pub(crate) fn apply_all(g: &mut EGraph<Math>, rules: &[Rule<Math>]) {
     for rule in rules {
         let roots = rule.plan.roots(g);
         for m in rule.plan.search(g, roots, &|_, _| true, false, &NoExterns) {
-            g.apply_head(&rule.head, &m);
+            g.apply_head(&rule.head, rule.head_vars, &m);
         }
     }
     g.rebuild();

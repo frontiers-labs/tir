@@ -453,7 +453,9 @@ fn generate_rule(rule: &Rule, function: Ident, base: u32) -> Option<TokenStream>
         .head
         .push(quote! { HeadOp::Union(#root, #replacement) });
 
-    let (vars, scalars) = (build.vars, build.scalars);
+    // A head's own classes are not part of a match: it binds them while it runs.
+    let (vars, scalars) = (pattern.vars, build.scalars);
+    let head_vars = build.vars - pattern.vars;
     let (atoms, guards, head) = (&build.atoms, &build.guards, &build.head);
     let externs = build.externs.iter().enumerate().map(|(id, body)| {
         let id = id as u32;
@@ -474,6 +476,7 @@ fn generate_rule(rule: &Rule, function: Ident, base: u32) -> Option<TokenStream>
                     nots: Vec::new(),
                 }),
                 head: vec![#(#head),*],
+                head_vars: #head_vars,
                 post_saturation: false,
             }
         }

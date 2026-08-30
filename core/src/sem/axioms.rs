@@ -683,13 +683,15 @@ impl Axiom {
         low.left(self);
         low.widths(self);
         low.predicates(self, index);
+        // Everything below matches; everything above is what the head builds.
+        let match_vars = low.slots.vars;
         let head = low.right(self)?;
         let assumed = low.assumed;
         Some((
             tir_relational::Rule {
                 name: format!("axiom-{}", self.name),
                 plan: Plan::compile(Query {
-                    vars: low.slots.vars,
+                    vars: match_vars,
                     scalars: low.slots.scalars,
                     root: 0,
                     atoms: low.atoms,
@@ -697,6 +699,7 @@ impl Axiom {
                     nots: Vec::new(),
                 }),
                 head,
+                head_vars: low.slots.vars - match_vars,
                 post_saturation: self.post_saturation,
             },
             assumed,
