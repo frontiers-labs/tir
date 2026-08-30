@@ -136,6 +136,45 @@ pub fn resolve_operands_for_instruction<'a>(
         .collect()
 }
 
+/// The value constraints an operand declares, as its consumers need them: the
+/// alignment defaults to 1 when the operand declares none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OperandConstraint {
+    pub align: u32,
+    pub nonzero: bool,
+}
+
+impl Default for OperandConstraint {
+    fn default() -> Self {
+        Self {
+            align: 1,
+            nonzero: false,
+        }
+    }
+}
+
+/// The constraints of an instruction's operands, by name; a name the
+/// instruction redeclares takes the instruction's constraints.
+pub fn resolve_operand_constraints_for_instruction<'a>(
+    inst: &'a ast::Instruction,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> HashMap<String, OperandConstraint> {
+    resolve_template_chain(inst, item_cache)
+        .into_iter()
+        .flat_map(|t| t.operands.iter())
+        .chain(inst.operands.iter())
+        .map(|op| {
+            (
+                op.name.clone(),
+                OperandConstraint {
+                    align: op.align.unwrap_or(1),
+                    nonzero: op.nonzero,
+                },
+            )
+        })
+        .collect()
+}
+
 pub fn resolve_template_chain<'a>(
     inst: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,

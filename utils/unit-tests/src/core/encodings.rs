@@ -87,6 +87,8 @@ const LUI: EncodeSpec = EncodeSpec {
         EncodeField {
             attr: "rd",
             int_range: None,
+            align_mask: 0,
+            nonzero: false,
             runs: &[FieldRun {
                 op_lo: 0,
                 word_lo: 7,
@@ -97,6 +99,8 @@ const LUI: EncodeSpec = EncodeSpec {
         EncodeField {
             attr: "imm",
             int_range: Some((-524288, 1048576, 1048576)),
+            align_mask: 0,
+            nonzero: false,
             runs: &[FieldRun {
                 op_lo: 0,
                 word_lo: 12,
@@ -140,6 +144,52 @@ fn encode_rejects_out_of_range_and_unallocated() {
     assignment.insert(unplaced, (r(), 5));
     let encoded = encode_with(&op, &LUI, &assignment).expect("encodes once placed");
     assert_eq!(encoded.bytes, (55u32 | (5 << 7) | (1 << 12)).to_le_bytes());
+}
+
+// `c.addi4spn rd', sp, nzuimm`: the field holds `imm[9:2]`, so the operand is
+// a nonzero multiple of four.
+const ADDI4SPN: EncodeSpec = EncodeSpec {
+    const_word: 0,
+    width_bytes: 2,
+    fields: &[
+        EncodeField {
+            attr: "rd",
+            int_range: None,
+            align_mask: 0,
+            nonzero: false,
+            runs: &[FieldRun {
+                op_lo: 0,
+                word_lo: 2,
+                width: 3,
+            }],
+            register: true,
+        },
+        EncodeField {
+            attr: "imm",
+            int_range: Some((-512, 1024, 1024)),
+            align_mask: 3,
+            nonzero: true,
+            runs: &[FieldRun {
+                op_lo: 2,
+                word_lo: 5,
+                width: 8,
+            }],
+            register: false,
+        },
+    ],
+};
+
+#[test]
+fn encode_rejects_values_the_operand_constraints_exclude() {
+    let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(6))]);
+    assert!(encode_with(&op, &ADDI4SPN, &RegAssignment::default()).is_none());
+
+    let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(0))]);
+    assert!(encode_with(&op, &ADDI4SPN, &RegAssignment::default()).is_none());
+
+    let (_context, op) = op_with(vec![("rd", phys(1)), ("imm", AttributeValue::Int(8))]);
+    let encoded = encode_with(&op, &ADDI4SPN, &RegAssignment::default()).expect("encodes");
+    assert_eq!(encoded.bytes, ((1u16 << 2) | (2 << 5)).to_le_bytes());
 }
 
 #[test]

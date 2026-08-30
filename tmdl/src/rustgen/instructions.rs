@@ -215,6 +215,7 @@ fn emit_instructions<'a>(
             &resolve_isa_param_values(inst, item_cache),
         );
         let ops_map = ops.clone().into_iter().collect::<HashMap<_, _>>();
+        let operand_constraints = resolve_operand_constraints_for_instruction(inst, item_cache);
         let defined_register_operands = infer_defined_register_operands(&inst.behavior, &ops);
 
         // Build attributes schema from the operands that are not registers: a
@@ -668,6 +669,7 @@ fn emit_instructions<'a>(
                 &semantics.pattern,
                 &ops,
                 &semantics.variable_symbols,
+                &operand_constraints,
             ));
             // Registers read by path are dependencies outside the encoded operands.
             // Value-register reads carry a fixed-use constraint; configuration
@@ -792,10 +794,15 @@ fn emit_instructions<'a>(
                     .map(|(name, _)| name.clone())
                     .expect("immediate operand has a name");
                 let zero_imm_range_entries = imm_range_spec_entries(
-                    &immediate_operand_ranges(&semantics.pattern, &ops, &semantics.variable_symbols)
-                        .into_iter()
-                        .filter(|(symbol, _, _)| *symbol == imm_sym)
-                        .collect::<Vec<_>>(),
+                    &immediate_operand_ranges(
+                        &semantics.pattern,
+                        &ops,
+                        &semantics.variable_symbols,
+                        &operand_constraints,
+                    )
+                    .into_iter()
+                    .filter(|range| range.symbol == imm_sym)
+                    .collect::<Vec<_>>(),
                 );
 
                 let zero_emit_attrs = vec![
@@ -871,6 +878,7 @@ fn emit_instructions<'a>(
                 &branch.target_operand,
                 branch.target_symbol,
                 &no_zero_slots,
+                &operand_constraints,
                 &float_classes,
                 &polymorphic_classes,
             );
@@ -963,6 +971,7 @@ fn emit_instructions<'a>(
                         &branch.target_operand,
                         branch.target_symbol,
                         &zero_slots,
+                        &operand_constraints,
                         &float_classes,
                         &polymorphic_classes,
                     );
@@ -1161,8 +1170,19 @@ fn emit_instructions<'a>(
                                     }
                                     _ => quote! { None },
                                 };
+                                let constraint = operand_constraints
+                                    .get(&op_name)
+                                    .copied()
+                                    .unwrap_or_default();
+                                let align =
+                                    proc_macro2::Literal::u32_unsuffixed(constraint.align);
+                                let nonzero = constraint.nonzero;
                                 parse_steps.push(quote! {
-                                    ParseStep::Immediate(#op_name_lit, #signed, #range)
+                                    ParseStep::Immediate(#op_name_lit, #signed, ImmConstraint {
+                                        range: #range,
+                                        align: #align,
+                                        nonzero: #nonzero,
+                                    })
                                 });
                             }
                             // Strings in asm templates aren't currently used as
@@ -1354,6 +1374,7 @@ fn emit_instructions<'a>(
                     inst,
                     &encoding_arms,
                     &ops_map,
+                    &operand_constraints,
                     &resolved_params,
                     width_bytes,
                 )
@@ -1538,7 +1559,9 @@ fn emit_instructions<'a>(
         }
     } else {
         quote! {
-            use tir::backend::asm_desc::{self, AsmSymbol, InstrDesc, ParseStep, PrintPart};
+            use tir::backend::asm_desc::{
+                self, AsmSymbol, ImmConstraint, InstrDesc, ParseStep, PrintPart,
+            };
 
             #(#instruction_descs)*
 

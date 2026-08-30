@@ -86,7 +86,8 @@ used, so stubs are sufficient.
 
 `tmdlc --action=emit-smtlib --output=<name>.smt2` also writes
 `<name>.metadata.json`. The versioned sidecar describes each instruction's
-operands, encoding width, support status, flattened state expressions, PC and register-file writes,
+operands and the `#[align]`/`#[nonzero]` constraints they declare (the concrete
+boundary cases stay inside them), encoding width, support status, flattened state expressions, PC and register-file writes,
 reservation use, memory address terms, and trap kinds. The verifier reads this
 sidecar directly; it does not recover behavior facts by scanning SMT function
 bodies or substituting text in emitted expressions.

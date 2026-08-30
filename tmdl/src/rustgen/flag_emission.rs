@@ -54,6 +54,7 @@ fn emit_flag_rules<'a>(
         let info = FlagInst {
             inst,
             ops,
+            constraints: resolve_operand_constraints_for_instruction(inst, item_cache),
             op_name,
             mnemonic,
             isa_param_values,
@@ -229,6 +230,7 @@ fn emit_flag_branch_rules(
                 &d_sem.graph,
                 &d.ops,
                 &d_sem.variable_symbols,
+                &d.constraints,
             ));
 
             let target_symbol = d_sem
@@ -817,16 +819,26 @@ fn emit_flag_reader_rules(
                 &polymorphic_classes,
             );
             let mut immediate_ranges =
-                immediate_operand_ranges(&d_sem.graph, &d.ops, &d_sem.variable_symbols);
+                immediate_operand_ranges(
+                    &d_sem.graph,
+                    &d.ops,
+                    &d_sem.variable_symbols,
+                    &d.constraints,
+                );
             immediate_ranges.extend(
-                immediate_operand_ranges(&r_sem.graph, &r.ops, &r_sem.variable_symbols)
-                    .into_iter()
-                    .filter_map(|(symbol, width, signed)| {
-                        arm_remap
-                            .get(&symbol)
-                            .copied()
-                            .map(|symbol| (symbol, width, signed))
-                    }),
+                immediate_operand_ranges(
+                    &r_sem.graph,
+                    &r.ops,
+                    &r_sem.variable_symbols,
+                    &r.constraints,
+                )
+                .into_iter()
+                .filter_map(|range| {
+                    arm_remap
+                        .get(&range.symbol)
+                        .copied()
+                        .map(|symbol| ImmediateRange { symbol, ..range })
+                }),
             );
             let imm_range_entries = imm_range_spec_entries(&immediate_ranges);
 

@@ -51,6 +51,11 @@ pub struct EncodeField {
     /// signed spellings, `umax` (exclusive) for unsigned. `None` for full-width
     /// fields and unconstrained operands.
     pub int_range: Option<(i64, i64, u64)>,
+    /// Low bits the operand's `#[align]` declares zero; a value with any of
+    /// them set has no encoding.
+    pub align_mask: u128,
+    /// Whether the operand declares `#[nonzero]`.
+    pub nonzero: bool,
     pub runs: &'static [FieldRun],
     pub register: bool,
 }
@@ -80,14 +85,14 @@ pub fn encode_with(
         }
         // Immediates written in assembly may be spelled signed or unsigned
         // (`-1` vs `0xFFF`), so accept either fit within the declared width.
-        match op.attr(field.attr)? {
+        let value = match op.attr(field.attr)? {
             AttributeValue::Int(v) => {
                 if let Some((min, max, _)) = field.int_range
                     && !(min..max).contains(&v)
                 {
                     return None;
                 }
-                scatter(&mut word, v as u128, field.runs);
+                v as u128
             }
             AttributeValue::UInt(v) => {
                 if let Some((_, _, umax)) = field.int_range
@@ -95,12 +100,24 @@ pub fn encode_with(
                 {
                     return None;
                 }
-                scatter(&mut word, v as u128, field.runs);
+                v as u128
             }
-            AttributeValue::Str(s) => fixups.push(FixupTarget::Symbol(s.to_string())),
-            AttributeValue::Block(b) => fixups.push(FixupTarget::Block(b)),
+            AttributeValue::Str(s) => {
+                fixups.push(FixupTarget::Symbol(s.to_string()));
+                continue;
+            }
+            AttributeValue::Block(b) => {
+                fixups.push(FixupTarget::Block(b));
+                continue;
+            }
             _ => return None,
+        };
+        // A value the operand's declared constraints exclude is not encodable:
+        // the scatter would drop the bits `#[align]` promises are zero.
+        if value & field.align_mask != 0 || (field.nonzero && value == 0) {
+            return None;
         }
+        scatter(&mut word, value, field.runs);
     }
     Some(EncodedInst {
         bytes: word.to_le_bytes()[..spec.width_bytes].to_vec(),

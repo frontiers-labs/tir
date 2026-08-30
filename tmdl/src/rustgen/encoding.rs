@@ -43,6 +43,7 @@ fn emit_instruction_encoder(
     inst: &ast::Instruction,
     encoding_arms: &[ast::EncodingArm],
     ops_map: &HashMap<String, Type>,
+    constraints: &HashMap<String, OperandConstraint>,
     resolved_params: &HashMap<String, (Type, Option<ast::Expr>)>,
     width_bytes: u64,
 ) -> Result<Option<(proc_macro2::TokenStream, Option<proc_macro2::TokenStream>)>, TMDLError> {
@@ -175,6 +176,8 @@ fn emit_instruction_encoder(
             tir::backend::binary::EncodeField {
                 attr: #name_lit,
                 int_range: None,
+                align_mask: 0u128,
+                nonzero: false,
                 runs: #runs,
                 register: true,
             }
@@ -194,10 +197,15 @@ fn emit_instruction_encoder(
             }
             _ => quote! { None },
         };
+        let constraint = constraints.get(name.as_str()).copied().unwrap_or_default();
+        let align_mask = proc_macro2::Literal::u128_suffixed(u128::from(constraint.align - 1));
+        let nonzero = constraint.nonzero;
         spec_fields.push(quote! {
             tir::backend::binary::EncodeField {
                 attr: #name_lit,
                 int_range: #int_range,
+                align_mask: #align_mask,
+                nonzero: #nonzero,
                 runs: #runs,
                 register: false,
             }
@@ -231,15 +239,12 @@ fn emit_instruction_encoder(
         } else {
             quote! { None }
         };
-        let lowest_bit = fields.iter().map(|f| f.op_lo).min().unwrap_or(0);
-        // Operand bits below the lowest encoded bit are silently dropped by the
-        // scatter (e.g. bit 0 of RISC-V branch offsets); a value with any of
-        // them set cannot be represented.
-        let dropped_mask = proc_macro2::Literal::u128_suffixed(if lowest_bit > 0 {
-            encoding_mask(lowest_bit)
-        } else {
-            0
-        });
+        // The operand bits the encoding drops are the ones its `#[align]`
+        // declares zero (sema admits an encoding that drops bits only with the
+        // matching alignment), so a value with any of them set is not
+        // representable.
+        let align = constraints.get(name.as_str()).copied().unwrap_or_default().align;
+        let dropped_mask = proc_macro2::Literal::u128_suffixed(u128::from(align - 1));
         let runs = emit_field_runs(fields);
         Some(quote! {
             static #patch_spec_ident: tir::backend::binary::PatchSpec =

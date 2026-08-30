@@ -262,13 +262,17 @@ impl IselCostModel for DefaultIselCostModel {}
 pub type RuleEmitFn =
     fn(&Context, &EmitRequest, &RuleMatch) -> Result<Box<dyn Operation>, PassError>;
 
-/// An immediate operand's encoding range: the field's bit width and whether the
-/// instruction sign-extends it. A constant outside the range must not bind — its
-/// encoding would silently truncate to a different value.
+/// An immediate operand's encoding range: the field's bit width, whether the
+/// instruction sign-extends it, and the `#[align]`/`#[nonzero]` constraints the
+/// operand declares. A constant outside the range must not bind — its encoding
+/// would silently truncate to a different value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImmRange {
     pub width: u32,
     pub signed: bool,
+    /// The declared alignment; 1 when the operand declares none.
+    pub align: u32,
+    pub nonzero: bool,
 }
 
 /// The semantic value representations a physical register class can store.
@@ -401,15 +405,20 @@ impl ImmRange {
     /// bits at its own width: i16 `-32640` is the pattern `0x8080`, which a
     /// 16-bit unsigned field encodes exactly.
     pub fn contains(&self, value: &APInt) -> bool {
+        let bits = if value.is_signed() {
+            value.to_i64() as u64
+        } else {
+            value.to_u64()
+        };
+        // The operand's declared constraints hold whatever the field's width:
+        // the encoding drops the bits `#[align]` promises are zero.
+        if !bits.is_multiple_of(u64::from(self.align)) || (self.nonzero && bits == 0) {
+            return false;
+        }
         if self.width >= 64 {
             return true;
         }
         if self.signed {
-            let bits = if value.is_signed() {
-                value.to_i64() as u64
-            } else {
-                value.to_u64()
-            };
             let shift = 64 - self.width;
             (((bits << shift) as i64) >> shift) as u64 == bits
         } else {

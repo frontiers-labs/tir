@@ -8,8 +8,8 @@ use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
     get_encoding_arms, isa_param_values, item_supports_isa, parse_literal_value,
-    resolve_isa_param_values, resolve_operand_widths, resolve_operands_for_instruction,
-    resolve_params_for_instruction,
+    resolve_isa_param_values, resolve_operand_constraints_for_instruction, resolve_operand_widths,
+    resolve_operands_for_instruction, resolve_params_for_instruction,
 };
 use tir_graph::{Dag, NodeId};
 
@@ -78,6 +78,10 @@ struct OperandMetadata {
     kind: String,
     class: Option<String>,
     width: u16,
+    /// The operand's declared `#[align(N)]`; 1 when it declares none.
+    align: u32,
+    /// Whether the operand declares `#[nonzero]`.
+    nonzero: bool,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -674,27 +678,26 @@ fn build_instructions<'a>(
             name, writes_pc, enc_width, operand_meta
         )?;
 
+        let constraints = resolve_operand_constraints_for_instruction(i, item_cache);
         let operand_metadata = operands
             .iter()
-            .map(|(operand_name, ty)| match ty {
-                Type::Struct(class) => OperandMetadata {
+            .map(|(operand_name, ty)| {
+                let constraint = constraints.get(operand_name).copied().unwrap_or_default();
+                let (kind, class, width) = match ty {
+                    Type::Struct(class) => {
+                        ("register", Some(class.to_lowercase()), ctx.idx_width(class))
+                    }
+                    Type::Bits(width) => ("bits", None, *width),
+                    _ => ("int", None, ctx.xlen),
+                };
+                OperandMetadata {
                     name: operand_name.to_lowercase(),
-                    kind: "register".to_string(),
-                    class: Some(class.to_lowercase()),
-                    width: ctx.idx_width(class),
-                },
-                Type::Bits(width) => OperandMetadata {
-                    name: operand_name.to_lowercase(),
-                    kind: "bits".to_string(),
-                    class: None,
-                    width: *width,
-                },
-                _ => OperandMetadata {
-                    name: operand_name.to_lowercase(),
-                    kind: "int".to_string(),
-                    class: None,
-                    width: ctx.xlen,
-                },
+                    kind: kind.to_string(),
+                    class,
+                    width,
+                    align: constraint.align,
+                    nonzero: constraint.nonzero,
+                }
             })
             .collect();
         let pc_source_operands = behavior.as_ref().map_or_else(Vec::new, |behavior| {

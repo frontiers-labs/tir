@@ -674,6 +674,8 @@ fn materializer_rule(emit: RuleEmitFn) -> Rule {
         ImmRange {
             width: 12,
             signed: true,
+            align: 1,
+            nonzero: false,
         },
     )])
 }
@@ -770,6 +772,8 @@ fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
             ImmRange {
                 width: 12,
                 signed: true,
+                align: 1,
+                nonzero: false,
             },
         )]),
         materializer_rule(emit_materializer_marker),
@@ -810,6 +814,8 @@ fn run_immediate_range(constant: i64) -> Vec<&'static str> {
             ImmRange {
                 width: 12,
                 signed: true,
+                align: 1,
+                nonzero: false,
             },
         )]),
         Rule::new(

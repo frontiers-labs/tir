@@ -246,14 +246,22 @@ fn result_register_spec(
     }
 }
 
-fn imm_range_spec_entries(ranges: &[(u32, u32, bool)]) -> Vec<proc_macro2::TokenStream> {
+fn imm_range_spec_entries(ranges: &[ImmediateRange]) -> Vec<proc_macro2::TokenStream> {
     ranges
         .iter()
-        .map(|(symbol, width, signed)| {
-            let symbol_lit = proc_macro2::Literal::u32_unsuffixed(*symbol);
-            let width_lit = proc_macro2::Literal::u32_unsuffixed(*width);
+        .map(|range| {
+            let symbol_lit = proc_macro2::Literal::u32_unsuffixed(range.symbol);
+            let width_lit = proc_macro2::Literal::u32_unsuffixed(range.width);
+            let signed = range.signed;
+            let align_lit = proc_macro2::Literal::u32_unsuffixed(range.constraint.align);
+            let nonzero = range.constraint.nonzero;
             quote! {
-                (#symbol_lit, tir::backend::isel::ImmRange { width: #width_lit, signed: #signed })
+                (#symbol_lit, tir::backend::isel::ImmRange {
+                    width: #width_lit,
+                    signed: #signed,
+                    align: #align_lit,
+                    nonzero: #nonzero,
+                })
             }
         })
         .collect()

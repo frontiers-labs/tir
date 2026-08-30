@@ -900,6 +900,7 @@ fn definer_immediate_symbols(d: &FlagInst<'_>, d_sem: &FlagDefinerSemantics) -> 
 struct FlagInst<'a> {
     inst: &'a ast::Instruction,
     ops: Vec<(String, Type)>,
+    constraints: HashMap<String, OperandConstraint>,
     /// The op's registered name (`OPNAME`, falling back to `MNEMONIC`).
     op_name: String,
     mnemonic: String,

@@ -43,8 +43,68 @@ instruction OpImm8 for [ImmIsa] {
     }
 }
 
-// The immediate's accepted range is a field of the instruction's parse
+// The immediate's accepted values are a field of the instruction's parse
 // descriptor, which the shared runtime parser enforces for every literal form.
 // CHECK: static DESC_OPIMM8: InstrDesc = InstrDesc {
-// CHECK: ParseStep::Immediate("imm", false, Some((-128i64, 256i64))),
+// CHECK: ParseStep::Immediate(
+// CHECK-NEXT: "imm",
+// CHECK-NEXT: false,
+// CHECK-NEXT: ImmConstraint {
+// CHECK-NEXT: range: Some((-128i64, 256i64)),
+// CHECK-NEXT: align: 1,
+// CHECK-NEXT: nonzero: false,
+
+// An operand's `#[align]`/`#[nonzero]` narrow that set further: the encoding
+// carries only `imm[9:2]`, so a misaligned or zero value has no encoding at
+// all. Every consumer of the operand — the parser, the encoder, the fixup
+// patcher and instruction selection — sees the same constraint.
+instruction OpAligned for [ImmIsa] {
+    param MNEMONIC: String = "opa";
+
+    operands {
+        rd: GPR,
+        #[align(4), nonzero] imm: bits<10>,
+    }
+
+    encoding {
+        imm[9..2],
+        rd,
+        0b0100011,
+    }
+
+    asm {
+        "{self.MNEMONIC} {rd}, {imm}"
+    }
+
+    behavior {
+        rd = sext(imm, self.XLEN);
+    }
+}
+
+// CHECK: static DESC_OPALIGNED: InstrDesc = InstrDesc {
+// CHECK: ParseStep::Immediate(
+// CHECK-NEXT: "imm",
+// CHECK-NEXT: false,
+// CHECK-NEXT: ImmConstraint {
+// CHECK-NEXT: range: Some((-512i64, 1024i64)),
+// CHECK-NEXT: align: 4,
+// CHECK-NEXT: nonzero: true,
 // CHECK: fn parse_opimm8_inst
+
+// CHECK: static ENCODE_OPALIGNED
+// CHECK: attr: "imm",
+// CHECK-NEXT: int_range: Some((-512i64, 1024i64, 1024u64)),
+// CHECK-NEXT: align_mask: 3u128,
+// CHECK-NEXT: nonzero: true,
+
+// The bits the alignment justifies dropping are the ones a resolved fixup may
+// not set.
+// CHECK: static PATCH_OPALIGNED
+// CHECK: dropped_mask: 3u128,
+
+// CHECK: static RULE_OPALIGNED
+// CHECK: ImmRange {
+// CHECK-NEXT: width: 10,
+// CHECK-NEXT: signed: true,
+// CHECK-NEXT: align: 4,
+// CHECK-NEXT: nonzero: true,

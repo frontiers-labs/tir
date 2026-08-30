@@ -55,10 +55,32 @@ pub enum ParseStep {
     /// A register operand: attribute name, its class, and the class's parser.
     Register(&'static str, RegClassId, RegisterTokenParser),
     /// An immediate operand: attribute name, whether a preceding
-    /// [`ParseStep::Sign`] applies to it, and the half-open interval the
-    /// operand's `bits<N>` width admits. A value outside that interval fails
-    /// the candidate so per-mnemonic dispatch can backtrack to a wider form.
-    Immediate(&'static str, bool, Option<(i64, i64)>),
+    /// [`ParseStep::Sign`] applies to it, and the values it admits. A value
+    /// outside them fails the candidate so per-mnemonic dispatch can backtrack
+    /// to a wider form.
+    Immediate(&'static str, bool, ImmConstraint),
+}
+
+/// The values an immediate operand admits: the half-open interval its `bits<N>`
+/// width spells, plus the `#[align]`/`#[nonzero]` constraints it declares.
+#[derive(Debug, Clone, Copy)]
+pub struct ImmConstraint {
+    pub range: Option<(i64, i64)>,
+    /// The declared alignment; 1 when the operand declares none.
+    pub align: u32,
+    pub nonzero: bool,
+}
+
+impl ImmConstraint {
+    /// Whether the operand admits `value`.
+    pub fn admits(&self, value: i64) -> bool {
+        if let Some((min, max)) = self.range
+            && !(min..max).contains(&value)
+        {
+            return false;
+        }
+        (value as u64).is_multiple_of(u64::from(self.align)) && !(self.nonzero && value == 0)
+    }
 }
 
 /// One element of an instruction's printed assembly, in syntax order.
@@ -153,8 +175,8 @@ fn parse_operands<'src>(
                     }),
                 ));
             }
-            ParseStep::Immediate(name, signed, range) => {
-                let value = parse_immediate(parser, *signed, sign, *range)?;
+            ParseStep::Immediate(name, signed, constraint) => {
+                let value = parse_immediate(parser, *signed, sign, *constraint)?;
                 attributes.push(NamedAttribute::new(context.intern(name), value));
             }
         }
@@ -179,7 +201,7 @@ fn parse_immediate<'src>(
     parser: &mut Parser<'src, Token<'src>>,
     signed: bool,
     sign: i64,
-    range: Option<(i64, i64)>,
+    constraint: ImmConstraint,
 ) -> Result<AttributeValue, ()> {
     let value = match parser.peek() {
         Some(Token::DecNumber(number)) => number.parse::<i64>().map_err(|_| ())?,
@@ -201,9 +223,7 @@ fn parse_immediate<'src>(
     } else {
         value
     };
-    if let Some((min, max)) = range
-        && !(min..max).contains(&value)
-    {
+    if !constraint.admits(value) {
         return Err(());
     }
     let _ = parser.bump();

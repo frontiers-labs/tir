@@ -645,8 +645,25 @@ fn generate_tmdl_smt(sh: &Shell, spec: &IsaSpec, root: &Path, out: &Path) -> any
 #[derive(Clone, Debug)]
 enum OperandKind {
     Reg { class: String, idx_width: u32 },
-    Bits(u32),
-    Int,
+    Bits(u32, ImmConstraint),
+    Int(ImmConstraint),
+}
+
+/// The values an immediate operand admits beyond its width: `#[align(N)]` makes
+/// it a multiple of `N`, `#[nonzero]` excludes zero.
+#[derive(Clone, Copy, Debug)]
+struct ImmConstraint {
+    align: u64,
+    nonzero: bool,
+}
+
+impl ImmConstraint {
+    /// `value` moved into the admitted set: rounded down to the alignment, and
+    /// `None` when nothing is left (zero under `#[nonzero]`).
+    fn admitted(&self, value: u64) -> Option<u64> {
+        let value = value & !(self.align - 1);
+        (!(self.nonzero && value == 0)).then_some(value)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -729,6 +746,8 @@ struct RawOperand {
     kind: String,
     class: Option<String>,
     width: u32,
+    align: u64,
+    nonzero: bool,
 }
 
 #[derive(Deserialize)]
@@ -775,6 +794,10 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
                 .operands
                 .into_iter()
                 .map(|operand| {
+                    let constraint = ImmConstraint {
+                        align: operand.align,
+                        nonzero: operand.nonzero,
+                    };
                     let kind = match operand.kind.as_str() {
                         "register" => OperandKind::Reg {
                             class: operand
@@ -782,8 +805,8 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
                                 .ok_or_else(|| anyhow!("register operand without class"))?,
                             idx_width: operand.width,
                         },
-                        "bits" => OperandKind::Bits(operand.width),
-                        "int" => OperandKind::Int,
+                        "bits" => OperandKind::Bits(operand.width, constraint),
+                        "int" => OperandKind::Int(constraint),
                         kind => anyhow::bail!("unknown operand kind {kind}"),
                     };
                     Ok((operand.name, kind))
@@ -893,21 +916,20 @@ fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
         ],
     };
 
-    let imm_position: Option<(usize, u32)> =
-        instr
-            .operands
-            .iter()
-            .enumerate()
-            .find_map(|(i, (_, k))| match k {
-                OperandKind::Bits(w) => Some((i, *w)),
-                OperandKind::Int => Some((i, 64)),
-                OperandKind::Reg { .. } => None,
-            });
+    let imm_position: Option<(usize, u32, ImmConstraint)> = instr
+        .operands
+        .iter()
+        .enumerate()
+        .find_map(|(i, (_, k))| match k {
+            OperandKind::Bits(w, c) => Some((i, *w, *c)),
+            OperandKind::Int(c) => Some((i, 64, *c)),
+            OperandKind::Reg { .. } => None,
+        });
     let imm_values: Vec<u64> = match imm_position {
         None => vec![0],
-        Some((_, w)) => {
+        Some((_, w, constraint)) => {
             let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
-            if instr.writes_pc {
+            let values = if instr.writes_pc {
                 vec![4, 8, mask & !3, 1u64 << (w - 1), (1u64 << (w - 1)) - 4]
             } else {
                 vec![
@@ -918,7 +940,16 @@ fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
                     (1u64 << (w - 1)) - 1,
                     0xAAAA & mask,
                 ]
+            };
+            // A case the operand's declared constraints exclude is not a case
+            // the instruction has: it encodes nothing.
+            let mut admitted: Vec<u64> = vec![];
+            for value in values.into_iter().filter_map(|v| constraint.admitted(v)) {
+                if !admitted.contains(&value) {
+                    admitted.push(value);
+                }
             }
+            admitted
         }
     };
 
@@ -929,7 +960,7 @@ fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
             for (slot, value) in reg_positions.iter().zip(regs) {
                 case[*slot] = *value;
             }
-            if let Some((slot, _)) = imm_position {
+            if let Some((slot, _, _)) = imm_position {
                 case[slot] = *imm;
             }
             cases.push(case);
@@ -2109,9 +2140,13 @@ mod tests {
         assert!(parse_shard(["--shard".into(), "4/4".into()].into_iter()).is_err());
     }
 
-    #[test]
-    fn parses_structured_instruction_metadata() {
-        let json = r#"{
+    /// Metadata for one 32-bit `load rd, imm`, with the operand declarations
+    /// spliced in so a test can vary the constraints they carry.
+    fn load_metadata(operands: &str) -> String {
+        METADATA_TEMPLATE.replace("OPERANDS", operands)
+    }
+
+    const METADATA_TEMPLATE: &str = r#"{
           "version": 1,
           "isa": "TestIsa",
           "dialect": "test",
@@ -2130,10 +2165,7 @@ mod tests {
           }],
           "instructions": [{
             "name": "load", "writes_pc": false, "width_bits": 32,
-            "operands": [
-              {"name": "rd", "kind": "register", "class": "gpr", "width": 5},
-              {"name": "imm", "kind": "bits", "class": null, "width": 12}
-            ],
+            "operands": [OPERANDS],
             "supported": true, "write_classes": ["gpr"],
             "uses_reservation": false, "pc_source_operands": [],
             "memory_accesses": [{"kind": "load", "bytes": 4, "address": "(read_gpr st rd)", "flat_address": "(select st0_gpr rd)"}],
@@ -2146,7 +2178,14 @@ mod tests {
             "flat_execute": {"gpr": "st0_gpr", "mem": "st0_mem", "resv": "st0_resv", "resa": "st0_resa", "pc": "st0_pc"}
           }]
         }"#;
-        let inventory = parse_inventory(json).unwrap();
+
+    #[test]
+    fn parses_structured_instruction_metadata() {
+        let json = load_metadata(
+            r#"{"name": "rd", "kind": "register", "class": "gpr", "width": 5, "align": 1, "nonzero": false},
+               {"name": "imm", "kind": "bits", "class": null, "width": 12, "align": 1, "nonzero": false}"#,
+        );
+        let inventory = parse_inventory(&json).unwrap();
         let instruction = &inventory.instructions[0];
         assert_eq!(instruction.name, "load");
         assert_eq!(inventory.isa, "TestIsa");
@@ -2159,6 +2198,24 @@ mod tests {
         let words = encode_words(instruction, &[vec![5, 0]]);
         assert_eq!(words, [5 << 7 | 3]);
         assert_eq!(decode_operands(instruction, &words)[0][0], 5);
+    }
+
+    // A boundary case the operand's `#[align]`/`#[nonzero]` exclude is not a
+    // case the instruction has: the concrete pass must not send it to Sail.
+    #[test]
+    fn operand_cases_honour_immediate_constraints() {
+        let json = load_metadata(
+            r#"{"name": "rd", "kind": "register", "class": "gpr", "width": 5, "align": 1, "nonzero": false},
+               {"name": "imm", "kind": "bits", "class": null, "width": 12, "align": 4, "nonzero": true}"#,
+        );
+        let inventory = parse_inventory(&json).unwrap();
+        let spec = ISA_SPECS
+            .iter()
+            .find(|spec| spec.name == "riscv64")
+            .unwrap();
+        let cases = operand_cases(spec, &inventory.instructions[0]);
+        assert!(!cases.is_empty());
+        assert!(cases.iter().all(|case| case[1] != 0 && case[1] % 4 == 0));
     }
 
     #[test]

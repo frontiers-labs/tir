@@ -443,6 +443,7 @@ fn emit_cond_branch_rule(
     target_operand: &str,
     target_symbol: u32,
     zero_slots: &HashMap<String, (String, u16)>,
+    constraints: &HashMap<String, OperandConstraint>,
     float_classes: &HashSet<String>,
     polymorphic_classes: &HashSet<String>,
 ) -> (proc_macro2::TokenStream, proc_macro2::Ident) {
@@ -505,8 +506,12 @@ fn emit_cond_branch_rule(
         float_classes,
         polymorphic_classes,
     );
-    let imm_range_entries =
-        imm_range_spec_entries(&immediate_operand_ranges(pattern, ops, variable_symbols));
+    let imm_range_entries = imm_range_spec_entries(&immediate_operand_ranges(
+        pattern,
+        ops,
+        variable_symbols,
+        constraints,
+    ));
 
     let (emitter_ts, emit_shim) =
         emit_emitter_spec(rule_name, dialect, op_name, op_ty_ident, &emit_attrs, inst_name);

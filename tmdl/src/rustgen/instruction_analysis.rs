@@ -372,6 +372,17 @@ fn collect_symbols(
     }
 }
 
+/// An immediate operand's selection range: the pattern symbol it binds, the
+/// width and signedness its behavior gives the encoded field, and the
+/// constraints the operand declares.
+#[derive(Clone, Copy)]
+struct ImmediateRange {
+    symbol: u32,
+    width: u32,
+    signed: bool,
+    constraint: OperandConstraint,
+}
+
 /// The encoding range of each immediate operand: the field's bit width from the
 /// operand type, signedness from how the behavior consumes the symbol —
 /// `sext(imm, _)` sign-extends, everything else is unsigned — and an
@@ -381,7 +392,8 @@ fn immediate_operand_ranges(
     dag: &impl tir_graph::Dag<Node = tir_symbolic::lang::SymKind, Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>>,
     ops: &[(String, Type)],
     variable_symbols: &HashMap<String, u32>,
-) -> Vec<(u32, u32, bool)> {
+    constraints: &HashMap<String, OperandConstraint>,
+) -> Vec<ImmediateRange> {
     use tir_symbolic::lang::{SymKind as K, SymPayload};
 
     let is_symbol_leaf = |node: tir_graph::NodeId, symbol: u32| {
@@ -426,7 +438,12 @@ fn immediate_operand_ranges(
                 _ => {}
             }
         }
-        out.push((symbol, width, signed));
+        out.push(ImmediateRange {
+            symbol,
+            width,
+            signed,
+            constraint: constraints.get(op_name).copied().unwrap_or_default(),
+        });
     }
     out
 }

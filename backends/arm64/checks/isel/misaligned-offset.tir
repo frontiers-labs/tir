@@ -1,0 +1,31 @@
+// RUN: tir mc --march=armv8 --stage=isel %s | filecheck %s
+
+// The scaled load stores its byte offset shifted down by the access size, so
+// its operand is declared #[align(8)]: an offset of 6 is not a value it can
+// encode. Selection must not bind it — the unscaled form takes the load
+// instead. Before the operand carried its alignment, `ldr` bound the 6 and the
+// encoding silently dropped it to 0.
+
+module {
+  %fn_aligned = func.func @aligned(%0: !ptr.p<!i64>) -> !i64 {
+    %1 = constant {value = 8} : !i64
+    %2 = ptr.ptradd %0, %1 : !ptr.p<!i64>
+    %3 = ptr.load %2 : !i64
+    func.return %3
+  }
+
+  %fn_misaligned = func.func @misaligned(%0: !ptr.p<!i64>) -> !i64 {
+    %1 = constant {value = 6} : !i64
+    %2 = ptr.ptradd %0, %1 : !ptr.p<!i64>
+    %3 = ptr.load %2 : !i64
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "aligned"
+// CHECK: arm64.load_doubleword {rt = %{{[0-9]+}}:GPR, rn = %{{[0-9]+}}:GPR, imm = 8}
+
+// CHECK: asm.symbol {name = "misaligned"
+// CHECK-NOT: arm64.load_doubleword {
+// CHECK: arm64.load_doubleword_unscaled {rt = %{{[0-9]+}}:GPR, rn = %{{[0-9]+}}:GPR, imm = 6}
