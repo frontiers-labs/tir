@@ -1,0 +1,82 @@
+// An encoding may drop the low bits of an immediate only when the operand
+// declares the alignment that makes them zero, and the declared alignment must
+// be exactly the one the encoding relies on. An alignment is a power of two and
+// constrains an immediate, never a register. The rule reaches an operand whose
+// width is an ISA-parameter expression, and holds for a drop no alignment can
+// justify.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa WordIsa {
+    param XLEN: Integer = 32;
+}
+
+register_class GPRC for [WordIsa] {
+    param ENCODING_LEN: Integer = 3;
+    param WIDTH: Integer = self.XLEN;
+    registers { x8..x15 => { } }
+}
+
+instruction NonPowerOfTwo for [WordIsa] {
+    param MNEMONIC: String = "notpow2";
+    operands { rd: GPRC, #[align(6)] imm: bits<10> }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = zext(imm[9..2], 32); }
+    encoding { 0b000, imm[9..2], rd, 0b00 }
+}
+
+instruction AlignOnRegister for [WordIsa] {
+    param MNEMONIC: String = "alignreg";
+    operands { #[align(4)] rd: GPRC, imm: bits<10> }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = zext(imm, 32); }
+    encoding { 0b000, imm, rd }
+}
+
+instruction MissingAlign for [WordIsa] {
+    param MNEMONIC: String = "noalign";
+    operands { rd: GPRC, imm: bits<10> }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = zext(imm[9..2], 32); }
+    encoding { 0b000, imm[9..2], rd, 0b00 }
+}
+
+instruction AlignTooLarge for [WordIsa] {
+    param MNEMONIC: String = "bigalign";
+    operands { rd: GPRC, #[align(8)] imm: bits<10> }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = zext(imm[9..2], 32); }
+    encoding { 0b000, imm[9..2], rd, 0b00 }
+}
+
+instruction WideDrop for [WordIsa] {
+    param MNEMONIC: String = "widedrop";
+    operands { rd: GPRC, imm: bits<200> }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = zext(imm[199..150], 32); }
+    encoding { 0b000, imm[199..150], rd, 0b00 }
+}
+
+instruction ExprWidth for [WordIsa] {
+    param MNEMONIC: String = "exprwidth";
+    operands { rd: GPRC, imm: bits<log2Ceil(self.XLEN) + 5> }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = zext(imm[9..2], 32); }
+    encoding { 0b000, imm[9..2], rd, 0b00 }
+}
+
+instruction Gap for [WordIsa] {
+    param MNEMONIC: String = "gap";
+    operands { rd: GPRC, imm: bits<10> }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = zext(imm[9..6], 32); }
+    encoding { 0b000, imm[9..6], imm[3..0], rd, 0b000000 }
+}
+
+// CHECK-DAG: alignment 6 of operand 'imm' in 'NonPowerOfTwo' is not a power of two
+// CHECK-DAG: operand 'rd' of 'AlignOnRegister' is a register; an alignment constrains an immediate
+// CHECK-DAG: encoding of instruction 'MissingAlign' drops the low 2 bits of operand 'imm'; declare #[align(4)] on it
+// CHECK-DAG: alignment 8 of operand 'imm' in 'AlignTooLarge' exceeds the 4 justified by the 2 low bits its encoding drops
+// CHECK-DAG: encoding of instruction 'WideDrop' drops the low 150 bits of operand 'imm'; declare #[align(2^150)] on it
+// CHECK-DAG: encoding of instruction 'Gap' skips bits 4, 5 of operand 'imm'; only low bits may be dropped, and only with #[align]
+// CHECK-DAG: encoding of instruction 'ExprWidth' drops the low 2 bits of operand 'imm'; declare #[align(4)] on it

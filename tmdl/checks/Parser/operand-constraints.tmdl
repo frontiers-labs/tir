@@ -1,0 +1,45 @@
+// An operand carries the constraints the ISA puts on it: `#[align(N)]` for a
+// value the encoding may drop the low bits of, `#[nonzero]` for one the
+// encoding has no room to spell. Both sit on the operand declaration, so the
+// AST holds them next to the type.
+
+// RUN: tmdlc --action=emit-ast --text-only --output=- %s | filecheck %s
+// RUN: tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s --check-prefix=JSON
+
+isa TestIsa { param XLEN: Integer = 32; }
+
+register_class GPRC for [TestIsa] {
+    param ENCODING_LEN: Integer = 3;
+    param WIDTH: Integer = self.XLEN;
+    registers { x8..x15 => { } }
+}
+
+instruction Addi4spn for [TestIsa] {
+    param MNEMONIC: String = "c.addi4spn";
+    operands { rd: GPRC, #[align(4), nonzero] imm: bits<10> }
+    asm { "{self.MNEMONIC} {rd}, {imm}" }
+    behavior { rd = zext(imm[9..2], 32); }
+    encoding { 0b000, imm[5..4], imm[9..6], imm[2], imm[3], rd, 0b00 }
+}
+
+// CHECK:      operands: [
+// CHECK-NEXT:     Operand {
+// CHECK-NEXT:         name: "rd",
+// CHECK-NEXT:         ty: Struct(
+// CHECK-NEXT:             "GPRC",
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         align: None,
+// CHECK-NEXT:         nonzero: false,
+// CHECK:          Operand {
+// CHECK-NEXT:         name: "imm",
+// CHECK-NEXT:         ty: Bits(
+// CHECK-NEXT:             10,
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         align: Some(
+// CHECK-NEXT:             4,
+// CHECK-NEXT:         ),
+// CHECK-NEXT:         nonzero: true,
+
+// JSON:      "name": "imm",
+// JSON:      "align": 4,
+// JSON-NEXT: "nonzero": true

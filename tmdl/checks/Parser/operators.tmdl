@@ -148,24 +148,30 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rd",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rd",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs1",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs1",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs2",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs2",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [],
 // CHECK-NEXT:                 asm: Some(
@@ -286,24 +292,30 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rd",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rd",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs1",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs1",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs2",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs2",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [],
 // CHECK-NEXT:                 asm: Some(
@@ -424,18 +436,22 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rd",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rd",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs1",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs1",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [],
 // CHECK-NEXT:                 asm: Some(
@@ -529,24 +545,30 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rd",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rd",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs1",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs1",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs2",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs2",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [],
 // CHECK-NEXT:                 asm: Some(
@@ -640,7 +662,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1122..35932,
+// CHECK-NEXT:                 span: 1122..37307,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

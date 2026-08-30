@@ -85,7 +85,7 @@ instruction CAddImm4SpN for [C] {
 
     operands {
         rd: GPRC,
-        imm: bits<10>,
+        #[align(4)] imm: bits<10>,
     }
 
     encoding {
@@ -117,7 +117,7 @@ instruction CLoadWord for [C] {
     operands {
         rd: GPRC,
         rs1: GPRC,
-        imm: bits<7>,
+        #[align(4)] imm: bits<7>,
     }
 
     encoding {
@@ -151,7 +151,7 @@ instruction CLoadDouble for [C64] {
     operands {
         rd: GPRC,
         rs1: GPRC,
-        imm: bits<8>,
+        #[align(8)] imm: bits<8>,
     }
 
     encoding {
@@ -184,7 +184,7 @@ instruction CFLoadDouble for [Zcd] {
     operands {
         fd: FPR64C,
         rs1: GPRC,
-        imm: bits<8>,
+        #[align(8)] imm: bits<8>,
     }
 
     encoding {
@@ -213,7 +213,7 @@ instruction CFLoadWord for [Zcf] {
     operands {
         fd: FPR32C,
         rs1: GPRC,
-        imm: bits<7>,
+        #[align(4)] imm: bits<7>,
     }
 
     encoding {
@@ -245,7 +245,7 @@ instruction CStoreWord for [C] {
     operands {
         rs1: GPRC,
         rs2: GPRC,
-        imm: bits<7>,
+        #[align(4)] imm: bits<7>,
     }
 
     encoding {
@@ -279,7 +279,7 @@ instruction CStoreDouble for [C64] {
     operands {
         rs1: GPRC,
         rs2: GPRC,
-        imm: bits<8>,
+        #[align(8)] imm: bits<8>,
     }
 
     encoding {
@@ -312,7 +312,7 @@ instruction CFStoreDouble for [Zcd] {
     operands {
         rs1: GPRC,
         fs2: FPR64C,
-        imm: bits<8>,
+        #[align(8)] imm: bits<8>,
     }
 
     encoding {
@@ -341,7 +341,7 @@ instruction CFStoreWord for [Zcf] {
     operands {
         rs1: GPRC,
         fs2: FPR32C,
-        imm: bits<7>,
+        #[align(4)] imm: bits<7>,
     }
 
     encoding {
@@ -455,7 +455,7 @@ instruction CAddImm16Sp for [C] {
     param MNEMONIC: String = "c.addi16sp";
 
     operands {
-        imm: bits<10>,
+        #[align(16)] imm: bits<10>,
     }
 
     encoding {
@@ -628,7 +628,7 @@ template CJOp for [C] {
     param FUNCT3: bits<3>;
 
     operands {
-        imm: bits<12>,
+        #[align(2)] imm: bits<12>,
     }
 
     encoding {
@@ -678,7 +678,7 @@ template CBranchOp for [C] {
 
     operands {
         rs1: GPRC,
-        imm: bits<9>,
+        #[align(2)] imm: bits<9>,
     }
 
     encoding {
@@ -757,7 +757,7 @@ instruction CLoadWordSp for [C] {
 
     operands {
         rd: GPR,
-        imm: bits<8>,
+        #[align(4)] imm: bits<8>,
     }
 
     encoding {
@@ -789,7 +789,7 @@ instruction CLoadDoubleSp for [C64] {
 
     operands {
         rd: GPR,
-        imm: bits<9>,
+        #[align(8)] imm: bits<9>,
     }
 
     encoding {
@@ -821,7 +821,7 @@ instruction CFLoadDoubleSp for [Zcd] {
 
     operands {
         fd: FPR64,
-        imm: bits<9>,
+        #[align(8)] imm: bits<9>,
     }
 
     encoding {
@@ -849,7 +849,7 @@ instruction CFLoadWordSp for [Zcf] {
 
     operands {
         fd: FPR32,
-        imm: bits<8>,
+        #[align(4)] imm: bits<8>,
     }
 
     encoding {
@@ -1009,7 +1009,7 @@ instruction CStoreWordSp for [C] {
 
     operands {
         rs2: GPR,
-        imm: bits<8>,
+        #[align(4)] imm: bits<8>,
     }
 
     encoding {
@@ -1040,7 +1040,7 @@ instruction CStoreDoubleSp for [C64] {
 
     operands {
         rs2: GPR,
-        imm: bits<9>,
+        #[align(8)] imm: bits<9>,
     }
 
     encoding {
@@ -1071,7 +1071,7 @@ instruction CFStoreDoubleSp for [Zcd] {
 
     operands {
         fs2: FPR64,
-        imm: bits<9>,
+        #[align(8)] imm: bits<9>,
     }
 
     encoding {
@@ -1098,7 +1098,7 @@ instruction CFStoreWordSp for [Zcf] {
 
     operands {
         fs2: FPR32,
-        imm: bits<8>,
+        #[align(4)] imm: bits<8>,
     }
 
     encoding {

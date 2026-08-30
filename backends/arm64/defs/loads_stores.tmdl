@@ -719,7 +719,7 @@ instruction LoadVector128 for [AdvSIMD] {
     operands {
         vt: QPR,
         rn: GPRsp,
-        imm: bits<16>,
+        #[align(16)] imm: bits<16>,
     }
 
     encoding {
@@ -750,7 +750,7 @@ instruction StoreVector128 for [AdvSIMD] {
     operands {
         vt: QPR,
         rn: GPRsp,
-        imm: bits<16>,
+        #[align(16)] imm: bits<16>,
     }
 
     encoding {

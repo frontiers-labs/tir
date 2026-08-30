@@ -1575,21 +1575,27 @@ fn check_instruction_consistent(
         params_cache.insert(name.as_str(), (ty.clone(), value.clone()));
     }
 
-    // Build operands_cache from chain + instruction.
-    let mut operands_cache: HashMap<&str, Type> = HashMap::new();
-    for tmpl in &chain {
-        for (name, ty) in &tmpl.operands {
-            operands_cache.insert(name.as_str(), ty.clone());
+    // Operands in declaration order, each name resolving to its closest
+    // declaration: the instruction's overrides the template's.
+    let mut operands: Vec<&ast::Operand> = Vec::new();
+    for operand in chain
+        .iter()
+        .flat_map(|t| &t.operands)
+        .chain(&instruction.operands)
+    {
+        match operands.iter_mut().find(|held| held.name == operand.name) {
+            Some(held) => *held = operand,
+            None => operands.push(operand),
         }
     }
-    for (name, ty) in &instruction.operands {
-        operands_cache.insert(name.as_str(), ty.clone());
-    }
+
+    diags.extend(check_operand_constraints(instruction, &operands, file_name));
 
     // `bits<expr>` widths must constant-fold against the ISA parameters.
     let isa_params = resolve_isa_param_values(instruction, item_cache);
-    for (name, ty) in &operands_cache {
-        if let Type::BitsExpr(expr) = ty
+    for operand in &operands {
+        let name = &operand.name;
+        if let Type::BitsExpr(expr) = &operand.ty
             && eval_bits_width(expr, &isa_params).is_none()
         {
             diags.push((
@@ -1652,7 +1658,8 @@ fn check_instruction_consistent(
             instruction,
             effective_encoding,
             &params_cache,
-            &operands_cache,
+            &operands,
+            &isa_params,
             crate::encoding::encoding_unit(&isa_params),
             file_name,
         ));
@@ -1687,10 +1694,10 @@ fn check_instruction_consistent(
         file_name,
     ));
 
-    let reserved: HashSet<String> = operands_cache
-        .keys()
-        .chain(params_cache.keys())
-        .map(|name| name.to_string())
+    let reserved: HashSet<String> = operands
+        .iter()
+        .map(|operand| operand.name.clone())
+        .chain(params_cache.keys().map(|name| name.to_string()))
         .chain(
             item_cache
                 .iter()
@@ -2275,17 +2282,20 @@ fn check_encoding(
     instruction: &ast::Instruction,
     encoding: &[ast::EncodingField],
     params_cache: &HashMap<&str, (Type, Option<ast::Expr>)>,
-    operands_cache: &HashMap<&str, Type>,
+    operands: &[&ast::Operand],
+    isa_params: &HashMap<String, i64>,
     unit: Option<u16>,
     file_name: &str,
 ) -> Vec<(String, Diag)> {
     let mut diags = vec![];
 
     let declared_width = |name: &str| -> Option<u16> {
-        let ty = params_cache
-            .get(name)
-            .map(|(ty, _)| ty)
-            .or_else(|| operands_cache.get(name))?;
+        let ty = params_cache.get(name).map(|(ty, _)| ty).or_else(|| {
+            operands
+                .iter()
+                .find(|operand| operand.name == name)
+                .map(|operand| &operand.ty)
+        })?;
         match ty {
             Type::Bits(width) => Some(*width),
             _ => None,
@@ -2327,6 +2337,81 @@ fn check_encoding(
         }
     }
 
+    for operand in operands {
+        let width = match &operand.ty {
+            Type::Bits(width) => *width,
+            Type::BitsExpr(expr) => match eval_bits_width(expr, isa_params) {
+                Some(width) => width,
+                None => continue,
+            },
+            _ => continue,
+        };
+        let Some(covered) = covered_bits(encoding, &operand.name, width) else {
+            continue;
+        };
+        let dropped = covered.iter().take_while(|bit| !**bit).count() as u32;
+
+        // A gap between spelled bits is truncation nothing can justify.
+        let top = covered.iter().rposition(|bit| *bit).unwrap_or_default();
+        let skipped: Vec<String> = (dropped as usize..top)
+            .filter(|bit| !covered[*bit])
+            .map(|bit| bit.to_string())
+            .collect();
+        if !skipped.is_empty() {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!(
+                        "encoding of instruction '{}' skips bits {} of operand '{}'; \
+                         only low bits may be dropped, and only with #[align]",
+                        instruction.name,
+                        skipped.join(", "),
+                        operand.name
+                    ),
+                ),
+            ));
+        }
+
+        // Dropping the low `dropped` bits is sound exactly when the operand is
+        // declared a multiple of `2^dropped`. An alignment is a `u32`, so a
+        // wider drop can never be justified.
+        let justified = if dropped < u32::BITS {
+            format!("{}", 1u32 << dropped)
+        } else {
+            format!("2^{dropped}")
+        };
+        let bits = if dropped == 1 { "bit" } else { "bits" };
+        match operand.align {
+            // Already reported by `check_operand_constraints`.
+            Some(align) if !align.is_power_of_two() => {}
+            Some(align) if align.trailing_zeros() > dropped => diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!(
+                        "alignment {align} of operand '{}' in '{}' exceeds the {justified} \
+                         justified by the {dropped} low {bits} its encoding drops",
+                        operand.name, instruction.name
+                    ),
+                ),
+            )),
+            Some(align) if align.trailing_zeros() == dropped => {}
+            _ if dropped > 0 => diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!(
+                        "encoding of instruction '{}' drops the low {dropped} {bits} of \
+                         operand '{}'; declare #[align({justified})] on it",
+                        instruction.name, operand.name
+                    ),
+                ),
+            )),
+            _ => {}
+        }
+    }
+
     diags.extend(crate::encoding::check_encoding_units(
         encoding,
         unit,
@@ -2335,5 +2420,70 @@ fn check_encoding(
         file_name,
     ));
 
+    diags
+}
+
+/// Which bits of `name` the encoding spells, low bit first, or `None` when the
+/// encoding does not carry the operand at all.
+fn covered_bits(encoding: &[ast::EncodingField], name: &str, width: u16) -> Option<Vec<bool>> {
+    let mut covered = vec![false; usize::from(width)];
+    let mut carried = false;
+    for field in encoding {
+        if encoding_value_name(&field.value) != Some(name) {
+            continue;
+        }
+        carried = true;
+        let (lo, hi) = match &field.value {
+            ast::Expr::Slice(slc) => (slc.lo, slc.hi),
+            ast::Expr::IndexAccess(idx) => (idx.index, idx.index),
+            _ => (0, width.saturating_sub(1)),
+        };
+        for bit in lo..=hi {
+            // A slice reaching past the operand is reported on its own.
+            if let Some(bit) = covered.get_mut(usize::from(bit)) {
+                *bit = true;
+            }
+        }
+    }
+    carried.then_some(covered)
+}
+
+/// `#[align(N)]` is a power of two and constrains an immediate: a register
+/// operand takes whatever values its class holds, not a multiple of anything.
+fn check_operand_constraints(
+    instruction: &ast::Instruction,
+    operands: &[&ast::Operand],
+    file_name: &str,
+) -> Vec<(String, Diag)> {
+    let mut diags = vec![];
+    for operand in operands {
+        let Some(align) = operand.align else {
+            continue;
+        };
+        if !align.is_power_of_two() {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!(
+                        "alignment {align} of operand '{}' in '{}' is not a power of two",
+                        operand.name, instruction.name
+                    ),
+                ),
+            ));
+        }
+        if matches!(operand.ty, Type::Struct(_)) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!(
+                        "operand '{}' of '{}' is a register; an alignment constrains an immediate",
+                        operand.name, instruction.name
+                    ),
+                ),
+            ));
+        }
+    }
     diags
 }

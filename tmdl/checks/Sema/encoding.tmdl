@@ -18,7 +18,7 @@ register_class GPR for [Arch] {
 instruction ImmSplice for [Arch] {
     param MNEMONIC: String = "immsplice";
     param OPCODE: bits<7> = 0b0010011;
-    operands { imm: bits<13> }
+    operands { #[align(2)] imm: bits<13> }
     encoding { imm[12..5], imm[4..1], imm[12], OPCODE }
     asm { "{self.MNEMONIC} {imm}" }
     behavior { imm = imm; }

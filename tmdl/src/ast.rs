@@ -201,6 +201,18 @@ pub struct Isa {
     pub span: Span,
 }
 
+/// One entry of an `operands { ... }` block: a name, a type, and the
+/// constraints the ISA puts on the values it may take. `#[align(N)]` says the
+/// value is a multiple of `N`, which is what lets an encoding drop its low
+/// bits; `#[nonzero]` says zero is not encodable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Operand {
+    pub name: String,
+    pub ty: Type,
+    pub align: Option<u32>,
+    pub nonzero: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Template {
     pub doc: Option<String>,
@@ -208,7 +220,7 @@ pub struct Template {
     pub for_isas: Vec<String>,
     pub parent_template: Option<String>,
     pub params: StableHashMap<String, (Type, Option<Expr>)>,
-    pub operands: Vec<(String, Type)>,
+    pub operands: Vec<Operand>,
     pub encoding: Vec<EncodingField>,
     pub asm: Option<Expr>,
     /// Scheduling-class membership shared by derived instructions that declare no
@@ -225,7 +237,7 @@ pub struct Instruction {
     pub for_isas: Vec<String>,
     pub parent_template: Option<String>,
     pub params: StableHashMap<String, (Type, Option<Expr>)>,
-    pub operands: Vec<(String, Type)>,
+    pub operands: Vec<Operand>,
     pub encoding: Vec<EncodingField>,
     pub asm: Option<Expr>,
     pub behavior: Expr,

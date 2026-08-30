@@ -1482,8 +1482,18 @@
       "description": "Named instruction operand.",
       "type": "object",
       "properties": {
+        "align": {
+          "description": "Declared `#[align(N)]`: the value is a multiple of `N`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
         "name": {
           "type": "string"
+        },
+        "nonzero": {
+          "description": "Declared `#[nonzero]`: zero is not an encodable value.",
+          "type": "boolean"
         },
         "type": {
           "$ref": "#/$defs/Type"

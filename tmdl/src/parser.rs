@@ -715,7 +715,7 @@ where
 
 enum TemplateOrInstBody {
     Param((String, (Type, Option<ast::Expr>))),
-    Operands(Vec<(String, Type)>),
+    Operands(Vec<ast::Operand>),
     Encoding(Vec<EncodingField>),
     Asm(Expr),
     Behavior(Expr),
@@ -1551,12 +1551,21 @@ where
 }
 
 fn instruction_operands<'src, I>()
--> impl Parser<'src, I, Vec<(String, Type)>, extra::Err<Rich<'src, Token<'src>, Span>>>
+-> impl Parser<'src, I, Vec<ast::Operand>, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     let ident = select! { Token::Identifier(i) => i.to_string() };
-    let single_operand = ident.then_ignore(just(Token::Colon)).then(type_());
+    let single_operand = operand_attributes()
+        .then(ident)
+        .then_ignore(just(Token::Colon))
+        .then(type_())
+        .map(|((attrs, name), ty)| ast::Operand {
+            name,
+            ty,
+            align: attrs.align,
+            nonzero: attrs.nonzero,
+        });
     just(Token::KwOperands)
         .ignored()
         .then(
@@ -1567,6 +1576,58 @@ where
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
         .map(|((), operands)| operands)
+}
+
+#[derive(Default)]
+struct OperandAttributes {
+    align: Option<u32>,
+    nonzero: bool,
+}
+
+#[derive(Clone)]
+enum OperandAttribute {
+    Align(u32),
+    Nonzero,
+}
+
+/// The `#[align(N), nonzero]` group preceding an operand.
+fn operand_attributes<'src, I>()
+-> impl Parser<'src, I, OperandAttributes, extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let align = just(Token::Identifier("align"))
+        .ignore_then(
+            select! { Token::Number(n) => n }
+                .try_map(|n, span| {
+                    parse_int_lit(n)
+                        .and_then(|v| u32::try_from(v).ok())
+                        .ok_or_else(|| Rich::custom(span, format!("invalid alignment '{n}'")))
+                })
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .map(OperandAttribute::Align);
+    let nonzero = just(Token::Identifier("nonzero")).to(OperandAttribute::Nonzero);
+
+    just(Token::Pound)
+        .ignore_then(
+            choice((align, nonzero))
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+        )
+        .or_not()
+        .map(|group| {
+            let mut attrs = OperandAttributes::default();
+            for item in group.into_iter().flatten() {
+                match item {
+                    OperandAttribute::Align(align) => attrs.align = Some(align),
+                    OperandAttribute::Nonzero => attrs.nonzero = true,
+                }
+            }
+            attrs
+        })
 }
 
 fn isa_requirements<'src, I>()

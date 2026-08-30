@@ -518,7 +518,7 @@ macro tmpl_loadstore_immh {
             operands {
                 rt: $cls,
                 rn: GPRsp,
-                imm: bits<13>,
+                #[align(2)] imm: bits<13>,
             }
 
             encoding {
@@ -556,7 +556,7 @@ macro tmpl_loadstore_scaled_word {
             operands {
                 rt: $cls,
                 rn: GPRsp,
-                imm: bits<14>,
+                #[align(4)] imm: bits<14>,
             }
 
             encoding {
@@ -592,7 +592,7 @@ template LoadStoreImmUnsignedD for [ARMv8A64] {
     operands {
         rt: GPR,
         rn: GPRsp,
-        imm: bits<15>,
+        #[align(8)] imm: bits<15>,
     }
 
     encoding {
@@ -612,7 +612,7 @@ template LoadStoreImmUnsignedD for [ARMv8A64] {
 }
 
 macro tmpl_loadstore_float_scaled {
-    ( $name:ident, $cls:ident, $imm_width:literal, $lo:literal, $hi:literal, size = $size:literal ) => {
+    ( $name:ident, $cls:ident, $imm_width:literal, $lo:literal, $hi:literal, align = $align:literal, size = $size:literal ) => {
         template $name for [ARMv8A64] {
             schedule { units = [WriteLoad]; }
             param MNEMONIC: String;
@@ -621,7 +621,7 @@ macro tmpl_loadstore_float_scaled {
             operands {
                 ft: $cls,
                 rn: GPRsp,
-                imm: bits<$imm_width>,
+                #[align($align)] imm: bits<$imm_width>,
             }
 
             encoding {
@@ -642,8 +642,8 @@ macro tmpl_loadstore_float_scaled {
     };
 }
 
-tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedD, FPR64, 15, 3, 14, size = 0b11)
-tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedS, FPR32, 14, 2, 13, size = 0b10)
+tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedD, FPR64, 15, 3, 14, align = 8, size = 0b11)
+tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedS, FPR32, 14, 2, 13, align = 4, size = 0b10)
 
 template BranchImm for [ARMv8A64] {
     schedule { units = [WriteIALU]; }
@@ -1205,7 +1205,7 @@ template LoadStorePair for [ARMv8A64] {
         rt: GPR,
         rt2: GPR,
         rn: GPRsp,
-        imm: bits<10>,
+        #[align(8)] imm: bits<10>,
     }
 
     encoding {
@@ -1306,7 +1306,7 @@ template LoadStorePairWriteback for [ARMv8A64] {
         rt: GPR,
         rt2: GPR,
         rn: GPRsp,
-        imm: bits<10>,
+        #[align(8)] imm: bits<10>,
     }
 
     encoding {

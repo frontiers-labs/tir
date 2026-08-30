@@ -131,12 +131,8 @@ pub fn resolve_operands_for_instruction<'a>(
     resolve_template_chain(inst, item_cache)
         .into_iter()
         .flat_map(|t| t.operands.iter())
-        .map(|(name, ty)| (name.clone(), ty.clone()))
-        .chain(
-            inst.operands
-                .iter()
-                .map(|(name, ty)| (name.clone(), ty.clone())),
-        )
+        .chain(inst.operands.iter())
+        .map(|op| (op.name.clone(), op.ty.clone()))
         .collect()
 }
 

@@ -247,7 +247,7 @@ template BType for [RV32I, RV64I] {
     operands {
         rs1: GPR,
         rs2: GPR,
-        imm: bits<13>,
+        #[align(2)] imm: bits<13>,
     }
 
     encoding {
@@ -350,7 +350,7 @@ template JType for [RV32I, RV64I] {
 
     operands {
         rd: GPR,
-        imm: bits<21>,
+        #[align(2)] imm: bits<21>,
     }
 
     encoding {

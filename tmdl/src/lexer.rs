@@ -41,6 +41,8 @@ pub enum Token<'a> {
     Tilde,
     /// `$`
     Dollar,
+    /// `#`
+    Pound,
 
     /// `.`
     Dot,
@@ -207,6 +209,7 @@ pub(crate) fn lexer<'src>()
         just('&').to(Token::Ampersand),
         just('^').to(Token::Hat),
         just('$').to(Token::Dollar),
+        just('#').to(Token::Pound),
     ));
 
     let ident = text::ascii::ident().map(|ident: &str| match ident {
@@ -304,6 +307,7 @@ impl<'a> fmt::Display for Token<'a> {
             Token::Bang => f.write_char('!'),
             Token::Tilde => f.write_char('~'),
             Token::Dollar => f.write_char('$'),
+            Token::Pound => f.write_char('#'),
             Token::LBracket => f.write_str("["),
             Token::RBracket => f.write_str("]"),
             Token::LParen => f.write_str("("),

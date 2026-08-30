@@ -186,24 +186,30 @@
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs1",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs1",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rs2",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rs2",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "rd",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "rd",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "GPR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [
 // CHECK-NEXT:                     EncodingField {

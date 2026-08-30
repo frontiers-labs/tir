@@ -137,18 +137,22 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "vd",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "vd",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "VR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "vs2",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "vs2",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "VR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [],
 // CHECK-NEXT:                 asm: Some(
@@ -286,18 +290,22 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "vd",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "vd",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "VR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "vs2",
-// CHECK-NEXT:                         Struct(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "vs2",
+// CHECK-NEXT:                         ty: Struct(
 // CHECK-NEXT:                             "VR",
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [],
 // CHECK-NEXT:                 asm: Some(
@@ -426,15 +434,17 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "a",
-// CHECK-NEXT:                         Bits(
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "a",
+// CHECK-NEXT:                         ty: Bits(
 // CHECK-NEXT:                             6,
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
-// CHECK-NEXT:                     (
-// CHECK-NEXT:                         "b",
-// CHECK-NEXT:                         BitsExpr(
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
+// CHECK-NEXT:                     Operand {
+// CHECK-NEXT:                         name: "b",
+// CHECK-NEXT:                         ty: BitsExpr(
 // CHECK-NEXT:                             Call(
 // CHECK-NEXT:                                 Call {
 // CHECK-NEXT:                                     callee: BuiltinFunction(
@@ -458,7 +468,9 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                                 },
 // CHECK-NEXT:                             ),
 // CHECK-NEXT:                         ),
-// CHECK-NEXT:                     ),
+// CHECK-NEXT:                         align: None,
+// CHECK-NEXT:                         nonzero: false,
+// CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
 // CHECK-NEXT:                 encoding: [],
 // CHECK-NEXT:                 asm: Some(
@@ -505,7 +517,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 931..29578,
+// CHECK-NEXT:                 span: 931..30328,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

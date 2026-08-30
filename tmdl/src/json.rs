@@ -383,14 +383,23 @@ struct Operand {
     name: String,
     #[serde(rename = "type")]
     ty: Type,
+    /// Declared `#[align(N)]`: the value is a multiple of `N`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "u32")]
+    align: Option<u32>,
+    /// Declared `#[nonzero]`: zero is not an encodable value.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    nonzero: bool,
 }
 
-fn operands(values: &[(String, AstType)]) -> Vec<Operand> {
+fn operands(values: &[ast::Operand]) -> Vec<Operand> {
     values
         .iter()
-        .map(|(name, ty)| Operand {
-            name: name.clone(),
-            ty: Type::from(ty),
+        .map(|operand| Operand {
+            name: operand.name.clone(),
+            ty: Type::from(&operand.ty),
+            align: operand.align,
+            nonzero: operand.nonzero,
         })
         .collect()
 }

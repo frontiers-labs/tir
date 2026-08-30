@@ -36,7 +36,10 @@ pub fn resolve_encoding_widths(files: &mut [ast::File]) -> Vec<Diag> {
                 ast::Item::Instruction(i) => (&i.name, &i.operands, &i.params, &mut i.encoding),
                 _ => continue,
             };
-            let operands: HashMap<String, Type> = operands.iter().cloned().collect();
+            let operands: HashMap<String, Type> = operands
+                .iter()
+                .map(|op| (op.name.clone(), op.ty.clone()))
+                .collect();
             let params: HashMap<String, Type> = params
                 .iter()
                 .map(|(name, (ty, _))| (name.clone(), ty.clone()))
