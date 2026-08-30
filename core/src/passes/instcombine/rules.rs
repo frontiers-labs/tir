@@ -312,6 +312,7 @@ fn const_fold(template: &Node) -> tir_relational::Rule<Node> {
             },
             HeadOp::Union(0, arity + 1),
         ],
+        post_saturation: false,
     }
 }
 
@@ -389,6 +390,7 @@ fn decided_gamma(arity: usize) -> tir_relational::Rule<Node> {
             offset: 2,
             index: Scalars::ARM,
         }],
+        post_saturation: false,
     }
 }
 
@@ -518,6 +520,7 @@ fn cmp_complement(
             },
             HeadOp::Union(3, 4),
         ],
+        post_saturation: false,
     }
 }
 

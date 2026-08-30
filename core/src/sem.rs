@@ -31,7 +31,7 @@ pub(crate) mod rewrites;
 pub(crate) mod theory;
 pub use egraph::SemEGraph;
 pub use node::{IrOp, Kind, Prov, SemNode, SemPayload, template_node};
-pub use rewrites::{IselRewrite, SaturationLimits};
+pub use rewrites::{SaturationLimits, Theory};
 
 /// The post-order graph core builds semantic expressions into: the shared
 /// [`tir_symbolic::sem::SemGraph`] annotated with [`NodeMeta`], so a node can

@@ -602,6 +602,7 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
             args: smallvec![1],
             into: 2,
         }],
+        post_saturation: false,
     };
     // `add(x, y)` with a `neg(x)` anywhere in the graph proves the two equal —
     // nonsense as algebra, and exactly the shape of a law relating two spellings.
@@ -626,6 +627,7 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
             ],
         )),
         head: vec![HeadOp::Union(0, 3)],
+        post_saturation: false,
     };
     assert!(relate.plan.unbounded());
 

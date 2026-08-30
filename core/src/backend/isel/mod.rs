@@ -41,7 +41,7 @@ pub use rules::{
     CapabilityKind, EmitAttr, EmitSpec, PatternRef, RegOperandSpec, ResultRegSpec, RuleSpec,
     build_rules, emit_with,
 };
-pub use tir::sem::{IselRewrite, SaturationLimits, SemEGraph, SemNode, SemPayload};
+pub use tir::sem::{SaturationLimits, SemEGraph, SemNode, SemPayload, Theory};
 pub use tir_symbolic::egraph::EMatch;
 
 use builder::{AuxSlot, SemDagBuilder};
@@ -973,7 +973,7 @@ pub struct InstructionSelectPass {
     /// The target's own data layout, applying where the IR declares none.
     default_layout: Option<crate::attributes::AttributeValue>,
     /// Semantic invariants the program e-graph is saturated with before covering.
-    rewrites: Vec<IselRewrite>,
+    theory: Theory,
     /// Instructions that define a register implicitly; selection introduces one
     /// ahead of any op whose `implicit_uses` name a matching register.
     /// Target hooks for terminator lowering; branch selection is off without them
@@ -1242,7 +1242,7 @@ impl InstructionSelectPass {
             })
             .collect();
 
-        let rewrites = discover_rewrites();
+        let theory = discover_rewrites();
         let constant_materializer_ranges: Vec<_> = compiled_patterns
             .iter()
             .filter_map(CompiledIselPattern::constant_materializer_range)
@@ -1262,7 +1262,7 @@ impl InstructionSelectPass {
             constant_materializer_ranges,
             float_constant_materializer_widths,
             default_layout: None,
-            rewrites,
+            theory,
             branch_emitters: None,
             cost_model: Box::new(DefaultIselCostModel),
             op_lowerings: vec![],
@@ -1283,8 +1283,8 @@ impl InstructionSelectPass {
     }
 
     /// Install semantic invariants used to saturate the program e-graph.
-    pub fn with_rewrites(mut self, rewrites: Vec<IselRewrite>) -> Self {
-        self.rewrites = rewrites;
+    pub fn with_theory(mut self, theory: Theory) -> Self {
+        self.theory = theory;
         self
     }
 
@@ -1297,14 +1297,12 @@ impl InstructionSelectPass {
 
     /// Install additional semantic invariants.
     pub fn with_axioms(mut self, file: &str) -> Self {
-        let mut materializes_constants = false;
         for form in axioms::axiom_forms(file) {
             let axiom = axioms::parse_axiom(&form)
                 .unwrap_or_else(|e| panic!("invalid axiom `{form}`: {e}"));
-            materializes_constants |= axiom.materializes_constants();
-            self.rewrites.push(axiom.compile());
+            self.theory.push(axiom);
         }
-        if materializes_constants && !self.constant_materializer_ranges.is_empty() {
+        if self.theory.materializes_constants() && !self.constant_materializer_ranges.is_empty() {
             self.float_constant_materializer_widths.extend(
                 self.rules
                     .iter()
@@ -1582,7 +1580,7 @@ impl InstructionSelectPass {
             roots_by_op.entry(op_id).or_insert(class);
         }
 
-        rewrites::saturate(context, &mut egraph, &self.rewrites, Default::default());
+        rewrites::saturate(context, &mut egraph, &self.theory, Default::default());
 
         crate::memstats::egraph_census("isel", &egraph);
 
@@ -1784,7 +1782,7 @@ impl InstructionSelectPass {
                 rewrites::saturate_scope(
                     context,
                     &mut fs.egraph,
-                    &self.rewrites,
+                    &self.theory,
                     Default::default(),
                     changed.roots.clone(),
                 );

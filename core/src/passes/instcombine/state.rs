@@ -102,6 +102,7 @@ pub(crate) fn pointer_derivation() -> tir_relational::Rule<Node> {
                 Box::new(Expr::Scalar(Derivation::STEP)),
             ),
         }],
+        post_saturation: false,
     }
 }
 
@@ -209,6 +210,7 @@ pub(crate) fn forward_load() -> tir_relational::Rule<Node> {
             nots: Vec::new(),
         }),
         head: vec![HeadOp::Union(0, 6 + STORE_VALUE as u32)],
+        post_saturation: false,
     }
 }
 
@@ -556,5 +558,6 @@ pub(crate) fn eliminate_dead_store() -> tir_relational::Rule<Node> {
             nots,
         }),
         head: vec![HeadOp::Union(state, before)],
+        post_saturation: false,
     }
 }

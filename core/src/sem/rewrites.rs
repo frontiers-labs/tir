@@ -6,33 +6,55 @@
 
 use std::collections::HashSet;
 
-use tir_symbolic::egraph::{Delta, EMatch, ENode, Id, Pattern, RoundStats, Timer, trace_enabled};
+use tir_relational::Rule;
+use tir_symbolic::egraph::{Delta, ENode, Id, RoundStats, Timer, trace_enabled};
 
+use super::SymKind;
+use super::axioms::{Axiom, Folding, Interpretation};
 use super::egraph::SemEGraph;
 use super::node::SemNode;
 use super::theory::axioms;
 use crate::Context;
 
-/// The right-hand side of an [`IselRewrite`]: given the e-graph and a match, assert
-/// the proven equivalence (typically by building nodes and unioning the result with
-/// the match root).
-pub type IselApplier = dyn Fn(&Context, &mut SemEGraph, &EMatch<u32>) + Send + Sync;
+/// The axioms a target selects with and the rules they compile to. The axioms
+/// stay because a proof obligation names the one it belongs to: `TIR_VERIFY_AXIOMS`
+/// discharges each width instantiation as it fires.
+#[derive(Default)]
+pub struct Theory {
+    pub rules: Vec<Rule<SemNode>>,
+    axioms: Vec<Axiom>,
+    /// The pure ops the heads fold over constants; an extern id names one.
+    folds: Vec<SymKind>,
+}
 
-/// An imperative algebraic rewrite: e-match `searcher`, then call `apply` for each
-/// match to assert the proven equivalence.
-pub struct IselRewrite {
-    pub name: String,
-    pub searcher: Pattern<SemNode, u32>,
-    pub apply: Box<IselApplier>,
-    /// Apply once after iterative saturation reaches a fixpoint.
-    pub post_saturation: bool,
-    /// Whether a saturation round may narrow this rule's roots to the change
-    /// frontier. Sound only when `apply` reads no class the `searcher` did not
-    /// bind, so that the pattern's height bounds everything the rule looks at.
-    /// [`Axiom::compile`](super::theory::Axiom) sets it, because it generates an
-    /// applier that only ever reads `m.binding(..)`; a hand-written one must
-    /// leave it false and be searched everywhere, every round.
-    pub cone_bounded: bool,
+impl Theory {
+    /// Add an axiom's rules: the reading that folds an operand the graph turns
+    /// out to have made constant, where that is a different rule at all, and the
+    /// one that does not.
+    pub fn push(&mut self, axiom: Axiom) {
+        let index = self.axioms.len();
+        if let Some((folding, true)) = axiom.compile(index, &mut self.folds, Folding::Assume) {
+            self.rules.push(folding);
+        }
+        if let Some((plain, _)) = axiom.compile(index, &mut self.folds, Folding::Never) {
+            self.rules.push(plain);
+        }
+        self.axioms.push(axiom);
+    }
+
+    /// Add a rule that is not an axiom — a target's own bridge, or a test's.
+    pub fn push_rule(&mut self, rule: Rule<SemNode>) {
+        self.rules.push(rule);
+    }
+
+    /// Whether any axiom decomposes a wide constant in place.
+    pub fn materializes_constants(&self) -> bool {
+        self.axioms.iter().any(Axiom::materializes_constants)
+    }
+
+    fn interpretation<'a>(&'a self, context: &'a Context) -> Interpretation<'a> {
+        Interpretation::new(context, &self.axioms, &self.folds)
+    }
 }
 
 /// Saturation budget: a cap on iterations and on e-class count.
@@ -51,45 +73,42 @@ impl Default for SaturationLimits {
     }
 }
 
-/// Saturate `eg` with `rewrites`. Each iteration searches every rewrite against the
-/// same snapshot, applies all matches, then rebuilds — so a node born this iteration
-/// is only visible to the next. Stops at a fixpoint (an iteration that changes
-/// neither the class nor the node count) or once a limit is reached.
-pub fn saturate(
-    ctx: &Context,
-    eg: &mut SemEGraph,
-    rewrites: &[IselRewrite],
-    limits: SaturationLimits,
-) {
-    saturate_impl(ctx, eg, rewrites, limits, None);
+/// Saturate `eg` with `theory`. Each iteration searches every rule against the
+/// same snapshot, applies all matches, then rebuilds — so a node born this
+/// iteration is only visible to the next. Stops at a fixpoint (an iteration that
+/// changes neither the class nor the node count nor a fact) or once a limit is
+/// reached.
+pub fn saturate(ctx: &Context, eg: &mut SemEGraph, theory: &Theory, limits: SaturationLimits) {
+    saturate_impl(ctx, eg, theory, limits, None);
 }
 
 /// Saturate an open scope's assumption over `roots`, the base graph already being
 /// saturated globally. `roots` are searched verbatim — the caller has already
 /// narrowed them to the classes the scope changed, and a class it left alone is
-/// at the base fixpoint. Each round re-narrows, since applying a rewrite mints
+/// at the base fixpoint. Each round re-narrows, since applying a rule mints
 /// classes and those are changed by construction.
 pub fn saturate_scope(
     ctx: &Context,
     eg: &mut SemEGraph,
-    rewrites: &[IselRewrite],
+    theory: &Theory,
     limits: SaturationLimits,
     roots: Vec<Id>,
 ) {
-    saturate_impl(ctx, eg, rewrites, limits, Some(roots));
+    saturate_impl(ctx, eg, theory, limits, Some(roots));
 }
 
 fn saturate_impl(
     ctx: &Context,
     eg: &mut SemEGraph,
-    rewrites: &[IselRewrite],
+    theory: &Theory,
     limits: SaturationLimits,
     mut roots: Option<Vec<Id>>,
 ) {
     // Round 0 searches everything the caller asked for; from there on only the
-    // classes the previous round changed, and their parents up to each pattern's
+    // classes the previous round changed, and their parents up to each rule's
     // height, can hold a match the round before did not already apply.
     let timer = Timer::start();
+    let externs = theory.interpretation(ctx);
     eg.take_changed();
     let mut delta: Option<Delta> = None;
     // Cleared by every exit that reached a fixpoint; a stop on a limit leaves it
@@ -99,18 +118,14 @@ fn saturate_impl(
     for _ in 0..limits.max_iterations {
         let mut stats = RoundStats::start(eg, delta.as_ref());
         let mut matches = Vec::new();
-        for (index, rw) in rewrites.iter().enumerate() {
-            if rw.post_saturation {
+        for (index, rule) in theory.rules.iter().enumerate() {
+            if rule.post_saturation {
                 continue;
             }
-            let frontier = delta.as_mut().filter(|_| rw.cone_bounded);
-            let round = rw.searcher.round_roots(eg, roots.as_deref(), frontier);
+            let round = round_roots(eg, rule, roots.as_deref(), delta.as_mut());
             stats.searched(round.len(), delta.as_ref());
-            // No `only_new` here: every `IselRewrite` applier may decline — on a
-            // width guard, an immediate's range, a missing constant binding —
-            // and what stops it declining is the content of a class the pattern
-            // bound, which no e-node the match binds records.
-            for m in rw.searcher.search_roots(eg, round) {
+            let narrow = delta.is_some() && !rule.plan.unbounded();
+            for m in rule.plan.search(eg, round, &|_, _| true, narrow, &externs) {
                 matches.push((index, m));
             }
         }
@@ -123,9 +138,13 @@ fn saturate_impl(
         let before = (eg.num_classes(), eg.total_size(), eg.stats().raises);
         for (index, m) in &matches {
             if trace_enabled() {
-                eprintln!("M {} {}", rewrites[*index].name, eg.find(m.root).index());
+                eprintln!(
+                    "M {} {}",
+                    theory.rules[*index].name,
+                    eg.find(m.root).index()
+                );
             }
-            stats.apply(eg, |eg| (rewrites[*index].apply)(ctx, eg, m));
+            stats.apply(eg, |eg| eg.apply_head(&theory.rules[*index].head, m));
         }
         eg.rebuild();
         stats.finish(eg);
@@ -154,24 +173,44 @@ fn saturate_impl(
     }
     eg.rebuild();
 
-    let matches: Vec<_> = rewrites
+    let matches: Vec<_> = theory
+        .rules
         .iter()
         .enumerate()
-        .filter(|(_, rewrite)| rewrite.post_saturation)
-        .flat_map(|(index, rewrite)| {
-            let roots = rewrite.searcher.round_roots(eg, roots.as_deref(), None);
-            rewrite
-                .searcher
-                .search_roots(eg, roots)
+        .filter(|(_, rule)| rule.post_saturation)
+        .flat_map(|(index, rule)| {
+            let roots = round_roots(eg, rule, roots.as_deref(), None);
+            rule.plan
+                .search(eg, roots, &|_, _| true, false, &externs)
                 .into_iter()
                 .map(move |matched| (index, matched))
         })
         .collect();
     for (index, matched) in &matches {
-        (rewrites[*index].apply)(ctx, eg, matched);
+        eg.apply_head(&theory.rules[*index].head, matched);
     }
     eg.rebuild();
     timer.finish();
+}
+
+/// The classes a round searches `rule` at: what the caller narrowed the
+/// saturation to, else everything the rule's root atom can match, and then only
+/// the frontier at the rule's height — for a rule the change log can speak for.
+fn round_roots(
+    eg: &SemEGraph,
+    rule: &Rule<SemNode>,
+    scope: Option<&[Id]>,
+    delta: Option<&mut Delta>,
+) -> Vec<Id> {
+    let mut roots = match scope {
+        Some(scope) => scope.to_vec(),
+        None => rule.plan.roots(eg),
+    };
+    if let Some(delta) = delta.filter(|_| !rule.plan.unbounded()) {
+        let frontier = delta.at(eg, rule.plan.height());
+        roots.retain(|&root| frontier.binary_search(&eg.find(root)).is_ok());
+    }
+    roots
 }
 
 /// Discovery order is deterministic (DFS from `roots` in the given order):
@@ -195,6 +234,10 @@ pub(crate) fn reachable_roots(eg: &SemEGraph, roots: impl IntoIterator<Item = Id
 }
 
 /// The target-independent semantic invariants every rule set gets.
-pub(crate) fn discover_rewrites() -> Vec<IselRewrite> {
-    axioms().into_iter().map(|axiom| axiom.compile()).collect()
+pub fn discover_rewrites() -> Theory {
+    let mut theory = Theory::default();
+    for axiom in axioms() {
+        theory.push(axiom);
+    }
+    theory
 }

@@ -39,18 +39,20 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
+use smallvec::{SmallVec, smallvec};
 use tir_adt::APInt;
-use tir_symbolic::egraph::{EMatch, Id, Pattern, Var};
+use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, HeadOp, LabelFill, Plan, Query, Source};
+use tir_symbolic::egraph::Id;
 
+use crate::builtin::{FloatType, IntegerType};
 use crate::sem::{
     EquivalenceOracle, SemExpr, SemGraph, SmtOracle, SymKind, SymPayload, Value, con, execute, op,
     op_kind, parse, sym,
 };
-use crate::{Context, graph::NodeId};
+use crate::{Context, TypeId, graph::NodeId};
 
-use super::egraph::{SemEGraph, class_int_binding, class_width, is_comparison};
-use super::node::{SemNode, template_node};
-use super::rewrites::IselRewrite;
+use super::egraph::{is_comparison, type_width};
+use super::node::{SemNode, field, template_node};
 
 /// Whether the SMT obligations behind the semantic invariants and the guarded
 /// relaxations are discharged. They validate the target description, they are not
@@ -70,20 +72,6 @@ enum WidthBinding {
 }
 
 impl WidthBinding {
-    /// Bind or check against the actual class width; false on mismatch.
-    fn bind(&self, actual: u64, widths: &mut [Option<u64>]) -> bool {
-        match self {
-            WidthBinding::Lit(l) => *l == actual,
-            WidthBinding::Name(i) => match widths[*i] {
-                Some(bound) => bound == actual,
-                None => {
-                    widths[*i] = Some(actual);
-                    true
-                }
-            },
-        }
-    }
-
     fn value(&self, widths: &[u64]) -> u64 {
         match self {
             WidthBinding::Lit(l) => *l,
@@ -117,24 +105,9 @@ impl WidthExpr {
     }
 }
 
-enum Guard {
+enum Guard_ {
     Lt(WidthExpr, WidthExpr),
     Eq(WidthExpr, WidthExpr),
-}
-
-impl Guard {
-    fn holds(&self, widths: &[u64]) -> bool {
-        match self {
-            Guard::Lt(a, b) => matches!(
-                (a.eval(widths), b.eval(widths)),
-                (Some(a), Some(b)) if a < b
-            ),
-            Guard::Eq(a, b) => matches!(
-                (a.eval(widths), b.eval(widths)),
-                (Some(a), Some(b)) if a == b
-            ),
-        }
-    }
 }
 
 /// A predicate over a matched constant's *value* (not its width): whether the
@@ -233,7 +206,7 @@ struct Realization<'a> {
     theta_port: Option<ThetaPort>,
 }
 
-pub(crate) struct Axiom {
+pub struct Axiom {
     pub(crate) name: String,
     /// Width names in declaration order; a resolved `Vec<u64>` in this order is
     /// the proof-memo key.
@@ -246,7 +219,7 @@ pub(crate) struct Axiom {
     /// symbols (the identity holds for any value); the applier checks constness.
     const_vars: Vec<usize>,
     root_width: WidthBinding,
-    guards: Vec<Guard>,
+    guards: Vec<Guard_>,
     /// Value predicates gating on a matched constant's magnitude (see
     /// [`ValueGuard`]); only meaningful for `materialize` axioms.
     value_guards: Vec<ValueGuard>,
@@ -402,8 +375,8 @@ pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
                             let a = parse_width_expr(a, &width_names)?;
                             let b = parse_width_expr(b, &width_names)?;
                             guards.push(match cmp.as_str() {
-                                "<" => Guard::Lt(a, b),
-                                "=" => Guard::Eq(a, b),
+                                "<" => Guard_::Lt(a, b),
+                                "=" => Guard_::Eq(a, b),
                                 other => return Err(format!("unknown guard `{other}`")),
                             });
                         }
@@ -696,100 +669,38 @@ impl Axiom {
         self.materialize
     }
 
-    /// Compile into an [`IselRewrite`]. Debug builds prove each width
-    /// instantiation before asserting the invariant.
-    pub(crate) fn compile(self) -> IselRewrite {
-        let mut searcher = Pattern::<SemNode, u32>::new();
-        let mut holes: HashMap<String, Id> = HashMap::new();
-        let mut const_matches: Vec<(Id, WidthExpr)> = Vec::new();
-        compile_lhs(
-            &self.lhs,
-            &mut searcher,
-            &mut holes,
-            &mut const_matches,
-            &mut 0,
-        );
-
-        let const_var_ids: Vec<Id> = self
-            .const_vars
-            .iter()
-            .map(|&i| holes[&self.vars[i].0])
-            .collect();
-
-        let name = format!("axiom-{}", self.name);
-        let post_saturation = self.post_saturation;
-        IselRewrite {
-            name,
-            searcher,
-            post_saturation,
-            // The applier below reads classes only through `m.binding(..)`.
-            cone_bounded: true,
-            apply: Box::new(move |ctx: &Context, eg: &mut SemEGraph, m: &EMatch<u32>| {
-                let Some(widths) = self.resolve_widths(ctx, eg, m, &holes) else {
-                    return;
-                };
-                if !self.guards.iter().all(|g| g.holds(&widths)) {
-                    return;
-                }
-                // Constant-operand vars fire only on the immediate form.
-                if const_var_ids
-                    .iter()
-                    .any(|&id| class_int_binding(eg, m.binding(id)).is_none())
-                {
-                    return;
-                }
-                for vg in &self.value_guards {
-                    match class_int_binding(eg, m.binding(holes[&self.vars[vg.var].0])) {
-                        Some(v)
-                            if (if vg.unsigned {
-                                fits_unsigned(&v, vg.bits)
-                            } else {
-                                fits_signed(&v, vg.bits)
-                            }) == !vg.negated => {}
-                        _ => return,
-                    }
-                }
-                for (id, expr) in &const_matches {
-                    let Some(expected) = expr.eval(&widths) else {
-                        return;
-                    };
-                    match class_int_binding(eg, m.binding(*id)) {
-                        Some(bound) if bound.to_u64() == expected => {}
-                        _ => return,
-                    }
-                }
-                if verify_axioms() {
-                    self.verify(&widths);
-                }
-                if let Some(id) = self.instantiate(ctx, &self.rhs, eg, m, &holes, &widths) {
-                    eg.union(m.root, id);
-                }
-            }),
-        }
-    }
-
-    /// Resolve every width name from the matched classes; `None` if a needed
-    /// class width is unknown or a binding conflicts.
-    fn resolve_widths(
+    /// Compile into a rule: the left-hand side as atoms, the declared widths and
+    /// value predicates as guards, the right-hand side as a head. Debug builds
+    /// prove each width instantiation before asserting the invariant, through
+    /// the [`call::VERIFY`] guard.
+    pub(crate) fn compile(
         &self,
-        ctx: &Context,
-        eg: &SemEGraph,
-        m: &EMatch<u32>,
-        holes: &HashMap<String, Id>,
-    ) -> Option<Vec<u64>> {
-        let mut widths = vec![None; self.width_names.len()];
-        let root_width = class_width(ctx, eg, m.root)?;
-        if !self.root_width.bind(root_width as u64, &mut widths) {
-            return None;
-        }
-        for (var, binding) in &self.vars {
-            let class = m.binding(holes[var]);
-            let actual = class_width(ctx, eg, class)?;
-            if !binding.bind(actual as u64, &mut widths) {
-                return None;
-            }
-        }
-        widths.into_iter().collect()
+        index: usize,
+        folds: &mut Vec<SymKind>,
+        assume: Folding,
+    ) -> Option<(tir_relational::Rule<SemNode>, bool)> {
+        let mut low = Lowering::new(self, folds, assume);
+        low.left(self);
+        low.widths(self);
+        low.predicates(self, index);
+        let head = low.right(self)?;
+        let assumed = low.assumed;
+        Some((
+            tir_relational::Rule {
+                name: format!("axiom-{}", self.name),
+                plan: Plan::compile(Query {
+                    vars: low.slots.vars,
+                    scalars: low.slots.scalars,
+                    root: 0,
+                    atoms: low.atoms,
+                    guards: low.guards,
+                    nots: Vec::new(),
+                }),
+                head,
+                post_saturation: self.post_saturation,
+            },
+            assumed,
+        ))
     }
 
     /// Discharge this instantiation's proof obligation, panicking on an unsound
@@ -924,169 +835,6 @@ impl Axiom {
             AxNode::Keep(inner) => self.realize(inner, g, r),
         }
     }
-
-    /// Build the RHS in the e-graph from a match's bindings.
-    fn instantiate(
-        &self,
-        ctx: &Context,
-        node: &AxNode,
-        eg: &mut SemEGraph,
-        m: &EMatch<u32>,
-        holes: &HashMap<String, Id>,
-        widths: &[u64],
-    ) -> Option<Id> {
-        Some(match node {
-            AxNode::Root => m.root,
-            AxNode::ConstMatch(..) => unreachable!("const-match holes are lhs-only"),
-            AxNode::Hole(name, _) => m.binding(holes[name]),
-            AxNode::Const(e, width) => {
-                let width = match width {
-                    ConstWidth::Register => 64,
-                    ConstWidth::Fixed(w) => *w,
-                };
-                eg.add(template_node(
-                    SymKind::Constant,
-                    Some(SymPayload::Int(APInt::new(width, e.eval(widths)?))),
-                    None,
-                ))
-            }
-            // A kept materialize node stays structural (an emitted instruction),
-            // typed at the root width so its shift/add tiles the class.
-            AxNode::Keep(inner) => {
-                let AxNode::Node(kind, node_children) = &**inner else {
-                    unreachable!("keep wraps a node");
-                };
-                let children = node_children
-                    .iter()
-                    .map(|c| self.instantiate(ctx, c, eg, m, holes, widths))
-                    .collect::<Option<Vec<_>>>()?;
-                let width = self.root_width.value(widths) as u32;
-                let ty = tir::builtin::IntegerType::new(ctx, width);
-                let mut n = template_node(*kind, None, Some(ty));
-                n.children = children;
-                eg.add(n)
-            }
-            AxNode::Node(kind, children) => {
-                // An unmarked subtree of a materialize axiom is evaluated purely
-                // numerically at the *root width* — the width the identity was
-                // proved at — and becomes one *typed* constant class: a clean
-                // recursion target the axiom can decompose again, with no
-                // back-reference to the wide root (which would make the cover's
-                // class graph cyclic) and no junk classes for the deconstruction
-                // intermediates. The value is stored sign-extended the same way
-                // program constants are interned. Only the kept reconstruction
-                // nodes survive as instructions.
-                if self.materialize {
-                    let width = self.root_width.value(widths) as u32;
-                    let ty = tir::builtin::IntegerType::new(ctx, width);
-                    let value = self.eval_at(node, eg, m, holes, widths, width)?;
-                    return Some(eg.add(template_node(
-                        SymKind::Constant,
-                        Some(SymPayload::Int(APInt::new_signed(64, value))),
-                        Some(ty),
-                    )));
-                }
-                let children = children
-                    .iter()
-                    .map(|c| self.instantiate(ctx, c, eg, m, holes, widths))
-                    .collect::<Option<Vec<_>>>()?;
-                fold_constant_op(*kind, &children, eg).unwrap_or_else(|| {
-                    // Conversions carry the result type named by their format or
-                    // width operands; every other node is register-wide integer
-                    // (comparisons a single bit).
-                    let ty = if matches!(*kind, SymKind::SIToFP | SymKind::UIToFP) {
-                        conversion_float_type(ctx, eg, &children)
-                    } else if matches!(
-                        *kind,
-                        SymKind::FPToSI | SymKind::FPToUI | SymKind::ZExt | SymKind::SExt
-                    ) {
-                        conversion_integer_type(ctx, eg, &children)
-                    } else if *kind == SymKind::Extract {
-                        extract_integer_type(ctx, eg, &children, self.register_width(widths))
-                    } else {
-                        let width = if is_comparison(*kind) {
-                            1
-                        } else {
-                            self.register_width(widths)
-                        };
-                        tir::builtin::IntegerType::new(ctx, width)
-                    };
-                    let mut n = template_node(*kind, None, Some(ty));
-                    n.children = children;
-                    eg.add(n)
-                })
-            }
-        })
-    }
-
-    /// Numerically evaluate an unmarked materialize-RHS subtree at `width` (see
-    /// [`fold_values_at`]); `None` if a leaf is not a bound constant.
-    fn eval_at(
-        &self,
-        node: &AxNode,
-        eg: &SemEGraph,
-        m: &EMatch<u32>,
-        holes: &HashMap<String, Id>,
-        widths: &[u64],
-        width: u32,
-    ) -> Option<i64> {
-        match node {
-            AxNode::Hole(name, _) => {
-                class_int_binding(eg, m.binding(holes[name])).map(|v| v.to_i64())
-            }
-            AxNode::Const(e, _) | AxNode::ConstMatch(e) => e.eval(widths).map(|v| v as i64),
-            AxNode::Node(kind, children) => {
-                let values = children
-                    .iter()
-                    .map(|c| self.eval_at(c, eg, m, holes, widths, width))
-                    .collect::<Option<Vec<_>>>()?;
-                fold_values_at(*kind, &values, width)
-            }
-            AxNode::Root | AxNode::Keep(..) => None,
-        }
-    }
-}
-
-/// The IEEE result type of a conversion node from its exponent/mantissa operand
-/// classes; falls back to double when either is not a bound constant.
-fn conversion_float_type(ctx: &Context, eg: &SemEGraph, children: &[Id]) -> tir::TypeId {
-    let format = |slot: usize| {
-        children
-            .get(slot)
-            .and_then(|&c| class_int_binding(eg, c))
-            .map(|v| v.to_u64() as u32)
-    };
-    let exp = format(1).unwrap_or(11);
-    let mant = format(2).unwrap_or(52);
-    tir::builtin::FloatType::new(ctx, exp, mant)
-}
-
-fn conversion_integer_type(ctx: &Context, eg: &SemEGraph, children: &[Id]) -> tir::TypeId {
-    let width = children
-        .get(1)
-        .and_then(|&c| class_int_binding(eg, c))
-        .map(|v| v.to_u64() as u32)
-        .unwrap_or(64);
-    tir::builtin::IntegerType::new(ctx, width)
-}
-
-fn extract_integer_type(
-    ctx: &Context,
-    eg: &SemEGraph,
-    children: &[Id],
-    fallback: u32,
-) -> tir::TypeId {
-    let bound = |slot: usize| {
-        children
-            .get(slot)
-            .and_then(|&c| class_int_binding(eg, c))
-            .map(|v| v.to_u64() as u32)
-    };
-    let width = match (bound(1), bound(2)) {
-        (Some(hi), Some(lo)) if hi >= lo => hi - lo + 1,
-        _ => fallback,
-    };
-    tir::builtin::IntegerType::new(ctx, width)
 }
 
 /// Execute a pure op over `(value, width)` constant operands via a throwaway
@@ -1116,76 +864,793 @@ fn fold_values_at(kind: SymKind, values: &[i64], width: u32) -> Option<i64> {
     Some(sign_extend(result.to_u64(), width))
 }
 
-/// Fold a pure op whose operands are all constants into a single constant, so an
-/// immediate consumer can bind the result — e.g. `Sub(x, c) -> Add(x, neg(c))`
-/// yields `neg(const)`, which folds to the negated immediate `addi` reads.
-/// `None` when an operand is not constant or the kind is not a foldable pure op.
-fn fold_constant_op(kind: SymKind, children: &[Id], eg: &mut SemEGraph) -> Option<Id> {
-    use SymKind::*;
-    if !matches!(
-        kind,
-        Add | Sub
-            | Mul
-            | And
-            | Or
-            | Xor
-            | ShiftLeft
-            | ShiftRightLogic
-            | ShiftRightArithmetic
-            | Neg
-            | Not
-    ) {
-        return None;
-    }
-    let operands: Vec<(u64, u32)> = children
-        .iter()
-        .map(|&c| class_int_binding(eg, c).map(|v| (v.to_u64(), v.width())))
-        .collect::<Option<Vec<_>>>()?;
-    let result = execute_fold(kind, &operands)?;
-    Some(eg.add(template_node(
-        SymKind::Constant,
-        Some(SymPayload::Int(result)),
-        None,
-    )))
+/// Where the next class variable and the next scalar of a lowered axiom come
+/// from.
+#[derive(Default)]
+struct Slots {
+    vars: u32,
+    scalars: u32,
 }
 
-/// Lower the LHS into a search pattern: holes become capture vars (one per
-/// name), nodes become untyped templates. The LHS root is added last, so it is
-/// the pattern root.
-fn compile_lhs(
-    node: &AxNode,
-    searcher: &mut Pattern<SemNode, u32>,
-    holes: &mut HashMap<String, Id>,
-    const_matches: &mut Vec<(Id, WidthExpr)>,
-    next_symbol: &mut u32,
-) -> Id {
-    match node {
-        AxNode::Hole(name, _) => {
-            if let Some(&id) = holes.get(name) {
-                return id;
+impl Slots {
+    fn var(&mut self) -> u32 {
+        self.vars += 1;
+        self.vars - 1
+    }
+
+    fn scalar(&mut self) -> u32 {
+        self.scalars += 1;
+        self.scalars - 1
+    }
+}
+
+/// The host functions an axiom's guards and head call. Every one reads the
+/// `Context` — a type's width, a type for a width, the value of a pure op over
+/// constants — and none reads the e-graph, which is what keeps a match's
+/// existence a function of its atoms.
+pub(crate) mod call {
+    pub(crate) const WIDTH_OF: u32 = 0;
+    pub(crate) const INT_TYPE: u32 = 1;
+    pub(crate) const FLOAT_TYPE: u32 = 2;
+    pub(crate) const EXTRACT_TYPE: u32 = 3;
+    pub(crate) const MAX: u32 = 4;
+    pub(crate) const FITS: u32 = 5;
+    /// One per pure op a head folds over constants, so the id names the kind.
+    pub(crate) const FOLD: u32 = 8;
+    /// One per pure op the folding rules execute, by the same table as
+    /// [`FOLD`], but over `(value, width)` operands rather than a common width.
+    pub(crate) const EXECUTE: u32 = 512;
+    /// One per axiom, so a proof obligation names the axiom it belongs to.
+    pub(crate) const VERIFY: u32 = 1024;
+}
+
+/// The `Context` reads an axiom's guards and head make: a type's width, the type
+/// for a width, the value of a pure op over constants, and — under
+/// `TIR_VERIFY_AXIOMS` — the proof obligation itself. None of them reads the
+/// e-graph, which is what keeps a match's existence a function of its atoms.
+pub struct Interpretation<'a> {
+    context: &'a Context,
+    axioms: &'a [Axiom],
+    folds: &'a [SymKind],
+}
+
+impl<'a> Interpretation<'a> {
+    pub fn new(context: &'a Context, axioms: &'a [Axiom], folds: &'a [SymKind]) -> Self {
+        Self {
+            context,
+            axioms,
+            folds,
+        }
+    }
+}
+
+impl tir_relational::Externs<SemNode> for Interpretation<'_> {
+    fn call(&self, id: u32, _terms: &[&SemNode], args: &[u64], out: &mut [u64]) -> bool {
+        match id {
+            call::WIDTH_OF => match type_width(self.context, TypeId::from_number(args[0] as u32)) {
+                Some(width) => {
+                    out[0] = width as u64;
+                    true
+                }
+                None => false,
+            },
+            call::INT_TYPE => {
+                let width = args[0] as u32;
+                if !(1..=64).contains(&width) {
+                    return false;
+                }
+                out[0] = IntegerType::new(self.context, width).number() as u64;
+                true
             }
-            let id = searcher.var(Var::Symbol(*next_symbol));
-            *next_symbol += 1;
-            holes.insert(name.clone(), id);
-            id
+            call::FLOAT_TYPE => {
+                out[0] =
+                    FloatType::new(self.context, args[0] as u32, args[1] as u32).number() as u64;
+                true
+            }
+            call::EXTRACT_TYPE => {
+                let (hi, lo, known, fallback) =
+                    (args[0] as u32, args[1] as u32, args[2] != 0, args[3] as u32);
+                let width = if known && hi >= lo {
+                    hi - lo + 1
+                } else {
+                    fallback
+                };
+                if !(1..=64).contains(&width) {
+                    return false;
+                }
+                out[0] = IntegerType::new(self.context, width).number() as u64;
+                true
+            }
+            call::MAX => {
+                out[0] = args.iter().copied().max().unwrap_or(0);
+                true
+            }
+            call::FITS => {
+                let value = APInt::new(args[1] as u32, args[0]);
+                let (bits, unsigned, negated) = (args[2] as u32, args[3] != 0, args[4] != 0);
+                let fits = if unsigned {
+                    fits_unsigned(&value, bits)
+                } else {
+                    fits_signed(&value, bits)
+                };
+                fits == !negated
+            }
+            proof if proof >= call::VERIFY => {
+                if verify_axioms() {
+                    self.axioms[(proof - call::VERIFY) as usize].verify(args);
+                }
+                true
+            }
+            execute if execute >= call::EXECUTE => {
+                let kind = self.folds[(execute - call::EXECUTE) as usize];
+                let operands: Vec<(u64, u32)> = args
+                    .chunks(2)
+                    .map(|pair| (pair[0], pair[1] as u32))
+                    .collect();
+                match execute_fold(kind, &operands) {
+                    Some(value) => {
+                        out[0] = value.to_u64();
+                        out[1] = value.width() as u64;
+                        true
+                    }
+                    None => false,
+                }
+            }
+            fold => {
+                let kind = self.folds[(fold - call::FOLD) as usize];
+                let width = args[0] as u32;
+                let values: Vec<i64> = args[1..].iter().map(|&v| v as i64).collect();
+                match fold_values_at(kind, &values, width) {
+                    Some(value) => {
+                        out[0] = value as u64;
+                        true
+                    }
+                    None => false,
+                }
+            }
         }
-        AxNode::ConstMatch(e) => {
-            let id = searcher.var(Var::Symbol(*next_symbol));
-            *next_symbol += 1;
-            const_matches.push((id, e.clone()));
-            id
+    }
+}
+
+/// A right-hand side node as the head builds it: the class variable it lands in,
+/// and — where the axiom's own text determines it — the scalar holding its value.
+#[derive(Clone, Copy)]
+struct Built {
+    var: u32,
+    /// Scalars holding the value and width of the constant this node is, where
+    /// the axiom's own text says it is one.
+    value: Option<(u32, u32)>,
+    /// Whether the node is an operand the graph may turn out to have made a
+    /// constant, so a fold may ask for it to be one.
+    assumable: bool,
+}
+
+/// One axiom's left-hand side as atoms and guards, and the numbering the head
+/// reads back.
+struct Lowering<'a> {
+    slots: Slots,
+    atoms: Vec<Atom<SemNode>>,
+    guards: Vec<Guard>,
+    /// Class variable per capture name, so a name written twice is one variable.
+    holes: HashMap<String, u32>,
+    /// Class variable per declared var, in declaration order.
+    declared: Vec<u32>,
+    /// Scalars holding each declared const var's value and width.
+    const_values: HashMap<usize, (u32, u32)>,
+    /// Scalar per width name.
+    widths: Vec<u32>,
+    /// Scalar holding the register width, once something asks for it.
+    register: Option<u32>,
+    /// The pure ops any head folds over constants, shared across the theory so
+    /// one extern id names one kind.
+    folds: &'a mut Vec<SymKind>,
+    /// Whether an operand the axiom does not declare constant may be assumed to
+    /// be one, at the cost of an atom that requires it.
+    assume: Folding,
+    /// Whether that assumption was taken, so a caller can tell the two readings
+    /// apart.
+    assumed: bool,
+    /// Value and width scalars per class already assumed constant.
+    assumptions: HashMap<u32, (u32, u32)>,
+}
+
+/// Whether a head may fold an operand the axiom's own text does not say is a
+/// constant.
+///
+/// An axiom's right-hand side is one shape; what its operands turn out to be is
+/// the graph's business. `sext(x, w)` becomes a pair of shifts, and where `x` is
+/// a constant those shifts *are* a constant — the one an immediate consumer
+/// binds. Both readings are true, so both are rules: one requires the operand to
+/// be known constant and folds, one does not and does not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Folding {
+    Never,
+    Assume,
+}
+
+impl<'a> Lowering<'a> {
+    fn new(axiom: &Axiom, folds: &'a mut Vec<SymKind>, assume: Folding) -> Self {
+        let mut slots = Slots::default();
+        // Variable zero is the matched root, as every plan's is.
+        slots.var();
+        Self {
+            slots,
+            atoms: Vec::new(),
+            guards: Vec::new(),
+            holes: HashMap::new(),
+            declared: vec![u32::MAX; axiom.vars.len()],
+            const_values: HashMap::new(),
+            widths: Vec::new(),
+            register: None,
+            folds,
+            assume,
+            assumed: false,
+            assumptions: HashMap::new(),
         }
-        AxNode::Node(kind, children) => {
-            let children: Vec<Id> = children
-                .iter()
-                .map(|c| compile_lhs(c, searcher, holes, const_matches, next_symbol))
-                .collect();
-            let mut n = template_node(*kind, None, None);
-            n.children = children;
-            searcher.add(n)
+    }
+
+    /// The left-hand side, root atom first and then a depth-first walk, which is
+    /// the order the goal stack popped its nodes in and so the order the ids a
+    /// saturation mints still depend on.
+    fn left(&mut self, axiom: &Axiom) {
+        match &axiom.lhs {
+            // A materialize axiom's left-hand side is a bare constant var: it
+            // matches every constant class so a wide one can be decomposed where
+            // it stands.
+            AxNode::Hole(name, var) => {
+                self.holes.insert(name.clone(), 0);
+                if let Some(index) = var {
+                    self.declared[*index] = 0;
+                }
+            }
+            node => self.node(node, 0),
         }
-        AxNode::Root | AxNode::Const(..) | AxNode::Keep(..) => {
-            unreachable!("rejected when parsing the lhs")
+    }
+
+    fn node(&mut self, node: &AxNode, class: u32) {
+        let AxNode::Node(kind, children) = node else {
+            unreachable!("only a template node is matched")
+        };
+        let args: Vec<u32> = children.iter().map(|child| self.child(child)).collect();
+        let mut template = template_node(*kind, None, None);
+        template.children = args.iter().map(|&var| Id::from_raw(var)).collect();
+        self.atoms.push(Atom::Node {
+            template,
+            args: args.iter().copied().collect(),
+            class,
+            row: None,
+        });
+        for (child, &var) in children.iter().zip(&args) {
+            match child {
+                AxNode::Node(..) => self.node(child, var),
+                AxNode::ConstMatch(expr) => self.const_match(var, expr),
+                _ => {}
+            }
         }
+    }
+
+    /// The variable a child binds, reusing the one a capture name already has.
+    fn child(&mut self, node: &AxNode) -> u32 {
+        match node {
+            AxNode::Hole(name, var) => {
+                if let Some(&existing) = self.holes.get(name) {
+                    return existing;
+                }
+                let fresh = self.slots.var();
+                self.holes.insert(name.clone(), fresh);
+                if let Some(index) = var {
+                    self.declared[*index] = fresh;
+                }
+                fresh
+            }
+            _ => self.slots.var(),
+        }
+    }
+
+    /// An operand that must be the constant `expr` evaluates to.
+    fn const_match(&mut self, class: u32, expr: &WidthExpr) {
+        let (value, _) = self.constant(class);
+        let want = self.slots.scalar();
+        self.guards.push(Guard::Let {
+            out: want,
+            value: width_expr(expr, &self.widths),
+        });
+        self.guards
+            .push(Guard::Cmp(Cmp::Eq, Expr::Scalar(value), Expr::Scalar(want)));
+    }
+
+    /// Bind `class`'s constant, its value and its width.
+    fn constant(&mut self, class: u32) -> (u32, u32) {
+        let label = self.slots.scalar();
+        let value = self.slots.scalar();
+        let width = self.slots.scalar();
+        self.atoms.push(Atom::Fact {
+            column: ColumnId::Const,
+            key: class,
+            value: label,
+        });
+        self.guards.push(Guard::Read {
+            term: Source::Label(label),
+            field: field::INT_VALUE,
+            out: value,
+        });
+        self.guards.push(Guard::Read {
+            term: Source::Label(label),
+            field: field::INT_WIDTH,
+            out: width,
+        });
+        (value, width)
+    }
+
+    /// Resolve every width name from the matched classes, root first and then the
+    /// declared vars in order — a name met twice is a comparison, not a rebinding.
+    fn widths(&mut self, axiom: &Axiom) {
+        self.widths = vec![u32::MAX; axiom.width_names.len()];
+        let root = self.width_of(0);
+        self.bind(&axiom.root_width, root);
+        for (index, (_, binding)) in axiom.vars.iter().enumerate() {
+            let width = self.width_of(self.declared[index]);
+            self.bind(binding, width);
+        }
+    }
+
+    /// The width of the type `class`'s terms carry.
+    fn width_of(&mut self, class: u32) -> u32 {
+        let ty = self.slots.scalar();
+        let width = self.slots.scalar();
+        self.atoms.push(Atom::Fact {
+            column: ColumnId::Type,
+            key: class,
+            value: ty,
+        });
+        self.guards.push(Guard::Extern {
+            call: call::WIDTH_OF,
+            terms: SmallVec::new(),
+            args: smallvec![Expr::Scalar(ty)],
+            out: smallvec![width],
+        });
+        width
+    }
+
+    fn bind(&mut self, binding: &WidthBinding, actual: u32) {
+        match binding {
+            WidthBinding::Lit(literal) => self.guards.push(Guard::Cmp(
+                Cmp::Eq,
+                Expr::Scalar(actual),
+                Expr::Lit(*literal as i64),
+            )),
+            WidthBinding::Name(index) => match self.widths[*index] {
+                u32::MAX => self.widths[*index] = actual,
+                bound => self.guards.push(Guard::Cmp(
+                    Cmp::Eq,
+                    Expr::Scalar(actual),
+                    Expr::Scalar(bound),
+                )),
+            },
+        }
+    }
+
+    /// The declared guards, the constant-operand requirement, the value
+    /// predicates, and the proof obligation.
+    fn predicates(&mut self, axiom: &Axiom, index: usize) {
+        for guard in &axiom.guards {
+            let (cmp, a, b) = match guard {
+                Guard_::Lt(a, b) => (Cmp::Lt, a, b),
+                Guard_::Eq(a, b) => (Cmp::Eq, a, b),
+            };
+            let widths = self.widths.clone();
+            self.guards.push(Guard::Cmp(
+                cmp,
+                width_expr(a, &widths),
+                width_expr(b, &widths),
+            ));
+        }
+        // Constant-operand vars fire only on the immediate form.
+        for &var in &axiom.const_vars {
+            let class = self.declared[var];
+            let constant = self.constant(class);
+            self.const_values.insert(var, constant);
+        }
+        for predicate in &axiom.value_guards {
+            let class = self.declared[predicate.var];
+            let (value, _) = *self
+                .const_values
+                .get(&predicate.var)
+                .expect("a value predicate names a constant var");
+            let width = self.width_of(class);
+            self.guards.push(Guard::Extern {
+                call: call::FITS,
+                terms: SmallVec::new(),
+                args: smallvec![
+                    Expr::Scalar(value),
+                    Expr::Scalar(width),
+                    Expr::Lit(predicate.bits as i64),
+                    Expr::Lit(i64::from(predicate.unsigned)),
+                    Expr::Lit(i64::from(predicate.negated)),
+                ],
+                out: SmallVec::new(),
+            });
+        }
+        // The obligation is a debug-build check on the target description, not
+        // an input to selection, so it is only in the rule when it is asked for.
+        if verify_axioms() {
+            self.guards.push(Guard::Extern {
+                call: call::VERIFY + index as u32,
+                terms: SmallVec::new(),
+                args: self.widths.iter().map(|&w| Expr::Scalar(w)).collect(),
+                out: SmallVec::new(),
+            });
+        }
+    }
+
+    /// The width the identity was proved at: the widest of the declared vars and
+    /// the root.
+    fn register_width(&mut self, axiom: &Axiom) -> u32 {
+        if let Some(width) = self.register {
+            return width;
+        }
+        let widths = self.widths.clone();
+        let args: SmallVec<[Expr; 4]> = axiom
+            .vars
+            .iter()
+            .map(|(_, binding)| binding_expr(binding, &widths))
+            .chain([binding_expr(&axiom.root_width, &widths)])
+            .collect();
+        let out = self.slots.scalar();
+        self.guards.push(Guard::Extern {
+            call: call::MAX,
+            terms: SmallVec::new(),
+            args,
+            out: smallvec![out],
+        });
+        self.register = Some(out);
+        out
+    }
+
+    fn right(&mut self, axiom: &Axiom) -> Option<Vec<HeadOp<SemNode>>> {
+        let mut head = Vec::new();
+        let built = self.build(axiom, &axiom.rhs, &mut head)?;
+        head.push(HeadOp::Union(0, built.var));
+        Some(head)
+    }
+
+    fn build(
+        &mut self,
+        axiom: &Axiom,
+        node: &AxNode,
+        head: &mut Vec<HeadOp<SemNode>>,
+    ) -> Option<Built> {
+        Some(match node {
+            AxNode::Root => Built {
+                var: 0,
+                value: None,
+                assumable: false,
+            },
+            AxNode::ConstMatch(..) => unreachable!("const-match holes are lhs-only"),
+            AxNode::Hole(name, var) => {
+                let class = self.holes[name];
+                Built {
+                    var: class,
+                    value: var.and_then(|index| self.const_values.get(&index).copied()),
+                    assumable: true,
+                }
+            }
+            AxNode::Const(expr, width) => {
+                let value = self.slots.scalar();
+                let widths = self.widths.clone();
+                self.guards.push(Guard::Let {
+                    out: value,
+                    value: width_expr(expr, &widths),
+                });
+                let bits = match width {
+                    ConstWidth::Register => 64,
+                    ConstWidth::Fixed(width) => *width,
+                };
+                let width = self.constant_width(bits);
+                let var = self.literal(value, width, None, head);
+                Built {
+                    var,
+                    value: Some((value, width)),
+                    assumable: false,
+                }
+            }
+            // A kept materialize node stays structural — an emitted instruction —
+            // typed at the root width so its shift and add tile the class.
+            AxNode::Keep(inner) => {
+                let AxNode::Node(kind, children) = &**inner else {
+                    unreachable!("keep wraps a node")
+                };
+                let args: Vec<u32> = children
+                    .iter()
+                    .map(|child| self.build(axiom, child, head).map(|built| built.var))
+                    .collect::<Option<_>>()?;
+                let widths = self.widths.clone();
+                let width = self.let_expr(binding_expr(&axiom.root_width, &widths));
+                let ty = self.int_type(width);
+                Built {
+                    var: self.insert(*kind, &args, Some(ty), head),
+                    value: None,
+                    assumable: false,
+                }
+            }
+            AxNode::Node(kind, children) => {
+                // An unmarked subtree of a materialize axiom is evaluated purely
+                // numerically at the root width — the width the identity was
+                // proved at — and becomes one typed constant class: a clean
+                // recursion target with no back-reference to the wide root and no
+                // junk classes for the deconstruction intermediates.
+                if axiom.materialize {
+                    let widths = self.widths.clone();
+                    let width = self.let_expr(binding_expr(&axiom.root_width, &widths));
+                    let values: SmallVec<[Expr; 4]> = children
+                        .iter()
+                        .map(|child| {
+                            self.build(axiom, child, &mut Vec::new())
+                                .and_then(|built| built.value)
+                                .map(|(value, _)| Expr::Scalar(value))
+                        })
+                        .collect::<Option<_>>()?;
+                    let value = self.fold(*kind, width, values);
+                    let ty = self.int_type(width);
+                    let sixty_four = self.let_expr(Expr::Lit(64));
+                    return Some(Built {
+                        var: self.literal(value, sixty_four, Some(ty), head),
+                        value: Some((value, sixty_four)),
+                        assumable: false,
+                    });
+                }
+                let built: Vec<Built> = children
+                    .iter()
+                    .map(|child| self.build(axiom, child, head))
+                    .collect::<Option<_>>()?;
+                // A pure op the axiom's own text says is over constants folds
+                // where the head builds it, so an immediate consumer binds the
+                // result: `sub(x, c)` becomes `add(x, neg(c))`, and `neg(c)` is
+                // the negated immediate an `addi` reads. A `keep` node is exempt
+                // by construction — it is an instruction, not a value.
+                if let Some(folded) = self.fold_operands(*kind, &built) {
+                    let (value, width) = folded;
+                    return Some(Built {
+                        var: self.literal(value, width, None, head),
+                        value: Some(folded),
+                        assumable: false,
+                    });
+                }
+                let args: Vec<u32> = built.iter().map(|built| built.var).collect();
+                let ty = self.result_type(axiom, *kind, &built);
+                Built {
+                    var: self.insert(*kind, &args, Some(ty), head),
+                    value: None,
+                    assumable: false,
+                }
+            }
+        })
+    }
+
+    /// The value and width a pure op takes over operands the axiom's text
+    /// already says are constants; `None` when it is not such an op, or an
+    /// operand is not one.
+    fn fold_operands(&mut self, kind: SymKind, children: &[Built]) -> Option<(u32, u32)> {
+        if !FOLDABLE.contains(&kind) {
+            return None;
+        }
+        let values: SmallVec<[(u32, u32); 4]> = children
+            .iter()
+            .map(|built| match built.value {
+                Some(known) => Some(known),
+                None if built.assumable => self.assumed_constant(built.var),
+                None => None,
+            })
+            .collect::<Option<_>>()?;
+        let operands: SmallVec<[Expr; 4]> = values
+            .iter()
+            .flat_map(|&(value, width)| [Expr::Scalar(value), Expr::Scalar(width)])
+            .collect();
+        let slot = self.fold_slot(kind);
+        let (value, width) = (self.slots.scalar(), self.slots.scalar());
+        self.guards.push(Guard::Extern {
+            call: call::EXECUTE + slot,
+            terms: SmallVec::new(),
+            args: operands,
+            out: smallvec![value, width],
+        });
+        Some((value, width))
+    }
+
+    /// The value of a class the axiom does not declare constant, under the
+    /// reading that assumes it is — which the atom this adds then requires.
+    fn assumed_constant(&mut self, class: u32) -> Option<(u32, u32)> {
+        if self.assume == Folding::Never {
+            return None;
+        }
+        if let Some(&known) = self.assumptions.get(&class) {
+            return Some(known);
+        }
+        let constant = self.constant(class);
+        self.assumptions.insert(class, constant);
+        self.assumed = true;
+        Some(constant)
+    }
+
+    fn fold_slot(&mut self, kind: SymKind) -> u32 {
+        match self.folds.iter().position(|&seen| seen == kind) {
+            Some(slot) => slot as u32,
+            None => {
+                self.folds.push(kind);
+                self.folds.len() as u32 - 1
+            }
+        }
+    }
+
+    /// The type a right-hand side node carries. A conversion names it through
+    /// its own format or width operands; a comparison is one bit; everything
+    /// else is register-wide.
+    fn result_type(&mut self, axiom: &Axiom, kind: SymKind, children: &[Built]) -> u32 {
+        let operand = |slot: usize| {
+            children
+                .get(slot)
+                .and_then(|built| built.value)
+                .map(|(value, _)| value)
+        };
+        match kind {
+            SymKind::SIToFP | SymKind::UIToFP => {
+                let exponent = operand(1).map_or(Expr::Lit(11), Expr::Scalar);
+                let mantissa = operand(2).map_or(Expr::Lit(52), Expr::Scalar);
+                self.extern_type(call::FLOAT_TYPE, smallvec![exponent, mantissa])
+            }
+            SymKind::FPToSI | SymKind::FPToUI | SymKind::ZExt | SymKind::SExt => {
+                let width = operand(1).map_or(Expr::Lit(64), Expr::Scalar);
+                self.extern_type(call::INT_TYPE, smallvec![width])
+            }
+            SymKind::Extract => {
+                let register = self.register_width(axiom);
+                let (hi, lo) = (operand(1), operand(2));
+                let known = i64::from(hi.is_some() && lo.is_some());
+                self.extern_type(
+                    call::EXTRACT_TYPE,
+                    smallvec![
+                        hi.map_or(Expr::Lit(0), Expr::Scalar),
+                        lo.map_or(Expr::Lit(0), Expr::Scalar),
+                        Expr::Lit(known),
+                        Expr::Scalar(register),
+                    ],
+                )
+            }
+            kind if is_comparison(kind) => {
+                let one = self.let_expr(Expr::Lit(1));
+                self.int_type(one)
+            }
+            _ => {
+                let register = self.register_width(axiom);
+                self.int_type(register)
+            }
+        }
+    }
+
+    fn insert(
+        &mut self,
+        kind: SymKind,
+        args: &[u32],
+        ty: Option<u32>,
+        head: &mut Vec<HeadOp<SemNode>>,
+    ) -> u32 {
+        let mut template = template_node(kind, None, None);
+        template.children = args.iter().map(|&var| Id::from_raw(var)).collect();
+        let into = self.slots.var();
+        head.push(HeadOp::Insert {
+            label: LabelFill {
+                template,
+                fills: ty.map(|ty| (field::TY, ty)).into_iter().collect(),
+            },
+            args: args.iter().copied().collect(),
+            into,
+        });
+        into
+    }
+
+    /// A constant of `value` at `width`, optionally typed.
+    fn literal(
+        &mut self,
+        value: u32,
+        width: u32,
+        ty: Option<u32>,
+        head: &mut Vec<HeadOp<SemNode>>,
+    ) -> u32 {
+        let mut fills: SmallVec<[(u32, u32); 2]> =
+            smallvec![(field::INT_VALUE, value), (field::INT_WIDTH, width)];
+        fills.extend(ty.map(|ty| (field::TY, ty)));
+        let into = self.slots.var();
+        head.push(HeadOp::Insert {
+            label: LabelFill {
+                template: template_node(
+                    SymKind::Constant,
+                    Some(SymPayload::Int(APInt::new(1, 0))),
+                    None,
+                ),
+                fills,
+            },
+            args: SmallVec::new(),
+            into,
+        });
+        into
+    }
+
+    fn constant_width(&mut self, bits: u32) -> u32 {
+        self.let_expr(Expr::Lit(bits as i64))
+    }
+
+    fn let_expr(&mut self, value: Expr) -> u32 {
+        let out = self.slots.scalar();
+        self.guards.push(Guard::Let { out, value });
+        out
+    }
+
+    fn int_type(&mut self, width: u32) -> u32 {
+        self.extern_type(call::INT_TYPE, smallvec![Expr::Scalar(width)])
+    }
+
+    fn extern_type(&mut self, call: u32, args: SmallVec<[Expr; 4]>) -> u32 {
+        let out = self.slots.scalar();
+        self.guards.push(Guard::Extern {
+            call,
+            terms: SmallVec::new(),
+            args,
+            out: smallvec![out],
+        });
+        out
+    }
+
+    /// The value a pure op takes over constant operands, at `width`.
+    fn fold(&mut self, kind: SymKind, width: u32, values: SmallVec<[Expr; 4]>) -> u32 {
+        let out = self.slots.scalar();
+        let slot = self.fold_slot(kind);
+        let mut args: SmallVec<[Expr; 4]> = smallvec![Expr::Scalar(width)];
+        args.extend(values);
+        self.guards.push(Guard::Extern {
+            call: call::FOLD + slot,
+            terms: SmallVec::new(),
+            args,
+            out: smallvec![out],
+        });
+        out
+    }
+}
+
+/// The pure ops a head can introduce over constant operands. An axiom's
+/// right-hand side builds the shape; what its operands turn out to be is the
+/// graph's business, so folding it is a rule rather than a step inside the head
+/// — `sub(x, c)` becomes `add(x, neg(c))`, and `neg(c)` is the negated immediate
+/// an `addi` reads only once something says so.
+pub(crate) const FOLDABLE: [SymKind; 11] = [
+    SymKind::Add,
+    SymKind::Sub,
+    SymKind::Mul,
+    SymKind::And,
+    SymKind::Or,
+    SymKind::Xor,
+    SymKind::ShiftLeft,
+    SymKind::ShiftRightLogic,
+    SymKind::ShiftRightArithmetic,
+    SymKind::Neg,
+    SymKind::Not,
+];
+
+/// A width expression over the scalars the width names bound.
+fn width_expr(expr: &WidthExpr, widths: &[u32]) -> Expr {
+    match expr {
+        WidthExpr::Lit(value) => Expr::Lit(*value as i64),
+        WidthExpr::Name(index) => Expr::Scalar(widths[*index]),
+        WidthExpr::Sub(a, b) => Expr::Sub(
+            Box::new(width_expr(a, widths)),
+            Box::new(width_expr(b, widths)),
+        ),
+        WidthExpr::Ones(e) => Expr::Ones(Box::new(width_expr(e, widths))),
+    }
+}
+
+fn binding_expr(binding: &WidthBinding, widths: &[u32]) -> Expr {
+    match binding {
+        WidthBinding::Lit(value) => Expr::Lit(*value as i64),
+        WidthBinding::Name(index) => Expr::Scalar(widths[*index]),
     }
 }

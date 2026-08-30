@@ -11,8 +11,8 @@ use tir::{
 };
 
 use tir::backend::isel::{
-    EMatch, EmitRequest, ImmRange, InstructionSelectPass, IselCostModel, RegisterCapability,
-    RegisterRequirement, Rule, RuleEmitFn, RuleMatch, SemEGraph, SemNode, LATENCY_COST_SCALE,
+    EmitRequest, ImmRange, InstructionSelectPass, IselCostModel, RegisterCapability,
+    RegisterRequirement, Rule, RuleEmitFn, RuleMatch, LATENCY_COST_SCALE,
 };
 use tir::sem::template_node;
 
@@ -1097,8 +1097,9 @@ fn memory_ops_select_via_interfaces() {
 /// Equivalent definitions extract to one tile.
 #[test]
 fn merged_value_classes_resolve_to_earliest_def() {
-    use tir::backend::isel::IselRewrite;
-    use tir_symbolic::egraph::{Pattern, Var};
+    use smallvec::smallvec;
+    use tir::backend::isel::Theory;
+    use tir_relational::{Atom, ClassId as Id, HeadOp, Plan, Query};
 
     let context = Context::with_default_dialects();
     let i32_ty = IntegerType::new(&context, 32);
@@ -1117,28 +1118,27 @@ fn merged_value_classes_resolve_to_earliest_def() {
         .append_op(func_ops::r#return(&context, sub_result).build());
 
     // A test-only "proof" that x*y == x+y: union the Mul class with the Add
-    // class, exactly the shape a discovered algebraic bridge produces.
-    let mut searcher = Pattern::<SemNode, u32>::new();
-    let lhs = searcher.var(Var::Symbol(0));
-    let rhs = searcher.var(Var::Symbol(1));
-    let mut mul_root = template_node(SymKind::Mul, None, None);
-    mul_root.children = vec![lhs, rhs];
-    searcher.add(mul_root);
-    let union_mul_add = IselRewrite {
+    // class over the same operands, exactly the shape a discovered algebraic
+    // bridge produces.
+    let template = |kind, class| {
+        let mut node = template_node(kind, None, None);
+        node.children = vec![Id::from_raw(1), Id::from_raw(2)];
+        Atom::Node {
+            template: node,
+            args: smallvec![1, 2],
+            class,
+            row: None,
+        }
+    };
+    let union_mul_add = tir_relational::Rule {
         name: "mul-equals-add".to_string(),
-        searcher,
+        plan: Plan::compile(Query::tree(
+            4,
+            0,
+            vec![template(SymKind::Mul, 0), template(SymKind::Add, 3)],
+        )),
+        head: vec![HeadOp::Union(0, 3)],
         post_saturation: false,
-        // The applier scans every class, so no frontier bounds what it reads.
-        cone_bounded: false,
-        apply: Box::new(|_ctx: &Context, egraph: &mut SemEGraph, m: &EMatch<u32>| {
-            let add_class = egraph
-                .classes()
-                .find(|class| class.nodes().any(|n| n.kind == SymKind::Add))
-                .map(|class| class.id());
-            if let Some(add_class) = add_class {
-                egraph.union(m.root, add_class);
-            }
-        }),
     };
 
     fn emit_sub_bound(
@@ -1177,7 +1177,9 @@ fn merged_value_classes_resolve_to_earliest_def() {
         ),
     ];
 
-    let pass = InstructionSelectPass::new(rules).with_rewrites(vec![union_mul_add]);
+    let mut theory = Theory::default();
+    theory.push_rule(union_mul_add);
+    let pass = InstructionSelectPass::new(rules).with_theory(theory);
     run_pass(&context, &module, func, pass).expect("merged classes should still select");
 
     let block_ref = context

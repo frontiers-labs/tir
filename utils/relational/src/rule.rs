@@ -59,6 +59,9 @@ pub struct Rule<L> {
     pub name: String,
     pub plan: Plan<L>,
     pub head: Vec<HeadOp<L>>,
+    /// Applied once after the iterative fixpoint rather than in it, for a law
+    /// whose right-hand side would feed back through the others.
+    pub post_saturation: bool,
 }
 
 impl<L: Label> Engine<L> {
@@ -149,6 +152,7 @@ mod tests {
                 },
                 HeadOp::Union(0, 3),
             ],
+            post_saturation: false,
         }
     }
 
@@ -194,6 +198,7 @@ mod tests {
                     Box::new(crate::Expr::Scalar(2)),
                 ),
             }],
+            post_saturation: false,
         }
     }
 
