@@ -273,7 +273,10 @@ fn sequence_behavior(expr: &ast::Expr, bindings: &mut Bindings) -> ast::Expr {
                 span: lambda.span,
             })
         }
-        ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => expr.clone(),
+        ast::Expr::Lit(_)
+        | ast::Expr::BuiltinFunction(_)
+        | ast::Expr::Tuple(_)
+        | ast::Expr::Invalid => expr.clone(),
     }
 }
 

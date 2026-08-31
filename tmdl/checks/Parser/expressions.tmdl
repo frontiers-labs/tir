@@ -154,7 +154,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                         nonzero: false,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 encoding: None,
 // CHECK-NEXT:                 asm: Some(
 // CHECK-NEXT:                     Block(
 // CHECK-NEXT:                         Block {
@@ -307,7 +307,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                         nonzero: false,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 encoding: None,
 // CHECK-NEXT:                 asm: Some(
 // CHECK-NEXT:                     Block(
 // CHECK-NEXT:                         Block {
@@ -472,7 +472,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                         nonzero: false,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 encoding: None,
 // CHECK-NEXT:                 asm: Some(
 // CHECK-NEXT:                     Block(
 // CHECK-NEXT:                         Block {
@@ -517,7 +517,7 @@ instruction WidthExpr for [Test] {
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 931..30328,
+// CHECK-NEXT:                 span: 931..30334,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

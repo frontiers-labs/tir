@@ -10,7 +10,9 @@ The output contains the input files in command-line order and their declarations
 in source order. It represents the same stage used by the other checked-AST
 actions: macros and register-class inheritance have been processed, semantic and
 type checks have passed, and template inheritance has not been normalized into
-each instruction.
+each instruction. The one derived field is an instruction's `encoding_shapes`:
+the fixed bit maps its encoding expression expands to, resolved against the
+whole template chain.
 
 The root `version` identifies the JSON contract. Version 1 uses flat records with
 a snake-case `kind` field. Optional values, empty collections, and false defaults

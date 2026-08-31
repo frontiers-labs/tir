@@ -1,8 +1,9 @@
-//! Inlining of `fn` items: pure expression-level helpers called from
-//! behaviors. A call `f(a, b)` is replaced by the function's body with the
+//! Inlining of `fn` items: pure expression-level helpers called from behaviors
+//! and encodings. A call `f(a, b)` is replaced by the function's body with the
 //! parameters substituted by the argument expressions — before sema and type
-//! checking, so every later stage (semantics lowering, instruction selection,
-//! verification, documentation) sees only the expanded expression.
+//! checking, so every later stage (semantics lowering, shape expansion,
+//! instruction selection, verification, documentation) sees only the expanded
+//! expression.
 //!
 //! Functions may call functions; a call cycle is an error. Substitution is
 //! capture-avoiding with respect to `map`/`reduce` lambda parameters: a lambda
@@ -47,6 +48,20 @@ pub fn inline_functions(files: &mut [ast::File]) -> Vec<(String, Diag)> {
                     let mut stack = Vec::new();
                     inst.behavior =
                         inline_expr(&inst.behavior, &fns, &mut stack, &mut diags, &file_name);
+                    if let Some(encoding) = &inst.encoding {
+                        let mut stack = Vec::new();
+                        inst.encoding = Some(inline_expr(
+                            encoding, &fns, &mut stack, &mut diags, &file_name,
+                        ));
+                    }
+                }
+                ast::Item::Template(template) => {
+                    if let Some(encoding) = &template.encoding {
+                        let mut stack = Vec::new();
+                        template.encoding = Some(inline_expr(
+                            encoding, &fns, &mut stack, &mut diags, &file_name,
+                        ));
+                    }
                 }
                 ast::Item::Isa(isa) => {
                     if let Some(trap) = &mut isa.trap_handler {
@@ -80,7 +95,11 @@ fn inline_expr(
         return expr;
     };
     let Some((def, _)) = fns.get(&callee.name) else {
-        return expr;
+        diags.push((
+            file_name.to_string(),
+            Diag::custom(call.span, format!("unknown function '{}'", callee.name)),
+        ));
+        return ast::Expr::Invalid;
     };
     if stack.iter().any(|name| name == &callee.name) {
         diags.push((
@@ -110,7 +129,7 @@ fn inline_expr(
     let bindings: HashMap<&str, &ast::Expr> = def
         .params
         .iter()
-        .map(String::as_str)
+        .map(|param| param.name.as_str())
         .zip(call.arguments.iter())
         .collect();
     let body = substitute(&def.body, &bindings);

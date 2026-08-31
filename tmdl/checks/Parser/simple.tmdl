@@ -211,62 +211,49 @@
 // CHECK-NEXT:                         nonzero: false,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 encoding: [
-// CHECK-NEXT:                     EncodingField {
-// CHECK-NEXT:                         value: Lit(
-// CHECK-NEXT:                             Int(
-// CHECK-NEXT:                                 LitInt {
-// CHECK-NEXT:                                     value: "0x0000",
-// CHECK-NEXT:                                     span: 691..697,
-// CHECK-NEXT:                                 },
-// CHECK-NEXT:                             ),
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         width: 16,
-// CHECK-NEXT:                         span: 691..697,
-// CHECK-NEXT:                     },
-// CHECK-NEXT:                     EncodingField {
-// CHECK-NEXT:                         value: Ident(
-// CHECK-NEXT:                             Ident {
-// CHECK-NEXT:                                 name: "rd",
-// CHECK-NEXT:                                 span: 707..709,
-// CHECK-NEXT:                             },
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         width: 5,
-// CHECK-NEXT:                         span: 707..709,
-// CHECK-NEXT:                     },
-// CHECK-NEXT:                     EncodingField {
-// CHECK-NEXT:                         value: Ident(
-// CHECK-NEXT:                             Ident {
-// CHECK-NEXT:                                 name: "rs2",
-// CHECK-NEXT:                                 span: 719..722,
-// CHECK-NEXT:                             },
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         width: 5,
-// CHECK-NEXT:                         span: 719..722,
-// CHECK-NEXT:                     },
-// CHECK-NEXT:                     EncodingField {
-// CHECK-NEXT:                         value: Ident(
-// CHECK-NEXT:                             Ident {
-// CHECK-NEXT:                                 name: "rs1",
-// CHECK-NEXT:                                 span: 732..735,
-// CHECK-NEXT:                             },
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         width: 5,
-// CHECK-NEXT:                         span: 732..735,
-// CHECK-NEXT:                     },
-// CHECK-NEXT:                     EncodingField {
-// CHECK-NEXT:                         value: Lit(
-// CHECK-NEXT:                             Int(
-// CHECK-NEXT:                                 LitInt {
-// CHECK-NEXT:                                     value: "0b1",
-// CHECK-NEXT:                                     span: 745..748,
-// CHECK-NEXT:                                 },
-// CHECK-NEXT:                             ),
-// CHECK-NEXT:                         ),
-// CHECK-NEXT:                         width: 1,
-// CHECK-NEXT:                         span: 745..748,
-// CHECK-NEXT:                     },
-// CHECK-NEXT:                 ],
+// CHECK-NEXT:                 encoding: Some(
+// CHECK-NEXT:                     Tuple(
+// CHECK-NEXT:                         Tuple {
+// CHECK-NEXT:                             elements: [
+// CHECK-NEXT:                                 Lit(
+// CHECK-NEXT:                                     Int(
+// CHECK-NEXT:                                         LitInt {
+// CHECK-NEXT:                                             value: "0x0000",
+// CHECK-NEXT:                                             span: 691..697,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                                 Ident(
+// CHECK-NEXT:                                     Ident {
+// CHECK-NEXT:                                         name: "rd",
+// CHECK-NEXT:                                         span: 707..709,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                                 Ident(
+// CHECK-NEXT:                                     Ident {
+// CHECK-NEXT:                                         name: "rs2",
+// CHECK-NEXT:                                         span: 719..722,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                                 Ident(
+// CHECK-NEXT:                                     Ident {
+// CHECK-NEXT:                                         name: "rs1",
+// CHECK-NEXT:                                         span: 732..735,
+// CHECK-NEXT:                                     },
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                                 Lit(
+// CHECK-NEXT:                                     Int(
+// CHECK-NEXT:                                         LitInt {
+// CHECK-NEXT:                                             value: "0b1",
+// CHECK-NEXT:                                             span: 745..748,
+// CHECK-NEXT:                                         },
+// CHECK-NEXT:                                     ),
+// CHECK-NEXT:                                 ),
+// CHECK-NEXT:                             ],
+// CHECK-NEXT:                             span: 672..761,
+// CHECK-NEXT:                         },
+// CHECK-NEXT:                     ),
+// CHECK-NEXT:                 ),
 // CHECK-NEXT:                 asm: Some(
 // CHECK-NEXT:                     Block(
 // CHECK-NEXT:                         Block {
@@ -331,7 +318,7 @@
 // CHECK-NEXT:                     ),
 // CHECK-NEXT:                 },
 // CHECK-NEXT:                 operands: [],
-// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 encoding: None,
 // CHECK-NEXT:                 asm: None,
 // CHECK-NEXT:                 behavior: Block(
 // CHECK-NEXT:                     Block {

@@ -1,8 +1,28 @@
-// A slice or single bit in an encoding must lie inside the operand's declared
-// width. The field's own width is never in question — it comes from the slice —
-// so the only way to get the range wrong is to reach past the operand.
+// An encoding is an expression, and every shape it expands to is checked as the
+// fixed bit map it is: bit ranges stay inside their operand, a group fills whole
+// encoding units, conditions are decided from the operands, and the shapes stay
+// distinguishable from the instruction word alone.
 
 // RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa Arch {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [Arch] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x15 => { } }
+}
+
+register_class PC for [Arch] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = self.XLEN;
+    registers { pc => { traits = [program_counter] } }
+}
+
+fn modrm(reg: bits<4>, rm: bits<4>) { (0b11, reg[2..0], rm[2..0]) }
 
 instruction SliceOutOfRange {
     param MNEMONIC: String = "sliceoor";
@@ -20,5 +40,136 @@ instruction BitOutOfRange {
     encoding { imm[13], OPCODE }
 }
 
+// A group is what the manual draws as whole bytes, so it must fill them.
+instruction ShortGroup for [Arch] {
+    param MNEMONIC: String = "shortgroup";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding { OPCODE, (0b11, dst), src }
+}
+
+// The encoder holds the operands and the parameters, and nothing else.
+instruction ConditionOverNonOperand for [Arch] {
+    param MNEMONIC: String = "condnonop";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding { OPCODE, if rex { 0x40 } else { () }, modrm(dst, src) }
+}
+
+// #[align(4)] leaves only 0, which #[nonzero] then excludes: the operand has
+// no legal value, so no shape of an encoding reading it is reachable.
+instruction NoSatisfiableShape for [Arch] {
+    param MNEMONIC: String = "nosatshape";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, #[align(4), nonzero] imm: bits<2> }
+    asm { "{self.MNEMONIC} {dst}, {imm}" }
+    behavior { dst = zext(imm, self.XLEN); }
+    encoding { OPCODE, if imm[1] { 0x66 } else { () }, 0b0000, dst }
+}
+
+// Two shapes of one width that pin the same bits: the word cannot say which.
+instruction IndistinguishableShapes for [Arch] {
+    param MNEMONIC: String = "indistinct";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding { OPCODE, 0b0000, if dst[3] { dst } else { src } }
+}
+
+// The behavior reads PC, so the instruction's length must not depend on a guard.
+instruction PcWithTwoShapes for [Arch] {
+    param MNEMONIC: String = "pctwoshapes";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = PC::pc + src; }
+    encoding { OPCODE, if dst[3] { 0x40 } else { () }, modrm(dst, src) }
+}
+
+// A concatenation belongs to an encoding; a behavior computes a value.
+instruction ConcatInBehavior for [Arch] {
+    param MNEMONIC: String = "concatbehavior";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = (src, src); }
+    encoding { OPCODE, modrm(dst, src) }
+}
+
+// A condition is a single bit, not a value the encoding forgot to spell.
+instruction NonBitCondition for [Arch] {
+    param MNEMONIC: String = "nonbitcond";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding { OPCODE, if dst { 0x66 } else { () }, modrm(dst, src) }
+}
+
+// More conditions than a shape expansion admits.
+instruction TooManyConditions for [Arch] {
+    param MNEMONIC: String = "toomany";
+    param OPCODE: bits<8> = 0x8b;
+    operands { imm: bits<9> }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { imm = imm; }
+    encoding {
+        OPCODE,
+        if imm[0] { 0b1 } else { 0b0 },
+        if imm[1] { 0b1 } else { 0b0 },
+        if imm[2] { 0b1 } else { 0b0 },
+        if imm[3] { 0b1 } else { 0b0 },
+        if imm[4] { 0b1 } else { 0b0 },
+        if imm[5] { 0b1 } else { 0b0 },
+        if imm[6] { 0b1 } else { 0b0 },
+        if imm[7] { 0b1 } else { 0b0 },
+        if imm[8] { 0b1 } else { 0b0 },
+    }
+}
+
+// A condition wider than the evaluator's word cannot be decided.
+instruction WideConcatCondition for [Arch] {
+    param MNEMONIC: String = "wideconcat";
+    param OPCODE: bits<8> = 0x8b;
+    operands { imm: bits<64> }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { imm = imm; }
+    encoding { OPCODE, if (imm, 0b1) == 0b1 { 0x66 } else { () }, imm }
+}
+
+// Conditions reading more operand values than the expansion will try.
+instruction TooManyDomainPoints for [Arch] {
+    param MNEMONIC: String = "toomanypoints";
+    param OPCODE: bits<8> = 0x8b;
+    operands { a: bits<32>, b: bits<32>, c: bits<32>, d: bits<32> }
+    asm { "{self.MNEMONIC} {a}, {b}, {c}, {d}" }
+    behavior { a = b + c + d; }
+    encoding {
+        OPCODE,
+        if a[0] { 0b1 } else { 0b0 },
+        if b[0] { 0b1 } else { 0b0 },
+        if c[0] { 0b1 } else { 0b0 },
+        if d[0] { 0b1 } else { 0b0 },
+        0b0000,
+        a, b, c, d
+    }
+}
+
 // CHECK-DAG: slice 'imm[13..10]' exceeds bits<13>
 // CHECK-DAG: bit 'imm[13]' exceeds bits<13>
+// CHECK-DAG: concatenation in the encoding of 'ShortGroup' is 6 bits, which is not a whole number of 8-bit encoding units
+// CHECK-DAG: condition in the encoding of 'ConditionOverNonOperand' reads 'rex', which is not one of its operands or parameters
+// CHECK-DAG: operand 'imm' of 'NoSatisfiableShape' is #[align(4)] and #[nonzero], which no bits<2> value satisfies
+// CHECK-DAG: encoding of instruction 'NoSatisfiableShape' has no satisfiable shape
+// CHECK-DAG: two encoding shapes of instruction 'IndistinguishableShapes' are the same 16 bits wide and fix no bit differently, so the word does not decide between them
+// CHECK-DAG: instruction 'PcWithTwoShapes' reads the program counter and has 2 encoding shapes; its behavior cannot see which one the encoder picked
+// CHECK-DAG: concatenation in the behavior of 'ConcatInBehavior'
+// CHECK-DAG: condition in the encoding of 'NonBitCondition' is bits<4>; a condition is bits<1>
+// CHECK-DAG: encoding of instruction 'TooManyConditions' has 9 conditions, more than the 8 a shape expansion admits
+// CHECK-DAG: condition in the encoding of 'WideConcatCondition' concatenates more than 64 bits, which no condition can decide
+// CHECK-DAG: conditions in the encoding of 'TooManyDomainPoints' read more operand values than the 1048576 combinations a shape expansion tries

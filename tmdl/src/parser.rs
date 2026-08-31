@@ -572,16 +572,13 @@ where
                 })
                 .unwrap_or_default();
 
-            let encoding = body
-                .iter()
-                .find_map(|b| {
-                    if let TemplateOrInstBody::Encoding(e) = b {
-                        Some(e.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
+            let encoding = body.iter().find_map(|b| {
+                if let TemplateOrInstBody::Encoding(e) = b {
+                    Some(e.clone())
+                } else {
+                    None
+                }
+            });
 
             let asm = body.iter().find_map(|b| {
                 if let TemplateOrInstBody::Asm(a) = b {
@@ -658,16 +655,13 @@ where
                 })
                 .unwrap_or_default();
 
-            let encoding = body
-                .iter()
-                .find_map(|b| {
-                    if let TemplateOrInstBody::Encoding(e) = b {
-                        Some(e.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
+            let encoding = body.iter().find_map(|b| {
+                if let TemplateOrInstBody::Encoding(e) = b {
+                    Some(e.clone())
+                } else {
+                    None
+                }
+            });
 
             let asm = body.iter().find_map(|b| {
                 if let TemplateOrInstBody::Asm(a) = b {
@@ -716,7 +710,7 @@ where
 enum TemplateOrInstBody {
     Param((String, (Type, Option<ast::Expr>))),
     Operands(Vec<ast::Operand>),
-    Encoding(Vec<EncodingField>),
+    Encoding(Expr),
     Asm(Expr),
     Behavior(Expr),
     Schedule(Schedule),
@@ -1505,30 +1499,29 @@ where
         .labelled("machine definition")
 }
 
-/// `encoding { field, field, ... }`: the fields of an instruction word, high
-/// bit first within an encoding unit and units in emission order. Each field's
-/// width comes from what it names, resolved after parsing by
-/// [`crate::encoding::resolve_encoding_widths`].
-fn encoding<'src, I>()
--> impl Parser<'src, I, Vec<EncodingField>, extra::Err<Rich<'src, Token<'src>, Span>>>
+/// `encoding { a, b, c }`: the instruction word as an expression. The braces
+/// are sugar for the concatenation `(a, b, c)` — elements high bit first
+/// within an encoding unit, units in emission order. An element may itself be
+/// a concatenation, a call to a `fn` helper, or an `if` whose arms differ in
+/// width; [`crate::shapes`] expands the result into fixed bit maps.
+fn encoding<'src, I>() -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let field = inline_expr().map_with(|value, e| EncodingField {
-        value,
-        width: 0,
-        span: e.span(),
-    });
     just(Token::KwEncoding)
-        .ignored()
-        .then(
-            field
+        .ignore_then(
+            inline_expr()
                 .separated_by(just(Token::Comma))
                 .allow_trailing()
-                .collect()
+                .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|((), fields)| fields)
+        .map_with(|elements, e| {
+            Expr::Tuple(ast::Tuple {
+                elements,
+                span: e.span(),
+            })
+        })
 }
 
 fn parameter<'src, I>()
@@ -1753,10 +1746,13 @@ fn fn_def<'src, I>() -> impl Parser<'src, I, FnDef, extra::Err<Rich<'src, Token<
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
+    let param = ident()
+        .then(just(Token::Colon).ignore_then(type_()).or_not())
+        .map(|(name, ty)| ast::FnParam { name, ty });
     just(Token::KwFn)
         .ignore_then(ident())
         .then(
-            ident()
+            param
                 .separated_by(just(Token::Comma))
                 .allow_trailing()
                 .collect::<Vec<_>>()
@@ -1977,12 +1973,26 @@ where
                 })
         });
 
+        // `(a, b, c)` concatenates, `()` is the empty bit vector; a lone
+        // parenthesized expression is grouping, not a one-element tuple.
+        let parenthesized = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map_with(|mut elements, e| match elements.len() {
+                1 => elements.pop().unwrap(),
+                _ => Expr::Tuple(ast::Tuple {
+                    elements,
+                    span: e.span(),
+                }),
+            });
+
         let atom = inline_if
             .or(lambda)
             .or(literal_or_ident)
-            .or(expr
-                .clone()
-                .delimited_by(just(Token::LParen), just(Token::RParen)))
+            .or(parenthesized)
             .boxed();
 
         let items = expr

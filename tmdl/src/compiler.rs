@@ -212,12 +212,6 @@ impl Compiler {
         crate::ast::resolve_register_class_inheritance(&mut parsed_files);
         crate::ast::resolve_abi_inheritance(&mut parsed_files);
 
-        let encoding_diags = crate::encoding::resolve_encoding_widths(&mut parsed_files);
-        if !encoding_diags.is_empty() {
-            print_diags(encoding_diags, &self.inputs, &sources);
-            return Ok(None);
-        }
-
         let inline_diags = crate::fninline::inline_functions(&mut parsed_files);
         if !inline_diags.is_empty() {
             print_diags(inline_diags, &self.inputs, &sources);
@@ -345,6 +339,22 @@ impl Compiler {
             .iter()
             .flat_map(|f| f.items.iter().map(|i| (i.name(), i)))
             .collect();
+
+        // Every emitter lowers one fixed bit map per instruction. Until the
+        // encoder that picks between shapes by guard lands, a guarded encoding
+        // has no lowering, and emitting its first shape would be wrong bytes.
+        let guarded: Vec<&str> = parsed_files
+            .iter()
+            .flat_map(|f| f.instructions())
+            .filter(|inst| crate::utils::get_encoding_shapes(inst, &item_cache).len() > 1)
+            .map(|inst| inst.name.as_str())
+            .collect();
+        if !guarded.is_empty() {
+            return Err(TMDLError::Codegen(format!(
+                "encoding of {} has more than one shape, which no emitter lowers yet",
+                guarded.join(", ")
+            )));
+        }
 
         match &self.action {
             Action::EmitRust => {

@@ -77,6 +77,7 @@ fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
         | ast::Expr::Lit(_)
         | ast::Expr::Path(_)
         | ast::Expr::BuiltinFunction(_)
+        | ast::Expr::Tuple(_)
         | ast::Expr::Invalid => false,
     }
 }
@@ -137,6 +138,7 @@ fn behavior_has_dynamic_sized_memory_access(
         | ast::Expr::Lit(_)
         | ast::Expr::Path(_)
         | ast::Expr::BuiltinFunction(_)
+        | ast::Expr::Tuple(_)
         | ast::Expr::Invalid => false,
     }
 }

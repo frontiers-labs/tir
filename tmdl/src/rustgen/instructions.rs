@@ -981,7 +981,7 @@ fn emit_instructions<'a>(
             }
         }
 
-        let encoding_arms = get_encoding_arms(inst, item_cache);
+        let encoding_arms = first_encoding_shape_arms(inst, item_cache);
         let width_bytes_lit = proc_macro2::Literal::u8_unsuffixed(width_bytes as u8);
         let mnemonic_lit = proc_macro2::Literal::string(mnemonic_name);
 

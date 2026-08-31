@@ -37,8 +37,11 @@ Expressions are used in parameters, encodings, asm templates, and behavior.
   operand means whichever the context is about — the value in a behavior, the
   index in an encoding — so both are only written when the two are mixed.
 - Casts: `x as bits<N>` — the low `N` bits of `x`.
-- Calls: `foo(a, b)` (reserved for future extensions).
+- Calls: `foo(a, b)` — a `fn` helper, inlined before anything else sees it.
 - Grouping: `(expr)`
+- Concatenation: `(a, b, c)` is `a` in the top bits, then `b`, then `c`; `()`
+  is the empty bit vector, which contributes no bits. Its width is the sum of
+  its elements'.
 - Binary operators and precedence:
   - Highest: `*` `/`
   - Next: `+` `-` `|` `&` `^` `<<` `>>` (these share the same precedence tier)
@@ -104,7 +107,10 @@ instruction AddSat for [RV32I] : RType {
 ```
 
 A `fn` item declares a helper usable in `behavior` bodies (including inside
-`map`/`reduce` lambdas). Calls are **inlined on the AST** before semantic
+`map`/`reduce` lambdas) and in `encoding` expressions. A parameter may carry a
+type — `fn rex(w: bits<1>, reg: bits<4>, rm: bits<4>)` — so an encoding
+helper spells its own width and no call site has to supply it. Calls are
+**inlined on the AST** before semantic
 analysis: the body is substituted with the argument expressions at each call
 site, so there is no runtime call and nothing downstream (instruction
 selection, verification, codegen) is aware of helpers. Bodies may use locals,
@@ -358,6 +364,59 @@ encoding {
   0b1,
 }
 ```
+
+### The Encoding Is an Expression
+
+`encoding { a, b, c }` is sugar for the concatenation `(a, b, c)`, so anything
+that produces bits can stand where a field does: a nested concatenation, a call
+to a `fn` helper, or an `if` whose arms differ in width. A nested concatenation
+is a group the manual draws as whole encoding units, so it must fill them.
+
+```
+fn rex(w: bits<1>, reg: bits<4>, rm: bits<4>) {
+  if w | reg[3] | rm[3] { (0b0100, w, reg[3], 0b0, rm[3]) } else { () }
+}
+
+fn modrm_reg(reg: bits<4>, rm: bits<4>) { (0b11, reg[2..0], rm[2..0]) }
+
+encoding { rex(0b1, src, dst), OPCODE, modrm_reg(src, dst) }
+```
+
+### Shapes
+
+An encoding with conditions is not one bit map but several. The compiler
+inlines the helpers, substitutes the `let` bindings and expands the conditions
+into **shapes**: each truth assignment of the condition set that some operand
+value produces yields one fixed bit map with the guard that selects it. The
+example above has two — one 3 bytes with the REX prefix, one 2 bytes without —
+and `w = 0b1` makes the second unreachable. An encoding with no condition has
+exactly one shape, always taken, which is what every fixed-width ISA has.
+
+The rules a set of shapes must satisfy:
+
+- A condition is `bits<1>` and is decided from the instruction's own operands
+  and parameters; nothing else is in hand when the encoder runs.
+- At least one shape is reachable, and every operand value the expansion tries
+  selects exactly one. An operand its `#[align]`/`#[nonzero]` constraints leave
+  no value for makes them all unreachable.
+- Shapes are decode-distinguishable: any two differ in width or in some bit
+  both of them fix, so decoding stays a function of the instruction word.
+- An instruction whose behavior reads the program counter has one shape; its
+  behavior cannot see which one the encoder picked.
+- At most eight conditions per encoding. Beyond that the encoding is a design
+  smell, not a limit to raise.
+
+Reachability is decided by evaluating the conditions over the operand domains.
+An operand up to 8 bits wide is enumerated, so the answer is exact. A wider one
+is sampled: the boundaries, every single-bit value, every constant the
+conditions name, and for each `x[hi..lo] == k` they spell, values that satisfy
+it with the rest of the operand zero and all-ones. Two conditions over disjoint
+slices of one wide operand can still be missed together, which drops a shape, so
+the encoder-decoder agreement per shape is also an SMT obligation.
+
+Code generation does not lower a guarded encoding yet: an instruction with more
+than one shape is a `tmdlc` error for `emit-rust`, `emit-smtlib`, `emit-btor2`
+and `emit-markdown`. The AST and JSON actions expand and export the shapes.
 
 ## ASM Templates
 

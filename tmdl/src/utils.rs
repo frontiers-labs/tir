@@ -203,16 +203,19 @@ pub fn resolve_template_chain<'a>(
 pub fn resolve_effective_encoding_for_instruction<'a>(
     inst: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
-) -> &'a [ast::EncodingField] {
-    if !inst.encoding.is_empty() {
-        return &inst.encoding;
-    }
-    resolve_template_chain(inst, item_cache)
-        .into_iter()
-        .rev()
-        .find(|t| !t.encoding.is_empty())
-        .map(|t| t.encoding.as_slice())
-        .unwrap_or(&[])
+) -> Option<&'a ast::Expr> {
+    // An `encoding { }` spells no bits, which is the same as declaring none:
+    // the template's encoding, if any, still applies.
+    let spelled = |encoding: &'a ast::Expr| match encoding {
+        ast::Expr::Tuple(tuple) if tuple.elements.is_empty() => None,
+        _ => Some(encoding),
+    };
+    inst.encoding.as_ref().and_then(spelled).or_else(|| {
+        resolve_template_chain(inst, item_cache)
+            .into_iter()
+            .rev()
+            .find_map(|t| t.encoding.as_ref().and_then(spelled))
+    })
 }
 
 pub fn resolve_effective_asm_for_instruction<'a>(
@@ -242,29 +245,93 @@ pub fn resolve_effective_schedule_for_instruction<'a>(
     })
 }
 
-/// The instruction's encoding as instruction-word bit ranges, laid out in the
-/// encoding units its ISA declares (see [`crate::encoding`]).
-pub fn get_encoding_arms<'a>(
+/// One fixed bit map of an instruction word: the guard that selects it and the
+/// bit ranges it spells (see [`crate::shapes`]). An unconditional encoding has
+/// exactly one, with an always-true guard.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodingShape {
+    pub guard: crate::shapes::Guard,
+    pub arms: Vec<ast::EncodingArm>,
+    pub width_bits: u16,
+}
+
+/// What an instruction's effective encoding expression resolves against. A
+/// name the instruction redeclares takes the instruction's declaration, so the
+/// context holds one entry per operand.
+pub fn encoding_context<'a>(
+    instruction: &'a Instruction,
+    item_cache: &HashMap<&'a str, &'a Item>,
+) -> crate::shapes::Context {
+    let constraints = resolve_operand_constraints_for_instruction(instruction, item_cache);
+    let isa_params = resolve_isa_param_values(instruction, item_cache);
+    let mut operands: Vec<(String, Type, OperandConstraint)> = Vec::new();
+    for (name, ty) in resolve_operands_for_instruction(instruction, item_cache) {
+        let constraint = constraints.get(&name).copied().unwrap_or_default();
+        match operands.iter_mut().find(|(held, _, _)| *held == name) {
+            Some(held) => *held = (name, ty, constraint),
+            None => operands.push((name, ty, constraint)),
+        }
+    }
+    crate::shapes::Context {
+        owner: instruction.name.clone(),
+        operands,
+        params: resolve_params_for_instruction(instruction, item_cache),
+        classes: crate::encoding::register_classes_from_cache(item_cache),
+        unit: crate::encoding::encoding_unit(&isa_params),
+    }
+}
+
+/// The instruction's encoding shapes, each as instruction-word bit ranges laid
+/// out in the encoding units its ISA declares (see [`crate::encoding`]).
+pub fn get_encoding_shapes<'a>(
+    instruction: &'a Instruction,
+    item_cache: &HashMap<&'a str, &'a Item>,
+) -> Vec<EncodingShape> {
+    let Some(encoding) = resolve_effective_encoding_for_instruction(instruction, item_cache) else {
+        return Vec::new();
+    };
+    let ctx = encoding_context(instruction, item_cache);
+    let (shapes, _) = crate::shapes::expand(encoding, &ctx);
+    shapes
+        .into_iter()
+        .filter_map(|shape| {
+            let width_bits = shape.fields.iter().map(|field| field.width).sum();
+            Some(EncodingShape {
+                arms: crate::encoding::encoding_arms(&shape.fields, ctx.unit)?,
+                guard: shape.guard,
+                width_bits,
+            })
+        })
+        .collect()
+}
+
+/// The bit ranges of an instruction's first encoding shape. The emitters lower
+/// one fixed bit map per instruction; a guarded encoding has several, and the
+/// encoder that picks between them by guard is not wired up yet.
+pub fn first_encoding_shape_arms<'a>(
     instruction: &'a Instruction,
     item_cache: &HashMap<&'a str, &'a Item>,
 ) -> Vec<ast::EncodingArm> {
-    let fields = resolve_effective_encoding_for_instruction(instruction, item_cache);
-    let unit = crate::encoding::encoding_unit(&resolve_isa_param_values(instruction, item_cache));
-    crate::encoding::encoding_arms(fields, unit).unwrap_or_default()
+    get_encoding_shapes(instruction, item_cache)
+        .into_iter()
+        .next()
+        .map(|shape| shape.arms)
+        .unwrap_or_default()
 }
 
-/// The instruction's encoding size in bytes. With no encoding (a text-only
-/// pseudo-ISA) there is no binary width; report 0 bytes rather than the 32-bit
-/// default assumed for real ISAs.
+/// The instruction's encoding size in bytes, widest shape first. With no
+/// encoding (a text-only pseudo-ISA) there is no binary width; report 0 bytes
+/// rather than the 32-bit default assumed for real ISAs.
 pub fn encoding_width_bytes<'a>(
     instruction: &'a Instruction,
     item_cache: &HashMap<&'a str, &'a Item>,
 ) -> u64 {
-    let total: u16 = resolve_effective_encoding_for_instruction(instruction, item_cache)
+    let widest = get_encoding_shapes(instruction, item_cache)
         .iter()
-        .map(|field| field.width)
-        .sum();
-    u64::from(u32::from(total).div_ceil(8))
+        .map(|shape| shape.width_bits)
+        .max()
+        .unwrap_or(0);
+    u64::from(u32::from(widest).div_ceil(8))
 }
 
 pub fn resolve_params_for_instruction<'a>(
@@ -418,7 +485,7 @@ pub fn behavior_uses_todo(expr: &ast::Expr) -> bool {
     match expr {
         ast::Expr::BuiltinFunction(ast::BuiltinFunction::Todo) => true,
         ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
-        ast::Expr::Path(_) | ast::Expr::Invalid => false,
+        ast::Expr::Path(_) | ast::Expr::Tuple(_) | ast::Expr::Invalid => false,
         ast::Expr::Assign(a) => behavior_uses_todo(&a.dest) || behavior_uses_todo(&a.value),
         ast::Expr::Let(l) => behavior_uses_todo(&l.value),
         ast::Expr::Binary(b) => behavior_uses_todo(&b.lhs) || behavior_uses_todo(&b.rhs),
@@ -465,7 +532,7 @@ pub fn behavior_memory_effects(expr: &ast::Expr) -> (bool, bool) {
 }
 
 /// Apply `f` to `expr` and every sub-expression of it, outermost first.
-fn visit_exprs(expr: &ast::Expr, f: &mut impl FnMut(&ast::Expr)) {
+pub(crate) fn visit_exprs<'a>(expr: &'a ast::Expr, f: &mut dyn FnMut(&'a ast::Expr)) {
     f(expr);
     match expr {
         ast::Expr::Ident(_)
@@ -512,6 +579,7 @@ fn visit_exprs(expr: &ast::Expr, f: &mut impl FnMut(&ast::Expr)) {
             t.handlers.iter().for_each(|h| visit_exprs(&h.body, f));
         }
         ast::Expr::Lambda(l) => visit_exprs(&l.body, f),
+        ast::Expr::Tuple(t) => t.elements.iter().for_each(|e| visit_exprs(e, f)),
     }
 }
 
@@ -640,6 +708,10 @@ pub(crate) fn map_child_exprs(
             params: l.params.clone(),
             body: Box::new(f(&l.body)),
             span: l.span,
+        }),
+        ast::Expr::Tuple(t) => ast::Expr::Tuple(ast::Tuple {
+            elements: t.elements.iter().map(&mut *f).collect(),
+            span: t.span,
         }),
         ast::Expr::Ident(_)
         | ast::Expr::Path(_)

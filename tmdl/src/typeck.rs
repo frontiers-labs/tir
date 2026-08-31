@@ -880,6 +880,24 @@ fn infer<'a>(
             Type::Con("fn".into(), fields)
         }
 
+        // `(a, b, c)` concatenates: bits<w(a) + w(b) + w(c)>. An element whose
+        // width is not yet known leaves the whole width open, which is what a
+        // per-shape `if` does until the encoding is expanded.
+        ast::Expr::Tuple(tuple) => {
+            let widths: Option<u16> = tuple
+                .elements
+                .iter()
+                .map(|element| {
+                    let ty = infer(element, env, tvg, subst, cache, diags, file_name);
+                    bit_width(&ty.apply(subst))
+                })
+                .sum();
+            match widths {
+                Some(width) => Type::Bits(width),
+                None => Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]),
+            }
+        }
+
         ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => Type::Var(tvg.fresh()),
     };
 

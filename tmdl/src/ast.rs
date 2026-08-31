@@ -221,7 +221,7 @@ pub struct Template {
     pub parent_template: Option<String>,
     pub params: StableHashMap<String, (Type, Option<Expr>)>,
     pub operands: Vec<Operand>,
-    pub encoding: Vec<EncodingField>,
+    pub encoding: Option<Expr>,
     pub asm: Option<Expr>,
     /// Scheduling-class membership shared by derived instructions that declare no
     /// `schedule` of their own (resolved by
@@ -238,7 +238,7 @@ pub struct Instruction {
     pub parent_template: Option<String>,
     pub params: StableHashMap<String, (Type, Option<Expr>)>,
     pub operands: Vec<Operand>,
-    pub encoding: Vec<EncodingField>,
+    pub encoding: Option<Expr>,
     pub asm: Option<Expr>,
     pub behavior: Expr,
     /// Performance model membership: the scheduling classes this
@@ -482,13 +482,14 @@ pub struct Machine {
     pub span: Span,
 }
 
-/// One field of an `encoding` block. Fields are listed high bit first within an
-/// encoding unit, units in emission order (see [`crate::encoding`]).
+/// One leaf of an encoding expression: a value and the bits it spells. Derived
+/// from the encoding expression by [`crate::shapes`], one list per shape, high
+/// bit first within an encoding unit and units in emission order (see
+/// [`crate::encoding`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncodingField {
     pub value: Expr,
-    /// Bit width of `value`, resolved from its declared type by
-    /// [`crate::encoding::resolve_encoding_widths`]; zero before that runs.
+    /// Bit width of `value`, resolved from its declared type.
     pub width: u16,
     pub span: Span,
 }
@@ -496,7 +497,7 @@ pub struct EncodingField {
 /// One contiguous bit range of an encoded instruction word, `[start, end]`
 /// inclusive with bit 0 the least significant. Derived from an instruction's
 /// [`EncodingField`] list by [`crate::encoding::encoding_arms`]; every consumer
-/// of an encoding works in these terms.
+/// of an encoding shape works in these terms.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncodingArm {
     pub start: u16,
@@ -517,13 +518,22 @@ pub enum Item {
     Fn(FnDef),
 }
 
+/// One parameter of a [`FnDef`]. The type is optional: a helper used only in a
+/// behavior takes its parameters' widths from the call site, while an encoding
+/// helper spells them so the encoding's width is known without a call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnParam {
+    pub name: String,
+    pub ty: Option<Type>,
+}
+
 /// A pure expression-level helper: `fn name(p1, p2) { body }`. Calls are
 /// inlined on the AST before semantic analysis (see `fninline`), so the rest
 /// of the pipeline never sees them.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
     pub name: String,
-    pub params: Vec<String>,
+    pub params: Vec<FnParam>,
     pub body: Expr,
     pub span: Span,
 }
@@ -558,6 +568,14 @@ pub struct If {
     pub cond: Box<Expr>,
     pub then: Box<Expr>,
     pub else_: Option<Box<Expr>>,
+    pub span: Span,
+}
+
+/// A concatenation, high bit first: `(a, b, c)` is `a` in the top bits, then
+/// `b`, then `c`. `()` is the empty bit vector, which contributes nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Tuple {
+    pub elements: Vec<Expr>,
     pub span: Span,
 }
 
@@ -845,6 +863,7 @@ pub enum Expr {
     Try(TryExcept),
     BuiltinFunction(BuiltinFunction),
     Lambda(Lambda),
+    Tuple(Tuple),
     Invalid,
 }
 
@@ -1164,6 +1183,12 @@ impl From<If> for Expr {
     }
 }
 
+impl From<Tuple> for Expr {
+    fn from(val: Tuple) -> Self {
+        Expr::Tuple(val)
+    }
+}
+
 impl Expr {
     fn lower_with_ctx<
         G: tir_graph::MutDag<
@@ -1186,6 +1211,8 @@ impl Expr {
             );
         }
         match self {
+            // Concatenation is an encoding form; sema keeps it out of behaviors.
+            Expr::Tuple(_) => unreachable!("concatenation is not a behavior expression"),
             Expr::Assign(x) => x.as_sema_expr(ctx),
             Expr::Let(x) => x.as_sema_expr(ctx),
             Expr::Binary(x) => x.as_sema_expr(ctx),
@@ -2297,6 +2324,12 @@ impl RegisterClass {
             }
         }
         out
+    }
+
+    /// Whether this class holds the program counter.
+    pub fn is_program_counter(&self) -> bool {
+        self.resolve_registers()
+            .any(|r| r.traits.contains(&RegisterTrait::ProgramCounter))
     }
 
     /// Every register that carries a concrete encoding index, paired with its

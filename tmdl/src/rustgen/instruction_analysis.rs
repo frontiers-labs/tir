@@ -178,6 +178,7 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
         ast::Expr::Lit(_)
         | ast::Expr::Path(_)
         | ast::Expr::BuiltinFunction(_)
+        | ast::Expr::Tuple(_)
         | ast::Expr::Invalid => {}
         ast::Expr::Assign(a) => {
             collect_referenced_idents(&a.dest, operands, out);
@@ -504,7 +505,7 @@ fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> boo
     match expr {
         ast::Expr::Path(path) => pc_classes.contains(&path.base),
         ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
-        ast::Expr::Invalid => false,
+        ast::Expr::Tuple(_) | ast::Expr::Invalid => false,
         ast::Expr::Assign(a) => {
             behavior_references_pc(&a.dest, pc_classes)
                 || behavior_references_pc(&a.value, pc_classes)
@@ -559,7 +560,7 @@ fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>
     match expr {
         ast::Expr::Path(path) => flag_classes.contains(&path.base),
         ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
-        ast::Expr::Invalid => false,
+        ast::Expr::Tuple(_) | ast::Expr::Invalid => false,
         ast::Expr::Assign(a) => {
             let dest_is_flag_write =
                 matches!(&*a.dest, ast::Expr::Path(p) if flag_classes.contains(&p.base));

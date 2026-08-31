@@ -1,0 +1,108 @@
+// The JSON export carries both halves of an encoding: the expression exactly as
+// written, and the fixed bit maps it expands to, each with the guard that picks
+// it and its width. A truth assignment no operand value produces — `base` both
+// 0b100 and 0b101 — yields no shape.
+
+// RUN: tmdlc --action=emit-ast-json --output=- %s | filecheck %s
+
+isa ByteIsa {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [ByteIsa] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x15 => { } }
+}
+
+fn rex(reg: bits<4>, rm: bits<4>) {
+    if reg[3] | rm[3] { (0b0100, 0b0, reg[3], 0b0, rm[3]) } else { () }
+}
+
+fn modrm(reg: bits<4>, rm: bits<4>) { (0b11, reg[2..0], rm[2..0]) }
+
+instruction MovRR for [ByteIsa] {
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding { rex(dst, src), OPCODE, modrm(dst, src) }
+}
+
+instruction MovMem for [ByteIsa] {
+    param MNEMONIC: String = "movmem";
+    param OPCODE: bits<8> = 0x89;
+    operands { dst: GPR, base: GPR }
+    asm { "{self.MNEMONIC} {dst}, [{base}]" }
+    behavior { dst = base; }
+    encoding {
+        OPCODE,
+        (if base[2..0] == 0b101 { 0b01 } else { 0b00 }, dst[2..0], base[2..0]),
+        if base[2..0] == 0b100 { 0x24 } else { () },
+        if base[2..0] == 0b101 { 0x00 } else { () },
+    }
+}
+
+// Two truth assignments that spell the same bits are one shape, and its guard
+// is the disjunction of the assignments that reach it. A slice test also has to
+// be satisfiable in the operand domain, or its shape would be lost.
+instruction MergedShapes for [ByteIsa] {
+    param MNEMONIC: String = "merged";
+    param OPCODE: bits<8> = 0x8a;
+    operands { dst: GPR, imm: bits<16> }
+    asm { "{self.MNEMONIC} {dst}, {imm}" }
+    behavior { dst = zext(imm, self.XLEN); }
+    encoding {
+        OPCODE,
+        if imm[7..4] == 0b0110 { 0x66 } else { () },
+        if dst[3] { 0b0000 } else { 0b0000 },
+        dst,
+        imm
+    }
+}
+
+// The encoding is exported as the expression it is.
+// CHECK:      "name": "MovRR",
+// CHECK:      "encoding": {
+// CHECK-NEXT:   "kind": "tuple",
+
+// Two shapes, one per value of the single REX condition.
+// CHECK:      "encoding_shapes": [
+// CHECK-NEXT:   {
+// CHECK-NEXT:     "width": 16,
+// CHECK:            "name": "dst"
+// CHECK:            "name": "src"
+// CHECK:          "value": false
+// CHECK:        "width": 24,
+// CHECK:          "value": true
+// CHECK-NOT:    "guard": [
+// CHECK:      "assembly": {
+
+// Two conditions, four truth assignments, three shapes: `base` cannot be both
+// 0b100 and 0b101.
+// CHECK:      "name": "MovMem",
+// CHECK:      "encoding_shapes": [
+// CHECK-NEXT:   {
+// CHECK-NEXT:     "width": 16,
+// CHECK:        "guard": [
+// CHECK:        "width": 24,
+// CHECK:        "guard": [
+// CHECK:        "width": 24,
+// CHECK:        "guard": [
+// CHECK-NOT:    "guard": [
+// CHECK:      "assembly": {
+
+// Two shapes, not four: the `dst[3]` condition spells the same bits either way,
+// so its two assignments merge into one guard of two clauses.
+// CHECK:      "name": "MergedShapes",
+// CHECK:      "encoding_shapes": [
+// CHECK-NEXT:   {
+// CHECK-NEXT:     "width": 32,
+// CHECK:          "value": false
+// CHECK:          "value": false
+// CHECK:          "value": true
+// CHECK:        "width": 40,
+// CHECK-NOT:    "width": 40,
+// CHECK:      "assembly": {

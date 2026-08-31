@@ -27,9 +27,13 @@ pub(crate) struct Document {
 
 impl Document {
     pub(crate) fn from_ast(files: &[ast::File]) -> Self {
+        let item_cache = crate::sema::build_item_cache(files);
         Self {
             version: VERSION,
-            files: files.iter().map(File::from).collect(),
+            files: files
+                .iter()
+                .map(|f| File::from_ast(f, &item_cache))
+                .collect(),
         }
     }
 }
@@ -51,11 +55,15 @@ struct File {
     items: Vec<Item>,
 }
 
-impl From<&ast::File> for File {
-    fn from(file: &ast::File) -> Self {
+impl File {
+    fn from_ast(file: &ast::File, item_cache: &HashMap<&str, &ast::Item>) -> Self {
         Self {
             path: file.file_name.clone(),
-            items: file.items.iter().filter_map(Item::from_ast).collect(),
+            items: file
+                .items
+                .iter()
+                .filter_map(|item| Item::from_ast(item, item_cache))
+                .collect(),
         }
     }
 }
@@ -135,8 +143,10 @@ enum Item {
         parameters: Vec<Parameter>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         operands: Vec<Operand>,
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        encoding: Vec<EncodingField>,
+        /// The encoding expression as written, with `fn` helpers inlined.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Expr")]
+        encoding: Option<Expr>,
         #[serde(skip_serializing_if = "Option::is_none")]
         #[schemars(with = "Expr")]
         assembly: Option<Expr>,
@@ -155,8 +165,15 @@ enum Item {
         parameters: Vec<Parameter>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         operands: Vec<Operand>,
+        /// The encoding expression as written, with `fn` helpers inlined.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Expr")]
+        encoding: Option<Expr>,
+        /// The fixed bit maps the encoding expression expands to, derived from
+        /// the whole template chain: one per reachable truth assignment of its
+        /// conditions.
         #[serde(skip_serializing_if = "Vec::is_empty")]
-        encoding: Vec<EncodingField>,
+        encoding_shapes: Vec<EncodingShape>,
         #[serde(skip_serializing_if = "Option::is_none")]
         #[schemars(with = "Expr")]
         assembly: Option<Expr>,
@@ -212,7 +229,7 @@ enum Item {
 impl Item {
     /// `fn` items are inlined at call sites before this point, so they have no
     /// JSON representation of their own.
-    fn from_ast(item: &ast::Item) -> Option<Self> {
+    fn from_ast(item: &ast::Item, item_cache: &HashMap<&str, &ast::Item>) -> Option<Self> {
         Some(match item {
             ast::Item::Isa(isa) => Self::Isa {
                 name: isa.name.clone(),
@@ -260,7 +277,7 @@ impl Item {
                 template: template.parent_template.clone(),
                 parameters: parameters(&template.params),
                 operands: operands(&template.operands),
-                encoding: template.encoding.iter().map(EncodingField::from).collect(),
+                encoding: template.encoding.as_ref().map(Expr::from),
                 assembly: template.asm.as_ref().map(Expr::from),
                 schedule: schedule_classes(&template.schedule),
             },
@@ -270,11 +287,8 @@ impl Item {
                 template: instruction.parent_template.clone(),
                 parameters: parameters(&instruction.params),
                 operands: operands(&instruction.operands),
-                encoding: instruction
-                    .encoding
-                    .iter()
-                    .map(EncodingField::from)
-                    .collect(),
+                encoding: instruction.encoding.as_ref().map(Expr::from),
+                encoding_shapes: encoding_shapes(instruction, item_cache),
                 assembly: instruction.asm.as_ref().map(Expr::from),
                 behavior: Expr::from(&instruction.behavior),
                 schedule: schedule_classes(&instruction.schedule),
@@ -549,8 +563,8 @@ impl From<&AstType> for Type {
 
 #[derive(Serialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-/// One field of an instruction encoding. Fields are listed high bit first
-/// within an encoding unit, units in emission order.
+/// One field of an encoding shape. Fields are listed high bit first within an
+/// encoding unit, units in emission order.
 struct EncodingField {
     /// Bits the field occupies, from what it names.
     width: u16,
@@ -564,6 +578,66 @@ impl From<&ast::EncodingField> for EncodingField {
             value: Expr::from(&field.value),
         }
     }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+/// One fixed bit map an encoding expression expands to.
+struct EncodingShape {
+    /// Bits the shape occupies.
+    width: u16,
+    /// The conditions that select this shape, as a disjunction of conjunctions.
+    /// Absent when the encoding has no condition and the shape is always taken.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    guard: Vec<Vec<GuardLiteral>>,
+    fields: Vec<EncodingField>,
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+/// One `if` condition of an encoding, and the value it takes in a shape.
+struct GuardLiteral {
+    condition: Expr,
+    value: bool,
+}
+
+fn encoding_shapes(
+    instruction: &ast::Instruction,
+    item_cache: &HashMap<&str, &ast::Item>,
+) -> Vec<EncodingShape> {
+    let Some(encoding) =
+        crate::utils::resolve_effective_encoding_for_instruction(instruction, item_cache)
+    else {
+        return Vec::new();
+    };
+    let (shapes, _) = crate::shapes::expand(
+        encoding,
+        &crate::utils::encoding_context(instruction, item_cache),
+    );
+    shapes
+        .into_iter()
+        .map(|shape| EncodingShape {
+            width: shape.fields.iter().map(|field| field.width).sum(),
+            guard: match shape.guard.is_always() {
+                true => Vec::new(),
+                false => shape
+                    .guard
+                    .0
+                    .iter()
+                    .map(|clause| {
+                        clause
+                            .iter()
+                            .map(|literal| GuardLiteral {
+                                condition: Expr::from(&literal.cond),
+                                value: literal.value,
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            },
+            fields: shape.fields.iter().map(EncodingField::from).collect(),
+        })
+        .collect()
 }
 
 #[derive(Serialize, JsonSchema)]

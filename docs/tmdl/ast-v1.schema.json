@@ -275,7 +275,7 @@
       ]
     },
     "EncodingField": {
-      "description": "One field of an instruction encoding. Fields are listed high bit first\nwithin an encoding unit, units in emission order.",
+      "description": "One field of an encoding shape. Fields are listed high bit first within an\nencoding unit, units in emission order.",
       "type": "object",
       "properties": {
         "value": {
@@ -293,6 +293,40 @@
       "required": [
         "width",
         "value"
+      ]
+    },
+    "EncodingShape": {
+      "description": "One fixed bit map an encoding expression expands to.",
+      "type": "object",
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EncodingField"
+          }
+        },
+        "guard": {
+          "description": "The conditions that select this shape, as a disjunction of conjunctions.\nAbsent when the encoding has no condition and the shape is always taken.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/GuardLiteral"
+            }
+          }
+        },
+        "width": {
+          "description": "Bits the shape occupies.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "fields"
       ]
     },
     "ExceptClause": {
@@ -739,6 +773,26 @@
           ]
         },
         {
+          "description": "Concatenation of bit values, high bit first. Empty spells no bits.",
+          "type": "object",
+          "properties": {
+            "elements": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "tuple"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
           "description": "Parser recovery node; checked successful inputs do not normally contain it.",
           "type": "object",
           "properties": {
@@ -905,6 +959,23 @@
       "required": [
         "first",
         "second"
+      ]
+    },
+    "GuardLiteral": {
+      "description": "One `if` condition of an encoding, and the value it takes in a shape.",
+      "type": "object",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/Expr"
+        },
+        "value": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "condition",
+        "value"
       ]
     },
     "IsaRequirement": {
@@ -1124,10 +1195,8 @@
               "$ref": "#/$defs/Expr"
             },
             "encoding": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/EncodingField"
-              }
+              "description": "The encoding expression as written, with `fn` helpers inlined.",
+              "$ref": "#/$defs/Expr"
             },
             "isas": {
               "type": "array",
@@ -1181,9 +1250,14 @@
               "$ref": "#/$defs/Expr"
             },
             "encoding": {
+              "description": "The encoding expression as written, with `fn` helpers inlined.",
+              "$ref": "#/$defs/Expr"
+            },
+            "encoding_shapes": {
+              "description": "The fixed bit maps the encoding expression expands to, derived from\nthe whole template chain: one per reachable truth assignment of its\nconditions.",
               "type": "array",
               "items": {
-                "$ref": "#/$defs/EncodingField"
+                "$ref": "#/$defs/EncodingShape"
               }
             },
             "isas": {

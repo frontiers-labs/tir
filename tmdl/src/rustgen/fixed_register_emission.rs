@@ -703,6 +703,10 @@ fn collect_register_path_reads(expr: &ast::Expr, out: &mut HashSet<(String, Stri
         }
         ast::Expr::Path(_) | ast::Expr::Ident(_) | ast::Expr::Lit(_) => {}
         ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => {}
+        ast::Expr::Tuple(t) => t
+            .elements
+            .iter()
+            .for_each(|e| collect_register_path_reads(e, out)),
         ast::Expr::Assign(a) => {
             // A register-path assignment destination is a write, not a read.
             if assignment_dest_register_path(&a.dest).is_none() {

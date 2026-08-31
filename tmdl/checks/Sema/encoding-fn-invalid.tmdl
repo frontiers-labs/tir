@@ -1,0 +1,39 @@
+// `fn` helpers are inlined into an encoding before it is anything else, so a
+// call to a helper that does not exist or takes a different number of arguments
+// is caught there, ahead of every shape.
+
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa Arch {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [Arch] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x15 => { } }
+}
+
+fn modrm(reg: bits<4>, rm: bits<4>) { (0b11, reg[2..0], rm[2..0]) }
+
+instruction UnknownHelper for [Arch] {
+    param MNEMONIC: String = "unknownhelper";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding { OPCODE, sib(dst, src) }
+}
+
+instruction WrongArity for [Arch] {
+    param MNEMONIC: String = "wrongarity";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding { OPCODE, modrm(dst) }
+}
+
+// CHECK-DAG: unknown function 'sib'
+// CHECK-DAG: function 'modrm' takes 2 arguments, but 1 were supplied

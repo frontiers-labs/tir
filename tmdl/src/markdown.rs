@@ -10,7 +10,7 @@ use crate::ast::{
 };
 use crate::error::TMDLError;
 use crate::utils::{
-    get_encoding_arms, resolve_effective_asm_for_instruction,
+    first_encoding_shape_arms, resolve_effective_asm_for_instruction,
     resolve_effective_schedule_for_instruction, resolve_operands_for_instruction,
     resolve_params_for_instruction,
 };
@@ -325,7 +325,7 @@ fn write_instructions(
                 writeln!(output, "\n**Scheduling class:** {classes}")?;
             }
 
-            let mut encoding = get_encoding_arms(instruction, item_cache);
+            let mut encoding = first_encoding_shape_arms(instruction, item_cache);
             encoding.sort_by_key(|arm| std::cmp::Reverse(arm.end.unwrap_or(arm.start)));
             if !encoding.is_empty() {
                 writeln!(output, "\n**Encoding**\n")?;
@@ -534,6 +534,15 @@ fn format_expr_with_precedence(expr: &Expr, parent_precedence: u8) -> String {
             .collect::<Vec<_>>()
             .join("::"),
         Expr::Field(field) => format!("{}.{}", format_expr(&field.base), field.member),
+        Expr::Tuple(tuple) => format!(
+            "({})",
+            tuple
+                .elements
+                .iter()
+                .map(format_expr)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Expr::Slice(slice) => format!("{}[{}..{}]", format_expr(&slice.base), slice.hi, slice.lo),
         Expr::Cast(cast) => format!(
             "{} as bits<{}>",

@@ -24,7 +24,7 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    behavior_uses_todo, get_encoding_arms, isa_param_values, item_supports_isa,
+    behavior_uses_todo, first_encoding_shape_arms, isa_param_values, item_supports_isa,
     parse_literal_value, resolve_isa_param_values, resolve_operand_widths,
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
@@ -94,11 +94,6 @@ fn eval_class_param(
         }
         _ => None,
     }
-}
-
-fn is_pc_class(rc: &ast::RegisterClass) -> bool {
-    rc.resolve_registers()
-        .any(|r| r.traits.contains(&ast::RegisterTrait::ProgramCounter))
 }
 
 fn item_enabled<'a>(
@@ -598,7 +593,7 @@ fn decode_layout(
     let mut guards = Vec::new();
     let mut pieces: Pieces = HashMap::new();
 
-    for arm in get_encoding_arms(instruction, item_cache) {
+    for arm in first_encoding_shape_arms(instruction, item_cache) {
         let word_lo = arm.start;
         let word_hi = arm.end.unwrap_or(arm.start);
         match &arm.value {
@@ -735,7 +730,7 @@ fn instruction_width(
     instruction: &ast::Instruction,
     item_cache: &HashMap<&str, &ast::Item>,
 ) -> Option<u16> {
-    get_encoding_arms(instruction, item_cache)
+    first_encoding_shape_arms(instruction, item_cache)
         .into_iter()
         .map(|arm| arm.end.unwrap_or(arm.start) + 1)
         .max()
@@ -758,7 +753,7 @@ pub fn generate_btor2<'a>(
             continue;
         }
         let name = rc.name.to_lowercase();
-        if is_pc_class(rc) {
+        if rc.is_program_counter() {
             pc_classes.insert(name);
             continue;
         }

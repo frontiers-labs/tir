@@ -173,7 +173,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                         nonzero: false,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 encoding: None,
 // CHECK-NEXT:                 asm: Some(
 // CHECK-NEXT:                     Block(
 // CHECK-NEXT:                         Block {
@@ -317,7 +317,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                         nonzero: false,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 encoding: None,
 // CHECK-NEXT:                 asm: Some(
 // CHECK-NEXT:                     Block(
 // CHECK-NEXT:                         Block {
@@ -453,7 +453,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                         nonzero: false,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 encoding: None,
 // CHECK-NEXT:                 asm: Some(
 // CHECK-NEXT:                     Block(
 // CHECK-NEXT:                         Block {
@@ -570,7 +570,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                         nonzero: false,
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ],
-// CHECK-NEXT:                 encoding: [],
+// CHECK-NEXT:                 encoding: None,
 // CHECK-NEXT:                 asm: Some(
 // CHECK-NEXT:                     Block(
 // CHECK-NEXT:                         Block {
@@ -662,7 +662,7 @@ instruction UnsignedLessEqual for [Test] {
 // CHECK-NEXT:                     },
 // CHECK-NEXT:                 ),
 // CHECK-NEXT:                 schedule: None,
-// CHECK-NEXT:                 span: 1122..37307,
+// CHECK-NEXT:                 span: 1122..37315,
 // CHECK-NEXT:             },
 // CHECK-NEXT:         ),
 // CHECK-NEXT:     ],

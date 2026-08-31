@@ -7,7 +7,7 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    get_encoding_arms, isa_param_values, item_supports_isa, parse_literal_value,
+    first_encoding_shape_arms, isa_param_values, item_supports_isa, parse_literal_value,
     resolve_isa_param_values, resolve_operand_constraints_for_instruction, resolve_operand_widths,
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
@@ -287,7 +287,7 @@ pub fn generate_smtlib<'a>(
             continue;
         }
         let name = rc.name.to_lowercase();
-        if is_pc_class(rc) {
+        if rc.is_program_counter() {
             pc_classes.insert(name);
             continue;
         }
@@ -357,11 +357,6 @@ pub fn generate_smtlib<'a>(
 // ---------------------------------------------------------------------------
 // State (register file) declaration
 // ---------------------------------------------------------------------------
-
-fn is_pc_class(rc: &ast::RegisterClass) -> bool {
-    rc.resolve_registers()
-        .any(|r| r.traits.contains(&ast::RegisterTrait::ProgramCounter))
-}
 
 fn flat_state_fields(ctx: &SmtCtx<'_>) -> Vec<FlatStateFieldMetadata> {
     let mut fields = ctx
@@ -873,7 +868,7 @@ fn encoding_width<'a>(
     instruction: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
 ) -> u16 {
-    get_encoding_arms(instruction, item_cache)
+    first_encoding_shape_arms(instruction, item_cache)
         .iter()
         .map(|arm| arm.end.unwrap_or(arm.start) + 1)
         .max()
@@ -886,7 +881,7 @@ fn build_encoding_metadata<'a>(
     operands: &[(String, Type)],
 ) -> Vec<EncodingFieldMetadata> {
     let params = resolve_params_for_instruction(instruction, item_cache);
-    get_encoding_arms(instruction, item_cache)
+    first_encoding_shape_arms(instruction, item_cache)
         .into_iter()
         .map(|arm| {
             let word_high = arm.end.unwrap_or(arm.start);
@@ -947,7 +942,7 @@ fn build_smt_encoding<'a>(
 ) -> (String, u16) {
     let operands = operands.iter().cloned().collect::<HashMap<_, _>>();
     let params = resolve_params_for_instruction(instruction, item_cache);
-    let encoding_arms = get_encoding_arms(instruction, item_cache);
+    let encoding_arms = first_encoding_shape_arms(instruction, item_cache);
 
     let mut pieces: Vec<(u16, String)> = Vec::new();
     for arm in &encoding_arms {
@@ -2629,7 +2624,7 @@ fn build_decoder<'a>(
         let operand_list = resolved_operands(ctx, i, item_cache);
         let operands: HashMap<String, Type> = operand_list.iter().cloned().collect();
         let params = resolve_params_for_instruction(i, item_cache);
-        let encoding_arms = get_encoding_arms(i, item_cache);
+        let encoding_arms = first_encoding_shape_arms(i, item_cache);
 
         // For each operand: collect (op_lo, op_hi, word_lo, word_hi) pieces.
         let mut operand_pieces: HashMap<String, Vec<(u16, u16, u16, u16)>> = HashMap::new();

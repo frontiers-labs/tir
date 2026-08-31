@@ -1,0 +1,55 @@
+// An encoding is an expression. A tuple concatenates its elements high bit
+// first, `()` contributes no bits, and `fn` helpers with typed parameters are
+// inlined into the encoding before any later stage sees it.
+
+// RUN: tmdlc --action=emit-ast --output=- %s | filecheck %s
+
+isa ByteIsa {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [ByteIsa] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x15 => { } }
+}
+
+fn rex(w: bits<1>, reg: bits<4>, rm: bits<4>) {
+    if w | reg[3] | rm[3] { (0b0100, w, reg[3], 0b0, rm[3]) } else { () }
+}
+
+fn modrm_reg(reg: bits<4>, rm: bits<4>) { (0b11, reg[2..0], rm[2..0]) }
+
+instruction MovRR for [ByteIsa] {
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding { rex(0b0, dst, src), OPCODE, modrm_reg(dst, src) }
+}
+
+// A typed parameter list on a `fn`.
+// CHECK:      FnDef {
+// CHECK-NEXT:     name: "rex",
+// CHECK-NEXT:     params: [
+// CHECK-NEXT:         FnParam {
+// CHECK-NEXT:             name: "w",
+// CHECK-NEXT:             ty: Some(
+// CHECK-NEXT:                 Bits(
+// CHECK-NEXT:                     1,
+
+// The `else` arm contributes no bits.
+// CHECK:      else_: Some(
+// CHECK-NEXT:     Block(
+// CHECK-NEXT:         Block {
+// CHECK-NEXT:             stmts: [
+// CHECK-NEXT:                 Tuple(
+// CHECK-NEXT:                     Tuple {
+// CHECK-NEXT:                         elements: [],
+
+// The encoding is one tuple whose elements are the inlined helper bodies.
+// CHECK:      name: "MovRR",
+// CHECK:      encoding: Some(
+// CHECK-NEXT:     Tuple(

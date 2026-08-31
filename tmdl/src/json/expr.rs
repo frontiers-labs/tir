@@ -79,6 +79,11 @@ pub(super) enum Expr {
         parameters: Vec<String>,
         body: Box<Expr>,
     },
+    /// Concatenation of bit values, high bit first. Empty spells no bits.
+    Tuple {
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        elements: Vec<Expr>,
+    },
     /// Parser recovery node; checked successful inputs do not normally contain it.
     Invalid,
 }
@@ -162,6 +167,9 @@ impl From<&ast::Expr> for Expr {
             ast::Expr::Lambda(lambda) => Self::Lambda {
                 parameters: lambda.params.clone(),
                 body: Box::new(Expr::from(lambda.body.as_ref())),
+            },
+            ast::Expr::Tuple(tuple) => Self::Tuple {
+                elements: tuple.elements.iter().map(Expr::from).collect(),
             },
             ast::Expr::Invalid => Self::Invalid,
         }

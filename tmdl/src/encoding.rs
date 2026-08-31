@@ -1,7 +1,6 @@
-//! Encoding field lists: resolving each field's width and laying the fields
-//! out into instruction-word bit ranges.
+//! Laying an encoding shape's fields out into instruction-word bit ranges.
 //!
-//! An `encoding` block lists fields the way the ISA's manual draws them: high
+//! An encoding shape lists fields the way the ISA's manual draws them: high
 //! bit first within an *encoding unit*, units in emission order. The unit is
 //! the ISA's `ENCODING_UNIT` parameter — 32 for a fixed-width word ISA, 8 for a
 //! byte-stream ISA like x86, where the manual draws one byte at a time. With no
@@ -18,50 +17,7 @@ use chumsky::error::Rich;
 use crate::Span;
 use crate::ast;
 use crate::expander::Diag;
-use crate::types::Type;
 use crate::utils::parse_literal_value;
-
-/// Resolve every encoding field's width from the declared type of the operand,
-/// parameter, register class or literal it names. Fields whose width cannot be
-/// determined are reported; the rest of the pipeline can then assume a width.
-pub fn resolve_encoding_widths(files: &mut [ast::File]) -> Vec<Diag> {
-    let classes = register_class_widths(files);
-    let mut diags = Vec::new();
-
-    for file in files.iter_mut() {
-        let file_name = file.file_name.clone();
-        for item in &mut file.items {
-            let (name, operands, params, encoding) = match item {
-                ast::Item::Template(t) => (&t.name, &t.operands, &t.params, &mut t.encoding),
-                ast::Item::Instruction(i) => (&i.name, &i.operands, &i.params, &mut i.encoding),
-                _ => continue,
-            };
-            let operands: HashMap<String, Type> = operands
-                .iter()
-                .map(|op| (op.name.clone(), op.ty.clone()))
-                .collect();
-            let params: HashMap<String, Type> = params
-                .iter()
-                .map(|(name, (ty, _))| (name.clone(), ty.clone()))
-                .collect();
-            let ctx = FieldContext {
-                owner: name,
-                operands: &operands,
-                params: &params,
-                classes: &classes,
-            };
-            for field in encoding.iter_mut() {
-                match ctx.width_of(&field.value) {
-                    Ok(width) => field.width = width,
-                    Err(message) => {
-                        diags.push((file_name.clone(), Rich::custom(field.span, message)))
-                    }
-                }
-            }
-        }
-    }
-    diags
-}
 
 /// `ENCODING_LEN` of every register class, i.e. the width of an operand of that
 /// class in an encoding.
@@ -69,79 +25,51 @@ pub fn register_class_widths(files: &[ast::File]) -> HashMap<String, u16> {
     files
         .iter()
         .flat_map(|f| &f.items)
-        .filter_map(|item| match item {
-            ast::Item::RegisterClass(class) => {
-                let width = class
-                    .parameters
-                    .get("ENCODING_LEN")
-                    .and_then(|(_, value)| value.as_ref())
-                    .and_then(|value| match value {
-                        ast::Expr::Lit(ast::Lit::Int(li)) => Some(parse_literal_value(li) as u16),
-                        _ => None,
-                    })?;
-                Some((class.name.clone(), width))
-            }
-            _ => None,
-        })
+        .filter_map(class_width)
         .collect()
 }
 
-struct FieldContext<'a> {
-    owner: &'a str,
-    operands: &'a HashMap<String, Type>,
-    params: &'a HashMap<String, Type>,
-    classes: &'a HashMap<String, u16>,
+fn class_width(item: &ast::Item) -> Option<(String, u16)> {
+    let ast::Item::RegisterClass(class) = item else {
+        return None;
+    };
+    let width = class
+        .parameters
+        .get("ENCODING_LEN")
+        .and_then(|(_, value)| value.as_ref())
+        .and_then(|value| match value {
+            ast::Expr::Lit(ast::Lit::Int(li)) => Some(parse_literal_value(li) as u16),
+            _ => None,
+        })?;
+    Some((class.name.clone(), width))
 }
 
-impl FieldContext<'_> {
-    fn width_of(&self, value: &ast::Expr) -> Result<u16, String> {
-        match value {
-            ast::Expr::Lit(ast::Lit::Int(li)) => literal_width(li.value()),
-            ast::Expr::Ident(id) => self.named_width(&id.name),
-            ast::Expr::Slice(slc) => Ok(slc.hi - slc.lo + 1),
-            ast::Expr::IndexAccess(_) => Ok(1),
-            _ => Err(format!(
-                "encoding field in '{}' must be a literal, parameter, operand or bit slice",
-                self.owner
-            )),
-        }
-    }
-
-    /// The width a bare `name` contributes. A register operand contributes its
-    /// class's `ENCODING_LEN`; anything whose width is an ISA-parameter
-    /// expression has no single width and must be sliced explicitly.
-    fn named_width(&self, name: &str) -> Result<u16, String> {
-        let ty = self
-            .operands
-            .get(name)
-            .or_else(|| self.params.get(name))
-            .ok_or_else(|| {
-                format!(
-                    "Unknown '{name}' in encoding of instruction '{}': \
-                     not a parameter or operand",
-                    self.owner
-                )
-            })?;
-        match ty {
-            Type::Bits(width) => Ok(*width),
-            Type::Struct(class) => self.classes.get(class).copied().ok_or_else(|| {
-                format!(
-                    "register class '{class}' of operand '{name}' in '{}' \
-                     declares no ENCODING_LEN",
-                    self.owner
-                )
-            }),
-            Type::BitsExpr(_) => Err(format!(
-                "width of '{name}' in '{}' depends on an ISA parameter; \
-                 give the encoding field an explicit bit range",
-                self.owner
-            )),
-            _ => Err(format!(
-                "'{name}' in encoding of '{}' has no bit width",
-                self.owner
-            )),
-        }
-    }
+/// What an encoding needs to know about every register class reachable through
+/// an item cache: how wide an operand of it is, and which indices it names.
+pub fn register_classes_from_cache(
+    item_cache: &HashMap<&str, &ast::Item>,
+) -> HashMap<String, crate::shapes::RegisterClassInfo> {
+    item_cache
+        .values()
+        .filter_map(|item| {
+            let (name, encoding_len) = class_width(item)?;
+            let ast::Item::RegisterClass(class) = item else {
+                return None;
+            };
+            let indices = class
+                .indexed_registers()
+                .into_iter()
+                .map(|(index, _)| u64::from(index))
+                .collect();
+            Some((
+                name,
+                crate::shapes::RegisterClassInfo {
+                    encoding_len,
+                    indices,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Bits a literal spells: one per binary digit, four per hex digit. A decimal

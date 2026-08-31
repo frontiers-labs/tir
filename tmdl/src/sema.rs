@@ -1271,7 +1271,7 @@ fn frontend_has_capable_decoder(
     })
 }
 
-fn build_item_cache(files: &[ast::File]) -> HashMap<&str, &ast::Item> {
+pub(crate) fn build_item_cache(files: &[ast::File]) -> HashMap<&str, &ast::Item> {
     files
         .iter()
         .flat_map(|f| f.items.iter().map(|i| (i.name(), i)))
@@ -1589,10 +1589,14 @@ fn check_instruction_consistent(
         }
     }
 
-    diags.extend(check_operand_constraints(instruction, &operands, file_name));
-
     // `bits<expr>` widths must constant-fold against the ISA parameters.
     let isa_params = resolve_isa_param_values(instruction, item_cache);
+    diags.extend(check_operand_constraints(
+        instruction,
+        &operands,
+        &isa_params,
+        file_name,
+    ));
     for operand in &operands {
         let name = &operand.name;
         if let Type::BitsExpr(expr) = &operand.ty
@@ -1642,27 +1646,24 @@ fn check_instruction_consistent(
     // Encoding must exist somewhere in the chain or instruction. Text-only
     // targets (pseudo-ISAs like PTX) have no binary representation, so an empty
     // encoding is allowed there and simply produces no encoder.
-    let effective_encoding = resolve_effective_encoding_for_instruction(instruction, item_cache);
-    if effective_encoding.is_empty() {
-        if !text_only {
-            diags.push((
-                file_name.to_string(),
-                Rich::custom(
-                    instruction.span,
-                    format!("Instruction '{}' has no encoding defined", instruction.name),
-                ),
-            ));
-        }
-    } else {
-        diags.extend(check_encoding(
+    match resolve_effective_encoding_for_instruction(instruction, item_cache) {
+        Some(encoding) => diags.extend(check_encoding(
             instruction,
-            effective_encoding,
+            encoding,
             &params_cache,
             &operands,
             &isa_params,
-            crate::encoding::encoding_unit(&isa_params),
+            item_cache,
             file_name,
-        ));
+        )),
+        None if !text_only => diags.push((
+            file_name.to_string(),
+            Rich::custom(
+                instruction.span,
+                format!("Instruction '{}' has no encoding defined", instruction.name),
+            ),
+        )),
+        None => {}
     }
 
     // Asm must exist somewhere in the chain or instruction.
@@ -1803,6 +1804,7 @@ fn check_behavior(
             ast::Expr::Ident(_)
             | ast::Expr::Lit(_)
             | ast::Expr::BuiltinFunction(_)
+            | ast::Expr::Tuple(_)
             | ast::Expr::Invalid => {}
         }
     }
@@ -1832,6 +1834,21 @@ fn check_behavior(
     }
 
     let mut diags = Vec::new();
+    crate::utils::visit_exprs(behavior, &mut |node| {
+        if let ast::Expr::Tuple(tuple) = node {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    tuple.span,
+                    format!(
+                        "concatenation in the behavior of '{owner}'; a concatenation \
+                         spells the bits of an encoding, not a value"
+                    ),
+                ),
+            ));
+        }
+    });
+
     let mut excepts = Vec::new();
     walk_excepts(behavior, &mut excepts);
     for clause in excepts {
@@ -1943,7 +1960,7 @@ fn check_let_bindings(
     diags: &mut Vec<(String, Diag)>,
 ) {
     let mut bound = HashSet::new();
-    visit_exprs(behavior, &mut |e| {
+    crate::utils::visit_exprs(behavior, &mut |e| {
         if let ast::Expr::Let(l) = e {
             bound.insert(l.name.clone());
         }
@@ -2049,7 +2066,7 @@ fn check_let_bindings(
                 }
                 ast::Expr::Lambda(l) => nested(self, &l.body, scope, diags),
                 ast::Expr::Lit(_) | ast::Expr::Path(_) | ast::Expr::BuiltinFunction(_) => {}
-                ast::Expr::Invalid => {}
+                ast::Expr::Tuple(_) | ast::Expr::Invalid => {}
             }
         }
     }
@@ -2093,60 +2110,9 @@ fn is_fence_call(e: &ast::Expr) -> bool {
     ))
 }
 
-/// Visit `e` and every sub-expression.
-fn visit_exprs<'a>(e: &'a ast::Expr, f: &mut dyn FnMut(&'a ast::Expr)) {
-    f(e);
-    match e {
-        ast::Expr::Assign(a) => {
-            visit_exprs(&a.dest, f);
-            visit_exprs(&a.value, f);
-        }
-        ast::Expr::Let(l) => {
-            if let Some(width) = &l.width {
-                visit_exprs(width, f);
-            }
-            visit_exprs(&l.value, f);
-        }
-        ast::Expr::Binary(b) => {
-            visit_exprs(&b.lhs, f);
-            visit_exprs(&b.rhs, f);
-        }
-        ast::Expr::Unary(u) => visit_exprs(&u.x, f),
-        ast::Expr::Block(b) => b.stmts.iter().for_each(|s| visit_exprs(s, f)),
-        ast::Expr::Call(c) => {
-            visit_exprs(&c.callee, f);
-            c.arguments.iter().for_each(|a| visit_exprs(a, f));
-        }
-        ast::Expr::Field(fld) => visit_exprs(&fld.base, f),
-        ast::Expr::If(i) => {
-            visit_exprs(&i.cond, f);
-            visit_exprs(&i.then, f);
-            if let Some(e) = &i.else_ {
-                visit_exprs(e, f);
-            }
-        }
-        ast::Expr::IndexAccess(ix) => visit_exprs(&ix.base, f),
-        ast::Expr::Slice(s) => visit_exprs(&s.base, f),
-        ast::Expr::Cast(c) => {
-            visit_exprs(&c.x, f);
-            visit_exprs(&c.width, f);
-        }
-        ast::Expr::Try(t) => {
-            visit_exprs(&t.body, f);
-            t.handlers.iter().for_each(|h| visit_exprs(&h.body, f));
-        }
-        ast::Expr::Lambda(l) => visit_exprs(&l.body, f),
-        ast::Expr::Ident(_)
-        | ast::Expr::Lit(_)
-        | ast::Expr::Path(_)
-        | ast::Expr::BuiltinFunction(_)
-        | ast::Expr::Invalid => {}
-    }
-}
-
 fn count_matching(e: &ast::Expr, pred: fn(&ast::Expr) -> bool) -> usize {
     let mut n = 0;
-    visit_exprs(e, &mut |x| {
+    crate::utils::visit_exprs(e, &mut |x| {
         if pred(x) {
             n += 1;
         }
@@ -2255,7 +2221,7 @@ fn check_atomic_structure(
 }
 
 /// Best-effort span of an arbitrary expression, for diagnostics.
-fn expr_span(e: &ast::Expr) -> Span {
+pub(crate) fn expr_span(e: &ast::Expr) -> Span {
     match e {
         ast::Expr::Assign(a) => a.span,
         ast::Expr::Let(l) => l.span,
@@ -2272,22 +2238,34 @@ fn expr_span(e: &ast::Expr) -> Span {
         ast::Expr::Path(p) => p.span,
         ast::Expr::Ident(id) => id.span,
         ast::Expr::Lambda(l) => l.span,
+        ast::Expr::Tuple(t) => t.span,
         ast::Expr::Lit(ast::Lit::Int(li)) => li.span,
         ast::Expr::Lit(ast::Lit::Str(ls)) => ls.span,
         ast::Expr::BuiltinFunction(_) | ast::Expr::Invalid => (0..0).into(),
     }
 }
 
+/// Check an instruction's encoding expression and every shape it expands to.
+/// Bit ranges are checked once on the expression, since no condition moves
+/// them; each shape is then checked as the fixed bit map it is.
 fn check_encoding(
     instruction: &ast::Instruction,
-    encoding: &[ast::EncodingField],
+    encoding: &ast::Expr,
     params_cache: &HashMap<&str, (Type, Option<ast::Expr>)>,
     operands: &[&ast::Operand],
     isa_params: &HashMap<String, i64>,
-    unit: Option<u16>,
+    item_cache: &HashMap<&str, &ast::Item>,
     file_name: &str,
 ) -> Vec<(String, Diag)> {
     let mut diags = vec![];
+    let unit = crate::encoding::encoding_unit(isa_params);
+    let ctx = crate::utils::encoding_context(instruction, item_cache);
+    let (shapes, errors) = crate::shapes::expand(encoding, &ctx);
+    diags.extend(
+        errors
+            .into_iter()
+            .map(|(span, message)| (file_name.to_string(), Rich::custom(span, message))),
+    );
 
     let declared_width = |name: &str| -> Option<u16> {
         let ty = params_cache.get(name).map(|(ty, _)| ty).or_else(|| {
@@ -2314,29 +2292,74 @@ fn check_encoding(
         )
     };
 
-    for field in encoding {
-        let Some(name) = encoding_value_name(&field.value) else {
-            continue;
+    crate::utils::visit_exprs(encoding, &mut |node| {
+        let Some(name) = encoding_value_name(node) else {
+            return;
         };
         let Some(width) = declared_width(name) else {
-            continue;
+            return;
         };
-        match &field.value {
+        match node {
             ast::Expr::Slice(slc) if slc.hi >= width => diags.push(out_of_range(
-                field.span,
+                slc.span,
                 format!(
                     "slice '{name}[{}..{}]' exceeds bits<{width}>",
                     slc.hi, slc.lo
                 ),
             )),
             ast::Expr::IndexAccess(idx) if idx.index >= width => diags.push(out_of_range(
-                field.span,
+                idx.span,
                 format!("bit '{name}[{}]' exceeds bits<{width}>", idx.index),
             )),
             _ => {}
         }
+    });
+
+    diags.extend(check_shapes_distinguishable(
+        instruction,
+        &shapes,
+        params_cache,
+        unit,
+        file_name,
+    ));
+    diags.extend(check_pc_single_shape(
+        instruction,
+        &shapes,
+        item_cache,
+        file_name,
+    ));
+
+    // One mistake in an encoding is reached once per shape.
+    let mut seen = HashSet::new();
+    for shape in &shapes {
+        diags.extend(
+            check_shape(
+                instruction,
+                &shape.fields,
+                operands,
+                isa_params,
+                unit,
+                file_name,
+            )
+            .into_iter()
+            .filter(|(_, diag)| seen.insert((*diag.span(), diag.to_string()))),
+        );
     }
 
+    diags
+}
+
+/// Bit-level checks of one fixed bit map: which operand bits it drops, and
+/// whether it fills whole encoding units.
+fn check_shape(
+    instruction: &ast::Instruction,
+    encoding: &[ast::EncodingField],
+    operands: &[&ast::Operand],
+    isa_params: &HashMap<String, i64>,
+    unit: Option<u16>,
+    file_name: &str,
+) -> Vec<(String, Diag)> {
+    let mut diags = vec![];
     for operand in operands {
         let width = match &operand.ty {
             Type::Bits(width) => *width,
@@ -2423,6 +2446,116 @@ fn check_encoding(
     diags
 }
 
+/// Decoding stays a function of the instruction word: two shapes of one
+/// instruction must differ in width or in some bit both of them fix.
+fn check_shapes_distinguishable(
+    instruction: &ast::Instruction,
+    shapes: &[crate::shapes::Shape],
+    params_cache: &HashMap<&str, (Type, Option<ast::Expr>)>,
+    unit: Option<u16>,
+    file_name: &str,
+) -> Vec<(String, Diag)> {
+    // A shape whose fields do not lay out has no bit map to compare; the layout
+    // itself is already reported.
+    let maps: Vec<(u16, HashMap<u16, bool>)> = shapes
+        .iter()
+        .filter_map(|shape| {
+            let width = shape.fields.iter().map(|field| field.width).sum();
+            let arms = crate::encoding::encoding_arms(&shape.fields, unit)?;
+            Some((width, fixed_bits(&arms, params_cache)))
+        })
+        .collect();
+
+    let mut diags = vec![];
+    for (index, (width, bits)) in maps.iter().enumerate() {
+        for (other_width, other_bits) in &maps[index + 1..] {
+            let distinguishable = width != other_width
+                || bits
+                    .iter()
+                    .any(|(bit, value)| other_bits.get(bit).is_some_and(|other| other != value));
+            if !distinguishable {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        instruction.span,
+                        format!(
+                            "two encoding shapes of instruction '{}' are the same \
+                             {width} bits wide and fix no bit differently, so the \
+                             word does not decide between them",
+                            instruction.name
+                        ),
+                    ),
+                ));
+            }
+        }
+    }
+    diags
+}
+
+/// The literal bits a shape pins, by absolute bit position.
+fn fixed_bits(
+    arms: &[ast::EncodingArm],
+    params_cache: &HashMap<&str, (Type, Option<ast::Expr>)>,
+) -> HashMap<u16, bool> {
+    let mut bits = HashMap::new();
+    for arm in arms {
+        let literal = match &arm.value {
+            ast::Expr::Lit(ast::Lit::Int(li)) => li,
+            ast::Expr::Ident(id) => match params_cache.get(id.name.as_str()) {
+                Some((_, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => li,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let value = crate::utils::parse_literal_value(literal);
+        for bit in arm.start..=arm.end.unwrap_or(arm.start) {
+            bits.insert(bit, (value >> (bit - arm.start)) & 1 == 1);
+        }
+    }
+    bits
+}
+
+/// An instruction whose behavior reads the program counter cannot have its
+/// length decided by a guard: the behavior would need to know which shape was
+/// chosen. No branch relaxation exists, so one shape is the rule.
+fn check_pc_single_shape(
+    instruction: &ast::Instruction,
+    shapes: &[crate::shapes::Shape],
+    item_cache: &HashMap<&str, &ast::Item>,
+    file_name: &str,
+) -> Vec<(String, Diag)> {
+    if shapes.len() < 2 {
+        return vec![];
+    }
+    let reads_pc = {
+        let mut found = false;
+        crate::utils::visit_exprs(&instruction.behavior, &mut |node| {
+            if let ast::Expr::Path(path) = node
+                && let Some(ast::Item::RegisterClass(class)) = item_cache.get(path.base.as_str())
+                && class.is_program_counter()
+            {
+                found = true;
+            }
+        });
+        found
+    };
+    if !reads_pc {
+        return vec![];
+    }
+    vec![(
+        file_name.to_string(),
+        Rich::custom(
+            instruction.span,
+            format!(
+                "instruction '{}' reads the program counter and has {} encoding \
+                 shapes; its behavior cannot see which one the encoder picked",
+                instruction.name,
+                shapes.len()
+            ),
+        ),
+    )]
+}
+
 /// Which bits of `name` the encoding spells, low bit first, or `None` when the
 /// encoding does not carry the operand at all.
 fn covered_bits(encoding: &[ast::EncodingField], name: &str, width: u16) -> Option<Vec<bool>> {
@@ -2453,6 +2586,7 @@ fn covered_bits(encoding: &[ast::EncodingField], name: &str, width: u16) -> Opti
 fn check_operand_constraints(
     instruction: &ast::Instruction,
     operands: &[&ast::Operand],
+    isa_params: &HashMap<String, i64>,
     file_name: &str,
 ) -> Vec<(String, Diag)> {
     let mut diags = vec![];
@@ -2479,6 +2613,31 @@ fn check_operand_constraints(
                     instruction.span,
                     format!(
                         "operand '{}' of '{}' is a register; an alignment constrains an immediate",
+                        operand.name, instruction.name
+                    ),
+                ),
+            ));
+        }
+
+        // The smallest nonzero multiple of the alignment is the alignment
+        // itself, so an operand too narrow to hold it can take no value at all.
+        let width = match &operand.ty {
+            Type::Bits(width) => Some(*width),
+            Type::BitsExpr(expr) => eval_bits_width(expr, isa_params),
+            _ => None,
+        };
+        if let Some(width) = width
+            && operand.nonzero
+            && align.is_power_of_two()
+            && u32::from(width) <= align.trailing_zeros()
+        {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!(
+                        "operand '{}' of '{}' is #[align({align})] and #[nonzero], \
+                         which no bits<{width}> value satisfies",
                         operand.name, instruction.name
                     ),
                 ),
