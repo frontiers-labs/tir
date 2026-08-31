@@ -515,6 +515,32 @@ fn scope_dirty_drops_the_inner_scope_on_pop() {
 }
 
 #[test]
+fn innermost_dirty_holds_only_the_inner_scope_changes() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let c = sym(&mut g, 2);
+    let d = sym(&mut g, 3);
+    g.rebuild();
+
+    g.push_context();
+    g.union(a, b);
+    g.rebuild();
+    g.push_context();
+    let sum = add(&mut g, c, d);
+    g.union(c, d);
+    g.rebuild();
+    let mut expected = vec![g.find(c), g.find(sum)];
+    expected.sort();
+    assert_eq!(g.innermost_dirty(), expected);
+
+    g.pop_context();
+    assert_eq!(g.innermost_dirty(), vec![g.find(a)]);
+    g.pop_context();
+    assert!(g.innermost_dirty().is_empty());
+}
+
+#[test]
 fn scope_dirty_closes_upward_over_parents() {
     // A parent's e-nodes re-canonicalize through the merge, so a pattern rooted
     // there can match under the scope and not in the base graph.

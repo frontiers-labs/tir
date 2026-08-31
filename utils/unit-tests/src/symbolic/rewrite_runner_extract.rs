@@ -512,3 +512,55 @@ proptest::proptest! {
         g.pop_context();
     }
 }
+
+proptest::proptest! {
+    // Three saturations and a full extraction per case, so fewer of them.
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
+
+    /// A scope nested in another refreshes the extraction its parent refreshed,
+    /// and recomputes only what it changed itself — the classes the parent
+    /// dirtied are already answered for. The answer must still be the one a full
+    /// pass over the doubly scoped graph gives.
+    #[test]
+    fn nested_refresh_equals_full_extraction(
+        exprs in proptest::collection::vec(expr_strategy(), 1..4),
+        outer in proptest::collection::vec((0usize..64, 0usize..64), 0..3),
+        inner in proptest::collection::vec((0usize..64, 0usize..64), 0..3),
+    ) {
+        let rules = math_rules();
+        let mut g = EGraph::new();
+        for e in &exprs {
+            build(&mut g, e);
+        }
+        g.rebuild();
+        g.saturate_rules(&rules, &NoExterns, 30, 10_000);
+        let base = g.extract_best(|_, node| unit(node));
+
+        let classes: Vec<Id> = g.class_ids().collect();
+        g.push_context();
+        for &(a, b) in &outer {
+            g.union(classes[a % classes.len()], classes[b % classes.len()]);
+        }
+        g.rebuild();
+        g.saturate_rules(&rules, &NoExterns, 30, 10_000);
+        let outer_extraction = base.refresh(&g, &g.innermost_dirty(), |_, node| unit(node));
+
+        g.push_context();
+        for &(a, b) in &inner {
+            g.union(classes[a % classes.len()], classes[b % classes.len()]);
+        }
+        g.rebuild();
+        g.saturate_rules(&rules, &NoExterns, 30, 10_000);
+        let refreshed = outer_extraction.refresh(&g, &g.innermost_dirty(), |_, node| unit(node));
+
+        let full = g.extract_best(|_, node| unit(node));
+        for id in g.class_ids() {
+            proptest::prop_assert_eq!(
+                refreshed.node(id).map(|node| format!("{node:?}")),
+                full.node(id).map(|node| format!("{node:?}"))
+            );
+        }
+        g.pop_context();
+        g.pop_context();
+    }
+}

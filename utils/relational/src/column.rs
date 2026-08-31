@@ -184,7 +184,15 @@ impl<V: Copy + Eq + Hash> Column<V> {
     /// The classes the open scopes have written. Duplicated across frames, and
     /// not canonicalized: a caller closing over them does both.
     pub fn scoped_keys(&self) -> impl Iterator<Item = ClassId> + '_ {
-        self.scopes.iter().flatten().map(|&(class, _)| class)
+        self.scoped_keys_from(0)
+    }
+
+    /// The same, from the `depth`th open scope inward.
+    pub fn scoped_keys_from(&self, depth: usize) -> impl Iterator<Item = ClassId> + '_ {
+        self.scopes[depth..]
+            .iter()
+            .flatten()
+            .map(|&(class, _)| class)
     }
 
     /// Whether an open scope wrote `class`'s entry — an assumption, as opposed

@@ -96,10 +96,10 @@ pub struct Engine<L: Label> {
     changed_all: bool,
 
     scopes: Vec<Frame>,
-    /// Per open scope, the classes minted inside it. A popped scope's classes
-    /// keep their ids but stop being the scope's business, so this cannot be
-    /// read off the id range.
-    minted: Vec<Vec<ClassId>>,
+    /// Per open scope, the classes it minted or merged: the seeds of
+    /// [`Self::scope_dirty`]. A popped scope's classes keep their ids but stop
+    /// being the scope's business, so this cannot be read off the id range.
+    scope_dirt: Vec<Vec<ClassId>>,
     undo: Vec<Undo>,
     /// The constant a class is known to be: seeded by every literal row, raised
     /// by a scope's assumption, joined by a union.
@@ -205,7 +205,7 @@ impl<L: Label> Engine<L> {
             changed_epoch: 1,
             changed_all: true,
             scopes: Vec::new(),
-            minted: Vec::new(),
+            scope_dirt: Vec::new(),
             undo: Vec::new(),
             consts: Column::new(Join::Agree),
             tags: Column::new(Join::First),
@@ -459,6 +459,10 @@ impl<L: Label> Engine<L> {
                 .entry(survivor)
                 .or_insert_with(|| vec![survivor])
                 .extend(taken);
+            self.scope_dirt
+                .last_mut()
+                .expect("a scope frame is a scope")
+                .push(survivor);
         }
         self.num_classes -= 1;
         self.pending.push(survivor);
@@ -665,8 +669,8 @@ impl<L: Label> Engine<L> {
             self.memo_insert(key, row);
         }
         self.op_rows.entry(op_key).or_default().push(row);
-        if let Some(minted) = self.minted.last_mut() {
-            minted.push(class);
+        if let Some(dirt) = self.scope_dirt.last_mut() {
+            dirt.push(class);
             self.undo.push(Undo::OpBucket { op: op_key });
         }
         if let Some(constant) = constant {
@@ -1207,7 +1211,7 @@ impl<L: Label> Engine<L> {
         self.types.push_scope();
         self.objects.push_scope();
         self.scope_members.push(members);
-        self.minted.push(Vec::new());
+        self.scope_dirt.push(Vec::new());
         self.refresh_view();
     }
 
@@ -1258,7 +1262,7 @@ impl<L: Label> Engine<L> {
         }
         self.scope_memo.pop();
         self.scope_members.pop();
-        self.minted.pop();
+        self.scope_dirt.pop();
         self.pending = frame.pending;
         self.total_nodes = frame.total_nodes;
         self.num_classes = frame.num_classes;
@@ -1301,21 +1305,26 @@ impl<L: Label> Engine<L> {
     /// the ones minted inside them, and transitively every class holding a node
     /// with such a child. Ascending id. Empty with no scope open.
     pub fn scope_dirty(&self) -> Vec<ClassId> {
+        self.dirty_since(0)
+    }
+
+    /// The same, counted from the innermost scope alone: what changed since the
+    /// scope enclosing it, so a caller that already answered for that one has
+    /// only this to redo. Ascending id. Empty with no scope open.
+    pub fn innermost_dirty(&self) -> Vec<ClassId> {
+        self.dirty_since(self.scope_dirt.len().saturating_sub(1))
+    }
+
+    /// Everything the scopes from `depth` outward-in changed, closed upward.
+    fn dirty_since(&self, depth: usize) -> Vec<ClassId> {
         if !self.in_scope() {
             return Vec::new();
         }
-        let seeds: Vec<ClassId> = self
-            .minted
+        let seeds: Vec<ClassId> = self.scope_dirt[depth..]
             .iter()
             .flatten()
             .copied()
-            .chain(self.consts.scoped_keys())
-            .chain(
-                self.scope_members
-                    .last()
-                    .into_iter()
-                    .flat_map(|frame| frame.keys().copied()),
-            )
+            .chain(self.consts.scoped_keys_from(depth))
             .collect();
         self.close_upward(seeds, None)
     }

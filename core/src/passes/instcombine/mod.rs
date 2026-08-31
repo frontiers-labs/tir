@@ -353,7 +353,9 @@ impl Driver<'_> {
 
     /// Recurse into each nested region, assuming its guard's fact inside it. An
     /// unguarded region reads the extraction it was given; a guarded one
-    /// re-extracts only the classes its assumption dirtied.
+    /// re-extracts only the classes its own assumption dirtied — what the
+    /// assumptions above it dirtied is what the extraction it layers over
+    /// already answers.
     fn recurse(
         &mut self,
         op_ids: &[OpId],
@@ -375,7 +377,7 @@ impl Driver<'_> {
                         self.eg.push_context();
                         self.inject(value, holds);
                         self.saturate();
-                        let dirty = self.eg.scope_dirty();
+                        let dirty = self.eg.innermost_dirty();
                         let scoped = extraction.refresh(&self.eg, &dirty, |_, node| cost(node));
                         self.process_region(sub, &scoped, rewriter)?;
                         self.eg.pop_context();
