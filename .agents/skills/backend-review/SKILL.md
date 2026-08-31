@@ -17,8 +17,12 @@ to abandon the change set.
   "virtual operations", custom hand-written  instruction selection rules. If selection does
   not go through e-graph, there's nothing to salvage in the patch. It must be fully rejected.
   Expanding selection behavior is only allowed by improving the formal theory.
-- Dynamically sized encodings. One encoding == one instruction. If encoding somehow requires
-  dynamic size, that is not a single instruction => patch has a design flow => immediate reject.
+- Encodings outside the shape model. An instruction's encoding is a finite list of fixed bit
+  maps (shapes), each selected by a guard over the operands; a fixed-width instruction has one
+  shape with Guard::True. Anything not expressible as guarded fixed shapes is not a single
+  instruction => patch has a design flaw => immediate reject. The same goes for form logic in
+  hand-written Rust: encoding-only twin instructions, post-RA re-encoding passes, or register
+  classes that exist only to pick an encoding. The guard is the one place a form decision lives.
 - Any extension of symbolic language, unless the behavior can not be provably expressed via
   a combination of existing operations. "Or-combine", "vector load" and other compound operations
   must be immediately rejected.
