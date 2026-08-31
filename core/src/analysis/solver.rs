@@ -7,10 +7,21 @@
 //!
 //! Facts are keyed in a hash map but never iterated: iteration order comes from
 //! the worklist, which is a `Vec` seeded in IR order, so a solution is
-//! reproducible bit for bit.
+//! reproducible bit for bit. The hasher is [`FxBuildHasher`]: the keys are
+//! integer ids, and the default one is SipHash.
+//!
+//! The plan's column indexed by the node's number is what this wants to be, and
+//! it cannot be one yet. A [`ValueId`](crate::ValueId) comes from a counter the
+//! whole module shares, an analysis is one function's, and the analysis cache
+//! holds a result per function, so a column from the module's key space costs a
+//! module-sized allocation per function: measured on a 400-function module,
+//! 183 MB of peak RSS became 563 MB, and 419 MB with the column narrowed to the
+//! span of the keys raised. Per-function id spaces are Step 6's `Context` split.
 
 use std::collections::HashMap;
 use std::hash::Hash;
+
+use tir_adt::FxBuildHasher;
 
 /// A join-semilattice of facts. [`Lattice::bottom`] is "nothing known yet" and
 /// must be the identity of [`Lattice::join`]; `join` must be the least upper
@@ -36,14 +47,14 @@ pub trait FactDomain {
 
 /// What the solver knows, and what it still has to look at.
 pub struct Facts<N, F> {
-    facts: HashMap<N, F>,
+    facts: HashMap<N, F, FxBuildHasher>,
     worklist: Vec<N>,
 }
 
 impl<N, F> Default for Facts<N, F> {
     fn default() -> Self {
         Self {
-            facts: HashMap::new(),
+            facts: HashMap::default(),
             worklist: Vec::new(),
         }
     }

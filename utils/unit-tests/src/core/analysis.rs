@@ -1,4 +1,4 @@
-//! AnalysisManager caching and def-use analysis.
+//! AnalysisManager caching, def-use analysis and the monotone fact solver.
 
 use std::rc::Rc;
 
@@ -167,4 +167,53 @@ fn chains_over_ssa_ops() {
 
     assert!(!du.is_used(dead.result().number()));
     assert_eq!(du.use_counts()[&arg_id.number()], 2);
+}
+
+/// Whether a slot was reached: the smallest lattice with something to say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Reached(bool);
+
+impl tir::analysis::solver::Lattice for Reached {
+    fn bottom() -> Self {
+        Self(false)
+    }
+
+    fn join(&self, other: &Self) -> Self {
+        Self(self.0 || other.0)
+    }
+}
+
+/// A node of a key space with holes in it, and a ceiling the seed never
+/// mentions.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Slot(usize);
+
+/// Slot 0 reaches slot 250, which reaches slot 500, and there it stops.
+struct Chain;
+
+impl tir::analysis::solver::FactDomain for Chain {
+    type Node = Slot;
+    type Fact = Reached;
+
+    fn seed(&self, facts: &mut tir::analysis::solver::Facts<Slot, Reached>) {
+        facts.raise(Slot(0), Reached(true));
+    }
+
+    fn transfer(&self, node: Slot, facts: &mut tir::analysis::solver::Facts<Slot, Reached>) {
+        if node.0 < 500 {
+            facts.raise(Slot(node.0 + 250), Reached(true));
+        }
+    }
+}
+
+#[test]
+fn a_fact_nothing_raised_reads_as_the_lattice_bottom() {
+    let facts = tir::analysis::solver::solve(&Chain);
+
+    assert_eq!(facts.get(Slot(0)), Reached(true));
+    assert_eq!(facts.get(Slot(250)), Reached(true));
+    assert_eq!(facts.get(Slot(500)), Reached(true));
+    // A hole between two raised slots, and a slot past every one of them.
+    assert_eq!(facts.get(Slot(251)), Reached(false));
+    assert_eq!(facts.get(Slot(100_000)), Reached(false));
 }
