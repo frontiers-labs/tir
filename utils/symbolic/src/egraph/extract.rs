@@ -41,10 +41,12 @@ impl<'a, L: ENode> Extraction<'a, L> {
     /// This extraction with the classes in `dirty`, and only those, recomputed
     /// against `eg` as it stands now.
     ///
-    /// A class's answer depends on its own rows and its children's costs. `dirty`
-    /// must therefore be closed upward over parents, which is what
-    /// [`tir_relational::Engine::scope_dirty`] returns: every class an open scope
-    /// changed the rows or the children of. A class outside it has the rows and
+    /// A class's answer depends on its own rows and its children's costs, so
+    /// `dirty` must name every class changed since `self` was taken, closed
+    /// upward over parents:
+    /// [`tir_relational::Engine::scope_dirty`] where `self` is the base
+    /// extraction, [`tir_relational::Engine::innermost_dirty`] where it is the
+    /// one the enclosing scope refreshed. A class outside it has the rows and
     /// the child costs it had when `self` was taken, so it keeps its answer.
     /// Ascending order makes the sweep the same scan a full pass takes over those
     /// classes, which is what keeps the cost ties broken the same way.

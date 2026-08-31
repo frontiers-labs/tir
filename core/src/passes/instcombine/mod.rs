@@ -87,8 +87,12 @@ impl Pass for InstCombinePass {
             ruleset,
             replacing: std::cell::Cell::new(None),
         };
-        driver.hypothesize(loop_ports);
+        // The base fixpoint first, then the loops. A hypothesis scope opened over
+        // a saturated graph pays its own unions and no more; opened over an
+        // unsaturated one it pays a full search each time, and it cannot even
+        // see a port entered on a constant that the fixpoint is what folds.
         driver.saturate();
+        driver.hypothesize(loop_ports);
         // One extraction per fixpoint, not per region: the rewrites read the
         // e-graph and never write it, so the base graph a region is rewritten
         // from is the one this pass extracted.
@@ -389,7 +393,8 @@ impl Driver<'_> {
         Ok(())
     }
 
-    /// Prove the loop-carried values a loop never changes, optimistically.
+    /// Prove the loop-carried values a loop never changes, optimistically. The
+    /// base graph is at its fixpoint on entry and is left at one.
     ///
     /// SCCP's distinctive power as a scope: hypothesise that a port holds the
     /// constant the loop was entered on, run the body under that hypothesis, and
@@ -450,6 +455,7 @@ impl Driver<'_> {
                 let mut dropped = refuted.iter();
                 hypotheses.retain(|_| !dropped.next().copied().unwrap_or(false));
             }
+            let promoted = !hypotheses.is_empty();
             for port in hypotheses {
                 self.eg.union(port.head, port.init);
                 // The loop is left with what its test forwarded, which is the
@@ -459,6 +465,13 @@ impl Driver<'_> {
                 self.eg.union(port.result, port.published);
             }
             self.eg.rebuild();
+            // Back to a fixpoint before the next loop opens its scope, from the
+            // log the promoted unions left. A loop that promoted nothing left
+            // none, and a saturation still costs a round of the rules no delta
+            // narrows.
+            if promoted {
+                self.saturate();
+            }
             self.hypothesize_within(loops, order, Some(holder.op));
         }
     }
