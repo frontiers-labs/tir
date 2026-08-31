@@ -67,7 +67,7 @@ fn emit_instructions<'a>(
     let mut as_sem_expr_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_encoder_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_decoder_impls: Vec<proc_macro2::TokenStream> = vec![];
-    let mut instruction_decoder_dispatch: Vec<(u128, proc_macro2::Ident)> = vec![];
+    let mut instruction_decoder_dispatch: Vec<(u32, proc_macro2::Ident)> = vec![];
     // Data-driven assembly syntax (text-only targets): one entry per instruction,
     // consumed by a target-specific front-end to parse/print instruction bodies.
     let mut asm_syntax_entries: Vec<proc_macro2::TokenStream> = vec![];
@@ -206,7 +206,12 @@ fn emit_instructions<'a>(
         };
 
         let mnemonic_name = mnemonic.as_deref().unwrap_or(op_name);
-        let width_bytes = encoding_width_bytes(inst, item_cache);
+        let encoding_shapes = get_encoding_shapes(inst, item_cache);
+        // The same view of the operands the shape expansion was computed
+        // against, so a runtime guard reads a condition at the width the
+        // expansion decided it at.
+        let encoding_ctx = crate::utils::encoding_context(inst, item_cache);
+        let (min_width_bytes, max_width_bytes) = width_range(&encoding_shapes);
         let op_name_lit = proc_macro2::Literal::string(op_name);
         // Width expressions resolve against the same cross-ISA parameter view
         // `execute()` uses (the per-ISA maximum, e.g. XLEN=64 for RV32+RV64).
@@ -981,8 +986,11 @@ fn emit_instructions<'a>(
             }
         }
 
-        let encoding_arms = first_encoding_shape_arms(inst, item_cache);
-        let width_bytes_lit = proc_macro2::Literal::u8_unsuffixed(width_bytes as u8);
+        let width_bytes_lit = {
+            let min = proc_macro2::Literal::u8_unsuffixed(min_width_bytes);
+            let max = proc_macro2::Literal::u8_unsuffixed(max_width_bytes);
+            quote! { (#min, #max) }
+        };
         let mnemonic_lit = proc_macro2::Literal::string(mnemonic_name);
 
         // The behavior RHS to compile. Normal instructions assign to a register
@@ -990,7 +998,7 @@ fn emit_instructions<'a>(
         // synthesize into a single value-producing expression written to PC.
         let resolved_rhs = resolve_behavior_rhs(&selection_behavior, &ops, &defined_register_operands);
         let branch_value = if resolved_rhs.is_none() {
-            synthesize_branch_value(&selection_behavior, width_bytes)
+            synthesize_branch_value(&selection_behavior, u64::from(max_width_bytes))
         } else {
             None
         };
@@ -1071,7 +1079,6 @@ fn emit_instructions<'a>(
         // `InstrInfo` rather than an entry in a string-keyed side table.
         let mut desc_ident: Option<proc_macro2::Ident> = None;
         let mut encode_ident: Option<proc_macro2::Ident> = None;
-        let mut patch_ident: Option<proc_macro2::Ident> = None;
         machine_instruction_impls.push(quote! {
             impl tir::backend::MachineInstruction for #name_ident {
                 fn instance(&self) -> &tir::OpHandle {
@@ -1366,17 +1373,17 @@ fn emit_instructions<'a>(
             }
         }
 
-        // Text-only pseudo-ISAs have no binary encoding, so no encoders/patchers
-        // are emitted at all (rather than empty, unused functions).
-        if let Some((encoder, patcher)) = (!text_only)
+        // Text-only pseudo-ISAs have no binary encoding, so no encoder is
+        // emitted at all (rather than an empty, unused table).
+        if let Some(encoder) = (!text_only)
             .then(|| {
                 emit_instruction_encoder(
                     inst,
-                    &encoding_arms,
+                    &encoding_shapes,
                     &ops_map,
                     &operand_constraints,
                     &resolved_params,
-                    width_bytes,
+                    &encoding_ctx,
                 )
             })
             .transpose()?
@@ -1384,23 +1391,18 @@ fn emit_instructions<'a>(
         {
             instruction_encoder_impls.push(encoder);
             encode_ident = Some(format_ident!("ENCODE_{}", inst.name.to_uppercase()));
-            if let Some(patcher) = patcher {
-                instruction_encoder_impls.push(patcher);
-                patch_ident = Some(format_ident!("PATCH_{}", inst.name.to_uppercase()));
-            }
         }
 
-        if let Some((decoder, decode_spec_ident, fixed_mask)) = emit_instruction_decoder(
+        if let Some((decoder, decode_spec_ident, specificity)) = emit_instruction_decoder(
             inst,
-            &encoding_arms,
+            &encoding_shapes,
             &ops_map,
             &resolved_params,
-            width_bytes,
             dialect,
             op_name,
         ) {
             instruction_decoder_impls.push(decoder);
-            instruction_decoder_dispatch.push((fixed_mask, decode_spec_ident));
+            instruction_decoder_dispatch.push((specificity, decode_spec_ident));
         }
 
         // One record per opcode, spelling only what departs from
@@ -1410,7 +1412,7 @@ fn emit_instructions<'a>(
             quote! { mnemonic: #mnemonic_lit },
             quote! { program: #program },
         ];
-        if width_bytes != 0 {
+        if max_width_bytes != 0 {
             info_fields.push(quote! { width_bytes: #width_bytes_lit });
         }
         if uncond_pc || cond_pc {
@@ -1433,9 +1435,6 @@ fn emit_instructions<'a>(
         }
         if let Some(encode_ident) = &encode_ident {
             info_fields.push(quote! { encode: Some(&#encode_ident) });
-        }
-        if let Some(patch_ident) = &patch_ident {
-            info_fields.push(quote! { patch: Some(&#patch_ident) });
         }
         // `InstrInfo::BASE` already costs one cycle.
         let cost = sched_tables.cost(&inst.name);
@@ -1483,7 +1482,7 @@ fn emit_instructions<'a>(
     // more-general encoding declared earlier cannot shadow a specific one that
     // should claim the word. `sort_by_key` is stable, preserving declaration
     // order among equally-specific encodings.
-    instruction_decoder_dispatch.sort_by_key(|d| std::cmp::Reverse(d.0.count_ones()));
+    instruction_decoder_dispatch.sort_by_key(|d| std::cmp::Reverse(d.0));
     let decode_spec_idents: Vec<proc_macro2::Ident> = instruction_decoder_dispatch
         .into_iter()
         .map(|(_, ident)| ident)

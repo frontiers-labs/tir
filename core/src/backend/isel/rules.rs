@@ -343,7 +343,7 @@ pub fn build_rules(
             .emits
             .iter()
             .map(|info| {
-                info.cost * crate::backend::isel::LATENCY_COST_SCALE + u32::from(info.width_bytes)
+                info.cost * crate::backend::isel::LATENCY_COST_SCALE + u32::from(info.width_bytes.0)
             })
             .sum();
         let operand_registers = spec

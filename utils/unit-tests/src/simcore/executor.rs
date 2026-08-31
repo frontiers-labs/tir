@@ -66,6 +66,36 @@ fn mem_trace_records_loads_and_stores_parallel_to_trace() {
 }
 
 #[test]
+fn pc_advances_by_each_instructions_encoded_length() {
+    // A compressed instruction is two bytes and an uncompressed one four, so
+    // the program counter follows what each instruction encodes to rather than
+    // one width per opcode.
+    let context = Context::with_default_dialects();
+    let program = riscv_program(
+        &context,
+        "
+            .global last
+            last:
+              add x0, x0, x0
+            .global first
+            first:
+              c.addi a0, 1
+              add    a1, a0, a0
+              c.addi a0, 1
+        ",
+    );
+
+    let base = 0x8000_0000;
+    let mut executor = Executor::new_at(4096, base);
+    executor.enable_trace_recording();
+    executor.load(program).unwrap();
+    executor.run(base + 8, 10).unwrap();
+
+    let pcs: Vec<u64> = executor.trace().iter().map(|(_, pc)| *pc).collect();
+    assert_eq!(pcs, vec![base, base + 2, base + 6]);
+}
+
+#[test]
 fn mem_trace_records_atomic_kinds() {
     let context = Context::with_default_dialects();
     let program = riscv_program(

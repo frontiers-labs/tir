@@ -121,7 +121,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         let (pc, width_bytes) = layout
             .as_ref()
             .and_then(|layout| layout.get(index).copied())
-            .unwrap_or((0, u16::from(info.width_bytes.max(1))));
+            .unwrap_or((0, u16::from(mi.width_bytes().max(1))));
         base.push(ScoreboardInstr {
             text,
             op_name: info.name.to_string(),

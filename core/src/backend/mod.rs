@@ -318,7 +318,9 @@ pub struct InstrInfo {
     /// The op's registered name, and the one key identifying this opcode.
     pub name: &'static str,
     pub mnemonic: &'static str,
-    pub width_bytes: u8,
+    /// Encoded size in bytes over the encoding's shapes: `(min, max)`. Equal
+    /// for a fixed-width instruction; the widest shape is what a fixup takes.
+    pub width_bytes: (u8, u8),
     pub control_flow: ControlFlow,
     pub program: exec::Program,
     /// Fixed registers the behavior touches without naming them in an operand.
@@ -330,7 +332,6 @@ pub struct InstrInfo {
     /// Assembly syntax, or `None` for an opcode with no textual form.
     pub asm: Option<&'static asm_desc::InstrDesc>,
     pub encode: Option<&'static binary::EncodeSpec>,
-    pub patch: Option<&'static binary::PatchSpec>,
     /// Machine-independent cost (a latency proxy) from the TMDL `unit` defaults.
     pub cost: u32,
     /// Scheduling class per machine, indexed by [`sched::MachineModel::id`].
@@ -346,7 +347,7 @@ impl InstrInfo {
     pub const BASE: InstrInfo = InstrInfo {
         name: "",
         mnemonic: "",
-        width_bytes: 0,
+        width_bytes: (0, 0),
         control_flow: ControlFlow::None,
         program: exec::Program::Unsupported("instruction has no behavior"),
         implicit_regs: &[],
@@ -354,7 +355,6 @@ impl InstrInfo {
         effects: MemoryEffects::NONE,
         asm: None,
         encode: None,
-        patch: None,
         cost: 1,
         sched: &[],
     };
@@ -383,8 +383,16 @@ pub trait MachineInstruction {
     fn mnemonic(&self) -> &'static str {
         self.info().mnemonic
     }
+    /// How many bytes this instruction encodes to: the width of the shape its
+    /// operands select, so a guarded encoding reports what it actually emits.
+    /// Operands still holding values (before register allocation) select no
+    /// shape, and the widest is reported.
     fn width_bytes(&self) -> u8 {
-        self.info().width_bytes
+        let info = self.info();
+        match info.encode {
+            Some(spec) => binary::encoded_width(self.instance(), spec, &RegAssignment::default()),
+            None => info.width_bytes.1,
+        }
     }
     fn execute(&self, machine: &mut dyn MachineContext) -> Result<(), SimTrap> {
         exec::run(self.instance(), self.info(), machine)

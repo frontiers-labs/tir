@@ -31,7 +31,6 @@ pub enum BinaryEmitError {
     UnknownBlockTarget { op: String },
     MisalignedTarget { op: String, delta: i64 },
     FixupOutOfRange { op: String, value: i64 },
-    MissingPatcher { op: String },
     SymbolOperandUnsupported { op: String },
 }
 
@@ -57,9 +56,6 @@ impl Display for BinaryEmitError {
             BinaryEmitError::FixupOutOfRange { op, value } => {
                 write!(f, "branch target of '{op}' is out of range (value {value})")
             }
-            BinaryEmitError::MissingPatcher { op } => {
-                write!(f, "'{op}' has no fixup patcher")
-            }
             BinaryEmitError::SymbolOperandUnsupported { op } => {
                 write!(f, "instruction '{op}' cannot take a symbol operand")
             }
@@ -76,10 +72,13 @@ struct PendingFixup {
     len: u8,
     info: &'static InstrInfo,
     target: FixupTarget,
+    /// The immediate field of the shape the instruction was encoded as.
+    patch: &'static super::PatchField,
 }
 
 /// Lays out and encodes machine IR into an object file. Stateless: an
-/// instruction's encoder and patcher are fields of its [`InstrInfo`].
+/// instruction's encoder is a field of its [`InstrInfo`], and the patcher for
+/// a fixup comes back from the encoding.
 #[derive(Default)]
 pub struct BinaryWriter;
 
@@ -269,13 +268,14 @@ impl BinaryWriter {
         data.extend_from_slice(&encoded.bytes);
         state.obj.sections[section].insn_spans.push((offset, len));
 
-        for target in encoded.fixups {
+        for fixup in encoded.fixups {
             state.fixups.push(PendingFixup {
                 section,
                 offset,
                 len,
                 info,
-                target,
+                target: fixup.target,
+                patch: fixup.patch,
             });
         }
         Ok(())
@@ -309,15 +309,9 @@ impl BinaryWriter {
                         });
                     }
                     let value = delta >> scale;
-                    let spec = fixup
-                        .info
-                        .patch
-                        .ok_or_else(|| BinaryEmitError::MissingPatcher {
-                            op: name.to_string(),
-                        })?;
                     let data = &mut state.obj.sections[fixup.section].data;
                     let range = fixup.offset as usize..(fixup.offset + fixup.len as u64) as usize;
-                    super::patch_with(&mut data[range], value, spec).ok_or(
+                    super::patch_with(&mut data[range], value, fixup.patch).ok_or(
                         BinaryEmitError::FixupOutOfRange {
                             op: name.to_string(),
                             value,

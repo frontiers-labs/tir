@@ -115,7 +115,7 @@ fn nop_emit(
 static EMITTED: tir::backend::InstrInfo = tir::backend::InstrInfo {
     name: "add",
     mnemonic: "add",
-    width_bytes: 4,
+    width_bytes: (4, 4),
     cost: 3,
     ..tir::backend::InstrInfo::BASE
 };

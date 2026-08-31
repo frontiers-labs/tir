@@ -305,9 +305,9 @@ pub fn get_encoding_shapes<'a>(
         .collect()
 }
 
-/// The bit ranges of an instruction's first encoding shape. The emitters lower
-/// one fixed bit map per instruction; a guarded encoding has several, and the
-/// encoder that picks between them by guard is not wired up yet.
+/// The bit ranges of an instruction's first encoding shape, for the emitters
+/// that still lower one fixed bit map per instruction (the SMT, BTOR2 and
+/// markdown backends; the Rust backend lowers every shape).
 pub fn first_encoding_shape_arms<'a>(
     instruction: &'a Instruction,
     item_cache: &HashMap<&'a str, &'a Item>,
@@ -317,21 +317,6 @@ pub fn first_encoding_shape_arms<'a>(
         .next()
         .map(|shape| shape.arms)
         .unwrap_or_default()
-}
-
-/// The instruction's encoding size in bytes, widest shape first. With no
-/// encoding (a text-only pseudo-ISA) there is no binary width; report 0 bytes
-/// rather than the 32-bit default assumed for real ISAs.
-pub fn encoding_width_bytes<'a>(
-    instruction: &'a Instruction,
-    item_cache: &HashMap<&'a str, &'a Item>,
-) -> u64 {
-    let widest = get_encoding_shapes(instruction, item_cache)
-        .iter()
-        .map(|shape| shape.width_bits)
-        .max()
-        .unwrap_or(0);
-    u64::from(u32::from(widest).div_ceil(8))
 }
 
 pub fn resolve_params_for_instruction<'a>(

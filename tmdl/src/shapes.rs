@@ -336,6 +336,14 @@ impl Context {
         }
     }
 
+    /// The declared width of an operand: its `bits<N>`, or the `ENCODING_LEN`
+    /// of a register operand's class. The width a condition over that operand
+    /// is evaluated at, so a runtime guard can read the same pattern.
+    pub fn operand_width(&self, name: &str) -> Option<u16> {
+        self.operand(name)?;
+        self.named_width(name).ok()
+    }
+
     fn named_width(&self, name: &str) -> Result<u16, String> {
         let ty = self
             .operand(name)

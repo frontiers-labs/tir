@@ -1,0 +1,78 @@
+// A guarded encoding lowers to one `EncodeShape` per fixed bit map, each with
+// the guard over the operands that selects it. The instruction's width is the
+// range its shapes span, and the encoder picks a shape at encode time instead
+// of the backend picking between hand-written encoding-only twins.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdlc --action=emit-ast-json --output=- %s | filecheck %s --check-prefix=JSON
+// RUN: not tmdlc --action=emit-smtlib --isa=ByteIsa --output=- %s 2>&1 | filecheck %s --check-prefix=SMT
+
+isa ByteIsa {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [ByteIsa] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x15 => { } }
+}
+
+instruction MovRR for [ByteIsa] {
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0x8b;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    behavior { dst = src; }
+    encoding {
+        if dst[3] | src[3] { (0b0100, 0b0, dst[3], 0b0, src[3]) } else { () },
+        OPCODE,
+        (0b11, dst[2..0], src[2..0])
+    }
+}
+
+// CHECK: static INFO_MOVRR: tir::backend::InstrInfo = tir::backend::InstrInfo {
+// CHECK: width_bytes: (2, 3),
+
+// CHECK: static ENCODE_MOVRR: tir::backend::binary::EncodeSpec
+// CHECK-NEXT: shapes: &[
+
+// Without a bit-three register the prefix byte is absent, so this shape is two
+// bytes and its guard is the negation of the one that spells the prefix.
+// CHECK: tir::backend::binary::EncodeShape {
+// CHECK-NEXT: guard: tir::backend::binary::Guard::Not(
+// CHECK-NEXT: &tir::backend::binary::Guard::Or(
+// CHECK: tir::backend::binary::Guard::Bit {
+// CHECK-NEXT: op: "dst",
+// CHECK-NEXT: bit: 3,
+// CHECK: tir::backend::binary::Guard::Bit {
+// CHECK-NEXT: op: "src",
+// CHECK-NEXT: bit: 3,
+// CHECK: const_word: 49291u128,
+// CHECK-NEXT: width_bytes: 2,
+
+// With one, the prefix byte is spelled and the same fields move up a byte.
+// CHECK: tir::backend::binary::EncodeShape {
+// CHECK-NEXT: guard: tir::backend::binary::Guard::Or(
+// CHECK: const_word: 12618560u128,
+// CHECK-NEXT: width_bytes: 3,
+// CHECK: attr: "src",
+// CHECK: op_lo: 3,
+// CHECK-NEXT: word_lo: 0,
+// CHECK-NEXT: width: 1,
+
+// CHECK: width_bytes: (2, 3),
+
+// Both shapes decode: each fixes its own opcode bits, and the two-byte one
+// fixes nothing above its own width.
+// CHECK: static DECODE_MOVRR: tir::backend::binary::DecodeSpec
+// CHECK: fixed_mask: 49407u32,
+// CHECK-NEXT: const_word: 49291u32,
+
+// The front end exports the same shapes.
+// JSON:      "width": 16,
+// JSON:      "width": 24,
+
+// The symbolic emitters still describe one fixed bit map per instruction, so
+// they refuse the instruction rather than describe the first shape's bytes.
+// SMT: encoding of MovRR has more than one shape, which this emitter does not lower

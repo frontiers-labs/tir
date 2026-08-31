@@ -4,12 +4,17 @@ TIR emits ELF relocatable objects (`ET_REL`) directly, without an external
 assembler. The pieces:
 
 - **Instruction encoders** are generated from TMDL `encoding` blocks, next to
-  the asm printers/parsers. An encoder returns the instruction bytes plus
-  *fixups* for operands whose value is unknown at encode time: a basic-block
-  target (`AttributeValue::Block`) or a symbol name (`AttributeValue::Str`).
-  A *patcher* (also generated) re-scatters a resolved value into the
-  operand's encoding bits, including non-contiguous immediates such as
-  RISC-V B/J-type offsets.
+  the asm printers/parsers. An encoding is a list of *shapes* — fixed bit maps,
+  each with the guard over the operands that selects it — so a prefix ISA's
+  forms are one instruction, not one opcode per form. An encoder picks the
+  shape whose guard holds and returns its bytes plus *fixups* for operands
+  whose value is unknown at encode time: a basic-block target
+  (`AttributeValue::Block`) or a symbol name (`AttributeValue::Str`). A fixup
+  carries the *patch field* of the shape that was encoded, which re-scatters a
+  resolved value into the operand's encoding bits, including non-contiguous
+  immediates such as RISC-V B/J-type offsets. An operand with no value yet
+  fails every guard that reads it, so a fixup takes the shape spelling the
+  widest immediate.
 - **`BinaryWriter`** (`tir::backend::binary`) walks lowered machine IR the
   same way the assembly printer does, lays out `.text`, records symbol and
   block offsets, patches block-target fixups, and turns symbol fixups into

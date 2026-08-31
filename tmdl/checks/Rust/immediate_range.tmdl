@@ -98,9 +98,13 @@ instruction OpAligned for [ImmIsa] {
 // CHECK-NEXT: nonzero: true,
 
 // The bits the alignment justifies dropping are the ones a resolved fixup may
-// not set.
-// CHECK: static PATCH_OPALIGNED
-// CHECK: dropped_mask: 3u128,
+// not set. The patch belongs to the shape that was encoded, so it sits beside
+// the fields of that shape.
+// CHECK: patch: &[
+// CHECK-NEXT: tir::backend::binary::PatchField {
+// CHECK-NEXT: attr: "imm",
+// CHECK-NEXT: range: Some((-512i64, 512i64)),
+// CHECK-NEXT: dropped_mask: 3u128,
 
 // CHECK: static RULE_OPALIGNED
 // CHECK: ImmRange {

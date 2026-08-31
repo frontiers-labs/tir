@@ -2,10 +2,10 @@
 //!
 //! An instruction's TMDL-generated [`EncodeSpec`] turns it into bytes plus a
 //! list of fixups for operands whose value is not known at encode time (branch
-//! targets, external symbols); its [`PatchSpec`] re-scatters a resolved value
-//! into the immediate bits once layout is known. Both are fields of the
-//! instruction's [`crate::backend::InstrInfo`]. The laid-out result is
-//! an [`ObjectFile`], which a format backend (ELF today) serializes to bytes.
+//! targets, external symbols). Each fixup carries the [`PatchField`] of the
+//! shape that was encoded, which re-scatters the resolved value into the
+//! immediate bits once layout is known. The laid-out result is an
+//! [`ObjectFile`], which a format backend (ELF today) serializes to bytes.
 
 mod ascii;
 mod elf;
@@ -18,8 +18,8 @@ pub use ascii::render_ascii;
 pub use elf::{EM_AARCH64, EM_RISCV, EM_X86_64, write_elf};
 pub use elf_read::{ElfFile, ElfReadError, ElfRela, ElfSection, ElfSymbol, parse_elf, reloc_name};
 pub use encodings::{
-    DecodeField, DecodeFieldKind, DecodeSpec, EncodeField, EncodeSpec, FieldRun, PatchSpec,
-    decode_with, encode_with, patch_with,
+    CmpOp, DecodeField, DecodeFieldKind, DecodeShape, DecodeSpec, EncodeField, EncodeShape,
+    EncodeSpec, FieldRun, Guard, PatchField, decode_with, encode_with, encoded_width, patch_with,
 };
 pub use format::{ElfClass, ObjectFormatInfo, RelocKind};
 pub use writer::{BinaryEmitError, BinaryWriter, ObjectEmission};
@@ -36,13 +36,22 @@ pub enum FixupTarget {
     Symbol(String),
 }
 
+/// One operand left as zero bits, with the way to fill them in once layout
+/// resolves what it points at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncodedFixup {
+    pub target: FixupTarget,
+    /// The immediate field of the shape that was encoded.
+    pub patch: &'static PatchField,
+}
+
 /// One encoded machine instruction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodedInst {
     /// Little-endian instruction bytes; fixup bits are zero.
     pub bytes: Vec<u8>,
     /// Operands left as zero bits, to be resolved at layout time.
-    pub fixups: Vec<FixupTarget>,
+    pub fixups: Vec<EncodedFixup>,
 }
 
 /// A relocatable object in format-neutral form.

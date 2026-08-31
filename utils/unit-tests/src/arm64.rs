@@ -18,7 +18,7 @@ fn instruction_info_carries_every_per_opcode_fact() {
     // fields of its own `InstrInfo`, with no side table keyed by its name.
     let add = info("add");
     assert_eq!(add.mnemonic, "add");
-    assert_eq!(add.width_bytes, 4);
+    assert_eq!(add.width_bytes, (4, 4));
     assert!(add.asm.is_some());
     assert!(add.encode.is_some());
     assert_eq!(add.sched.len(), tir_arm64::machines(Feature::ALL).len());

@@ -63,7 +63,7 @@ pub fn simulate(
                 (
                     info.name,
                     info.sched_on(model),
-                    u64::from(info.width_bytes),
+                    u64::from(mi.width_bytes()),
                     info.control_flow == ControlFlow::Conditional,
                 )
             }

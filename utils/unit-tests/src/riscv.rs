@@ -115,18 +115,20 @@ fn instruction_info_carries_every_per_opcode_fact() {
     // fields of its own `InstrInfo`, with no side table keyed by its name.
     let add = info("add");
     assert_eq!(add.mnemonic, "add");
-    assert_eq!(add.width_bytes, 4);
+    assert_eq!(add.width_bytes, (4, 4));
     assert!(add.asm.is_some());
     assert!(add.encode.is_some());
     assert_eq!(add.sched.len(), tir_riscv::machines(Feature::ALL).len());
     assert_eq!(add.effects, tir::backend::MemoryEffects::NONE);
 
     // A load's behavior reads memory and its branch-offset immediate is
-    // patchable once layout is known; `add` needs neither.
+    // patchable once layout is known; `add` has no immediate to patch.
     assert!(info("lw").effects.reads);
     assert!(info("sw").effects.writes);
-    assert!(info("beq").patch.is_some());
-    assert!(add.patch.is_none());
+    let patch_fields =
+        |info: &tir::backend::InstrInfo| info.encode.expect("encodes").shapes[0].patch.len();
+    assert_eq!(patch_fields(info("beq")), 1);
+    assert_eq!(patch_fields(add), 0);
 }
 
 #[test]

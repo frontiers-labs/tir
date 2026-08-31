@@ -340,20 +340,25 @@ impl Compiler {
             .flat_map(|f| f.items.iter().map(|i| (i.name(), i)))
             .collect();
 
-        // Every emitter lowers one fixed bit map per instruction. Until the
-        // encoder that picks between shapes by guard lands, a guarded encoding
-        // has no lowering, and emitting its first shape would be wrong bytes.
-        let guarded: Vec<&str> = parsed_files
-            .iter()
-            .flat_map(|f| f.instructions())
-            .filter(|inst| crate::utils::get_encoding_shapes(inst, &item_cache).len() > 1)
-            .map(|inst| inst.name.as_str())
-            .collect();
-        if !guarded.is_empty() {
-            return Err(TMDLError::Codegen(format!(
-                "encoding of {} has more than one shape, which no emitter lowers yet",
-                guarded.join(", ")
-            )));
+        // The Rust backend lowers every shape; the symbolic and documentation
+        // emitters still lower one fixed bit map per instruction, and emitting
+        // the first shape of a guarded encoding would describe wrong bytes.
+        if matches!(
+            self.action,
+            Action::EmitSmtlib | Action::EmitBtor2 | Action::EmitMarkdown
+        ) {
+            let guarded: Vec<&str> = parsed_files
+                .iter()
+                .flat_map(|f| f.instructions())
+                .filter(|inst| crate::utils::get_encoding_shapes(inst, &item_cache).len() > 1)
+                .map(|inst| inst.name.as_str())
+                .collect();
+            if !guarded.is_empty() {
+                return Err(TMDLError::Codegen(format!(
+                    "encoding of {} has more than one shape, which this emitter does not lower",
+                    guarded.join(", ")
+                )));
+            }
         }
 
         match &self.action {

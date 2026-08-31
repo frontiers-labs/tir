@@ -18,7 +18,6 @@ fn a_virtual_op_reports_itself_and_nothing_else() {
     assert_eq!(info.control_flow, tir::backend::ControlFlow::Unconditional);
     assert!(info.asm.is_none());
     assert!(info.encode.is_none());
-    assert!(info.patch.is_none());
     assert!(info.sched.is_empty());
 }
 
