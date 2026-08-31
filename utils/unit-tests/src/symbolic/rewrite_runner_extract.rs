@@ -120,6 +120,34 @@ fn roots_canonicalize_after_saturation() {
     assert_eq!(g.find(ab), g.find(ba));
 }
 
+/// A scope opened over a saturated graph starts its own saturation from the log
+/// its assumption left, not from a full search. The driver reads that log
+/// through `take_changed`, so what it reports there is the whole contract:
+/// `Some` of the assumption's own classes, rather than the `None` that asks for
+/// a full search.
+#[test]
+fn a_scope_over_a_fixpoint_starts_from_its_own_log() {
+    let mut g = EGraph::new();
+    let a = sym(&mut g, 0);
+    let b = sym(&mut g, 1);
+    let ab = add(&mut g, a, b);
+    add(&mut g, b, a);
+    g.saturate_rules(&[comm_rule()], &NoExterns, 30, 100_000);
+    assert_eq!(
+        g.take_changed(),
+        Some(Vec::new()),
+        "a saturation that reached a fixpoint leaves an empty log"
+    );
+
+    g.push_context();
+    let c = sym(&mut g, 2);
+    g.union(ab, c);
+    g.rebuild();
+
+    assert_eq!(g.take_changed(), Some(vec![g.find(ab)]));
+    g.pop_context();
+}
+
 // ── Extraction ─────────────────────────────────────────────────────────────
 
 /// Unit cost for operators, zero for leaves.

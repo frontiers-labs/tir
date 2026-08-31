@@ -393,8 +393,11 @@ impl Driver<'_> {
         Ok(())
     }
 
-    /// Prove the loop-carried values a loop never changes, optimistically. The
-    /// base graph is at its fixpoint on entry and is left at one.
+    /// Prove the loop-carried values a loop never changes, optimistically. Every
+    /// union promoted into the base graph is saturated before this returns, so
+    /// the base is left wherever [`EGraph::saturate_rules`] leaves it: at a
+    /// fixpoint, or marked wholly changed by a limit stop, which is that
+    /// driver's contract to state and not this one's.
     ///
     /// SCCP's distinctive power as a scope: hypothesise that a port holds the
     /// constant the loop was entered on, run the body under that hypothesis, and
