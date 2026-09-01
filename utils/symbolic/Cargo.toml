@@ -17,15 +17,3 @@ smallvec = "1.15.2"
 [[bin]]
 name = "tir-smt"
 path = "src/bin/main.rs"
-
-[dev-dependencies]
-criterion = { workspace = true }
-egg = "0.11"
-
-[[bench]]
-name = "egraph"
-harness = false
-
-[[bench]]
-name = "egg_math"
-harness = false

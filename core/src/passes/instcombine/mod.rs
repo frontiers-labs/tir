@@ -1,6 +1,6 @@
 //! InstCombine: an equality-saturation simplifier. It seeds the function's
 //! regions ([`seed`], which reads gates off the ops' own interfaces) into a
-//! [`tir_symbolic`] e-graph of real IR values, saturates, extracts the cheapest
+//! [`tir_relational`] e-graph of real IR values, saturates, extracts the cheapest
 //! form per value by [`crate::OpCost`], and rewrites what improved.
 //!
 //! Flow-sensitive facts ride the e-graph's scoped assumptions, both ways round. A
@@ -25,7 +25,7 @@ use seed::{LoopPorts, Port};
 
 use std::collections::HashMap;
 
-use tir_symbolic::egraph::{EGraph, Extraction, Id};
+use tir_relational::{ClassId as Id, Engine, Extraction};
 
 use crate::analysis::scopes;
 use crate::{
@@ -100,7 +100,7 @@ impl Pass for InstCombinePass {
         let body = context.get_op(root).regions()[0];
         driver.process_region(body, &extraction, rewriter)?;
         let result = driver.sweep(root, rewriter);
-        tir_symbolic::egraph::report_saturation("instcombine");
+        tir_relational::report_saturation("instcombine");
         result
     }
 }
@@ -109,7 +109,7 @@ impl Pass for InstCombinePass {
 /// children's scopes open so the base classes a child scope reads are final.
 struct Driver<'a> {
     context: &'a Context,
-    eg: EGraph<Node>,
+    eg: Engine<Node>,
     value_class: HashMap<ValueId, Id>,
     /// The block each block argument belongs to: it has no defining op, so the
     /// scope check has no other way to place it.
@@ -395,7 +395,7 @@ impl Driver<'_> {
 
     /// Prove the loop-carried values a loop never changes, optimistically. Every
     /// union promoted into the base graph is saturated before this returns, so
-    /// the base is left wherever [`EGraph::saturate_rules`] leaves it: at a
+    /// the base is left wherever [`Engine::saturate_rules`] leaves it: at a
     /// fixpoint, or marked wholly changed by a limit stop, which is that
     /// driver's contract to state and not this one's.
     ///

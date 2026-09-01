@@ -11,7 +11,7 @@ use tir::{
     },
 };
 use tir_pbqp::{self as pbqp, INF_COST, PbqpMatrix, PbqpProblem};
-use tir_symbolic::egraph::Id;
+use tir_relational::ClassId as Id;
 
 use super::RuleMatch;
 use super::node::{class_is_pure, class_value_binding, is_low_extract_view};

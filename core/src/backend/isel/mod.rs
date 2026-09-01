@@ -5,7 +5,7 @@
 //! rewrites the vocabulary owns ([`tir::sem::rewrites`]), and then covered *per
 //! block* while traversing the
 //! dominating-edge assumption scopes — by the target's instruction patterns
-//! ([`pattern`]), e-matched by the shared [`tir_symbolic::egraph`] engine, via a
+//! ([`pattern`]), e-matched by the shared [`tir_relational`] engine, via a
 //! PBQP instance over e-classes ([`cover`]). The solved cover becomes an emission
 //! plan ([`emit`]) the pass commits through the rewriter.
 
@@ -35,7 +35,7 @@ use tir::{
     },
 };
 use tir_adt::APInt;
-use tir_symbolic::egraph::{ENode, Id};
+use tir_relational::{ClassId as Id, Label as ENode};
 
 pub use rules::{
     CapabilityKind, EmitAttr, EmitSpec, PatternRef, RegOperandSpec, ResultRegSpec, RuleSpec,
@@ -2819,7 +2819,7 @@ mod telemetry {
         if !crate::pass::timing::enabled() {
             return;
         }
-        tir_symbolic::egraph::report_saturation("isel");
+        tir_relational::report_saturation("isel");
         let c = COUNTS.replace([0; 6]);
         let changed_avg = c[CHANGED_SUM].checked_div(c[SCOPED]).unwrap_or(0);
         eprintln!(

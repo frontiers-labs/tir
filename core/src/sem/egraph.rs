@@ -8,7 +8,7 @@
 //! a semantic type is spelled as. What a *backend* makes of a class — a
 //! register's type, a low-bit view of one — stays with the backend.
 
-use tir_symbolic::egraph::{EGraph, Id};
+use tir_relational::{ClassId as Id, Engine};
 
 use crate::builtin::{FloatType, IntegerType};
 use crate::sem::{FloatFormat, SemNode, SemPayload, SemType, SymKind, SymPayload};
@@ -17,7 +17,7 @@ use tir_adt::APInt;
 
 /// The semantic e-graph: e-classes of equivalent semantic expressions for the
 /// values a region or a function computes.
-pub type SemEGraph = EGraph<SemNode>;
+pub type SemEGraph = Engine<SemNode>;
 
 /// The constant a class is proven to hold: an integer literal member, or the
 /// value the open assumption scope proves it evaluates to.

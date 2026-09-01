@@ -41,8 +41,8 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 
 use smallvec::{SmallVec, smallvec};
 use tir_adt::APInt;
+use tir_relational::ClassId as Id;
 use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, HeadOp, LabelFill, Plan, Query, Source};
-use tir_symbolic::egraph::Id;
 
 use crate::builtin::{FloatType, IntegerType};
 use crate::sem::{

@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
+use crate::Csr;
 use tir_adt::FxBuildHasher;
-use tir_relational::Csr;
 
-use crate::egraph::{EGraph, ENode, Id};
+use crate::{ClassId as Id, Engine, Label as ENode};
 
 type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 
 /// No slot: a class the extraction's table does not cover.
 const NONE: u32 = u32::MAX;
 
-/// Cheapest representative e-node per e-class, chosen by [`EGraph::extract_best`].
+/// Cheapest representative e-node per e-class, chosen by [`Engine::extract_best`].
 ///
 /// A scope's extraction is a layer over the one it refreshed rather than a copy
 /// of it, so it holds only the classes its assumption dirtied and costs the
@@ -33,7 +33,7 @@ struct Chosen<L> {
 
 impl<'a, L: ENode> Extraction<'a, L> {
     /// Chosen node for `id`'s class, or `None` if no node has finite cost. `id` must
-    /// be canonical ([`EGraph::find`]).
+    /// be canonical ([`Engine::find`]).
     pub fn node(&self, id: Id) -> Option<&L> {
         self.chosen(id).map(|chosen| &chosen.node)
     }
@@ -52,7 +52,7 @@ impl<'a, L: ENode> Extraction<'a, L> {
     /// classes, which is what keeps the cost ties broken the same way.
     pub fn refresh<'b>(
         &'b self,
-        eg: &EGraph<L>,
+        eg: &Engine<L>,
         dirty: &[Id],
         cost_of: impl Fn(Id, &L) -> u64,
     ) -> Extraction<'b, L> {
@@ -78,14 +78,14 @@ impl<'a, L: ENode> Extraction<'a, L> {
     }
 }
 
-impl<L: ENode> EGraph<L> {
+impl<L: ENode> Engine<L> {
     /// Greedy bottom-up extraction: per class, the node minimizing
     /// `cost_of(class, node)` plus each child's chosen cost. The class is the
     /// canonical id the node would represent, so a cost model may reject a form
     /// the class cannot be spelled in. Cycle-tolerant — a node with un-costed
     /// children is skipped and revisited to a fixpoint, so a cycle is costed
     /// through its non-cyclic input. Scope-aware via
-    /// [`EGraph::classes`]/[`EGraph::find`].
+    /// [`Engine::classes`]/[`Engine::find`].
     pub fn extract_best(&self, cost_of: impl Fn(Id, &L) -> u64) -> Extraction<'static, L> {
         let started = super::telemetry::enabled().then(std::time::Instant::now);
         let classes: Vec<Id> = self.class_ids().collect();
@@ -128,7 +128,7 @@ struct FlatNode<'a, L> {
 
 impl<'a, L: ENode> FlatGraph<'a, L> {
     fn new(
-        eg: &'a EGraph<L>,
+        eg: &'a Engine<L>,
         classes: &'a [Id],
         outside: Option<&Extraction<'_, L>>,
         cost_of: impl Fn(Id, &L) -> u64,
@@ -138,7 +138,7 @@ impl<'a, L: ENode> FlatGraph<'a, L> {
         // fraction of what a probe per child costs.
         let mut index: Vec<u32> = vec![NONE; eg.class_count()];
         let mut nodes: Vec<FlatNode<'a, L>> = Vec::new();
-        let mut rows: Vec<tir_relational::RowId> = Vec::new();
+        let mut rows: Vec<crate::RowId> = Vec::new();
         for (slot, &id) in classes.iter().enumerate() {
             index[id.index()] = slot as u32;
             for row in eg.rows(id) {

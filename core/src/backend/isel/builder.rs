@@ -15,7 +15,7 @@ use tir::{
     },
 };
 use tir_adt::APInt;
-use tir_symbolic::egraph::Id;
+use tir_relational::ClassId as Id;
 
 use crate::analysis::scopes::{carried_operands, port_edges, region_exit};
 
@@ -62,7 +62,7 @@ impl RegionControl {
 }
 
 /// Builds a block's semantic expressions straight into the e-graph: every lowered
-/// node is hash-consed by [`SemEGraph::add`], so the e-graph *is* the interned DAG
+/// node is hash-consed by [`SemEngine::add`], so the e-graph *is* the interned DAG
 /// (no separate arena). Returns e-class [`Id`]s and records, in `value_to_class`,
 /// the class built for each IR value so operands share and cross-block uses expand.
 pub(crate) struct SemDagBuilder<'a> {

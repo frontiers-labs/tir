@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tir_symbolic::egraph::{EGraph, Id};
+use tir_relational::{ClassId as Id, Engine};
 
 use crate::analysis::scopes::{carried_operands, port_edges, region_exit, tested_ports};
 use crate::builtin::StateType;
@@ -28,7 +28,7 @@ const STORE_OPERANDS: usize = 3;
 /// argument's block, the state classes something outside the term graph
 /// observes, and the value ports each loop carries.
 pub struct Seeded {
-    pub eg: EGraph<Node>,
+    pub eg: Engine<Node>,
     pub value_class: HashMap<ValueId, Id>,
     pub arg_block: HashMap<ValueId, BlockId>,
     pub loop_ports: Vec<LoopPorts>,
@@ -57,7 +57,7 @@ pub struct Port {
 pub fn seed(context: &Context, root: OpId) -> Seeded {
     let mut seeder = Seeder {
         context,
-        eg: EGraph::new(),
+        eg: Engine::new(),
         value_class: HashMap::new(),
         arg_block: HashMap::new(),
         seeded: HashSet::new(),
@@ -79,7 +79,7 @@ pub fn seed(context: &Context, root: OpId) -> Seeded {
 
 struct Seeder<'a> {
     context: &'a Context,
-    eg: EGraph<Node>,
+    eg: Engine<Node>,
     value_class: HashMap<ValueId, Id>,
     arg_block: HashMap<ValueId, BlockId>,
     seeded: HashSet<OpId>,

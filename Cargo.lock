@@ -2260,6 +2260,8 @@ dependencies = [
 name = "tir-relational"
 version = "0.1.0"
 dependencies = [
+ "criterion",
+ "egg",
  "proptest",
  "smallvec",
  "tir-adt",
@@ -2285,8 +2287,6 @@ name = "tir-symbolic"
 version = "0.1.0"
 dependencies = [
  "chumsky",
- "criterion",
- "egg",
  "smallvec",
  "tir-adt",
  "tir-graph",

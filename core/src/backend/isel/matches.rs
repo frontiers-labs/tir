@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
+use tir_relational::ClassId as Id;
 use tir_relational::Csr;
-use tir_symbolic::egraph::Id;
 
 use super::IselMatch;
 

@@ -4,7 +4,7 @@
 
 use tir_adt::APInt;
 use tir_relational::{Atom, ClassId, NoExterns, Plan, Query};
-use tir_symbolic::egraph::{EGraph, ENode, Id};
+use tir_relational::{ClassId as Id, Engine, Label as ENode};
 
 use super::test_lang::*;
 
@@ -62,7 +62,7 @@ impl ENode for Wild {
 /// operator, which is what [`ENode::op_key`]'s contract buys.
 #[test]
 fn the_operator_index_finds_a_wildcard_rooted_match() {
-    let mut g: EGraph<Wild> = EGraph::new();
+    let mut g: Engine<Wild> = Engine::new();
     let leaf = g.add(Wild::Leaf(7));
     let op = g.add(Wild::Op(5, [leaf]));
 
@@ -86,7 +86,7 @@ fn the_operator_index_finds_a_wildcard_rooted_match() {
 /// The legality hook prunes a binding the caller rejects, wherever it sits.
 #[test]
 fn the_legality_hook_prunes_a_binding() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
@@ -118,7 +118,7 @@ fn the_legality_hook_prunes_a_binding() {
 /// is what the scope assumed of it rather than a row it holds.
 #[test]
 fn a_literal_matches_the_constant_a_scope_assumed() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let root = add(&mut g, a, b);
@@ -153,7 +153,7 @@ fn a_literal_matches_the_constant_a_scope_assumed() {
 /// A float literal reads the same column an integer one does.
 #[test]
 fn a_float_literal_matches_its_constant() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let f = fnum(&mut g, 1.5);
     let n = neg(&mut g, f);
     g.rebuild();

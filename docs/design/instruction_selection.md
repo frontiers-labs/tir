@@ -474,14 +474,14 @@ instruction patterns still match them.
 ## 3. Patterns and matches
 
 Each `Rule`'s pattern is compiled once (`compile_isel_pattern`) into a
-`tir_symbolic::egraph::Pattern<SemNode, u32>`. Operand leaves become
+a `tir_relational::Plan<SemNode>`. Operand leaves become
 `Var::Symbol` holes (capture points — the match's substitution binds them);
 interior nodes become typed/untyped templates, with per-node register /
 immediate / width requirements kept in `node_meta`. `specificity` counts
 type-constrained nodes — the tie-breaker (see below).
 
 `collect_block_matches` e-matches every value pattern against the shared e-graph
-(via the `tir_symbolic::egraph` search engine — the same matcher instcombine uses
+(via the `tir_relational` evaluator — the same matcher instcombine uses
 — with operand constraints and match legality supplied as a legality callback),
 then **restricts every hit to the solving block B**: a match survives only if its
 root is a value B computes (an op of B, a class a destruction reads there, or a

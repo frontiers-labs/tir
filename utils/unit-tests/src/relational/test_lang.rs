@@ -3,7 +3,7 @@
 use tir_adt::{APFloat, APInt};
 
 use tir_relational::{Atom, HeadOp, LabelFill, NoExterns, Plan, Query, Rule};
-use tir_symbolic::egraph::{EGraph, ENode, Id};
+use tir_relational::{ClassId as Id, Engine, Label as ENode};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Math {
@@ -82,19 +82,19 @@ impl ENode for Math {
     }
 }
 
-pub(crate) fn num(g: &mut EGraph<Math>, n: i64) -> Id {
+pub(crate) fn num(g: &mut Engine<Math>, n: i64) -> Id {
     g.add(Math::Num(n))
 }
-pub(crate) fn fnum(g: &mut EGraph<Math>, v: f64) -> Id {
+pub(crate) fn fnum(g: &mut Engine<Math>, v: f64) -> Id {
     g.add(Math::FNum(APFloat::from_f64(v)))
 }
-pub(crate) fn sym(g: &mut EGraph<Math>, s: u32) -> Id {
+pub(crate) fn sym(g: &mut Engine<Math>, s: u32) -> Id {
     g.add(Math::Sym(s))
 }
-pub(crate) fn neg(g: &mut EGraph<Math>, a: Id) -> Id {
+pub(crate) fn neg(g: &mut Engine<Math>, a: Id) -> Id {
     g.add(Math::Neg([a]))
 }
-pub(crate) fn add(g: &mut EGraph<Math>, a: Id, b: Id) -> Id {
+pub(crate) fn add(g: &mut Engine<Math>, a: Id, b: Id) -> Id {
     g.add(Math::Add([a, b]))
 }
 
@@ -135,7 +135,7 @@ pub(crate) fn insert(template: Math, args: &[u32], into: u32) -> HeadOp<Math> {
 }
 
 /// Apply every match of `rules` once, then restore congruence.
-pub(crate) fn apply_all(g: &mut EGraph<Math>, rules: &[Rule<Math>]) {
+pub(crate) fn apply_all(g: &mut Engine<Math>, rules: &[Rule<Math>]) {
     for rule in rules {
         let roots = rule.plan.roots(g);
         for m in rule.plan.search(g, roots, &|_, _| true, false, &NoExterns) {

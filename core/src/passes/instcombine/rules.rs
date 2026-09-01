@@ -2,7 +2,7 @@ use smallvec::{SmallVec, smallvec};
 use tir_relational::{
     Atom, Cmp, ColumnId, Expr, Externs, Guard, HeadOp, LabelFill, Plan, Query, Source,
 };
-use tir_symbolic::egraph::{EGraph, ENode, Id};
+use tir_relational::{ClassId as Id, Engine, Label as ENode};
 
 use super::seed::Seeded;
 use super::state;
@@ -185,7 +185,7 @@ fn emit_shl() -> EmitFn {
 /// One LHS template per distinct seeded-op signature in `eg`, so const folding
 /// searches the classes holding such an op instead of every class. Only a seeded
 /// op ever folds and rewrites introduce none, so the seeded graph fixes the set.
-fn fold_templates(eg: &EGraph<Node>) -> Vec<Node> {
+fn fold_templates(eg: &Engine<Node>) -> Vec<Node> {
     let mut templates: Vec<Node> = Vec::new();
     for class in eg.classes() {
         for node in class.nodes() {
@@ -274,7 +274,7 @@ fn const_fold(template: &Node) -> tir_relational::Rule<Node> {
 /// The γ arities the seeded graph holds, so a decided gate is searched at the
 /// widths it actually occurs at. Only a gate the seeding built is ever decided and
 /// rewrites introduce no new arity, so the seeded graph fixes the set.
-fn gamma_arities(eg: &EGraph<Node>) -> Vec<usize> {
+fn gamma_arities(eg: &Engine<Node>) -> Vec<usize> {
     let mut arities: Vec<usize> = Vec::new();
     for class in eg.classes() {
         for node in class.nodes() {

@@ -1,5 +1,5 @@
 use tir_relational::{Atom, HeadOp, NoExterns, Rule};
-use tir_symbolic::egraph::{EGraph, ENode, Id};
+use tir_relational::{ClassId as Id, Engine, Label as ENode};
 
 use super::test_lang::*;
 
@@ -18,7 +18,7 @@ fn double_negation_eliminates() {
         vec![HeadOp::Union(0, 2)],
     );
 
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let nn = neg(&mut g, a);
     let nna = neg(&mut g, nn);
@@ -30,7 +30,7 @@ fn double_negation_eliminates() {
 
 #[test]
 fn commutativity_unions_swapped_form() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
@@ -43,7 +43,7 @@ fn commutativity_unions_swapped_form() {
 
 #[test]
 fn additive_identity_via_integer_literal() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let z = num(&mut g, 0);
     let root = add(&mut g, a, z);
@@ -57,7 +57,7 @@ fn additive_identity_via_integer_literal() {
 
 #[test]
 fn saturates_and_applies_a_rule() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
@@ -71,7 +71,7 @@ fn saturates_and_applies_a_rule() {
 #[test]
 fn combines_rules_across_iterations() {
     // add(0, a): commutativity exposes add(a, 0), then add-zero collapses it.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let z = num(&mut g, 0);
     let root = add(&mut g, z, a);
@@ -83,7 +83,7 @@ fn combines_rules_across_iterations() {
 
 #[test]
 fn iter_limit_zero_does_nothing() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
@@ -98,7 +98,7 @@ fn iter_limit_zero_does_nothing() {
 #[test]
 fn node_limit_halts_before_growth() {
     // comm must mint add(b, a); capping at the current size blocks it.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     add(&mut g, a, b);
@@ -110,7 +110,7 @@ fn node_limit_halts_before_growth() {
 
 #[test]
 fn roots_canonicalize_after_saturation() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
@@ -127,7 +127,7 @@ fn roots_canonicalize_after_saturation() {
 /// a full search.
 #[test]
 fn a_scope_over_a_fixpoint_starts_from_its_own_log() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
@@ -161,7 +161,7 @@ fn unit(node: &Math) -> u64 {
 #[test]
 fn picks_cheaper_equivalent_form() {
     // neg(neg(a)) unioned with a: extraction prefers the bare a (cost 0).
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let inner = neg(&mut g, a);
     let nn = neg(&mut g, inner);
@@ -174,7 +174,7 @@ fn picks_cheaper_equivalent_form() {
 
 #[test]
 fn sums_children_costs() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let na = neg(&mut g, a);
     let extraction = g.extract_best(|_, node| unit(node));
@@ -186,7 +186,7 @@ fn sums_children_costs() {
 fn ties_keep_the_first_node_to_reach_the_minimum() {
     // add(a, b) and add(b, a) merged: equal cost, so the node the scan reaches
     // first stays chosen.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
@@ -204,7 +204,7 @@ fn ties_keep_the_first_node_to_reach_the_minimum() {
 fn terminates_on_a_cycle() {
     // a ≡ neg(a): the class is a self-cycle, but extraction still terminates and
     // costs it through the symbol leaf.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let na = neg(&mut g, a);
     g.union(a, na);
@@ -281,7 +281,7 @@ fn math_rules() -> Vec<Rule<Math>> {
 /// The pre-semi-naive driver: every round searches every rule over the whole
 /// graph. The reference the delta rounds must agree with.
 fn saturate_naive(
-    g: &mut EGraph<Math>,
+    g: &mut Engine<Math>,
     rules: &[&Rule<Math>],
     iter_limit: usize,
     node_limit: usize,
@@ -323,7 +323,7 @@ enum Expr {
     Add(Box<Expr>, Box<Expr>),
 }
 
-fn build(g: &mut EGraph<Math>, e: &Expr) -> Id {
+fn build(g: &mut Engine<Math>, e: &Expr) -> Id {
     match e {
         Expr::Leaf(s) => sym(g, *s),
         Expr::Zero => num(g, 0),
@@ -343,8 +343,8 @@ fn build(g: &mut EGraph<Math>, e: &Expr) -> Id {
 /// Not the shape: two saturations reaching the same partition hold different sets
 /// of equivalent spellings, so they break a cost tie differently.
 fn extracted_cost(
-    g: &EGraph<Math>,
-    e: &tir_symbolic::egraph::Extraction<'_, Math>,
+    g: &Engine<Math>,
+    e: &tir_relational::Extraction<'_, Math>,
     id: Id,
     seen: &mut Vec<Id>,
 ) -> Option<u64> {
@@ -391,16 +391,16 @@ proptest::proptest! {
             .map(|(_, rule)| rule)
             .collect();
 
-        let seed = |g: &mut EGraph<Math>| -> Vec<Id> {
+        let seed = |g: &mut Engine<Math>| -> Vec<Id> {
             exprs.iter().map(|e| build(g, e)).collect()
         };
 
-        let mut naive = EGraph::new();
+        let mut naive = Engine::new();
         let naive_roots = seed(&mut naive);
         naive.rebuild();
         saturate_naive(&mut naive, &rules, 30, 10_000);
 
-        let mut semi = EGraph::new();
+        let mut semi = Engine::new();
         let semi_roots = seed(&mut semi);
         semi.rebuild();
         let owned: Vec<Rule<Math>> = rules.iter().map(|&rule| rule.clone()).collect();
@@ -438,7 +438,7 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
     use smallvec::smallvec;
     use tir_relational::{LabelFill, Plan, Query};
 
-    let mut g: EGraph<Math> = EGraph::new();
+    let mut g: Engine<Math> = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let sum = add(&mut g, a, b);
@@ -513,7 +513,7 @@ proptest::proptest! {
         pairs in proptest::collection::vec((0usize..64, 0usize..64), 0..4),
     ) {
         let rules = math_rules();
-        let mut g = EGraph::new();
+        let mut g = Engine::new();
         for e in &exprs {
             build(&mut g, e);
         }
@@ -556,7 +556,7 @@ proptest::proptest! {
         inner in proptest::collection::vec((0usize..64, 0usize..64), 0..3),
     ) {
         let rules = math_rules();
-        let mut g = EGraph::new();
+        let mut g = Engine::new();
         for e in &exprs {
             build(&mut g, e);
         }

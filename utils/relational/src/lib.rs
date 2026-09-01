@@ -11,9 +11,12 @@
 mod column;
 mod csr;
 mod engine;
+mod extract;
 mod label;
 mod query;
 mod rule;
+mod saturate;
+mod telemetry;
 mod unionfind;
 
 #[cfg(test)]
@@ -22,12 +25,15 @@ mod testing;
 pub use column::{Column, Fact, Join};
 pub use csr::Csr;
 pub use engine::{ClassRef, Engine, Rows, Stats};
+pub use extract::Extraction;
 pub use label::Label;
 pub use query::{
     Atom, Cmp, ColumnId, Expr, ExternId, Externs, Field, Guard, Match, Nested, NoExterns, Plan,
     Query, Scalar, Source, Step, Var,
 };
 pub use rule::{HeadOp, LabelFill, Rule};
+pub use saturate::{Delta, round_roots};
+pub use telemetry::{RoundStats, Timer, report_saturation};
 pub use unionfind::UnionFind;
 
 /// Whether `TIR_SAT_TRACE` asked for a saturation trace on stderr: every class

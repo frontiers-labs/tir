@@ -1,11 +1,13 @@
 //! The proved algebraic rewrites the semantic e-graph saturates with, plus the
-//! small saturation driver over the [`tir_symbolic`] e-graph.
+//! small saturation driver over the [`tir_relational`] engine.
 //!
 //! Instruction selection saturates a whole function's e-graph with them before
 //! covering.
 
 use tir_relational::Rule;
-use tir_symbolic::egraph::{self, Delta, Id, RoundStats, Timer, trace_enabled};
+use tir_relational::{
+    ClassId as Id, Delta, RoundStats, Timer, round_roots as delta_roots, trace_enabled,
+};
 
 use super::SymKind;
 use super::axioms::{Axiom, Folding, Interpretation};
@@ -211,7 +213,7 @@ pub fn saturate(ctx: &Context, eg: &mut SemEGraph, theory: &Theory, limits: Satu
 /// log can speak for.
 fn round_roots(eg: &SemEGraph, rule: &Rule<SemNode>, delta: Option<&mut Delta>) -> Vec<Id> {
     match delta.filter(|_| !rule.plan.unbounded()) {
-        Some(delta) => egraph::round_roots(eg, &rule.plan, delta),
+        Some(delta) => delta_roots(eg, &rule.plan, delta),
         None => rule.plan.roots(eg),
     }
 }

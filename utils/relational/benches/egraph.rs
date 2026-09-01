@@ -1,4 +1,4 @@
-//! Symbolic-math equality-saturation benchmark for `tir-symbolic`, vs egg's `tests/math.rs`
+//! Symbolic-math equality-saturation benchmark for `tir-relational`, vs egg's `tests/math.rs`
 //! on the same [`shared::RULES`]/[`shared::SEED_EXPRS`]. Names intern to `u32` (see [`intern`])
 //! so the comparison measures e-matching, not string handling — matching egg's `Copy` names.
 
@@ -11,7 +11,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 use smallvec::{SmallVec, smallvec};
 use tir_adt::{APInt, FxHasher};
 use tir_relational::{Atom, Guard, HeadOp, LabelFill, Match, Nested, NoExterns, Plan, Query, Rule};
-use tir_symbolic::egraph::{EGraph, ENode, Id};
+use tir_relational::{ClassId as Id, Engine, Label as ENode};
 
 #[path = "math_shared.rs"]
 mod shared;
@@ -176,7 +176,7 @@ fn atom_str(e: &Sexp) -> &str {
     }
 }
 
-fn add_expr(g: &mut EGraph<Math>, e: &Sexp) -> Id {
+fn add_expr(g: &mut Engine<Math>, e: &Sexp) -> Id {
     match e {
         Sexp::Atom(a) => {
             if let Ok(n) = a.parse::<i64>() {
@@ -374,15 +374,15 @@ fn build_rules() -> Vec<Rule<Math>> {
         .collect()
 }
 
-fn seed_all() -> EGraph<Math> {
-    let mut g = EGraph::new();
+fn seed_all() -> Engine<Math> {
+    let mut g = Engine::new();
     for s in SEED_EXPRS {
         add_expr(&mut g, &parse_sexp(s));
     }
     g
 }
 
-fn pre_saturated() -> (Vec<Rule<Math>>, EGraph<Math>) {
+fn pre_saturated() -> (Vec<Rule<Math>>, Engine<Math>) {
     let rules = build_rules();
     let mut g = seed_all();
     g.saturate_rules(&rules, &NoExterns, PRE_SAT_ITERS, NODE_LIMIT);
@@ -415,9 +415,9 @@ fn bench_saturate(c: &mut Criterion) {
 }
 
 /// The pre-semi-naive driver: every round searches every rule over the whole
-/// graph. Kept here as the baseline [`EGraph::saturate`]'s delta rounds are
+/// graph. Kept here as the baseline [`Engine::saturate`]'s delta rounds are
 /// measured against.
-fn saturate_naive(g: &mut EGraph<Math>, rules: &[Rule<Math>], iters: usize) {
+fn saturate_naive(g: &mut Engine<Math>, rules: &[Rule<Math>], iters: usize) {
     for _ in 0..iters {
         let size = g.total_size();
         if size >= NODE_LIMIT {

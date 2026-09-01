@@ -1,33 +1,23 @@
-//! Equality saturation over [`tir_relational`]'s columnar e-graph.
-//!
-//! The e-graph itself — hash-consing, congruence closure, scopes, the change log
-//! — lives in `tir-relational`, which knows nothing about terms beyond the
-//! [`ENode`] contract. What stays here is what saturation adds: patterns, the
-//! matcher, rewrites, extraction and the round counters.
-
-mod extract;
-mod telemetry;
+//! The semi-naive saturation driver: rounds over a frozen snapshot, each one
+//! searching only what the round before changed, plus the change frontier a
+//! round narrows itself by.
 
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
 
 use tir_adt::FxBuildHasher;
 
-pub use tir_relational::trace_enabled;
-pub use tir_relational::{ClassId as Id, ClassRef as EClass, Label as ENode};
-
-pub use extract::*;
-pub use telemetry::{RoundStats, Timer, report_saturation};
+use crate::telemetry::{RoundStats, Timer};
+use crate::{ClassId, Engine, Externs, Label, Match, Plan, Rule, trace_enabled};
 
 /// Δ_h grouped by operator: for each, the classes holding it paired with the row
 /// each one enters that operator's bucket at, which is what orders the group.
-type OpGroups = HashMap<u64, Vec<(u32, Id)>, FxBuildHasher>;
+type OpGroups = HashMap<u64, Vec<(u32, ClassId)>, FxBuildHasher>;
 
 /// Per-round frontier of semi-naive saturation: the change log of the previous
 /// round closed upward, cached by the pattern heights a rule set asks for.
 pub struct Delta {
     /// `levels[h]` is Δ_h; grown on demand, each from the one below it.
-    levels: Vec<Vec<Id>>,
+    levels: Vec<Vec<ClassId>>,
     /// `by_op[h]` groups Δ_h by the operators its classes hold, so a round scans
     /// each depth once instead of once per rule.
     /// Each group is ordered by the row a class enters the bucket at.
@@ -35,8 +25,8 @@ pub struct Delta {
 }
 
 impl Delta {
-    /// Seed from a [`EGraph::take_changed`] drain.
-    pub fn new(changed: Vec<Id>) -> Self {
+    /// Seed from a [`Engine::take_changed`] drain.
+    pub fn new(changed: Vec<ClassId>) -> Self {
         Self {
             levels: vec![changed],
             by_op: Vec::new(),
@@ -60,7 +50,7 @@ impl Delta {
     }
 
     /// Δ_height, ascending.
-    pub fn at<L: ENode>(&mut self, eg: &EGraph<L>, height: usize) -> &[Id] {
+    pub fn at<L: Label>(&mut self, eg: &Engine<L>, height: usize) -> &[ClassId] {
         while self.levels.len() <= height {
             let below = self.levels.last().expect("seeded level");
             self.levels.push(eg.delta(below, 1));
@@ -79,7 +69,7 @@ impl Delta {
     /// first row of that operator, so ordering each group by that row reproduces
     /// the bucket's order exactly — which is the root order a match's position in
     /// the round is defined by, and so the order class ids are assigned in.
-    pub fn roots<L: ENode>(&mut self, eg: &EGraph<L>, height: usize, op: u64) -> &[(u32, Id)] {
+    pub fn roots<L: Label>(&mut self, eg: &Engine<L>, height: usize, op: u64) -> &[(u32, ClassId)] {
         self.at(eg, height);
         while self.by_op.len() <= height {
             let mut by_op: OpGroups = HashMap::default();
@@ -108,11 +98,7 @@ impl Delta {
 
 /// The classes a semi-naive round searches `plan` at: the change frontier at the
 /// plan's height, restricted to the operator its root binds.
-pub fn round_roots<L: ENode>(
-    eg: &EGraph<L>,
-    plan: &tir_relational::Plan<L>,
-    delta: &mut Delta,
-) -> Vec<Id> {
+pub fn round_roots<L: Label>(eg: &Engine<L>, plan: &Plan<L>, delta: &mut Delta) -> Vec<ClassId> {
     match plan.root_op() {
         Some(op) => delta
             .roots(eg, plan.height(), op)
@@ -123,34 +109,7 @@ pub fn round_roots<L: ENode>(
     }
 }
 
-/// The saturating e-graph: [`tir_relational::Engine`] plus a rule driver.
-pub struct EGraph<L: ENode>(tir_relational::Engine<L>);
-
-impl<L: ENode> Default for EGraph<L> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<L: ENode> Deref for EGraph<L> {
-    type Target = tir_relational::Engine<L>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<L: ENode> DerefMut for EGraph<L> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<L: ENode> EGraph<L> {
-    pub fn new() -> Self {
-        Self(tir_relational::Engine::new())
-    }
-
+impl<L: Label> Engine<L> {
     /// Saturate in place with `rules`, and the host functions their guards call.
     /// Each iteration searches every rule against one snapshot, then applies and
     /// rebuilds — a node born this iteration is visible only to the next. Stops
@@ -158,8 +117,8 @@ impl<L: ENode> EGraph<L> {
     /// changed, or an empty change log) or at a limit.
     pub fn saturate_rules(
         &mut self,
-        rules: &[tir_relational::Rule<L>],
-        externs: &dyn tir_relational::Externs<L>,
+        rules: &[Rule<L>],
+        externs: &dyn Externs<L>,
         iter_limit: usize,
         node_limit: usize,
     ) {
@@ -177,7 +136,7 @@ impl<L: ENode> EGraph<L> {
             let before = (self.num_classes(), size, self.stats().raises);
 
             let mut stats = RoundStats::start(self, delta.as_ref());
-            let mut found: Vec<(&tir_relational::Rule<L>, Vec<tir_relational::Match>)> = Vec::new();
+            let mut found: Vec<(&Rule<L>, Vec<Match>)> = Vec::new();
             for rule in rules {
                 // Everything a rule reads is an atom or a guard over what an atom
                 // bound, so both narrowings come free of any hand-asserted

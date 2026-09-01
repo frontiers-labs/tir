@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use tir_symbolic::egraph::{EGraph, ENode};
+use tir_relational::{Engine, Label as ENode};
 
 static FORCED: AtomicBool = AtomicBool::new(false);
 static PASS_TOTALS: Mutex<Vec<(&'static str, i64)>> = Mutex::new(Vec::new());
@@ -128,7 +128,7 @@ pub fn analysis_census(pass: &'static str, entries: usize) {
 
 /// Node and class counts of a view, plus the bytes its columns hold. An estimate
 /// for ranking, not an allocator total.
-pub fn egraph_census<L: ENode>(label: &str, egraph: &EGraph<L>) {
+pub fn egraph_census<L: ENode>(label: &str, egraph: &Engine<L>) {
     if !enabled() {
         return;
     }

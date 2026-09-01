@@ -4,7 +4,7 @@ use tir::{
     BlockId, Context, OpId, TypeId, ValueId, analysis::DominatorTree,
     sem::egraph::class_int_binding,
 };
-use tir_symbolic::egraph::Id;
+use tir_relational::ClassId as Id;
 
 use super::{
     FunctionSelection, RuleMatch,

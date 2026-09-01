@@ -37,7 +37,7 @@
 
 use smallvec::smallvec;
 use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, HeadOp, Nested, Plan, Query, Source};
-use tir_symbolic::egraph::{ENode, Id};
+use tir_relational::{ClassId as Id, Label as ENode};
 
 use crate::sem::{SemNode as Node, SymKind, node::field};
 

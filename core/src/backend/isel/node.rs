@@ -13,7 +13,7 @@ use tir::{
     },
 };
 use tir_adt::APInt;
-use tir_symbolic::egraph::{ENode, Id};
+use tir_relational::{ClassId as Id, Label as ENode};
 
 /// If the class is a low-bit truncation `Extract(v, hi, 0)`, its operand class
 /// `v`. Such a value *is* the low `hi+1` bits of `v`'s register — the framework's

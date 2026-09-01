@@ -12,8 +12,8 @@ use tir::{
         infer_types, template_node,
     },
 };
+use tir_relational::ClassId as Id;
 use tir_relational::{Atom, Match, NoExterns, Plan, Query};
-use tir_symbolic::egraph::Id;
 
 use super::node::{class_register_type, is_memory_kind, low_extract_source, low_extract_width};
 use super::{ImmRange, RegisterRequirement};

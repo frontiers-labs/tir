@@ -39,16 +39,20 @@ mod symbolic {
     mod bitblast;
     mod btor2;
     mod discover;
-    mod egraph;
-    mod egraph_pattern;
     mod exec;
     mod infer;
     mod ops;
-    mod rewrite_runner_extract;
     mod sat;
     mod sexpr;
     mod smtlib;
     mod support;
+}
+
+#[cfg(test)]
+mod relational {
+    mod egraph;
+    mod egraph_pattern;
+    mod rewrite_runner_extract;
     mod test_lang;
 }
 

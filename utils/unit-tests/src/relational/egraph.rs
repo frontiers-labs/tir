@@ -1,10 +1,10 @@
-use tir_symbolic::egraph::{EGraph, ENode, Id};
+use tir_relational::{ClassId as Id, Engine, Label as ENode};
 
 use super::test_lang::*;
 
 #[test]
 fn hash_consing_shares_identical_expressions() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let e1 = add(&mut g, a, b);
@@ -27,7 +27,7 @@ fn hash_cons_includes_children() {
 
 #[test]
 fn lookup_probes_without_inserting() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     assert!(g.lookup(&Math::Add([a, b])).is_none());
@@ -38,7 +38,7 @@ fn lookup_probes_without_inserting() {
 
 #[test]
 fn union_merges_classes() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = num(&mut g, 7);
     let c = num(&mut g, 9);
@@ -51,7 +51,7 @@ fn union_merges_classes() {
 
 #[test]
 fn congruence_merges_function_applications() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -72,7 +72,7 @@ fn congruence_merges_function_applications() {
 
 #[test]
 fn rebuild_propagates_congruence_to_fixpoint() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let mut cur = a;
     for _ in 0..5 {
@@ -88,7 +88,7 @@ fn rebuild_propagates_congruence_to_fixpoint() {
 #[test]
 fn hash_collision_keeps_distinct_nodes_separate() {
     // Num(1) and Num(2) share a hash_cons bucket but must not merge.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let n1 = num(&mut g, 1);
     let n2 = num(&mut g, 2);
     let n1b = num(&mut g, 1);
@@ -99,7 +99,7 @@ fn hash_collision_keeps_distinct_nodes_separate() {
 
 #[test]
 fn unique_nodes_never_share_or_merge() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let e1 = g.add(Math::Effect(0, [a]));
     let e2 = g.add(Math::Effect(0, [a]));
@@ -120,7 +120,7 @@ fn unique_nodes_never_share_or_merge() {
 
 #[test]
 fn scope_union_is_discarded_on_pop() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = num(&mut g, 7);
     g.push_context();
@@ -134,7 +134,7 @@ fn scope_union_is_discarded_on_pop() {
 fn scope_congruence_collapses_and_restores() {
     // neg(a) and neg(b) are distinct at base; assuming a≡b in a scope makes
     // them congruent, and popping restores the distinction.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let fa = neg(&mut g, a);
@@ -155,7 +155,7 @@ fn scope_congruence_collapses_and_restores() {
 
 #[test]
 fn scope_preserves_base_equalities() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -177,7 +177,7 @@ fn scope_preserves_base_equalities() {
 fn scope_congruence_propagates_to_fixpoint() {
     // neg(neg(a)) ≡ a under a≡neg(a): assuming a≡neg(a) collapses the whole
     // tower of negations into one class.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let mut cur = a;
     for _ in 0..5 {
@@ -197,7 +197,7 @@ fn scope_congruence_propagates_to_fixpoint() {
 
 #[test]
 fn nested_scopes_isolate() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -219,7 +219,7 @@ fn scope_add_then_congruence() {
     // A node built inside a scope participates in scoped congruence. `b` is
     // interned first so it represents the merged set, which is what leaves
     // `neg(b)` a term the base hash-cons has never seen.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let b = sym(&mut g, 1);
     let a = sym(&mut g, 0);
     let fa = neg(&mut g, a);
@@ -238,7 +238,7 @@ fn scope_add_then_congruence() {
 
 #[test]
 fn nested_pop_restores_outer_scope_hash_cons() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -263,7 +263,7 @@ fn rewrite_under_scope_is_discarded_on_pop() {
     // add(x, y) => add(y, x), applied only inside a scope.
     let comm = comm_rule();
 
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
@@ -280,7 +280,7 @@ fn rewrite_under_scope_is_discarded_on_pop() {
 
 #[test]
 fn scope_add_then_pop_restores_class_count() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -297,7 +297,7 @@ fn scope_add_then_pop_restores_class_count() {
 
 #[test]
 fn readd_after_pop_mints_one_class_no_accumulation() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -318,7 +318,7 @@ fn readd_after_pop_mints_one_class_no_accumulation() {
 
 #[test]
 fn nested_scope_pop_reverts_only_inner_adds() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -343,7 +343,7 @@ fn scoped_saturate_leaves_base_identical() {
     // Commutativity introduces add(b, a) as a new node inside the scope; after pop
     // the base graph must be structurally identical.
     let comm = comm_rule();
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     add(&mut g, a, b);
@@ -362,7 +362,7 @@ fn scoped_saturate_leaves_base_identical() {
 
 #[test]
 fn scope_merge_aggregates_nodes_in_base_order() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -387,7 +387,7 @@ fn scope_merge_aggregates_nodes_in_base_order() {
 
 #[test]
 fn nested_pop_restores_outer_scope_partition() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -417,7 +417,7 @@ fn nested_pop_restores_outer_scope_partition() {
 
 #[test]
 fn scope_counts_follow_the_hypothesis_and_the_pop_undoes_them() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -438,7 +438,7 @@ fn scope_counts_follow_the_hypothesis_and_the_pop_undoes_them() {
 
 #[test]
 fn classes_iterate_scope_roots_at_first_member_position() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -454,7 +454,7 @@ fn classes_iterate_scope_roots_at_first_member_position() {
 
 #[test]
 fn scope_dirty_is_empty_without_a_scope() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.union(a, b);
@@ -464,7 +464,7 @@ fn scope_dirty_is_empty_without_a_scope() {
 
 #[test]
 fn scope_dirty_holds_the_class_a_scoped_union_merged() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     sym(&mut g, 2);
@@ -479,7 +479,7 @@ fn scope_dirty_holds_the_class_a_scoped_union_merged() {
 
 #[test]
 fn scope_dirty_holds_a_class_minted_under_the_scope() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -493,7 +493,7 @@ fn scope_dirty_holds_a_class_minted_under_the_scope() {
 
 #[test]
 fn scope_dirty_drops_the_inner_scope_on_pop() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -516,7 +516,7 @@ fn scope_dirty_drops_the_inner_scope_on_pop() {
 
 #[test]
 fn innermost_dirty_holds_only_the_inner_scope_changes() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -544,7 +544,7 @@ fn innermost_dirty_holds_only_the_inner_scope_changes() {
 fn scope_dirty_closes_upward_over_parents() {
     // A parent's e-nodes re-canonicalize through the merge, so a pattern rooted
     // there can match under the scope and not in the base graph.
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let sum = add(&mut g, a, b);
@@ -563,7 +563,7 @@ fn scope_dirty_closes_upward_over_parents() {
 
 #[test]
 fn assume_const_is_read_under_the_scope_and_gone_after_pop() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     g.rebuild();
 
@@ -577,7 +577,7 @@ fn assume_const_is_read_under_the_scope_and_gone_after_pop() {
 
 #[test]
 fn assumed_classes_names_every_class_assumed_to_be_the_constant() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
@@ -600,7 +600,7 @@ fn assumed_classes_names_every_class_assumed_to_be_the_constant() {
 /// block proven unreachable needs.
 #[test]
 fn a_nested_assumption_conflicts_with_the_outer_one_and_the_pop_restores_it() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     g.rebuild();
 
@@ -618,7 +618,7 @@ fn a_nested_assumption_conflicts_with_the_outer_one_and_the_pop_restores_it() {
 
 #[test]
 fn assumption_follows_the_class_through_a_scoped_union() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -635,7 +635,7 @@ fn assumption_follows_the_class_through_a_scoped_union() {
 
 #[test]
 fn inner_union_rekeys_an_outer_assumption_and_pop_restores_it() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -654,7 +654,7 @@ fn inner_union_rekeys_an_outer_assumption_and_pop_restores_it() {
 
 #[test]
 fn scope_dirty_holds_an_assumed_class_and_its_parents() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let sum = add(&mut g, a, b);
@@ -673,7 +673,7 @@ fn scope_dirty_holds_an_assumed_class_and_its_parents() {
 #[test]
 #[should_panic(expected = "a scope to be undone by")]
 fn assume_const_without_a_scope_panics() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     g.assume_const(a, Math::Num(1));
 }
@@ -682,14 +682,14 @@ fn assume_const_without_a_scope_panics() {
 
 #[test]
 fn take_changed_starts_as_everything() {
-    let mut g: EGraph<Math> = EGraph::new();
+    let mut g: Engine<Math> = Engine::new();
     assert!(g.take_changed().is_none());
     assert_eq!(g.take_changed(), Some(Vec::new()));
 }
 
 #[test]
 fn added_classes_are_changed() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     g.take_changed();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
@@ -700,7 +700,7 @@ fn added_classes_are_changed() {
 
 #[test]
 fn union_survivor_is_changed() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.take_changed();
@@ -710,7 +710,7 @@ fn union_survivor_is_changed() {
 
 #[test]
 fn repair_reports_re_canonicalized_parents() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let na = neg(&mut g, a);
@@ -727,7 +727,7 @@ fn repair_reports_re_canonicalized_parents() {
 
 #[test]
 fn assumed_constants_change_their_class() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     g.take_changed();
     g.push_context();
@@ -740,7 +740,7 @@ fn assumed_constants_change_their_class() {
 
 #[test]
 fn a_scope_leaves_the_change_log_as_it_found_it() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let na = neg(&mut g, a);
@@ -768,7 +768,7 @@ fn a_scope_leaves_the_change_log_as_it_found_it() {
 
 #[test]
 fn nested_scopes_restore_one_layer_at_a_time() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.rebuild();
@@ -789,7 +789,7 @@ fn nested_scopes_restore_one_layer_at_a_time() {
 
 #[test]
 fn delta_closes_upward_by_height() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let x = sym(&mut g, 0);
     let hx = neg(&mut g, x);
     let ghx = neg(&mut g, hx);
@@ -805,7 +805,7 @@ fn delta_closes_upward_by_height() {
 
 #[test]
 fn delta_covers_a_merged_group_parents_under_a_scope() {
-    let mut g = EGraph::new();
+    let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let na = neg(&mut g, a);
@@ -820,7 +820,7 @@ fn delta_covers_a_merged_group_parents_under_a_scope() {
     g.pop_context();
 }
 
-fn sorted(g: &EGraph<Math>, ids: impl IntoIterator<Item = Id>) -> Vec<Id> {
+fn sorted(g: &Engine<Math>, ids: impl IntoIterator<Item = Id>) -> Vec<Id> {
     let mut ids: Vec<Id> = ids.into_iter().map(|id| g.find(id)).collect();
     ids.sort();
     ids.dedup();

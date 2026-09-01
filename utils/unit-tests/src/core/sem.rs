@@ -8,7 +8,7 @@ use tir::sem::{
 use tir::{attributes::NamedAttribute, Context, TypeId};
 use tir_adt::APInt;
 use tir_relational::{Atom, ClassId, NoExterns, Plan, Query};
-use tir_symbolic::egraph::{EGraph, Id};
+use tir_relational::{ClassId as Id, Engine};
 
 /// A one-level query over `template`, binding its two operands.
 fn addi_plan(template: SemNode) -> Plan<SemNode> {
@@ -59,7 +59,7 @@ fn op_pattern(name: &'static str, args: Vec<Id>) -> SemNode {
 
 #[test]
 fn equal_constants_share_a_class_distinct_widths_do_not() {
-    let mut g: EGraph<SemNode> = EGraph::new();
+    let mut g: Engine<SemNode> = Engine::new();
     let a = g.add(konst(32, 0));
     let b = g.add(konst(32, 0));
     let c = g.add(konst(64, 0));
@@ -70,7 +70,7 @@ fn equal_constants_share_a_class_distinct_widths_do_not() {
 // Ops differing only in a value attribute must not hash-cons; identical ones must.
 #[test]
 fn ops_differing_in_attributes_stay_distinct() {
-    let mut g: EGraph<SemNode> = EGraph::new();
+    let mut g: Engine<SemNode> = Engine::new();
     let x = g.add(konst(32, 0));
     let context = Context::with_default_dialects();
     let cmpi = |pred: &str, args: Vec<Id>| {
@@ -91,7 +91,7 @@ fn ops_differing_in_attributes_stay_distinct() {
 // stay in distinct classes — merging would miscompile.
 #[test]
 fn wildcard_search_groups_result_types_without_merging_them() {
-    let mut g: EGraph<SemNode> = EGraph::new();
+    let mut g: Engine<SemNode> = Engine::new();
     let x = g.add(konst(32, 0));
     let addi = |t: TypeId, args: Vec<Id>| op("addi", t, vec![], args);
     let a32 = g.add(addi(ty(32), vec![x, x]));
@@ -114,7 +114,7 @@ fn wildcard_search_groups_result_types_without_merging_them() {
 
 #[test]
 fn graph_operation_controls_commutative_matching() {
-    let mut g: EGraph<SemNode> = EGraph::new();
+    let mut g: Engine<SemNode> = Engine::new();
     let zero = g.add(konst(32, 0));
     let x = g.add(konst(32, 1));
     let mut addi = op("addi", ty(32), vec![], vec![zero, x]);
@@ -153,7 +153,7 @@ fn graph_operation_controls_commutative_matching() {
 /// rather than two that would conflict and leave the class knowing nothing.
 #[test]
 fn two_spellings_of_one_constant_are_one_fact() {
-    let mut g: EGraph<SemNode> = EGraph::new();
+    let mut g: Engine<SemNode> = Engine::new();
     let untyped = g.add(konst(32, 5));
     let typed = g.add(konst(32, 5).typed(ty(32)));
     assert_ne!(g.find(untyped), g.find(typed));

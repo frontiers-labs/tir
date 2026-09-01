@@ -6,9 +6,8 @@ use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use tir_relational::Stats;
-
-use super::{Delta, EGraph, ENode};
+use crate::saturate::Delta;
+use crate::{Engine, Label as ENode, Stats};
 
 /// Mirrors the core pass timer's switch; this crate cannot see it.
 pub fn enabled() -> bool {
@@ -33,7 +32,7 @@ thread_local! {
     static EXTRACTED: Cell<(usize, Duration)> = const { Cell::new((0, Duration::ZERO)) };
 }
 
-/// Record one [`EGraph::extract_best`](super::EGraph::extract_best): it costs a
+/// Record one [`Engine::extract_best`](super::Engine::extract_best): it costs a
 /// pass over every class, and instcombine runs one per region, so the count is as
 /// interesting as the time.
 pub(super) fn count_extract(elapsed: Duration) {
@@ -71,7 +70,7 @@ pub struct RoundStats(Option<(Round, Stats)>);
 impl RoundStats {
     /// Open a round searching against `delta` (`None` on the first round, which
     /// searches everything).
-    pub fn start<L: ENode>(eg: &EGraph<L>, delta: Option<&Delta>) -> Self {
+    pub fn start<L: ENode>(eg: &Engine<L>, delta: Option<&Delta>) -> Self {
         if !enabled() {
             return Self(None);
         }
@@ -95,7 +94,7 @@ impl RoundStats {
 
     /// Apply one match, counting it as a no-op if it merged nothing and minted
     /// nothing — the match was already in the graph, as re-finding an old one is.
-    pub fn apply<L: ENode>(&mut self, eg: &mut EGraph<L>, apply: impl FnOnce(&mut EGraph<L>)) {
+    pub fn apply<L: ENode>(&mut self, eg: &mut Engine<L>, apply: impl FnOnce(&mut Engine<L>)) {
         let Some((round, _)) = &mut self.0 else {
             return apply(eg);
         };
@@ -109,7 +108,7 @@ impl RoundStats {
     }
 
     /// Close the round; call after the rebuild, whose merges and repairs it counts.
-    pub fn finish<L: ENode>(self, eg: &EGraph<L>) {
+    pub fn finish<L: ENode>(self, eg: &Engine<L>) {
         let Some((mut round, base)) = self.0 else {
             return;
         };
