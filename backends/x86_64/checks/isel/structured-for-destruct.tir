@@ -32,7 +32,7 @@ module {data_layout = #data_layout} {
 // of the IR. The advance leads the body: rooted at no operation of its own, it
 // takes the head of the order the cover spells.
 // CHECK-NEXT: x86_64.add {dst = %[[NEXT:[0-9]+]]:GPR, dst_tied = %[[IV]]:GPR, src = %[[V2:[0-9]+]]:GPR}
-// CHECK-NEXT: x86_64.add_imm {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, imm = 5}
+// CHECK-NEXT: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %{{[0-9]+}}:GPR, imm = 5}
 // CHECK-NEXT: x86_64.cmp {dst = %[[NEXT]]:GPR, src = %[[V1]]:GPR}
 // CHECK-NEXT: x86_64.jl {imm = ^[[LATCH:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[EXIT]]

@@ -21,7 +21,7 @@ module {
 
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK: ^{{bb[0-9]+}}(%[[ARM:[0-9]+]]: !state):
-// CHECK: x86_64.mov_store32_norex {{.*}} state(%[[ARM]] -> %[[STORED:[0-9]+]])
+// CHECK: x86_64.mov_store32 {{.*}} state(%[[ARM]] -> %[[STORED:[0-9]+]])
 // CHECK-NEXT: asm.vbr %[[STORED]] ^[[JOIN:bb[0-9]+]]
 // CHECK: ^[[JOIN]](%[[MERGED:[0-9]+]]: !state):
-// CHECK-NEXT: x86_64.mov_load32_norex {{.*}} state(%[[MERGED]] -> %{{[0-9]+}})
+// CHECK-NEXT: x86_64.mov_load32 {{.*}} state(%[[MERGED]] -> %{{[0-9]+}})

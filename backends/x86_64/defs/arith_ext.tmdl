@@ -302,20 +302,19 @@ extend_ops!(
     (Movsx16, "movsx16", "movsx", ExtendReg16, 0xBF, { dst = sext(src, self.XLEN); })
 )
 
-macro extend32_norex {
-    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $src:ident, $opcode:literal, { $($b:tt)* } ) ),* ) => {
-        $( instruction $name for [X86] {
+macro extend32 {
+    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $src:ident, $byte:literal, $opcode:literal, { $($b:tt)* } ) ),* ) => {
+        $( instruction $name for [X86_64] {
                param OPNAME: String = $opname;
                param MNEMONIC: String = $mnemonic;
 
-               operands { dst: GPR32low, src: $src, }
+               operands { dst: GPR32, src: $src, }
 
                encoding {
+                   rex(0b0, dst, src, $byte & needs_rex8_one(src)),
                    0x0F,
                    $opcode,
-                   0b11,
-                   dst[2..0],
-                   src[2..0],
+                   modrm_reg(dst, src),
                }
 
                asm { "{self.MNEMONIC} {dst}, {src}" }
@@ -325,14 +324,14 @@ macro extend32_norex {
     };
 }
 
-extend32_norex!(
-    (Movzx8To32, "movzx8_to32", "movzx", GPR8low, 0xB6,
+extend32!(
+    (Movzx8To32, "movzx8_to32", "movzx", GPR8, 0b1, 0xB6,
         { dst = zext(src, 32); }),
-    (Movzx16To32, "movzx16_to32", "movzx", GPR16low, 0xB7,
+    (Movzx16To32, "movzx16_to32", "movzx", GPR16, 0b0, 0xB7,
         { dst = zext(src, 32); }),
-    (Movsx8To32, "movsx8_to32", "movsx", GPR8low, 0xBE,
+    (Movsx8To32, "movsx8_to32", "movsx", GPR8, 0b1, 0xBE,
         { dst = sext(src, 32); }),
-    (Movsx16To32, "movsx16_to32", "movsx", GPR16low, 0xBF,
+    (Movsx16To32, "movsx16_to32", "movsx", GPR16, 0b0, 0xBF,
         { dst = sext(src, 32); })
 )
 
@@ -348,15 +347,9 @@ instruction Movsxd for [X86_64] {
     }
 
     encoding {
-        0b0100,
-        0b1,
-        dst[3],
-        0b0,
-        src[3],
+        rex(0b1, dst, src, 0b0),
         0x63,
-        0b11,
-        dst[2..0],
-        src[2..0],
+        modrm_reg(dst, src),
     }
 
     asm {
@@ -382,15 +375,9 @@ instruction Movzxd for [X86_64] {
     }
 
     encoding {
-        0b0100,
-        0b0,
-        dst[3],
-        0b0,
-        src[3],
+        rex(0b0, dst, src, 0b0),
         0x8B,
-        0b11,
-        dst[2..0],
-        src[2..0],
+        modrm_reg(dst, src),
     }
 
     asm {
@@ -416,11 +403,7 @@ instruction MovAbs for [X86_64] {
     }
 
     encoding {
-        0b0100,
-        0b1,
-        0b0,
-        0b0,
-        dst[3],
+        rex_rm(0b1, dst, 0b0),
         0b10111,
         dst[2..0],
         imm,

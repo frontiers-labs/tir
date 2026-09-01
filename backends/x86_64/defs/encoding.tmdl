@@ -47,6 +47,93 @@ fn signed_fits(x, n) {
     sext(x as bits<n>, width(x)) == x
 }
 
+// A base register whose low three bits are 100 (rsp, r12) means "a SIB byte
+// follows" in the r/m field, so the address is spelled with one; the SIB that
+// names no index and the same base is 0x24.
+fn is_sib(base) {
+    base[2..0] == 0b100
+}
+
+fn rm_field(base) {
+    if is_sib(base) { 0b100 } else { base[2..0] }
+}
+
+fn sib_byte(base) {
+    if is_sib(base) { 0x24 } else { () }
+}
+
+// A base whose low three bits are 101 (rbp, r13) means "rip-relative" with
+// mod=00, so an address through it always carries a displacement.
+fn forced_disp8(base) {
+    base[2..0] == 0b101
+}
+
+// `[base]`: mod=00, except through rbp and r13, which spell a zero byte.
+fn modrm_base(reg, base) {
+    (
+        if forced_disp8(base) {
+            (0b01, reg[2..0], rm_field(base))
+        } else {
+            (0b00, reg[2..0], rm_field(base))
+        },
+        sib_byte(base),
+        if forced_disp8(base) { 0x00 } else { () },
+    )
+}
+
+// Whether the displacement is spelled in one byte: it has to fit, and it has to
+// be there at all, which a zero displacement only is through rbp or r13.
+fn needs_disp8(base, disp) {
+    signed_fits(disp, 8) & ((disp != 0b0) | forced_disp8(base))
+}
+
+// `[base + disp]`: the displacement decides mod, and so how many bytes of it
+// the instruction carries.
+fn modrm_disp(reg, base, disp) {
+    (
+        if ~signed_fits(disp, 8) {
+            (0b10, reg[2..0], rm_field(base))
+        } else if needs_disp8(base, disp) {
+            (0b01, reg[2..0], rm_field(base))
+        } else {
+            (0b00, reg[2..0], rm_field(base))
+        },
+        sib_byte(base),
+        if ~signed_fits(disp, 8) {
+            disp
+        } else if needs_disp8(base, disp) {
+            disp as bits<8>
+        } else {
+            ()
+        },
+    )
+}
+
+// The prefix for an address with an index register, which has its own fourth
+// bit in REX.X.
+fn rex_sib(w, reg, index, base) {
+    if w | reg[3] | index[3] | base[3] {
+        (0b0100, w, reg[3], index[3], base[3])
+    } else {
+        ()
+    }
+}
+
+// `[base + index * scale]`: the r/m field is the SIB escape, and the SIB byte
+// names the scale, the index and the base. rbp and r13 need the zero byte here
+// too, for the same reason.
+fn modrm_sib(reg, base, index, scale) {
+    (
+        if forced_disp8(base) {
+            (0b01, reg[2..0], 0b100)
+        } else {
+            (0b00, reg[2..0], 0b100)
+        },
+        (scale, index[2..0], base[2..0]),
+        if forced_disp8(base) { 0x00 } else { () },
+    )
+}
+
 // Whether an 8-bit operand names a register only a REX byte can reach: spl,
 // bpl, sil and dil are numbers 4..7, which without REX name ah, ch, dh and bh.
 fn needs_rex8(a, b) {

@@ -21,4 +21,4 @@ module {
 
 // CHECK: asm.symbol {name = "accumulate"
 // CHECK-NOT: x86_64.mov_imm
-// CHECK: x86_64.add_imm {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, imm = 5}
+// CHECK: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %{{[0-9]+}}:GPR, imm = 5}

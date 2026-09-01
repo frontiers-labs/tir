@@ -338,113 +338,9 @@ instruction RetLegacy for [X86] {
 // generic for every other base. Post-RA `canonicalize_encodings` selects them
 // for codegen. Behavior-free (canonicalize-only), so they root no isel rules.
 
-instruction MovLoadSib for [X86_64] {
-    param OPNAME: String = "mov_load_sib";
-    param MNEMONIC: String = "mov";
 
-    operands {
-        dst: GPR,
-        base: GPRsib,
-    }
 
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
-        0x8B,
-        0b00,
-        dst[2..0],
-        0b100,
-        0x24,
-    }
 
-    asm {
-        "{self.MNEMONIC} {dst}, [{base}]"
-    }
-
-    behavior {
-        dst = load(base, 8, 0b0);
-    }
-}
-
-instruction MovLoadRbp for [X86_64] {
-    param OPNAME: String = "mov_load_rbp";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        dst: GPR,
-        base: GPRrbp,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
-        0x8B,
-        0b01,
-        dst[2..0],
-        0b101,
-        0x00,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base}]"
-    }
-
-    behavior {
-        dst = load(base, 8, 0b0);
-    }
-}
-
-instruction MovStoreSib for [X86_64] {
-    param OPNAME: String = "mov_store_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRsib,
-        src: GPR,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b1)
-        0x89,
-        0b00,
-        src[2..0],
-        0b100,
-        0x24,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base}], {src}"
-    }
-
-    behavior {
-        store(base, 8, src);
-    }
-}
-
-instruction MovStoreRbp for [X86_64] {
-    param OPNAME: String = "mov_store_rbp";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRrbp,
-        src: GPR,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b1)
-        0x89,
-        0b01,
-        src[2..0],
-        0b101,
-        0x00,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base}], {src}"
-    }
-
-    behavior {
-        store(base, 8, src);
-    }
-}
 
 instruction MovLoad for [X86_64] {
     param OPNAME: String = "mov_load";
@@ -456,11 +352,9 @@ instruction MovLoad for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
+        rex(0b1, dst, base, 0b0),
         0x8B,
-        0b00,
-        dst[2..0],
-        base[2..0],
+        modrm_base(dst, base),
     }
 
     asm {
@@ -482,11 +376,9 @@ instruction MovStore for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { src[3] }, 0b1)
+        rex(0b1, src, base, 0b0),
         0x89,
-        0b00,
-        src[2..0],
-        base[2..0],
+        modrm_base(src, base),
     }
 
     asm {

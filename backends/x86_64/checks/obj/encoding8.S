@@ -1,9 +1,10 @@
 # RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
 
-# 8-bit forms. The low-byte ALU opcode is one below the wider form (add 00 vs 01)
-# and a REX byte is always emitted, which makes spl/bpl/sil/dil and r8b..r15b
-# encodable. The high bytes ah/ch/dh/bh carry NO REX prefix, so their encoding is
-# just opcode + ModR/M; their ModR/M numbers are 4..7.
+# 8-bit forms. The low-byte ALU opcode is one below the wider form (add 00 vs
+# 01). A REX byte appears exactly where the operands need one: spl/bpl/sil/dil
+# are the ModR/M numbers 4..7, which name ah/ch/dh/bh without it, so an
+# instruction reaching them spells the empty REX 0x40. The high bytes carry no
+# REX at all.
 
 	.global enc8
 enc8:
@@ -19,6 +20,10 @@ enc8:
 	mov ch, dh
 	add ah, 42
 	shl bh, 2
+	mov sil, [rdx + 0]
+	mov [rdx], dil
+	mov cl, [rdx + 8]
+	mov [rdx + 8], sil
 
 # CHECK: enc8:
 # add al, bl: REX=40, opcode 00, ModR/M=11 reg(bl=3) rm(al=0) = D8.
@@ -46,3 +51,10 @@ enc8:
 # CHECK-NEXT: [0x80, 0xC4, 0x2A]
 # shl bh, 2: no REX, opcode C0, ModR/M=11 100(/4) rm(bh=7) = E7, imm8=2.
 # CHECK-NEXT: [0xC0, 0xE7, 0x02]
+# A byte in memory: the register the byte comes from or goes to decides the REX
+# byte, not the address. sil and dil need it; cl does not. A zero displacement
+# is spelled by leaving it out (mod=00).
+# CHECK-NEXT: [0x40, 0x8A, 0x32]
+# CHECK-NEXT: [0x40, 0x88, 0x3A]
+# CHECK-NEXT: [0x8A, 0x4A, 0x08]
+# CHECK-NEXT: [0x40, 0x88, 0x72, 0x08]

@@ -182,169 +182,20 @@ register_class GPR8H for [X86] {
     }
 }
 
-// Low-register subclasses selected post-RA by `canonicalize_encodings` for the
-// REX-free encodings GNU as emits when no register-number 4th bit and no
-// REX.W/8-bit-spl are needed. Like the memory views below they share the GPR
-// file, carry no `argument` traits (so `default_integer_class` is unaffected),
-// and are never allocation classes: every instruction over them leaves its value
-// unmodeled, so they root no isel rule and are reachable only through
-// canonicalization.
-//   GPR32low/GPR16low: eax..edi / ax..di (indices 0-7) — a REX-free 32/16-bit op.
-//   GPR8low: al/cl/dl/bl (indices 0-3) — the only 8-bit registers with no REX;
-//   spl/bpl/sil/dil (4-7) still require an empty REX and stay on the GPR8 form.
-register_class GPRlow for [X86] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = self.XLEN;
 
-    registers {
-        rax => { index = 0 },
-        rcx => { index = 1 },
-        rdx => { index = 2 },
-        rbx => { index = 3 },
-        rsp => { index = 4 },
-        rbp => { index = 5 },
-        rsi => { index = 6 },
-        rdi => { index = 7 },
-    }
-}
 
-register_class GPRaddrDispLow for [X86] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = self.XLEN;
 
-    registers {
-        rax => { index = 0 },
-        rcx => { index = 1 },
-        rdx => { index = 2 },
-        rbx => { index = 3 },
-        rbp => { index = 5 },
-        rsi => { index = 6 },
-        rdi => { index = 7 },
-    }
-}
 
-register_class GPRaddrDirectLow for [X86] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = self.XLEN;
 
-    registers {
-        rax => { index = 0 },
-        rcx => { index = 1 },
-        rdx => { index = 2 },
-        rbx => { index = 3 },
-        rsi => { index = 6 },
-        rdi => { index = 7 },
-    }
-}
 
-register_class GPRsibLow for [X86] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = self.XLEN;
-
-    registers {
-        rsp => { index = 4 },
-    }
-}
-
-register_class GPR32low for [X86] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = 32;
-
-    registers {
-        eax => { index = 0 },
-        ecx => { index = 1 },
-        edx => { index = 2 },
-        ebx => { index = 3 },
-        esp => { index = 4 },
-        ebp => { index = 5 },
-        esi => { index = 6 },
-        edi => { index = 7 },
-    }
-}
-
-register_class GPR16low for [X86] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = 16;
-    param WRITE_POLICY: String = "merge";
-
-    registers {
-        ax => { index = 0 },
-        cx => { index = 1 },
-        dx => { index = 2 },
-        bx => { index = 3 },
-        sp => { index = 4 },
-        bp => { index = 5 },
-        si => { index = 6 },
-        di => { index = 7 },
-    }
-}
-
-register_class GPR8low for [X86] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = 8;
-    param WRITE_POLICY: String = "merge";
-
-    registers {
-        al => { index = 0 },
-        cl => { index = 1 },
-        dl => { index = 2 },
-        bl => { index = 3 },
-    }
-}
 
 // Memory-base operand views over the GPR file, selected post-RA when a base
 // register lands on a ModR/M escape. Neither carries `argument` traits, so
 // `default_integer_class` still resolves to GPR; they share the file
 // (`file = GPR`) and alias index-for-index, and are never allocation classes.
 
-// rsp (4) and r12 (12) share ModR/M low bits 100, which as a memory operand's rm
-// field means "a SIB byte follows". A base here selects a `_sib` variant.
-register_class GPRsib for [X86_64] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = self.XLEN;
 
-    registers {
-        rsp => { index = 4 },
-        r12 => { index = 12 },
-    }
-}
 
-// rbp (5) and r13 (13) share ModR/M low bits 101, which with mod=00 means
-// RIP-relative disp32. A base here selects a `_rbp` variant (mod=01, disp8=0).
-register_class GPRrbp for [X86_64] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = self.XLEN;
-
-    registers {
-        rbp => { index = 5 },
-        r13 => { index = 13 },
-    }
-}
-
-// SIB address components for forms without a displacement. rbp/r13 cannot be
-// encoded as a mod=00 base, and rsp cannot occupy the SIB index field.
-register_class GPRaddrBase for [X86_64] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = self.XLEN;
-
-    registers {
-        rax => { index = 0 }, rcx => { index = 1 }, rdx => { index = 2 },
-        rbx => { index = 3 }, rsp => { index = 4 }, rsi => { index = 6 },
-        rdi => { index = 7 }, r8 => { index = 8 }, r9 => { index = 9 },
-        r10 => { index = 10 }, r11 => { index = 11 }, r12 => { index = 12 },
-        r14 => { index = 14 }, r15 => { index = 15 },
-    }
-}
 
 register_class GPRaddrIndex for [X86_64] {
     file = GPR;
@@ -361,20 +212,6 @@ register_class GPRaddrIndex for [X86_64] {
     }
 }
 
-// Bases whose low encoding bits can be used directly in a ModR/M r/m field.
-register_class GPRaddrModRmBase for [X86_64] {
-    file = GPR;
-    param ENCODING_LEN: Integer = 4;
-    param WIDTH: Integer = self.XLEN;
-
-    registers {
-        rax => { index = 0 }, rcx => { index = 1 }, rdx => { index = 2 },
-        rbx => { index = 3 }, rbp => { index = 5 }, rsi => { index = 6 },
-        rdi => { index = 7 }, r8 => { index = 8 }, r9 => { index = 9 },
-        r10 => { index = 10 }, r11 => { index = 11 }, r13 => { index = 13 },
-        r14 => { index = 14 }, r15 => { index = 15 },
-    }
-}
 
 // `op dst, src`: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst). The REX byte
 // is 0100 WRXB: REX.B carries dst's 4th bit, REX.R carries src's.
@@ -616,19 +453,6 @@ macro reg_ext {
     };
 }
 
-// No-REX shift/rotate-by-immediate forms (low subclasses). Two-address, value
-// unmodeled; the shifts and the rotates differ in which flags they write.
-macro shift_imm_norex {
-    ( $suf:literal, $tmpl:ident, $b:tt, $( ( $name:ident, $mn:literal, $ext:literal ) ),* ) => {
-        $( instruction ${concat($name, $suf, "Norex")} for [X86] : $tmpl {
-               param OPNAME: String = ${concat($mn, $suf, "_norex")};
-               param MNEMONIC: String = $mn;
-               param EXT: bits<3> = $ext;
-               schedule { units = [WriteIShift]; }
-               behavior $b
-           } )*
-    };
-}
 
 // Template-family macros. x86 width variants share a ModR/M scaffold and differ
 // in three answers the template takes as parameters: REX.W, the 0x66

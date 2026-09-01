@@ -30,7 +30,9 @@ module {
 // COPY: x86_64.mov_store16_disp
 // COPY: x86_64.mov_load16_disp
 
-// The frame base is rsp, so the disp32 forms carry a SIB byte (mod=10, rm=100,
-// SIB 0x24) behind the 0x66 prefix and the always-emitted REX byte.
-// ENC: [0x66, 0x40, 0x89, 0x84, 0x24
-// ENC: [0x66, 0x40, 0x8B, 0x84, 0x24
+// The frame base is rsp, so the spill and reload carry the SIB byte that
+// names it (rm=100, SIB 0x24) behind the 0x66 prefix. The slot is at offset
+// zero and no register needs its fourth bit, so neither a displacement nor a
+// REX byte is spelled.
+// ENC: [0x66, 0x89, 0x04, 0x24]
+// ENC: [0x66, 0x8B, 0x04, 0x24]

@@ -1,798 +1,10 @@
 //! Narrow and displacement-based memory operations plus stack push/pop instructions.
 
-macro mov32_memory_norex {
-    ( $name:ident, $opname:literal, load ) => {
-        instruction $name for [X86] {
-            param OPNAME: String = $opname;
-            param MNEMONIC: String = "mov";
-            operands { dst: GPR32low, base: GPRaddrDirectLow, }
-            encoding {
-                0x8B,
-                0b00,
-                dst[2..0],
-                base[2..0],
-            }
-            asm { "{self.MNEMONIC} {dst}, [{base}]" }
-            behavior { dst = load(base, 4, 0b0); }
-        }
-    };
-    ( $name:ident, $opname:literal, store ) => {
-        instruction $name for [X86] {
-            param OPNAME: String = $opname;
-            param MNEMONIC: String = "mov";
-            operands { base: GPRaddrDirectLow, src: GPR32low, }
-            encoding {
-                0x89,
-                0b00,
-                src[2..0],
-                base[2..0],
-            }
-            asm { "{self.MNEMONIC} [{base}], {src}" }
-            behavior { store(base, 4, src); }
-        }
-    };
-}
-
-mov32_memory_norex!(Mov32LoadNorex, "mov_load32_norex", load)
-mov32_memory_norex!(Mov32StoreNorex, "mov_store32_norex", store)
-
-instruction Mov16StoreNorex for [X86] {
-    param OPNAME: String = "mov_store16_norex";
-    param MNEMONIC: String = "mov";
-    operands { base: GPRaddrDirectLow, src: GPR16low, }
-    encoding {
-        0x66,
-        0x89,
-        0b00,
-        src[2..0],
-        base[2..0],
-    }
-    asm { "{self.MNEMONIC} [{base}], {src}" }
-    behavior { store(base, 2, src); }
-}
-
-instruction Mov8StoreNorex for [X86] {
-    param OPNAME: String = "mov_store8_norex";
-    param MNEMONIC: String = "mov";
-    operands { base: GPRaddrDirectLow, src: GPR8low, }
-    encoding {
-        0x88,
-        0b00,
-        src[2..0],
-        base[2..0],
-    }
-    asm { "{self.MNEMONIC} [{base}], {src}" }
-    behavior { store(base, 1, src); }
-}
-
-macro extend_load32_norex {
-    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $size:literal, $opcode:literal, { $($b:tt)* } ) ),* ) => {
-        $( instruction $name for [X86] {
-               param OPNAME: String = $opname;
-               param MNEMONIC: String = $mnemonic;
-               operands { dst: GPR32low, base: GPRaddrDirectLow, }
-               encoding {
-                   0x0F,
-                   $opcode,
-                   0b00,
-                   dst[2..0],
-                   base[2..0],
-               }
-               asm { ${concat("{self.MNEMONIC} {dst}, ", $size, " ptr [{base}]")} }
-               behavior { $($b)* }
-           } )*
-    };
-}
-
-extend_load32_norex!(
-    (Movzx8Load32Norex, "movzx8_load32_norex", "movzx", "byte", 0xB6,
-     { dst = zext(load(base, 1, 0b0), 32); }),
-    (Movzx16Load32Norex, "movzx16_load32_norex", "movzx", "word", 0xB7,
-     { dst = zext(load(base, 2, 0b0), 32); }),
-    (Movsx8Load32Norex, "movsx8_load32_norex", "movsx", "byte", 0xBE,
-     { dst = sext(load(base, 1, 0b1), 32); }),
-    (Movsx16Load32Norex, "movsx16_load32_norex", "movsx", "word", 0xBF,
-     { dst = sext(load(base, 2, 0b1), 32); })
-)
-
 // Memory-access extensions: sub-64-bit loads/stores (lb/lh/lw parity through
 // movzx/movsx and narrow mov), a disp32 addressing form for the 64-bit mov,
 // and the stack push/pop pair. Addressing is register-direct; the rsp/rbp (and
 // r12/r13) ModR/M escapes get their own encodings below.
 
-// ModR/M-escape variants. Declared before the generic memory forms so the
-// assembler tries the narrow-base `_sib`/`_rbp` candidates first (they parse a
-// base only in the rsp/r12 or rbp/r13 class and fall through otherwise).
-// Post-RA `canonicalize_encodings` selects them for codegen; the access itself
-// is identical to the register-direct form. `_sib` adds the escape SIB byte
-// 0x24 (scale=00, index=none, base=100); `_rbp` uses mod=01 with a zero disp8.
-
-template ExtendLoadSib for [X86_64] {
-    param MNEMONIC: String;
-    param OPCODE: bits<8>;
-
-    operands {
-        dst: GPR,
-        base: GPRsib,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
-        0x0F,
-        OPCODE,
-        0b00,
-        dst[2..0],
-        0b100,
-        0x24,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base}]"
-    }
-}
-
-template ExtendLoadRbp for [X86_64] {
-    param MNEMONIC: String;
-    param OPCODE: bits<8>;
-
-    operands {
-        dst: GPR,
-        base: GPRrbp,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
-        0x0F,
-        OPCODE,
-        0b01,
-        dst[2..0],
-        0b101,
-        0x00,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base}]"
-    }
-}
-
-instruction Movzx8LoadSib for [X86_64] : ExtendLoadSib {
-    param OPNAME: String = "movzx8_load_sib";
-    param MNEMONIC: String = "movzx";
-    param OPCODE: bits<8> = 0xB6;
-
-    asm {
-        "{self.MNEMONIC} {dst}, byte ptr [{base}]"
-    }
-
-    behavior {
-        dst = zext(load(base, 1, 0b0), self.XLEN);
-    }
-}
-
-instruction Movzx8LoadRbp for [X86_64] : ExtendLoadRbp {
-    param OPNAME: String = "movzx8_load_rbp";
-    param MNEMONIC: String = "movzx";
-    param OPCODE: bits<8> = 0xB6;
-
-    asm {
-        "{self.MNEMONIC} {dst}, byte ptr [{base}]"
-    }
-
-    behavior {
-        dst = zext(load(base, 1, 0b0), self.XLEN);
-    }
-}
-
-instruction Movzx16LoadSib for [X86_64] : ExtendLoadSib {
-    param OPNAME: String = "movzx16_load_sib";
-    param MNEMONIC: String = "movzx";
-    param OPCODE: bits<8> = 0xB7;
-
-    asm {
-        "{self.MNEMONIC} {dst}, word ptr [{base}]"
-    }
-
-    behavior {
-        dst = zext(load(base, 2, 0b0), self.XLEN);
-    }
-}
-
-instruction Movzx16LoadRbp for [X86_64] : ExtendLoadRbp {
-    param OPNAME: String = "movzx16_load_rbp";
-    param MNEMONIC: String = "movzx";
-    param OPCODE: bits<8> = 0xB7;
-
-    asm {
-        "{self.MNEMONIC} {dst}, word ptr [{base}]"
-    }
-
-    behavior {
-        dst = zext(load(base, 2, 0b0), self.XLEN);
-    }
-}
-
-instruction Movsx8LoadSib for [X86_64] : ExtendLoadSib {
-    param OPNAME: String = "movsx8_load_sib";
-    param MNEMONIC: String = "movsx";
-    param OPCODE: bits<8> = 0xBE;
-
-    asm {
-        "{self.MNEMONIC} {dst}, byte ptr [{base}]"
-    }
-
-    behavior {
-        dst = sext(load(base, 1, 0b1), self.XLEN);
-    }
-}
-
-instruction Movsx8LoadRbp for [X86_64] : ExtendLoadRbp {
-    param OPNAME: String = "movsx8_load_rbp";
-    param MNEMONIC: String = "movsx";
-    param OPCODE: bits<8> = 0xBE;
-
-    asm {
-        "{self.MNEMONIC} {dst}, byte ptr [{base}]"
-    }
-
-    behavior {
-        dst = sext(load(base, 1, 0b1), self.XLEN);
-    }
-}
-
-instruction Movsx16LoadSib for [X86_64] : ExtendLoadSib {
-    param OPNAME: String = "movsx16_load_sib";
-    param MNEMONIC: String = "movsx";
-    param OPCODE: bits<8> = 0xBF;
-
-    asm {
-        "{self.MNEMONIC} {dst}, word ptr [{base}]"
-    }
-
-    behavior {
-        dst = sext(load(base, 2, 0b1), self.XLEN);
-    }
-}
-
-instruction Movsx16LoadRbp for [X86_64] : ExtendLoadRbp {
-    param OPNAME: String = "movsx16_load_rbp";
-    param MNEMONIC: String = "movsx";
-    param OPCODE: bits<8> = 0xBF;
-
-    asm {
-        "{self.MNEMONIC} {dst}, word ptr [{base}]"
-    }
-
-    behavior {
-        dst = sext(load(base, 2, 0b1), self.XLEN);
-    }
-}
-
-instruction MovsxdLoadSib for [X86_64] {
-    param OPNAME: String = "movsxd_load_sib";
-    param MNEMONIC: String = "movsxd";
-
-    operands {
-        dst: GPR,
-        base: GPRsib,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
-        0x63,
-        0b00,
-        dst[2..0],
-        0b100,
-        0x24,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, dword ptr [{base}]"
-    }
-
-    behavior {
-        dst = sext(load(base, 4, 0b1), self.XLEN);
-    }
-}
-
-instruction MovsxdLoadRbp for [X86_64] {
-    param OPNAME: String = "movsxd_load_rbp";
-    param MNEMONIC: String = "movsxd";
-
-    operands {
-        dst: GPR,
-        base: GPRrbp,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
-        0x63,
-        0b01,
-        dst[2..0],
-        0b101,
-        0x00,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, dword ptr [{base}]"
-    }
-
-    behavior {
-        dst = sext(load(base, 4, 0b1), self.XLEN);
-    }
-}
-
-instruction Mov32LoadSib for [X86_64] {
-    param OPNAME: String = "mov_load32_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        dst: GPR32,
-        base: GPRsib,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b0)
-        0x8B,
-        0b00,
-        dst[2..0],
-        0b100,
-        0x24,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base}]"
-    }
-
-    behavior {
-        dst = load(base, 4, 0b0);
-    }
-}
-
-instruction Mov32LoadRbp for [X86_64] {
-    param OPNAME: String = "mov_load32_rbp";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        dst: GPR32,
-        base: GPRrbp,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b0)
-        0x8B,
-        0b01,
-        dst[2..0],
-        0b101,
-        0x00,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base}]"
-    }
-
-    behavior {
-        dst = load(base, 4, 0b0);
-    }
-}
-
-instruction Mov32StoreSib for [X86_64] {
-    param OPNAME: String = "mov_store32_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRsib,
-        src: GPR32,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
-        0x89,
-        0b00,
-        src[2..0],
-        0b100,
-        0x24,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base}], {src}"
-    }
-
-    behavior {
-        store(base, 4, src);
-    }
-}
-
-instruction Mov32StoreRbp for [X86_64] {
-    param OPNAME: String = "mov_store32_rbp";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRrbp,
-        src: GPR32,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
-        0x89,
-        0b01,
-        src[2..0],
-        0b101,
-        0x00,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base}], {src}"
-    }
-
-    behavior {
-        store(base, 4, src);
-    }
-}
-
-instruction Mov16StoreSib for [X86_64] {
-    param OPNAME: String = "mov_store16_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRsib,
-        src: GPR16,
-    }
-
-    encoding {
-        0x66,
-        0b0100,
-        0b0,
-        src[3],
-        0b0,
-        base[3],
-        0x89,
-        0b00,
-        src[2..0],
-        0b100,
-        0x24,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base}], {src}"
-    }
-
-    behavior {
-        store(base, 2, src);
-    }
-}
-
-instruction Mov16StoreRbp for [X86_64] {
-    param OPNAME: String = "mov_store16_rbp";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRrbp,
-        src: GPR16,
-    }
-
-    encoding {
-        0x66,
-        0b0100,
-        0b0,
-        src[3],
-        0b0,
-        base[3],
-        0x89,
-        0b01,
-        src[2..0],
-        0b101,
-        0x00,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base}], {src}"
-    }
-
-    behavior {
-        store(base, 2, src);
-    }
-}
-
-instruction Mov8StoreSib for [X86_64] {
-    param OPNAME: String = "mov_store8_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRsib,
-        src: GPR8,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
-        0x88,
-        0b00,
-        src[2..0],
-        0b100,
-        0x24,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base}], {src}"
-    }
-
-    behavior {
-        store(base, 1, src);
-    }
-}
-
-instruction Mov8StoreRbp for [X86_64] {
-    param OPNAME: String = "mov_store8_rbp";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRrbp,
-        src: GPR8,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
-        0x88,
-        0b01,
-        src[2..0],
-        0b101,
-        0x00,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base}], {src}"
-    }
-
-    behavior {
-        store(base, 1, src);
-    }
-}
-
-// disp32 (mod=10) needs a SIB only for rsp/r12; rbp/r13 are legal at mod=10.
-instruction MovLoadDispSib for [X86_64] {
-    param OPNAME: String = "mov_load_disp_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        dst: GPR,
-        base: GPRsib,
-        imm: bits<32>,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
-        0x8B,
-        0b10,
-        dst[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
-    }
-
-    behavior {
-        dst = load(base + sext(imm, self.XLEN), 8, 0b0);
-    }
-}
-
-instruction MovStoreDispSib for [X86_64] {
-    param OPNAME: String = "mov_store_disp_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRsib,
-        imm: bits<32>,
-        src: GPR,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b1)
-        0x89,
-        0b10,
-        src[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base} + {imm}], {src}"
-    }
-
-    behavior {
-        store(base + sext(imm, self.XLEN), 8, src);
-    }
-}
-
-instruction Mov32LoadDispSib for [X86_64] {
-    param OPNAME: String = "mov_load32_disp_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        dst: GPR32,
-        base: GPRsib,
-        imm: bits<32>,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b0)
-        0x8B,
-        0b10,
-        dst[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
-    }
-
-    behavior {
-        dst = load(base + sext(imm, self.XLEN), 4, 0b0);
-    }
-}
-
-instruction Mov32StoreDispSib for [X86_64] {
-    param OPNAME: String = "mov_store32_disp_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRsib,
-        imm: bits<32>,
-        src: GPR32,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
-        0x89,
-        0b10,
-        src[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base} + {imm}], {src}"
-    }
-
-    behavior {
-        store(base + sext(imm, self.XLEN), 4, src);
-    }
-}
-
-instruction Mov16LoadDispSib for [X86_64] {
-    param OPNAME: String = "mov_load16_disp_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        dst: GPR16,
-        base: GPRsib,
-        imm: bits<32>,
-    }
-
-    encoding {
-        0x66,
-        0b0100,
-        0b0,
-        dst[3],
-        0b0,
-        base[3],
-        0x8B,
-        0b10,
-        dst[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
-    }
-
-    behavior {
-        dst = load(base + sext(imm, self.XLEN), 2, 0b0);
-    }
-}
-
-instruction Mov16StoreDispSib for [X86_64] {
-    param OPNAME: String = "mov_store16_disp_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRsib,
-        imm: bits<32>,
-        src: GPR16,
-    }
-
-    encoding {
-        0x66,
-        0b0100,
-        0b0,
-        src[3],
-        0b0,
-        base[3],
-        0x89,
-        0b10,
-        src[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base} + {imm}], {src}"
-    }
-
-    behavior {
-        store(base + sext(imm, self.XLEN), 2, src);
-    }
-}
-
-instruction Mov8LoadDispSib for [X86_64] {
-    param OPNAME: String = "mov_load8_disp_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        dst: GPR8,
-        base: GPRsib,
-        imm: bits<32>,
-    }
-
-    encoding {
-        rex!({ base[3] }, { dst[3] }, 0b0)
-        0x8A,
-        0b10,
-        dst[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
-    }
-
-    behavior {
-        dst = load(base + sext(imm, self.XLEN), 1, 0b0);
-    }
-}
-
-instruction Mov8StoreDispSib for [X86_64] {
-    param OPNAME: String = "mov_store8_disp_sib";
-    param MNEMONIC: String = "mov";
-
-    operands {
-        base: GPRsib,
-        imm: bits<32>,
-        src: GPR8,
-    }
-
-    encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
-        0x88,
-        0b10,
-        src[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} [{base} + {imm}], {src}"
-    }
-
-    behavior {
-        store(base + sext(imm, self.XLEN), 1, src);
-    }
-}
-
-// `movzx/movsx r64, size ptr [base]`: REX.W + 0x0F + opcode +
-// ModR/M(mod=00, reg=dst, rm=base). Each instruction overrides the asm to
-// spell its memory operand width (`byte ptr`/`word ptr`).
 template ExtendLoad for [X86_64] {
     param MNEMONIC: String;
     param OPCODE: bits<8>;
@@ -803,18 +15,62 @@ template ExtendLoad for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
+        rex(0b1, dst, base, 0b0),
         0x0F,
         OPCODE,
-        0b00,
-        dst[2..0],
-        base[2..0],
+        modrm_base(dst, base),
     }
 
     asm {
         "{self.MNEMONIC} {dst}, [{base}]"
     }
 }
+
+// The same load with a 32-bit destination: the write zero-extends to 64 bits,
+// so the model is the 32-bit view.
+template ExtendLoad32 for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    operands {
+        dst: GPR32,
+        base: GPR,
+    }
+
+    encoding {
+        rex(0b0, dst, base, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_base(dst, base),
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base}]"
+    }
+}
+
+macro extend_load32 {
+    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $size:literal, $opcode:literal, { $($b:tt)* } ) ),* ) => {
+        $( instruction $name for [X86_64] : ExtendLoad32 {
+               param OPNAME: String = $opname;
+               param MNEMONIC: String = $mnemonic;
+               param OPCODE: bits<8> = $opcode;
+               asm { ${concat("{self.MNEMONIC} {dst}, ", $size, " ptr [{base}]")} }
+               behavior { $($b)* }
+           } )*
+    };
+}
+
+extend_load32!(
+    (Movzx8Load32, "movzx8_load32", "movzx", "byte", 0xB6,
+     { dst = zext(load(base, 1, 0b0), 32); }),
+    (Movzx16Load32, "movzx16_load32", "movzx", "word", 0xB7,
+     { dst = zext(load(base, 2, 0b0), 32); }),
+    (Movsx8Load32, "movsx8_load32", "movsx", "byte", 0xBE,
+     { dst = sext(load(base, 1, 0b1), 32); }),
+    (Movsx16Load32, "movsx16_load32", "movsx", "word", 0xBF,
+     { dst = sext(load(base, 2, 0b1), 32); })
+)
 
 instruction Movzx8Load for [X86_64] : ExtendLoad {
     param OPNAME: String = "movzx8_load";
@@ -883,11 +139,9 @@ instruction MovsxdLoad for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
+        rex(0b1, dst, base, 0b0),
         0x63,
-        0b00,
-        dst[2..0],
-        base[2..0],
+        modrm_base(dst, base),
     }
 
     asm {
@@ -913,11 +167,9 @@ instruction Mov32Load for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { dst[3] }, 0b0)
+        rex(0b0, dst, base, 0b0),
         0x8B,
-        0b00,
-        dst[2..0],
-        base[2..0],
+        modrm_base(dst, base),
     }
 
     asm {
@@ -939,11 +191,9 @@ instruction Mov32Store for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
+        rex(0b0, src, base, 0b0),
         0x89,
-        0b00,
-        src[2..0],
-        base[2..0],
+        modrm_base(src, base),
     }
 
     asm {
@@ -966,15 +216,9 @@ instruction Mov16Store for [X86_64] {
 
     encoding {
         0x66,
-        0b0100,
-        0b0,
-        src[3],
-        0b0,
-        base[3],
+        rex(0b0, src, base, 0b0),
         0x89,
-        0b00,
-        src[2..0],
-        base[2..0],
+        modrm_base(src, base),
     }
 
     asm {
@@ -996,11 +240,9 @@ instruction Mov8Store for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
+        rex(0b0, src, base, needs_rex8_one(src)),
         0x88,
-        0b00,
-        src[2..0],
-        base[2..0],
+        modrm_base(src, base),
     }
 
     asm {
@@ -1025,12 +267,9 @@ instruction MovLoadDisp for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { dst[3] }, 0b1)
+        rex(0b1, dst, base, 0b0),
         0x8B,
-        0b10,
-        dst[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(dst, base, imm),
     }
 
     asm {
@@ -1053,12 +292,9 @@ instruction MovStoreDisp for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { src[3] }, 0b1)
+        rex(0b1, src, base, 0b0),
         0x89,
-        0b10,
-        src[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(src, base, imm),
     }
 
     asm {
@@ -1081,12 +317,9 @@ instruction Mov32LoadDisp for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { dst[3] }, 0b0)
+        rex(0b0, dst, base, 0b0),
         0x8B,
-        0b10,
-        dst[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(dst, base, imm),
     }
 
     asm {
@@ -1109,12 +342,9 @@ instruction Mov32StoreDisp for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
+        rex(0b0, src, base, 0b0),
         0x89,
-        0b10,
-        src[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(src, base, imm),
     }
 
     asm {
@@ -1138,16 +368,9 @@ instruction Mov16LoadDisp for [X86_64] {
 
     encoding {
         0x66,
-        0b0100,
-        0b0,
-        dst[3],
-        0b0,
-        base[3],
+        rex(0b0, dst, base, 0b0),
         0x8B,
-        0b10,
-        dst[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(dst, base, imm),
     }
 
     asm {
@@ -1171,16 +394,9 @@ instruction Mov16StoreDisp for [X86_64] {
 
     encoding {
         0x66,
-        0b0100,
-        0b0,
-        src[3],
-        0b0,
-        base[3],
+        rex(0b0, src, base, 0b0),
         0x89,
-        0b10,
-        src[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(src, base, imm),
     }
 
     asm {
@@ -1203,12 +419,9 @@ instruction Mov8LoadDisp for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { dst[3] }, 0b0)
+        rex(0b0, dst, base, needs_rex8_one(dst)),
         0x8A,
-        0b10,
-        dst[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(dst, base, imm),
     }
 
     asm {
@@ -1231,12 +444,9 @@ instruction Mov8StoreDisp for [X86_64] {
     }
 
     encoding {
-        rex!({ base[3] }, { src[3] }, 0b0)
+        rex(0b0, src, base, needs_rex8_one(src)),
         0x88,
-        0b10,
-        src[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(src, base, imm),
     }
 
     asm {
@@ -1253,22 +463,13 @@ template LeaBaseIndexTemplate for [X86_64] {
     param SCALE_BITS: bits<2>;
     operands {
         dst: GPR,
-        base: GPRaddrBase,
+        base: GPR,
         index: GPRaddrIndex,
     }
     encoding {
-        0b0100,
-        0b1,
-        dst[3],
-        index[3],
-        base[3],
+        rex_sib(0b1, dst, index, base),
         0x8D,
-        0b00,
-        dst[2..0],
-        0b100,
-        SCALE_BITS,
-        index[2..0],
-        base[2..0],
+        modrm_sib(dst, base, index, SCALE_BITS),
     }
 }
 
@@ -1333,91 +534,10 @@ instruction LeaBaseIndex8 for [X86_64] : LeaBaseIndexTemplate {
     }
 }
 
-template LeaRbpIndexTemplate for [X86_64] {
-    param SCALE_BITS: bits<2>;
 
-    operands {
-        dst: GPR,
-        base: GPRrbp,
-        index: GPRaddrIndex,
-    }
 
-    encoding {
-        0b0100,
-        0b1,
-        dst[3],
-        index[3],
-        base[3],
-        0x8D,
-        0b01,
-        dst[2..0],
-        0b100,
-        SCALE_BITS,
-        index[2..0],
-        base[2..0],
-        0x00,
-    }
-}
 
-instruction LeaRbpIndex for [X86_64] : LeaRbpIndexTemplate {
-    param OPNAME: String = "lea_rbp_index";
-    param MNEMONIC: String = "lea";
-    param SCALE_BITS: bits<2> = 0b00;
-    schedule { units = [WriteILeaSimple]; }
 
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + {index}]"
-    }
-
-    behavior {
-        dst = base + index;
-    }
-}
-
-instruction LeaRbpIndex2 for [X86_64] : LeaRbpIndexTemplate {
-    param OPNAME: String = "lea_rbp_index2";
-    param MNEMONIC: String = "lea";
-    param SCALE_BITS: bits<2> = 0b01;
-    schedule { units = [WriteILeaComplex]; }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + 2*{index}]"
-    }
-
-    behavior {
-        dst = base + (index << 1);
-    }
-}
-
-instruction LeaRbpIndex4 for [X86_64] : LeaRbpIndexTemplate {
-    param OPNAME: String = "lea_rbp_index4";
-    param MNEMONIC: String = "lea";
-    param SCALE_BITS: bits<2> = 0b10;
-    schedule { units = [WriteILeaComplex]; }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + 4*{index}]"
-    }
-
-    behavior {
-        dst = base + (index << 2);
-    }
-}
-
-instruction LeaRbpIndex8 for [X86_64] : LeaRbpIndexTemplate {
-    param OPNAME: String = "lea_rbp_index8";
-    param MNEMONIC: String = "lea";
-    param SCALE_BITS: bits<2> = 0b11;
-    schedule { units = [WriteILeaComplex]; }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + 8*{index}]"
-    }
-
-    behavior {
-        dst = base + (index << 3);
-    }
-}
 
 template LeaScaledIndex for [X86_64] {
     param SCALE_BITS: bits<2>;
@@ -1617,99 +737,24 @@ instruction LeaIndex8Disp32 for [X86_64] : LeaIndexDisp32 {
     }
 }
 
-// `lea r64, [base + disp8]` using the compact ModR/M displacement form.
-instruction LeaBaseDisp8 for [X86_64] {
-    param OPNAME: String = "lea_base_disp8";
+
+
+instruction LeaBaseDisp for [X86_64] {
+    param OPNAME: String = "lea_base_disp";
     param MNEMONIC: String = "lea";
 
     schedule { units = [WriteILeaSimple]; }
 
     operands {
         dst: GPR,
-        base: GPRaddrModRmBase,
-        imm: bits<8>,
-    }
-
-    encoding {
-        0b0100,
-        0b1,
-        dst[3],
-        0b0,
-        base[3],
-        0x8D,
-        0b01,
-        dst[2..0],
-        base[2..0],
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
-    }
-
-    behavior {
-        dst = base + sext(imm, self.XLEN);
-    }
-}
-
-instruction LeaBaseDisp8Sib for [X86_64] {
-    param OPNAME: String = "lea_base_disp8_sib";
-    param MNEMONIC: String = "lea";
-
-    schedule { units = [WriteILeaSimple]; }
-
-    operands {
-        dst: GPR,
-        base: GPRsib,
-        imm: bits<8>,
-    }
-
-    encoding {
-        0b0100,
-        0b1,
-        dst[3],
-        0b0,
-        base[3],
-        0x8D,
-        0b01,
-        dst[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
-    }
-
-    behavior {
-        dst = base + sext(imm, self.XLEN);
-    }
-}
-
-instruction LeaBaseDisp32 for [X86_64] {
-    param OPNAME: String = "lea_base_disp32";
-    param MNEMONIC: String = "lea";
-
-    schedule { units = [WriteILeaSimple]; }
-
-    operands {
-        dst: GPR,
-        base: GPRaddrModRmBase,
+        base: GPR,
         imm: bits<32>,
     }
 
     encoding {
-        0b0100,
-        0b1,
-        dst[3],
-        0b0,
-        base[3],
+        rex(0b1, dst, base, 0b0),
         0x8D,
-        0b10,
-        dst[2..0],
-        base[2..0],
-        imm,
+        modrm_disp(dst, base, imm),
     }
 
     asm {
@@ -1721,40 +766,6 @@ instruction LeaBaseDisp32 for [X86_64] {
     }
 }
 
-instruction LeaBaseDisp32Sib for [X86_64] {
-    param OPNAME: String = "lea_base_disp32_sib";
-    param MNEMONIC: String = "lea";
-
-    schedule { units = [WriteILeaSimple]; }
-
-    operands {
-        dst: GPR,
-        base: GPRsib,
-        imm: bits<32>,
-    }
-
-    encoding {
-        0b0100,
-        0b1,
-        dst[3],
-        0b0,
-        base[3],
-        0x8D,
-        0b10,
-        dst[2..0],
-        0b100,
-        0x24,
-        imm,
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
-    }
-
-    behavior {
-        dst = base + sext(imm, self.XLEN);
-    }
-}
 
 // `lea r64, [rip + disp32]` (REX.W + 0x8D + ModR/M mod=00 reg=dst rm=101): loads
 // the pc-relative address of a symbol. Emitted by `lower_addr_of`; the disp32 is

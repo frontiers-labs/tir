@@ -2603,15 +2603,27 @@ fn guard_proves_fit(
     operand: &str,
     spelled: u16,
 ) -> bool {
+    fn proves(predicate: &crate::shapes::Predicate, operand: &str, spelled: u16) -> bool {
+        use crate::shapes::Predicate;
+        match predicate {
+            Predicate::Fits {
+                op, bits, signed, ..
+            } => op == operand && (*bits == spelled || (!signed && *bits <= spelled)),
+            // Every conjunct holds, so any one of them proving it is enough.
+            Predicate::And(parts) => parts.iter().any(|part| proves(part, operand, spelled)),
+            // `if ~fits { wide } else { narrow }` reaches the narrow shape with
+            // the negation taken.
+            Predicate::Not(inner) => match &**inner {
+                Predicate::Not(inner) => proves(inner, operand, spelled),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
     guard.0.iter().all(|clause| {
-        clause.iter().any(|literal| {
-            literal.value
-                && matches!(
-                    crate::shapes::fit_test(&literal.cond, ctx),
-                    Some(crate::shapes::Predicate::Fits { op, bits, signed, .. })
-                        if op == operand && (bits == spelled || (!signed && bits <= spelled))
-                )
-        })
+        let clause = crate::shapes::Guard(vec![clause.clone()]);
+        crate::shapes::lower_guard(&clause, ctx)
+            .is_ok_and(|predicate| proves(&predicate, operand, spelled))
     })
 }
 

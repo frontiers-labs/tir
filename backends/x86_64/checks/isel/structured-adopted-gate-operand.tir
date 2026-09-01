@@ -22,5 +22,5 @@ module {
   module_end
 }
 
-// CHECK: x86_64.movzx8_load
+// CHECK: x86_64.mov_load8_disp
 // CHECK-NOT: scf.

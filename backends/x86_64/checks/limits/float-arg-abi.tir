@@ -11,4 +11,4 @@ module {
 }
 
 // CHECK: arg_regs = [%[[V0:[0-9]+]]:XMM, %[[V1:[0-9]+]]:XMM]
-// CHECK: x86_64.addsd_norex {dst = %{{[0-9]+}}:xmm0, dst_tied = %{{[0-9]+}}:xmm0, src = %{{[0-9]+}}:xmm1}
+// CHECK: x86_64.addsd {dst = %{{[0-9]+}}:xmm0, dst_tied = %{{[0-9]+}}:xmm0, src = %{{[0-9]+}}:xmm1}

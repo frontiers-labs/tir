@@ -253,224 +253,24 @@ mod isa {
         }
     }
 
-    /// Post-RA: a memory operand whose allocated base is rsp/r12 (ModR/M rm=100)
-    /// or rbp/r13 with mod=00 (rm=101) needs an escape the generic encoding
-    /// omits — a SIB byte for the former, a mod=01 zero disp8 for the latter —
-    /// or the byte stream desyncs. Rewrite each affected op to its `_sib`/`_rbp`
-    /// variant now that the base is physical. The disp (mod=10) forms only need
-    /// the SIB variant; rbp/r13 are already legal there.
-    fn canonicalize_encodings(
+    /// Post-RA: a boolean materialized by `setcc` defines one byte, so a
+    /// generic `test` consuming it must read that width and ignore the stale
+    /// upper bits of the register it landed in.
+    fn narrow_test_to_byte(
         context: &tir::Context,
         op: &tir::OperationRef,
         rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
-        // Post-RA the register slots still hold values; where each landed is
-        // read from the function's assignment.
-        let register = |inner: &dyn Operation, name: &str| {
-            tir::backend::op_slot_register(context, inner.handle(), name)
+        let Some(inner) = op.as_op::<TestOp>() else {
+            return Ok(false);
         };
-        let base_index = |inner: &dyn Operation| register(inner, "base").map(|(_, index)| index);
-        let reg_index = |inner: &dyn Operation, name: &str| register(inner, name).map(|(_, i)| i);
-        // An immediate operand's integer value, or None for a symbol reference
-        // (a relocation that cannot fold to the sign-extended imm8 form).
-        fn imm_int(op: &dyn Operation, name: &str) -> Option<i64> {
-            match op.attr(name)? {
-                AttributeValue::Int(v) => Some(v),
-                _ => None,
-            }
+        let byte = tir::backend::op_slot_register(context, inner.handle(), "dst")
+            .is_some_and(|(class, _)| class == RegClass::GPR8.id());
+        if !byte {
+            return Ok(false);
         }
-        let replace = |rewriter: &mut tir::Rewriter, new_op: Box<dyn Operation>| {
-            rewriter.replace_op(op, new_op.as_ref()).map(|()| true)
-        };
-        // Every variant below is the same instruction in another encoding, so it
-        // keeps the original's operands, results and immediates.
-        macro_rules! reencode {
-            ($Target:ty, $inner:expr) => {
-                tir::backend::reencode_as::<$Target>(context, $inner.handle())
-            };
-        }
-
-        macro_rules! escape {
-            ($Op:ty, $Sib:ty, $Rbp:ty) => {
-                if let Some(inner) = op.as_op::<$Op>() {
-                    let Some(idx) = base_index(&inner) else {
-                        return Ok(false);
-                    };
-                    return match idx {
-                        4 | 12 => replace(rewriter, reencode!($Sib, inner)),
-                        5 | 13 => replace(rewriter, reencode!($Rbp, inner)),
-                        _ => Ok(false),
-                    };
-                }
-            };
-            (sib $Op:ty, $Sib:ty) => {
-                if let Some(inner) = op.as_op::<$Op>() {
-                    let Some(idx) = base_index(&inner) else {
-                        return Ok(false);
-                    };
-                    if matches!(idx, 4 | 12) {
-                        return replace(rewriter, reencode!($Sib, inner));
-                    }
-                    return Ok(false);
-                }
-            };
-        }
-        macro_rules! escape_norex {
-            ($Op:ty, $Sib:ty, $Rbp:ty, $Norex:ty, $reg:literal, $limit:expr) => {
-                if let Some(inner) = op.as_op::<$Op>() {
-                    let Some(base) = base_index(&inner) else {
-                        return Ok(false);
-                    };
-                    let replacement: Option<Box<dyn Operation>> = match base {
-                        4 | 12 => Some(reencode!($Sib, inner)),
-                        5 | 13 => Some(reencode!($Rbp, inner)),
-                        _ if base < 8
-                            && matches!(reg_index(&inner, $reg), Some(reg) if reg < $limit) =>
-                        {
-                            Some(reencode!($Norex, inner))
-                        }
-                        _ => None,
-                    };
-                    return match replacement {
-                        Some(replacement) => replace(rewriter, replacement),
-                        None => Ok(false),
-                    };
-                }
-            };
-        }
-
-        escape!(MovLoadOp, MovLoadSibOp, MovLoadRbpOp);
-        escape!(MovStoreOp, MovStoreSibOp, MovStoreRbpOp);
-        escape!(Movzx8LoadOp, Movzx8LoadSibOp, Movzx8LoadRbpOp);
-        escape!(Movzx16LoadOp, Movzx16LoadSibOp, Movzx16LoadRbpOp);
-        escape!(Movsx8LoadOp, Movsx8LoadSibOp, Movsx8LoadRbpOp);
-        escape!(Movsx16LoadOp, Movsx16LoadSibOp, Movsx16LoadRbpOp);
-        escape!(MovsxdLoadOp, MovsxdLoadSibOp, MovsxdLoadRbpOp);
-        escape_norex!(
-            Mov32LoadOp,
-            Mov32LoadSibOp,
-            Mov32LoadRbpOp,
-            Mov32LoadNorexOp,
-            "dst",
-            8
-        );
-        escape_norex!(
-            Mov32StoreOp,
-            Mov32StoreSibOp,
-            Mov32StoreRbpOp,
-            Mov32StoreNorexOp,
-            "src",
-            8
-        );
-        escape_norex!(
-            Mov16StoreOp,
-            Mov16StoreSibOp,
-            Mov16StoreRbpOp,
-            Mov16StoreNorexOp,
-            "src",
-            8
-        );
-        escape_norex!(
-            Mov8StoreOp,
-            Mov8StoreSibOp,
-            Mov8StoreRbpOp,
-            Mov8StoreNorexOp,
-            "src",
-            4
-        );
-        escape!(sib LeaBaseDisp32Op, LeaBaseDisp32SibOp);
-        escape!(sib MovLoadDispOp, MovLoadDispSibOp);
-        escape!(sib MovStoreDispOp, MovStoreDispSibOp);
-        escape!(sib Mov32LoadDispOp, Mov32LoadDispSibOp);
-        escape!(sib Mov32StoreDispOp, Mov32StoreDispSibOp);
-        escape!(sib Mov16LoadDispOp, Mov16LoadDispSibOp);
-        escape!(sib Mov16StoreDispOp, Mov16StoreDispSibOp);
-        escape!(sib Mov8LoadDispOp, Mov8LoadDispSibOp);
-        escape!(sib Mov8StoreDispOp, Mov8StoreDispSibOp);
-        escape!(sib MovssLoadDispOp, MovssLoadDispSibOp);
-        escape!(sib MovssStoreDispOp, MovssStoreDispSibOp);
-        escape!(sib MovsdLoadDispOp, MovsdLoadDispSibOp);
-        escape!(sib MovsdStoreDispOp, MovsdStoreDispSibOp);
-        escape!(sib MovssLoadDispNorexOp, MovssLoadDispSibNorexOp);
-        escape!(sib MovssStoreDispNorexOp, MovssStoreDispSibNorexOp);
-        escape!(sib MovsdLoadDispNorexOp, MovsdLoadDispSibNorexOp);
-        escape!(sib MovsdStoreDispNorexOp, MovsdStoreDispSibNorexOp);
-
-        // REX-free canonicalization: drop the REX byte GNU as omits when every
-        // register index is low (< 8, or < 4 for the 8-bit forms that must avoid
-        // the spl/bpl/sil/dil encodings), and fold group-1 immediates that fit a
-        // sign-extended i8 into the 0x83 short form. Each op maps to exactly one
-        // behavior-free variant, so selection is unaffected.
-        const LO: u16 = 8;
-        const B: u16 = 4;
-
-        // A boolean materialized by setcc defines one byte. Preserve that width
-        // when a generic test consumes it, so stale upper register bits are ignored.
-        if let Some(inner) = op.as_op::<TestOp>()
-            && register(&inner, "dst").map(|(class, _)| class) == Some(RegClass::GPR8.id())
-        {
-            return replace(rewriter, reencode!(Test8Op, inner));
-        }
-
-        // Register/register: `op → op_norex` when both operands are low.
-        macro_rules! rr_norex {
-            ($Op:ty, $Norex:ty, $t:expr) => {
-                rr_named_norex!($Op, $Norex, "dst", "src", $t)
-            };
-        }
-        macro_rules! rr_named_norex {
-            ($Op:ty, $Norex:ty, $dst:literal, $src:literal, $t:expr) => {
-                if let Some(inner) = op.as_op::<$Op>() {
-                    return match (reg_index(&inner, $dst), reg_index(&inner, $src)) {
-                        (Some(d), Some(s)) if d < $t && s < $t => {
-                            replace(rewriter, reencode!($Norex, inner))
-                        }
-                        _ => Ok(false),
-                    };
-                }
-            };
-        }
-        macro_rules! mem_norex {
-            ($Op:ty, $Norex:ty, $reg:literal) => {
-                if let Some(inner) = op.as_op::<$Op>() {
-                    return match (reg_index(&inner, $reg), base_index(&inner)) {
-                        (Some(r), Some(b)) if r < LO && b < LO => {
-                            replace(rewriter, reencode!($Norex, inner))
-                        }
-                        _ => Ok(false),
-                    };
-                }
-            };
-        }
-        // Low-xmm SSE: drop the empty REX when both xmm operands are xmm0..xmm7.
-        rr_norex!(AddssOp, AddssNorexOp, LO);
-        rr_norex!(SubssOp, SubssNorexOp, LO);
-        rr_norex!(MulssOp, MulssNorexOp, LO);
-        rr_norex!(DivssOp, DivssNorexOp, LO);
-        rr_norex!(MovssOp, MovssNorexOp, LO);
-        rr_norex!(AddsdOp, AddsdNorexOp, LO);
-        rr_norex!(SubsdOp, SubsdNorexOp, LO);
-        rr_norex!(MulsdOp, MulsdNorexOp, LO);
-        rr_norex!(DivsdOp, DivsdNorexOp, LO);
-        rr_norex!(MovsdOp, MovsdNorexOp, LO);
-        rr_norex!(Cvtsi2ss32Op, Cvtsi2ss32NorexOp, LO);
-        rr_norex!(Cvttss2si32Op, Cvttss2si32NorexOp, LO);
-        rr_norex!(Cvtsi2sd32Op, Cvtsi2sd32NorexOp, LO);
-        rr_norex!(Cvttsd2si32Op, Cvttsd2si32NorexOp, LO);
-        rr_norex!(MovdXmmGpr32Op, MovdXmmGpr32NorexOp, LO);
-        rr_norex!(MovdGpr32XmmOp, MovdGpr32XmmNorexOp, LO);
-        rr_named_norex!(UcomissOp, UcomissNorexOp, "lhs", "rhs", LO);
-        rr_named_norex!(UcomisdOp, UcomisdNorexOp, "lhs", "rhs", LO);
-        mem_norex!(MovssLoadDispOp, MovssLoadDispNorexOp, "dst");
-        mem_norex!(MovssStoreDispOp, MovssStoreDispNorexOp, "src");
-        mem_norex!(MovssLoadDispSibOp, MovssLoadDispSibNorexOp, "dst");
-        mem_norex!(MovssStoreDispSibOp, MovssStoreDispSibNorexOp, "src");
-        mem_norex!(MovsdLoadDispOp, MovsdLoadDispNorexOp, "dst");
-        mem_norex!(MovsdStoreDispOp, MovsdStoreDispNorexOp, "src");
-        mem_norex!(MovsdLoadDispSibOp, MovsdLoadDispSibNorexOp, "dst");
-        mem_norex!(MovsdStoreDispSibOp, MovsdStoreDispSibNorexOp, "src");
-
-        Ok(false)
+        let narrowed = tir::backend::reencode_as::<Test8Op>(context, inner.handle());
+        rewriter.replace_op(op, narrowed.as_ref()).map(|()| true)
     }
 
     /// Post-RA: `vret` becomes `ret`; `vbr` becomes `jmp dest`.
@@ -754,7 +554,7 @@ mod isa {
                 )]);
             }
             Ok(vec![Box::new(
-                LeaBaseDisp32OpBuilder::new(context)
+                LeaBaseDispOpBuilder::new(context)
                     .result_values(vec![dst])
                     .attr("base", phys(frame.0, frame.1))
                     .attr("imm", AttributeValue::Int(offset))
@@ -1001,7 +801,7 @@ mod isa {
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![canonicalize_encodings, finalize_virtual_ops]
+            vec![narrow_test_to_byte, finalize_virtual_ops]
         }
 
         fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {

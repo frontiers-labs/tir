@@ -94,8 +94,8 @@ enc_ext:
 # disp32 forms: mod=10 + disp32. Divergence: TIR always uses disp32 for a
 # non-zero displacement; GNU as would pick the shorter disp8 (mod=01) form
 # (48 8b 43 08 / 48 89 51 10). Both valid; TIR's is 3 bytes longer.
-# CHECK-NEXT: [0x48, 0x8B, 0x83, 0x08, 0x00, 0x00, 0x00]
-# CHECK-NEXT: [0x48, 0x89, 0x91, 0x10, 0x00, 0x00, 0x00]
+# CHECK-NEXT: [0x48, 0x8B, 0x43, 0x08]
+# CHECK-NEXT: [0x48, 0x89, 0x51, 0x10]
 # push/pop: 50+rd / 58+rd behind a plain REX.
 # CHECK-NEXT: [0x53]
 # CHECK-NEXT: [0x41, 0x54]

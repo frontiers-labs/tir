@@ -17,6 +17,6 @@ module {
 }
 
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK: x86_64.mov_load32_norex {{.*}} state(%[[ENTRY]] -> %[[READ:[0-9]+]])
-// CHECK: x86_64.mov_store32_norex {{.*}} state(%[[READ]] -> %[[WRITTEN:[0-9]+]])
-// CHECK: x86_64.mov_load32_norex {{.*}} state(%[[WRITTEN]] -> %{{[0-9]+}})
+// CHECK: x86_64.mov_load32 {{.*}} state(%[[ENTRY]] -> %[[READ:[0-9]+]])
+// CHECK: x86_64.mov_store32 {{.*}} state(%[[READ]] -> %[[WRITTEN:[0-9]+]])
+// CHECK: x86_64.mov_load32 {{.*}} state(%[[WRITTEN]] -> %{{[0-9]+}})

@@ -14,8 +14,8 @@ module {
   module_end
 }
 
-// ISEL:      x86_64.addsd_norex {dst = %[[V2:[0-9]+]]:XMMlow, dst_tied = %[[V0:[0-9]+]]:XMM, src = %[[V1:[0-9]+]]:XMM}
+// ISEL:      x86_64.addsd {dst = %[[V2:[0-9]+]]:XMM, dst_tied = %[[V0:[0-9]+]]:XMM, src = %[[V1:[0-9]+]]:XMM}
 // ISEL-NEXT: asm.vret
 
-// CHECK:      x86_64.addsd_norex {dst = %{{[0-9]+}}:xmm0, dst_tied = %{{[0-9]+}}:xmm0, src = %{{[0-9]+}}:xmm1}
+// CHECK:      x86_64.addsd {dst = %{{[0-9]+}}:xmm0, dst_tied = %{{[0-9]+}}:xmm0, src = %{{[0-9]+}}:xmm1}
 // CHECK-NEXT: asm.vret
