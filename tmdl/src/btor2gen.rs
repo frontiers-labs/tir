@@ -634,6 +634,20 @@ fn decode_layout(
                         .push((s.index, s.index, word_lo, word_hi));
                 }
             }
+            // `x as bits<n>`: the operand's low n bits, in the n bits the arm
+            // spells.
+            ast::Expr::Cast(cast) => {
+                if let ast::Expr::Ident(id) = &*cast.x
+                    && operands.contains_key(&id.name)
+                {
+                    pieces.entry(id.name.clone()).or_default().push((
+                        0,
+                        word_hi - word_lo,
+                        word_lo,
+                        word_hi,
+                    ));
+                }
+            }
             _ => {}
         }
     }

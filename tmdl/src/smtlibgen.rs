@@ -993,6 +993,14 @@ fn build_encoding_metadata<'a>(
                     };
                     (operand, index.index, "0".to_string())
                 }
+                // `x as bits<n>`: the operand's low n bits.
+                ast::Expr::Cast(cast) => {
+                    let operand = match &*cast.x {
+                        ast::Expr::Ident(id) => Some(id.name.to_lowercase()),
+                        _ => None,
+                    };
+                    (operand, 0, "0".to_string())
+                }
                 _ => (None, 0, "0".to_string()),
             };
             EncodingFieldMetadata {
@@ -1216,6 +1224,13 @@ fn build_shape_encoding<'a>(
                     _ => "(_ bv0 64)".to_string(),
                 };
                 format!("((_ extract {} {}) {})", s.index, s.index, base_str)
+            }
+            ast::Expr::Cast(cast) => {
+                let base_str = match &*cast.x {
+                    ast::Expr::Ident(id) => id.name.to_lowercase(),
+                    _ => "(_ bv0 64)".to_string(),
+                };
+                format!("((_ extract {} 0) {})", width - 1, base_str)
             }
             _ => zero_bv(width),
         };
@@ -2866,8 +2881,15 @@ fn build_decoder<'a>(
                     .sum::<u16>(),
             )
         });
+        let shape_ctx = crate::utils::encoding_context(i, item_cache);
         for shape in &instruction_shapes {
             let encoding_arms = &shape.arms;
+            // The operands this shape spells narrowly under a signed fit test,
+            // and how many bits of each it spells.
+            let signed_fits: HashMap<String, u16> =
+                crate::shapes::lower_guard(&shape.guard, &shape_ctx)
+                    .map(|predicate| signed_fit_widths(&predicate))
+                    .unwrap_or_default();
 
             // For each operand: collect (op_lo, op_hi, word_lo, word_hi) pieces.
             let mut operand_pieces: HashMap<String, Vec<(u16, u16, u16, u16)>> = HashMap::new();
@@ -2927,6 +2949,19 @@ fn build_decoder<'a>(
                                 .push((s.index, s.index, word_lo, word_hi));
                         }
                     }
+                    // `x as bits<n>`: the operand's low n bits.
+                    ast::Expr::Cast(cast) => {
+                        if let ast::Expr::Ident(id) = &*cast.x
+                            && operands.contains_key(&id.name)
+                        {
+                            operand_pieces.entry(id.name.clone()).or_default().push((
+                                0,
+                                word_width - 1,
+                                word_lo,
+                                word_hi,
+                            ));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2984,7 +3019,21 @@ fn build_decoder<'a>(
                         .reduce(|acc, f| format!("(concat {} {})", acc, f))
                         .unwrap_or_else(|| zero_bv(target_width));
 
-                    cast_bv_smt(&raw, raw_width, target_width)
+                    // A field the guard picked because the value fits it holds
+                    // the low bits of a signed value: reading it back
+                    // zero-extended would be a different number.
+                    let declared = match op_ty {
+                        Type::Bits(n) => *n,
+                        _ => target_width,
+                    };
+                    match signed_fits.get(op_name) {
+                        Some(bits) if *bits == raw_width && raw_width < declared => {
+                            let widened =
+                                format!("((_ sign_extend {}) {raw})", declared - raw_width);
+                            cast_bv_smt(&widened, declared, target_width)
+                        }
+                        _ => cast_bv_smt(&raw, raw_width, target_width),
+                    }
                 })
                 .collect();
 
@@ -3037,6 +3086,58 @@ fn build_decoder<'a>(
         "\n(define-fun execute_by_word_{dialect} ((state TMDLState) (word (_ BitVec {word_width}))) TMDLState\n  (execute_{dialect} state (decode_{dialect} word)))"
     )?;
 
+    // The obligation an encoding owes its decoder: whatever an instruction
+    // encodes to decodes back to that instruction, whichever shape the guards
+    // picked. `cargo xtask verify` discharges one per instruction.
+    for i in &instructions {
+        let name = i.name.to_lowercase();
+        let operand_list = resolved_operands(ctx, i, item_cache);
+        let params = build_smt_operands(ctx, &operand_list).join(" ");
+        let args = operand_list
+            .iter()
+            .map(|(operand, _)| operand.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let encode = match args.is_empty() {
+            true => format!("encode_{name}"),
+            false => format!("(encode_{name} {args})"),
+        };
+        let width = encoding_width(i, item_cache);
+        let word = match width < word_width {
+            true => format!("((_ zero_extend {}) {encode})", word_width - width),
+            false => encode,
+        };
+        let instr = match args.is_empty() {
+            true => i.name.to_uppercase(),
+            false => format!("({} {args})", i.name.to_uppercase()),
+        };
+        // A `bits<N>` operand rides in a register-wide variable, so the claim is
+        // about the values it can actually hold.
+        let domain: Vec<String> = operand_list
+            .iter()
+            .filter_map(|(operand, ty)| match ty {
+                Type::Bits(n) if *n < ctx.xlen => Some(format!(
+                    "(= {0} ((_ zero_extend {1}) ((_ extract {2} 0) {0})))",
+                    operand.to_lowercase(),
+                    ctx.xlen - n,
+                    n - 1
+                )),
+                _ => None,
+            })
+            .collect();
+        let claim = match domain.is_empty() {
+            true => format!("(= (decode_{dialect} {word}) {instr})"),
+            false => format!(
+                "(=> (and {}) (= (decode_{dialect} {word}) {instr}))",
+                domain.join(" ")
+            ),
+        };
+        writeln!(
+            output,
+            "\n; ROUNDTRIP: {name}\n(define-fun roundtrip_{name} ({params}) Bool\n  {claim})"
+        )?;
+    }
+
     Ok(())
 }
 
@@ -3072,6 +3173,22 @@ fn cast_bv(name: &str, from_width: u16, to_width: u16) -> String {
 /// Like `cast_bv` but accepts an arbitrary SMT-LIB expression instead of a
 /// plain identifier.  When `from_width == to_width` the expression is returned
 /// as-is; otherwise it is wrapped in `zero_extend` or `extract`.
+/// The operands a guard asks to survive a narrow signed field, and the width
+/// of that field.
+fn signed_fit_widths(predicate: &crate::shapes::Predicate) -> HashMap<String, u16> {
+    use crate::shapes::Predicate;
+    match predicate {
+        Predicate::Fits {
+            op, bits, signed, ..
+        } if *signed => HashMap::from([(op.clone(), *bits)]),
+        Predicate::And(parts) | Predicate::Or(parts) => {
+            parts.iter().flat_map(signed_fit_widths).collect()
+        }
+        Predicate::Not(inner) => signed_fit_widths(inner),
+        _ => HashMap::new(),
+    }
+}
+
 fn cast_bv_smt(expr: &str, from_width: u16, to_width: u16) -> String {
     match from_width.cmp(&to_width) {
         std::cmp::Ordering::Equal => expr.to_string(),

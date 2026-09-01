@@ -5,6 +5,7 @@
 // no, so a relocation always takes the wide shape.
 
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=ByteIsa --output=- %s | filecheck %s --check-prefix=SMT
 
 isa ByteIsa {
     param XLEN: Integer = 64;
@@ -57,3 +58,12 @@ instruction AddImm for [ByteIsa] {
 // CHECK: width: 32,
 
 // CHECK: width_bytes: (3, 6),
+
+// The SMT model spells the same choice, reads the short field back as the
+// signed value it holds, and carries the obligation that the two agree.
+// SMT: (define-fun encode_addimm
+// SMT-NEXT: (ite (= ((_ sign_extend 24) ((_ extract 7 0) ((_ extract 31 0) imm))) ((_ extract 31 0) imm))
+// SMT: (define-fun decode_test
+// SMT: ((_ zero_extend 32) ((_ sign_extend 24) ((_ extract 23 16) word)))
+// SMT: (define-fun roundtrip_addimm
+// SMT-NEXT: (=> (and (= imm ((_ zero_extend 32) ((_ extract 31 0) imm))))

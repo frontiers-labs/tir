@@ -58,8 +58,10 @@ fn rm_field(base) {
     if is_sib(base) { 0b100 } else { base[2..0] }
 }
 
+// scale=00, index=100 (none), base. The base field repeats the register the
+// r/m field could not name, so the word still says which register it was.
 fn sib_byte(base) {
-    if is_sib(base) { 0x24 } else { () }
+    if is_sib(base) { (0b00, 0b100, base[2..0]) } else { () }
 }
 
 // A base whose low three bits are 101 (rbp, r13) means "rip-relative" with
