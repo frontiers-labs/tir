@@ -1298,6 +1298,10 @@ fn encoding_value_name(expr: &ast::Expr) -> Option<&str> {
             ast::Expr::Ident(id) => Some(id.name.as_str()),
             _ => None,
         },
+        ast::Expr::Cast(cast) => match &*cast.x {
+            ast::Expr::Ident(id) => Some(id.name.as_str()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -2335,7 +2339,8 @@ fn check_encoding(
         diags.extend(
             check_shape(
                 instruction,
-                &shape.fields,
+                shape,
+                &ctx,
                 operands,
                 isa_params,
                 unit,
@@ -2353,12 +2358,14 @@ fn check_encoding(
 /// whether it fills whole encoding units.
 fn check_shape(
     instruction: &ast::Instruction,
-    encoding: &[ast::EncodingField],
+    shape: &crate::shapes::Shape,
+    ctx: &crate::shapes::Context,
     operands: &[&ast::Operand],
     isa_params: &HashMap<String, i64>,
     unit: Option<u16>,
     file_name: &str,
 ) -> Vec<(String, Diag)> {
+    let encoding = &shape.fields;
     let mut diags = vec![];
     for operand in operands {
         let width = match &operand.ty {
@@ -2391,6 +2398,27 @@ fn check_shape(
                         instruction.name,
                         skipped.join(", "),
                         operand.name
+                    ),
+                ),
+            ));
+        }
+
+        // Dropping the high bits is sound exactly when the guard that selects
+        // this shape has already asked whether the operand survives the narrow
+        // field, which is what makes a short immediate form the same
+        // instruction as the long one.
+        let spelled = top as u16 + 1;
+        if spelled < width && !guard_proves_fit(&shape.guard, ctx, &operand.name, spelled) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    instruction.span,
+                    format!(
+                        "encoding of instruction '{}' spells only bits {top}..{dropped} of \
+                         operand '{}'; a shape that drops the high bits needs a condition \
+                         proving they are an extension, e.g. sext({} as bits<{spelled}>, \
+                         {width}) == {}",
+                        instruction.name, operand.name, operand.name, operand.name
                     ),
                 ),
             ));
@@ -2558,6 +2586,27 @@ fn check_pc_single_shape(
 
 /// Which bits of `name` the encoding spells, low bit first, or `None` when the
 /// encoding does not carry the operand at all.
+/// Whether every way of reaching this shape asks that `operand` survives the
+/// `spelled` bits it spells of it. Each clause of the guard is one way, so each
+/// has to make the test itself.
+fn guard_proves_fit(
+    guard: &crate::shapes::Guard,
+    ctx: &crate::shapes::Context,
+    operand: &str,
+    spelled: u16,
+) -> bool {
+    guard.0.iter().all(|clause| {
+        clause.iter().any(|literal| {
+            literal.value
+                && matches!(
+                    crate::shapes::fit_test(&literal.cond, ctx),
+                    Some(crate::shapes::Predicate::Fits { op, bits, signed, .. })
+                        if op == operand && (bits == spelled || (!signed && bits <= spelled))
+                )
+        })
+    })
+}
+
 fn covered_bits(encoding: &[ast::EncodingField], name: &str, width: u16) -> Option<Vec<bool>> {
     let mut covered = vec![false; usize::from(width)];
     let mut carried = false;
@@ -2569,6 +2618,7 @@ fn covered_bits(encoding: &[ast::EncodingField], name: &str, width: u16) -> Opti
         let (lo, hi) = match &field.value {
             ast::Expr::Slice(slc) => (slc.lo, slc.hi),
             ast::Expr::IndexAccess(idx) => (idx.index, idx.index),
+            ast::Expr::Cast(_) => (0, field.width.saturating_sub(1)),
             _ => (0, width.saturating_sub(1)),
         };
         for bit in lo..=hi {

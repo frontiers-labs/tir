@@ -29,5 +29,5 @@ module {
 
 // The parameter is read into the call argument before the back edge writes it.
 // CHECK:      asm.vcall {callee = "foo"
-// CHECK:      x86_64.add_imm8s32_norex
+// CHECK:      x86_64.add_imm32
 // CHECK-NEXT: asm.vbr

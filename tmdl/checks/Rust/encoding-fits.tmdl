@@ -1,0 +1,59 @@
+// An immediate an instruction can spell in one byte is spelled in one byte.
+// The test that decides it — does the value survive the round trip through the
+// narrow field — is written in the model as `sext`/`as`, and the encoder asks
+// it of the operand at encode time. A value still waiting for a fixup answers
+// no, so a relocation always takes the wide shape.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa ByteIsa {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [ByteIsa] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x15 => { } }
+}
+
+fn signed_fits(x, n) { sext(x as bits<n>, width(x)) == x }
+
+instruction AddImm for [ByteIsa] {
+    param MNEMONIC: String = "add";
+    operands { dst: GPR, imm: bits<32> }
+    asm { "{self.MNEMONIC} {dst}, {imm}" }
+    behavior { dst = dst + sext(imm, self.XLEN); }
+    encoding {
+        if signed_fits(imm, 8) { 0x83 } else { 0x81 },
+        (0b11, 0b000, dst[2..0]),
+        if signed_fits(imm, 8) { imm as bits<8> } else { imm },
+    }
+}
+
+// CHECK: static INFO_ADDIMM: tir::backend::InstrInfo
+// CHECK: width_bytes: (3, 6),
+
+// CHECK: static ENCODE_ADDIMM: tir::backend::binary::EncodeSpec
+// CHECK: guard: tir::backend::binary::Guard::SignedFits {
+// CHECK-NEXT: op: "imm",
+// CHECK-NEXT: width: 32,
+// CHECK-NEXT: bits: 8,
+
+// The short shape spells eight bits of the immediate, and says so: the range
+// it accepts is the range those bits hold, not the operand's declared 32.
+// CHECK: attr: "imm",
+// CHECK-NEXT: int_range: Some((-128i64, 256i64, 256u64)),
+// CHECK: width: 8,
+
+// The wide shape is the only one a fixup can take, and it is the only one with
+// a patch: a relocation resolved into the short field would lose its high bits.
+// CHECK: guard: tir::backend::binary::Guard::Not(
+// CHECK-NEXT: &tir::backend::binary::Guard::SignedFits {
+// CHECK: attr: "imm",
+// CHECK-NEXT: int_range: Some((-2147483648i64, 4294967296i64, 4294967296u64)),
+// CHECK: tir::backend::binary::PatchField {
+// CHECK-NEXT: attr: "imm",
+// CHECK: width: 32,
+
+// CHECK: width_bytes: (3, 6),

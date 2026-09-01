@@ -160,6 +160,17 @@ instruction TooManyDomainPoints for [Arch] {
     }
 }
 
+// Dropping the high bits of an operand with nothing to say they are an
+// extension of the ones spelled: the encoder would emit a different immediate.
+instruction UnguardedTruncation for [Arch] {
+    param MNEMONIC: String = "unguarded";
+    param OPCODE: bits<8> = 0x81;
+    operands { imm: bits<32> }
+    asm { "{self.MNEMONIC} {imm}" }
+    behavior { imm = imm; }
+    encoding { OPCODE, imm[7..0] }
+}
+
 // CHECK-DAG: slice 'imm[13..10]' exceeds bits<13>
 // CHECK-DAG: bit 'imm[13]' exceeds bits<13>
 // CHECK-DAG: concatenation in the encoding of 'ShortGroup' is 6 bits, which is not a whole number of 8-bit encoding units
@@ -173,3 +184,4 @@ instruction TooManyDomainPoints for [Arch] {
 // CHECK-DAG: encoding of instruction 'TooManyConditions' has 9 conditions, more than the 8 a shape expansion admits
 // CHECK-DAG: condition in the encoding of 'WideConcatCondition' concatenates more than 64 bits, which no condition can decide
 // CHECK-DAG: conditions in the encoding of 'TooManyDomainPoints' read more operand values than the 1048576 combinations a shape expansion tries
+// CHECK-DAG: encoding of instruction 'UnguardedTruncation' spells only bits 7..0 of operand 'imm'; a shape that drops the high bits needs a condition proving they are an extension, e.g. sext(imm as bits<8>, 32) == imm

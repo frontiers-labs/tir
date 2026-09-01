@@ -32,9 +32,9 @@ alu8:
 # CHECK-NEXT: x86_64.or8 {dst = bpl, src = spl}
 # CHECK-NEXT: x86_64.xor8 {dst = al, src = al}
 # CHECK-NEXT: x86_64.mov8 {dst = bl, src = cl}
-# CHECK-NEXT: x86_64.add_imm8_norex {dst = al, imm = 42}
-# CHECK-NEXT: x86_64.and_imm8_norex {dst = cl, imm = 255}
-# CHECK-NEXT: x86_64.or_imm8_norex {dst = dl, imm = 1}
+# CHECK-NEXT: x86_64.add_imm8 {dst = al, imm = 42}
+# CHECK-NEXT: x86_64.and_imm8 {dst = cl, imm = 255}
+# CHECK-NEXT: x86_64.or_imm8 {dst = dl, imm = 1}
 # CHECK-NEXT: x86_64.xor_imm8 {dst = sil, imm = 7}
 # CHECK-NEXT: x86_64.mov_imm8 {dst = dil, imm = 100}
 # CHECK-NEXT: x86_64.shl8_norex {dst = al, imm = 3}

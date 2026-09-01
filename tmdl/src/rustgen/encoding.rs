@@ -103,6 +103,12 @@ fn lower_shape(
                 ast::Expr::Ident(id) => (&id.name, idx.index, 1),
                 _ => return Err(bad_value()),
             },
+            // `x as bits<n>`: the operand's low n bits, the field the guard
+            // proved the rest of it is an extension of.
+            ast::Expr::Cast(cast) => match &*cast.x {
+                ast::Expr::Ident(id) => (&id.name, 0, width),
+                _ => return Err(bad_value()),
+            },
             _ => return Err(bad_value()),
         };
         let field = IntField {
@@ -268,9 +274,17 @@ fn emit_instruction_encoder(
                 Some(Type::Bits(n)) => Some(*n),
                 _ => None,
             };
+            // The operand bits this shape spells. A shape a fit test selects
+            // spells fewer than the operand declares, and accepts only the
+            // values that many bits hold.
+            let carried = fields
+                .iter()
+                .map(|field| field.op_lo + field.width)
+                .max()
+                .unwrap_or(0);
             // Any attribute value fits a full-width field, and the range
             // literals would overflow at 64 bits.
-            let bounded = declared.filter(|n| *n < 64);
+            let bounded = declared.map(|n| n.min(carried)).filter(|n| *n < 64);
             let int_range = match bounded {
                 Some(n) => {
                     let min = proc_macro2::Literal::i64_suffixed(-(1i64 << (n - 1)));
@@ -299,8 +313,11 @@ fn emit_instruction_encoder(
             // rather than silently truncated. The operand bits the encoding
             // drops are the ones its `#[align]` declares zero (sema admits an
             // encoding that drops bits only with the matching alignment), so a
-            // value with any of them set is not representable either.
-            if declared.is_none() {
+            // value with any of them set is not representable either. A shape
+            // that spells fewer bits than the operand declares gets no patch
+            // either: an unresolved fixup answers no to the fit test that
+            // selects it, so the wide shape is the one a relocation lands in.
+            if declared.is_none_or(|declared| carried < declared) {
                 continue;
             }
             let range = match bounded {

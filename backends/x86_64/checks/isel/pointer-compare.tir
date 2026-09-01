@@ -33,7 +33,7 @@ module {data_layout = #data_layout} {
     func.return %4
   }
   // CHECK: asm.symbol {name = "is_null"
-  // CHECK: x86_64.cmp_imm8s {dst = %{{[0-9]+}}:GPR, imm = 0}
+  // CHECK: x86_64.cmp_imm {dst = %{{[0-9]+}}:GPR, imm = 0}
   // CHECK-NEXT: x86_64.je {imm = ^bb1}
 
   module_end

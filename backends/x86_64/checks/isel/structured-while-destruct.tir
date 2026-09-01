@@ -27,7 +27,7 @@ module {
 // CHECK: asm.vbr %1, %0 ^[[TEST:bb[0-9]+]]
 // CHECK: ^[[TEST]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
 // The test fuses into the branch exactly as a guarded terminator's would.
-// CHECK-NEXT: x86_64.cmp_imm8s {dst = %{{[0-9]+}}:GPR, imm = 0}
+// CHECK-NEXT: x86_64.cmp_imm {dst = %{{[0-9]+}}:GPR, imm = 0}
 // CHECK-NEXT: x86_64.jg {imm = ^[[ENTER:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[EXIT:bb[0-9]+]]
 // CHECK: ^[[BODY:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):

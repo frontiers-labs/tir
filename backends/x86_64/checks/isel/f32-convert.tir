@@ -53,7 +53,7 @@ module {
 // CHECK: x86_64.cvttss2si64
 // CHECK: x86_64.ucomiss_norex {lhs = %{{[0-9]+}}:XMM, rhs = %{{[0-9]+}}:XMM}
 // CHECK-NEXT: x86_64.seta_norex
-// CHECK: x86_64.mov_imm32_norex
+// CHECK: x86_64.mov_imm32
 // CHECK-NEXT: x86_64.movd_xmm_gpr32_norex
 // CHECK-LABEL: asm.symbol {name = "bits_to_float"
 // CHECK: x86_64.movd_xmm_gpr32_norex

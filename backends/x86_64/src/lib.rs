@@ -458,77 +458,8 @@ mod isa {
                 reg1_norex!($Op, $Norex, "dst", $t)
             };
         }
-        // Group-1 32/16-bit immediate: pick imm8/imm8-norex/imm32-norex.
-        macro_rules! g1_imm {
-            ($Op:ty, $Imm8:ty, $Imm8N:ty, $Imm32N:ty) => {
-                if let Some(inner) = op.as_op::<$Op>() {
-                    let low = matches!(reg_index(&inner, "dst"), Some(d) if d < LO);
-                    let small =
-                        matches!(imm_int(&inner, "imm"), Some(v) if (-128..=127).contains(&v));
-                    let new: Box<dyn Operation> = match (small, low) {
-                        (true, true) => reencode!($Imm8N, inner),
-                        (true, false) => reencode!($Imm8, inner),
-                        (false, true) => reencode!($Imm32N, inner),
-                        (false, false) => return Ok(false),
-                    };
-                    return replace(rewriter, new);
-                }
-            };
-        }
-        // Group-1 64-bit immediate: only the 0x83 imm8 fold (REX.W stays).
-        macro_rules! g1_imm64 {
-            ($Op:ty, $Imm8:ty) => {
-                if let Some(inner) = op.as_op::<$Op>() {
-                    return match imm_int(&inner, "imm") {
-                        Some(v) if (-128..=127).contains(&v) => {
-                            replace(rewriter, reencode!($Imm8, inner))
-                        }
-                        _ => Ok(false),
-                    };
-                }
-            };
-        }
-
         rr_norex!(Imul32Op, Imul32NorexOp, LO);
         rr_norex!(ImulImm32Op, ImulImm32NorexOp, LO);
-
-        g1_imm!(AddImm32Op, AddImm8s32Op, AddImm8s32NorexOp, AddImm32NorexOp);
-        g1_imm!(OrImm32Op, OrImm8s32Op, OrImm8s32NorexOp, OrImm32NorexOp);
-        g1_imm!(AndImm32Op, AndImm8s32Op, AndImm8s32NorexOp, AndImm32NorexOp);
-        g1_imm!(XorImm32Op, XorImm8s32Op, XorImm8s32NorexOp, XorImm32NorexOp);
-        g1_imm!(SubImm32Op, SubImm8s32Op, SubImm8s32NorexOp, SubImm32NorexOp);
-        g1_imm!(CmpImm32Op, CmpImm8s32Op, CmpImm8s32NorexOp, CmpImm32NorexOp);
-        g1_imm!(AddImm16Op, AddImm8s16Op, AddImm8s16NorexOp, AddImm16NorexOp);
-        g1_imm!(OrImm16Op, OrImm8s16Op, OrImm8s16NorexOp, OrImm16NorexOp);
-        g1_imm!(AndImm16Op, AndImm8s16Op, AndImm8s16NorexOp, AndImm16NorexOp);
-        g1_imm!(XorImm16Op, XorImm8s16Op, XorImm8s16NorexOp, XorImm16NorexOp);
-
-        g1_imm64!(AddImmOp, AddImm8sOp);
-        g1_imm64!(OrImmOp, OrImm8sOp);
-        g1_imm64!(AndImmOp, AndImm8sOp);
-        g1_imm64!(XorImmOp, XorImm8sOp);
-        g1_imm64!(SubImmOp, SubImm8sOp);
-        g1_imm64!(CmpImmOp, CmpImm8sOp);
-
-        // mov/test immediates: no 0x83 form, only the REX-free downgrade.
-        // Direct isel picks of the 0x83 imm8 short forms still need the
-        // REX-free downgrade.
-        ri_norex!(AddImm8s32Op, AddImm8s32NorexOp, LO);
-        ri_norex!(OrImm8s32Op, OrImm8s32NorexOp, LO);
-        ri_norex!(AndImm8s32Op, AndImm8s32NorexOp, LO);
-        ri_norex!(XorImm8s32Op, XorImm8s32NorexOp, LO);
-        ri_norex!(SubImm8s32Op, SubImm8s32NorexOp, LO);
-        ri_norex!(CmpImm8s32Op, CmpImm8s32NorexOp, LO);
-
-        ri_norex!(MovImm32Op, MovImm32NorexOp, LO);
-        ri_norex!(TestImm32Op, TestImm32NorexOp, LO);
-        ri_norex!(MovImm16Op, MovImm16NorexOp, LO);
-        // 8-bit group-1 + mov immediates: REX-free when in al/cl/dl/bl.
-        ri_norex!(AddImm8Op, AddImm8NorexOp, B);
-        ri_norex!(OrImm8Op, OrImm8NorexOp, B);
-        ri_norex!(AndImm8Op, AndImm8NorexOp, B);
-        ri_norex!(XorImm8Op, XorImm8NorexOp, B);
-        ri_norex!(MovImm8Op, MovImm8NorexOp, B);
 
         ri_norex!(ShlImm32Op, ShlImm32NorexOp, LO);
         ri_norex!(ShrImm32Op, ShrImm32NorexOp, LO);

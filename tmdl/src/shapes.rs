@@ -238,6 +238,9 @@ fn lower_cond(cond: &ast::Expr, ctx: &Context) -> Result<Predicate, String> {
             ctx.owner
         )
     };
+    if let Some(fits) = fit_test(cond, ctx) {
+        return Ok(fits);
+    }
     if let Some((op, bit, set)) = operand_bit(cond, ctx) {
         let test = Predicate::Bit {
             op: op.to_string(),
@@ -343,6 +346,68 @@ fn lower_comparison(
         cmp_width: width.max(literal_width(literal.value()).unwrap_or(64)),
         cmp,
         value: i128::from(value),
+    })
+}
+
+/// The round-trip test an encoding makes before spelling a narrow field:
+/// `sext(x as bits<n>, width(x)) == x` for a signed field, `x as bits<n> == x`
+/// or the `zext` spelling for an unsigned one. `x[n-1..0]` stands for the cast.
+///
+/// The test is written in the model rather than built into the compiler, so
+/// this reads the shape of it back out. An equivalent spelling it does not
+/// match fails loudly at code generation, never silently.
+pub(crate) fn fit_test(cond: &ast::Expr, ctx: &Context) -> Option<Predicate> {
+    let ast::Expr::Binary(binary) = cond else {
+        return None;
+    };
+    if binary.op != ast::BinOp::Equal {
+        return None;
+    }
+    let operand = |expr: &ast::Expr| match expr {
+        ast::Expr::Ident(id) => ctx
+            .operand_width(&id.name)
+            .map(|width| (id.name.clone(), width)),
+        _ => None,
+    };
+    let (probe, (name, width)) = match (operand(&binary.lhs), operand(&binary.rhs)) {
+        (None, Some(held)) => (&*binary.lhs, held),
+        (Some(held), None) => (&*binary.rhs, held),
+        _ => return None,
+    };
+    // The extension back to the operand's own width, if the test spells one.
+    let (kept, signed) = match probe {
+        ast::Expr::Call(call) => {
+            let (ast::Expr::BuiltinFunction(builtin), [kept, to]) =
+                (&*call.callee, call.arguments.as_slice())
+            else {
+                return None;
+            };
+            if int_literal(to).map(parse_literal_value)? != u64::from(width) {
+                return None;
+            }
+            match builtin {
+                ast::BuiltinFunction::SExt => (kept, true),
+                ast::BuiltinFunction::ZExt => (kept, false),
+                _ => return None,
+            }
+        }
+        kept => (kept, false),
+    };
+    // The narrow field itself, as a cast or as the low bits.
+    let (base, bits) = match kept {
+        ast::Expr::Cast(cast) => (&*cast.x, int_literal(&cast.width).map(parse_literal_value)?),
+        ast::Expr::Slice(slice) if slice.lo == 0 => (&*slice.base, u64::from(slice.hi) + 1),
+        _ => return None,
+    };
+    let ast::Expr::Ident(id) = base else {
+        return None;
+    };
+    let bits = u16::try_from(bits).ok()?;
+    (id.name == name && bits < width).then_some(Predicate::Fits {
+        op: name,
+        width,
+        bits,
+        signed,
     })
 }
 
@@ -503,7 +568,36 @@ fn normalize(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
             _ => expr,
         }
     }
-    decide(&collapse(&crate::utils::inline_let_bindings(expr)), ctx)
+    let expr = collapse(&crate::utils::inline_let_bindings(expr));
+    decide(&resolve_widths(&expr, ctx), ctx)
+}
+
+/// Replace `width(x)` with the width `x` spells in an encoding, which for a
+/// register operand is its class's `ENCODING_LEN` rather than the value width a
+/// behavior would read. `fn signed_fits(x, n)` is written over it, so this has
+/// to happen before the conditions are evaluated.
+fn resolve_widths(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
+    let expr = crate::utils::map_child_exprs(expr, &mut |child| resolve_widths(child, ctx));
+    let ast::Expr::Call(call) = &expr else {
+        return expr;
+    };
+    if !matches!(
+        &*call.callee,
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Width)
+    ) {
+        return expr;
+    }
+    let Some(ast::Expr::Ident(id)) = call.arguments.first() else {
+        return expr;
+    };
+    match ctx.named_width(&id.name) {
+        Ok(width) => ast::Expr::Lit(ast::Lit::Int(ast::LitInt::new(
+            format!("0b{width:b}"),
+            call.span,
+        ))),
+        // Left as it was: the condition then reports what it could not read.
+        Err(_) => expr,
+    }
 }
 
 /// Take every branch the parameters decide. One template writes the encoding of
@@ -744,12 +838,34 @@ impl Context {
         match value {
             ast::Expr::Lit(ast::Lit::Int(li)) => literal_width(li.value()),
             ast::Expr::Ident(id) => self.named_width(&id.name),
-            ast::Expr::Slice(slc) => Ok(slc.hi - slc.lo + 1),
-            ast::Expr::IndexAccess(_) => Ok(1),
+            ast::Expr::Slice(slc) => self.sliced(&slc.base).map(|()| slc.hi - slc.lo + 1),
+            ast::Expr::IndexAccess(idx) => self.sliced(&idx.base).map(|()| 1),
+            // `x as bits<n>`: the low n bits, the same field `x[n-1..0]` names.
+            ast::Expr::Cast(cast) => match int_literal(&cast.width).map(parse_literal_value) {
+                Some(width) if (1..=128).contains(&width) => Ok(width as u16),
+                _ => Err(format!(
+                    "cast in the encoding of '{}' must name a constant width",
+                    self.owner
+                )),
+            },
             _ => Err(format!(
                 "encoding field in '{}' must be a literal, parameter, operand or bit slice",
                 self.owner
             )),
+        }
+    }
+
+    /// A field may take bits out of an operand, whose value the encoder reads
+    /// at encode time. Taking them out of a parameter instead spells a constant
+    /// no consumer reads back as one, so the parameter is spelled whole.
+    fn sliced(&self, base: &ast::Expr) -> Result<(), String> {
+        match base {
+            ast::Expr::Ident(id) if self.operand(&id.name).is_none() => Err(format!(
+                "encoding of '{}' takes bits out of '{}', which is a parameter; \
+                 spell the parameter whole",
+                self.owner, id.name
+            )),
+            _ => Ok(()),
         }
     }
 
@@ -844,6 +960,18 @@ impl Context {
             // `x[7..4] == 0b0110` is never true anywhere in the sample and
             // loses its shape. Falsifying it needs nothing extra, since the
             // base values above already differ from any one slice value.
+            // The edges of each fit test: the widest value the narrow field
+            // holds and the first one it does not, on both sides of zero.
+            for bits in probes.fits.get(name).into_iter().flatten() {
+                values.extend([
+                    mask(*bits),
+                    mask(*bits) + 1,
+                    mask(bits - 1),
+                    mask(bits - 1) + 1,
+                    domain_mask & !mask(bits - 1),
+                    domain_mask & !mask(*bits),
+                ]);
+            }
             for (lo, hi, value) in probes.slices.get(name).into_iter().flatten() {
                 let field = shift_left(mask(hi - lo + 1), u64::from(*lo));
                 let placed = shift_left(*value, u64::from(*lo)) & field;
@@ -874,11 +1002,16 @@ struct Probes {
     literals: Vec<u64>,
     /// Operand name -> `(lo, hi, value)` of each `x[hi..lo] == value` spelled.
     slices: HashMap<String, Vec<(u16, u16, u64)>>,
+    /// Operand name -> the field widths a fit test asks about.
+    fits: HashMap<String, Vec<u16>>,
 }
 
 impl Probes {
     fn collect(&mut self, cond: &ast::Expr, ctx: &Context) {
         crate::utils::visit_exprs(cond, &mut |node| {
+            if let Some(Predicate::Fits { op, bits, .. }) = fit_test(node, ctx) {
+                self.fits.entry(op).or_default().push(bits);
+            }
             match node {
                 ast::Expr::Ident(id) if ctx.operand(&id.name).is_some() => {
                     if !self.names.contains(&id.name) {
@@ -1124,7 +1257,49 @@ fn eval(
             }
         }
         ast::Expr::Binary(binary) => eval_binary(binary, ctx, env),
+        // `x as bits<n>` keeps the low n bits, which is what a narrow encoding
+        // field spells of a wider operand.
+        ast::Expr::Cast(cast) => {
+            let (value, _) = eval(&cast.x, ctx, env)?;
+            let width = eval_width(&cast.width, ctx, env)?;
+            Ok((value & mask(width), width))
+        }
+        ast::Expr::Call(call) => {
+            let (ast::Expr::BuiltinFunction(builtin), [value, width]) =
+                (&*call.callee, call.arguments.as_slice())
+            else {
+                return Err("calls a function no encoder can evaluate".to_string());
+            };
+            let (value, from) = eval(value, ctx, env)?;
+            let to = eval_width(width, ctx, env)?;
+            match builtin {
+                ast::BuiltinFunction::SExt => Ok((sign_extend(value, from) & mask(to), to)),
+                ast::BuiltinFunction::ZExt => Ok((value & mask(to), to)),
+                other => Err(format!("calls '{other:?}', which no encoder can evaluate")),
+            }
+        }
         _ => Err("is not an expression over the operands".to_string()),
+    }
+}
+
+/// A width an encoding names: a constant between 1 and 64.
+fn eval_width(
+    expr: &ast::Expr,
+    ctx: &Context,
+    env: &HashMap<&str, (u64, u16)>,
+) -> Result<u16, String> {
+    let (value, _) = eval(expr, ctx, env)?;
+    u16::try_from(value)
+        .ok()
+        .filter(|width| (1..=64).contains(width))
+        .ok_or_else(|| format!("names the width {value}, which no encoder can spell"))
+}
+
+/// `value`, read as a signed number of `width` bits, in 64.
+fn sign_extend(value: u64, width: u16) -> u64 {
+    match width > 0 && width < 64 && value & (1 << (width - 1)) != 0 {
+        true => value | !mask(width),
+        false => value,
     }
 }
 

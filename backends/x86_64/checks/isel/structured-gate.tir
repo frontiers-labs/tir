@@ -20,5 +20,5 @@ module {
 }
 
 // CHECK: asm.symbol {name = "choose"
-// CHECK: x86_64.add_imm8s {dst = %{{[0-9]+}}:GPR, dst_tied = %[[V1:[0-9]+]]:GPR, imm = 7}
-// CHECK: x86_64.add_imm8s {dst = %{{[0-9]+}}:GPR, dst_tied = %[[V1]]:GPR, imm = -7}
+// CHECK: x86_64.add_imm {dst = %{{[0-9]+}}:GPR, dst_tied = %[[V1:[0-9]+]]:GPR, imm = 7}
+// CHECK: x86_64.add_imm {dst = %{{[0-9]+}}:GPR, dst_tied = %[[V1]]:GPR, imm = -7}

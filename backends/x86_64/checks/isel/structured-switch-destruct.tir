@@ -26,22 +26,22 @@ module {
 
 // CHECK-NOT: scf.
 // Each case tests in its own block: nothing computes a case it never reaches.
-// CHECK: x86_64.cmp_imm8s32_norex {dst = %[[V0:[0-9]+]]:GPR, imm = 1}
-// CHECK-NEXT: x86_64.je_legacy {imm = ^[[ONE:bb[0-9]+]]}
+// CHECK: x86_64.cmp_imm32 {dst = %[[V0:[0-9]+]]:GPR, imm = 1}
+// CHECK-NEXT: x86_64.je {imm = ^[[ONE:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[CHAIN:bb[0-9]+]]
 // CHECK: ^[[ONE]]:
-// CHECK-NEXT: x86_64.mov_imm32_norex {dst = %{{[0-9]+}}:GPR32low, imm = 10}
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 10}
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
 // CHECK: ^[[TWO:bb[0-9]+]]:
-// CHECK-NEXT: x86_64.mov_imm32_norex {dst = %{{[0-9]+}}:GPR32low, imm = 20}
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 20}
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
 // CHECK: ^[[DEFAULT:bb[0-9]+]]:
-// CHECK-NEXT: x86_64.mov_imm32_norex {dst = %{{[0-9]+}}:GPR32low, imm = 30}
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 30}
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
 // CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR):
 // CHECK-NEXT: asm.vret
 // CHECK: ^[[CHAIN]]:
-// CHECK-NEXT: x86_64.cmp_imm8s32_norex {dst = %[[V0]]:GPR, imm = 2}
-// CHECK-NEXT: x86_64.je_legacy {imm = ^[[TWO]]}
+// CHECK-NEXT: x86_64.cmp_imm32 {dst = %[[V0]]:GPR, imm = 2}
+// CHECK-NEXT: x86_64.je {imm = ^[[TWO]]}
 // CHECK-NEXT: asm.vbr ^[[DEFAULT]]
 // CHECK-NOT: scf.

@@ -47,9 +47,9 @@ module {
 
 // Materializing an i8 constant defines an ordinary offset-0 value too.
 // CHECK: asm.symbol {name = "const8"
-// CHECK: x86_64.mov_imm8_norex {dst = %{{[0-9]+}}:GPR8low, imm = 7}
+// CHECK: x86_64.mov_imm8 {dst = %{{[0-9]+}}:GPR8, imm = 7}
 
 // An i32 add with a constant folds the constant into the encoding; 5 fits an
-// imm8, so the sign-extending `add_imm8s32` (3 bytes) beats `add_imm32` (6).
+// imm8, so the sign-extending `add_imm32` (3 bytes) beats `add_imm32` (6).
 // CHECK: asm.symbol {name = "imm"
-// CHECK: x86_64.add_imm8s32_norex {dst = %{{[0-9]+}}:GPR32low, dst_tied = %{{[0-9]+}}:GPR, imm = 5}
+// CHECK: x86_64.add_imm32 {dst = %{{[0-9]+}}:GPR32, dst_tied = %{{[0-9]+}}:GPR, imm = 5}

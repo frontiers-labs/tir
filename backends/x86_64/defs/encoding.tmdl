@@ -19,14 +19,40 @@ fn rex(w, reg, rm, needed) {
     }
 }
 
+// The same prefix where the ModR/M reg field holds an opcode extension rather
+// than a register, so only the r/m register can need its fourth bit.
+fn rex_rm(w, rm, needed) {
+    if w | rm[3] | needed {
+        (0b0100, w, 0b0, 0b0, rm[3])
+    } else {
+        ()
+    }
+}
+
 // ModR/M with both operands in registers: mod=11, then the two low register
 // numbers. `reg` is the /r field, `rm` the r/m field.
 fn modrm_reg(reg, rm) {
     (0b11, reg[2..0], rm[2..0])
 }
 
+// ModR/M where the reg field is an opcode extension (the /digit of a group
+// opcode) rather than a register number.
+fn modrm_ext(ext, rm) {
+    (0b11, ext, rm[2..0])
+}
+
+// Whether an immediate is the sign-extension of its own low `n` bits, i.e.
+// whether the short form of the instruction spells the same value.
+fn signed_fits(x, n) {
+    sext(x as bits<n>, width(x)) == x
+}
+
 // Whether an 8-bit operand names a register only a REX byte can reach: spl,
 // bpl, sil and dil are numbers 4..7, which without REX name ah, ch, dh and bh.
 fn needs_rex8(a, b) {
     (a ~>= 0b0100) | (b ~>= 0b0100)
+}
+
+fn needs_rex8_one(a) {
+    a ~>= 0b0100
 }
