@@ -1,10 +1,10 @@
 // RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
 
-// An indirect call whose target lands in a low register (rcx) is materialized
-// REX-free by `finalize_virtual_ops` (the call op is created after the
-// canonicalization pass, so the decision is made at creation). The stable
-// frame adjustment folds to the imm8 form and `mov eax, 0` drops its REX. Bytes
-// match GNU as throughout: call rcx -> ff d1.
+// An indirect call spells the REX byte whatever its target register is: the
+// return address it pushes is its own end, so it has one length. Everything
+// around it takes the shortest form its operands allow — the frame adjustment
+// folds to the imm8 group, `mov eax, 0` needs no REX. GNU as writes `call rcx`
+// as `ff d1`, one byte shorter; that byte buys the model a single shape.
 
 module {
   %fn_f = func.func @f(%fp: !ptr.p) -> !i64 {
@@ -22,8 +22,8 @@ module {
 // CHECK-NEXT: [0x48, 0x89, 0xF9]
 // mov eax, 0 (norex): the B8+rd form, b8 00 00 00 00.
 // CHECK-NEXT: [0xB8, 0x00, 0x00, 0x00, 0x00]
-// call rcx (REX-free): ff d1
-// CHECK-NEXT: [0xFF, 0xD1]
+// call rcx: the empty REX, then ff d1.
+// CHECK-NEXT: [0x40, 0xFF, 0xD1]
 // CHECK-NEXT: [0x48, 0x89, 0xC0]
 // CHECK-NEXT: [0x48, 0x83, 0xC4, 0x08]
 // CHECK-NEXT: [0xC3]

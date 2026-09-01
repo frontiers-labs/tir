@@ -2561,17 +2561,25 @@ fn check_pc_single_shape(
                         Some(ast::Item::RegisterClass(class)) if class.is_program_counter()))
     };
     // Writing the program counter is fine — `jmp *reg` sets it from a register
-    // whatever the encoding looks like. Reading it is not: the value a branch
-    // computes from it counts the bytes of the instruction doing the reading,
-    // and the shape decides how many those are.
+    // whatever the encoding looks like. Reading it is not: the value an
+    // instruction computes from it counts its own bytes, and the shape decides
+    // how many those are. A read is any mention outside an assignment's
+    // destination, including one buried in a call argument (`store(sp, 8,
+    // PC::pc + 3)`).
+    let mut written: Vec<Span> = Vec::new();
+    crate::utils::visit_exprs(&instruction.behavior, &mut |node| {
+        if let ast::Expr::Assign(assign) = node {
+            written.push(expr_span(&assign.dest));
+        }
+    });
     let reads_pc = {
         let mut found = false;
         crate::utils::visit_exprs(&instruction.behavior, &mut |node| {
-            let value = match node {
-                ast::Expr::Assign(assign) => &*assign.value,
-                _ => return,
-            };
-            crate::utils::visit_exprs(value, &mut |inner| found |= is_pc(inner));
+            let span = expr_span(node);
+            let destination = written
+                .iter()
+                .any(|dest| dest.start <= span.start && span.end <= dest.end);
+            found |= is_pc(node) && !destination;
         });
         found
     };

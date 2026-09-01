@@ -417,7 +417,11 @@ instruction CallIndirect for [X86_64] {
     }
 
     encoding {
-        rex_rm(0b0, target, 0b0),
+        // The REX byte is spelled even when no register needs it, so this
+        // instruction has one shape and one length. The return address it
+        // pushes is its own end, and a behavior cannot see which shape the
+        // encoder picked; an assembler would write two bytes here.
+        rex_rm(0b0, target, 0b1),
         0xFF,
         modrm_ext(0b010, target),
     }
