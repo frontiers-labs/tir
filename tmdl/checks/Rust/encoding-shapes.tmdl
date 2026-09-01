@@ -5,7 +5,7 @@
 
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
 // RUN: tmdlc --action=emit-ast-json --output=- %s | filecheck %s --check-prefix=JSON
-// RUN: not tmdlc --action=emit-smtlib --isa=ByteIsa --output=- %s 2>&1 | filecheck %s --check-prefix=SMT
+// RUN: tmdlc --action=emit-smtlib --dialect=test --isa=ByteIsa --output=- %s | filecheck %s --check-prefix=SMT
 
 isa ByteIsa {
     param XLEN: Integer = 64;
@@ -73,6 +73,14 @@ instruction MovRR for [ByteIsa] {
 // JSON:      "width": 16,
 // JSON:      "width": 24,
 
-// The symbolic emitters still describe one fixed bit map per instruction, so
-// they refuse the instruction rather than describe the first shape's bytes.
-// SMT: encoding of MovRR has more than one shape, which this emitter does not lower
+// The SMT model is the same function of the operands: the word is the shape the
+// guard picks, zero-extended into the widest, and the length comes with it.
+// SMT: (define-fun encode_movrr
+// SMT-NEXT: (ite (not (or (= ((_ extract 3 3) dst) #b1) (= ((_ extract 3 3) src) #b1))) ((_ zero_extend 8)
+// SMT: (define-fun encode_len_movrr
+// SMT-NEXT: (_ bv2 8) (_ bv3 8))
+
+// Each shape decodes on its own, the one fixing the most bits first.
+// SMT: (define-fun decode_test
+// SMT-NEXT: (= ((_ extract 7 4) word) (_ bv4 4))
+// SMT: (ite (and (= ((_ extract 7 0) word) (_ bv139 8))

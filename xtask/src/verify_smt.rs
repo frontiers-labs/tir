@@ -679,8 +679,18 @@ struct Instruction {
     uses_reservation: bool,
     pc_source_operands: Vec<usize>,
     memory_accesses: Vec<MemoryAccessMetadata>,
-    encoding: Vec<EncodingField>,
+    /// The fixed bit maps this instruction encodes to, each with the guard over
+    /// the operands that selects it. Every ISA but x86 has exactly one.
+    shapes: Vec<Shape>,
     flat_execute: Option<HashMap<String, String>>,
+}
+
+#[derive(Clone, Debug)]
+struct Shape {
+    name: String,
+    width_bits: u32,
+    guard: tmdl::shapes::Predicate,
+    encoding: Vec<EncodingField>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -719,8 +729,16 @@ struct RawInstruction {
     pc_source_operands: Vec<usize>,
     memory_accesses: Vec<MemoryAccessMetadata>,
     trap_kinds: Vec<String>,
-    encoding: Vec<RawEncodingField>,
+    shapes: Vec<RawShape>,
     flat_execute: Option<HashMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+struct RawShape {
+    name: String,
+    width_bits: u32,
+    guard: tmdl::shapes::Predicate,
+    fields: Vec<RawEncodingField>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -760,8 +778,29 @@ struct RawEncodingField {
 }
 
 impl Instruction {
-    fn width_bytes(&self) -> u32 {
-        self.width_bits / 8
+    /// The shape an operand tuple encodes to: the first whose guard holds, as
+    /// the encoder picks it. The guards partition the operand domain, so
+    /// "first" only decides which of two equal answers is taken.
+    fn shape_for(&self, case: &[u64]) -> Option<&Shape> {
+        let value = |name: &str| {
+            self.operands
+                .iter()
+                .position(|(operand, _)| operand == name)
+                .and_then(|index| case.get(index).copied())
+                .unwrap_or(0)
+        };
+        self.shapes
+            .iter()
+            .find(|shape| shape.guard.holds(&value))
+            .or(self.shapes.first())
+    }
+
+    /// The bytes one operand tuple encodes to. Shapes differ in width, and the
+    /// program counter moves by the one the encoder picked, not by the widest.
+    fn width_bytes(&self, case: &[u64]) -> u32 {
+        self.shape_for(case)
+            .map_or(self.width_bits, |shape| shape.width_bits)
+            / 8
     }
 }
 
@@ -812,27 +851,39 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
                     Ok((operand.name, kind))
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            let encoding = raw
-                .encoding
+            let shapes = raw
+                .shapes
                 .into_iter()
-                .map(|field| {
-                    let operand_index = field
-                        .operand
-                        .map(|name| {
-                            operands
-                                .iter()
-                                .position(|(operand, _)| operand == &name)
-                                .ok_or_else(|| {
-                                    anyhow!("encoding references unknown operand {name}")
+                .map(|shape| {
+                    let encoding = shape
+                        .fields
+                        .into_iter()
+                        .map(|field| {
+                            let operand_index = field
+                                .operand
+                                .map(|name| {
+                                    operands
+                                        .iter()
+                                        .position(|(operand, _)| operand == &name)
+                                        .ok_or_else(|| {
+                                            anyhow!("encoding references unknown operand {name}")
+                                        })
                                 })
+                                .transpose()?;
+                            Ok(EncodingField {
+                                word_low: field.word_low,
+                                word_high: field.word_high,
+                                operand_index,
+                                operand_low: field.operand_low,
+                                value: field.value.parse()?,
+                            })
                         })
-                        .transpose()?;
-                    Ok(EncodingField {
-                        word_low: field.word_low,
-                        word_high: field.word_high,
-                        operand_index,
-                        operand_low: field.operand_low,
-                        value: field.value.parse()?,
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    Ok(Shape {
+                        name: shape.name,
+                        width_bits: shape.width_bits,
+                        guard: shape.guard,
+                        encoding,
                     })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
@@ -846,7 +897,7 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
                 uses_reservation: raw.uses_reservation,
                 pc_source_operands: raw.pc_source_operands,
                 memory_accesses: raw.memory_accesses,
-                encoding,
+                shapes,
                 flat_execute: raw.flat_execute,
             })
         })
@@ -1058,14 +1109,19 @@ fn encode_words(instr: &Instruction, cases: &[Vec<u64>]) -> Vec<u128> {
     cases
         .iter()
         .map(|case| {
-            instr.encoding.iter().fold(0u128, |word, field| {
-                let width = field.word_high - field.word_low + 1;
-                let source = field
-                    .operand_index
-                    .map_or(field.value, |index| u128::from(case[index]));
-                let piece = (source >> field.operand_low) & bit_mask(width);
-                word | (piece << field.word_low)
-            })
+            instr
+                .shape_for(case)
+                .map(|shape| shape.encoding.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .fold(0u128, |word, field| {
+                    let width = field.word_high - field.word_low + 1;
+                    let source = field
+                        .operand_index
+                        .map_or(field.value, |index| u128::from(case[index]));
+                    let piece = (source >> field.operand_low) & bit_mask(width);
+                    word | (piece << field.word_low)
+                })
         })
         .collect()
 }
@@ -1074,12 +1130,17 @@ fn encode_words(instr: &Instruction, cases: &[Vec<u64>]) -> Vec<u128> {
 /// equivalence check uses what the encoding can express: lossy immediate
 /// fields drop bits (branch immediates force bit 0, ARM unsigned-offset
 /// loads/stores store the byte offset scaled down by the access size).
-fn decode_operands(instr: &Instruction, words: &[u128]) -> Vec<Vec<u64>> {
-    words
+fn decode_operands(instr: &Instruction, cases: &[Vec<u64>], words: &[u128]) -> Vec<Vec<u64>> {
+    cases
         .iter()
-        .map(|word| {
+        .zip(words)
+        .map(|(case, word)| {
             let mut operands = vec![0u64; instr.operands.len()];
-            for field in &instr.encoding {
+            for field in instr
+                .shape_for(case)
+                .map(|shape| shape.encoding.as_slice())
+                .unwrap_or_default()
+            {
                 let Some(index) = field.operand_index else {
                     continue;
                 };
@@ -1115,8 +1176,7 @@ fn cache_fingerprint(tools: &Tools) -> u64 {
 fn sail_traces(
     tools: &Tools,
     out_dir: &Path,
-    instr: &Instruction,
-    words: &[u128],
+    words: &[(u128, u32)],
 ) -> anyhow::Result<HashMap<u128, Option<Vec<Vec<tir_verify::TraceEvent>>>>> {
     let fingerprint = cache_fingerprint(tools);
     let cache_path = |word| {
@@ -1126,7 +1186,8 @@ fn sail_traces(
     };
     let mut result = HashMap::new();
     let mut missing = Vec::new();
-    for &word in words {
+    let mut widths = Vec::new();
+    for &(word, width) in words {
         if result.contains_key(&word) {
             continue;
         }
@@ -1134,11 +1195,13 @@ fn sail_traces(
             Ok(json) => {
                 result.insert(word, Some(serde_json::from_slice(&json)?));
             }
-            Err(_) => missing.push(word),
+            Err(_) => {
+                missing.push(word);
+                widths.push(width);
+            }
         }
     }
     if !missing.is_empty() {
-        let widths = vec![instr.width_bits; missing.len()];
         let mut executed = tools.verifier.execute(&missing, &widths)?;
         for word in missing {
             let traces = executed.remove(&word);
@@ -1539,7 +1602,7 @@ fn build_query(
     // Fixed-width ISAs align the PC to the concrete instruction width. x86
     // pins the PC to a concrete aligned value in its config instead.
     if spec.align_pc {
-        let alignment_bits = instr.width_bytes().trailing_zeros();
+        let alignment_bits = instr.width_bytes(case).trailing_zeros();
         if alignment_bits > 0 {
             let _ = writeln!(
                 q,
@@ -1574,7 +1637,7 @@ fn build_query(
     } else {
         // Registers feeding an indirect jump obey the target instruction
         // alignment, so misaligned-fetch trap paths are vacuous.
-        let alignment_bits = instr.width_bytes().trailing_zeros();
+        let alignment_bits = instr.width_bytes(case).trailing_zeros();
         for &i in &instr.pc_source_operands {
             if let OperandKind::Reg { class, idx_width } = &instr.operands[i].1 {
                 let reg = flat_read_register(
@@ -1600,7 +1663,7 @@ fn build_query(
         q.push('\n');
     }
     let gw = spec.gpr_idx_width();
-    let width_bytes = instr.width_bytes();
+    let width_bytes = instr.width_bytes(case);
     let slot_access = |i: usize, state: &str| {
         let (_, class, slot, w) = spec.extra_regs[i];
         flat_read_register(model, class, state, &format!("(_ bv{} {})", slot, w))
@@ -1883,6 +1946,8 @@ impl Report {
 struct InstructionTiming {
     instruction: String,
     cases: usize,
+    /// Cases per encoding shape. A zero here is a shape nothing verified.
+    shape_cases: Vec<(String, usize)>,
     paths: usize,
     encode_ms: u128,
     decode_ms: u128,
@@ -1909,15 +1974,38 @@ fn verify_instruction(
         .filter(|case| operand_case_is_valid(spec, instr, case))
         .collect::<Vec<_>>();
     timing.cases = cases.len();
+    // Every shape is its own encoding of the instruction, so the report counts
+    // the cases each one covers: a shape no case reaches is unverified, however
+    // many cases the instruction has.
+    timing.shape_cases = instr
+        .shapes
+        .iter()
+        .map(|shape| {
+            let covered = cases
+                .iter()
+                .filter(|case| {
+                    instr
+                        .shape_for(case)
+                        .is_some_and(|held| std::ptr::eq(held, shape))
+                })
+                .count();
+            (shape.name.clone(), covered)
+        })
+        .collect();
     let started = Instant::now();
     let words = encode_words(instr, &cases);
     timing.encode_ms = started.elapsed().as_millis();
+    let word_widths: Vec<(u128, u32)> = cases
+        .iter()
+        .zip(&words)
+        .map(|(case, word)| (*word, instr.width_bytes(case) * 8))
+        .collect();
     let decode_started = Instant::now();
-    let cases = decode_operands(instr, &words);
+    let cases = decode_operands(instr, &cases, &words);
     timing.decode_ms = decode_started.elapsed().as_millis();
     let mut line = String::new();
     let isla_started = Instant::now();
-    let traces_by_word = sail_traces(tools, out_dir, instr, &words)?;
+    let traces_by_word = sail_traces(tools, out_dir, &word_widths)?;
     timing.isla_ms = isla_started.elapsed().as_millis();
 
     for (case, word) in cases.iter().zip(&words) {
@@ -2170,10 +2258,13 @@ mod tests {
             "uses_reservation": false, "pc_source_operands": [],
             "memory_accesses": [{"kind": "load", "bytes": 4, "address": "(read_gpr st rd)", "flat_address": "(select st0_gpr rd)"}],
             "trap_kinds": ["misaligned_load"],
-            "encoding": [
-              {"word_low": 7, "word_high": 11, "operand": "rd", "operand_low": 0, "value": "0"},
-              {"word_low": 0, "word_high": 6, "operand": null, "operand_low": 0, "value": "3"}
-            ],
+            "shapes": [{
+              "name": "load", "width_bits": 32, "guard": "always",
+              "fields": [
+                {"word_low": 7, "word_high": 11, "operand": "rd", "operand_low": 0, "value": "0"},
+                {"word_low": 0, "word_high": 6, "operand": null, "operand_low": 0, "value": "3"}
+              ]
+            }],
             "execute": "(write_gpr st rd (_ bv0 64))",
             "flat_execute": {"gpr": "st0_gpr", "mem": "st0_mem", "resv": "st0_resv", "resa": "st0_resa", "pc": "st0_pc"}
           }]
@@ -2195,9 +2286,10 @@ mod tests {
             instruction.memory_accesses[0].flat_address,
             "(select st0_gpr rd)"
         );
-        let words = encode_words(instruction, &[vec![5, 0]]);
+        let cases = [vec![5, 0]];
+        let words = encode_words(instruction, &cases);
         assert_eq!(words, [5 << 7 | 3]);
-        assert_eq!(decode_operands(instruction, &words)[0][0], 5);
+        assert_eq!(decode_operands(instruction, &cases, &words)[0][0], 5);
     }
 
     // A boundary case the operand's `#[align]`/`#[nonzero]` exclude is not a
@@ -2261,7 +2353,7 @@ mod tests {
             uses_reservation: false,
             pc_source_operands: vec![],
             memory_accesses: vec![],
-            encoding: vec![],
+            shapes: vec![],
             flat_execute: Some(HashMap::new()),
         };
         let trace = analyze_trace(

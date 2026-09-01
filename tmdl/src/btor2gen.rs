@@ -24,7 +24,7 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    behavior_uses_todo, first_encoding_shape_arms, isa_param_values, item_supports_isa,
+    EncodingShape, behavior_uses_todo, get_encoding_shapes, isa_param_values, item_supports_isa,
     parse_literal_value, resolve_isa_param_values, resolve_operand_widths,
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
@@ -585,6 +585,7 @@ type Pieces = HashMap<String, Vec<(u16, u16, u16, u16)>>;
 /// Collect fixed-field guards and per-operand bit pieces from the encoding,
 /// mirroring `smtlibgen::build_decoder`.
 fn decode_layout(
+    shape: &EncodingShape,
     instruction: &ast::Instruction,
     item_cache: &HashMap<&str, &ast::Item>,
     operands: &HashMap<String, Type>,
@@ -593,7 +594,7 @@ fn decode_layout(
     let mut guards = Vec::new();
     let mut pieces: Pieces = HashMap::new();
 
-    for arm in first_encoding_shape_arms(instruction, item_cache) {
+    for arm in &shape.arms {
         let word_lo = arm.start;
         let word_hi = arm.end.unwrap_or(arm.start);
         match &arm.value {
@@ -723,17 +724,18 @@ struct PreparedInstruction<'a> {
     operands: Vec<(String, Type)>,
     behavior: sem_expr_state::BehaviorGraph,
     source_operands: Vec<String>,
-    width: u16,
+    shapes: Vec<EncodingShape>,
 }
 
-fn instruction_width(
-    instruction: &ast::Instruction,
-    item_cache: &HashMap<&str, &ast::Item>,
-) -> Option<u16> {
-    first_encoding_shape_arms(instruction, item_cache)
-        .into_iter()
+/// The bits one shape spells, which is how far the program counter moves when
+/// the decoder matches it.
+fn shape_width(shape: &EncodingShape) -> u16 {
+    shape
+        .arms
+        .iter()
         .map(|arm| arm.end.unwrap_or(arm.start) + 1)
         .max()
+        .unwrap_or_default()
 }
 
 pub fn generate_btor2<'a>(
@@ -828,9 +830,10 @@ pub fn generate_btor2<'a>(
         {
             continue;
         }
-        let Some(width) = instruction_width(instruction, item_cache) else {
+        let shapes = get_encoding_shapes(instruction, item_cache);
+        if shapes.is_empty() {
             continue;
-        };
+        }
         let operands = resolved_operands(&ctx, instruction, item_cache);
         let mut numeric_params = resolve_isa_param_values(instruction, item_cache);
         numeric_params.extend(
@@ -874,12 +877,12 @@ pub fn generate_btor2<'a>(
             operands,
             behavior,
             source_operands,
-            width,
+            shapes,
         });
     }
     let word_width = prepared
         .iter()
-        .map(|instruction| instruction.width)
+        .flat_map(|instruction| instruction.shapes.iter().map(shape_width))
         .max()
         .unwrap_or(8);
     let source_count = prepared
@@ -911,110 +914,122 @@ pub fn generate_btor2<'a>(
     let valid = b.input(1, "valid");
 
     let mut specs: Vec<(String, Bv, PostState)> = Vec::new();
-    for prepared in prepared {
+    for prepared in &prepared {
         let PreparedInstruction {
             instruction: inst,
             operands: operand_list,
             behavior: behavior_graph,
             source_operands,
-            width,
+            shapes,
         } = prepared;
         let operands: HashMap<String, Type> = operand_list.iter().cloned().collect();
-        let (guards, pieces) = decode_layout(inst, item_cache, &operands);
         let source_positions: HashMap<String, usize> = source_operands
-            .into_iter()
+            .iter()
+            .cloned()
             .enumerate()
             .map(|(index, name)| (name, index))
             .collect();
 
-        // Decode operand addresses and immediates. Register values used by the
-        // behavior come from ordered source slots in operand declaration order.
-        let mut operand_vals = HashMap::new();
-        let mut operand_addrs = HashMap::new();
-        let mut spare_guards: Vec<Bv> = Vec::new();
-        for (name, ty) in &operand_list {
-            let lname = name.to_lowercase();
-            match ty {
-                Type::Struct(rc) if ctx.pc_classes.contains(&rc.to_lowercase()) => {}
-                Type::Struct(rc) => {
-                    let (addr, guard) = decode_operand(
-                        &mut b,
-                        insn,
-                        pieces.get(name).cloned().unwrap_or_default(),
-                        ctx.idx_width(rc),
-                    );
-                    spare_guards.extend(guard);
-                    operand_addrs.insert(lname.clone(), (addr, rc.clone()));
-                    if let Some(index) = source_positions.get(name) {
-                        operand_vals.insert(
-                            lname,
-                            b.fit(source_values[*index], ctx.val_width(rc) as u32),
+        // A shape is a fixed bit map, so each is its own decode arm over the
+        // same fully symbolic word: same behavior, its own fixed bits, operand
+        // pieces and width.
+        for (shape_index, shape) in shapes.iter().enumerate() {
+            let width = shape_width(shape);
+            let (guards, pieces) = decode_layout(shape, inst, item_cache, &operands);
+
+            // Decode operand addresses and immediates. Register values used by the
+            // behavior come from ordered source slots in operand declaration order.
+            let mut operand_vals = HashMap::new();
+            let mut operand_addrs = HashMap::new();
+            let mut spare_guards: Vec<Bv> = Vec::new();
+            for (name, ty) in operand_list {
+                let lname = name.to_lowercase();
+                match ty {
+                    Type::Struct(rc) if ctx.pc_classes.contains(&rc.to_lowercase()) => {}
+                    Type::Struct(rc) => {
+                        let (addr, guard) = decode_operand(
+                            &mut b,
+                            insn,
+                            pieces.get(name).cloned().unwrap_or_default(),
+                            ctx.idx_width(rc),
                         );
+                        spare_guards.extend(guard);
+                        operand_addrs.insert(lname.clone(), (addr, rc.clone()));
+                        if let Some(index) = source_positions.get(name) {
+                            operand_vals.insert(
+                                lname,
+                                b.fit(source_values[*index], ctx.val_width(rc) as u32),
+                            );
+                        }
                     }
+                    Type::Bits(n) => {
+                        let (v, guard) = decode_operand(
+                            &mut b,
+                            insn,
+                            pieces.get(name).cloned().unwrap_or_default(),
+                            *n,
+                        );
+                        spare_guards.extend(guard);
+                        operand_vals.insert(lname, v);
+                    }
+                    _ => {}
                 }
-                Type::Bits(n) => {
-                    let (v, guard) = decode_operand(
-                        &mut b,
-                        insn,
-                        pieces.get(name).cloned().unwrap_or_default(),
-                        *n,
-                    );
-                    spare_guards.extend(guard);
-                    operand_vals.insert(lname, v);
-                }
-                _ => {}
             }
-        }
 
-        let mut guard = build_guard(&mut b, insn, &guards);
-        for sg in spare_guards {
-            guard = b.binary("and", guard, sg, false);
-        }
-        if width < word_width {
-            let high = b.slice(insn, word_width as u32 - 1, width as u32);
-            let zero = b.constant(high.width, 0);
-            let high_clear = b.compare("eq", high, zero);
-            guard = b.binary("and", guard, high_clear, false);
-        }
+            let mut guard = build_guard(&mut b, insn, &guards);
+            for sg in spare_guards {
+                guard = b.binary("and", guard, sg, false);
+            }
+            if width < word_width {
+                let high = b.slice(insn, word_width as u32 - 1, width as u32);
+                let zero = b.constant(high.width, 0);
+                let high_clear = b.compare("eq", high, zero);
+                guard = b.binary("and", guard, high_clear, false);
+            }
 
-        let step = b.constant(x, u64::from(width.div_ceil(8)));
-        let fallthrough = b.binary("add", pc, step, false);
+            let step = b.constant(x, u64::from(width.div_ceil(8)));
+            let fallthrough = b.binary("add", pc, step, false);
 
-        let init = PostState {
-            dst_we: b.constant(1, 0),
-            dst_val: b.constant(x, 0),
-            dst_addr: b.constant(idx_w, 0),
-            next_pc: fallthrough,
-        };
+            let init = PostState {
+                dst_we: b.constant(1, 0),
+                dst_val: b.constant(x, 0),
+                dst_addr: b.constant(idx_w, 0),
+                next_pc: fallthrough,
+            };
 
-        let checker = Checker {
-            ctx: &ctx,
-            operands,
-            operand_vals,
-            operand_addrs,
-            behavior: &behavior_graph,
-            pc,
-            b: RefCell::new(&mut b),
-            failed: Cell::new(false),
-        };
-        let post = sem_expr_state::fold_behavior(&behavior_graph, &init, &checker);
-        if checker.failed.get() {
-            continue;
+            let checker = Checker {
+                ctx: &ctx,
+                operands: operands.clone(),
+                operand_vals,
+                operand_addrs,
+                behavior: behavior_graph,
+                pc,
+                b: RefCell::new(&mut b),
+                failed: Cell::new(false),
+            };
+            let post = sem_expr_state::fold_behavior(behavior_graph, &init, &checker);
+            if checker.failed.get() {
+                continue;
+            }
+            drop(checker);
+            // Normalize destination views to the retirement ABI widths. Narrow
+            // register views report the value written through that view, zero
+            // extended to XLEN; they do not report preserved backing-file bits.
+            let post = PostState {
+                dst_addr: b.fit(post.dst_addr, idx_w),
+                dst_val: if post.dst_val.width > x {
+                    b.slice(post.dst_val, x - 1, 0)
+                } else {
+                    b.widen(post.dst_val, x, false)
+                },
+                ..post
+            };
+            let name = match shapes.len() {
+                1 => inst.name.clone(),
+                _ => format!("{}#{shape_index}", inst.name),
+            };
+            specs.push((name, guard, post));
         }
-        drop(checker);
-        // Normalize destination views to the retirement ABI widths. Narrow
-        // register views report the value written through that view, zero
-        // extended to XLEN; they do not report preserved backing-file bits.
-        let post = PostState {
-            dst_addr: b.fit(post.dst_addr, idx_w),
-            dst_val: if post.dst_val.width > x {
-                b.slice(post.dst_val, x - 1, 0)
-            } else {
-                b.widen(post.dst_val, x, false)
-            },
-            ..post
-        };
-        specs.push((inst.name.clone(), guard, post));
     }
 
     for (name, _, _) in &specs {

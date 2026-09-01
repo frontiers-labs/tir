@@ -305,20 +305,6 @@ pub fn get_encoding_shapes<'a>(
         .collect()
 }
 
-/// The bit ranges of an instruction's first encoding shape, for the emitters
-/// that still lower one fixed bit map per instruction (the SMT, BTOR2 and
-/// markdown backends; the Rust backend lowers every shape).
-pub fn first_encoding_shape_arms<'a>(
-    instruction: &'a Instruction,
-    item_cache: &HashMap<&'a str, &'a Item>,
-) -> Vec<ast::EncodingArm> {
-    get_encoding_shapes(instruction, item_cache)
-        .into_iter()
-        .next()
-        .map(|shape| shape.arms)
-        .unwrap_or_default()
-}
-
 pub fn resolve_params_for_instruction<'a>(
     inst: &'a ast::Instruction,
     cache: &HashMap<&'a str, &'a ast::Item>,
@@ -417,6 +403,34 @@ pub fn item_supports_isa<'a>(
     for_isas
         .iter()
         .any(|isa| supports(isa, target, item_cache, &mut HashSet::new()))
+}
+
+/// Whether `target` is `isa` or requires it, transitively: what an ISA's world
+/// contains. [`item_supports_isa`] asks the opposite question — whether an item
+/// declared for one ISA is reachable from another — and an `requires [A, B]`
+/// list holds for it only when every entry does.
+pub fn isa_includes<'a>(target: &str, isa: &str, item_cache: &HashMap<&'a str, &'a Item>) -> bool {
+    let mut pending = std::collections::VecDeque::from([target]);
+    let mut visited: HashSet<&str> = HashSet::new();
+    while let Some(name) = pending.pop_front() {
+        if name == isa {
+            return true;
+        }
+        if !visited.insert(name) {
+            continue;
+        }
+        let Some(Item::Isa(item)) = item_cache.get(name) else {
+            continue;
+        };
+        match &item.requires {
+            None => {}
+            Some(ast::IsaRequirement::Single(parent)) => pending.push_back(parent),
+            Some(ast::IsaRequirement::Any(parents) | ast::IsaRequirement::All(parents)) => {
+                pending.extend(parents.iter().map(String::as_str))
+            }
+        }
+    }
+    false
 }
 
 /// Parameter values visible from `target`: its own parameters and those

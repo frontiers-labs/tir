@@ -58,6 +58,324 @@ impl Guard {
     }
 }
 
+/// A guard as the tests it makes, with nothing left of how they were spelled.
+///
+/// The encoder, the SMT model and the checker all have to ask the same question
+/// of the same operand, so the question is read out of the source once, here,
+/// and each of them renders this. A test no encoder can answer is an error at
+/// expansion time rather than three separate refusals downstream.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Predicate {
+    Always,
+    Not(Box<Predicate>),
+    And(Vec<Predicate>),
+    Or(Vec<Predicate>),
+    /// One bit of an operand's encoded pattern.
+    Bit {
+        op: String,
+        bit: u16,
+    },
+    SliceEq {
+        op: String,
+        lo: u16,
+        hi: u16,
+        value: u128,
+    },
+    /// The operand against a constant, both read at `cmp_width` bits.
+    Cmp {
+        op: String,
+        width: u16,
+        cmp_width: u16,
+        cmp: CmpOp,
+        value: i128,
+    },
+    /// Whether the operand's value survives a round trip through `bits`, which
+    /// is what an encoding asks before spelling a narrower field. An operand
+    /// still waiting for a fixup answers no, so the widest shape takes it.
+    Fits {
+        op: String,
+        width: u16,
+        bits: u16,
+        signed: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    ULt,
+    ULe,
+    UGt,
+    UGe,
+}
+
+impl Predicate {
+    /// Whether the guard holds when each operand spells the pattern `value`
+    /// gives for it. Every value is known here, which is what a verifier
+    /// building concrete words has; the encoder's own evaluation is
+    /// three-valued because a fixup is not resolved yet.
+    pub fn holds(&self, value: &impl Fn(&str) -> u64) -> bool {
+        let read = |op: &str, width: u16| value(op) & mask(width);
+        match self {
+            Predicate::Always => true,
+            Predicate::Not(inner) => !inner.holds(value),
+            Predicate::And(parts) => parts.iter().all(|part| part.holds(value)),
+            Predicate::Or(parts) => parts.iter().any(|part| part.holds(value)),
+            Predicate::Bit { op, bit } => shift_right(value(op), u64::from(*bit)) & 1 == 1,
+            Predicate::SliceEq { op, lo, hi, value } => {
+                u128::from(shift_right(read(op, hi + 1), u64::from(*lo))) == *value
+            }
+            Predicate::Cmp {
+                op,
+                width,
+                cmp_width,
+                cmp,
+                value,
+            } => {
+                let sign = |v: u64| -> i128 {
+                    match *cmp_width < 64 && v & (1 << (cmp_width - 1)) != 0 {
+                        true => i128::from(v) - (1i128 << cmp_width),
+                        false => i128::from(v),
+                    }
+                };
+                let held = read(op, *width);
+                let value = *value & (mask(*cmp_width) as i128);
+                match cmp {
+                    CmpOp::Eq => i128::from(held) == value,
+                    CmpOp::Ne => i128::from(held) != value,
+                    CmpOp::Lt => sign(held) < sign(value as u64),
+                    CmpOp::Le => sign(held) <= sign(value as u64),
+                    CmpOp::Gt => sign(held) > sign(value as u64),
+                    CmpOp::Ge => sign(held) >= sign(value as u64),
+                    CmpOp::ULt => i128::from(held) < value,
+                    CmpOp::ULe => i128::from(held) <= value,
+                    CmpOp::UGt => i128::from(held) > value,
+                    CmpOp::UGe => i128::from(held) >= value,
+                }
+            }
+            Predicate::Fits {
+                op,
+                width,
+                bits,
+                signed,
+            } => {
+                let held = read(op, *width);
+                let kept = read(op, *bits);
+                let extended = match *signed && kept & (1 << (bits - 1)) != 0 {
+                    true => kept | (mask(*width) & !mask(*bits)),
+                    false => kept,
+                };
+                extended == held
+            }
+        }
+    }
+}
+
+impl CmpOp {
+    /// The name of the matching `tir::backend::binary::CmpOp` variant.
+    pub fn name(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "Eq",
+            CmpOp::Ne => "Ne",
+            CmpOp::Lt => "Lt",
+            CmpOp::Le => "Le",
+            CmpOp::Gt => "Gt",
+            CmpOp::Ge => "Ge",
+            CmpOp::ULt => "ULt",
+            CmpOp::ULe => "ULe",
+            CmpOp::UGt => "UGt",
+            CmpOp::UGe => "UGe",
+        }
+    }
+
+    /// Whether the comparison reads both sides as signed.
+    pub fn signed(self) -> bool {
+        matches!(self, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge)
+    }
+}
+
+/// The tests a shape's guard makes, or why one of them is not a test the
+/// operands answer.
+pub fn lower_guard(guard: &Guard, ctx: &Context) -> Result<Predicate, String> {
+    let mut clauses = Vec::new();
+    for clause in &guard.0 {
+        let mut literals = Vec::new();
+        for literal in clause {
+            let cond = lower_cond(&literal.cond, ctx)?;
+            literals.push(match literal.value {
+                true => cond,
+                false => Predicate::Not(Box::new(cond)),
+            });
+        }
+        // Nothing left to test: this shape holds for every operand tuple.
+        if literals.is_empty() {
+            return Ok(Predicate::Always);
+        }
+        clauses.push(match literals.len() {
+            1 => literals.remove(0),
+            _ => Predicate::And(literals),
+        });
+    }
+    Ok(match clauses.len() {
+        0 => Predicate::Always,
+        1 => clauses.remove(0),
+        _ => Predicate::Or(clauses),
+    })
+}
+
+fn lower_cond(cond: &ast::Expr, ctx: &Context) -> Result<Predicate, String> {
+    let unsupported = || {
+        format!(
+            "condition in the encoding of '{}' is not a test the encoder can make \
+             of an operand",
+            ctx.owner
+        )
+    };
+    if let Some((op, bit, set)) = operand_bit(cond, ctx) {
+        let test = Predicate::Bit {
+            op: op.to_string(),
+            bit,
+        };
+        return Ok(match set {
+            true => test,
+            false => Predicate::Not(Box::new(test)),
+        });
+    }
+    match cond {
+        ast::Expr::Unary(unary) => Ok(Predicate::Not(Box::new(lower_cond(&unary.x, ctx)?))),
+        ast::Expr::Binary(binary) => {
+            let (lhs, rhs) = (&*binary.lhs, &*binary.rhs);
+            match &binary.op {
+                ast::BinOp::BitwiseAnd => Ok(Predicate::And(vec![
+                    lower_cond(lhs, ctx)?,
+                    lower_cond(rhs, ctx)?,
+                ])),
+                ast::BinOp::BitwiseOr => Ok(Predicate::Or(vec![
+                    lower_cond(lhs, ctx)?,
+                    lower_cond(rhs, ctx)?,
+                ])),
+                op => {
+                    let (literal, operand, flipped) = match (int_literal(lhs), int_literal(rhs)) {
+                        (Some(literal), None) => (literal, rhs, true),
+                        (None, Some(literal)) => (literal, lhs, false),
+                        _ => return Err(unsupported()),
+                    };
+                    lower_comparison(op, operand, literal, flipped, ctx)
+                }
+            }
+        }
+        _ => Err(unsupported()),
+    }
+}
+
+/// A comparison of an operand, or a slice of one, against a constant.
+fn lower_comparison(
+    op: &ast::BinOp,
+    operand: &ast::Expr,
+    literal: &ast::LitInt,
+    flipped: bool,
+    ctx: &Context,
+) -> Result<Predicate, String> {
+    let unsupported = || {
+        format!(
+            "condition in the encoding of '{}' compares something other than an \
+             operand against a constant",
+            ctx.owner
+        )
+    };
+    let value = parse_literal_value(literal);
+    // A slice test is a test of its own: `base[hi..lo] == k`.
+    if matches!(op, ast::BinOp::Equal | ast::BinOp::NotEqual)
+        && let ast::Expr::Slice(slc) = operand
+        && let ast::Expr::Ident(id) = &*slc.base
+        && ctx.operand_width(&id.name).is_some()
+    {
+        let test = Predicate::SliceEq {
+            op: id.name.clone(),
+            lo: slc.lo,
+            hi: slc.hi,
+            value: u128::from(value),
+        };
+        return Ok(match op {
+            ast::BinOp::NotEqual => Predicate::Not(Box::new(test)),
+            _ => test,
+        });
+    }
+    let ast::Expr::Ident(id) = operand else {
+        return Err(unsupported());
+    };
+    let Some(width) = ctx.operand_width(&id.name) else {
+        return Err(unsupported());
+    };
+    let cmp = match (op, flipped) {
+        (ast::BinOp::Equal, _) => CmpOp::Eq,
+        (ast::BinOp::NotEqual, _) => CmpOp::Ne,
+        (ast::BinOp::LessThan, false) | (ast::BinOp::GreaterThan, true) => CmpOp::Lt,
+        (ast::BinOp::LessThenEqual, false) | (ast::BinOp::GreaterThanEqual, true) => CmpOp::Le,
+        (ast::BinOp::GreaterThan, false) | (ast::BinOp::LessThan, true) => CmpOp::Gt,
+        (ast::BinOp::GreaterThanEqual, false) | (ast::BinOp::LessThenEqual, true) => CmpOp::Ge,
+        (ast::BinOp::UnsignedLessThan, false) | (ast::BinOp::UnsignedGreaterThan, true) => {
+            CmpOp::ULt
+        }
+        (ast::BinOp::UnsignedLessThenEqual, false)
+        | (ast::BinOp::UnsignedGreaterThanEqual, true) => CmpOp::ULe,
+        (ast::BinOp::UnsignedGreaterThan, false) | (ast::BinOp::UnsignedLessThan, true) => {
+            CmpOp::UGt
+        }
+        (ast::BinOp::UnsignedGreaterThanEqual, false)
+        | (ast::BinOp::UnsignedLessThenEqual, true) => CmpOp::UGe,
+        _ => return Err(unsupported()),
+    };
+    // The operand is read as its declared bit pattern, and both sides are then
+    // compared at the width the shape expansion used: the wider of the operand
+    // and the literal as spelled (a decimal literal has no width, and is read
+    // as 64 bits).
+    Ok(Predicate::Cmp {
+        op: id.name.clone(),
+        width,
+        cmp_width: width.max(literal_width(literal.value()).unwrap_or(64)),
+        cmp,
+        value: i128::from(value),
+    })
+}
+
+/// The operand, bit and polarity a condition tests, for `x[bit]` and
+/// `x[bit] == 0` / `x[bit] == 1`.
+fn operand_bit<'a>(cond: &'a ast::Expr, ctx: &Context) -> Option<(&'a str, u16, bool)> {
+    let (base, index, set) = match cond {
+        ast::Expr::IndexAccess(idx) => (&idx.base, idx.index, true),
+        ast::Expr::Binary(binary) if binary.op == ast::BinOp::Equal => {
+            let value = int_literal(&binary.rhs).map(parse_literal_value)?;
+            match (&*binary.lhs, value) {
+                (ast::Expr::IndexAccess(idx), 0) => (&idx.base, idx.index, false),
+                (ast::Expr::IndexAccess(idx), 1) => (&idx.base, idx.index, true),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    match &**base {
+        ast::Expr::Ident(id) if ctx.operand_width(&id.name).is_some() => {
+            Some((&id.name, index, set))
+        }
+        _ => None,
+    }
+}
+
+fn int_literal(expr: &ast::Expr) -> Option<&ast::LitInt> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Int(li)) => Some(li),
+        _ => None,
+    }
+}
+
 /// One fixed bit map of an encoding: the fields it spells, high bit first, and
 /// the guard that picks it.
 #[derive(Debug, Clone, PartialEq)]

@@ -12,7 +12,7 @@ mod parser;
 mod rustgen;
 mod sem_expr_state;
 mod sema;
-mod shapes;
+pub mod shapes;
 mod smtlibgen;
 mod typeck;
 mod types;

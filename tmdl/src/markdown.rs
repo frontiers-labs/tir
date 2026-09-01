@@ -10,7 +10,7 @@ use crate::ast::{
 };
 use crate::error::TMDLError;
 use crate::utils::{
-    first_encoding_shape_arms, resolve_effective_asm_for_instruction,
+    get_encoding_shapes, resolve_effective_asm_for_instruction,
     resolve_effective_schedule_for_instruction, resolve_operands_for_instruction,
     resolve_params_for_instruction,
 };
@@ -325,10 +325,26 @@ fn write_instructions(
                 writeln!(output, "\n**Scheduling class:** {classes}")?;
             }
 
-            let mut encoding = first_encoding_shape_arms(instruction, item_cache);
-            encoding.sort_by_key(|arm| std::cmp::Reverse(arm.end.unwrap_or(arm.start)));
-            if !encoding.is_empty() {
-                writeln!(output, "\n**Encoding**\n")?;
+            // One table per shape: an encoding with a condition spells more
+            // than one bit map, and the guard says which.
+            let shapes = get_encoding_shapes(instruction, item_cache);
+            let single = shapes.len() == 1;
+            for (index, shape) in shapes.into_iter().enumerate() {
+                let mut encoding = shape.arms;
+                encoding.sort_by_key(|arm| std::cmp::Reverse(arm.end.unwrap_or(arm.start)));
+                if encoding.is_empty() {
+                    continue;
+                }
+                match single {
+                    true => writeln!(output, "\n**Encoding**\n")?,
+                    false => writeln!(
+                        output,
+                        "\n**Encoding {} ({} bytes), when {}**\n",
+                        index + 1,
+                        shape.width_bits.div_ceil(8),
+                        format_guard(&shape.guard)
+                    )?,
+                }
                 writeln!(output, "| Bits | Value |")?;
                 writeln!(output, "| --- | --- |")?;
                 for arm in encoding {
@@ -518,6 +534,25 @@ fn format_type(ty: &Type) -> String {
             format!("{name}<{arguments}>")
         }
     }
+}
+
+/// The condition under which a shape is the encoding, as the source spelled it.
+fn format_guard(guard: &crate::shapes::Guard) -> String {
+    guard
+        .0
+        .iter()
+        .map(|clause| {
+            clause
+                .iter()
+                .map(|literal| match literal.value {
+                    true => format!("`{}`", format_expr(&literal.cond)),
+                    false => format!("not `{}`", format_expr(&literal.cond)),
+                })
+                .collect::<Vec<_>>()
+                .join(" and ")
+        })
+        .collect::<Vec<_>>()
+        .join(", or ")
 }
 
 fn format_expr(expr: &Expr) -> String {

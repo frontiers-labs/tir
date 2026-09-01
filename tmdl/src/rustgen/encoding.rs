@@ -136,209 +136,86 @@ fn lower_shape(
 
 /// The runtime guard that selects `shape`, as a `tir::backend::binary::Guard`.
 ///
-/// A shape's guard is a disjunction of conjunctions over the encoding's `if`
-/// conditions. Only tests the operands answer are left by then: the shape
-/// expansion has already taken every branch the instruction's parameters
-/// decide.
+/// The tests themselves are read out of the encoding by `shapes::lower_guard`;
+/// this renders them. Only tests the operands answer are left by then: the
+/// shape expansion has already taken every branch the parameters decide.
 fn emit_guard(
     inst: &ast::Instruction,
     shape: &EncodingShape,
     ctx: &crate::shapes::Context,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
-    let mut clauses = Vec::new();
-    for clause in &shape.guard.0 {
-        let mut literals = Vec::new();
-        for literal in clause {
-            let cond = emit_condition(inst, &literal.cond, ctx)?;
-            literals.push(match literal.value {
-                true => cond,
-                false => quote! { tir::backend::binary::Guard::Not(&#cond) },
-            });
-        }
-        // Nothing left to test: this shape holds for every operand tuple.
-        if literals.is_empty() {
-            return Ok(quote! { tir::backend::binary::Guard::True });
-        }
-        clauses.push(match literals.len() {
-            1 => literals.remove(0),
-            _ => quote! { tir::backend::binary::Guard::And(&[#(#literals),*]) },
-        });
-    }
-    Ok(match clauses.len() {
-        0 => quote! { tir::backend::binary::Guard::True },
-        1 => clauses.remove(0),
-        _ => quote! { tir::backend::binary::Guard::Or(&[#(#clauses),*]) },
-    })
+    let predicate = crate::shapes::lower_guard(&shape.guard, ctx).map_err(|reason| {
+        TMDLError::Codegen(format!("instruction '{}': {reason}", inst.name))
+    })?;
+    Ok(emit_predicate(&predicate))
 }
 
-/// One encoding condition as a runtime guard over the operand values.
-fn emit_condition(
-    inst: &ast::Instruction,
-    cond: &ast::Expr,
-    ctx: &crate::shapes::Context,
-) -> Result<proc_macro2::TokenStream, TMDLError> {
-    let unsupported = || {
-        TMDLError::Codegen(format!(
-            "instruction '{}': encoding condition has no runtime guard",
-            inst.name
-        ))
-    };
-    // `x[bit]`, spelled directly or as `x[bit] == 0` / `== 1`.
-    if let Some((op, bit, set)) = operand_bit(cond, ctx) {
-        let op = proc_macro2::Literal::string(op);
-        let bit = proc_macro2::Literal::u16_unsuffixed(bit);
-        let guard = quote! { tir::backend::binary::Guard::Bit { op: #op, bit: #bit } };
-        return Ok(match set {
-            true => guard,
-            false => quote! { tir::backend::binary::Guard::Not(&#guard) },
-        });
-    }
-    match cond {
-        ast::Expr::Unary(unary) => {
-            let inner = emit_condition(inst, &unary.x, ctx)?;
-            Ok(quote! { tir::backend::binary::Guard::Not(&#inner) })
+fn emit_predicate(predicate: &crate::shapes::Predicate) -> proc_macro2::TokenStream {
+    use crate::shapes::Predicate;
+    match predicate {
+        Predicate::Always => quote! { tir::backend::binary::Guard::True },
+        Predicate::Not(inner) => {
+            let inner = emit_predicate(inner);
+            quote! { tir::backend::binary::Guard::Not(&#inner) }
         }
-        ast::Expr::Binary(binary) => {
-            let lhs = &*binary.lhs;
-            let rhs = &*binary.rhs;
-            match &binary.op {
-                ast::BinOp::BitwiseAnd => {
-                    let (lhs, rhs) = (
-                        emit_condition(inst, lhs, ctx)?,
-                        emit_condition(inst, rhs, ctx)?,
-                    );
-                    Ok(quote! { tir::backend::binary::Guard::And(&[#lhs, #rhs]) })
-                }
-                ast::BinOp::BitwiseOr => {
-                    let (lhs, rhs) = (
-                        emit_condition(inst, lhs, ctx)?,
-                        emit_condition(inst, rhs, ctx)?,
-                    );
-                    Ok(quote! { tir::backend::binary::Guard::Or(&[#lhs, #rhs]) })
-                }
-                op => {
-                    let (literal, operand, flipped) = match (int_literal(lhs), int_literal(rhs)) {
-                        (Some(literal), None) => (literal, rhs, true),
-                        (None, Some(literal)) => (literal, lhs, false),
-                        _ => return Err(unsupported()),
-                    };
-                    emit_comparison(inst, op, operand, literal, flipped, ctx)
+        Predicate::And(parts) => {
+            let parts = parts.iter().map(emit_predicate);
+            quote! { tir::backend::binary::Guard::And(&[#(#parts),*]) }
+        }
+        Predicate::Or(parts) => {
+            let parts = parts.iter().map(emit_predicate);
+            quote! { tir::backend::binary::Guard::Or(&[#(#parts),*]) }
+        }
+        Predicate::Bit { op, bit } => {
+            let op = proc_macro2::Literal::string(op);
+            let bit = proc_macro2::Literal::u16_unsuffixed(*bit);
+            quote! { tir::backend::binary::Guard::Bit { op: #op, bit: #bit } }
+        }
+        Predicate::SliceEq { op, lo, hi, value } => {
+            let op = proc_macro2::Literal::string(op);
+            let lo = proc_macro2::Literal::u16_unsuffixed(*lo);
+            let hi = proc_macro2::Literal::u16_unsuffixed(*hi);
+            let value = proc_macro2::Literal::u128_unsuffixed(*value);
+            quote! {
+                tir::backend::binary::Guard::SliceEq { op: #op, lo: #lo, hi: #hi, value: #value }
+            }
+        }
+        Predicate::Cmp {
+            op,
+            width,
+            cmp_width,
+            cmp,
+            value,
+        } => {
+            let op = proc_macro2::Literal::string(op);
+            let width = proc_macro2::Literal::u16_unsuffixed(*width);
+            let cmp_width = proc_macro2::Literal::u16_unsuffixed(*cmp_width);
+            let cmp = format_ident!("{}", cmp.name());
+            let value = proc_macro2::Literal::i128_unsuffixed(*value);
+            quote! {
+                tir::backend::binary::Guard::Cmp {
+                    op: #op,
+                    width: #width,
+                    cmp_width: #cmp_width,
+                    cmp: tir::backend::binary::CmpOp::#cmp,
+                    value: #value,
                 }
             }
         }
-        _ => Err(unsupported()),
-    }
-}
-
-/// A comparison of an operand (or a slice of one) against a constant.
-fn emit_comparison(
-    inst: &ast::Instruction,
-    op: &ast::BinOp,
-    operand: &ast::Expr,
-    literal: &ast::LitInt,
-    flipped: bool,
-    ctx: &crate::shapes::Context,
-) -> Result<proc_macro2::TokenStream, TMDLError> {
-    let unsupported = || {
-        TMDLError::Codegen(format!(
-            "instruction '{}': encoding condition has no runtime guard",
-            inst.name
-        ))
-    };
-    let equality = matches!(op, ast::BinOp::Equal | ast::BinOp::NotEqual);
-    let negated = matches!(op, ast::BinOp::NotEqual);
-    // A slice test is a guard of its own: `base[hi..lo] == k`.
-    let value = parse_literal_value(literal);
-    if equality
-        && let ast::Expr::Slice(slc) = operand
-        && let ast::Expr::Ident(id) = &*slc.base
-        && ctx.operand_width(&id.name).is_some()
-    {
-        let name = proc_macro2::Literal::string(&id.name);
-        let lo = proc_macro2::Literal::u16_unsuffixed(slc.lo);
-        let hi = proc_macro2::Literal::u16_unsuffixed(slc.hi);
-        let value = proc_macro2::Literal::u128_unsuffixed(u128::from(value));
-        let guard = quote! {
-            tir::backend::binary::Guard::SliceEq { op: #name, lo: #lo, hi: #hi, value: #value }
-        };
-        return Ok(match negated {
-            true => quote! { tir::backend::binary::Guard::Not(&#guard) },
-            false => guard,
-        });
-    }
-    let ast::Expr::Ident(id) = operand else {
-        return Err(unsupported());
-    };
-    let Some(operand_width) = ctx.operand_width(&id.name) else {
-        return Err(unsupported());
-    };
-    let cmp = match (op, flipped) {
-        (ast::BinOp::Equal, _) => "Eq",
-        (ast::BinOp::NotEqual, _) => "Ne",
-        (ast::BinOp::LessThan, false) | (ast::BinOp::GreaterThan, true) => "Lt",
-        (ast::BinOp::LessThenEqual, false) | (ast::BinOp::GreaterThanEqual, true) => "Le",
-        (ast::BinOp::GreaterThan, false) | (ast::BinOp::LessThan, true) => "Gt",
-        (ast::BinOp::GreaterThanEqual, false) | (ast::BinOp::LessThenEqual, true) => "Ge",
-        (ast::BinOp::UnsignedLessThan, false) | (ast::BinOp::UnsignedGreaterThan, true) => "ULt",
-        (ast::BinOp::UnsignedLessThenEqual, false)
-        | (ast::BinOp::UnsignedGreaterThanEqual, true) => "ULe",
-        (ast::BinOp::UnsignedGreaterThan, false) | (ast::BinOp::UnsignedLessThan, true) => "UGt",
-        (ast::BinOp::UnsignedGreaterThanEqual, false)
-        | (ast::BinOp::UnsignedLessThenEqual, true) => "UGe",
-        _ => return Err(unsupported()),
-    };
-    // The operand is read as its declared bit pattern, and both sides are then
-    // compared at the width the shape expansion used: the wider of the operand
-    // and the literal as spelled (a decimal literal has no width, and is read
-    // as 64 bits).
-    let cmp_width =
-        operand_width.max(crate::encoding::literal_width(literal.value()).unwrap_or(64));
-    let name = proc_macro2::Literal::string(&id.name);
-    let cmp = format_ident!("{}", cmp);
-    let width_lit = proc_macro2::Literal::u16_unsuffixed(operand_width);
-    let cmp_width_lit = proc_macro2::Literal::u16_unsuffixed(cmp_width);
-    let value = proc_macro2::Literal::i128_unsuffixed(i128::from(value));
-    Ok(quote! {
-        tir::backend::binary::Guard::Cmp {
-            op: #name,
-            width: #width_lit,
-            cmp_width: #cmp_width_lit,
-            cmp: tir::backend::binary::CmpOp::#cmp,
-            value: #value,
-        }
-    })
-}
-
-/// The operand, bit and polarity a condition tests, for `x[bit]` and
-/// `x[bit] == 0` / `x[bit] == 1`.
-fn operand_bit<'a>(
-    cond: &'a ast::Expr,
-    ctx: &crate::shapes::Context,
-) -> Option<(&'a str, u16, bool)> {
-    let (base, index, set) = match cond {
-        ast::Expr::IndexAccess(idx) => (&idx.base, idx.index, true),
-        ast::Expr::Binary(binary) if binary.op == ast::BinOp::Equal => {
-            let value = int_literal(&binary.rhs).map(parse_literal_value)?;
-            match (&*binary.lhs, value) {
-                (ast::Expr::IndexAccess(idx), 0) => (&idx.base, idx.index, false),
-                (ast::Expr::IndexAccess(idx), 1) => (&idx.base, idx.index, true),
-                _ => return None,
+        Predicate::Fits {
+            op,
+            width,
+            bits,
+            signed,
+        } => {
+            let op = proc_macro2::Literal::string(op);
+            let width = proc_macro2::Literal::u16_unsuffixed(*width);
+            let bits = proc_macro2::Literal::u16_unsuffixed(*bits);
+            let variant = format_ident!("{}", if *signed { "SignedFits" } else { "UnsignedFits" });
+            quote! {
+                tir::backend::binary::Guard::#variant { op: #op, width: #width, bits: #bits }
             }
         }
-        _ => return None,
-    };
-    match &**base {
-        ast::Expr::Ident(id) if ctx.operand_width(&id.name).is_some() => {
-            Some((&id.name, index, set))
-        }
-        _ => None,
-    }
-}
-
-fn int_literal(expr: &ast::Expr) -> Option<&ast::LitInt> {
-    match expr {
-        ast::Expr::Lit(ast::Lit::Int(li)) => Some(li),
-        _ => None,
     }
 }
 

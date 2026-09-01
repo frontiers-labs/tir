@@ -7,7 +7,7 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    first_encoding_shape_arms, isa_param_values, item_supports_isa, parse_literal_value,
+    EncodingShape, get_encoding_shapes, isa_param_values, item_supports_isa, parse_literal_value,
     resolve_isa_param_values, resolve_operand_constraints_for_instruction, resolve_operand_widths,
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
@@ -36,7 +36,7 @@ struct InstructionMetadata {
     pc_source_operands: Vec<usize>,
     memory_accesses: Vec<MemoryAccessMetadata>,
     trap_kinds: Vec<String>,
-    encoding: Vec<EncodingFieldMetadata>,
+    shapes: Vec<EncodingShapeMetadata>,
     execute: Option<String>,
     flat_execute: Option<BTreeMap<String, String>>,
 }
@@ -99,6 +99,16 @@ struct EncodingFieldMetadata {
     operand: Option<String>,
     operand_low: u16,
     value: String,
+}
+
+/// One fixed bit map of an instruction: what selects it, how wide it is, and
+/// the fields it spells.
+#[derive(serde::Serialize)]
+struct EncodingShapeMetadata {
+    name: String,
+    width_bits: u16,
+    guard: crate::shapes::Predicate,
+    fields: Vec<EncodingFieldMetadata>,
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +228,22 @@ fn eval_class_param(
 
 /// Whether a class's `WRITE_POLICY` is `"merge"` (preserve untouched storage
 /// bits on write); absent or `"zero_extend"` is the default zero-extend.
+/// Whether a register class is part of the model of `isa`: declared for that
+/// ISA, for an extension of it, or for one it requires. The last case is what
+/// makes x86-64's flags register — declared for 32-bit x86 and inherited — part
+/// of the 64-bit model, and an instruction cannot write a register the model
+/// does not hold.
+fn class_in_model<'a>(
+    for_isas: &[String],
+    isa: &str,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> bool {
+    item_supports_isa(for_isas, isa, item_cache)
+        || for_isas
+            .iter()
+            .any(|owner| crate::utils::isa_includes(isa, owner, item_cache))
+}
+
 fn class_write_merge(rc: &ast::RegisterClass) -> bool {
     matches!(
         rc.parameters.get("WRITE_POLICY"),
@@ -283,7 +309,7 @@ pub fn generate_smtlib<'a>(
         current
     };
     for rc in files.iter().flat_map(|f| f.register_classes()) {
-        if !item_supports_isa(&rc.for_isas, isa, item_cache) {
+        if !class_in_model(&rc.for_isas, isa, item_cache) {
             continue;
         }
         let name = rc.name.to_lowercase();
@@ -636,7 +662,8 @@ fn build_instructions<'a>(
         } else {
             format!("((st TMDLState) {smt_operands_joined})")
         };
-        let (smt_encoding, enc_width) = build_smt_encoding(ctx, item_cache, i, &operands);
+        let (smt_encoding, smt_encoding_len, enc_width) =
+            build_smt_encoding(ctx, item_cache, i, &operands)?;
         let behavior = build_smt_behavior(ctx, item_cache, i, &operands, &register_index_map);
         // Untranslatable behaviors (e.g. memory accesses) get an identity body
         // plus a machine-readable marker so verification tooling can tell
@@ -729,7 +756,7 @@ fn build_instructions<'a>(
             trap_kinds: behavior
                 .as_ref()
                 .map_or_else(Vec::new, |behavior| behavior.trap_kinds.clone()),
-            encoding: build_encoding_metadata(item_cache, i, &operands),
+            shapes: build_shape_metadata(ctx, item_cache, i, &operands)?,
             execute: behavior.as_ref().map(|behavior| behavior.body.clone()),
             flat_execute: behavior
                 .as_ref()
@@ -744,7 +771,7 @@ fn build_instructions<'a>(
 
         writeln!(
             output,
-            "\n(define-fun encode_{name} {operand_params} (_ BitVec {enc_width})\n  {smt_encoding})\n\n(define-fun execute_{name} {execute_params} TMDLState\n  {smt_behavior})"
+            "\n(define-fun encode_{name} {operand_params} (_ BitVec {enc_width})\n  {smt_encoding})\n\n(define-fun encode_len_{name} {operand_params} (_ BitVec 8)\n  {smt_encoding_len})\n\n(define-fun execute_{name} {execute_params} TMDLState\n  {smt_behavior})"
         )?;
 
         // The shared `encode_{dialect}` returns the ISA's widest encoding, so a
@@ -863,26 +890,72 @@ fn smt_ty_of(ctx: &SmtCtx<'_>, ty: &Type) -> String {
     }
 }
 
-/// Total bit width of an instruction's encoding (highest covered bit + 1).
-fn encoding_width<'a>(
-    instruction: &'a ast::Instruction,
-    item_cache: &HashMap<&'a str, &'a ast::Item>,
-) -> u16 {
-    first_encoding_shape_arms(instruction, item_cache)
+/// Total bit width of one shape's bit map (highest covered bit + 1).
+fn shape_width(shape: &EncodingShape) -> u16 {
+    shape
+        .arms
         .iter()
         .map(|arm| arm.end.unwrap_or(arm.start) + 1)
         .max()
         .unwrap_or(32)
 }
 
-fn build_encoding_metadata<'a>(
+/// Total bit width of an instruction's widest encoding shape. A word of this
+/// width holds every shape, the narrower ones zero-extended into it.
+fn encoding_width<'a>(
+    instruction: &'a ast::Instruction,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> u16 {
+    get_encoding_shapes(instruction, item_cache)
+        .iter()
+        .map(shape_width)
+        .max()
+        .unwrap_or(32)
+}
+
+/// The shapes of an instruction as verification metadata: what selects each
+/// one, how wide it is, and the bit map it spells. A verifier that only knew
+/// the first shape would send words no encoder produces.
+fn build_shape_metadata<'a>(
+    ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     instruction: &'a ast::Instruction,
     operands: &[(String, Type)],
+) -> Result<Vec<EncodingShapeMetadata>, TMDLError> {
+    let shape_ctx = crate::utils::encoding_context(instruction, item_cache);
+    let shapes = get_encoding_shapes(instruction, item_cache);
+    let named = shapes.len() > 1;
+    shapes
+        .iter()
+        .enumerate()
+        .map(|(index, shape)| {
+            let guard = crate::shapes::lower_guard(&shape.guard, &shape_ctx).map_err(|reason| {
+                TMDLError::Codegen(format!("instruction '{}': {reason}", instruction.name))
+            })?;
+            Ok(EncodingShapeMetadata {
+                name: match named {
+                    true => format!("{}#{index}", instruction.name.to_lowercase()),
+                    false => instruction.name.to_lowercase(),
+                },
+                width_bits: shape_width(shape),
+                guard,
+                fields: build_encoding_metadata(ctx, item_cache, instruction, operands, shape),
+            })
+        })
+        .collect()
+}
+
+fn build_encoding_metadata<'a>(
+    _ctx: &SmtCtx<'_>,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+    instruction: &'a ast::Instruction,
+    operands: &[(String, Type)],
+    shape: &EncodingShape,
 ) -> Vec<EncodingFieldMetadata> {
     let params = resolve_params_for_instruction(instruction, item_cache);
-    first_encoding_shape_arms(instruction, item_cache)
-        .into_iter()
+    shape
+        .arms
+        .iter()
         .map(|arm| {
             let word_high = arm.end.unwrap_or(arm.start);
             let (operand, operand_low, value) = match &arm.value {
@@ -933,19 +1006,174 @@ fn build_encoding_metadata<'a>(
         .collect()
 }
 
-/// Returns the encoding expression and its bit width.
+/// A shape's guard as an SMT predicate over the operand variables.
+fn render_predicate(
+    ctx: &SmtCtx<'_>,
+    predicate: &crate::shapes::Predicate,
+    operands: &[(String, Type)],
+    owner: &str,
+) -> Result<String, TMDLError> {
+    use crate::shapes::Predicate;
+    // The variable an operand binds to, narrowed to the bits its encoding
+    // spells: an immediate's variable is as wide as the register file.
+    let bits = |name: &str, width: u16| -> Result<String, TMDLError> {
+        let ty = operands
+            .iter()
+            .find(|(held, _)| held.eq_ignore_ascii_case(name))
+            .map(|(_, ty)| ty)
+            .ok_or_else(|| {
+                TMDLError::Codegen(format!(
+                    "instruction '{owner}': encoding guard reads '{name}', which is not an operand"
+                ))
+            })?;
+        let declared = match ty {
+            Type::Struct(rc) => ctx.idx_width(rc),
+            _ => ctx.xlen,
+        };
+        let name = name.to_lowercase();
+        Ok(match declared > width {
+            true => format!("((_ extract {} 0) {name})", width - 1),
+            false => name,
+        })
+    };
+    let parts = |parts: &[Predicate], op: &str| -> Result<String, TMDLError> {
+        let rendered: Result<Vec<String>, TMDLError> = parts
+            .iter()
+            .map(|part| render_predicate(ctx, part, operands, owner))
+            .collect();
+        Ok(format!("({op} {})", rendered?.join(" ")))
+    };
+    Ok(match predicate {
+        Predicate::Always => "true".to_string(),
+        Predicate::Not(inner) => {
+            format!("(not {})", render_predicate(ctx, inner, operands, owner)?)
+        }
+        Predicate::And(list) => parts(list, "and")?,
+        Predicate::Or(list) => parts(list, "or")?,
+        Predicate::Bit { op, bit } => {
+            let value = bits(op, bit + 1)?;
+            format!("(= ((_ extract {bit} {bit}) {value}) #b1)")
+        }
+        Predicate::SliceEq { op, lo, hi, value } => {
+            let read = bits(op, hi + 1)?;
+            format!(
+                "(= ((_ extract {hi} {lo}) {read}) (_ bv{} {}))",
+                value & bit_mask(hi - lo + 1),
+                hi - lo + 1
+            )
+        }
+        Predicate::Cmp {
+            op,
+            width,
+            cmp_width,
+            cmp,
+            value,
+        } => {
+            let read = bits(op, *width)?;
+            let read = match cmp_width > width {
+                true => format!("((_ zero_extend {}) {read})", cmp_width - width),
+                false => read,
+            };
+            let literal = (*value as u128) & bit_mask(*cmp_width);
+            let smt = match cmp {
+                crate::shapes::CmpOp::Eq => "=",
+                crate::shapes::CmpOp::Ne => "distinct",
+                crate::shapes::CmpOp::Lt => "bvslt",
+                crate::shapes::CmpOp::Le => "bvsle",
+                crate::shapes::CmpOp::Gt => "bvsgt",
+                crate::shapes::CmpOp::Ge => "bvsge",
+                crate::shapes::CmpOp::ULt => "bvult",
+                crate::shapes::CmpOp::ULe => "bvule",
+                crate::shapes::CmpOp::UGt => "bvugt",
+                crate::shapes::CmpOp::UGe => "bvuge",
+            };
+            format!("({smt} {read} (_ bv{literal} {cmp_width}))")
+        }
+        Predicate::Fits {
+            op,
+            width,
+            bits: kept,
+            signed,
+        } => {
+            let read = bits(op, *width)?;
+            let extend = match signed {
+                true => "sign_extend",
+                false => "zero_extend",
+            };
+            format!(
+                "(= ((_ {extend} {}) ((_ extract {} 0) {read})) {read})",
+                width - kept,
+                kept - 1
+            )
+        }
+    })
+}
+
+fn bit_mask(width: u16) -> u128 {
+    match width >= 128 {
+        true => u128::MAX,
+        false => (1u128 << width) - 1,
+    }
+}
+
+/// The word an instruction encodes to and how wide it is: one expression per
+/// shape, zero-extended to the widest and selected by the shape's guard, so an
+/// encoding that spells two bit maps is one function of its operands.
 fn build_smt_encoding<'a>(
     ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     instruction: &'a ast::Instruction,
     operands: &[(String, Type)],
+) -> Result<(String, String, u16), TMDLError> {
+    let shape_ctx = crate::utils::encoding_context(instruction, item_cache);
+    let shapes = get_encoding_shapes(instruction, item_cache);
+    let width = shapes.iter().map(shape_width).max().unwrap_or(32);
+    let mut arms: Vec<(String, String, u16)> = Vec::new();
+    for shape in &shapes {
+        let guard = crate::shapes::lower_guard(&shape.guard, &shape_ctx)
+            .map_err(|reason| {
+                TMDLError::Codegen(format!("instruction '{}': {reason}", instruction.name))
+            })
+            .and_then(|predicate| render_predicate(ctx, &predicate, operands, &instruction.name))?;
+        let (expr, shape_width) =
+            build_shape_encoding(ctx, item_cache, instruction, operands, shape);
+        let padded = match shape_width < width {
+            true => format!("((_ zero_extend {}) {expr})", width - shape_width),
+            false => expr,
+        };
+        arms.push((guard, padded, shape_width));
+    }
+    // The last shape is the fallback: the guards partition the operand domain,
+    // so whatever the others reject it takes.
+    let Some((_, last_expr, last_width)) = arms.pop() else {
+        return Ok((zero_bv(width), format!("(_ bv{} 8)", width / 8), width));
+    };
+    let encoding = arms.iter().rev().fold(last_expr, |else_branch, arm| {
+        format!("(ite {} {} {})", arm.0, arm.1, else_branch)
+    });
+    let length = arms
+        .iter()
+        .rev()
+        .fold(format!("(_ bv{} 8)", last_width.div_ceil(8)), |acc, arm| {
+            format!("(ite {} (_ bv{} 8) {})", arm.0, arm.2.div_ceil(8), acc)
+        });
+    Ok((encoding, length, width))
+}
+
+/// One shape's word: the concatenation of its fields, and its bit width.
+fn build_shape_encoding<'a>(
+    ctx: &SmtCtx<'_>,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+    instruction: &'a ast::Instruction,
+    operands: &[(String, Type)],
+    shape: &EncodingShape,
 ) -> (String, u16) {
     let operands = operands.iter().cloned().collect::<HashMap<_, _>>();
     let params = resolve_params_for_instruction(instruction, item_cache);
-    let encoding_arms = first_encoding_shape_arms(instruction, item_cache);
+    let encoding_arms = &shape.arms;
 
     let mut pieces: Vec<(u16, String)> = Vec::new();
-    for arm in &encoding_arms {
+    for arm in encoding_arms {
         let start = arm.start;
         let end = arm.end.unwrap_or(start);
         let width: u16 = end - start + 1;
@@ -2624,133 +2852,149 @@ fn build_decoder<'a>(
         let operand_list = resolved_operands(ctx, i, item_cache);
         let operands: HashMap<String, Type> = operand_list.iter().cloned().collect();
         let params = resolve_params_for_instruction(i, item_cache);
-        let encoding_arms = first_encoding_shape_arms(i, item_cache);
+        // Each shape is its own decoder: it fixes its own bits, and sema keeps
+        // any two of them apart in the word. The most specific goes first, so a
+        // shape another one subsumes is still reachable.
+        let mut instruction_shapes = get_encoding_shapes(i, item_cache);
+        instruction_shapes.sort_by_key(|shape| {
+            std::cmp::Reverse(
+                shape
+                    .arms
+                    .iter()
+                    .filter(|arm| matches!(arm.value, ast::Expr::Lit(ast::Lit::Int(_))))
+                    .map(|arm| arm.end.unwrap_or(arm.start) - arm.start + 1)
+                    .sum::<u16>(),
+            )
+        });
+        for shape in &instruction_shapes {
+            let encoding_arms = &shape.arms;
 
-        // For each operand: collect (op_lo, op_hi, word_lo, word_hi) pieces.
-        let mut operand_pieces: HashMap<String, Vec<(u16, u16, u16, u16)>> = HashMap::new();
-        let mut guards: Vec<String> = vec![];
+            // For each operand: collect (op_lo, op_hi, word_lo, word_hi) pieces.
+            let mut operand_pieces: HashMap<String, Vec<(u16, u16, u16, u16)>> = HashMap::new();
+            let mut guards: Vec<String> = vec![];
 
-        for arm in &encoding_arms {
-            let word_lo = arm.start;
-            let word_hi = arm.end.unwrap_or(arm.start);
-            let word_width = word_hi - word_lo + 1;
+            for arm in encoding_arms {
+                let word_lo = arm.start;
+                let word_hi = arm.end.unwrap_or(arm.start);
+                let word_width = word_hi - word_lo + 1;
 
-            match &arm.value {
-                ast::Expr::Lit(ast::Lit::Int(li)) => {
-                    let val = parse_literal_value_u128(li);
-                    guards.push(format!(
-                        "(= ((_ extract {} {}) word) (_ bv{} {}))",
-                        word_hi, word_lo, val, word_width
-                    ));
-                }
-                ast::Expr::Ident(id) => {
-                    let name = &id.name;
-                    if operands.contains_key(name) {
-                        // The entire word field holds bits [0..word_width-1] of the operand.
-                        operand_pieces.entry(name.clone()).or_default().push((
-                            0,
-                            word_width - 1,
-                            word_lo,
-                            word_hi,
-                        ));
-                    } else if let Some((_, Some(ast::Expr::Lit(ast::Lit::Int(li))))) =
-                        params.get(name)
-                    {
+                match &arm.value {
+                    ast::Expr::Lit(ast::Lit::Int(li)) => {
                         let val = parse_literal_value_u128(li);
                         guards.push(format!(
                             "(= ((_ extract {} {}) word) (_ bv{} {}))",
                             word_hi, word_lo, val, word_width
                         ));
                     }
-                    // Unresolved param: no guard emitted (treated as don't-care).
-                }
-                ast::Expr::Slice(s) => {
-                    if let ast::Expr::Ident(id) = &*s.base
-                        && operands.contains_key(&id.name)
-                    {
-                        operand_pieces
-                            .entry(id.name.clone())
-                            .or_default()
-                            .push((s.lo, s.hi, word_lo, word_hi));
+                    ast::Expr::Ident(id) => {
+                        let name = &id.name;
+                        if operands.contains_key(name) {
+                            // The entire word field holds bits [0..word_width-1] of the operand.
+                            operand_pieces.entry(name.clone()).or_default().push((
+                                0,
+                                word_width - 1,
+                                word_lo,
+                                word_hi,
+                            ));
+                        } else if let Some((_, Some(ast::Expr::Lit(ast::Lit::Int(li))))) =
+                            params.get(name)
+                        {
+                            let val = parse_literal_value_u128(li);
+                            guards.push(format!(
+                                "(= ((_ extract {} {}) word) (_ bv{} {}))",
+                                word_hi, word_lo, val, word_width
+                            ));
+                        }
+                        // Unresolved param: no guard emitted (treated as don't-care).
                     }
-                }
-                ast::Expr::IndexAccess(s) => {
-                    if let ast::Expr::Ident(id) = &*s.base
-                        && operands.contains_key(&id.name)
-                    {
-                        operand_pieces
-                            .entry(id.name.clone())
-                            .or_default()
-                            .push((s.index, s.index, word_lo, word_hi));
+                    ast::Expr::Slice(s) => {
+                        if let ast::Expr::Ident(id) = &*s.base
+                            && operands.contains_key(&id.name)
+                        {
+                            operand_pieces
+                                .entry(id.name.clone())
+                                .or_default()
+                                .push((s.lo, s.hi, word_lo, word_hi));
+                        }
                     }
+                    ast::Expr::IndexAccess(s) => {
+                        if let ast::Expr::Ident(id) = &*s.base
+                            && operands.contains_key(&id.name)
+                        {
+                            operand_pieces
+                                .entry(id.name.clone())
+                                .or_default()
+                                .push((s.index, s.index, word_lo, word_hi));
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
 
-        let guard = match guards.len() {
-            0 => "true".to_string(),
-            1 => guards.remove(0),
-            _ => format!("(and {})", guards.join(" ")),
-        };
+            let guard = match guards.len() {
+                0 => "true".to_string(),
+                1 => guards.remove(0),
+                _ => format!("(and {})", guards.join(" ")),
+            };
 
-        // Build the constructor arguments in operand declaration order.
-        let constructor_args: Vec<String> = operand_list
-            .iter()
-            .map(|(op_name, op_ty)| {
-                let target_width = match op_ty {
-                    Type::Struct(rc) => ctx.idx_width(rc),
-                    _ => ctx.xlen,
-                };
+            // Build the constructor arguments in operand declaration order.
+            let constructor_args: Vec<String> = operand_list
+                .iter()
+                .map(|(op_name, op_ty)| {
+                    let target_width = match op_ty {
+                        Type::Struct(rc) => ctx.idx_width(rc),
+                        _ => ctx.xlen,
+                    };
 
-                let Some(mut pieces) = operand_pieces.remove(op_name) else {
-                    return zero_bv(target_width);
-                };
+                    let Some(mut pieces) = operand_pieces.remove(op_name) else {
+                        return zero_bv(target_width);
+                    };
 
-                // Sort pieces by op_hi descending so the concat builds high→low.
-                pieces.sort_by_key(|piece| std::cmp::Reverse(piece.1));
+                    // Sort pieces by op_hi descending so the concat builds high→low.
+                    pieces.sort_by_key(|piece| std::cmp::Reverse(piece.1));
 
-                // Reconstruct the operand from its pieces, filling any gaps
-                // between non-contiguous slices with zero bits.
-                // `expected_hi` tracks the next op bit we expect; it starts at
-                // the top bit of the highest piece and steps downward.
-                let mut fragments: Vec<String> = vec![];
-                let mut raw_width: u16 = 0;
-                let mut expected_hi = pieces[0].1;
+                    // Reconstruct the operand from its pieces, filling any gaps
+                    // between non-contiguous slices with zero bits.
+                    // `expected_hi` tracks the next op bit we expect; it starts at
+                    // the top bit of the highest piece and steps downward.
+                    let mut fragments: Vec<String> = vec![];
+                    let mut raw_width: u16 = 0;
+                    let mut expected_hi = pieces[0].1;
 
-                for (op_lo, op_hi, word_lo, word_hi) in &pieces {
-                    // Fill any gap between the previous piece and this one.
-                    if *op_hi < expected_hi {
-                        let gap = expected_hi - op_hi; // bits [expected_hi..op_hi+1]
-                        fragments.push(zero_bv(gap));
-                        raw_width += gap;
+                    for (op_lo, op_hi, word_lo, word_hi) in &pieces {
+                        // Fill any gap between the previous piece and this one.
+                        if *op_hi < expected_hi {
+                            let gap = expected_hi - op_hi; // bits [expected_hi..op_hi+1]
+                            fragments.push(zero_bv(gap));
+                            raw_width += gap;
+                        }
+                        fragments.push(format!("((_ extract {} {}) word)", word_hi, word_lo));
+                        raw_width += op_hi - op_lo + 1;
+                        expected_hi = op_lo.saturating_sub(1);
                     }
-                    fragments.push(format!("((_ extract {} {}) word)", word_hi, word_lo));
-                    raw_width += op_hi - op_lo + 1;
-                    expected_hi = op_lo.saturating_sub(1);
-                }
-                // Fill any gap below the lowest piece (bits [op_lo-1..0]).
-                let lowest_op_lo = pieces.last().map(|(lo, _, _, _)| *lo).unwrap_or(0);
-                if lowest_op_lo > 0 {
-                    fragments.push(zero_bv(lowest_op_lo));
-                    raw_width += lowest_op_lo;
-                }
+                    // Fill any gap below the lowest piece (bits [op_lo-1..0]).
+                    let lowest_op_lo = pieces.last().map(|(lo, _, _, _)| *lo).unwrap_or(0);
+                    if lowest_op_lo > 0 {
+                        fragments.push(zero_bv(lowest_op_lo));
+                        raw_width += lowest_op_lo;
+                    }
 
-                let raw = fragments
-                    .into_iter()
-                    .reduce(|acc, f| format!("(concat {} {})", acc, f))
-                    .unwrap_or_else(|| zero_bv(target_width));
+                    let raw = fragments
+                        .into_iter()
+                        .reduce(|acc, f| format!("(concat {} {})", acc, f))
+                        .unwrap_or_else(|| zero_bv(target_width));
 
-                cast_bv_smt(&raw, raw_width, target_width)
-            })
-            .collect();
+                    cast_bv_smt(&raw, raw_width, target_width)
+                })
+                .collect();
 
-        let constructor = if constructor_args.is_empty() {
-            name_upper.clone()
-        } else {
-            format!("({name_upper} {})", constructor_args.join(" "))
-        };
-        arms.push((guard, constructor));
+            let constructor = if constructor_args.is_empty() {
+                name_upper.clone()
+            } else {
+                format!("({name_upper} {})", constructor_args.join(" "))
+            };
+            arms.push((guard, constructor));
+        }
     }
 
     // Build a fallback: the first instruction with all-zero operands.
