@@ -741,17 +741,6 @@ struct PreparedInstruction<'a> {
     shapes: Vec<EncodingShape>,
 }
 
-/// The bits one shape spells, which is how far the program counter moves when
-/// the decoder matches it.
-fn shape_width(shape: &EncodingShape) -> u16 {
-    shape
-        .arms
-        .iter()
-        .map(|arm| arm.end.unwrap_or(arm.start) + 1)
-        .max()
-        .unwrap_or_default()
-}
-
 pub fn generate_btor2<'a>(
     isa: &str,
     enabled_isas: Option<&[String]>,
@@ -896,7 +885,7 @@ pub fn generate_btor2<'a>(
     }
     let word_width = prepared
         .iter()
-        .flat_map(|instruction| instruction.shapes.iter().map(shape_width))
+        .flat_map(|instruction| instruction.shapes.iter().map(|shape| shape.width_bits))
         .max()
         .unwrap_or(8);
     let source_count = prepared
@@ -948,7 +937,7 @@ pub fn generate_btor2<'a>(
         // same fully symbolic word: same behavior, its own fixed bits, operand
         // pieces and width.
         for (shape_index, shape) in shapes.iter().enumerate() {
-            let width = shape_width(shape);
+            let width = shape.width_bits;
             let (guards, pieces) = decode_layout(shape, inst, item_cache, &operands);
 
             // Decode operand addresses and immediates. Register values used by the

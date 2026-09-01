@@ -890,16 +890,6 @@ fn smt_ty_of(ctx: &SmtCtx<'_>, ty: &Type) -> String {
     }
 }
 
-/// Total bit width of one shape's bit map (highest covered bit + 1).
-fn shape_width(shape: &EncodingShape) -> u16 {
-    shape
-        .arms
-        .iter()
-        .map(|arm| arm.end.unwrap_or(arm.start) + 1)
-        .max()
-        .unwrap_or(32)
-}
-
 /// Total bit width of an instruction's widest encoding shape. A word of this
 /// width holds every shape, the narrower ones zero-extended into it.
 fn encoding_width<'a>(
@@ -908,7 +898,7 @@ fn encoding_width<'a>(
 ) -> u16 {
     get_encoding_shapes(instruction, item_cache)
         .iter()
-        .map(shape_width)
+        .map(|shape| shape.width_bits)
         .max()
         .unwrap_or(32)
 }
@@ -937,7 +927,7 @@ fn build_shape_metadata<'a>(
                     true => format!("{}#{index}", instruction.name.to_lowercase()),
                     false => instruction.name.to_lowercase(),
                 },
-                width_bits: shape_width(shape),
+                width_bits: shape.width_bits,
                 guard,
                 fields: build_encoding_metadata(ctx, item_cache, instruction, operands, shape),
             })
@@ -1135,7 +1125,11 @@ fn build_smt_encoding<'a>(
 ) -> Result<(String, String, u16), TMDLError> {
     let shape_ctx = crate::utils::encoding_context(instruction, item_cache);
     let shapes = get_encoding_shapes(instruction, item_cache);
-    let width = shapes.iter().map(shape_width).max().unwrap_or(32);
+    let width = shapes
+        .iter()
+        .map(|shape| shape.width_bits)
+        .max()
+        .unwrap_or(32);
     let mut arms: Vec<(String, String, u16)> = Vec::new();
     for shape in &shapes {
         let guard = crate::shapes::lower_guard(&shape.guard, &shape_ctx)
