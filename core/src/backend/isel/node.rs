@@ -38,17 +38,6 @@ pub(crate) fn is_low_extract_view(egraph: &SemEGraph, class: Id) -> bool {
     low_extract_source(egraph, class).is_some()
 }
 
-pub(crate) fn low_extract_width(egraph: &SemEGraph, class: Id) -> Option<u32> {
-    egraph.nodes(class).find_map(|node| {
-        if node.kind != SymKind::Extract || node.children().len() != 3 {
-            return None;
-        }
-        let hi = class_int_binding(egraph, egraph.find(node.children()[1]))?.to_u64();
-        let lo = class_int_binding(egraph, egraph.find(node.children()[2]))?.to_u64();
-        (lo == 0).then(|| u32::try_from(hi + 1).ok()).flatten()
-    })
-}
-
 /// The register value carrying a class: an input value, then the first IR value
 /// the class computes (from `class_values`, the map recording which values a
 /// class stands for). The representative feeds cost-model approximation only.

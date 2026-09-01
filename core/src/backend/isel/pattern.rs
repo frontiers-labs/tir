@@ -13,9 +13,9 @@ use tir::{
     },
 };
 use tir_relational::ClassId as Id;
-use tir_relational::{Atom, Match, NoExterns, Plan, Query};
+use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, Match, NoExterns, Plan, Query, Source};
 
-use super::node::{class_register_type, is_memory_kind, low_extract_source, low_extract_width};
+use super::node::{class_register_type, is_memory_kind};
 use super::{ImmRange, RegisterRequirement};
 
 /// One node of a rule's pattern: a template operator, or an operand the rule
@@ -177,7 +177,19 @@ impl CompiledIselPattern {
         class: Id,
         pointer_width: Option<u32>,
     ) -> bool {
-        let meta = &self.node_meta[pattern_node.index()];
+        // A copy rule's query binds variables past the pattern's own nodes: the
+        // view it roots on, and the literals fixing that view's bounds. The
+        // pattern names none of them, so none of them carries an operand
+        // constraint. Its one named operand is not checked here either: it is
+        // read *through* the view, so the requirement that applies is
+        // `accepts_low_view_source` rather than plain acceptance, and
+        // `reads_the_source` is where that lives.
+        if self.copy {
+            return true;
+        }
+        let Some(meta) = self.node_meta.get(pattern_node.index()) else {
+            return true;
+        };
         if let Some(required) = meta.register
             && let Some(actual) = class_register_type(ctx, egraph, class, pointer_width)
             && !required.accepts(&actual)
@@ -214,14 +226,17 @@ impl CompiledIselPattern {
         pointer_width: Option<u32>,
         allowed: &dyn Fn(Id, Id) -> bool,
     ) -> Vec<Match> {
-        if self.copy {
-            return self.search_low_bit_copies_at(egraph, ctx, roots);
-        }
         let allowed = |var: u32, class: Id| allowed(Id::from_raw(var), class);
         self.plan
             .search(egraph, roots, &allowed, false, &NoExterns)
             .into_iter()
-            .filter(|matched| self.match_types(egraph, ctx, matched, pointer_width))
+            .filter(|matched| {
+                if self.copy {
+                    self.reads_the_source(egraph, ctx, matched)
+                } else {
+                    self.match_types(egraph, ctx, matched, pointer_width)
+                }
+            })
             .collect()
     }
 
@@ -237,42 +252,20 @@ impl CompiledIselPattern {
         })
     }
 
-    /// A copy rule roots on the low-bit `Extract` view of a wider class, binding
-    /// its bare symbol to the view's source — rooting on the source class itself
-    /// would make the copy self-referential.
-    fn search_low_bit_copies_at(
-        &self,
-        egraph: &SemEGraph,
-        ctx: &Context,
-        roots: impl IntoIterator<Item = Id>,
-    ) -> Vec<Match> {
-        let meta = &self.node_meta[self.root as usize];
-        if meta.constraint == Some(OperandConstraint::Immediate) {
-            return Vec::new();
-        }
-        roots
-            .into_iter()
-            .filter_map(|root| {
-                let root = egraph.find(root);
-                let source = low_extract_source(egraph, root)?;
-                let width = low_extract_width(egraph, root)?;
-                let source_ty = class_semantic_type(ctx, egraph, source)?;
-                let writes_the_view = self.result_register.is_some_and(|register| {
-                    register.capability.integer && register.capability.width == width
-                });
-                let reads_the_source = meta
-                    .register
-                    .is_none_or(|register| register.accepts_low_view_source(&source_ty));
-                if !writes_the_view || !reads_the_source {
-                    return None;
-                }
-                Some(Match {
-                    root,
-                    bindings: SmallVec::from_slice(&[Some(source)]),
-                    scalars: SmallVec::new(),
-                })
-            })
-            .collect()
+    /// Whether a copy rule may read the class its view is a truncation of. The
+    /// query has already found the view and matched the width; what is left is
+    /// the operand's own storage requirement, which is where every other
+    /// pattern's type checking also lives.
+    fn reads_the_source(&self, egraph: &SemEGraph, ctx: &Context, matched: &Match) -> bool {
+        let Some(source) = matched.bindings[self.root as usize] else {
+            return false;
+        };
+        let Some(source_ty) = class_semantic_type(ctx, egraph, source) else {
+            return false;
+        };
+        self.node_meta[self.root as usize]
+            .register
+            .is_none_or(|register| register.accepts_low_view_source(&source_ty))
     }
 }
 
@@ -310,7 +303,11 @@ pub(crate) fn compile_isel_pattern(
         .iter()
         .filter(|node| matches!(node, PatternNode::Template(node) if node.ty.is_some()))
         .count();
-    let (plan, captures) = lower(&nodes, pattern_root);
+    let (plan, captures) = if copy {
+        lower_copy(pattern_root, result_register?)?
+    } else {
+        lower(&nodes, pattern_root)
+    };
 
     Some(CompiledIselPattern {
         rule_index,
@@ -323,6 +320,68 @@ pub(crate) fn compile_isel_pattern(
         result_register,
         copy,
     })
+}
+
+/// The query a copy rule is. A copy roots on the low-bit `Extract` view of a
+/// wider class and binds its bare symbol to the view's *source*: rooting on the
+/// source itself would make the copy self-referential, so the root is a class the
+/// pattern does not name. Its variables therefore run past the pattern's own
+/// nodes, which is why operand legality only speaks for the ones it does name.
+///
+/// `Extract(source, hi, lo)` with `lo = 0` is the view, and `hi + 1` is the width
+/// it presents; the rule matches only where that is the width its result register
+/// writes. A rule whose result is not an integer register writes no view at all.
+fn lower_copy(source: Id, result: RegisterRequirement) -> Option<(Plan<SemNode>, Vec<u32>)> {
+    if !result.capability.integer {
+        return None;
+    }
+    let (view, hi, lo) = (source.0 + 1, source.0 + 2, source.0 + 3);
+    let (lo_label, lo_value, hi_label, hi_value) = (0, 1, 2, 3);
+    let mut extract = template_node(SymKind::Extract, None, None);
+    extract.children = vec![source, Id::from_raw(hi), Id::from_raw(lo)];
+    let query = Query {
+        vars: source.0 + 4,
+        scalars: 4,
+        root: view,
+        atoms: vec![
+            Atom::Node {
+                template: extract,
+                args: SmallVec::from_slice(&[source.0, hi, lo]),
+                class: view,
+                row: None,
+            },
+            Atom::Fact {
+                column: ColumnId::Const,
+                key: lo,
+                value: lo_label,
+            },
+            Atom::Fact {
+                column: ColumnId::Const,
+                key: hi,
+                value: hi_label,
+            },
+        ],
+        guards: vec![
+            Guard::Read {
+                term: Source::Label(lo_label),
+                field: tir::sem::node::field::INT_VALUE,
+                out: lo_value,
+            },
+            Guard::Cmp(Cmp::Eq, Expr::Scalar(lo_value), Expr::Lit(0)),
+            Guard::Read {
+                term: Source::Label(hi_label),
+                field: tir::sem::node::field::INT_VALUE,
+                out: hi_value,
+            },
+            Guard::Cmp(
+                Cmp::Eq,
+                Expr::Add(Box::new(Expr::Scalar(hi_value)), Box::new(Expr::Lit(1))),
+                Expr::Lit(i64::from(result.capability.width)),
+            ),
+        ],
+        nots: Vec::new(),
+    };
+    Some((Plan::compile(query), vec![source.0]))
 }
 
 /// Append a pattern node, returning the class variable it binds.

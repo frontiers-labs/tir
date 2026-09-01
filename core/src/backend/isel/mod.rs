@@ -2881,7 +2881,10 @@ fn value_match_allowed(
     if !compiled.boundary_ok(&fs.egraph, context, pattern_node, class, fs.pointer_width) {
         return false;
     }
-    if pattern_node == pattern_root || compiled.node_meta[pattern_node.index()].duplicable {
+    let Some(meta) = compiled.node_meta.get(pattern_node.index()) else {
+        return true;
+    };
+    if pattern_node == pattern_root || meta.duplicable {
         return true;
     }
     let class = fs.egraph.find(class);
