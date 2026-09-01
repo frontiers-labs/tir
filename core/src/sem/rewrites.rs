@@ -4,10 +4,8 @@
 //! Instruction selection saturates a whole function's e-graph with them before
 //! covering.
 
-use std::collections::HashSet;
-
 use tir_relational::Rule;
-use tir_symbolic::egraph::{Delta, ENode, Id, RoundStats, Timer, trace_enabled};
+use tir_symbolic::egraph::{self, Delta, Id, RoundStats, Timer, trace_enabled};
 
 use super::SymKind;
 use super::axioms::{Axiom, Folding, Interpretation};
@@ -78,39 +76,25 @@ impl Default for SaturationLimits {
 /// iteration is only visible to the next. Stops at a fixpoint (an iteration that
 /// changes neither the class nor the node count nor a fact) or once a limit is
 /// reached.
+///
+/// Round 0 starts from the change log rather than from the whole graph, so an
+/// assumption scope pays for what it assumed instead of for the graph it assumed
+/// it over. That is sound because the log is drained at the end of every
+/// saturation that reaches a fixpoint (below), which leaves a scope's entry log
+/// holding its own assertion alone, and because a scope saturates exactly once —
+/// the log is a single consumable stream, so a second saturation under the same
+/// assumption would find the assertion already gone. A stop on a limit marks
+/// everything changed instead, so the next saturation is a full one.
 pub fn saturate(ctx: &Context, eg: &mut SemEGraph, theory: &Theory, limits: SaturationLimits) {
-    saturate_impl(ctx, eg, theory, limits, None);
-}
-
-/// Saturate an open scope's assumption over `roots`, the base graph already being
-/// saturated globally. `roots` are searched verbatim — the caller has already
-/// narrowed them to the classes the scope changed, and a class it left alone is
-/// at the base fixpoint. Each round re-narrows, since applying a rule mints
-/// classes and those are changed by construction.
-pub fn saturate_scope(
-    ctx: &Context,
-    eg: &mut SemEGraph,
-    theory: &Theory,
-    limits: SaturationLimits,
-    roots: Vec<Id>,
-) {
-    saturate_impl(ctx, eg, theory, limits, Some(roots));
-}
-
-fn saturate_impl(
-    ctx: &Context,
-    eg: &mut SemEGraph,
-    theory: &Theory,
-    limits: SaturationLimits,
-    mut roots: Option<Vec<Id>>,
-) {
-    // Round 0 searches everything the caller asked for; from there on only the
-    // classes the previous round changed, and their parents up to each rule's
-    // height, can hold a match the round before did not already apply.
     let timer = Timer::start();
     let externs = theory.interpretation(ctx);
-    eg.take_changed();
-    let mut delta: Option<Delta> = None;
+    let mut log = eg.take_changed();
+    // Everything the saturation made readable, for the post-saturation phase to
+    // search. The rest of the graph was already at that phase's fixpoint when the
+    // caller handed it over, so only these classes can hold a match it does not
+    // have.
+    let mut touched = log.clone();
+    let mut delta: Option<Delta> = log.take().map(Delta::new);
     // Cleared by every exit that reached a fixpoint; a stop on a limit leaves it
     // set, since the matches such a stop never reached are not in the change log
     // and the next saturation of this graph may not trust it.
@@ -122,8 +106,11 @@ fn saturate_impl(
             if rule.post_saturation {
                 continue;
             }
-            let round = round_roots(eg, rule, roots.as_deref(), delta.as_mut());
+            let round = round_roots(eg, rule, delta.as_mut());
             stats.searched(round.len(), delta.as_ref());
+            if round.is_empty() {
+                continue;
+            }
             let narrow = delta.is_some() && !rule.plan.unbounded();
             for m in rule.plan.search(eg, round, &|_, _| true, narrow, &externs) {
                 matches.push((index, m));
@@ -154,15 +141,12 @@ fn saturate_impl(
         }
         eg.rebuild();
         stats.finish(eg);
-        delta = eg.take_changed().map(Delta::new);
-        if let Some(roots) = &mut roots {
-            let dirty: HashSet<Id> = eg.scope_dirty().into_iter().collect();
-            *roots = reachable_roots(eg, std::mem::take(roots))
-                .into_iter()
-                .filter(|class| dirty.contains(class))
-                .collect();
+        let log = eg.take_changed();
+        match (&mut touched, &log) {
+            (Some(all), Some(changed)) => all.extend(changed.iter().copied()),
+            _ => touched = None,
         }
-
+        delta = log.map(Delta::new);
         if (eg.num_classes(), eg.total_size(), eg.stats().raises) == before {
             // The counts held, but a round that changed only facts changed
             // nothing they count, and is not a fixpoint. `None` is the widest
@@ -176,20 +160,31 @@ fn saturate_impl(
     }
     if on_a_limit {
         eg.mark_all_changed();
+        touched = None;
     }
     eg.rebuild();
 
+    let mut touched = touched.map(|mut all| {
+        for id in &mut all {
+            *id = eg.find(*id);
+        }
+        all.sort_unstable();
+        all.dedup();
+        Delta::new(all)
+    });
     let matches: Vec<_> = theory
         .rules
         .iter()
         .enumerate()
         .filter(|(_, rule)| rule.post_saturation)
         .flat_map(|(index, rule)| {
-            let roots = round_roots(eg, rule, roots.as_deref(), None);
-            rule.plan
-                .search(eg, roots, &|_, _| true, false, &externs)
-                .into_iter()
-                .map(move |matched| (index, matched))
+            let roots = round_roots(eg, rule, touched.as_mut());
+            let matches = if roots.is_empty() {
+                Vec::new()
+            } else {
+                rule.plan.search(eg, roots, &|_, _| true, false, &externs)
+            };
+            matches.into_iter().map(move |matched| (index, matched))
         })
         .collect();
     for (index, matched) in &matches {
@@ -200,47 +195,25 @@ fn saturate_impl(
         );
     }
     eg.rebuild();
+    // A post-saturation head is terminal: the phase runs once, after the
+    // fixpoint, and nothing feeds its results back. Draining the log says so, and
+    // is what leaves the next assumption scope's entry log holding that scope's
+    // own assertion rather than this fixpoint's tail. A limit stop is not a
+    // fixpoint, so it keeps the "everything changed" mark instead.
+    if !on_a_limit {
+        eg.take_changed();
+    }
     timer.finish();
 }
 
-/// The classes a round searches `rule` at: what the caller narrowed the
-/// saturation to, else everything the rule's root atom can match, and then only
-/// the frontier at the rule's height — for a rule the change log can speak for.
-fn round_roots(
-    eg: &SemEGraph,
-    rule: &Rule<SemNode>,
-    scope: Option<&[Id]>,
-    delta: Option<&mut Delta>,
-) -> Vec<Id> {
-    let mut roots = match scope {
-        Some(scope) => scope.to_vec(),
+/// The classes a round searches `rule` at: everything the rule's root atom can
+/// match, and then only the frontier at the rule's height — for a rule the change
+/// log can speak for.
+fn round_roots(eg: &SemEGraph, rule: &Rule<SemNode>, delta: Option<&mut Delta>) -> Vec<Id> {
+    match delta.filter(|_| !rule.plan.unbounded()) {
+        Some(delta) => egraph::round_roots(eg, &rule.plan, delta),
         None => rule.plan.roots(eg),
-    };
-    if let Some(delta) = delta.filter(|_| !rule.plan.unbounded()) {
-        let frontier = delta.at(eg, rule.plan.height());
-        roots.retain(|&root| frontier.binary_search(&eg.find(root)).is_ok());
     }
-    roots
-}
-
-/// Discovery order is deterministic (DFS from `roots` in the given order):
-/// callers iterate the result into searching and application, where order
-/// decides which node wins a cost tie downstream.
-pub(crate) fn reachable_roots(eg: &SemEGraph, roots: impl IntoIterator<Item = Id>) -> Vec<Id> {
-    let mut seen = HashSet::new();
-    let mut reachable = Vec::new();
-    let mut pending: Vec<_> = roots.into_iter().collect();
-    while let Some(root) = pending.pop() {
-        let root = eg.find(root);
-        if !seen.insert(root) {
-            continue;
-        }
-        reachable.push(root);
-        for node in eg.nodes(root) {
-            pending.extend(node.children().iter().map(|child| eg.find(*child)));
-        }
-    }
-    reachable
 }
 
 /// The target-independent semantic invariants every rule set gets.

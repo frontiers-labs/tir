@@ -490,14 +490,22 @@ impl<L: Label> Plan<L> {
     /// The classes the root atom can match at: those holding its operator, or
     /// every class when the root binds no row.
     pub fn roots(&self, eg: &Engine<L>) -> Vec<ClassId> {
+        match self.root_op() {
+            Some(op) => eg.classes_with_op(op),
+            None => eg.class_ids().collect(),
+        }
+    }
+
+    /// The operator the root atom binds, or `None` when the root binds no row.
+    pub fn root_op(&self) -> Option<u64> {
         match self
             .query
             .atoms
             .iter()
             .find(|atom| atom.class() == self.query.root)
         {
-            Some(Atom::Node { template, .. }) => eg.classes_with_op(template.op_key()),
-            _ => eg.class_ids().collect(),
+            Some(Atom::Node { template, .. }) => Some(template.op_key()),
+            _ => None,
         }
     }
 

@@ -8,7 +8,10 @@
 mod extract;
 mod telemetry;
 
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+
+use tir_adt::FxBuildHasher;
 
 pub use tir_relational::trace_enabled;
 pub use tir_relational::{ClassId as Id, ClassRef as EClass, Label as ENode};
@@ -16,11 +19,19 @@ pub use tir_relational::{ClassId as Id, ClassRef as EClass, Label as ENode};
 pub use extract::*;
 pub use telemetry::{RoundStats, Timer, report_saturation};
 
+/// Δ_h grouped by operator: for each, the classes holding it paired with the row
+/// each one enters that operator's bucket at, which is what orders the group.
+type OpGroups = HashMap<u64, Vec<(u32, Id)>, FxBuildHasher>;
+
 /// Per-round frontier of semi-naive saturation: the change log of the previous
 /// round closed upward, cached by the pattern heights a rule set asks for.
 pub struct Delta {
     /// `levels[h]` is Δ_h; grown on demand, each from the one below it.
     levels: Vec<Vec<Id>>,
+    /// `by_op[h]` groups Δ_h by the operators its classes hold, so a round scans
+    /// each depth once instead of once per rule.
+    /// Each group is ordered by the row a class enters the bucket at.
+    by_op: Vec<OpGroups>,
 }
 
 impl Delta {
@@ -28,6 +39,7 @@ impl Delta {
     pub fn new(changed: Vec<Id>) -> Self {
         Self {
             levels: vec![changed],
+            by_op: Vec::new(),
         }
     }
 
@@ -54,6 +66,60 @@ impl Delta {
             self.levels.push(eg.delta(below, 1));
         }
         &self.levels[height]
+    }
+
+    /// The classes of Δ_height holding `op`, in the order the operator's row
+    /// bucket holds them: where a rule of that height rooted on that operator can
+    /// match anew.
+    ///
+    /// Scanning the frontier once per depth beats materializing each rule's whole
+    /// bucket and filtering it, because a settled round's frontier is a handful of
+    /// classes while the bucket holds every term of that shape in the function.
+    /// The bucket is appended to as rows are minted, and a class enters it at its
+    /// first row of that operator, so ordering each group by that row reproduces
+    /// the bucket's order exactly — which is the root order a match's position in
+    /// the round is defined by, and so the order class ids are assigned in.
+    pub fn roots<L: ENode>(&mut self, eg: &EGraph<L>, height: usize, op: u64) -> &[(u32, Id)] {
+        self.at(eg, height);
+        while self.by_op.len() <= height {
+            let mut by_op: OpGroups = HashMap::default();
+            let mut ops: Vec<(u64, u32)> = Vec::new();
+            for &class in &self.levels[self.by_op.len()] {
+                ops.clear();
+                for row in eg.rows(class) {
+                    let op = eg.node(row).op_key();
+                    match ops.iter_mut().find(|(seen, _)| *seen == op) {
+                        Some((_, first)) => *first = (*first).min(row.0),
+                        None => ops.push((op, row.0)),
+                    }
+                }
+                for &(op, row) in &ops {
+                    by_op.entry(op).or_default().push((row, class));
+                }
+            }
+            for group in by_op.values_mut() {
+                group.sort_unstable();
+            }
+            self.by_op.push(by_op);
+        }
+        self.by_op[height].get(&op).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The classes a semi-naive round searches `plan` at: the change frontier at the
+/// plan's height, restricted to the operator its root binds.
+pub fn round_roots<L: ENode>(
+    eg: &EGraph<L>,
+    plan: &tir_relational::Plan<L>,
+    delta: &mut Delta,
+) -> Vec<Id> {
+    match plan.root_op() {
+        Some(op) => delta
+            .roots(eg, plan.height(), op)
+            .iter()
+            .map(|&(_, class)| class)
+            .collect(),
+        None => delta.at(eg, plan.height()).to_vec(),
     }
 }
 
@@ -119,12 +185,14 @@ impl<L: ENode> EGraph<L> {
                 // speak for one whose match depends on rows outside the root's
                 // cone.
                 let bounded = !rule.plan.unbounded();
-                let mut roots = rule.plan.roots(self);
-                if let Some(delta) = delta.as_mut().filter(|_| bounded) {
-                    let frontier = delta.at(self, rule.plan.height());
-                    roots.retain(|&root| frontier.binary_search(&self.find(root)).is_ok());
-                }
+                let roots = match delta.as_mut().filter(|_| bounded) {
+                    Some(delta) => round_roots(self, &rule.plan, delta),
+                    None => rule.plan.roots(self),
+                };
                 stats.searched(roots.len(), delta.as_ref());
+                if roots.is_empty() {
+                    continue;
+                }
                 let matches = rule.plan.search(
                     self,
                     roots,

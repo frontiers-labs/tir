@@ -200,18 +200,10 @@ impl CompiledIselPattern {
         }
     }
 
-    pub(crate) fn search_with_legality(
-        &self,
-        egraph: &SemEGraph,
-        ctx: &Context,
-        pointer_width: Option<u32>,
-        allowed: &dyn Fn(Id, Id) -> bool,
-    ) -> Vec<Match> {
-        if self.copy {
-            return self.search_low_bit_copies(egraph, ctx);
-        }
-        let roots = self.plan.roots(egraph);
-        self.search_roots_with_legality(egraph, ctx, roots, pointer_width, allowed)
+    /// The classes the pattern can root at: those holding its root operator, or
+    /// every class where it roots on a bare symbol or a low-bit view.
+    pub(crate) fn roots(&self, egraph: &SemEGraph) -> Vec<Id> {
+        self.plan.roots(egraph)
     }
 
     pub(crate) fn search_roots_with_legality(
@@ -248,11 +240,6 @@ impl CompiledIselPattern {
     /// A copy rule roots on the low-bit `Extract` view of a wider class, binding
     /// its bare symbol to the view's source — rooting on the source class itself
     /// would make the copy self-referential.
-    fn search_low_bit_copies(&self, egraph: &SemEGraph, ctx: &Context) -> Vec<Match> {
-        let roots: Vec<_> = egraph.classes().map(|class| class.id()).collect();
-        self.search_low_bit_copies_at(egraph, ctx, roots)
-    }
-
     fn search_low_bit_copies_at(
         &self,
         egraph: &SemEGraph,

@@ -13,6 +13,7 @@ mod builder;
 mod cover;
 mod destruct;
 mod emit;
+mod matches;
 mod node;
 mod pattern;
 mod rules;
@@ -49,73 +50,11 @@ use cover::{
     PbqpIselMatch, build_eclass_cover, completeness_error, prune_dominated_matches,
 };
 use emit::{AuxEmit, BlockPlan, GuardBranch, ScheduledEmit, order_tiles, resolve_match};
+use matches::{MatchRef, Matches};
 use node::{is_low_extract_view, low_extract_source};
 use pattern::{CompiledIselPattern, PatternNode, compile_isel_pattern};
 use tir::sem::axioms::{self, verify_axioms};
 use tir::sem::rewrites::{self, discover_rewrites};
-
-/// The function-wide value search, indexed the way a block consumes it: by root
-/// class, each root's patterns in index order. A fact-free class reads its matches
-/// straight out of here however many blocks ask.
-struct FunctionMatches {
-    by_root: HashMap<Id, Vec<(usize, IselMatch)>>,
-    /// Value patterns rooted on a concrete operator, by that operator's key.
-    by_op: HashMap<u64, Vec<usize>>,
-    /// Value patterns that root on anything (a bare symbol, or a copy rule).
-    anywhere: Vec<usize>,
-    specificity: Vec<usize>,
-}
-
-impl FunctionMatches {
-    /// The patterns worth searching at `class`: those rooted on an operator it
-    /// holds (or on the constant its scope assumes it to be), plus the
-    /// root-agnostic ones. Ascending index, so a class's matches come out in the
-    /// same pattern order the base search recorded them in.
-    fn patterns_rooting_at(&self, fs: &FunctionSelection, class: Id) -> Vec<usize> {
-        let mut indices = self.anywhere.clone();
-        let assumed = fs.egraph.const_of(class).into_iter();
-        for node in fs.egraph.nodes(class).chain(assumed) {
-            indices.extend(self.by_op.get(&node.op_key()).into_iter().flatten());
-        }
-        indices.sort_unstable();
-        indices.dedup();
-        indices
-    }
-}
-
-/// The classes a block reads that its dominating assumption changed. Everywhere
-/// else the scoped e-graph is the base one node for node, so those classes'
-/// matches come from the function-wide [`InstructionSelectPass::base_value_matches`]
-/// and only these are searched again. Empty for a fact-free block and — the case
-/// that pays — for a block whose scope merged nothing it reads.
-#[derive(Default)]
-struct ChangedClasses {
-    /// Saturation seed order, so what the block proves is reproducible.
-    roots: Vec<Id>,
-    members: HashSet<Id>,
-}
-
-impl ChangedClasses {
-    /// The classes of `cone` the open scope changed. `cone` being closed downward,
-    /// intersecting it with the scope's whole affected set is the same as closing
-    /// upward inside it from the merges the block actually reads.
-    fn new(egraph: &SemEGraph, cone: &[Id]) -> Self {
-        let dirty: HashSet<Id> = egraph.scope_dirty().into_iter().collect();
-        let roots: Vec<Id> = cone
-            .iter()
-            .copied()
-            .filter(|class| dirty.contains(class))
-            .collect();
-        Self {
-            members: roots.iter().copied().collect(),
-            roots,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.roots.is_empty()
-    }
-}
 
 /// A conditional-branch rule chosen for a destruction's test: the rule, its
 /// operand bindings (the taken target bound as a block), the boundary classes the
@@ -972,6 +911,15 @@ pub type OpLowering = fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool,
 pub struct InstructionSelectPass {
     rules: Vec<Rule>,
     compiled_patterns: Vec<CompiledIselPattern>,
+    /// How type-constrained each compiled pattern is: the tie-break the cover
+    /// prunes dominated matches by.
+    specificity: Vec<usize>,
+    /// Value patterns rooted on a concrete operator, by that operator's key, and
+    /// those that root on anything (a bare symbol, or a copy rule). Rule data, so
+    /// it is built once rather than per function: a class is only ever searched
+    /// against the patterns that can root at it.
+    value_patterns_by_op: HashMap<u64, Vec<usize>>,
+    value_patterns_anywhere: Vec<usize>,
     /// Immediate ranges of every formal constant materializer
     /// (see [`pattern::constant_materializer_ranges`]). Empty means bare
     /// constants stay with the target's pre-RA materialization hook.
@@ -1251,6 +1199,24 @@ impl InstructionSelectPass {
             .collect();
 
         let theory = discover_rewrites();
+        let specificity = compiled_patterns
+            .iter()
+            .map(|pattern| pattern.specificity)
+            .collect();
+        let mut value_patterns_by_op: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut value_patterns_anywhere = Vec::new();
+        for (index, compiled) in compiled_patterns.iter().enumerate() {
+            if rules[compiled.rule_index].kind != RuleKind::Value {
+                continue;
+            }
+            match &compiled.nodes[compiled.root()] {
+                PatternNode::Template(node) if !compiled.is_copy() => value_patterns_by_op
+                    .entry(node.op_key())
+                    .or_default()
+                    .push(index),
+                _ => value_patterns_anywhere.push(index),
+            }
+        }
         let constant_materializer_ranges: Vec<_> = compiled_patterns
             .iter()
             .filter_map(CompiledIselPattern::constant_materializer_range)
@@ -1267,6 +1233,9 @@ impl InstructionSelectPass {
         Self {
             rules,
             compiled_patterns,
+            specificity,
+            value_patterns_by_op,
+            value_patterns_anywhere,
             constant_materializer_ranges,
             float_constant_materializer_widths,
             default_layout: None,
@@ -1362,18 +1331,10 @@ impl InstructionSelectPass {
         // A fact-free block sees exactly the base graph, so every value pattern's
         // e-match is block-independent: search once here and reuse for all such
         // blocks (fact-bearing blocks re-search under their scope).
-        let base_matches = self.base_value_matches(&fs, context);
+        let mut matches = self.base_value_matches(&fs, context);
         let mut visited = HashSet::new();
         if let Some(root) = dom.root() {
-            self.solve_dominator_subtree(
-                context,
-                &mut fs,
-                &dom,
-                root,
-                false,
-                &base_matches,
-                &mut visited,
-            );
+            self.solve_dominator_subtree(context, &mut fs, &dom, root, &mut matches, &mut visited);
         }
         // Unreachable blocks are absent from the dominator tree. A region's
         // blocks are absent for the same reason — the tree orders the function's
@@ -1383,7 +1344,7 @@ impl InstructionSelectPass {
             if block.is_empty() || visited.contains(&block_id) {
                 continue;
             }
-            let plan = self.solve_block(context, &block, &mut fs, &dom, false, &base_matches);
+            let plan = self.solve_block(context, &block, &fs, &dom, &mut matches);
             self.plans.insert(block_id, plan);
         }
         telemetry::report(
@@ -1406,15 +1367,13 @@ impl InstructionSelectPass {
         true
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn solve_dominator_subtree(
         &mut self,
         context: &Context,
         fs: &mut FunctionSelection,
         dom: &DominatorTree,
         node: NodeId,
-        inherited_scope: bool,
-        base_matches: &FunctionMatches,
+        matches: &mut Matches,
         visited: &mut HashSet<BlockId>,
     ) {
         let Some(block_id) = dom.block(node) else {
@@ -1432,21 +1391,22 @@ impl InstructionSelectPass {
                 assert_fact(context, &mut fs.egraph, expr, holds);
             }
             fs.egraph.rebuild();
+            self.open_scope_matches(context, fs, matches);
         }
-        let scoped = inherited_scope || own_fact.is_some();
 
         let block = context.get_block(block_id);
         if !block.is_empty() {
-            let plan = self.solve_block(context, &block, fs, dom, scoped, base_matches);
+            let plan = self.solve_block(context, &block, fs, dom, matches);
             self.plans.insert(block_id, plan);
         }
 
         let children: Vec<_> = dom.children(node).collect();
         for child in children {
-            self.solve_dominator_subtree(context, fs, dom, child, scoped, base_matches, visited);
+            self.solve_dominator_subtree(context, fs, dom, child, matches, visited);
         }
         if own_fact.is_some() {
             fs.egraph.pop_context();
+            matches.close_scope();
         }
     }
 
@@ -1454,45 +1414,85 @@ impl InstructionSelectPass {
     /// legality a fact-free block's solve applies (boundary constraints, and
     /// interior nodes restricted to pure or function-wide op-root classes). A
     /// block narrows this superset to the classes its cover reaches.
-    fn base_value_matches(&self, fs: &FunctionSelection, context: &Context) -> FunctionMatches {
-        let mut base = FunctionMatches {
-            by_root: HashMap::new(),
-            by_op: HashMap::new(),
-            anywhere: Vec::new(),
-            specificity: self
-                .compiled_patterns
-                .iter()
-                .map(|pattern| pattern.specificity)
-                .collect(),
-        };
+    fn base_value_matches(&self, fs: &FunctionSelection, context: &Context) -> Matches {
+        let mut found = Vec::new();
         for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
             if self.rules[compiled.rule_index].kind != RuleKind::Value {
                 continue;
             }
-            let pattern_root = Id::from_raw(compiled.root() as u32);
-            match &compiled.nodes[compiled.root()] {
-                PatternNode::Template(node) if !compiled.is_copy() => base
-                    .by_op
-                    .entry(node.op_key())
-                    .or_default()
-                    .push(pattern_index),
-                _ => base.anywhere.push(pattern_index),
-            }
-            for m in compiled.search_with_legality(
-                &fs.egraph,
-                context,
-                fs.pointer_width,
-                &|node, class| {
-                    value_match_allowed(fs, context, compiled, pattern_root, node, class)
-                },
-            ) {
-                base.by_root
-                    .entry(fs.egraph.find(m.root))
-                    .or_default()
-                    .push((pattern_index, m));
-            }
+            let roots = compiled.roots(&fs.egraph);
+            self.search_pattern(fs, context, pattern_index, roots, &mut found);
         }
-        base
+        Matches::base(fs.egraph.class_count(), found)
+    }
+
+    /// The value matches rooted at one class, in the order the cover reads them:
+    /// ascending pattern index, then production order. Only the patterns whose
+    /// root can bind at the class are searched, including those rooted on the
+    /// constant an open assumption proved it to be, which adds no row of its own.
+    fn value_matches_at(
+        &self,
+        fs: &FunctionSelection,
+        context: &Context,
+        class: Id,
+    ) -> Vec<(usize, IselMatch)> {
+        let mut indices = self.value_patterns_anywhere.clone();
+        let assumed = fs.egraph.const_of(class).into_iter();
+        for node in fs.egraph.nodes(class).chain(assumed) {
+            indices.extend(
+                self.value_patterns_by_op
+                    .get(&node.op_key())
+                    .into_iter()
+                    .flatten(),
+            );
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        let mut found = Vec::new();
+        for pattern_index in indices {
+            self.search_pattern(fs, context, pattern_index, [class], &mut found);
+        }
+        found
+    }
+
+    fn search_pattern(
+        &self,
+        fs: &FunctionSelection,
+        context: &Context,
+        pattern_index: usize,
+        roots: impl IntoIterator<Item = Id>,
+        found: &mut Vec<(usize, IselMatch)>,
+    ) {
+        let compiled = &self.compiled_patterns[pattern_index];
+        let pattern_root = Id::from_raw(compiled.root() as u32);
+        let matched = compiled.search_roots_with_legality(
+            &fs.egraph,
+            context,
+            roots,
+            fs.pointer_width,
+            &|node, class| value_match_allowed(fs, context, compiled, pattern_root, node, class),
+        );
+        found.extend(matched.into_iter().map(|mut m| {
+            m.root = fs.egraph.find(m.root);
+            (pattern_index, m)
+        }));
+    }
+
+    /// Saturate the assumption just pushed and open a match frame over what it
+    /// changed. Once per scope, not once per block: the engine's log is a single
+    /// consumable stream, so a second saturation under the same assumption would
+    /// find the assertion already drained, and the frame's changed set would stop
+    /// being a fixed point for the blocks still to be solved under it.
+    fn open_scope_matches(
+        &self,
+        context: &Context,
+        fs: &mut FunctionSelection,
+        matches: &mut Matches,
+    ) {
+        rewrites::saturate(context, &mut fs.egraph, &self.theory, Default::default());
+        let changed = fs.egraph.innermost_dirty();
+        telemetry::record_scope(changed.len());
+        matches.open_scope(changed);
     }
 
     /// Lower every block of the function into one shared, base-saturated e-graph
@@ -1770,40 +1770,6 @@ impl InstructionSelectPass {
         }
     }
 
-    /// Solve one block against its live dominator scope, saturating and matching
-    /// only classes reachable from the block's roots.
-    #[allow(clippy::too_many_arguments)]
-    fn solve_block(
-        &self,
-        context: &Context,
-        block: &BlockHandle,
-        fs: &mut FunctionSelection,
-        dom: &DominatorTree,
-        scoped: bool,
-        base_matches: &FunctionMatches,
-    ) -> Result<BlockPlan, String> {
-        let mut changed = ChangedClasses::default();
-        if scoped {
-            let cone = rewrites::reachable_roots(&fs.egraph, block_root_seeds(block, fs));
-            changed = ChangedClasses::new(&fs.egraph, &cone);
-            if !changed.is_empty() {
-                rewrites::saturate_scope(
-                    context,
-                    &mut fs.egraph,
-                    &self.theory,
-                    Default::default(),
-                    changed.roots.clone(),
-                );
-                // Saturation mints classes and merges more, so what the block
-                // reads and what changed in it both have to be re-read.
-                let cone = rewrites::reachable_roots(&fs.egraph, cone);
-                changed = ChangedClasses::new(&fs.egraph, &cone);
-            }
-            telemetry::record_scoped_block(&changed);
-        }
-        self.solve_block_inner(context, block, fs, dom, &changed, base_matches)
-    }
-
     /// Commit every block of the function and then destruct what carries regions:
     /// the whole function is emitted from its own visit, because a region's blocks
     /// become blocks of the function and neither the walk nor a per-block commit
@@ -2005,15 +1971,13 @@ impl InstructionSelectPass {
 
     /// Solve `block` against the (already scoped) shared graph, restricting
     /// matching and the cover to what `block` computes.
-    #[allow(clippy::too_many_arguments)]
-    fn solve_block_inner(
+    fn solve_block(
         &self,
         context: &Context,
         block: &BlockHandle,
         fs: &FunctionSelection,
         dom: &DominatorTree,
-        changed: &ChangedClasses,
-        base_matches: &FunctionMatches,
+        value_matches: &mut Matches,
     ) -> Result<BlockPlan, String> {
         let block_id = block.id();
         let op_ids = block.op_ids();
@@ -2048,8 +2012,7 @@ impl InstructionSelectPass {
             &op_refs,
             &block_op_by_root,
             &guard_classes,
-            changed,
-            base_matches,
+            value_matches,
         );
 
         // Search the branch rules once for the whole block, indexed by condition
@@ -2573,8 +2536,7 @@ impl InstructionSelectPass {
         op_refs: &HashMap<OpId, OperationRef>,
         block_op_by_root: &HashMap<Id, OpId>,
         guard_classes: &HashSet<Id>,
-        changed: &ChangedClasses,
-        base: &FunctionMatches,
+        value_matches: &mut Matches,
     ) -> (Vec<PbqpIselMatch>, Vec<Id>) {
         let mut covered: HashSet<Id> = block_op_by_root.keys().copied().collect();
         covered.extend(guard_classes.iter().copied());
@@ -2591,11 +2553,10 @@ impl InstructionSelectPass {
                 op_refs,
                 block_op_by_root,
                 guard_classes,
-                changed,
-                base,
+                value_matches,
                 class,
             );
-            prune_dominated_matches(&base.specificity, &mut at_class);
+            prune_dominated_matches(&self.specificity, &mut at_class);
             for matched in &at_class {
                 for binding in &matched.bindings.pattern_nodes {
                     if binding.is_state {
@@ -2614,8 +2575,9 @@ impl InstructionSelectPass {
         (matches, covered)
     }
 
-    /// The value matches rooted at one class: read off the function-wide base
-    /// search where the block's assumption left the class alone, searched again
+    /// The value matches rooted at one class, narrowed to what this block may
+    /// select. The index answers from the function-wide search where the open
+    /// assumption left the class alone, and from a re-search under the assumption
     /// where it did not.
     #[allow(clippy::too_many_arguments)]
     fn root_matches(
@@ -2625,54 +2587,26 @@ impl InstructionSelectPass {
         op_refs: &HashMap<OpId, OperationRef>,
         block_op_by_root: &HashMap<Id, OpId>,
         guard_classes: &HashSet<Id>,
-        changed: &ChangedClasses,
-        base: &FunctionMatches,
+        value_matches: &mut Matches,
         class: Id,
     ) -> Vec<PbqpIselMatch> {
-        let no_matches: &[(usize, IselMatch)] = &[];
-        let mut fresh: Vec<(usize, IselMatch)> = Vec::new();
-        let cached = if changed.members.contains(&class) {
-            for pattern_index in base.patterns_rooting_at(fs, class) {
-                let compiled = &self.compiled_patterns[pattern_index];
-                let pattern_root = Id::from_raw(compiled.root() as u32);
-                fresh.extend(
-                    compiled
-                        .search_roots_with_legality(
-                            &fs.egraph,
-                            context,
-                            [class],
-                            fs.pointer_width,
-                            &|node, bound| {
-                                value_match_allowed(
-                                    fs,
-                                    context,
-                                    compiled,
-                                    pattern_root,
-                                    node,
-                                    bound,
-                                )
-                            },
-                        )
-                        .into_iter()
-                        .map(|m| (pattern_index, m)),
-                );
-            }
-            no_matches
-        } else {
-            base.by_root.get(&class).map_or(no_matches, Vec::as_slice)
-        };
-        telemetry::record_root_matches(cached.len(), fresh.len());
+        value_matches.ensure(class, || {
+            let found = self.value_matches_at(fs, context, class);
+            telemetry::record_research(found.len());
+            found
+        });
+        let at_class: Vec<MatchRef<'_>> = value_matches.at(class).collect();
+        telemetry::record_root_matches(at_class.len());
 
         let mut matches = Vec::new();
-        for (pattern_index, m) in cached.iter().chain(&fresh) {
-            let pattern_index = *pattern_index;
+        for m in at_class {
+            let pattern_index = m.pattern;
+
             let compiled = &self.compiled_patterns[pattern_index];
             let rule = &self.rules[compiled.rule_index];
             let pattern_root = Id::from_raw(compiled.root() as u32);
             let root = fs.egraph.find(m.root);
-            if compiled.is_copy()
-                && fs.has_values(CompiledIselPattern::binding(m, pattern_root.index()))
-            {
+            if compiled.is_copy() && fs.has_values(m.bindings[pattern_root.index()]) {
                 continue;
             }
             let block_op = block_op_by_root.get(&root).copied();
@@ -2695,9 +2629,7 @@ impl InstructionSelectPass {
                 if node == pattern_root || compiled.node_meta[node.index()].duplicable {
                     return true;
                 }
-                let class = fs
-                    .egraph
-                    .find(CompiledIselPattern::binding(m, node.index()));
+                let class = fs.egraph.find(m.bindings[node.index()]);
                 node::class_is_pure(&fs.egraph, class)
                     || (block_op_by_root.contains_key(&class) && !fs.is_shared(class))
             });
@@ -2713,7 +2645,7 @@ impl InstructionSelectPass {
                 if compiled.is_state_symbol(symbol) {
                     continue;
                 }
-                let class = CompiledIselPattern::binding(m, node as usize);
+                let class = m.bindings[node as usize];
                 captures.bind(symbol, fs.egraph.find(class));
             }
 
@@ -2759,9 +2691,7 @@ impl InstructionSelectPass {
                     } else {
                         cover::BoundaryDemand::Structural
                     };
-                    let mut class = fs
-                        .egraph
-                        .find(CompiledIselPattern::binding(m, pattern_node.index()));
+                    let mut class = fs.egraph.find(m.bindings[pattern_node.index()]);
                     // A register boundary on a low-extract view reads the
                     // chased source's register, so the cover's edges, the
                     // schedule's dependencies, and availability all target
@@ -2837,29 +2767,25 @@ impl InstructionSelectPass {
     }
 }
 
-/// Whether incremental scoped matching is paying: how much of what a block reads
-/// its assumption changed, how many classes the cover actually reached, and how
-/// much of the candidate set came from the function-wide base search instead of a
-/// re-search. Printed as `tir-isel:` lines on stderr under `TIR_TIME_PASSES`,
-/// alongside the pass-timing table.
+/// Whether the per-scope match index is paying: how much of the graph each
+/// assumption changed, how many matches re-searching those classes produced, and
+/// how many the cover read in total. Printed as `tir-isel:` lines on stderr under
+/// `TIR_TIME_PASSES`, alongside the pass-timing table.
 mod telemetry {
     use std::cell::Cell;
 
-    use super::ChangedClasses;
-
     const SCOPED: usize = 0;
-    const CLEAN: usize = 1;
-    const DIRTY_SUM: usize = 2;
-    const DIRTY_MAX: usize = 3;
-    const REUSED: usize = 4;
-    const RESEARCHED: usize = 5;
-    const COVERED: usize = 6;
+    const CHANGED_SUM: usize = 1;
+    const CHANGED_MAX: usize = 2;
+    const READ: usize = 3;
+    const RESEARCHED: usize = 4;
+    const COVERED: usize = 5;
 
     thread_local! {
-        static COUNTS: Cell<[usize; 7]> = const { Cell::new([0; 7]) };
+        static COUNTS: Cell<[usize; 6]> = const { Cell::new([0; 6]) };
     }
 
-    fn bump(update: impl Fn(&mut [usize; 7])) {
+    fn bump(update: impl Fn(&mut [usize; 6])) {
         if !crate::pass::timing::enabled() {
             return;
         }
@@ -2870,21 +2796,22 @@ mod telemetry {
         });
     }
 
-    pub(super) fn record_scoped_block(changed: &ChangedClasses) {
-        let size = changed.roots.len();
+    pub(super) fn record_scope(changed: usize) {
         bump(|counts| {
             counts[SCOPED] += 1;
-            counts[CLEAN] += usize::from(size == 0);
-            counts[DIRTY_SUM] += size;
-            counts[DIRTY_MAX] = counts[DIRTY_MAX].max(size);
+            counts[CHANGED_SUM] += changed;
+            counts[CHANGED_MAX] = counts[CHANGED_MAX].max(changed);
         });
     }
 
-    pub(super) fn record_root_matches(reused: usize, researched: usize) {
+    pub(super) fn record_research(found: usize) {
+        bump(|counts| counts[RESEARCHED] += found);
+    }
+
+    pub(super) fn record_root_matches(read: usize) {
         bump(|counts| {
             counts[COVERED] += 1;
-            counts[REUSED] += reused;
-            counts[RESEARCHED] += researched;
+            counts[READ] += read;
         });
     }
 
@@ -2893,12 +2820,12 @@ mod telemetry {
             return;
         }
         tir_symbolic::egraph::report_saturation("isel");
-        let c = COUNTS.replace([0; 7]);
-        let dirty_avg = c[DIRTY_SUM].checked_div(c[SCOPED]).unwrap_or(0);
+        let c = COUNTS.replace([0; 6]);
+        let changed_avg = c[CHANGED_SUM].checked_div(c[SCOPED]).unwrap_or(0);
         eprintln!(
-            "tir-isel: fn={function} blocks={blocks} classes={classes} scoped={} clean={} \
-             dirty_avg={dirty_avg} dirty_max={} covered={} reused={} researched={}",
-            c[SCOPED], c[CLEAN], c[DIRTY_MAX], c[COVERED], c[REUSED], c[RESEARCHED]
+            "tir-isel: fn={function} blocks={blocks} classes={classes} scopes={} \
+             changed_avg={changed_avg} changed_max={} covered={} read={} researched={}",
+            c[SCOPED], c[CHANGED_MAX], c[COVERED], c[READ], c[RESEARCHED]
         );
     }
 }
@@ -2936,24 +2863,6 @@ fn enclosing_carrier(context: &Context, from: BlockId, def_block: BlockId) -> Op
         }
         current = parent;
     }
-}
-
-/// Op order then destruction-auxiliary order, first occurrence kept: the seeds
-/// feed scoped saturation and match search, whose order must be reproducible.
-fn block_root_seeds(block: &BlockHandle, fs: &FunctionSelection) -> Vec<Id> {
-    let mut seen = HashSet::new();
-    let mut roots: Vec<Id> = Vec::new();
-    let candidates = block
-        .op_ids()
-        .into_iter()
-        .filter_map(|op| fs.op_root.get(&op).copied())
-        .chain(fs.aux_classes(block.id()));
-    for root in candidates {
-        if seen.insert(root) {
-            roots.push(root);
-        }
-    }
-    roots
 }
 
 /// Whether `class` may bind under `pattern_node` in a value match, before the
