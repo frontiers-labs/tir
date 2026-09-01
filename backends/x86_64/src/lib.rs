@@ -442,68 +442,6 @@ mod isa {
                 }
             };
         }
-        // Single register (+ immediate): `op → op_norex` when the register is low.
-        macro_rules! reg1_norex {
-            ($Op:ty, $Norex:ty, $n:literal, $t:expr) => {
-                if let Some(inner) = op.as_op::<$Op>() {
-                    return match reg_index(&inner, $n) {
-                        Some(d) if d < $t => replace(rewriter, reencode!($Norex, inner)),
-                        _ => Ok(false),
-                    };
-                }
-            };
-        }
-        macro_rules! ri_norex {
-            ($Op:ty, $Norex:ty, $t:expr) => {
-                reg1_norex!($Op, $Norex, "dst", $t)
-            };
-        }
-        rr_norex!(Imul32Op, Imul32NorexOp, LO);
-        rr_norex!(ImulImm32Op, ImulImm32NorexOp, LO);
-
-        ri_norex!(ShlImm32Op, ShlImm32NorexOp, LO);
-        ri_norex!(ShrImm32Op, ShrImm32NorexOp, LO);
-        ri_norex!(SarImm32Op, SarImm32NorexOp, LO);
-        ri_norex!(ShlImm16Op, ShlImm16NorexOp, LO);
-        ri_norex!(ShrImm16Op, ShrImm16NorexOp, LO);
-        ri_norex!(SarImm16Op, SarImm16NorexOp, LO);
-        ri_norex!(ShlImm8Op, ShlImm8NorexOp, B);
-        ri_norex!(ShrImm8Op, ShrImm8NorexOp, B);
-        ri_norex!(SarImm8Op, SarImm8NorexOp, B);
-
-        reg1_norex!(SetEqOp, SetEqNorexOp, "dst", B);
-        reg1_norex!(SetParityOp, SetParityNorexOp, "dst", B);
-        reg1_norex!(SetNoParityOp, SetNoParityNorexOp, "dst", B);
-        reg1_norex!(SetNotEqOp, SetNotEqNorexOp, "dst", B);
-        reg1_norex!(SetLessOp, SetLessNorexOp, "dst", B);
-        reg1_norex!(SetGreaterEqOp, SetGreaterEqNorexOp, "dst", B);
-        reg1_norex!(SetLessEqOp, SetLessEqNorexOp, "dst", B);
-        reg1_norex!(SetGreaterOp, SetGreaterNorexOp, "dst", B);
-        reg1_norex!(SetBelowOp, SetBelowNorexOp, "dst", B);
-        reg1_norex!(SetAboveEqOp, SetAboveEqNorexOp, "dst", B);
-        reg1_norex!(SetBelowEqOp, SetBelowEqNorexOp, "dst", B);
-        reg1_norex!(SetAboveOp, SetAboveNorexOp, "dst", B);
-
-        reg1_norex!(PushOp, PushNorexOp, "reg", LO);
-        reg1_norex!(PopOp, PopNorexOp, "reg", LO);
-        // The indirect jmp/call forms are not produced before this pass: `jmp
-        // *reg` reaches its `_norex` form through the assembler, and the codegen
-        // indirect call is materialized REX-free directly in `finalize_virtual_ops`
-        // (it is created there, after this pass would have run).
-
-        // cmp/test reg-reg, neg/not, by-cl shifts and rotate immediates: the
-        // 32-bit width is the only one with a generic (so the only one reachable
-        // here); the 16/8-bit `_norex` forms exist for the assembler only.
-        reg1_norex!(Neg32Op, Neg32NorexOp, "dst", LO);
-        reg1_norex!(Not32Op, Not32NorexOp, "dst", LO);
-        reg1_norex!(SignedDivide32Op, SignedDivide32NorexOp, "dst", LO);
-        reg1_norex!(UnsignedDivide32Op, UnsignedDivide32NorexOp, "dst", LO);
-        reg1_norex!(ShlCl32Op, ShlCl32NorexOp, "dst", LO);
-        reg1_norex!(ShrCl32Op, ShrCl32NorexOp, "dst", LO);
-        reg1_norex!(SarCl32Op, SarCl32NorexOp, "dst", LO);
-        ri_norex!(RolImm32Op, RolImm32NorexOp, LO);
-        ri_norex!(RorImm32Op, RorImm32NorexOp, LO);
-
         // Low-xmm SSE: drop the empty REX when both xmm operands are xmm0..xmm7.
         rr_norex!(AddssOp, AddssNorexOp, LO);
         rr_norex!(SubssOp, SubssNorexOp, LO);
@@ -592,22 +530,8 @@ mod isa {
             let target = call.operands().first().copied().ok_or_else(|| {
                 tir::PassError::InvalidRuleSet("indirect call has no callee register".to_string())
             })?;
-            // `call *reg` needs no REX when the target is rax..rdi; emit the
-            // REX-free form directly (this op is created after
-            // `canonicalize_encodings` would run).
-            let low = matches!(
-                tir::backend::assigned_register(context, op.op(), target),
-                Some((_, index)) if index < 8
-            );
-            let real: Box<dyn Operation> = if low {
-                Box::new(
-                    CallIndirectNorexOpBuilder::new(context)
-                        .target(target)
-                        .build(),
-                )
-            } else {
-                Box::new(CallIndirectOpBuilder::new(context).target(target).build())
-            };
+            let real: Box<dyn Operation> =
+                Box::new(CallIndirectOpBuilder::new(context).target(target).build());
             tir::backend::forward_state(context, op.op(), real.as_ref());
             rewriter.replace_op(op, real.as_ref())?;
             return Ok(true);

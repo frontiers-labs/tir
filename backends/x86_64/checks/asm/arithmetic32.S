@@ -34,11 +34,11 @@ alu32:
 # CHECK-NEXT: x86_64.or_imm32 {dst = edx, imm = 1}
 # CHECK-NEXT: x86_64.xor_imm32 {dst = esi, imm = 7}
 # CHECK-NEXT: x86_64.mov_imm32 {dst = edi, imm = 100}
-# CHECK-NEXT: x86_64.shl32_norex {dst = eax, imm = 3}
-# CHECK-NEXT: x86_64.shr32_norex {dst = ebx, imm = 1}
-# CHECK-NEXT: x86_64.sar32_norex {dst = ecx, imm = 31}
+# CHECK-NEXT: x86_64.shl32 {dst = eax, imm = 3}
+# CHECK-NEXT: x86_64.shr32 {dst = ebx, imm = 1}
+# CHECK-NEXT: x86_64.sar32 {dst = ecx, imm = 31}
 # CHECK-NEXT: x86_64.add32 {dst = r8d, src = r9d}
 # CHECK-NEXT: x86_64.mov32 {dst = r15d, src = r10d}
 # CHECK-NEXT: x86_64.add_imm32 {dst = r12d, imm = 42}
-# CHECK-NEXT: x86_64.imul32_norex {dst = eax, src = ebx}
+# CHECK-NEXT: x86_64.imul32 {dst = eax, src = ebx}
 # CHECK-NEXT: x86_64.imul32 {dst = r8d, src = r9d}

@@ -2555,15 +2555,23 @@ fn check_pc_single_shape(
     if shapes.len() < 2 {
         return vec![];
     }
+    let is_pc = |expr: &ast::Expr| {
+        matches!(expr, ast::Expr::Path(path)
+            if matches!(item_cache.get(path.base.as_str()),
+                        Some(ast::Item::RegisterClass(class)) if class.is_program_counter()))
+    };
+    // Writing the program counter is fine — `jmp *reg` sets it from a register
+    // whatever the encoding looks like. Reading it is not: the value a branch
+    // computes from it counts the bytes of the instruction doing the reading,
+    // and the shape decides how many those are.
     let reads_pc = {
         let mut found = false;
         crate::utils::visit_exprs(&instruction.behavior, &mut |node| {
-            if let ast::Expr::Path(path) = node
-                && let Some(ast::Item::RegisterClass(class)) = item_cache.get(path.base.as_str())
-                && class.is_program_counter()
-            {
-                found = true;
-            }
+            let value = match node {
+                ast::Expr::Assign(assign) => &*assign.value,
+                _ => return,
+            };
+            crate::utils::visit_exprs(value, &mut |inner| found |= is_pc(inner));
         });
         found
     };

@@ -4,7 +4,9 @@
 // (cset/slt parity) and cmovcc (csel parity). Condition guards mirror the
 // jcc family in base.tmdl.
 
-// `setcc r/m8`: REX + 0x0F + 0x90|cc + ModR/M(mod=11, reg=0, rm=dst).
+// `setcc r/m8`: 0x0F + 0x90|cc + ModR/M(mod=11, reg=0, rm=dst), behind a REX
+// byte when the destination needs one (r8b..r15b, or spl/bpl/sil/dil, whose
+// numbers name ah..bh without it).
 template SetccReg for [X86_64] {
     param MNEMONIC: String;
     param CC: bits<8>;
@@ -14,38 +16,10 @@ template SetccReg for [X86_64] {
     }
 
     encoding {
-        0b0100,
-        0b0,
-        0b0,
-        0b0,
-        dst[3],
+        rex_rm(0b0, dst, needs_rex8_one(dst)),
         0x0F,
         CC,
-        0b11,
-        0b000,
-        dst[2..0],
-    }
-
-    asm {
-        "{self.MNEMONIC} {dst}"
-    }
-}
-
-// No-REX `setcc r/m8` (al/cl/dl/bl): 0x0F + 0x90|cc + ModR/M, no REX prefix.
-template SetccRegNorex for [X86] {
-    param MNEMONIC: String;
-    param CC: bits<8>;
-
-    operands {
-        dst: GPR8low,
-    }
-
-    encoding {
-        0x0F,
-        CC,
-        0b11,
-        0b000,
-        dst[2..0],
+        modrm_ext(0b000, dst),
     }
 
     asm {
@@ -81,21 +55,6 @@ setcc_ops!(
     (SetAboveEq,   "setae", 0x93, { EFLAGS::cf == zext(0b0, 1) }),
     (SetBelowEq,   "setbe", 0x96, { (EFLAGS::cf | EFLAGS::zf) == zext(0b1, 1) }),
     (SetAbove,     "seta",  0x97, { (EFLAGS::cf | EFLAGS::zf) == zext(0b0, 1) })
-)
-
-setcc_norex!(
-    (SetParityNorex,    "setp_norex",  "setp",  0x9A, { EFLAGS::pf == zext(0b1, 1) }),
-    (SetNoParityNorex,  "setnp_norex", "setnp", 0x9B, { EFLAGS::pf == zext(0b0, 1) }),
-    (SetEqNorex,        "sete_norex",  "sete",  0x94, { EFLAGS::zf == zext(0b1, 1) }),
-    (SetNotEqNorex,     "setne_norex", "setne", 0x95, { EFLAGS::zf == zext(0b0, 1) }),
-    (SetLessNorex,      "setl_norex",  "setl",  0x9C, { EFLAGS::sf != EFLAGS::of }),
-    (SetGreaterEqNorex, "setge_norex", "setge", 0x9D, { EFLAGS::sf == EFLAGS::of }),
-    (SetLessEqNorex,    "setle_norex", "setle", 0x9E, { (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b1, 1) }),
-    (SetGreaterNorex,   "setg_norex",  "setg",  0x9F, { (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b0, 1) }),
-    (SetBelowNorex,     "setb_norex",  "setb",  0x92, { EFLAGS::cf == zext(0b1, 1) }),
-    (SetAboveEqNorex,   "setae_norex", "setae", 0x93, { EFLAGS::cf == zext(0b0, 1) }),
-    (SetBelowEqNorex,   "setbe_norex", "setbe", 0x96, { (EFLAGS::cf | EFLAGS::zf) == zext(0b1, 1) }),
-    (SetAboveNorex,     "seta_norex",  "seta",  0x97, { (EFLAGS::cf | EFLAGS::zf) == zext(0b0, 1) })
 )
 
 // cmovcc family: `cmovcc r64, r/m64` (0x0F 0x40|cc), the `RegRegExt` layout.

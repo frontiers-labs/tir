@@ -5,19 +5,17 @@
 // movzx/movsx register extensions and fixed-register signed/unsigned division.
 
 // Group-3 unary `op r/m64`: REX.W + 0xF7 + ModR/M(mod=11, reg=EXT, rm=dst).
-tmpl_runary!(RegUnary, X86_64, GPR, rexw = 0b1)
+tmpl_runary!(RegUnary, X86_64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0, opcode = 0xF7)
 
-tmpl_runary!(RegUnary32, X86_64, GPR32, rexw = 0b0)
+tmpl_runary!(RegUnary32, X86_64, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0, opcode = 0xF7)
+
+tmpl_runary!(RegUnary16, X86_64, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0, opcode = 0xF7)
+
+tmpl_runary!(RegUnary8, X86_64, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1, opcode = 0xF6)
 
 // No-REX group-3 unary templates over the low subclasses (0xF7 / 0x66+0xF7 /
 // 0xF6). Selected post-RA by `canonicalize_encodings` and by the assembler's
 // specificity sort where GNU as omits the empty REX.
-tmpl_runary!(RegUnary32Norex, GPR32low, norex)
-
-tmpl_runary!(RegUnary16Norex, GPR16low, prefix66norex)
-
-tmpl_runary!(RegUnary8Norex, GPR8low, bytenorex)
-
 // `movzx/movsx r64, r/m8`: REX.W + 0x0F + opcode, dst in ModR/M.reg, the
 // narrow source in rm (the `RegRegExt` field layout with a narrow source).
 tmpl_extend!(ExtendReg8, GPR8)
@@ -253,63 +251,6 @@ instruction UnsignedDivide32 for [X86_64] : RegUnary32 {
     }
 }
 
-macro divide32_norex {
-    ( $( ( $name:ident, $opname:literal, $mnemonic:literal, $ext:literal, { $($b:tt)* } ) ),* ) => {
-        $( instruction $name for [X86] : RegUnary32Norex {
-               param OPNAME: String = $opname;
-               param MNEMONIC: String = $mnemonic;
-               param EXT: bits<3> = $ext;
-               behavior { $($b)* }
-           } )*
-    };
-}
-
-divide32_norex!(
-    (SignedDivide32Norex, "signed_divide32_norex", "idiv", 0b111, {
-        if GPR32::edx == sext(extract(GPR32::eax, 31, 31), 32) {
-            GPR32::edx = GPR32::eax - (GPR32::eax / dst) * dst;
-            GPR32::eax = GPR32::eax / dst;
-        } else {
-            GPR32::edx = extract(
-                ((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64))
-                    - (((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64))
-                        / sext(dst, 64))
-                        * sext(dst, 64),
-                31, 0);
-            GPR32::eax = extract(
-                ((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64)) / sext(dst, 64),
-                31, 0);
-        }
-    }),
-    (UnsignedDivide32Norex, "unsigned_divide32_norex", "div", 0b110, {
-        if GPR32::edx == zext(0b0, 32) {
-            GPR32::edx = GPR32::eax - (GPR32::eax ~/ dst) * dst;
-            GPR32::eax = GPR32::eax ~/ dst;
-        } else {
-            GPR32::edx = extract(
-                ((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64))
-                    - (((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64))
-                        ~/ zext(dst, 64))
-                        * zext(dst, 64),
-                31, 0);
-            GPR32::eax = extract(
-                ((zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64)) ~/ zext(dst, 64),
-                31, 0);
-        }
-    })
-)
-
-instruction SignExtendDividend32Norex for [X86] {
-    param OPNAME: String = "sign_extend_dividend32_norex";
-    param MNEMONIC: String = "cdq";
-    schedule { units = [WriteIExtend]; }
-    encoding { 0x99 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        GPR32::edx = sext(extract(GPR32::eax, 31, 31), 32);
-    }
-}
-
 // Rotates share the 0xC1 shift-immediate layout. Both shifts of the rotate pair
 // are computed with the count masked to the operand width, so a zero count
 // degenerates to `dst | dst`.
@@ -385,13 +326,13 @@ macro extend32_norex {
 }
 
 extend32_norex!(
-    (Movzx8To32Norex, "movzx8_to32_norex", "movzx", GPR8low, 0xB6,
+    (Movzx8To32, "movzx8_to32", "movzx", GPR8low, 0xB6,
         { dst = zext(src, 32); }),
-    (Movzx16To32Norex, "movzx16_to32_norex", "movzx", GPR16low, 0xB7,
+    (Movzx16To32, "movzx16_to32", "movzx", GPR16low, 0xB7,
         { dst = zext(src, 32); }),
-    (Movsx8To32Norex, "movsx8_to32_norex", "movsx", GPR8low, 0xBE,
+    (Movsx8To32, "movsx8_to32", "movsx", GPR8low, 0xBE,
         { dst = sext(src, 32); }),
-    (Movsx16To32Norex, "movsx16_to32_norex", "movsx", GPR16low, 0xBF,
+    (Movsx16To32, "movsx16_to32", "movsx", GPR16low, 0xBF,
         { dst = sext(src, 32); })
 )
 
@@ -595,33 +536,23 @@ instruction Not32 for [X86_64] : RegUnary32 {
     }
 }
 
-// No-REX neg/not (0xF7 /3, /2; byte 0xF6) over the low subclasses. neg = /3,
-// not = /2. The 32-bit forms are the canonicalize target for Neg32/Not32, the
-// 16/8-bit forms are assembler-only (no narrow generic). Like their generic
-// twins these model the value only: `neg` writes flags on hardware, but adding
-// them here would make the norex form disagree with Neg32/Neg.
-reg_ext_norex!(RegUnary32Norex, WriteIALU, { dst = zext(0b0, 32) - dst; },
-    (Neg32Norex, "neg32_norex", "neg", 0b011)
+// neg/not at the narrow widths (0xF7 /3, /2; byte 0xF6). Like the generic
+// forms these model the value only: `neg` writes flags on hardware, but adding
+// them here would make the narrow forms disagree with Neg32/Neg.
+reg_ext!(RegUnary16, WriteIALU3B, { dst = zext(0b0, 16) - dst; },
+    (Neg16, "neg16", "neg", 0b011)
 )
 
-reg_ext_norex!(RegUnary32Norex, WriteIALU, { dst = ~dst; },
-    (Not32Norex, "not32_norex", "not", 0b010)
+reg_ext!(RegUnary16, WriteIALU3B, { dst = ~dst; },
+    (Not16, "not16", "not", 0b010)
 )
 
-reg_ext_norex!(RegUnary16Norex, WriteIALU3B, { dst = zext(0b0, 16) - dst; },
-    (Neg16Norex, "neg16_norex", "neg", 0b011)
+reg_ext!(RegUnary8, WriteIALU, { dst = zext(0b0, 8) - dst; },
+    (Neg8, "neg8", "neg", 0b011)
 )
 
-reg_ext_norex!(RegUnary16Norex, WriteIALU3B, { dst = ~dst; },
-    (Not16Norex, "not16_norex", "not", 0b010)
-)
-
-reg_ext_norex!(RegUnary8Norex, WriteIALU, { dst = zext(0b0, 8) - dst; },
-    (Neg8Norex, "neg8_norex", "neg", 0b011)
-)
-
-reg_ext_norex!(RegUnary8Norex, WriteIALU, { dst = ~dst; },
-    (Not8Norex, "not8_norex", "not", 0b010)
+reg_ext!(RegUnary8, WriteIALU, { dst = ~dst; },
+    (Not8, "not8", "not", 0b010)
 )
 
 shift_imm!("32", "32", RegShift32,
@@ -657,37 +588,3 @@ shift_imm!("32", "32", RegShift32,
     })
 )
 
-// No-REX 32-bit rotate-by-immediate (0xC1 /0, /1): the canonicalize target for
-// RolImm32/RorImm32 on a low register, same semantics.
-shift_imm!(X86, "32Norex", "32_norex", RegShift32Norex,
-    (RolImm, "rol", 0b000, {
-        let res = (dst << extract(imm, 4, 0))
-            | (dst >> ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
-        EFLAGS::cf = if extract(imm, 4, 0) == zext(0b0, 5) {
-            EFLAGS::cf
-        } else {
-            extract(res, 0, 0)
-        };
-        EFLAGS::of = if extract(imm, 4, 0) == zext(0b0, 5) {
-            EFLAGS::of
-        } else {
-            extract(res, 31, 31) ^ extract(res, 0, 0)
-        };
-        dst = res;
-    }),
-    (RorImm, "ror", 0b001, {
-        let res = (dst >> extract(imm, 4, 0))
-            | (dst << ((zext(0b0, 32) - zext(extract(imm, 4, 0), 32)) & zext(0b11111, 32)));
-        EFLAGS::cf = if extract(imm, 4, 0) == zext(0b0, 5) {
-            EFLAGS::cf
-        } else {
-            extract(res, 31, 31)
-        };
-        EFLAGS::of = if extract(imm, 4, 0) == zext(0b0, 5) {
-            EFLAGS::of
-        } else {
-            extract(res, 31, 31) ^ extract(res, 30, 30)
-        };
-        dst = res;
-    })
-)

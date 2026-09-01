@@ -32,9 +32,9 @@ alu16:
 # CHECK-NEXT: x86_64.or_imm16 {dst = dx, imm = 1}
 # CHECK-NEXT: x86_64.xor_imm16 {dst = si, imm = 7}
 # CHECK-NEXT: x86_64.mov_imm16 {dst = di, imm = 100}
-# CHECK-NEXT: x86_64.shl16_norex {dst = ax, imm = 3}
-# CHECK-NEXT: x86_64.shr16_norex {dst = bx, imm = 1}
-# CHECK-NEXT: x86_64.sar16_norex {dst = cx, imm = 15}
+# CHECK-NEXT: x86_64.shl16 {dst = ax, imm = 3}
+# CHECK-NEXT: x86_64.shr16 {dst = bx, imm = 1}
+# CHECK-NEXT: x86_64.sar16 {dst = cx, imm = 15}
 # CHECK-NEXT: x86_64.add16 {dst = r8w, src = r9w}
 # CHECK-NEXT: x86_64.mov16 {dst = r15w, src = r10w}
 # CHECK-NEXT: x86_64.add_imm16 {dst = r12w, imm = 42}

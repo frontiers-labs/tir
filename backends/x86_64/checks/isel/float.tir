@@ -94,23 +94,23 @@ module {
 // CHECK:      x86_64.movsd_store_disp_norex
 // CHECK:      x86_64.mov_load
 // CHECK:      x86_64.ucomisd_norex {lhs = %{{[0-9]+}}:XMM, rhs = %{{[0-9]+}}:XMM}
-// CHECK-NEXT: x86_64.seta_norex {dst = %{{[0-9]+}}:GPR8low}
+// CHECK-NEXT: x86_64.seta {dst = %{{[0-9]+}}:GPR8}
 // CHECK:      x86_64.ucomisd_norex
-// CHECK-NEXT: x86_64.setae_norex
+// CHECK-NEXT: x86_64.setae
 // CHECK:      x86_64.ucomisd_norex
-// CHECK-NEXT: x86_64.seta_norex
+// CHECK-NEXT: x86_64.seta
 // CHECK:      x86_64.ucomisd_norex
-// CHECK-NEXT: x86_64.setae_norex
+// CHECK-NEXT: x86_64.setae
 // CHECK-LABEL: asm.symbol {name = "equal"
 // CHECK:      x86_64.ucomisd_norex
-// CHECK-NEXT: x86_64.set{{a|ae}}_norex
+// CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK:      x86_64.ucomisd_norex
-// CHECK-NEXT: x86_64.set{{a|ae}}_norex
+// CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK:      x86_64.and
 // CHECK-LABEL: asm.symbol {name = "not_equal"
 // CHECK:      x86_64.ucomisd_norex
-// CHECK-NEXT: x86_64.set{{a|ae}}_norex
+// CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK:      x86_64.ucomisd_norex
-// CHECK-NEXT: x86_64.set{{a|ae}}_norex
+// CHECK-NEXT: x86_64.set{{a|ae}}
 // CHECK:      x86_64.and
 // CHECK-NEXT: x86_64.xor_imm

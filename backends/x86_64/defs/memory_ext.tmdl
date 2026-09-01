@@ -1800,7 +1800,7 @@ template PushPop for [X86_64] {
     }
 
     encoding {
-        rex!({ reg[3] }, { 0b0 }, 0b0)
+        rex_rm(0b0, reg, 0b0),
         OPCODE,
         reg[2..0],
     }
@@ -1830,45 +1830,3 @@ instruction Pop for [X86_64] : PushPop {
     }
 }
 
-// No-REX push/pop (rax..rdi): the register number lives entirely in the opcode
-// byte. `canonicalize_encodings` downgrades `Push`/`Pop` to these, so they carry
-// the same 8-byte stack semantics.
-template PushPopNorex for [X86] {
-    param MNEMONIC: String;
-    param OPCODE: bits<5>;
-
-    operands {
-        reg: GPRlow,
-    }
-
-    encoding {
-        OPCODE,
-        reg[2..0],
-    }
-
-    asm {
-        "{self.MNEMONIC} {reg}"
-    }
-}
-
-instruction PushNorex for [X86] : PushPopNorex {
-    param OPNAME: String = "push_norex";
-    param MNEMONIC: String = "push";
-    param OPCODE: bits<5> = 0b01010;
-
-    behavior {
-        GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
-        store(GPR::rsp, 8, reg);
-    }
-}
-
-instruction PopNorex for [X86] : PushPopNorex {
-    param OPNAME: String = "pop_norex";
-    param MNEMONIC: String = "pop";
-    param OPCODE: bits<5> = 0b01011;
-
-    behavior {
-        reg = load(GPR::rsp, 8, 0b0);
-        GPR::rsp = GPR::rsp + zext(0b1000, self.XLEN);
-    }
-}

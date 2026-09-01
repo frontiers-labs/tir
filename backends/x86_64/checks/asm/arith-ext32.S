@@ -16,15 +16,15 @@ arith_ext32:
 	ror ebx, 2
 
 # CHECK:      asm.symbol {name = "arith_ext32"}
-# CHECK-NEXT: x86_64.neg32_norex {dst = eax}
-# CHECK-NEXT: x86_64.not32_norex {dst = ecx}
+# CHECK-NEXT: x86_64.neg32 {dst = eax}
+# CHECK-NEXT: x86_64.not32 {dst = ecx}
 # CHECK-NEXT: x86_64.sub_imm32 {dst = eax, imm = 42}
 # CHECK-NEXT: x86_64.cmp32 {dst = ebx, src = ecx}
 # CHECK-NEXT: x86_64.cmp_imm32 {dst = ebx, imm = 7}
 # CHECK-NEXT: x86_64.test32 {dst = edx, src = esi}
 # CHECK-NEXT: x86_64.test_imm32 {dst = edx, imm = 5}
-# CHECK-NEXT: x86_64.shl_cl32_norex {dst = eax}
-# CHECK-NEXT: x86_64.shr_cl32_norex {dst = ebx}
-# CHECK-NEXT: x86_64.sar_cl32_norex {dst = ecx}
-# CHECK-NEXT: x86_64.rol32_norex {dst = eax, imm = 3}
-# CHECK-NEXT: x86_64.ror32_norex {dst = ebx, imm = 2}
+# CHECK-NEXT: x86_64.shl_cl32 {dst = eax}
+# CHECK-NEXT: x86_64.shr_cl32 {dst = ebx}
+# CHECK-NEXT: x86_64.sar_cl32 {dst = ecx}
+# CHECK-NEXT: x86_64.rol32 {dst = eax, imm = 3}
+# CHECK-NEXT: x86_64.ror32 {dst = ebx, imm = 2}

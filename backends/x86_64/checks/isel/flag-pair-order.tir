@@ -20,4 +20,4 @@ module {
 }
 
 // CHECK: x86_64.cmp {dst = %[[LHS:[0-9]+]]:GPR, src = %[[RHS:[0-9]+]]:GPR}
-// CHECK-NEXT: x86_64.setl_norex {dst = %{{[0-9]+}}:GPR8low}
+// CHECK-NEXT: x86_64.setl {dst = %{{[0-9]+}}:GPR8}
