@@ -13,9 +13,6 @@ tmpl_runary!(RegUnary16, X86_64, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0, opcod
 
 tmpl_runary!(RegUnary8, X86_64, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1, opcode = 0xF6)
 
-// No-REX group-3 unary templates over the low subclasses (0xF7 / 0x66+0xF7 /
-// 0xF6). Selected post-RA by `canonicalize_encodings` and by the assembler's
-// specificity sort where GNU as omits the empty REX.
 // `movzx/movsx r64, r/m8`: REX.W + 0x0F + opcode, dst in ModR/M.reg, the
 // narrow source in rm (the `RegRegExt` field layout with a narrow source).
 tmpl_extend!(ExtendReg8, GPR8)

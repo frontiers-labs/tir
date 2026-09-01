@@ -1,8 +1,10 @@
 // Resources are abstract: no vendor port names or tables.
 sched_class WriteIALU { latency = 1; }
-// 3-byte encodings (REX rr forms, 66-prefixed no-REX rr, short immediate
-// forms): their predecode throughput differs from other widths on some cores.
-// Machines without that effect bind these like their parent class.
+// Forms whose canonical encoding is three bytes (a REX register/register op, a
+// 66-prefixed one, a short immediate): their predecode throughput differs from
+// other widths on some cores. An instruction carries one class, so the shorter
+// shape of the same instruction is billed the same way; machines without the
+// effect bind these like their parent class.
 sched_class WriteIALU3B { latency = 1; }
 sched_class WriteIMove3B { latency = 1; }
 // ALU forms with a 66-prefixed 16-bit immediate: a length-changing prefix,

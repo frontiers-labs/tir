@@ -332,13 +332,6 @@ instruction RetLegacy for [X86] {
     }
 }
 
-// ModR/M-escape variants of the mov load/store. Declared before the generic
-// forms so the assembler tries them first: a `_sib`/`_rbp` candidate parses its
-// base only in the narrow class (rsp/r12, rbp/r13), falling through to the
-// generic for every other base. Post-RA `canonicalize_encodings` selects them
-// for codegen. Behavior-free (canonicalize-only), so they root no isel rules.
-
-
 
 
 

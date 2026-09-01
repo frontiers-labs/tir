@@ -510,24 +510,6 @@ fn print_register(
     }
 }
 
-/// Rebuild `op` as opcode `T` — a different encoding of the same instruction —
-/// keeping its operands, results and attributes. The values stay put, so the
-/// register assignment that placed them still describes the rewritten op.
-pub fn reencode_as<T: tir::Operation>(
-    context: &tir::Context,
-    op: &tir::OpHandle,
-) -> Box<dyn tir::Operation> {
-    let instance = tir::OpInstance::new_dynamic(
-        (T::dialect(), T::name()),
-        context.as_context_ref(),
-        op.operands().to_vec(),
-        op.results().to_vec(),
-        vec![],
-        op.attributes().to_vec(),
-    );
-    T::from_op_instance_dyn(context.add_operation(instance))
-}
-
 pub fn register_attr(
     op: &impl tir::Operation,
     name: &str,

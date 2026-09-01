@@ -253,26 +253,6 @@ mod isa {
         }
     }
 
-    /// Post-RA: a boolean materialized by `setcc` defines one byte, so a
-    /// generic `test` consuming it must read that width and ignore the stale
-    /// upper bits of the register it landed in.
-    fn narrow_test_to_byte(
-        context: &tir::Context,
-        op: &tir::OperationRef,
-        rewriter: &mut tir::Rewriter,
-    ) -> Result<bool, tir::PassError> {
-        let Some(inner) = op.as_op::<TestOp>() else {
-            return Ok(false);
-        };
-        let byte = tir::backend::op_slot_register(context, inner.handle(), "dst")
-            .is_some_and(|(class, _)| class == RegClass::GPR8.id());
-        if !byte {
-            return Ok(false);
-        }
-        let narrowed = tir::backend::reencode_as::<Test8Op>(context, inner.handle());
-        rewriter.replace_op(op, narrowed.as_ref()).map(|()| true)
-    }
-
     /// Post-RA: `vret` becomes `ret`; `vbr` becomes `jmp dest`.
     fn finalize_virtual_ops(
         context: &tir::Context,
@@ -348,8 +328,8 @@ mod isa {
     /// The move family a register class is copied and spilled with. A class is a
     /// view over a register file, so the family follows from that view — the file
     /// it draws from, the width of the view and where the view starts — and never
-    /// from the class name: `GPR32` and the REX-free `GPR32low` are the same
-    /// 32-bit view of the GPR file and move alike.
+    /// from the class name: two classes over the same file, width and offset
+    /// move alike whatever they are called.
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     enum MoveKind {
         Gpr64,
@@ -801,7 +781,7 @@ mod isa {
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![narrow_test_to_byte, finalize_virtual_ops]
+            vec![finalize_virtual_ops]
         }
 
         fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {

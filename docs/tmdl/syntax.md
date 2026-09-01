@@ -401,8 +401,12 @@ The rules a set of shapes must satisfy:
   no value for makes them all unreachable.
 - Shapes are decode-distinguishable: any two differ in width or in some bit
   both of them fix, so decoding stays a function of the instruction word.
+- A shape that spells fewer bits of an operand than the operand declares needs
+  a condition proving the rest are an extension of them (see below); dropping
+  them silently would encode a different value.
 - An instruction whose behavior reads the program counter has one shape; its
-  behavior cannot see which one the encoder picked.
+  behavior cannot see which one the encoder picked. Writing it is fine: `jmp
+  *reg` sets it from a register whatever the encoding looks like.
 - At most eight conditions per encoding. Beyond that the encoding is a design
   smell, not a limit to raise.
 
@@ -412,6 +416,32 @@ which branches it takes, so `if REXW | reg[3] | rm[3] { … }` with `REXW = 0b1`
 is the prefix unconditionally and one shape, while `REXW = 0b0` leaves the
 register test and two shapes. The dead branch is gone before the expansion
 runs, and the guard the encoder carries reads operands only.
+
+A field may take bits out of an operand, whose value the encoder reads when it
+runs. Taking them out of a parameter is refused: the parameter is a constant, so
+spell it whole and let the bit map hold it.
+
+### Narrow Fields
+
+A field narrower than the operand it spells — the byte an x86 group-1
+instruction carries instead of a double word — is the operand's low bits,
+written `imm as bits<8>` or `imm[7..0]`. The condition that selects it asks
+whether the value survives the round trip:
+
+```
+fn signed_fits(x, n) { sext(x as bits<n>, width(x)) == x }
+
+encoding {
+  if signed_fits(imm, 8) { 0x83 } else { 0x81 },
+  modrm_ext(EXT, dst),
+  if signed_fits(imm, 8) { imm as bits<8> } else { imm },
+}
+```
+
+The encoder asks the same question of the operand's value, and an operand still
+waiting for a relocation answers no, so a fixup always lands in the shape that
+spells the widest field. `zext` in place of `sext`, or the cast alone, asks the
+unsigned question.
 
 Reachability is decided by evaluating the conditions over the operand domains.
 An operand up to 8 bits wide is enumerated, so the answer is exact. A wider one

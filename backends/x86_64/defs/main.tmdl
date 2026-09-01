@@ -182,20 +182,11 @@ register_class GPR8H for [X86] {
     }
 }
 
-
-
-
-
-
-
-
-// Memory-base operand views over the GPR file, selected post-RA when a base
-// register lands on a ModR/M escape. Neither carries `argument` traits, so
-// `default_integer_class` still resolves to GPR; they share the file
-// (`file = GPR`) and alias index-for-index, and are never allocation classes.
-
-
-
+// The index register of a scaled address. A SIB index of 100 means "no index",
+// so rsp cannot be one; that is the ISA speaking, not the encoding, which is
+// why this view survives while the encoding-only ones did not. It shares the
+// GPR file (`file = GPR`), carries no `argument` traits, and is never an
+// allocation class.
 
 register_class GPRaddrIndex for [X86_64] {
     file = GPR;
@@ -211,7 +202,6 @@ register_class GPRaddrIndex for [X86_64] {
         r14 => { index = 14 }, r15 => { index = 15 },
     }
 }
-
 
 // `op dst, src`: REX.W + opcode + ModR/M(mod=11, reg=src, rm=dst). The REX byte
 // is 0100 WRXB: REX.B carries dst's 4th bit, REX.R carries src's.
@@ -259,7 +249,6 @@ tmpl_ri!(RegImm32, X86_64, GPR32, imm = 32, rexw = 0b0, p66 = 0b0)
 
 // 32-bit `imul r32, r/m32, imm32` (0x69 /r id, no REX.W).
 tmpl_rrimm!(RegRegImm32, X86_64, GPR32, rexw = 0b0)
-
 
 tmpl_rs!(RegShift32, X86_64, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0, opcode = 0xC1)
 
@@ -452,7 +441,6 @@ macro reg_ext {
            } )*
     };
 }
-
 
 // Template-family macros. x86 width variants share a ModR/M scaffold and differ
 // in three answers the template takes as parameters: REX.W, the 0x66
