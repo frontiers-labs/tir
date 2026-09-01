@@ -1,0 +1,32 @@
+// The pieces every x86 encoding is built from, written once here instead of
+// once per width and once per register range.
+//
+// An `if` over the operands is a shape: the encoder picks the bit map whose
+// guard holds. That is how one instruction spells both the REX and the REX-free
+// form of the same operation, which the model used to carry as twin
+// instructions plus a post-register-allocation pass that swapped one for the
+// other.
+
+// The 0100 WRXB prefix. Present when the operation needs the wide bit (`w`), or
+// a register needs its fourth bit (`reg[3]`/`rm[3]`), or the caller says it is
+// needed anyway (`needed`) — which is how an 8-bit form reaches spl/bpl/sil/dil,
+// whose names exist only behind a REX byte.
+fn rex(w, reg, rm, needed) {
+    if w | reg[3] | rm[3] | needed {
+        (0b0100, w, reg[3], 0b0, rm[3])
+    } else {
+        ()
+    }
+}
+
+// ModR/M with both operands in registers: mod=11, then the two low register
+// numbers. `reg` is the /r field, `rm` the r/m field.
+fn modrm_reg(reg, rm) {
+    (0b11, reg[2..0], rm[2..0])
+}
+
+// Whether an 8-bit operand names a register only a REX byte can reach: spl,
+// bpl, sil and dil are numbers 4..7, which without REX name ah, ch, dh and bh.
+fn needs_rex8(a, b) {
+    (a ~>= 0b0100) | (b ~>= 0b0100)
+}

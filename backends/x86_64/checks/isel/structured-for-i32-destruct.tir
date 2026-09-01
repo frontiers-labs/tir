@@ -20,11 +20,11 @@ module {data_layout = #data_layout} {
 
 // CHECK-NOT: scf.
 // The zero-trip guard compares the bounds at their own width.
-// CHECK: x86_64.cmp32{{[a-z_]*}} {dst = %[[V0:[0-9]+]]:GPR{{[a-z]*}}, src = %[[V1:[0-9]+]]:GPR{{[a-z]*}}}
+// CHECK: x86_64.cmp32 {dst = %[[V0:[0-9]+]]:GPR, src = %[[V1:[0-9]+]]:GPR}
 // The counter is minted as a 32-bit body argument, advanced and tested 32 bits wide.
 // CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !x86_64.GPR, %[[IV:[0-9]+]]: !x86_64.GPR):
-// CHECK: x86_64.add32{{[a-z_]*}} {dst = %[[NEXT:[0-9]+]]:GPR32low{{[a-z]*}}, dst_tied = %[[IV]]:GPR{{[a-z]*}}, src = %[[V2:[0-9]+]]:GPR{{[a-z]*}}}
+// CHECK: x86_64.add32 {dst = %[[NEXT:[0-9]+]]:GPR32, dst_tied = %[[IV]]:GPR, src = %[[V2:[0-9]+]]:GPR}
 // The accumulator's tile falls between the two: no dependence orders the
 // counter's advance against it, so neither claims the other's place.
-// CHECK: x86_64.cmp32{{[a-z_]*}} {dst = %[[NEXT]]:GPR32low{{[a-z]*}}, src = %[[V1]]:GPR{{[a-z]*}}}
+// CHECK: x86_64.cmp32 {dst = %[[NEXT]]:GPR32, src = %[[V1]]:GPR}
 // CHECK-NOT: scf.

@@ -8,7 +8,7 @@ operand_widths:
 	add rax, rbx
 
 # CHECK:      asm.symbol {name = "operand_widths"}
-# CHECK-NEXT: x86_64.add8_norex {dst = al, src = bl}
-# CHECK-NEXT: x86_64.add16_norex {dst = ax, src = bx}
-# CHECK-NEXT: x86_64.add32_norex {dst = eax, src = ebx}
+# CHECK-NEXT: x86_64.add8 {dst = al, src = bl}
+# CHECK-NEXT: x86_64.add16 {dst = ax, src = bx}
+# CHECK-NEXT: x86_64.add32 {dst = eax, src = ebx}
 # CHECK-NEXT: x86_64.add {dst = rax, src = rbx}

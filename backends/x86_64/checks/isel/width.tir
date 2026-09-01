@@ -41,9 +41,9 @@ module {
 }
 
 // CHECK:      x86_64.add {dst = %[[V2:[0-9]+]]:GPR, dst_tied = %[[V0:[0-9]+]]:GPR, src = %[[V1:[0-9]+]]:GPR}
-// CHECK:      x86_64.add32_norex {dst = %{{[0-9]+}}:GPR32low, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
-// CHECK:      x86_64.sub16_norex {dst = %{{[0-9]+}}:GPR16low, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
-// CHECK:      x86_64.xor8_norex {dst = %{{[0-9]+}}:GPR8low, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK:      x86_64.add32 {dst = %{{[0-9]+}}:GPR32, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK:      x86_64.sub16 {dst = %{{[0-9]+}}:GPR16, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK:      x86_64.xor8 {dst = %{{[0-9]+}}:GPR8, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
 
 // Materializing an i8 constant defines an ordinary offset-0 value too.
 // CHECK: asm.symbol {name = "const8"

@@ -2,6 +2,7 @@
 
 const MODEL_CHECK_SOURCES: &[(&str, &str)] = &[
     ("main.tmdl", include_str!("../defs/main.tmdl")),
+    ("encoding.tmdl", include_str!("../defs/encoding.tmdl")),
     ("base.tmdl", include_str!("../defs/base.tmdl")),
     ("arith_ext.tmdl", include_str!("../defs/arith_ext.tmdl")),
     ("conditional.tmdl", include_str!("../defs/conditional.tmdl")),
@@ -488,26 +489,8 @@ mod isa {
             };
         }
 
-        rr_norex!(Add32Op, Add32NorexOp, LO);
-        rr_norex!(Sub32Op, Sub32NorexOp, LO);
-        rr_norex!(And32Op, And32NorexOp, LO);
-        rr_norex!(Or32Op, Or32NorexOp, LO);
-        rr_norex!(Xor32Op, Xor32NorexOp, LO);
-        rr_norex!(Mov32Op, Mov32NorexOp, LO);
         rr_norex!(Imul32Op, Imul32NorexOp, LO);
         rr_norex!(ImulImm32Op, ImulImm32NorexOp, LO);
-        rr_norex!(Add16Op, Add16NorexOp, LO);
-        rr_norex!(Sub16Op, Sub16NorexOp, LO);
-        rr_norex!(And16Op, And16NorexOp, LO);
-        rr_norex!(Or16Op, Or16NorexOp, LO);
-        rr_norex!(Xor16Op, Xor16NorexOp, LO);
-        rr_norex!(Mov16Op, Mov16NorexOp, LO);
-        rr_norex!(Add8Op, Add8NorexOp, B);
-        rr_norex!(Sub8Op, Sub8NorexOp, B);
-        rr_norex!(And8Op, And8NorexOp, B);
-        rr_norex!(Or8Op, Or8NorexOp, B);
-        rr_norex!(Xor8Op, Xor8NorexOp, B);
-        rr_norex!(Mov8Op, Mov8NorexOp, B);
 
         g1_imm!(AddImm32Op, AddImm8s32Op, AddImm8s32NorexOp, AddImm32NorexOp);
         g1_imm!(OrImm32Op, OrImm8s32Op, OrImm8s32NorexOp, OrImm32NorexOp);
@@ -580,8 +563,6 @@ mod isa {
         // cmp/test reg-reg, neg/not, by-cl shifts and rotate immediates: the
         // 32-bit width is the only one with a generic (so the only one reachable
         // here); the 16/8-bit `_norex` forms exist for the assembler only.
-        rr_norex!(Cmp32Op, Cmp32NorexOp, LO);
-        rr_norex!(Test32Op, Test32NorexOp, LO);
         reg1_norex!(Neg32Op, Neg32NorexOp, "dst", LO);
         reg1_norex!(Not32Op, Not32NorexOp, "dst", LO);
         reg1_norex!(SignedDivide32Op, SignedDivide32NorexOp, "dst", LO);

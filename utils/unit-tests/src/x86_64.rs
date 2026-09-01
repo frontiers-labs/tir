@@ -13,18 +13,20 @@ fn info(name: &str) -> &'static tir::backend::InstrInfo {
 
 #[test]
 fn instruction_info_carries_every_per_opcode_fact() {
-    // One record per opcode, keyed by op name — `add32_norex` and `add` share a
+    // One record per opcode, keyed by op name — `add32` and `add` share a
     // mnemonic but not a record, so neither can reach the other's facts.
-    let norex = info("add32_norex");
-    assert_eq!(norex.mnemonic, "add");
-    assert!(norex.asm.is_some());
-    assert!(norex.encode.is_some());
-    assert_eq!(norex.sched.len(), 1);
+    let add32 = info("add32");
+    assert_eq!(add32.mnemonic, "add");
+    assert!(add32.asm.is_some());
+    assert!(add32.encode.is_some());
+    assert_eq!(add32.sched.len(), 1);
     assert_ne!(
-        norex.sched[0],
+        add32.sched[0],
         tir::backend::sched::InstrSchedClass::DEFAULT
     );
-    assert_eq!(norex.effects, tir::backend::MemoryEffects::NONE);
+    assert_eq!(add32.effects, tir::backend::MemoryEffects::NONE);
+    // Its two shapes are the REX-free and REX encodings of the same operation.
+    assert_eq!(add32.width_bytes, (2, 3));
 }
 
 #[test]

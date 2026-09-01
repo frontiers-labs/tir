@@ -26,12 +26,12 @@ alu8:
 	shl bh, 2
 
 # CHECK:      asm.symbol {name = "alu8"}
-# CHECK-NEXT: x86_64.add8_norex {dst = al, src = bl}
-# CHECK-NEXT: x86_64.sub8_norex {dst = cl, src = dl}
+# CHECK-NEXT: x86_64.add8 {dst = al, src = bl}
+# CHECK-NEXT: x86_64.sub8 {dst = cl, src = dl}
 # CHECK-NEXT: x86_64.and8 {dst = sil, src = dil}
 # CHECK-NEXT: x86_64.or8 {dst = bpl, src = spl}
-# CHECK-NEXT: x86_64.xor8_norex {dst = al, src = al}
-# CHECK-NEXT: x86_64.mov8_norex {dst = bl, src = cl}
+# CHECK-NEXT: x86_64.xor8 {dst = al, src = al}
+# CHECK-NEXT: x86_64.mov8 {dst = bl, src = cl}
 # CHECK-NEXT: x86_64.add_imm8_norex {dst = al, imm = 42}
 # CHECK-NEXT: x86_64.and_imm8_norex {dst = cl, imm = 255}
 # CHECK-NEXT: x86_64.or_imm8_norex {dst = dl, imm = 1}

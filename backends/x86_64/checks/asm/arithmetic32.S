@@ -23,12 +23,12 @@ alu32:
 	imul r8d, r9d
 
 # CHECK:      asm.symbol {name = "alu32"}
-# CHECK-NEXT: x86_64.add32_norex {dst = eax, src = ebx}
-# CHECK-NEXT: x86_64.sub32_norex {dst = ecx, src = edx}
-# CHECK-NEXT: x86_64.and32_norex {dst = esi, src = edi}
-# CHECK-NEXT: x86_64.or32_norex {dst = ebp, src = esp}
-# CHECK-NEXT: x86_64.xor32_norex {dst = eax, src = eax}
-# CHECK-NEXT: x86_64.mov32_norex {dst = ebx, src = ecx}
+# CHECK-NEXT: x86_64.add32 {dst = eax, src = ebx}
+# CHECK-NEXT: x86_64.sub32 {dst = ecx, src = edx}
+# CHECK-NEXT: x86_64.and32 {dst = esi, src = edi}
+# CHECK-NEXT: x86_64.or32 {dst = ebp, src = esp}
+# CHECK-NEXT: x86_64.xor32 {dst = eax, src = eax}
+# CHECK-NEXT: x86_64.mov32 {dst = ebx, src = ecx}
 # CHECK-NEXT: x86_64.add_imm8s32_norex {dst = eax, imm = 42}
 # CHECK-NEXT: x86_64.and_imm8s32_norex {dst = ecx, imm = 255}
 # CHECK-NEXT: x86_64.or_imm8s32_norex {dst = edx, imm = 1}

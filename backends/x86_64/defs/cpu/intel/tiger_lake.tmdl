@@ -180,11 +180,6 @@ machine TigerLake ("tiger-lake") for [X86_64] {
         uop(Any3);
         zero_idiom = true;
     }
-    override Xor32Norex {
-        latency = 1;
-        uop(Any4);
-        zero_idiom = true;
-    }
     override Sub {
         latency = 1;
         uop(Any3);
@@ -193,11 +188,6 @@ machine TigerLake ("tiger-lake") for [X86_64] {
     override Sub32 {
         latency = 1;
         uop(Any3);
-        zero_idiom = true;
-    }
-    override Sub32Norex {
-        latency = 1;
-        uop(Any4);
         zero_idiom = true;
     }
 }

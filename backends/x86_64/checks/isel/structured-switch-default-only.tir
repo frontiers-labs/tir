@@ -19,5 +19,5 @@ module {
 // CHECK-NOT: cmp
 // CHECK: asm.vbr ^[[ARM:bb[0-9]+]]
 // CHECK: ^[[ARM]]:
-// CHECK-NEXT: x86_64.add32_norex
+// CHECK-NEXT: x86_64.add32
 // CHECK-NOT: scf.
