@@ -242,6 +242,7 @@ fn build_isa_reference(root: &std::path::Path) -> anyhow::Result<()> {
             false,
             &[
                 "backends/x86_64/defs/main.tmdl",
+                "backends/x86_64/defs/encoding.tmdl",
                 "backends/x86_64/defs/base.tmdl",
                 "backends/x86_64/defs/arith_ext.tmdl",
                 "backends/x86_64/defs/conditional.tmdl",

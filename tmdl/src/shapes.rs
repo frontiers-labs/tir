@@ -591,8 +591,10 @@ fn resolve_widths(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
         return expr;
     };
     match ctx.named_width(&id.name) {
+        // Decimal: this is a count of bits, not a field, and it reads as one
+        // in the guard a document or a diagnostic prints.
         Ok(width) => ast::Expr::Lit(ast::Lit::Int(ast::LitInt::new(
-            format!("0b{width:b}"),
+            width.to_string(),
             call.span,
         ))),
         // Left as it was: the condition then reports what it could not read.
