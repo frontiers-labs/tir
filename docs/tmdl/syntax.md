@@ -406,6 +406,13 @@ The rules a set of shapes must satisfy:
 - At most eight conditions per encoding. Beyond that the encoding is a design
   smell, not a limit to raise.
 
+A condition its parameters already answer is not a shape. One template writes
+the encoding of every width it serves, and the instruction's parameters decide
+which branches it takes, so `if REXW | reg[3] | rm[3] { … }` with `REXW = 0b1`
+is the prefix unconditionally and one shape, while `REXW = 0b0` leaves the
+register test and two shapes. The dead branch is gone before the expansion
+runs, and the guard the encoder carries reads operands only.
+
 Reachability is decided by evaluating the conditions over the operand domains.
 An operand up to 8 bits wide is enumerated, so the answer is exact. A wider one
 is sampled: the boundaries, every single-bit value, every constant the
@@ -414,9 +421,10 @@ it with the rest of the operand zero and all-ones. Two conditions over disjoint
 slices of one wide operand can still be missed together, which drops a shape, so
 the encoder-decoder agreement per shape is also an SMT obligation.
 
-Code generation does not lower a guarded encoding yet: an instruction with more
-than one shape is a `tmdlc` error for `emit-rust`, `emit-smtlib`, `emit-btor2`
-and `emit-markdown`. The AST and JSON actions expand and export the shapes.
+`emit-rust` lowers a guarded encoding to one `EncodeShape` per bit map, and the
+AST and JSON actions export the shapes. The symbolic emitters still describe one
+bit map per instruction: an instruction with more than one shape is a `tmdlc`
+error for `emit-smtlib`, `emit-btor2` and `emit-markdown`.
 
 ## ASM Templates
 

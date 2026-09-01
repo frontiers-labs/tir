@@ -108,7 +108,7 @@ impl Assignment<'_> {
 /// guard is the disjunction of the assignments that reach it.
 pub fn expand(encoding: &ast::Expr, ctx: &Context) -> (Vec<Shape>, Vec<(Span, String)>) {
     let mut errors = Vec::new();
-    let encoding = &normalize(encoding);
+    let encoding = &normalize(encoding, ctx);
     let conditions = collect_conditions(encoding);
 
     if conditions.len() > MAX_CONDITIONS {
@@ -172,9 +172,10 @@ pub fn expand(encoding: &ast::Expr, ctx: &Context) -> (Vec<Shape>, Vec<(Span, St
 }
 
 /// An encoding expression in the form the shapes are computed over: `let`
-/// bindings substituted into their uses, and the block an inlined `fn` body
-/// leaves behind collapsed to the value it produces.
-fn normalize(expr: &ast::Expr) -> ast::Expr {
+/// bindings substituted into their uses, the block an inlined `fn` body leaves
+/// behind collapsed to the value it produces, and every condition the
+/// instruction's parameters already answer taken.
+fn normalize(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
     fn collapse(expr: &ast::Expr) -> ast::Expr {
         let expr = crate::utils::map_child_exprs(expr, &mut collapse);
         match &expr {
@@ -184,7 +185,105 @@ fn normalize(expr: &ast::Expr) -> ast::Expr {
             _ => expr,
         }
     }
-    collapse(&crate::utils::inline_let_bindings(expr))
+    decide(&collapse(&crate::utils::inline_let_bindings(expr)), ctx)
+}
+
+/// Take every branch the parameters decide. One template writes the encoding of
+/// every width it serves, so a condition an instruction's parameters answer
+/// (`REXW | reg[3] | rm[3]`, with `REXW` set) is not a test the encoder repeats
+/// at run time: the branch it selects replaces the `if`, and only the tests the
+/// operands answer are left to guard a shape.
+fn decide(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
+    let expr = crate::utils::map_child_exprs(expr, &mut |child| decide(child, ctx));
+    let ast::Expr::If(if_) = &expr else {
+        return expr;
+    };
+    let cond = fold(&if_.cond, ctx);
+    match int_value(&cond) {
+        Some(0) => if_
+            .else_
+            .as_deref()
+            .cloned()
+            .unwrap_or(ast::Expr::Tuple(ast::Tuple {
+                elements: Vec::new(),
+                span: if_.span,
+            })),
+        Some(_) => (*if_.then).clone(),
+        None => ast::Expr::If(ast::If {
+            cond: Box::new(cond),
+            then: if_.then.clone(),
+            else_: if_.else_.clone(),
+            span: if_.span,
+        }),
+    }
+}
+
+/// A condition with everything the operands do not decide replaced by its
+/// value, and the identities that leaves behind (`0 | x`, `1 & x`) applied, so
+/// what remains reads operands only.
+fn fold(cond: &ast::Expr, ctx: &Context) -> ast::Expr {
+    let folded = crate::utils::map_child_exprs(cond, &mut |child| fold(child, ctx));
+    if !matches!(folded, ast::Expr::Lit(_))
+        && let Ok((value, width)) = eval(&folded, ctx, &HashMap::new())
+        && (1..=64).contains(&width)
+    {
+        return ast::Expr::Lit(ast::Lit::Int(ast::LitInt::new(
+            format!("0b{value:0width$b}", width = usize::from(width)),
+            expr_span(&folded),
+        )));
+    }
+    simplify(folded, ctx)
+}
+
+/// `x | 0`, `x | 1`, `x & 0` and `x & 1`, where the constant side is what a
+/// decided parameter left behind. Both sides are the width of the result, so
+/// dropping one keeps the condition's width.
+fn simplify(expr: ast::Expr, ctx: &Context) -> ast::Expr {
+    let ast::Expr::Binary(binary) = &expr else {
+        return expr;
+    };
+    if !matches!(binary.op, ast::BinOp::BitwiseOr | ast::BinOp::BitwiseAnd) {
+        return expr;
+    }
+    let (Some(width), Some(rhs_width)) = (
+        static_width(&binary.lhs, ctx),
+        static_width(&binary.rhs, ctx),
+    ) else {
+        return expr;
+    };
+    if width != rhs_width {
+        return expr;
+    }
+    let ones = mask(width);
+    let absorbing = match binary.op {
+        ast::BinOp::BitwiseOr => ones,
+        _ => 0,
+    };
+    for (side, other) in [(&binary.lhs, &binary.rhs), (&binary.rhs, &binary.lhs)] {
+        match int_value(side).map(|value| value & ones) {
+            Some(value) if value == absorbing => return (**side).clone(),
+            Some(_) => return (**other).clone(),
+            None => {}
+        }
+    }
+    expr
+}
+
+/// The width an encoding condition has whatever its operands hold.
+fn static_width(expr: &ast::Expr, ctx: &Context) -> Option<u16> {
+    let env: HashMap<&str, (u64, u16)> = ctx
+        .operands
+        .iter()
+        .filter_map(|(name, _, _)| Some((name.as_str(), (0, ctx.named_width(name).ok()?))))
+        .collect();
+    eval(expr, ctx, &env).ok().map(|(_, width)| width)
+}
+
+fn int_value(expr: &ast::Expr) -> Option<u64> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Int(li)) => Some(parse_literal_value(li)),
+        _ => None,
+    }
 }
 
 /// The distinct `if` conditions of an encoding, keyed by identity and in source

@@ -137,9 +137,9 @@ fn lower_shape(
 /// The runtime guard that selects `shape`, as a `tir::backend::binary::Guard`.
 ///
 /// A shape's guard is a disjunction of conjunctions over the encoding's `if`
-/// conditions. A condition no operand decides (`WIDTH == 16`) has the same
-/// value for every operand tuple this shape covers, so it is not a runtime
-/// test and is dropped.
+/// conditions. Only tests the operands answer are left by then: the shape
+/// expansion has already taken every branch the instruction's parameters
+/// decide.
 fn emit_guard(
     inst: &ast::Instruction,
     shape: &EncodingShape,
@@ -149,9 +149,6 @@ fn emit_guard(
     for clause in &shape.guard.0 {
         let mut literals = Vec::new();
         for literal in clause {
-            if !reads_operand(&literal.cond, ctx) {
-                continue;
-            }
             let cond = emit_condition(inst, &literal.cond, ctx)?;
             literals.push(match literal.value {
                 true => cond,
@@ -172,18 +169,6 @@ fn emit_guard(
         1 => clauses.remove(0),
         _ => quote! { tir::backend::binary::Guard::Or(&[#(#clauses),*]) },
     })
-}
-
-fn reads_operand(expr: &ast::Expr, ctx: &crate::shapes::Context) -> bool {
-    let mut found = false;
-    crate::utils::visit_exprs(expr, &mut |node| {
-        if let ast::Expr::Ident(id) = node
-            && ctx.operand_width(&id.name).is_some()
-        {
-            found = true;
-        }
-    });
-    found
 }
 
 /// One encoding condition as a runtime guard over the operand values.

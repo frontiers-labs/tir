@@ -1,0 +1,91 @@
+// A template writes one encoding for every width it serves; the parameters an
+// instruction sets decide which shapes that encoding has. A condition the
+// parameters already answer is not a runtime test: it folds away, taking its
+// dead branch with it, and only the part reading the operands survives as a
+// guard.
+
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa ByteIsa {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [ByteIsa] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x15 => { } }
+}
+
+fn prefix(w, reg, rm, needed) {
+    if w | reg[3] | rm[3] | needed {
+        (0b0100, w, reg[3], 0b0, rm[3])
+    } else {
+        ()
+    }
+}
+
+template RegReg for [ByteIsa] {
+    param MNEMONIC: String = "mov";
+    param OPCODE: bits<8> = 0x8b;
+    param WIDE: bits<1> = 0b0;
+    param BYTE: bits<1> = 0b0;
+    operands { dst: GPR, src: GPR }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+    encoding {
+        prefix(WIDE, src, dst, BYTE & ((dst ~>= 0b0100) | (src ~>= 0b0100))),
+        OPCODE,
+        (0b11, src[2..0], dst[2..0])
+    }
+}
+
+// The prefix is mandatory at this width, so the condition is true whatever the
+// operands hold: one shape, no guard.
+instruction MovWide for [ByteIsa] : RegReg {
+    param MNEMONIC: String = "movw";
+    param WIDE: bits<1> = 0b1;
+    behavior { dst = src; }
+}
+
+// CHECK: static INFO_MOVWIDE: tir::backend::InstrInfo
+// CHECK: width_bytes: (3, 3),
+// CHECK: static ENCODE_MOVWIDE: tir::backend::binary::EncodeSpec
+// CHECK: guard: tir::backend::binary::Guard::True,
+// CHECK-NEXT: const_word: 12618568u128,
+// CHECK-NEXT: width_bytes: 3,
+// CHECK: width_bytes: (3, 3),
+
+// Neither parameter is set, so the prefix depends on the register numbers
+// alone and the byte-register test folds to nothing.
+instruction Mov for [ByteIsa] : RegReg {
+    behavior { dst = src; }
+}
+
+// CHECK: static ENCODE_MOV: tir::backend::binary::EncodeSpec
+// CHECK-NEXT: shapes: &[
+// CHECK: guard: tir::backend::binary::Guard::Not(
+// CHECK-NEXT: &tir::backend::binary::Guard::Or(
+// CHECK: tir::backend::binary::Guard::Bit {
+// CHECK-NEXT: op: "src",
+// CHECK-NEXT: bit: 3,
+// CHECK: tir::backend::binary::Guard::Bit {
+// CHECK-NEXT: op: "dst",
+// CHECK-NEXT: bit: 3,
+// CHECK: width_bytes: 2,
+// CHECK: width_bytes: (2, 3),
+
+// The byte-register test survives, because only the operands answer it.
+instruction MovByte for [ByteIsa] : RegReg {
+    param MNEMONIC: String = "movb";
+    param BYTE: bits<1> = 0b1;
+    behavior { dst = src; }
+}
+
+// CHECK: static ENCODE_MOVBYTE: tir::backend::binary::EncodeSpec
+// CHECK: tir::backend::binary::Guard::Cmp {
+// CHECK-NEXT: op: "dst",
+// CHECK-NEXT: width: 4,
+// CHECK-NEXT: cmp_width: 4,
+// CHECK-NEXT: cmp: tir::backend::binary::CmpOp::UGe,
+// CHECK-NEXT: value: 4,
+// CHECK: width_bytes: (2, 3),
