@@ -317,7 +317,10 @@ fn allocate_with_affinities(
 
     let default_class = info.default_integer_class(abi);
 
-    // Per-node alternative lists, resolved to concrete physical registers.
+    // Per-node alternative lists, resolved to concrete physical registers. The
+    // allocation order depends on the class alone, so it is computed once per
+    // class rather than once per vreg.
+    let mut orders: HashMap<RegClassId, Vec<PhysReg>> = HashMap::new();
     let mut alternatives: Vec<Vec<Alternative>> = Vec::with_capacity(vregs.len());
     for &vreg in &vregs {
         let class = resolve_class(liveness, precolor, default_class, vreg)?;
@@ -325,8 +328,11 @@ fn allocate_with_affinities(
         // that is both a REX-free operand and a SIB index) is allocatable only
         // from the indices all of them encode.
         let allowed = liveness.allowed_indices.get(&vreg);
-        let mut alts: Vec<Alternative> = allocation_order(abi, class)
-            .into_iter()
+        let mut alts: Vec<Alternative> = orders
+            .entry(class)
+            .or_insert_with(|| allocation_order(abi, class))
+            .iter()
+            .copied()
             .filter(|(_, index)| allowed.is_none_or(|allowed| allowed.contains(index)))
             .map(Alternative::Phys)
             .collect();
@@ -714,10 +720,10 @@ impl Pass for RegisterAllocationPass {
         // a live range the allocator may pick to spill, and the spill code it
         // would write names a value this erasure is about to retire.
         erase_stack_allocas(context, rewriter, &stack_allocas)?;
+        // Spills insert ops within blocks but never add or remove edges, so the
+        // CFG is the same in every round.
+        let successors = block_successors(context, &blocks);
         let assignment = loop {
-            // Recomputed each round: spills insert ops within blocks but never add
-            // or remove edges, so the CFG is stable across rounds.
-            let successors = block_successors(context, &blocks);
             let liveness = liveness::analyze(context, &blocks, |b| {
                 successors.get(&b).cloned().unwrap_or_default()
             });
@@ -1622,7 +1628,6 @@ fn slot_class_of(context: &Context, blocks: &[BlockId], value: ValueId) -> Optio
     None
 }
 
-/// A fresh value of `class`: the type a machine instruction reads it through.
 /// Count how many times each virtual register is referenced (def or use) across the
 /// body, used to weight spill cost so the least-used register spills first.
 fn reference_counts(context: &Context, blocks: &[BlockId]) -> HashMap<u32, u32> {
