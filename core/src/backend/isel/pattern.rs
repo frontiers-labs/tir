@@ -1,5 +1,6 @@
 //! Compilation of rule semantic expressions into matchable patterns.
 
+use super::cover::BoundaryDemand;
 use std::collections::{HashMap, HashSet};
 
 use smallvec::SmallVec;
@@ -79,9 +80,25 @@ pub(crate) struct PatternNodeMeta {
     pub(crate) imm_range: Option<ImmRange>,
     /// The symbolic value type inferred from the semantic operator signatures.
     pub(crate) semantic_type: Option<SemType>,
+    /// What a match demands of the class bound here; meaningful for boundary
+    /// and constant nodes.
+    pub(crate) demand: BoundaryDemand,
 }
 
 impl PatternNodeMeta {
+    /// Boundary-like for the cover: an operand capture, or a constant that is
+    /// pure, folded into the encoding and never consumed by the match — so one
+    /// constant class can sit inside one match and under a boundary of another.
+    pub(crate) fn boundary_like(&self) -> bool {
+        self.is_boundary || self.is_constant
+    }
+
+    /// Where this operand's register class views its storage element.
+    pub(crate) fn view_offset(&self) -> u32 {
+        self.register
+            .map_or(0, |requirement| requirement.view_offset())
+    }
+
     /// The node demands its class in a register: a physical-register operand or
     /// an explicit register constraint.
     pub(crate) fn demands_register(&self) -> bool {
@@ -307,6 +324,7 @@ pub(crate) fn compile_isel_pattern(
     // without becoming self-referential. A bare immediate rule is different:
     // it encodes the captured constant and therefore materializes that class.
     let copy = nodes.len() == 1 && node_meta[0].demands_register();
+    assign_demands(&nodes, &mut node_meta);
 
     let specificity = nodes
         .iter()
@@ -329,6 +347,46 @@ pub(crate) fn compile_isel_pattern(
         result_register,
         copy,
     })
+}
+
+/// What each boundary demands of its class. The width operand of an extension
+/// is structural — the emitter reads it off the match — unless the same
+/// operand also appears in a value position; an operand with no register or
+/// immediate constraint is read from a register.
+fn assign_demands(nodes: &[PatternNode], node_meta: &mut [PatternNodeMeta]) {
+    let mut structural = HashSet::new();
+    let mut value = HashSet::new();
+    for node in nodes {
+        let PatternNode::Template(node) = node else {
+            continue;
+        };
+        for (operand, &child) in node.children.iter().enumerate() {
+            if !node_meta[child.index()].is_boundary {
+                continue;
+            }
+            if matches!(node.sym(), Some(SymKind::SExt | SymKind::ZExt)) && operand == 1 {
+                structural.insert(child);
+            } else {
+                value.insert(child);
+            }
+        }
+    }
+    for (index, meta) in node_meta.iter_mut().enumerate() {
+        let id = Id::from_raw(index as u32);
+        let structural_only = structural.contains(&id) && !value.contains(&id);
+        meta.demand = if meta.demands_register()
+            || (meta.is_boundary
+                && meta.constraint.is_none()
+                && meta.register.is_none()
+                && !structural_only)
+        {
+            BoundaryDemand::Register
+        } else if meta.constraint == Some(OperandConstraint::Immediate) || meta.is_constant {
+            BoundaryDemand::Immediate
+        } else {
+            BoundaryDemand::Structural
+        };
+    }
 }
 
 /// The query a copy rule is. A copy roots on the low-bit `Extract` view of a

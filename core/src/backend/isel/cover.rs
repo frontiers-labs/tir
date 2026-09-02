@@ -78,8 +78,9 @@ pub(crate) struct PatternNodeBinding {
 /// width variable) demands nothing — the emitter reads it from the match.
 /// Ordered by how demanding the requirement is: a structural boundary needs
 /// nothing, an immediate needs a constant, a register needs materialization.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum BoundaryDemand {
+    #[default]
     Structural,
     Immediate,
     Register,

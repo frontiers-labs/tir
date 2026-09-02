@@ -1285,7 +1285,8 @@ impl InstructionSelectPass {
         let dom = analyses.get::<DominatorTree>(context, root);
         let def_use = analyses.get::<DefUse>(context, root);
 
-        let mut fs = self.build_function_selection(context, op, &def_use);
+        let blocks = function_blocks(context, op);
+        let mut fs = self.build_function_selection(context, op, &def_use, &blocks);
         // A fact-free block sees exactly the base graph, so every value pattern's
         // e-match is block-independent: search once here and reuse for all such
         // blocks (fact-bearing blocks re-search under their scope).
@@ -1297,7 +1298,7 @@ impl InstructionSelectPass {
         // Unreachable blocks are absent from the dominator tree. A region's
         // blocks are absent for the same reason — the tree orders the function's
         // own blocks, and nothing yet orders sibling arms.
-        for block_id in function_blocks(context, op) {
+        for &block_id in &blocks {
             let block = context.get_block(block_id);
             if block.is_empty() || visited.contains(&block_id) {
                 continue;
@@ -1315,7 +1316,7 @@ impl InstructionSelectPass {
         );
         // The regions were solved here, so the operations carrying them must not
         // solve graphs of their own when the walk reaches them.
-        for block_id in function_blocks(context, op) {
+        for &block_id in &blocks {
             for op_id in context.get_block(block_id).op_ids() {
                 if !context.get_op(op_id).regions().is_empty() {
                     self.solved.insert(op_id);
@@ -1460,6 +1461,7 @@ impl InstructionSelectPass {
         context: &Context,
         op: &OperationRef,
         def_use: &DefUse,
+        blocks: &[BlockId],
     ) -> FunctionSelection {
         // Function-wide value/op layout: with a single `value_to_def` a cross-block
         // operand expands to its defining expression naturally (no remat special
@@ -1468,7 +1470,7 @@ impl InstructionSelectPass {
         let mut op_block = HashMap::new();
         let mut op_position = HashMap::new();
         let block_ids = symbol_body_blocks(context, op);
-        for &block_id in &function_blocks(context, op) {
+        for &block_id in blocks {
             for (position, op_id) in context.get_block(block_id).op_ids().into_iter().enumerate() {
                 op_block.insert(op_id, block_id);
                 op_position.insert(op_id, position);
@@ -1503,7 +1505,7 @@ impl InstructionSelectPass {
             // The structured operations' own control: the tests a destruction
             // branches on and the counter recurrences it advances, seeded before
             // saturation so the cover selects them like any other class.
-            for &block_id in &function_blocks(context, op) {
+            for &block_id in blocks {
                 for op_id in context.get_block(block_id).op_ids() {
                     let inner = context.get_op(op_id);
                     if inner.regions().is_empty() {
@@ -1604,7 +1606,7 @@ impl InstructionSelectPass {
         // and a use inside a region is a use.
         let mut arg_block: HashMap<ValueId, BlockId> = HashMap::new();
         let mut operand_uses: HashMap<ValueId, usize> = HashMap::new();
-        for &block_id in &function_blocks(context, op) {
+        for &block_id in blocks {
             for argument in context.get_block(block_id).arguments() {
                 arg_block.insert(argument.id(), block_id);
             }
@@ -1618,7 +1620,7 @@ impl InstructionSelectPass {
         // the operation carrying that region. The read happens before that
         // operation finishes, so what spells the value has to precede it.
         let mut region_use: HashMap<ValueId, OpId> = HashMap::new();
-        for &block_id in &function_blocks(context, op) {
+        for &block_id in blocks {
             for op_id in context.get_block(block_id).op_ids() {
                 for operand in context.get_op(op_id).operands() {
                     let Some(def_block) = value_to_def
@@ -2604,65 +2606,27 @@ impl InstructionSelectPass {
                 captures.bind(symbol, fs.egraph.find(class));
             }
 
-            let mut structural_boundaries = HashSet::new();
-            let mut value_boundaries = HashSet::new();
-            for index in 0..compiled.nodes.len() {
-                let PatternNode::Template(node) = &compiled.nodes[index] else {
-                    continue;
-                };
-                for (operand, &child) in node.children.iter().enumerate() {
-                    if !compiled.node_meta[child.index()].is_boundary {
-                        continue;
-                    }
-                    if matches!(node.sym(), Some(SymKind::SExt | SymKind::ZExt)) && operand == 1 {
-                        structural_boundaries.insert(child);
-                    } else {
-                        value_boundaries.insert(child);
-                    }
-                }
-            }
-            structural_boundaries.retain(|node| !value_boundaries.contains(node));
-            let pattern_nodes: Vec<PatternNodeBinding> = (0..compiled.nodes.len())
-                .map(|index| Id::from_raw(index as u32))
-                .map(|pattern_node| {
-                    let meta = &compiled.node_meta[pattern_node.index()];
-                    // Constants are boundary-like: pure, folded into the
-                    // encoding, never consumed by the match — so the same
-                    // constant class (e.g. the literal 0) can sit inside one
-                    // match and under a boundary of another without making
-                    // the cover infeasible.
-                    let is_boundary = meta.is_boundary || meta.is_constant;
-                    let demand = if meta.demands_register()
-                        || (meta.is_boundary
-                            && meta.constraint.is_none()
-                            && meta.register.is_none()
-                            && !structural_boundaries.contains(&pattern_node))
-                    {
-                        cover::BoundaryDemand::Register
-                    } else if meta.constraint == Some(tir::graph::OperandConstraint::Immediate)
-                        || meta.is_constant
-                    {
-                        cover::BoundaryDemand::Immediate
-                    } else {
-                        cover::BoundaryDemand::Structural
-                    };
-                    let mut class = fs.egraph.find(m.bindings[pattern_node.index()]);
+            let pattern_nodes: Vec<PatternNodeBinding> = compiled
+                .node_meta
+                .iter()
+                .enumerate()
+                .map(|(index, meta)| {
+                    let is_boundary = meta.boundary_like();
+                    let mut class = fs.egraph.find(m.bindings[index]);
                     // A register boundary on a low-extract view reads the
                     // chased source's register, so the cover's edges, the
                     // schedule's dependencies, and availability all target
                     // the class a tile can actually define.
-                    if is_boundary && demand == cover::BoundaryDemand::Register {
+                    if is_boundary && meta.demand == cover::BoundaryDemand::Register {
                         class = fs.chase_low_extract(class);
                     }
                     PatternNodeBinding {
-                        pattern_node,
+                        pattern_node: Id::from_raw(index as u32),
                         class,
                         is_boundary,
                         is_state: meta.is_state,
-                        demand,
-                        view_offset: meta
-                            .register
-                            .map_or(0, |requirement| requirement.view_offset()),
+                        demand: meta.demand,
+                        view_offset: meta.view_offset(),
                     }
                 })
                 .collect();
