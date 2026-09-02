@@ -14,6 +14,7 @@ use crate::utils::{
     resolve_operand_constraints_for_instruction, resolve_operand_widths,
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
+use tir_symbolic::sem::copy_subgraph;
 
 pub struct GeneratedRust {
     pub root: String,

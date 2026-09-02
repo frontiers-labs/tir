@@ -200,6 +200,21 @@ pub fn resolve_template_chain<'a>(
     chain
 }
 
+/// `own`, or else the nearest `pick` of the instruction's template chain.
+fn effective<'a, T>(
+    inst: &'a ast::Instruction,
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+    own: Option<&'a T>,
+    pick: impl Fn(&'a ast::Template) -> Option<&'a T>,
+) -> Option<&'a T> {
+    own.or_else(|| {
+        resolve_template_chain(inst, item_cache)
+            .into_iter()
+            .rev()
+            .find_map(pick)
+    })
+}
+
 pub fn resolve_effective_encoding_for_instruction<'a>(
     inst: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -210,24 +225,19 @@ pub fn resolve_effective_encoding_for_instruction<'a>(
         ast::Expr::Tuple(tuple) if tuple.elements.is_empty() => None,
         _ => Some(encoding),
     };
-    inst.encoding.as_ref().and_then(spelled).or_else(|| {
-        resolve_template_chain(inst, item_cache)
-            .into_iter()
-            .rev()
-            .find_map(|t| t.encoding.as_ref().and_then(spelled))
-    })
+    effective(
+        inst,
+        item_cache,
+        inst.encoding.as_ref().and_then(spelled),
+        |t| t.encoding.as_ref().and_then(spelled),
+    )
 }
 
 pub fn resolve_effective_asm_for_instruction<'a>(
     inst: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
 ) -> Option<&'a ast::Expr> {
-    inst.asm.as_ref().or_else(|| {
-        resolve_template_chain(inst, item_cache)
-            .into_iter()
-            .rev()
-            .find_map(|t| t.asm.as_ref())
-    })
+    effective(inst, item_cache, inst.asm.as_ref(), |t| t.asm.as_ref())
 }
 
 /// The scheduling-class membership in effect for `inst`: its own `schedule` block,
@@ -237,11 +247,8 @@ pub fn resolve_effective_schedule_for_instruction<'a>(
     inst: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
 ) -> Option<&'a ast::Schedule> {
-    inst.schedule.as_ref().or_else(|| {
-        resolve_template_chain(inst, item_cache)
-            .into_iter()
-            .rev()
-            .find_map(|t| t.schedule.as_ref())
+    effective(inst, item_cache, inst.schedule.as_ref(), |t| {
+        t.schedule.as_ref()
     })
 }
 

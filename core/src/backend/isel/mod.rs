@@ -1047,31 +1047,6 @@ fn subgraphs_equal<L: PartialEq>(
             .all(|(&a, &b)| subgraphs_equal(g1, a, g2, b))
 }
 
-/// Copy the subgraph under `node` into `dst`, preserving DAG sharing through `memo`.
-fn copy_subgraph(
-    src: &SemGraph,
-    node: NodeId,
-    dst: &mut SemGraph,
-    memo: &mut HashMap<usize, NodeId>,
-) -> NodeId {
-    if let Some(&copied) = memo.get(&node.index()) {
-        return copied;
-    }
-    let children: Vec<NodeId> = src
-        .children(node)
-        .map(|c| copy_subgraph(src, c, dst, memo))
-        .collect();
-    let copied = dst.add_node(*src.get_node(node));
-    if let Some(data) = src.get_leaf_data(node) {
-        dst.set_leaf_data(copied, data.clone());
-    }
-    for child in children {
-        dst.add_edge(copied, child);
-    }
-    memo.insert(node.index(), copied);
-    copied
-}
-
 /// The conjunction of definedness conditions of every partial-kind node reachable
 /// from `root`, appended to `g`; `None` when the subgraph holds no partial op.
 fn definedness_of(g: &mut SemGraph, root: NodeId, widths: &[Option<u32>]) -> Option<NodeId> {
@@ -1121,7 +1096,7 @@ fn relaxation_holds(
 
     let mut g = SemGraph::new();
     let mut memo = HashMap::new();
-    copy_subgraph(guarded, if_root, &mut g, &mut memo);
+    tir_symbolic::sem::copy_subgraph(&mut g, guarded, if_root, &mut memo);
     let cond = memo[&guard_cond.index()];
     let else_copy = memo[&else_arm.index()];
 

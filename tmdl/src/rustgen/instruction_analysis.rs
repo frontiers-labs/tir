@@ -1,3 +1,36 @@
+/// The register classes holding floating-point registers, and those holding
+/// polymorphic ones, by name.
+fn register_class_kinds(files: &[ast::File]) -> (HashSet<String>, HashSet<String>) {
+    let names = |keep: fn(&ast::RegisterClass) -> bool| {
+        files
+            .iter()
+            .flat_map(|file| file.register_classes())
+            .filter(|class| keep(class))
+            .map(|class| class.name.clone())
+            .collect()
+    };
+    (
+        names(|class| class.has_float_registers()),
+        names(|class| class.has_polymorphic_registers()),
+    )
+}
+
+/// The `MNEMONIC` an instruction resolves to and its `OPNAME`, which defaults
+/// to the mnemonic.
+fn instruction_names(
+    params: &HashMap<String, (Type, Option<ast::Expr>)>,
+) -> Option<(String, String)> {
+    let string = |name: &str| {
+        params
+            .get(name)
+            .and_then(|(_, value)| value.as_ref())
+            .and_then(resolve_string)
+    };
+    let mnemonic = string("MNEMONIC")?;
+    let op_name = string("OPNAME").unwrap_or_else(|| mnemonic.clone());
+    Some((mnemonic, op_name))
+}
+
 fn analyze_instruction_semantics(
     behavior: &ast::Expr,
     operands: &[(String, Type)],
@@ -502,50 +535,13 @@ fn scalar_root_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
 
 /// Whether `expr` reads or writes a program-counter register (`PC::pc`).
 fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> bool {
-    match expr {
-        ast::Expr::Path(path) => pc_classes.contains(&path.base),
-        ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
-        ast::Expr::Tuple(_) | ast::Expr::Invalid => false,
-        ast::Expr::Assign(a) => {
-            behavior_references_pc(&a.dest, pc_classes)
-                || behavior_references_pc(&a.value, pc_classes)
+    let mut found = false;
+    crate::utils::visit_exprs(expr, &mut |e| {
+        if let ast::Expr::Path(path) = e {
+            found |= pc_classes.contains(&path.base);
         }
-        ast::Expr::Let(l) => behavior_references_pc(&l.value, pc_classes),
-        ast::Expr::Binary(b) => {
-            behavior_references_pc(&b.lhs, pc_classes) || behavior_references_pc(&b.rhs, pc_classes)
-        }
-        ast::Expr::Unary(u) => behavior_references_pc(&u.x, pc_classes),
-        ast::Expr::Block(b) => b
-            .stmts
-            .iter()
-            .any(|stmt| behavior_references_pc(stmt, pc_classes)),
-        ast::Expr::Call(c) => {
-            behavior_references_pc(&c.callee, pc_classes)
-                || c.arguments
-                    .iter()
-                    .any(|arg| behavior_references_pc(arg, pc_classes))
-        }
-        ast::Expr::Field(f) => behavior_references_pc(&f.base, pc_classes),
-        ast::Expr::If(i) => {
-            behavior_references_pc(&i.cond, pc_classes)
-                || behavior_references_pc(&i.then, pc_classes)
-                || i.else_
-                    .as_ref()
-                    .is_some_and(|e| behavior_references_pc(e, pc_classes))
-        }
-        ast::Expr::IndexAccess(i) => behavior_references_pc(&i.base, pc_classes),
-        ast::Expr::Slice(s) => behavior_references_pc(&s.base, pc_classes),
-        ast::Expr::Cast(c) => {
-            behavior_references_pc(&c.x, pc_classes) || behavior_references_pc(&c.width, pc_classes)
-        }
-        ast::Expr::Try(t) => {
-            behavior_references_pc(&t.body, pc_classes)
-                || t.handlers
-                    .iter()
-                    .any(|h| behavior_references_pc(&h.body, pc_classes))
-        }
-        ast::Expr::Lambda(l) => behavior_references_pc(&l.body, pc_classes),
-    }
+    });
+    found
 }
 
 /// Whether a behavior *reads* a status-flag register (a `flag_classes` register
@@ -557,54 +553,14 @@ fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> boo
 /// `emit_flag_reader_rules`). A flag-path assignment *destination* is a write,
 /// not a read, so definers (`cmp`) are not caught.
 fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
-    match expr {
-        ast::Expr::Path(path) => flag_classes.contains(&path.base),
-        ast::Expr::Ident(_) | ast::Expr::Lit(_) | ast::Expr::BuiltinFunction(_) => false,
-        ast::Expr::Tuple(_) | ast::Expr::Invalid => false,
-        ast::Expr::Assign(a) => {
-            let dest_is_flag_write =
-                matches!(&*a.dest, ast::Expr::Path(p) if flag_classes.contains(&p.base));
-            behavior_reads_flag_register(&a.value, flag_classes)
-                || (!dest_is_flag_write && behavior_reads_flag_register(&a.dest, flag_classes))
-        }
-        ast::Expr::Let(l) => behavior_reads_flag_register(&l.value, flag_classes),
-        ast::Expr::Binary(b) => {
-            behavior_reads_flag_register(&b.lhs, flag_classes)
-                || behavior_reads_flag_register(&b.rhs, flag_classes)
-        }
-        ast::Expr::Unary(u) => behavior_reads_flag_register(&u.x, flag_classes),
-        ast::Expr::Block(b) => b
-            .stmts
-            .iter()
-            .any(|stmt| behavior_reads_flag_register(stmt, flag_classes)),
-        ast::Expr::Call(c) => {
-            behavior_reads_flag_register(&c.callee, flag_classes)
-                || c.arguments
-                    .iter()
-                    .any(|arg| behavior_reads_flag_register(arg, flag_classes))
-        }
-        ast::Expr::Field(f) => behavior_reads_flag_register(&f.base, flag_classes),
-        ast::Expr::If(i) => {
-            behavior_reads_flag_register(&i.cond, flag_classes)
-                || behavior_reads_flag_register(&i.then, flag_classes)
-                || i.else_
-                    .as_ref()
-                    .is_some_and(|e| behavior_reads_flag_register(e, flag_classes))
-        }
-        ast::Expr::IndexAccess(i) => behavior_reads_flag_register(&i.base, flag_classes),
-        ast::Expr::Slice(s) => behavior_reads_flag_register(&s.base, flag_classes),
-        ast::Expr::Cast(c) => {
-            behavior_reads_flag_register(&c.x, flag_classes)
-                || behavior_reads_flag_register(&c.width, flag_classes)
-        }
-        ast::Expr::Try(t) => {
-            behavior_reads_flag_register(&t.body, flag_classes)
-                || t.handlers
-                    .iter()
-                    .any(|h| behavior_reads_flag_register(&h.body, flag_classes))
-        }
-        ast::Expr::Lambda(l) => behavior_reads_flag_register(&l.body, flag_classes),
-    }
+    let is_flag = |e: &ast::Expr| matches!(e, ast::Expr::Path(p) if flag_classes.contains(&p.base));
+    let (mut mentions, mut writes) = (0usize, 0usize);
+    crate::utils::visit_exprs(expr, &mut |e: &ast::Expr| match e {
+        ast::Expr::Assign(a) if is_flag(&a.dest) => writes += 1,
+        _ if is_flag(e) => mentions += 1,
+        _ => {}
+    });
+    mentions > writes
 }
 
 /// Whether the *value* a behavior defines reads a status-flag register. Only
@@ -815,7 +771,7 @@ fn find_store_effect_expr(expr: &ast::Expr) -> Option<&ast::Expr> {
 // Template / asm helpers
 // ---------------------------------------------------------------------------
 
-fn resolve_string(expr: &ast::Expr) -> Option<String> {
+pub(crate) fn resolve_string(expr: &ast::Expr) -> Option<String> {
     match &expr {
         ast::Expr::Lit(ast::Lit::Str(lstr)) => Some(lstr.value().to_owned()),
         ast::Expr::Lit(_) => None,

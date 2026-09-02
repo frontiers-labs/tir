@@ -584,27 +584,46 @@ fn print_errors<'src, T>(file_name: &str, source: &'src str, errors: Vec<Rich<'s
 where
     T: fmt::Display,
 {
-    errors.into_iter().for_each(|e| {
-        Report::build(
-            ReportKind::Error,
-            (file_name.to_string(), e.span().into_range()),
-        )
+    for e in errors {
+        let contexts = e
+            .contexts()
+            .map(|(label, span)| (format!("while parsing this {label}"), span.into_range()))
+            .collect();
+        print_report(
+            file_name,
+            source,
+            e.span().into_range(),
+            e.to_string(),
+            e.reason().to_string(),
+            contexts,
+        );
+    }
+}
+
+fn print_report(
+    file_name: &str,
+    source: &str,
+    span: std::ops::Range<usize>,
+    message: String,
+    label: String,
+    contexts: Vec<(String, std::ops::Range<usize>)>,
+) {
+    Report::build(ReportKind::Error, (file_name.to_string(), span.clone()))
         .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-        .with_message(e.to_string())
+        .with_message(message)
         .with_label(
-            Label::new((file_name.to_string(), e.span().into_range()))
-                .with_message(e.reason().to_string())
+            Label::new((file_name.to_string(), span))
+                .with_message(label)
                 .with_color(Color::Red),
         )
-        .with_labels(e.contexts().map(|(label, span)| {
-            Label::new((file_name.to_string(), span.into_range()))
-                .with_message(format!("while parsing this {}", label))
+        .with_labels(contexts.into_iter().map(|(message, span)| {
+            Label::new((file_name.to_string(), span))
+                .with_message(message)
                 .with_color(Color::Yellow)
         }))
         .finish()
         .print(sources([(file_name.to_string(), source.to_string())]))
         .unwrap()
-    })
 }
 
 /// Print grouped-by-file diagnostics using the already-in-memory sources
@@ -624,20 +643,15 @@ fn print_diags(diags: Vec<Diag>, inputs: &[String], sources: &[String]) {
 }
 
 fn print_cheap_errors(file_name: &str, source: &str, errors: Vec<Cheap<Span>>) {
-    errors.into_iter().for_each(|e| {
-        Report::build(
-            ReportKind::Error,
-            (file_name.to_string(), e.span().into_range()),
-        )
-        .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-        .with_message("Unexpected token")
-        .with_label(
-            Label::new((file_name.to_string(), e.span().into_range()))
-                .with_message("Unexpected token")
-                .with_color(Color::Red),
-        )
-        .finish()
-        .print(sources([(file_name.to_string(), source.to_string())]))
-        .unwrap()
-    })
+    for e in errors {
+        let message = "Unexpected token".to_string();
+        print_report(
+            file_name,
+            source,
+            e.span().into_range(),
+            message.clone(),
+            message,
+            vec![],
+        );
+    }
 }

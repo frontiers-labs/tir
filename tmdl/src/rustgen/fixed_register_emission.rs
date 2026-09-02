@@ -52,18 +52,7 @@ fn emit_fixed_register_rules<'a>(
     isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
     rule_spec_idents: &mut Vec<proc_macro2::Ident>,
 ) -> Result<(), TMDLError> {
-    let float_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|file| file.register_classes())
-        .filter(|class| class.has_float_registers())
-        .map(|class| class.name.clone())
-        .collect();
-    let polymorphic_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|file| file.register_classes())
-        .filter(|class| class.has_polymorphic_registers())
-        .map(|class| class.name.clone())
-        .collect();
+    let (float_classes, polymorphic_classes) = register_class_kinds(files);
     let mut definers: Vec<Definer<'a>> = Vec::new();
     let mut readers: Vec<Reader<'a>> = Vec::new();
     for inst in files.iter().flat_map(|f| f.instructions()) {
@@ -71,18 +60,9 @@ fn emit_fixed_register_rules<'a>(
             continue;
         }
         let resolved_params = resolve_params_for_instruction(inst, item_cache);
-        let Some(mnemonic) = resolved_params
-            .get("MNEMONIC")
-            .and_then(|(_, value)| value.as_ref())
-            .and_then(resolve_string)
-        else {
+        let Some((mnemonic, op_name)) = instruction_names(&resolved_params) else {
             continue;
         };
-        let op_name = resolved_params
-            .get("OPNAME")
-            .and_then(|(_, value)| value.as_ref())
-            .and_then(resolve_string)
-            .unwrap_or_else(|| mnemonic.clone());
         let isa_param_values = resolve_isa_param_values(inst, item_cache);
         let ops = resolve_operand_widths(
             resolve_operands_for_instruction(inst, item_cache),
@@ -404,32 +384,15 @@ fn substitute_symbol_with_subgraph(
     replacement: tir_graph::NodeId,
     memo: &mut HashMap<usize, tir_graph::NodeId>,
 ) -> tir_graph::NodeId {
-    use tir_graph::{Dag, MutDag};
-    if let Some(&copied) = memo.get(&node.index()) {
-        return copied;
-    }
-    if *src.get_node(node) == tir_symbolic::lang::SymKind::Symbol
-        && let Some(tir_symbolic::lang::SymPayload::SymbolId(id)) = src.get_leaf_data(node)
-        && *id == symbol
-    {
-        let copied = copy_subgraph(dst, src, replacement, &mut HashMap::new());
-        memo.insert(node.index(), copied);
-        return copied;
-    }
-    let children: Vec<tir_graph::NodeId> = src.children(node).collect();
-    let copied_children: Vec<tir_graph::NodeId> = children
-        .into_iter()
-        .map(|child| substitute_symbol_with_subgraph(dst, src, child, symbol, replacement, memo))
-        .collect();
-    let copied = dst.add_node(*src.get_node(node));
-    if let Some(data) = src.get_leaf_data(node) {
-        dst.set_leaf_data(copied, data.clone());
-    }
-    for child in copied_children {
-        dst.add_edge(copied, child);
-    }
-    memo.insert(node.index(), copied);
-    copied
+    use tir_graph::Dag;
+    use tir_symbolic::lang::{SymKind, SymPayload};
+    use tir_symbolic::sem::{CopyAction, copy_subgraph_with};
+    copy_subgraph_with(dst, src, node, memo, &mut |dst, node| match src.get_leaf_data(node) {
+        Some(SymPayload::SymbolId(id)) if *id == symbol && *src.get_node(node) == SymKind::Symbol => {
+            CopyAction::Replace(copy_subgraph(dst, src, replacement, &mut HashMap::new()))
+        }
+        _ => CopyAction::Keep,
+    })
 }
 
 /// Emit one division value rule (quotient or remainder) for a (definer, reader)

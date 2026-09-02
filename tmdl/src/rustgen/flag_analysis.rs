@@ -453,34 +453,6 @@ fn analyze_flag_reader_semantics(
     })
 }
 
-/// Copy `node`'s subgraph from `src` into `dst`, preserving payloads. Children
-/// are copied first, keeping `dst` in post order.
-fn copy_subgraph(
-    dst: &mut tir_symbolic::sem::SemGraph,
-    src: &tir_symbolic::sem::SemGraph,
-    node: tir_graph::NodeId,
-    memo: &mut HashMap<usize, tir_graph::NodeId>,
-) -> tir_graph::NodeId {
-    use tir_graph::{Dag, MutDag};
-    if let Some(&copied) = memo.get(&node.index()) {
-        return copied;
-    }
-    let children: Vec<tir_graph::NodeId> = src.children(node).collect();
-    let copied_children: Vec<tir_graph::NodeId> = children
-        .into_iter()
-        .map(|child| copy_subgraph(dst, src, child, memo))
-        .collect();
-    let copied = dst.add_node(*src.get_node(node));
-    if let Some(data) = src.get_leaf_data(node) {
-        dst.set_leaf_data(copied, data.clone());
-    }
-    for child in copied_children {
-        dst.add_edge(copied, child);
-    }
-    memo.insert(node.index(), copied);
-    copied
-}
-
 /// Copy `node`'s subgraph, renumbering each distinct symbol id through `remap`
 /// to a fresh id from `next`. Used to lift a reader's arm symbols (its `XLEN`
 /// width var) above the two comparison-operand symbols they are spliced beside,
@@ -493,34 +465,20 @@ fn copy_subgraph_remap_symbols(
     remap: &mut HashMap<u32, u32>,
     next: &mut u32,
 ) -> tir_graph::NodeId {
-    use tir_graph::{Dag, MutDag};
-    if let Some(&copied) = memo.get(&node.index()) {
-        return copied;
-    }
-    let children: Vec<tir_graph::NodeId> = src.children(node).collect();
-    let copied_children: Vec<tir_graph::NodeId> = children
-        .into_iter()
-        .map(|child| copy_subgraph_remap_symbols(dst, src, child, memo, remap, next))
-        .collect();
-    let copied = dst.add_node(*src.get_node(node));
-    if let Some(data) = src.get_leaf_data(node) {
-        let data = if let tir_symbolic::lang::SymPayload::SymbolId(id) = data {
+    use tir_graph::Dag;
+    use tir_symbolic::lang::SymPayload;
+    use tir_symbolic::sem::{CopyAction, copy_subgraph_with};
+    copy_subgraph_with(dst, src, node, memo, &mut |_, node| match src.get_leaf_data(node) {
+        Some(SymPayload::SymbolId(id)) => {
             let new_id = *remap.entry(*id).or_insert_with(|| {
                 let assigned = *next;
                 *next += 1;
                 assigned
             });
-            tir_symbolic::lang::SymPayload::SymbolId(new_id)
-        } else {
-            data.clone()
-        };
-        dst.set_leaf_data(copied, data);
-    }
-    for child in copied_children {
-        dst.add_edge(copied, child);
-    }
-    memo.insert(node.index(), copied);
-    copied
+            CopyAction::Payload(SymPayload::SymbolId(new_id))
+        }
+        _ => CopyAction::Keep,
+    })
 }
 
 /// Copy a flag reader's arm. For a boolean materializer (`zext(0/1, W)`), replace the
@@ -574,41 +532,17 @@ fn compose_guard_with_definer(
     guard_memo: &mut HashMap<usize, tir_graph::NodeId>,
     definer_memo: &mut HashMap<usize, tir_graph::NodeId>,
 ) -> tir_graph::NodeId {
-    use tir_graph::{Dag, MutDag};
-    if let Some(&copied) = guard_memo.get(&node.index()) {
-        return copied;
-    }
-    if let Some(tir_symbolic::lang::SymPayload::SymbolId(symbol)) = guard.get_leaf_data(node)
-        && let Some(&flag_root) = substitute.get(symbol)
-    {
-        let copied = copy_subgraph(dst, definer, flag_root, definer_memo);
-        guard_memo.insert(node.index(), copied);
-        return copied;
-    }
-    let children: Vec<tir_graph::NodeId> = guard.children(node).collect();
-    let copied_children: Vec<tir_graph::NodeId> = children
-        .into_iter()
-        .map(|child| {
-            compose_guard_with_definer(
-                dst,
-                guard,
-                child,
-                substitute,
-                definer,
-                guard_memo,
-                definer_memo,
-            )
-        })
-        .collect();
-    let copied = dst.add_node(*guard.get_node(node));
-    if let Some(data) = guard.get_leaf_data(node) {
-        dst.set_leaf_data(copied, data.clone());
-    }
-    for child in copied_children {
-        dst.add_edge(copied, child);
-    }
-    guard_memo.insert(node.index(), copied);
-    copied
+    use tir_graph::Dag;
+    use tir_symbolic::lang::SymPayload;
+    use tir_symbolic::sem::{CopyAction, copy_subgraph, copy_subgraph_with};
+    copy_subgraph_with(dst, guard, node, guard_memo, &mut |dst, node| {
+        match guard.get_leaf_data(node) {
+            Some(SymPayload::SymbolId(symbol)) if substitute.contains_key(symbol) => {
+                CopyAction::Replace(copy_subgraph(dst, definer, substitute[symbol], definer_memo))
+            }
+            _ => CopyAction::Keep,
+        }
+    })
 }
 
 /// Operator kinds the constant folder may evaluate: pure scalar computations
@@ -682,7 +616,7 @@ fn fold_constant_subtrees(
             return copied;
         }
         let copied = if src.get_leaf_data(node).is_none() && all_constant(src, node, const_memo) {
-            let mut sub = tir_symbolic::sem::SemGraph::new();
+            let mut sub: tir_symbolic::sem::SemGraph = tir_symbolic::sem::SemGraph::new();
             copy_subgraph(&mut sub, src, node, &mut HashMap::new());
             let tir_symbolic::lang::Value::Int(value) = tir_symbolic::lang::execute(&sub, &[]) else {
                 // Not evaluable after all: copy verbatim.

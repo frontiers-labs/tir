@@ -25,18 +25,9 @@ fn emit_flag_rules<'a>(
             continue;
         }
         let resolved_params = resolve_params_for_instruction(inst, item_cache);
-        let Some(mnemonic) = resolved_params
-            .get("MNEMONIC")
-            .and_then(|(_, value)| value.as_ref())
-            .and_then(resolve_string)
-        else {
+        let Some((mnemonic, op_name)) = instruction_names(&resolved_params) else {
             continue;
         };
-        let op_name = resolved_params
-            .get("OPNAME")
-            .and_then(|(_, value)| value.as_ref())
-            .and_then(resolve_string)
-            .unwrap_or_else(|| mnemonic.clone());
         let isa_param_values = resolve_isa_param_values(inst, item_cache);
         let ops = resolve_operand_widths(
             resolve_operands_for_instruction(inst, item_cache),
@@ -136,18 +127,7 @@ fn emit_flag_branch_rules(
     isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
     rule_spec_idents: &mut Vec<proc_macro2::Ident>,
 ) {
-    let float_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|file| file.register_classes())
-        .filter(|class| class.has_float_registers())
-        .map(|class| class.name.clone())
-        .collect();
-    let polymorphic_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|file| file.register_classes())
-        .filter(|class| class.has_polymorphic_registers())
-        .map(|class| class.name.clone())
-        .collect();
+    let (float_classes, polymorphic_classes) = register_class_kinds(files);
     for (b, b_sem) in branches {
         for (d, d_sem) in definers {
             if d_sem.class != b_sem.class {
@@ -296,30 +276,15 @@ fn copy_subgraph_alias(
     map: &HashMap<u32, u32>,
     memo: &mut HashMap<usize, tir_graph::NodeId>,
 ) -> tir_graph::NodeId {
-    use tir_graph::{Dag, MutDag};
-    if let Some(&copied) = memo.get(&node.index()) {
-        return copied;
-    }
-    let children: Vec<tir_graph::NodeId> = src.children(node).collect();
-    let copied_children: Vec<tir_graph::NodeId> = children
-        .into_iter()
-        .map(|child| copy_subgraph_alias(dst, src, child, map, memo))
-        .collect();
-    let copied = dst.add_node(*src.get_node(node));
-    if let Some(data) = src.get_leaf_data(node) {
-        let data = match data {
-            tir_symbolic::lang::SymPayload::SymbolId(id) if map.contains_key(id) => {
-                tir_symbolic::lang::SymPayload::SymbolId(map[id])
-            }
-            other => other.clone(),
-        };
-        dst.set_leaf_data(copied, data);
-    }
-    for child in copied_children {
-        dst.add_edge(copied, child);
-    }
-    memo.insert(node.index(), copied);
-    copied
+    use tir_graph::Dag;
+    use tir_symbolic::lang::SymPayload;
+    use tir_symbolic::sem::{CopyAction, copy_subgraph_with};
+    copy_subgraph_with(dst, src, node, memo, &mut |_, node| match src.get_leaf_data(node) {
+        Some(SymPayload::SymbolId(id)) if map.contains_key(id) => {
+            CopyAction::Payload(SymPayload::SymbolId(map[id]))
+        }
+        _ => CopyAction::Keep,
+    })
 }
 
 /// A single-symbol comparison against a literal zero (`Ne(s0, 0)`/`Eq(s0, 0)`),
@@ -399,18 +364,7 @@ fn emit_aliased_zero_branch_rules(
     isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
     rule_spec_idents: &mut Vec<proc_macro2::Ident>,
 ) {
-    let float_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|file| file.register_classes())
-        .filter(|class| class.has_float_registers())
-        .map(|class| class.name.clone())
-        .collect();
-    let polymorphic_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|file| file.register_classes())
-        .filter(|class| class.has_polymorphic_registers())
-        .map(|class| class.name.clone())
-        .collect();
+    let (float_classes, polymorphic_classes) = register_class_kinds(files);
     let mut emitted_preludes: HashSet<String> = HashSet::new();
     for (b, b_sem) in branches {
         for (d, d_sem) in definers {
@@ -669,18 +623,7 @@ fn emit_flag_reader_rules(
     isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
     rule_spec_idents: &mut Vec<proc_macro2::Ident>,
 ) {
-    let float_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|file| file.register_classes())
-        .filter(|class| class.has_float_registers())
-        .map(|class| class.name.clone())
-        .collect();
-    let polymorphic_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|file| file.register_classes())
-        .filter(|class| class.has_polymorphic_registers())
-        .map(|class| class.name.clone())
-        .collect();
+    let (float_classes, polymorphic_classes) = register_class_kinds(files);
     use tir_graph::MutDag;
     let isa_closure = isa_requires_closure(files);
     for (r, r_sem) in readers {

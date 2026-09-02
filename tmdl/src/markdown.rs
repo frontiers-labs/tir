@@ -9,6 +9,7 @@ use crate::ast::{
     Expr, Lit, RegisterDef, RegisterTrait, UnOp,
 };
 use crate::error::TMDLError;
+use crate::rustgen::resolve_string;
 use crate::utils::{
     get_encoding_shapes, resolve_effective_asm_for_instruction,
     resolve_effective_schedule_for_instruction, resolve_operands_for_instruction,
@@ -21,7 +22,7 @@ pub fn generate_markdown(
     mut output: impl Write,
 ) -> Result<(), TMDLError> {
     write_overview(dialect, files, &mut output)?;
-    let item_cache = item_cache(files);
+    let item_cache = crate::sema::build_item_cache(files);
     write_instructions(files, &item_cache, &mut output)
 }
 
@@ -46,7 +47,7 @@ pub fn generate_markdown_book(
         }
     }
 
-    let item_cache = item_cache(files);
+    let item_cache = crate::sema::build_item_cache(files);
     for file in instruction_files {
         let stem = file_stem(file)?;
         let mut output = fs::File::create(output_dir.join(format!("{stem}.md")))?;
@@ -260,13 +261,6 @@ fn write_overview(
     Ok(())
 }
 
-fn item_cache(files: &[ast::File]) -> HashMap<&str, &ast::Item> {
-    files
-        .iter()
-        .flat_map(|file| file.items.iter().map(|item| (item.name(), item)))
-        .collect()
-}
-
 fn write_instructions(
     files: &[ast::File],
     item_cache: &HashMap<&str, &ast::Item>,
@@ -477,14 +471,6 @@ fn string_parameter(
         .get(name)
         .and_then(|(_, value)| value.as_ref())
         .and_then(resolve_string)
-}
-
-fn resolve_string(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::Lit(Lit::Str(value)) => Some(value.value().to_string()),
-        Expr::Block(block) if block.last_expr_return => block.stmts.last().and_then(resolve_string),
-        _ => None,
-    }
 }
 
 fn format_assembly(template: &str, parameters: &HashMap<String, (Type, Option<Expr>)>) -> String {

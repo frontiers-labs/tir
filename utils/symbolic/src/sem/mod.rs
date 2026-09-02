@@ -5,7 +5,9 @@
 //! The graph is parameterized by its per-node annotation so a consumer that has
 //! no IR types (TMDL) can build the very same expressions the IR does.
 
-use tir_graph::{MutDag, NodeId, PostOrderDag};
+use std::collections::HashMap;
+
+use tir_graph::{Dag, MutDag, NodeId, PostOrderDag};
 
 use crate::lang::{SymKind, SymPayload};
 
@@ -42,6 +44,65 @@ impl ValueId {
 /// whatever provenance its producer tracks (the IR carries `tir::graph::NodeMeta`;
 /// TMDL carries nothing).
 pub type SemGraph<A = ()> = PostOrderDag<SymKind, SymPayload<ValueId>, A>;
+
+/// What [`copy_subgraph_with`] makes of one source node.
+pub enum CopyAction {
+    /// The node and its payload, as they are.
+    Keep,
+    /// The node, carrying this payload instead of its own.
+    Payload(SymPayload<ValueId>),
+    /// This node of the destination, standing in for the source node and
+    /// everything under it.
+    Replace(NodeId),
+}
+
+/// Copy `node`'s subgraph from `src` into `dst`, preserving sharing through
+/// `memo`. Children are copied first, keeping `dst` in post order.
+pub fn copy_subgraph<A, B>(
+    dst: &mut SemGraph<B>,
+    src: &SemGraph<A>,
+    node: NodeId,
+    memo: &mut HashMap<usize, NodeId>,
+) -> NodeId {
+    copy_subgraph_with(dst, src, node, memo, &mut |_, _| CopyAction::Keep)
+}
+
+/// [`copy_subgraph`] with `act` deciding what each source node becomes. It runs
+/// before the node's children are copied and receives `dst`, so a replacement
+/// can be built there.
+pub fn copy_subgraph_with<A, B>(
+    dst: &mut SemGraph<B>,
+    src: &SemGraph<A>,
+    node: NodeId,
+    memo: &mut HashMap<usize, NodeId>,
+    act: &mut dyn FnMut(&mut SemGraph<B>, NodeId) -> CopyAction,
+) -> NodeId {
+    if let Some(&copied) = memo.get(&node.index()) {
+        return copied;
+    }
+    let payload = match act(dst, node) {
+        CopyAction::Keep => src.get_leaf_data(node).cloned(),
+        CopyAction::Payload(payload) => Some(payload),
+        CopyAction::Replace(copied) => {
+            memo.insert(node.index(), copied);
+            return copied;
+        }
+    };
+    let children: Vec<NodeId> = src.children(node).collect();
+    let copied_children: Vec<NodeId> = children
+        .into_iter()
+        .map(|child| copy_subgraph_with(dst, src, child, memo, act))
+        .collect();
+    let copied = dst.add_node(*src.get_node(node));
+    if let Some(payload) = payload {
+        dst.set_leaf_data(copied, payload);
+    }
+    for child in copied_children {
+        dst.add_edge(copied, child);
+    }
+    memo.insert(node.index(), copied);
+    copied
+}
 
 /// A payload literal in a serialized [`SemOp`] program; decoded to
 /// [`SymPayload`] on replay.
