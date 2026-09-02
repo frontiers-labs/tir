@@ -5,6 +5,7 @@ mod encoding;
 mod error;
 mod expander;
 mod fninline;
+#[cfg(feature = "json")]
 mod json;
 mod lexer;
 mod markdown;

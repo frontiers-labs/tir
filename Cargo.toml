@@ -36,7 +36,7 @@ members = [
 [workspace.dependencies]
 tir = { path = "core" }
 tir-sim = { path = "simulator/simcore" }
-tmdl = { path = "tmdl" }
+tmdl = { path = "tmdl", default-features = false }
 
 # Common utils
 tir-adt = { path = "utils/adt" }

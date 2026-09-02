@@ -115,9 +115,7 @@ impl Compiler {
                 ));
             }
             let mut output = self.create_output_writer()?;
-            serde_json::to_writer_pretty(&mut output, &crate::json::schema())?;
-            writeln!(output)?;
-            return Ok(());
+            return write_ast_json_schema(&mut output);
         }
         if !self.split_inputs.is_empty() && !matches!(self.action, Action::EmitRust) {
             return Err(TMDLError::Codegen(
@@ -278,11 +276,7 @@ impl Compiler {
                         writeln!(output, "{:#?}", f)?;
                     }
                 }
-                Action::EmitAstJson => {
-                    let document = crate::json::Document::from_ast(&parsed_files);
-                    serde_json::to_writer_pretty(&mut output, &document)?;
-                    writeln!(output)?;
-                }
+                Action::EmitAstJson => write_ast_json(&parsed_files, &mut output)?,
                 _ => unreachable!(),
             }
             return Ok(());
@@ -654,4 +648,34 @@ fn print_cheap_errors(file_name: &str, source: &str, errors: Vec<Cheap<Span>>) {
             vec![],
         );
     }
+}
+
+#[cfg(feature = "json")]
+fn write_ast_json_schema(output: &mut dyn Write) -> Result<(), TMDLError> {
+    serde_json::to_writer_pretty(&mut *output, &crate::json::schema())?;
+    writeln!(output)?;
+    Ok(())
+}
+
+#[cfg(feature = "json")]
+fn write_ast_json(files: &[crate::ast::File], output: &mut dyn Write) -> Result<(), TMDLError> {
+    let document = crate::json::Document::from_ast(files);
+    serde_json::to_writer_pretty(&mut *output, &document)?;
+    writeln!(output)?;
+    Ok(())
+}
+
+#[cfg(not(feature = "json"))]
+fn write_ast_json_schema(_output: &mut dyn Write) -> Result<(), TMDLError> {
+    Err(json_disabled())
+}
+
+#[cfg(not(feature = "json"))]
+fn write_ast_json(_files: &[crate::ast::File], _output: &mut dyn Write) -> Result<(), TMDLError> {
+    Err(json_disabled())
+}
+
+#[cfg(not(feature = "json"))]
+fn json_disabled() -> TMDLError {
+    TMDLError::Codegen("tmdl was built without the `json` feature".to_string())
 }
