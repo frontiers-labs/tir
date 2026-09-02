@@ -105,6 +105,7 @@ impl WidthExpr {
     }
 }
 
+#[derive(Clone)]
 enum Guard_ {
     Lt(WidthExpr, WidthExpr),
     Eq(WidthExpr, WidthExpr),
@@ -114,6 +115,7 @@ enum Guard_ {
 /// bound constant `var` fits a signed `bits`-bit immediate. A `materialize`
 /// decomposition axiom guards on the negation so it fires only on constants too
 /// wide for the target's immediate, bounding the saturation descent.
+#[derive(Clone)]
 struct ValueGuard {
     var: usize,
     bits: u32,
@@ -151,6 +153,7 @@ enum ConstWidth {
 
 /// One template tree shared by both sides; which leaves are legal where is
 /// enforced at parse by [`Side`].
+#[derive(Clone)]
 enum AxNode {
     /// An LHS capture hole — a declared var (`Some(index)`, also referencable
     /// from the RHS), or a width name / wildcard (`None`). In proofs a
@@ -176,6 +179,7 @@ enum Side {
     Rhs,
 }
 
+#[derive(Clone)]
 enum ProofObligation {
     /// Discharged by the [`SmtOracle`] over the realized LHS and RHS.
     Equivalence,
@@ -206,6 +210,7 @@ struct Realization<'a> {
     theta_port: Option<ThetaPort>,
 }
 
+#[derive(Clone)]
 pub struct Axiom {
     pub(crate) name: String,
     /// Width names in declaration order; a resolved `Vec<u64>` in this order is
@@ -278,8 +283,11 @@ pub(crate) fn axiom_forms(file: &str) -> Vec<String> {
 }
 
 pub(crate) fn parse_axiom(text: &str) -> Result<Axiom, String> {
-    let parsed = parse(text).ok_or("malformed s-expression")?;
-    let SemExpr::List(items) = &parsed else {
+    axiom_from_expr(&parse(text).ok_or("malformed s-expression")?)
+}
+
+pub(crate) fn axiom_from_expr(parsed: &SemExpr) -> Result<Axiom, String> {
+    let SemExpr::List(items) = parsed else {
         return Err("expected a top-level list".into());
     };
     let [head, name, sections @ ..] = items.as_slice() else {

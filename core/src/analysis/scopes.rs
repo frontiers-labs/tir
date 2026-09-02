@@ -229,3 +229,26 @@ pub fn region_facts(op: &OpHandle) -> Vec<(RegionId, ValueId, bool)> {
         .map(|&region| (region, condition, true))
         .collect()
 }
+
+/// Every operation in `region`'s tree, outermost first: each op precedes the
+/// ops of its own regions.
+pub fn region_ops(context: &Context, region: RegionId) -> Vec<OpId> {
+    let mut ops = Vec::new();
+    for block in context.get_region(region).iter(context.clone()) {
+        for op_id in block.op_ids() {
+            ops.push(op_id);
+            for nested in context.get_op(op_id).regions() {
+                ops.extend(region_ops(context, nested));
+            }
+        }
+    }
+    ops
+}
+
+/// Every operation under `op`'s regions, outermost first.
+pub fn subtree_ops(context: &Context, op: &OpHandle) -> Vec<OpId> {
+    op.regions()
+        .iter()
+        .flat_map(|&region| region_ops(context, region))
+        .collect()
+}

@@ -16,6 +16,7 @@
 //! accesses disagreeing on a type — keeps every access and reaches
 //! [`thread_state`](super::thread_state) as the memory it is.
 
+use crate::analysis::scopes;
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes, region_exit};
 use crate::analysis::slots::{SlotState, agreed_value_type, collect_slots};
 use crate::analysis::{AnalysisManager, EscapeFacts};
@@ -58,7 +59,7 @@ impl Pass for PromotePass {
         let [entry] = context.get_region(body).block_ids()[..] else {
             return Ok(());
         };
-        let ops = region_ops(context, body);
+        let ops = scopes::region_ops(context, body);
         let escapes = analyses.get::<EscapeFacts>(context, op.op().id);
         for (slot, state) in collect_slots(context, &escapes, &ops) {
             let Some(ty) = promotable(context, slot, &state, entry) else {
@@ -430,7 +431,9 @@ fn live_after(context: &Context, op: OpId, slot: ValueId) -> bool {
 fn reads_at_or_under(context: &Context, op: OpId, slot: ValueId) -> bool {
     let instance = context.get_op(op);
     reads_from(&instance, slot)
-        || subtree_ops(context, &instance).any(|inner| reads_from(&context.get_op(inner), slot))
+        || scopes::subtree_ops(context, &instance)
+            .into_iter()
+            .any(|inner| reads_from(&context.get_op(inner), slot))
 }
 
 fn reads_from(op: &OpHandle, slot: ValueId) -> bool {
@@ -447,7 +450,7 @@ fn writes_to(op: &OpHandle, slot: ValueId) -> bool {
 
 /// Whether anything in `op`'s region tree accesses `slot`.
 fn accesses_under(context: &Context, op: &OpHandle, slot: ValueId) -> bool {
-    subtree_ops(context, op).any(|op_id| {
+    scopes::subtree_ops(context, op).into_iter().any(|op_id| {
         let instance = context.get_op(op_id);
         reads_from(&instance, slot) || writes_to(&instance, slot)
     })
@@ -455,25 +458,7 @@ fn accesses_under(context: &Context, op: &OpHandle, slot: ValueId) -> bool {
 
 /// Whether anything in `op`'s region tree writes `slot`.
 fn writes_under(context: &Context, op: &OpHandle, slot: ValueId) -> bool {
-    subtree_ops(context, op).any(|op_id| writes_to(&context.get_op(op_id), slot))
-}
-
-fn subtree_ops(context: &Context, op: &OpHandle) -> impl Iterator<Item = OpId> {
-    op.regions()
-        .to_vec()
+    scopes::subtree_ops(context, op)
         .into_iter()
-        .flat_map(|region| region_ops(context, region))
-}
-
-fn region_ops(context: &Context, region: RegionId) -> Vec<OpId> {
-    let mut ops = Vec::new();
-    for block in context.get_region(region).iter(context.clone()) {
-        for op_id in block.op_ids() {
-            ops.push(op_id);
-            for nested in context.get_op(op_id).regions() {
-                ops.extend(region_ops(context, nested));
-            }
-        }
-    }
-    ops
+        .any(|op_id| writes_to(&context.get_op(op_id), slot))
 }

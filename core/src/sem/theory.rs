@@ -2,10 +2,10 @@ use std::sync::OnceLock;
 
 use crate::sem::{SemExpr, parse};
 
-use super::axioms::{Axiom, parse_axiom};
+use super::axioms::{Axiom, axiom_from_expr};
 
 pub(crate) struct Theory {
-    pub(crate) axioms: Vec<String>,
+    pub(crate) axioms: Vec<Axiom>,
 }
 
 pub(crate) fn theory() -> &'static Theory {
@@ -17,11 +17,7 @@ pub(crate) fn theory() -> &'static Theory {
 }
 
 pub(crate) fn axioms() -> Vec<Axiom> {
-    theory()
-        .axioms
-        .iter()
-        .map(|text| parse_axiom(text).expect("checked theory axiom must parse"))
-        .collect()
+    theory().axioms.clone()
 }
 
 fn atom(expr: &SemExpr) -> Option<&str> {
@@ -35,16 +31,6 @@ fn list(expr: &SemExpr) -> Result<&[SemExpr], String> {
     match expr {
         SemExpr::List(items) => Ok(items),
         SemExpr::Atom(_) => Err("expected a list".into()),
-    }
-}
-
-fn render(expr: &SemExpr) -> String {
-    match expr {
-        SemExpr::Atom(atom) => atom.clone(),
-        SemExpr::List(items) => {
-            let body = items.iter().map(render).collect::<Vec<_>>().join(" ");
-            format!("({body})")
-        }
     }
 }
 
@@ -62,11 +48,7 @@ fn parse_theory(text: &str) -> Result<Theory, String> {
     let mut axioms = Vec::new();
     for section in &items[1..] {
         match list(section)?.first().and_then(atom) {
-            Some("axiom") => {
-                let text = render(section);
-                parse_axiom(&text)?;
-                axioms.push(text);
-            }
+            Some("axiom") => axioms.push(axiom_from_expr(section)?),
             _ => return Err("unknown theory section".into()),
         }
     }

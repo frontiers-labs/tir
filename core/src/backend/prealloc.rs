@@ -9,7 +9,8 @@ use tir::attributes::AttributeValue;
 use tir::{AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, Rewriter, ValueId};
 
 use crate::backend::abi::{
-    GroupRollback, align_argument_group, reserve_indirect_result_argument, value_kind,
+    GroupRollback, align_argument_group, next_argument_register, next_return_register,
+    reserve_indirect_result_argument, value_kind,
 };
 use crate::backend::liveness::PhysReg;
 use crate::backend::regalloc::{
@@ -427,16 +428,10 @@ impl Pass for AbiPrecolorPass {
                 for (operand_index, value) in body_op.operands().iter().copied().enumerate() {
                     let class = value_class(context, value);
                     let kind = value_kind(context, self.abi, value);
-                    let slot = next_slot.entry(kind).or_insert(0usize);
-                    let Some(sequence) =
-                        self.abi.rets.iter().find(|sequence| sequence.kind == kind)
+                    let Some(register) = next_return_register(self.abi, kind, &mut next_slot)
                     else {
                         continue;
                     };
-                    let Some(&register) = sequence.regs.get(*slot) else {
-                        continue;
-                    };
-                    *slot += 1;
                     let rc = match class {
                         Some(class) if class.file() == register.0.file() => class,
                         _ => register.0,
@@ -580,7 +575,9 @@ fn plan_arguments(
             let pins = if abi.argument_group_fits_register_limit(members.len()) {
                 members
                     .iter()
-                    .map(|&(_, class, kind)| next_abi_register(abi, class, kind, &mut trial_slots))
+                    .map(|&(_, class, kind)| {
+                        next_argument_register(abi, Some(class), kind, &mut trial_slots)
+                    })
                     .collect::<Option<Vec<_>>>()
             } else {
                 None
@@ -602,7 +599,7 @@ fn plan_arguments(
         }
 
         let (value, class, kind) = members[0];
-        match next_abi_register(abi, class, kind, &mut next_slot) {
+        match next_argument_register(abi, Some(class), kind, &mut next_slot) {
             Some(pin) => plan.pins.push((value, pin)),
             None => {
                 plan.stack_args.push((value, class, next_stack_slot));
@@ -611,54 +608,6 @@ fn plan_arguments(
         }
     }
     Ok(plan)
-}
-
-fn next_abi_register(
-    abi: &crate::backend::abi::AbiInfo,
-    class: RegClassId,
-    mut kind: crate::backend::abi::ValueKind,
-    next_slot: &mut HashMap<crate::backend::abi::ValueKind, usize>,
-) -> Option<PhysReg> {
-    let mut visited = std::collections::HashSet::new();
-    loop {
-        if !visited.insert(kind) {
-            return None;
-        }
-        let sequence = match abi.args.iter().find(|sequence| sequence.kind == kind) {
-            Some(sequence) => sequence,
-            None if kind != crate::backend::abi::ValueKind::Int => {
-                kind = crate::backend::abi::ValueKind::Int;
-                continue;
-            }
-            None => return None,
-        };
-        let slot = next_slot.entry(kind).or_insert(0);
-        let register = if class.group_width > 1
-            && sequence
-                .regs
-                .first()
-                .is_some_and(|register| register.0.file() == class.file())
-        {
-            let first = sequence.regs.first().unwrap();
-            let last = sequence.regs.last().unwrap();
-            let index = first.1 + (*slot as u16 * class.group_width);
-            (index <= last.1).then_some((class, index))
-        } else {
-            sequence.regs.get(*slot).copied()
-        };
-        if let Some(register) = register {
-            *slot += 1;
-            return Some(if register.0.file() == class.file() {
-                (class, register.1)
-            } else {
-                register
-            });
-        }
-        match sequence.overflow {
-            crate::backend::abi::Overflow::Chain(next) => kind = next,
-            crate::backend::abi::Overflow::Stack => return None,
-        }
-    }
 }
 
 /// Sequentialize a parallel copy: a set of `dst <- src` moves (destinations

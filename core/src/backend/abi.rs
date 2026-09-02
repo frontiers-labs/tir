@@ -211,3 +211,81 @@ pub(crate) fn exhaust_argument_registers(
         }
     }
 }
+
+/// The next argument register for a value of `kind`, following the ABI's
+/// overflow chain and falling back to the integer sequence for a kind the ABI
+/// does not sequence. A `class` with a group width strides the sequence by
+/// that width and names the register in its own class.
+pub(crate) fn next_argument_register(
+    abi: &AbiInfo,
+    class: Option<crate::backend::regalloc::RegClassId>,
+    mut kind: ValueKind,
+    next_slot: &mut HashMap<ValueKind, usize>,
+) -> Option<crate::backend::liveness::PhysReg> {
+    let mut visited = HashSet::new();
+    loop {
+        if !visited.insert(kind) {
+            return None;
+        }
+        let sequence = match abi.args.iter().find(|sequence| sequence.kind == kind) {
+            Some(sequence) => sequence,
+            None if kind != ValueKind::Int => {
+                kind = ValueKind::Int;
+                continue;
+            }
+            None => return None,
+        };
+        let slot = next_slot.entry(kind).or_insert(0);
+        let same_file = |class: crate::backend::regalloc::RegClassId, register: PhysReg| {
+            register.0.file() == class.file()
+        };
+        let register = match class {
+            Some(class)
+                if class.group_width > 1
+                    && sequence
+                        .regs
+                        .first()
+                        .is_some_and(|&first| same_file(class, first)) =>
+            {
+                let first = sequence.regs.first().unwrap();
+                let last = sequence.regs.last().unwrap();
+                let index = first.1 + (*slot as u16 * class.group_width);
+                (index <= last.1).then_some((class, index))
+            }
+            _ => sequence.regs.get(*slot).copied(),
+        };
+        if let Some(register) = register {
+            *slot += 1;
+            return Some(match class {
+                Some(class) if same_file(class, register) => (class, register.1),
+                _ => register,
+            });
+        }
+        match sequence.overflow {
+            Overflow::Chain(next) => kind = next,
+            Overflow::Stack => return None,
+        }
+    }
+}
+
+/// The next return register for a value of `kind`, falling back to the
+/// integer sequence for a kind the ABI does not sequence.
+pub(crate) fn next_return_register(
+    abi: &AbiInfo,
+    kind: ValueKind,
+    next_slot: &mut HashMap<ValueKind, usize>,
+) -> Option<PhysReg> {
+    let sequence = abi
+        .rets
+        .iter()
+        .find(|sequence| sequence.kind == kind)
+        .or_else(|| {
+            abi.rets
+                .iter()
+                .find(|sequence| sequence.kind == ValueKind::Int)
+        })?;
+    let slot = next_slot.entry(sequence.kind).or_insert(0);
+    let register = *sequence.regs.get(*slot)?;
+    *slot += 1;
+    Some(register)
+}

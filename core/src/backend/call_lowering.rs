@@ -12,7 +12,8 @@ use tir::{Context, OpId, Operand, Operation, OperationRef, PassError, Rewriter, 
 
 use crate::backend::abi::{
     AbiInfo, GroupRollback, Overflow, ValueKind, align_argument_group, exhaust_argument_registers,
-    reserve_indirect_result_argument, type_kind, value_kind,
+    next_argument_register, next_return_register, reserve_indirect_result_argument, type_kind,
+    value_kind,
 };
 use crate::backend::liveness::PhysReg;
 use crate::backend::regalloc::RegClassId;
@@ -256,8 +257,9 @@ impl CallLowering {
                 values
                     .iter()
                     .map(|&value| {
-                        next_register(
+                        next_argument_register(
                             self.abi,
+                            None,
                             value_kind(context, self.abi, value),
                             &mut trial_slots,
                         )
@@ -535,21 +537,7 @@ impl CallLowering {
         }
 
         let kind = value_kind(context, self.abi, result);
-        let return_reg = self
-            .abi
-            .rets
-            .iter()
-            .find(|sequence| sequence.kind == kind)
-            .or_else(|| {
-                (kind != ValueKind::Int).then(|| {
-                    self.abi
-                        .rets
-                        .iter()
-                        .find(|sequence| sequence.kind == ValueKind::Int)
-                })?
-            })
-            .and_then(|sequence| sequence.regs.first())
-            .copied()
+        let return_reg = next_return_register(self.abi, kind, &mut HashMap::new())
             .ok_or_else(|| PassError::InvalidRuleSet("ABI has no return register".to_string()))?;
         // The call op is erased below and takes its result with it, so the copy
         // defines a register value of its own. The rewiring is explicit: the
@@ -623,30 +611,11 @@ fn tuple_return_registers(
         .into_iter()
         .enumerate()
         .map(|(index, ty)| {
-            let kind = type_kind(context, ty);
-            let slot = next_slot.entry(kind).or_insert(0usize);
-            let register = abi
-                .rets
-                .iter()
-                .find(|sequence| sequence.kind == kind)
-                .or_else(|| {
-                    (kind != ValueKind::Int)
-                        .then(|| {
-                            abi.rets
-                                .iter()
-                                .find(|sequence| sequence.kind == ValueKind::Int)
-                        })
-                        .flatten()
-                })
-                .and_then(|sequence| sequence.regs.get(*slot))
-                .copied()
-                .ok_or_else(|| {
-                    PassError::InvalidRuleSet(format!(
-                        "ABI has no return register for tuple element {index}"
-                    ))
-                })?;
-            *slot += 1;
-            Ok(register)
+            next_return_register(abi, type_kind(context, ty), &mut next_slot).ok_or_else(|| {
+                PassError::InvalidRuleSet(format!(
+                    "ABI has no return register for tuple element {index}"
+                ))
+            })
         })
         .collect()
 }
@@ -670,36 +639,6 @@ impl ArgumentLocation {
         match self {
             ArgumentLocation::Register(register) => register.0,
             ArgumentLocation::Stack { class, .. } => class,
-        }
-    }
-}
-
-fn next_register(
-    abi: &AbiInfo,
-    mut kind: ValueKind,
-    next_slot: &mut HashMap<ValueKind, usize>,
-) -> Option<PhysReg> {
-    let mut visited = HashSet::new();
-    loop {
-        if !visited.insert(kind) {
-            return None;
-        }
-        let sequence = match abi.args.iter().find(|sequence| sequence.kind == kind) {
-            Some(sequence) => sequence,
-            None if kind != ValueKind::Int => {
-                kind = ValueKind::Int;
-                continue;
-            }
-            None => return None,
-        };
-        let slot = next_slot.entry(kind).or_insert(0);
-        if let Some(&register) = sequence.regs.get(*slot) {
-            *slot += 1;
-            return Some(register);
-        }
-        match sequence.overflow {
-            Overflow::Chain(next) => kind = next,
-            Overflow::Stack => return None,
         }
     }
 }

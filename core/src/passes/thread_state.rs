@@ -26,6 +26,7 @@
 //! nothing.
 
 use crate::BlockHandle;
+use crate::analysis::scopes;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes};
@@ -36,7 +37,7 @@ use crate::ptr::MemcpyOp;
 use crate::state::{EntryStateOpBuilder, JoinOpBuilder, SplitOpBuilder};
 use crate::{
     Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation, OperationRef, Pass, PassError,
-    PassTarget, PromotableAllocation, RegionId, Rewriter, TypeId, ValueId, scf,
+    PassTarget, PromotableAllocation, Rewriter, TypeId, ValueId, scf,
 };
 
 #[derive(Default)]
@@ -74,7 +75,7 @@ impl Pass for ThreadStatePass {
             return Ok(());
         };
 
-        let ops = region_ops(context, body);
+        let ops = scopes::region_ops(context, body);
         if !ops
             .iter()
             .any(|&op_id| touches_memory(&context.get_op(op_id)))
@@ -363,7 +364,7 @@ impl Threader<'_> {
     fn chains_touched_under(&self, op: &OpHandle) -> BTreeSet<Chain> {
         op.regions()
             .iter()
-            .flat_map(|&region| region_ops(self.context, region))
+            .flat_map(|&region| scopes::region_ops(self.context, region))
             .flat_map(|op_id| match classify(&self.context.get_op(op_id)) {
                 Some(Kind::Read(address) | Kind::Write(address)) => vec![self.chain(address)],
                 Some(Kind::Clobber | Kind::Export) => self.exposed(),
@@ -632,26 +633,6 @@ fn carries_state(op: &OpHandle) -> bool {
 fn subtree_touches_memory(context: &Context, op: &OpHandle) -> bool {
     op.regions()
         .iter()
-        .flat_map(|&region| region_ops(context, region))
+        .flat_map(|&region| scopes::region_ops(context, region))
         .any(|op_id| touches_memory(&context.get_op(op_id)))
-}
-
-fn block_ops(context: &Context, block: &BlockHandle) -> Vec<OpId> {
-    let mut ops = Vec::new();
-    for op_id in block.op_ids() {
-        ops.push(op_id);
-        for region in context.get_op(op_id).regions() {
-            ops.extend(region_ops(context, region));
-        }
-    }
-    ops
-}
-
-/// Every operation in a region tree, outermost first.
-fn region_ops(context: &Context, region: RegionId) -> Vec<OpId> {
-    context
-        .get_region(region)
-        .iter(context.clone())
-        .flat_map(|block| block_ops(context, &block))
-        .collect()
 }
