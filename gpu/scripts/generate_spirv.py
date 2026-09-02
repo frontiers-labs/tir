@@ -50,7 +50,7 @@ def generate(grammar_path, output_dir):
         "#![allow(clippy::too_many_arguments)]",
         "",
         "use tir::helpers::operation;",
-        "use tir::{Any as TirAny, OpId, Operation, TypeId, ValueId};",
+        "use tir::{Any as TirAny, OpId, TypeId, ValueId};",
         "",
         "use tir as tir;",
         "",
@@ -76,35 +76,47 @@ def generate(grammar_path, output_dir):
             "",
         ])
     rust.extend([
-        "pub(crate) fn opcode_for_name(name: &str) -> Option<u16> {",
-        "    Some(match name {",
+        "/// Every generated op: its SPIR-V opcode, its name in the `spirv` dialect, and",
+        "/// how many id operands follow the result type and result id.",
+        "static GENERATED: &[(u16, &str, usize)] = &[",
     ])
     for instruction in operations:
-        rust.append(f'        "{instruction["opname"][2:]}" => {instruction["opcode"]},')
-    rust.extend(["        _ => return None,", "    })", "}", ""])
+        arity = len(instruction["operands"]) - 2
+        rust.append(f'    ({instruction["opcode"]}, "{instruction["opname"][2:]}", {arity}),')
     rust.extend([
+        "];",
+        "",
+        "pub(crate) fn opcode_for_name(name: &str) -> Option<u16> {",
+        "    GENERATED",
+        "        .iter()",
+        "        .find(|(_, candidate, _)| *candidate == name)",
+        "        .map(|&(opcode, _, _)| opcode)",
+        "}",
+        "",
         "pub(crate) fn build_generated(",
         "    context: &tir::Context,",
         "    opcode: u16,",
         "    operands: &[ValueId],",
         "    result_type: TypeId,",
         ") -> Option<(OpId, ValueId)> {",
-        "    Some(match opcode {",
+        "    let &(_, name, arity) = GENERATED.iter().find(|&&(code, _, _)| code == opcode)?;",
+        "    if operands.len() != arity {",
+        "        return None;",
+        "    }",
+        "    let result = context.create_value(result_type, None).id();",
+        "    let instance = tir::OpInstance::new_dynamic(",
+        '        ("spirv", name),',
+        "        context.as_context_ref(),",
+        "        operands.to_vec(),",
+        "        vec![result],",
+        "        vec![],",
+        "        vec![],",
+        "    );",
+        "    let op = context.add_operation(instance);",
+        "    Some((op.id, result))",
+        "}",
+        "",
     ])
-    for instruction in operations:
-        op_name = instruction["opname"][2:]
-        fields = [
-            field_name(operand.get("name"), index)
-            for index, operand in enumerate(instruction["operands"][2:])
-        ]
-        chain = "".join(f".{field}(operands[{index}])" for index, field in enumerate(fields))
-        rust.extend([
-            f"        {instruction['opcode']} if operands.len() == {len(fields)} => {{",
-            f"            let op = {op_name}OpBuilder::new(context){chain}.result_type(result_type).build();",
-            "            (op.id(), op.result())",
-            "        }",
-        ])
-    rust.extend(["        _ => return None,", "    })", "}", ""])
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "generated.rs").write_text("\n".join(rust))
     manual_ops = [
