@@ -5,6 +5,9 @@
 #   mov rax,[rbx] -> 48 8b 03      mov [rcx],rdx -> 48 89 11
 #   mov r9,[r10]  -> 4d 8b 0a      mov [r11],r12 -> 4d 89 23
 #   jmp rsi       -> ff e6         call r8       -> 41 ff d0
+# The one exception is `call *rax`: an indirect call pushes its own end, so its
+# length cannot depend on the register and it always writes the REX byte. GNU as
+# writes `ff d0`, two bytes, and TIR writes three.
 
 	.global mem
 mem:
@@ -14,6 +17,7 @@ mem:
 	mov [r11], r12
 	jmp *rsi
 	call *r8
+	call *rax
 
 # CHECK: mem:
 # CHECK-NEXT: [0x48, 0x8B, 0x03]
@@ -22,3 +26,4 @@ mem:
 # CHECK-NEXT: [0x4D, 0x89, 0x23]
 # CHECK-NEXT: [0xFF, 0xE6]
 # CHECK-NEXT: [0x41, 0xFF, 0xD0]
+# CHECK-NEXT: [0x40, 0xFF, 0xD0]

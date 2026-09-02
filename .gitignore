@@ -12,3 +12,7 @@ debug/
 /book
 /docs/generated/isa/
 .DS_Store
+
+# Scratch output of the .audit levers: generated-code snapshots and work logs
+/.audit/gen-*/
+/.audit/*.tsv

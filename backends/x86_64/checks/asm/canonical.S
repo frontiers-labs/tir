@@ -1,9 +1,10 @@
 # RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 # One candidate per operation: `add eax, ebx` and `add eax, r8d` are the same
-# `add32`, which spells the REX byte only for r8d. `add rcx, 42` binds the imm8
-# `add_imm` (bits<8> tried before bits<32>); the out-of-range `add rcx, 300`
-# backtracks to the imm32 `add_imm`.
+# `add32`, which spells the REX byte only for r8d, and `add rcx, 42` and
+# `add rcx, 300` are the same `add_imm`, whose immediate is 32 bits wide either
+# way. Whether 42 is written in one byte is a shape, decided at encode time, so
+# selection has nothing left to choose between.
 
 	.global p
 p:

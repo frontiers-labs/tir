@@ -506,6 +506,14 @@ pub fn verify_smt(sh: &Shell, isa: &str, args: impl Iterator<Item = String>) -> 
             report.failed
         );
     }
+    let uncovered = report.uncovered_shapes();
+    if !uncovered.is_empty() {
+        anyhow::bail!(
+            "{} encoding shape(s) came out of no verified case: {}",
+            uncovered.len(),
+            uncovered.join(", ")
+        );
+    }
     Ok(())
 }
 
@@ -1060,15 +1068,6 @@ fn operand_case_is_valid(spec: &IsaSpec, instr: &Instruction, case: &[u64]) -> b
         ("riscv32", "cshiftleftlogicalimm") => value(0) != 0 && value(1) < 32,
         (name, "cshiftleftlogicalimm") if name.starts_with("riscv") => value(0) != 0,
         (name, "cloadwordsp" | "cloaddoublesp") if name.starts_with("riscv") => value(0) != 0,
-        (
-            "x86_64",
-            "movload" | "mov32load" | "movsxdload" | "movsx8load" | "movsx16load" | "movzx8load"
-            | "movzx16load",
-        ) => !matches!(value(1) & 7, 4 | 5),
-        ("x86_64", "movstore" | "mov32store" | "mov16store" | "mov8store") => {
-            !matches!(value(0) & 7, 4 | 5)
-        }
-        ("x86_64", "movstoredisp") => value(0) & 7 != 4,
         _ => true,
     }
 }
@@ -1217,6 +1216,177 @@ fn slice_constraints(guard: &tmdl::shapes::Predicate, operand: &str) -> Vec<(u32
             .flat_map(|part| slice_constraints(part, operand))
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+/// An operand tuple the guard of `shape` accepts, built from `base` by making
+/// each test the guard makes come out the way that shape needs. Breaking a
+/// disjunction means choosing which arm to break, and an arm a sibling test
+/// needs back is a dead end, so every combination of those choices is tried.
+/// `None` when a test is one this cannot arrange, or when no combination lands
+/// in `shape`.
+fn case_reaching(instr: &Instruction, shape: &Shape, base: &[u64]) -> Option<Vec<u64>> {
+    (0..CHOICE_LIMIT).find_map(|choices| {
+        let mut case = base.to_vec();
+        let mut choices = Choices(choices);
+        satisfy(&shape.guard, instr, &mut case, true, &mut choices)?;
+        // The guard has to hold outright: `shape_for` falls back to the first
+        // shape when none does. And the encoder takes the first shape whose
+        // guard holds, so a tuple an earlier shape also accepts is not a tuple
+        // that reaches this one.
+        (shape.guard.holds(&reader(instr, &case)) && case_admitted(instr, &case)).then_some(())?;
+        instr
+            .shape_for(&case)
+            .filter(|held| std::ptr::eq(*held, shape))?;
+        Some(case)
+    })
+}
+
+/// Reads an operand out of `case` by name, the way a guard asks for it.
+fn reader<'a>(instr: &'a Instruction, case: &'a [u64]) -> impl Fn(&str) -> u64 + 'a {
+    move |name: &str| {
+        instr
+            .operands
+            .iter()
+            .position(|(operand, _)| operand == name)
+            .and_then(|slot| case.get(slot).copied())
+            .unwrap_or(0)
+    }
+}
+
+/// Whether every operand of `case` holds a value its declaration admits. The
+/// sampled cases go through the same test, so a synthesized one that skipped it
+/// would put the instruction through an operand it does not have.
+fn case_admitted(instr: &Instruction, case: &[u64]) -> bool {
+    instr
+        .operands
+        .iter()
+        .zip(case)
+        .all(|((_, kind), value)| match kind {
+            OperandKind::Reg { .. } => true,
+            OperandKind::Int(constraint) => constraint.admitted(*value) == Some(*value),
+            OperandKind::Bits(width, constraint) => {
+                constraint.admitted(*value) == Some(*value)
+                    && *value & !(bit_mask(*width) as u64) == 0
+            }
+        })
+}
+
+/// How many combinations of branch choices `case_reaching` tries. Guards on
+/// this side of a machine model nest a handful of tests deep, and a walk that
+/// needs more than this is one to write a case for by hand.
+const CHOICE_LIMIT: u64 = 4096;
+
+/// Which arm to take at each choice point, read off one number a digit at a
+/// time, so counting from zero walks every combination.
+struct Choices(u64);
+
+impl Choices {
+    fn pick(&mut self, arity: usize) -> usize {
+        if arity == 0 {
+            return 0;
+        }
+        let arity = arity as u64;
+        let taken = self.0 % arity;
+        self.0 /= arity;
+        taken as usize
+    }
+}
+
+/// Move `case` to where `predicate` takes the value `want`.
+fn satisfy(
+    predicate: &tmdl::shapes::Predicate,
+    instr: &Instruction,
+    case: &mut [u64],
+    want: bool,
+    choices: &mut Choices,
+) -> Option<()> {
+    use tmdl::shapes::{CmpOp, Predicate};
+    let index = |op: &str| instr.operands.iter().position(|(name, _)| name == op);
+    // A test the tuple already answers the wanted way is a test to leave alone:
+    // moving an operand for it would undo the work of a neighbouring test.
+    if predicate.holds(&reader(instr, case)) == want {
+        return Some(());
+    }
+    match predicate {
+        Predicate::Always => want.then_some(()),
+        Predicate::Not(inner) => satisfy(inner, instr, case, !want, choices),
+        // Every conjunct has to hold; to break the conjunction, breaking any
+        // one is enough, and which one is a choice.
+        Predicate::And(parts) if want => parts
+            .iter()
+            .try_for_each(|part| satisfy(part, instr, case, true, choices)),
+        Predicate::And(parts) => satisfy(
+            parts.get(choices.pick(parts.len()))?,
+            instr,
+            case,
+            false,
+            choices,
+        ),
+        Predicate::Or(parts) if want => satisfy(
+            parts.get(choices.pick(parts.len()))?,
+            instr,
+            case,
+            true,
+            choices,
+        ),
+        Predicate::Or(parts) => parts
+            .iter()
+            .try_for_each(|part| satisfy(part, instr, case, false, choices)),
+        Predicate::Bit { op, bit } => {
+            let slot = &mut case[index(op)?];
+            match want {
+                true => *slot |= 1 << bit,
+                false => *slot &= !(1 << bit),
+            }
+            Some(())
+        }
+        Predicate::SliceEq { op, lo, hi, value } => {
+            let slot = &mut case[index(op)?];
+            let mask = (bit_mask(u32::from(hi - lo + 1)) << lo) as u64;
+            let value = ((*value << lo) as u64) & mask;
+            *slot = match want {
+                true => (*slot & !mask) | value,
+                // Any other pattern of those bits will do.
+                false => (*slot & !mask) | ((value ^ mask) & mask),
+            };
+            Some(())
+        }
+        Predicate::Cmp {
+            op,
+            cmp_width,
+            cmp,
+            value,
+            ..
+        } => {
+            let slot = &mut case[index(op)?];
+            let mask = bit_mask(u32::from(*cmp_width)) as u64;
+            let value = (*value as u64) & mask;
+            let hit = match (cmp, want) {
+                (CmpOp::Eq, true) | (CmpOp::Ne, false) => value,
+                (CmpOp::Eq, false) | (CmpOp::Ne, true) => value.wrapping_add(1) & mask,
+                (CmpOp::Lt | CmpOp::ULt, true) | (CmpOp::Ge | CmpOp::UGe, false) => {
+                    value.checked_sub(1)? & mask
+                }
+                (CmpOp::Le | CmpOp::ULe, true) | (CmpOp::Gt | CmpOp::UGt, false) => value,
+                (CmpOp::Gt | CmpOp::UGt, true) | (CmpOp::Le | CmpOp::ULe, false) => {
+                    value.wrapping_add(1) & mask
+                }
+                (CmpOp::Ge | CmpOp::UGe, true) | (CmpOp::Lt | CmpOp::ULt, false) => value,
+            };
+            *slot = hit;
+            Some(())
+        }
+        Predicate::Fits { op, bits, .. } => {
+            let slot = &mut case[index(op)?];
+            *slot = match want {
+                // The largest value the narrow field holds.
+                true => bit_mask(u32::from(bits.checked_sub(1)?)) as u64,
+                // One bit past it, which the field cannot hold either way.
+                false => 1u64.checked_shl(u32::from(*bits))?,
+            };
+            Some(())
+        }
     }
 }
 
@@ -2007,6 +2177,18 @@ impl Report {
         self.failures.append(&mut other.failures);
     }
 
+    /// The shapes no operand tuple verified. Each is an encoding of a real
+    /// instruction that nothing here checked, so the job does not pass with one
+    /// outstanding.
+    fn uncovered_shapes(&self) -> Vec<&str> {
+        self.instructions
+            .iter()
+            .flat_map(|timing| timing.shape_cases.iter())
+            .filter(|(_, cases)| *cases == 0)
+            .map(|(shape, _)| shape.as_str())
+            .collect()
+    }
+
     fn print(&self) {
         println!("\n=== TMDL vs Sail SMT equivalence ===");
         println!("verified paths:  {}", self.verified);
@@ -2029,6 +2211,16 @@ impl Report {
         for (reason, n) in reasons {
             println!("  {:5}x {}", n, reason);
         }
+        let shapes: usize = self.instructions.iter().map(|t| t.shape_cases.len()).sum();
+        let uncovered = self.uncovered_shapes();
+        println!(
+            "encoding shapes: {} verified, {} unchecked",
+            shapes - uncovered.len(),
+            uncovered.len()
+        );
+        if !uncovered.is_empty() {
+            println!("  unchecked: {}", uncovered.join(", "));
+        }
         if !self.unsupported.is_empty() {
             println!(
                 "not modeled in SMT (skipped): {}",
@@ -2045,7 +2237,8 @@ impl Report {
 struct InstructionTiming {
     instruction: String,
     cases: usize,
-    /// Cases per encoding shape. A zero here is a shape nothing verified.
+    /// Cases per encoding shape whose paths the solver agreed with. A zero
+    /// here is a shape nothing verified.
     shape_cases: Vec<(String, usize)>,
     paths: usize,
     encode_ms: u128,
@@ -2072,25 +2265,40 @@ fn verify_instruction(
         .into_iter()
         .filter(|case| operand_case_is_valid(spec, instr, case))
         .collect::<Vec<_>>();
+    // A shape the sampled cases never reach is a shape nothing verifies, so
+    // each one that comes up empty gets a case built to satisfy its guard.
+    let mut cases = cases;
+    for shape in &instr.shapes {
+        let covered = cases.iter().any(|case| {
+            instr
+                .shape_for(case)
+                .is_some_and(|held| std::ptr::eq(held, shape))
+        });
+        if covered {
+            continue;
+        }
+        let Some(base) = cases.first() else { continue };
+        let Some(case) = case_reaching(instr, shape, base) else {
+            continue;
+        };
+        if operand_case_is_valid(spec, instr, &case) {
+            cases.push(case);
+        }
+    }
     timing.cases = cases.len();
-    // Every shape is its own encoding of the instruction, so the report counts
-    // the cases each one covers: a shape no case reaches is unverified, however
-    // many cases the instruction has.
-    timing.shape_cases = instr
-        .shapes
+    // Which shape encodes each case, so the report can say what every shape
+    // came out of at the end.
+    let shape_of_case: Vec<Option<usize>> = cases
         .iter()
-        .map(|shape| {
-            let covered = cases
+        .map(|case| {
+            let held = instr.shape_for(case)?;
+            instr
+                .shapes
                 .iter()
-                .filter(|case| {
-                    instr
-                        .shape_for(case)
-                        .is_some_and(|held| std::ptr::eq(held, shape))
-                })
-                .count();
-            (shape.name.clone(), covered)
+                .position(|shape| std::ptr::eq(shape, held))
         })
         .collect();
+    let mut verified_by_case = vec![0usize; cases.len()];
     let started = Instant::now();
     let words = encode_words(instr, &cases);
     timing.encode_ms = started.elapsed().as_millis();
@@ -2107,7 +2315,7 @@ fn verify_instruction(
     let traces_by_word = sail_traces(tools, out_dir, &word_widths)?;
     timing.isla_ms = isla_started.elapsed().as_millis();
 
-    for (case, word) in cases.iter().zip(&words) {
+    for (index, (case, word)) in cases.iter().zip(&words).enumerate() {
         let Some(traces) = traces_by_word.get(word).and_then(Option::as_ref) else {
             report.excluded_paths += 1;
             *report
@@ -2188,6 +2396,7 @@ fn verify_instruction(
                 line.push('-');
             } else if equivalence_status == Some("unsat") {
                 report.verified += 1;
+                verified_by_case[index] += 1;
                 line.push('.');
             } else if equivalence_status == Some("sat") {
                 report.failed += 1;
@@ -2213,6 +2422,23 @@ fn verify_instruction(
             }
         }
     }
+    // Every shape is its own encoding of the instruction, so the report counts
+    // the cases each one came out of that the solver agreed with. Reaching a
+    // shape is not verifying it: a case whose word Isla could not run leaves
+    // its shape as unchecked as no case at all.
+    timing.shape_cases = instr
+        .shapes
+        .iter()
+        .enumerate()
+        .map(|(index, shape)| {
+            let verified = shape_of_case
+                .iter()
+                .zip(&verified_by_case)
+                .filter(|(held, paths)| **held == Some(index) && **paths > 0)
+                .count();
+            (shape.name.clone(), verified)
+        })
+        .collect();
     timing.total_ms = total_started.elapsed().as_millis();
     Ok((report, timing, format!("{:24}{}", instr.name, line)))
 }
