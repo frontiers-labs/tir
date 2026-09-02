@@ -2287,10 +2287,8 @@ name = "tir-symbolic"
 version = "0.1.0"
 dependencies = [
  "chumsky",
- "smallvec",
  "tir-adt",
  "tir-graph",
- "tir-relational",
 ]
 
 [[package]]

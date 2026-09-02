@@ -114,24 +114,9 @@ impl APFloat {
         Self::new(11, 52, false)
     }
 
-    /// x86 80-bit extended precision: 1 sign, 15 exp, 64 mantissa (explicit)
-    pub fn x86_extended() -> Self {
-        Self::new(15, 64, true)
-    }
-
     /// IEEE 754 binary128 (quad precision): 1 sign, 15 exp, 112 mantissa
     pub fn quad() -> Self {
         Self::new(15, 112, false)
-    }
-
-    /// FP8 E4M3 (4-bit exponent, 3-bit mantissa)
-    pub fn fp8_e4m3() -> Self {
-        Self::new(4, 3, false)
-    }
-
-    /// FP8 E5M2 (5-bit exponent, 2-bit mantissa)
-    pub fn fp8_e5m2() -> Self {
-        Self::new(5, 2, false)
     }
 
     /// Get the exponent width
@@ -147,11 +132,6 @@ impl APFloat {
     /// Get the total bit width
     pub fn bit_width(&self) -> u32 {
         1 + self.exp_width + self.mant_width
-    }
-
-    /// Check if this has an explicit leading bit
-    pub fn has_explicit_leading_bit(&self) -> bool {
-        self.explicit_leading_bit
     }
 
     /// Get the exponent bias (standard: 2^(exp_width-1) - 1)
@@ -230,11 +210,6 @@ impl APFloat {
         };
 
         sign_shifted | exp_shifted | mantissa
-    }
-
-    /// Create from f32 (creates a single precision APFloat)
-    pub fn from_f32(value: f32) -> Self {
-        Self::from_bits(8, 23, false, value.to_bits() as u128)
     }
 
     /// Create from f64 (creates a double precision APFloat)
@@ -424,11 +399,6 @@ impl APFloat {
     /// Check if this is negative
     pub fn is_negative(&self) -> bool {
         self.sign
-    }
-
-    /// Check if this is a denormal number
-    pub fn is_denormal(&self) -> bool {
-        self.exponent == 0 && (self.mantissa_high != 0 || self.mantissa_low != 0)
     }
 
     /// Negate the value

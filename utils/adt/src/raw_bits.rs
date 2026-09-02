@@ -82,20 +82,6 @@ impl RawBits {
         RawBits { storage }
     }
 
-    /// Reinterpret these bits as a float of the given IEEE-style format.
-    pub fn to_apfloat(
-        &self,
-        exp_width: u32,
-        mant_width: u32,
-        explicit_leading_bit: bool,
-    ) -> APFloat {
-        let mut bits = 0u128;
-        for (i, byte) in self.storage.iter().enumerate() {
-            bits |= u128::from(*byte) << (i * BYTE_SIZE);
-        }
-        APFloat::from_bits(exp_width, mant_width, explicit_leading_bit, bits)
-    }
-
     /// Split into `lanes` equal byte-aligned pieces, lane 0 from the low bits.
     pub fn split(&self, lanes: usize) -> Vec<RawBits> {
         assert!(lanes > 0, "RawBits split requires a positive lane count");
@@ -165,14 +151,5 @@ mod tests {
         let raw = RawBits::from_apint(&value);
         assert_eq!(raw.width(), 32);
         assert_eq!(raw.to_apint(), value);
-    }
-
-    #[test]
-    fn float_reinterpretation_roundtrips() {
-        let value = APFloat::from_f32(1.5);
-        let raw = RawBits::from_apfloat(&value);
-        assert_eq!(raw.width(), 32);
-        let back = raw.to_apfloat(8, 23, false);
-        assert_eq!(back.to_f32(), 1.5);
     }
 }

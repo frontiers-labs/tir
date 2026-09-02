@@ -73,20 +73,6 @@ impl APInt {
         }
     }
 
-    /// Create the minimum value for the given width
-    pub fn min_value(width: u32, signed: bool) -> Self {
-        if signed {
-            let sign_bit = 1u64 << (width - 1);
-            APInt {
-                width,
-                signed: true,
-                value: sign_bit,
-            }
-        } else {
-            Self::zero(width)
-        }
-    }
-
     /// Get the bit width
     pub fn width(&self) -> u32 {
         self.width
@@ -95,11 +81,6 @@ impl APInt {
     /// Check if this APInt is signed
     pub fn is_signed(&self) -> bool {
         self.signed
-    }
-
-    /// Get the raw value as u64
-    pub fn raw_value(&self) -> u64 {
-        self.value
     }
 
     /// Convert to u64 (truncating if necessary)
@@ -140,11 +121,6 @@ impl APInt {
         self.value == 0
     }
 
-    /// Check if the value is one
-    pub fn is_one(&self) -> bool {
-        self.value == 1
-    }
-
     /// Check if negative (only meaningful for signed integers)
     pub fn is_negative(&self) -> bool {
         if !self.signed {
@@ -157,11 +133,6 @@ impl APInt {
     /// Check if positive (only meaningful for signed integers)
     pub fn is_positive(&self) -> bool {
         !self.is_zero() && !self.is_negative()
-    }
-
-    /// Set the signedness
-    pub fn set_signed(&mut self, signed: bool) {
-        self.signed = signed;
     }
 
     /// Get a copy with different signedness
@@ -385,31 +356,6 @@ impl APInt {
             signed: true,
             value: high_bits & mask,
         }
-    }
-
-    /// Signed-unsigned multiplication high, upper N bits of signed * unsigned.
-    pub fn mulhsu(&self, other: &APInt) -> Self {
-        assert_eq!(self.width, other.width, "Widths must match");
-        let b_unsigned = other.value as u128;
-        let full_result = (self.sext_u128() as i128).wrapping_mul(b_unsigned as i128);
-        let high_bits = ((full_result as u128) >> self.width) as u64;
-        let mask = Self::mask_for_width(self.width);
-
-        APInt {
-            width: self.width,
-            signed: false,
-            value: high_bits & mask,
-        }
-    }
-
-    /// Full unsigned multiplication as `(low N bits, high N bits)`.
-    pub fn mul_full(&self, other: &APInt) -> (Self, Self) {
-        (self.mul(other), self.mulhu(other))
-    }
-
-    /// Full signed multiplication as `(low N bits, high N bits)`.
-    pub fn mul_full_signed(&self, other: &APInt) -> (Self, Self) {
-        (self.mul(other), self.mulh(other))
     }
 
     /// Unsigned division
@@ -861,12 +807,6 @@ mod tests {
         fn test_mulh(x in prop::num::i64::ANY, y in prop::num::i64::ANY) {
             let res = APInt::from_i64(x).mulh(&APInt::from_i64(y));
             prop_assert_eq!(res.to_i64(), ((x as i128 * y as i128) >> 64) as i64);
-        }
-
-        #[test]
-        fn test_mulhsu(x in prop::num::i64::ANY, y in prop::num::u64::ANY) {
-            let res = APInt::from_i64(x).mulhsu(&APInt::from_u64(y));
-            prop_assert_eq!(res.to_u64(), ((x as i128 * y as i128) >> 64) as u64);
         }
 
         #[test]
