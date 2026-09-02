@@ -304,7 +304,7 @@ fn an_analysis_survives_a_pass_that_changes_nothing() {
 
     let mut pm = PassManager::new();
     pm.add_pass(ReadOnlyPass);
-    let root = OperationRef::new(context.get_op(func.id()), None, None);
+    let root = OperationRef::new(context.get_op(func.id()));
     pm.run_on_op_ref(&context, root, &analyses)
         .expect("the pass changes nothing");
 
@@ -326,7 +326,7 @@ fn repeated_pass_runs_do_not_grow_the_analysis_cache() {
 
     let mut counts = Vec::new();
     for _ in 0..8 {
-        let root = OperationRef::new(context.get_op(func.id()), None, None);
+        let root = OperationRef::new(context.get_op(func.id()));
         pm.run_on_op_ref(&context, root, &analyses)
             .expect("touching a block attribute keeps the IR valid");
         analyses.get::<DominatorTree>(&context, func.id());
@@ -350,7 +350,7 @@ fn an_analysis_is_rebuilt_after_a_pass_mutates() {
 
     let mut pm = PassManager::new();
     pm.add_pass(AddToSubPass);
-    let root = OperationRef::new(context.get_op(func.id()), None, None);
+    let root = OperationRef::new(context.get_op(func.id()));
     pm.run_on_op_ref(&context, root, &analyses)
         .expect("rewriting addi to subi keeps the IR valid");
 
@@ -441,7 +441,7 @@ fn erasing_an_op_drops_its_operand_uses() {
     )
     .build();
     let neg_id = neg.id();
-    let neg_ref = OperationRef::new(context.get_op(neg_id), Some(body.clone()), None);
+    let neg_ref = OperationRef::new(context.get_op(neg_id));
     body.append_op(neg);
     let argument = body.arguments()[0].id().number();
     assert!(tir::analysis::DefUse::new(&context, func.id()).is_used(argument));

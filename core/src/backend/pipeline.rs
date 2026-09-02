@@ -217,7 +217,7 @@ pub fn lower_and_emit(
     module_prologue()
         .run_on_op_ref(
             context,
-            OperationRef::new(context.get_op(module.id()), None, None),
+            OperationRef::new(context.get_op(module.id())),
             &AnalysisManager::new(),
         )
         .map_err(failed)?;
@@ -227,7 +227,6 @@ pub fn lower_and_emit(
     let mut rewriter = Rewriter::new(context.clone());
     let mut index = 0;
     while let Some(&op_id) = context.get_block(body).op_ids().get(index) {
-        let block = context.get_block(body);
         let op = context.get_op(op_id);
         if !op.is::<FuncOp>() {
             emit(context, &op)?;
@@ -236,7 +235,7 @@ pub fn lower_and_emit(
         }
         // A fresh cache per function: an analysis of a function that has been
         // emitted describes IR that no longer exists.
-        let root = OperationRef::new(op, Some(block), Some(index));
+        let root = OperationRef::new(op);
         let symbol = pipeline
             .run_on_op_ref(context, root, &AnalysisManager::new())
             .map_err(failed)?;

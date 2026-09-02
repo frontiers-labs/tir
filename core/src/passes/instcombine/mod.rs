@@ -237,9 +237,7 @@ impl Driver<'_> {
 
     /// A cursor at `op`, for a rewrite to build in front of.
     fn at(&self, op: OpId) -> OperationRef {
-        let instance = self.context.get_op(op);
-        let block = instance.parent_block().map(|id| self.context.get_block(id));
-        OperationRef::new(instance, block, None)
+        OperationRef::new(self.context.get_op(op))
     }
 
     /// Replace `op_id`'s value with its cheapest equivalent form, if that improved.
@@ -300,8 +298,7 @@ impl Driver<'_> {
             return Ok(());
         };
         let ty = self.context.get_value(value).ty();
-        let block = instance.parent_block().map(|b| self.context.get_block(b));
-        let target = OperationRef::new(instance.clone(), block, None);
+        let target = OperationRef::new(instance.clone());
         let mut memo = HashMap::new();
         let Some(new_value) =
             self.materialize(extraction, class, ty, &target, rewriter, &mut memo)?

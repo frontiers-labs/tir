@@ -28,7 +28,7 @@ impl LowerMemoryIntrinsicsPass {
                         if operation.is::<ModuleOp>() {
                             continue;
                         }
-                        let operation = OperationRef::new(operation, Some(block.clone()), None);
+                        let operation = OperationRef::new(operation);
                         if operation.is::<MemcpyOp>() {
                             copies.push(operation.clone());
                         } else if operation.is::<MemsetOp>() {

@@ -99,10 +99,7 @@ pub fn lower_function_and_return(
                     }
                     None => *element = Some(extract.result()),
                 }
-                let block = context.parent_block(*user).ok_or_else(|| {
-                    PassError::InvalidRuleSet("tuple_get has no parent block".to_string())
-                })?;
-                tuple_extracts.push((*user, block));
+                tuple_extracts.push(*user);
             }
 
             let group = element_types
@@ -170,12 +167,8 @@ pub fn lower_function_and_return(
         }
         let symbol = symbol.build();
         rewriter.replace_op_keeping_results(op, &symbol)?;
-        for (extract, block) in tuple_extracts {
-            rewriter.erase_op(&OperationRef::new(
-                context.get_op(extract),
-                Some(context.get_block(block)),
-                None,
-            ))?;
+        for extract in tuple_extracts {
+            rewriter.erase_op(&OperationRef::new(context.get_op(extract)))?;
         }
         return Ok(true);
     }
@@ -218,20 +211,13 @@ pub fn lower_function_and_return(
                 .build(),
         )?;
         if let Some((value, defining_op)) = tuple_source {
-            let block = context.parent_block(defining_op).ok_or_else(|| {
-                PassError::InvalidRuleSet("tuple construction has no parent block".to_string())
-            })?;
             let enclosing = context.parent_op(defining_op).ok_or_else(|| {
                 PassError::InvalidRuleSet("tuple construction has no enclosing op".to_string())
             })?;
             if tir::analysis::DefUse::new(context, enclosing).is_used(value.number()) {
                 return Ok(true);
             }
-            rewriter.erase_op(&OperationRef::new(
-                context.get_op(defining_op),
-                Some(context.get_block(block)),
-                None,
-            ))?;
+            rewriter.erase_op(&OperationRef::new(context.get_op(defining_op)))?;
         }
         return Ok(true);
     }

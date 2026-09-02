@@ -104,11 +104,7 @@ impl CallLowering {
                                         context.get_op(definition).is::<MakeTupleOp>()
                                     });
                             if !assembled {
-                                let return_ref = OperationRef::new(
-                                    instance.clone(),
-                                    Some(context.get_block(block.id())),
-                                    None,
-                                );
+                                let return_ref = OperationRef::new(instance.clone());
                                 let elements = insert_tuple_extractions(
                                     context,
                                     rewriter,
@@ -134,8 +130,7 @@ impl CallLowering {
                         continue;
                     };
                     let args = call.args();
-                    let call_ref =
-                        OperationRef::new(instance, Some(context.get_block(block.id())), None);
+                    let call_ref = OperationRef::new(instance);
                     for (argument_index, argument) in args.into_iter().enumerate() {
                         let ty = context.get_type_data(context.get_value(argument).ty());
                         let Some(tuple) =
@@ -509,14 +504,11 @@ impl CallLowering {
                 let register = registers.get(extract.index()).copied().ok_or_else(|| {
                     PassError::InvalidRuleSet("tuple extraction index is out of bounds".to_string())
                 })?;
-                let block = context.parent_block(*user).ok_or_else(|| {
-                    PassError::InvalidRuleSet("tuple extraction has no parent block".to_string())
-                })?;
                 extracts.push((
                     extract.index(),
                     extract.result(),
                     register,
-                    OperationRef::new(instance, Some(context.get_block(block)), None),
+                    OperationRef::new(instance),
                 ));
             }
             extracts.sort_by_key(|(index, result, ..)| (*index, result.number()));
@@ -609,20 +601,13 @@ fn erase_dead_tuple_arguments(
     tuple_arguments: &[(OpId, ValueId)],
 ) -> Result<(), PassError> {
     for &(tuple, value) in tuple_arguments {
-        let block = context.parent_block(tuple).ok_or_else(|| {
-            PassError::InvalidRuleSet("tuple construction has no parent block".to_string())
-        })?;
         let root = context.parent_op(tuple).ok_or_else(|| {
             PassError::InvalidRuleSet("tuple construction has no enclosing op".to_string())
         })?;
         if DefUse::new(context, root).is_used(value.number()) {
             continue;
         }
-        rewriter.erase_op(&OperationRef::new(
-            context.get_op(tuple),
-            Some(context.get_block(block)),
-            None,
-        ))?;
+        rewriter.erase_op(&OperationRef::new(context.get_op(tuple)))?;
     }
     Ok(())
 }

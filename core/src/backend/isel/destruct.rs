@@ -200,7 +200,7 @@ impl<'a> Destructor<'a> {
             });
         }
         self.add_block(continuation.id());
-        self.erase(rewriter, &block, op)?;
+        self.erase(rewriter, op)?;
 
         let Some((&last, leading)) = tests.split_last() else {
             let (dest, args) = edges[default].as_ref().unwrap();
@@ -294,12 +294,12 @@ impl<'a> Destructor<'a> {
         let forwarded = self.mapped(&terminator.operands()[terminator.operands().len() - ports..]);
         let (taken_dest, taken_args) = self.seal_into(rewriter, &body, test.id(), &forwarded)?;
         self.add_block(continuation.id());
-        self.erase(rewriter, &block, op)?;
+        self.erase(rewriter, op)?;
         self.jump(&block, test.id(), &inits);
 
         let taken = self.aux(op, AuxSlot::Test(0))?;
         let branch_block = test.clone();
-        rewriter.erase_op(&OperationRef::new(terminator, Some(test), None))?;
+        rewriter.erase_op(&OperationRef::new(terminator))?;
         self.branch(
             &branch_block,
             taken,
@@ -356,7 +356,7 @@ impl<'a> Destructor<'a> {
                 },
             );
         }
-        self.erase(rewriter, &block, op)?;
+        self.erase(rewriter, op)?;
 
         // Selection minted the counter as a trailing body argument only where no
         // carried port already counted; where one did, the ports are the whole edge.
@@ -381,11 +381,7 @@ impl<'a> Destructor<'a> {
         let exit = self.mapped(&latched);
         let terminator = self.terminator(&body)?;
         let body_block = self.context.get_block(body.id());
-        rewriter.erase_op(&OperationRef::new(
-            terminator,
-            Some(body_block.clone()),
-            None,
-        ))?;
+        rewriter.erase_op(&OperationRef::new(terminator))?;
         self.branch(
             &body_block,
             self.aux(op, AuxSlot::Latch)?,
@@ -428,7 +424,7 @@ impl<'a> Destructor<'a> {
             None => return Ok(None),
         };
         let args = self.mapped(&args);
-        let terminator = OperationRef::new(terminator, Some(block.clone()), None);
+        let terminator = OperationRef::new(terminator);
         if block.op_ids().len() == 1 {
             rewriter.erase_op(&terminator)?;
             return Ok(Some(Forward {
@@ -647,16 +643,7 @@ impl<'a> Destructor<'a> {
         self.context.get_block(continuation.id())
     }
 
-    fn erase(
-        &self,
-        rewriter: &mut Rewriter,
-        block: &BlockHandle,
-        op: &OpHandle,
-    ) -> Result<(), PassError> {
-        rewriter.erase_op(&OperationRef::new(
-            op.clone(),
-            Some(self.context.get_block(block.id())),
-            None,
-        ))
+    fn erase(&self, rewriter: &mut Rewriter, op: &OpHandle) -> Result<(), PassError> {
+        rewriter.erase_op(&OperationRef::new(op.clone()))
     }
 }

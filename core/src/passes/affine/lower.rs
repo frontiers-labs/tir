@@ -280,15 +280,7 @@ impl<'a> Lowering<'a> {
         rewriter: &mut Rewriter,
         view: &AffineView,
     ) -> Result<(), PassError> {
-        let block = self
-            .context
-            .parent_block(self.nest.root)
-            .ok_or(PassError::MissingBlock("scf.for"))?;
-        let target = OperationRef::new(
-            self.context.get_op(self.nest.root),
-            Some(self.context.get_block(block)),
-            None,
-        );
+        let target = OperationRef::new(self.context.get_op(self.nest.root));
         let remainder = self
             .candidate
             .sole_tiled()
@@ -564,11 +556,7 @@ impl<'a> Lowering<'a> {
             .iter()
             .map(|&port| operands[port])
             .collect();
-        rewriter.erase_op(&OperationRef::new(
-            self.context.get_op(terminator),
-            Some(block.clone()),
-            None,
-        ))?;
+        rewriter.erase_op(&OperationRef::new(self.context.get_op(terminator)))?;
         // The body stepped the counter for the loop it used to sit in; the loop
         // that now counts that dimension steps it, so the copy's latch is left
         // over. Dropping it here rather than leaving it to `dce` keeps what the
@@ -580,11 +568,7 @@ impl<'a> Lowering<'a> {
             .filter(|&latch| block.op_ids().contains(&latch))
             .filter(|&latch| !names(self.context, &block, latch))
         {
-            rewriter.erase_op(&OperationRef::new(
-                self.context.get_op(latch),
-                Some(block.clone()),
-                None,
-            ))?;
+            rewriter.erase_op(&OperationRef::new(self.context.get_op(latch)))?;
         }
         let Site::Append(destination) = site else {
             unreachable!("a body is built inside the loop that runs it");
@@ -598,9 +582,12 @@ impl<'a> Lowering<'a> {
     fn place(&self, site: &mut Site, op: OpId) {
         match site {
             Site::Before(target) => {
-                let block = self
-                    .context
-                    .get_block(target.block().expect("the nest sits in a block").id());
+                let block = self.context.get_block(
+                    target
+                        .op()
+                        .parent_block()
+                        .expect("the nest sits in a block"),
+                );
                 let position = block
                     .op_ids()
                     .iter()

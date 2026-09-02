@@ -1834,7 +1834,7 @@ impl InstructionSelectPass {
         for scheduled in &plan.schedule {
             let source = scheduled
                 .source_op
-                .map(|op| OperationRef::new(context.get_op(op), Some(block_arc.clone()), None));
+                .map(|op| OperationRef::new(context.get_op(op)));
             let mut m = scheduled.m.clone();
             m.remap_values(&self.emitted_values);
             let request = EmitRequest {
@@ -1927,7 +1927,7 @@ impl InstructionSelectPass {
             {
                 context.replace_value_uses(published, observed);
             }
-            let op = OperationRef::new(instance, Some(block_arc.clone()), None);
+            let op = OperationRef::new(instance);
             rewriter.erase_op_keeping_results(&op)?;
         }
 
@@ -1982,12 +1982,9 @@ impl InstructionSelectPass {
         let block_id = block.id();
         let op_ids = block.op_ids();
         let mut op_refs = HashMap::new();
-        for (position, op_id) in op_ids.iter().copied().enumerate() {
+        for op_id in op_ids.iter().copied() {
             let op = context.get_op(op_id);
-            op_refs.insert(
-                op_id,
-                OperationRef::new(op, Some(context.get_block(block_id)), Some(position)),
-            );
+            op_refs.insert(op_id, OperationRef::new(op));
         }
 
         // The earliest op of B rooting each class (for costing / the Emit anchor);
@@ -3016,11 +3013,11 @@ impl Pass for InstructionSelectPass {
 
         // Result-less ops still participate: a store must trigger its block's
         // selection even when no value-producing op precedes it.
-        let Some(block) = op.block() else {
+        let Some(block) = op.op().parent_block() else {
             return Ok(());
         };
 
-        self.commit_block_solution(context, block, rewriter)?;
+        self.commit_block_solution(context, &context.get_block(block), rewriter)?;
         Ok(())
     }
 }

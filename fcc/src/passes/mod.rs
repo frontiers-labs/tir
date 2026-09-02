@@ -36,11 +36,7 @@ impl LowerCirStructsPass {
                 for block in context.get_region(region).iter(context.clone()) {
                     for operation in block.op_ids() {
                         let operation = context.get_op(operation);
-                        result.push(OperationRef::new(
-                            operation.clone(),
-                            Some(block.clone()),
-                            None,
-                        ));
+                        result.push(OperationRef::new(operation.clone()));
                         visit(context, &operation, result);
                     }
                 }
@@ -53,11 +49,7 @@ impl LowerCirStructsPass {
     }
 
     fn refresh(context: &Context, operation: &OperationRef) -> OperationRef {
-        OperationRef::new(
-            context.get_op(operation.op().id),
-            operation.block().cloned(),
-            operation.position(),
-        )
+        OperationRef::new(context.get_op(operation.op().id))
     }
 
     fn string_attribute(operation: &impl Operation, name: &str) -> String {

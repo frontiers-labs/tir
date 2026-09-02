@@ -63,10 +63,7 @@ pub fn strip_mine(
     {
         return Err(PassError::RewriteFailed(op));
     }
-    let block = context
-        .parent_block(op)
-        .ok_or(PassError::MissingBlock("scf.for"))?;
-    let target = OperationRef::new(handle.clone(), Some(context.get_block(block)), None);
+    let target = OperationRef::new(handle.clone());
     let (lower, upper, step) = (counted.lower_bound(), counted.upper_bound(), counted.step());
     let ty = context.get_value(lower).ty();
 

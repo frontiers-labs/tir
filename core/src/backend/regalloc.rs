@@ -779,7 +779,7 @@ impl Pass for RegisterAllocationPass {
                 // Both ends live in one register, so the copy is a self-move.
                 // Its destination value stays: the assignment placed it, and a
                 // two-address instruction may define it again.
-                rewriter.erase_op_keeping_results(&op_ref_in(context, copy.block, copy.op))?;
+                rewriter.erase_op_keeping_results(&op_ref_in(context, copy.op))?;
             } else {
                 strip_attr(context, copy.op, prealloc::COALESCABLE_COPY_ATTR);
             }
@@ -871,7 +871,7 @@ impl RegisterAllocationPass {
                     }
                     let fresh = fresh_reg(context, class);
                     frame.temps.insert(fresh.number());
-                    let target = op_ref_in(context, block, op_id);
+                    let target = op_ref_in(context, op_id);
                     for address in self.target.emit_frame_address(
                         context,
                         fresh,
@@ -911,7 +911,7 @@ impl RegisterAllocationPass {
                 if op.attr(crate::backend::PINS_ATTR).is_none() {
                     continue;
                 }
-                let op_ref = op_ref_in(context, block_id, op_id);
+                let op_ref = op_ref_in(context, op_id);
                 for slot in crate::backend::reg_slots(&op) {
                     let crate::backend::RegSlot::Value(value) = slot.slot else {
                         continue;
@@ -1017,7 +1017,7 @@ impl RegisterAllocationPass {
                     // directions to it, and store it back after.
                     let fresh = fresh_reg(context, class);
                     frame.temps.insert(fresh.number());
-                    let op_ref = op_ref_in(context, block_id, op_id);
+                    let op_ref = op_ref_in(context, op_id);
                     if !uses.is_empty() {
                         let reload = self
                             .target
@@ -1057,7 +1057,7 @@ impl RegisterAllocationPass {
         if let Some(&entry) = blocks.first() {
             let op_ids = context.get_block(entry).op_ids();
             if let Some(&first) = op_ids.first() {
-                let target = op_ref_in(context, entry, first);
+                let target = op_ref_in(context, first);
                 for op in self.target.emit_prologue(context, self.abi, size, saves) {
                     rewriter.insert_op_before(&target, op.as_ref())?;
                 }
@@ -1068,7 +1068,7 @@ impl RegisterAllocationPass {
                 if !context.get_op(op_id).is::<VirtualReturnOp>() {
                     continue;
                 }
-                let target = op_ref_in(context, block_id, op_id);
+                let target = op_ref_in(context, op_id);
                 for op in self.target.emit_epilogue(context, self.abi, size, saves) {
                     rewriter.insert_op_before(&target, op.as_ref())?;
                 }
@@ -1092,9 +1092,9 @@ impl RegisterAllocationPass {
         if args.is_empty() {
             return Ok(());
         }
-        let Some(&entry) = blocks.first() else {
+        if blocks.is_empty() {
             return Ok(());
-        };
+        }
         let frame_register = self.frame_register();
         // The incoming argument area is a memory of its own, and nothing in this
         // function writes it: the loads all read the state it was entered with
@@ -1123,7 +1123,7 @@ impl RegisterAllocationPass {
             let load =
                 self.target
                     .emit_spill_reload(context, value, dst.0, &frame_register, offset);
-            let target = op_ref_in(context, entry, load_id);
+            let target = op_ref_in(context, load_id);
             incoming.observe(context, rewriter, &target, load.as_ref())?;
             rewriter.replace_op(&target, load.as_ref())?;
         }
@@ -1262,7 +1262,6 @@ fn align_delta(offset: u32, align: u32, desired_remainder: u32) -> u32 {
 
 struct StackAlloca {
     op_id: OpId,
-    block: BlockId,
     value: ValueId,
     offset: i64,
 }
@@ -1284,7 +1283,6 @@ fn collect_stack_allocas(
             };
             allocas.push(StackAlloca {
                 op_id,
-                block,
                 value: result,
                 offset: frame
                     .alloc_stack_allocation(allocation.size() as u32, allocation.align() as u32),
@@ -1307,7 +1305,7 @@ fn erase_stack_allocas(
         if !context.has_operation(alloca.op_id) {
             continue;
         }
-        let op_ref = op_ref_in(context, alloca.block, alloca.op_id);
+        let op_ref = op_ref_in(context, alloca.op_id);
         if let Some(published) = tir::builtin::trailing_state_result(context, op_ref.op()) {
             let root = tir::state::EntryStateOpBuilder::new(context)
                 .result_type(tir::builtin::StateType::new(context))
@@ -1357,12 +1355,8 @@ pub(crate) fn symbol_body_blocks(context: &Context, op: &OperationRef) -> Vec<Bl
         .collect()
 }
 
-pub(crate) fn op_ref_in(context: &Context, block_id: BlockId, op_id: OpId) -> OperationRef {
-    OperationRef::new(
-        context.get_op(op_id),
-        Some(context.get_block(block_id)),
-        None,
-    )
+pub(crate) fn op_ref_in(context: &Context, op_id: OpId) -> OperationRef {
+    OperationRef::new(context.get_op(op_id))
 }
 
 /// Mark a copy the allocator may coalesce away: it reads the endpoints as an
@@ -1474,7 +1468,7 @@ fn insert_after(
     let pos = op_ids.iter().position(|&id| id == op_id);
     match pos.and_then(|p| op_ids.get(p + 1).copied()) {
         Some(next) => {
-            let target = op_ref_in(context, block_id, next);
+            let target = op_ref_in(context, next);
             rewriter.insert_op_before(&target, new_op)
         }
         None => Err(PassError::RewriteFailed(op_id)),
@@ -1511,7 +1505,6 @@ fn callee_saved_slots(
 }
 
 struct CoalescableCopy {
-    block: BlockId,
     op: OpId,
     src: u32,
     dst: u32,
@@ -1538,7 +1531,6 @@ fn collect_coalescable_copies(
                 ))
             })?;
             copies.push(CoalescableCopy {
-                block: block_id,
                 op: op_id,
                 src,
                 dst,

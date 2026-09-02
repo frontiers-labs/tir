@@ -1,4 +1,5 @@
 use crate::BlockHandle;
+use std::collections::HashMap;
 
 use linkme::distributed_slice;
 
@@ -200,29 +201,15 @@ impl PassTarget {
 #[derive(Clone)]
 pub struct OperationRef {
     op: OpHandle,
-    block: Option<BlockHandle>,
-    position: Option<usize>,
 }
 
 impl OperationRef {
-    pub fn new(op: OpHandle, block: Option<BlockHandle>, position: Option<usize>) -> Self {
-        Self {
-            op,
-            block,
-            position,
-        }
+    pub fn new(op: OpHandle) -> Self {
+        Self { op }
     }
 
     pub fn op(&self) -> &OpHandle {
         &self.op
-    }
-
-    pub fn block(&self) -> Option<&BlockHandle> {
-        self.block.as_ref()
-    }
-
-    pub fn position(&self) -> Option<usize> {
-        self.position
     }
 
     pub fn name(&self) -> crate::OperationName {
@@ -264,11 +251,25 @@ pub trait Pass: Send {
 
 pub struct Rewriter {
     context: Context,
+    /// Erased op to the op that took its place, so a pipeline can follow its
+    /// root through [`Rewriter::replace_op`].
+    replacements: HashMap<OpId, OpId>,
 }
 
 impl Rewriter {
     pub fn new(context: Context) -> Self {
-        Self { context }
+        Self {
+            context,
+            replacements: HashMap::new(),
+        }
+    }
+
+    /// The block holding `target`, read live from the context.
+    fn block_of(&self, target: &OperationRef) -> Result<BlockHandle, PassError> {
+        self.context
+            .parent_block(target.op.id)
+            .map(|block| self.context.get_block(block))
+            .ok_or(PassError::MissingBlock(target.name().as_str()))
     }
 
     pub fn context(&self) -> &Context {
@@ -346,11 +347,9 @@ impl Rewriter {
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
-        let block = target
-            .block
-            .as_ref()
-            .ok_or(PassError::MissingBlock(target.name().as_str()))?;
+        let block = self.block_of(target)?;
         if block.replace_op(target.op.id, new_op.id()) {
+            self.replacements.insert(target.op.id, new_op.id());
             // Rewrite SSA uses of the old results to the new op's results when the
             // shapes line up, so consumers don't dangle on the erased op's values.
             let new_results = self.context.get_op(new_op.id()).results().to_vec();
@@ -374,10 +373,7 @@ impl Rewriter {
     /// allocator erasing a copy it granted one register at both ends) leaves
     /// the ops naming them intact.
     pub fn erase_op_keeping_results(&mut self, target: &OperationRef) -> Result<(), PassError> {
-        let block = target
-            .block
-            .as_ref()
-            .ok_or(PassError::MissingBlock(target.name().as_str()))?;
+        let block = self.block_of(target)?;
         if block.remove_op(target.op.id) {
             let results = target.op.results().to_vec();
             self.context.remove_operation_except(target.op.id, &results);
@@ -396,11 +392,9 @@ impl Rewriter {
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
-        let block = target
-            .block
-            .as_ref()
-            .ok_or(PassError::MissingBlock(target.name().as_str()))?;
+        let block = self.block_of(target)?;
         if block.replace_op(target.op.id, new_op.id()) {
+            self.replacements.insert(target.op.id, new_op.id());
             let results = target.op.results().to_vec();
             self.context.remove_operation_except(target.op.id, &results);
             Ok(())
@@ -410,10 +404,7 @@ impl Rewriter {
     }
 
     pub fn erase_op(&mut self, target: &OperationRef) -> Result<(), PassError> {
-        let block = target
-            .block
-            .as_ref()
-            .ok_or(PassError::MissingBlock(target.name().as_str()))?;
+        let block = self.block_of(target)?;
         if block.remove_op(target.op.id) {
             self.context.remove_operation(target.op.id);
             Ok(())
@@ -432,12 +423,7 @@ impl Rewriter {
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
-        let block = target
-            .block
-            .as_ref()
-            .ok_or(PassError::MissingBlock(target.name().as_str()))?;
-        // `target` may carry a block handle taken before earlier rewrites, so the
-        // position comes from the live block.
+        let block = self.block_of(target)?;
         let position = self
             .context
             .get_block(block.id())
@@ -461,27 +447,15 @@ fn matches_op_name(op: &OpHandle, spec: &str) -> bool {
 
 /// `root` as it stands now: a pipeline holds its root across passes that erase
 /// and replace it, and an [`OpHandle`] to an erased op reads as a panic. An
-/// erased root is looked up by position, because [`Rewriter::replace_op`] keeps the replacement at the
-/// erased op's index — that is where selection leaves the machine symbol it
-/// made out of a function.
-fn refreshed(context: &Context, root: &OperationRef) -> Option<OperationRef> {
-    if context.has_operation(root.op.id) {
-        return Some(OperationRef::new(
-            context.get_op(root.op.id),
-            root.block.clone(),
-            root.position,
-        ));
+/// erased root is followed through the replacements the rewriter recorded —
+/// that is how selection's machine symbol takes over from the function it was
+/// made of.
+fn refreshed(context: &Context, rewriter: &Rewriter, root: &OperationRef) -> Option<OperationRef> {
+    let mut id = root.op.id;
+    while !context.has_operation(id) {
+        id = *rewriter.replacements.get(&id)?;
     }
-    let block = root.block.as_ref()?.id();
-    let position = root.position?;
-    if !context.has_block(block) {
-        return None;
-    }
-    let block = context.get_block(block);
-    let id = *block.op_ids().get(position)?;
-    context
-        .has_operation(id)
-        .then(|| OperationRef::new(context.get_op(id), Some(block), Some(position)))
+    Some(OperationRef::new(context.get_op(id)))
 }
 
 /// Whether `op`'s tree has entered the machine layer — it holds a target
@@ -606,11 +580,7 @@ impl PassManager {
     }
 
     pub fn run(&mut self, context: &Context, op: OpHandle) -> Result<(), PassError> {
-        let root = OperationRef {
-            op,
-            block: None,
-            position: None,
-        };
+        let root = OperationRef::new(op);
         let result = self.run_on_op_ref(context, root, &AnalysisManager::new());
         crate::memstats::summary();
         result.map(|_| ())
@@ -623,20 +593,25 @@ impl PassManager {
     pub fn run_on_op_ref(
         &mut self,
         context: &Context,
-        mut root: OperationRef,
+        root: OperationRef,
         analyses: &AnalysisManager,
     ) -> Result<OperationRef, PassError> {
         let mut rewriter = Rewriter::new(context.clone());
+        self.run_with(context, root, &mut rewriter, analyses)
+    }
+
+    /// [`PassManager::run_on_op_ref`] over a caller's rewriter: a nested
+    /// pipeline records its replacements where the enclosing one reads them.
+    fn run_with(
+        &mut self,
+        context: &Context,
+        mut root: OperationRef,
+        rewriter: &mut Rewriter,
+        analyses: &AnalysisManager,
+    ) -> Result<OperationRef, PassError> {
         for entry in &mut self.passes {
-            Self::run_entry(
-                entry,
-                self.verify_ir,
-                context,
-                &root,
-                &mut rewriter,
-                analyses,
-            )?;
-            if let Some(current) = refreshed(context, &root) {
+            Self::run_entry(entry, self.verify_ir, context, &root, rewriter, analyses)?;
+            if let Some(current) = refreshed(context, rewriter, &root) {
                 root = current;
             }
         }
@@ -690,7 +665,7 @@ impl PassManager {
             PassNode::Nested { op_name, manager } => {
                 PassManager::walk_ops(context, root, &mut |op_ref| {
                     if matches_op_name(op_ref.op(), op_name) {
-                        manager.run_on_op_ref(context, op_ref.clone(), analyses)?;
+                        manager.run_with(context, op_ref.clone(), rewriter, analyses)?;
                     }
                     Ok(())
                 })
@@ -714,8 +689,7 @@ impl PassManager {
             }
             let region = context.get_region(region_id);
             for block in region.iter(context.clone()) {
-                let op_ids = block.op_ids();
-                for (index, op_id) in op_ids.into_iter().enumerate() {
+                for op_id in block.op_ids() {
                     // A pass run earlier in this walk may have erased or replaced a
                     // later op in the same block (isel rewrites the whole block at
                     // once); the id list read before the loop still holds the old id.
@@ -724,12 +698,7 @@ impl PassManager {
                     if !context.has_operation(op_id) {
                         continue;
                     }
-                    let op = context.get_op(op_id);
-                    let child = OperationRef {
-                        op,
-                        block: Some(block.clone()),
-                        position: Some(index),
-                    };
+                    let child = OperationRef::new(context.get_op(op_id));
                     PassManager::walk_ops(context, &child, f)?;
                 }
             }

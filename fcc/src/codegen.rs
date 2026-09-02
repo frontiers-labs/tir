@@ -4041,7 +4041,7 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
                 binding,
             )),
         }
-        rewriter.erase_op(&tir::OperationRef::new(op, Some(module_body.clone()), None))?;
+        rewriter.erase_op(&tir::OperationRef::new(op))?;
     }
 
     emit_data_section(context, &module_body, ".data", globals);

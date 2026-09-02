@@ -14,7 +14,7 @@
 use tir::attributes::AttributeValue;
 use tir::backend::{RegSlot, SymbolOp, VirtualCallOp, VirtualIndirectCallOp, reg_slot};
 use tir::{
-    AnalysisManager, Context, OpHandle, OpId, OperationRef, Pass, PassError, PassTarget, Rewriter,
+    AnalysisManager, Context, OpHandle, OperationRef, Pass, PassError, PassTarget, Rewriter,
     ValueId,
 };
 
@@ -270,7 +270,7 @@ impl Pass for InsertVsetvliPass {
                 {
                     continue;
                 }
-                let anchor = op_ref_in(context, block_id, op_id);
+                let anchor = OperationRef::new(context.get_op(op_id));
                 self.insert_config(context, rewriter, &anchor, key, vtypei)?;
                 state = Some(ConfigState {
                     keys: vec![key],
@@ -281,12 +281,4 @@ impl Pass for InsertVsetvliPass {
 
         Ok(())
     }
-}
-
-fn op_ref_in(context: &Context, block_id: tir::BlockId, op_id: OpId) -> OperationRef {
-    OperationRef::new(
-        context.get_op(op_id),
-        Some(context.get_block(block_id)),
-        None,
-    )
 }

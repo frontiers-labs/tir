@@ -166,11 +166,7 @@ fn flatten(context: &Context, rewriter: &mut Rewriter, op_id: OpId) -> Result<()
         body
     };
     let block = context.get_block(block);
-    rewriter.erase_op(&OperationRef::new(
-        context.get_op(op_id),
-        Some(block.clone()),
-        None,
-    ))?;
+    rewriter.erase_op(&OperationRef::new(context.get_op(op_id)))?;
     block.append_op(cb::br(context, vec![], head).build());
     Ok(())
 }
@@ -194,7 +190,7 @@ fn spill(
             .last()
             .expect("every block ends in a terminator");
         let op = context.get_op(last);
-        let target = OperationRef::new(op.clone(), Some(block.clone()), None);
+        let target = OperationRef::new(op.clone());
         if op.is::<cir::ConditionOp>() {
             let branch =
                 cb::cond_br(context, op.operands()[0], vec![], vec![], enter, exit).build();
@@ -471,10 +467,7 @@ fn raise(
     shape: &Shape,
     counted: Counted,
 ) -> Result<(), PassError> {
-    let block = context
-        .parent_block(op_id)
-        .expect("a loop op sits in a block");
-    let target = OperationRef::new(context.get_op(op_id), Some(context.get_block(block)), None);
+    let target = OperationRef::new(context.get_op(op_id));
 
     let lower = p::load(context, counted.slot, counted.counter).build();
     rewriter.insert_op_before(&target, &lower)?;
@@ -507,10 +500,7 @@ fn raise(
     let latch = scf::r#yield(context, vec![advance.result()]).build();
     let terminator = *body.op_ids().last().expect("the body ends in cir.yield");
     body.insert(body.op_ids().len() - 1, advance.id());
-    rewriter.replace_op(
-        &OperationRef::new(context.get_op(terminator), Some(body.clone()), None),
-        &latch,
-    )?;
+    rewriter.replace_op(&OperationRef::new(context.get_op(terminator)), &latch)?;
 
     let region = context.create_region();
     rewriter.splice_region(shape.body, region.id());

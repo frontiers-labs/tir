@@ -124,7 +124,7 @@ impl Pass for TiedOperandLoweringPass {
                 if ties.is_empty() {
                     continue;
                 }
-                let op_ref = op_ref_in(context, block_id, op_id);
+                let op_ref = op_ref_in(context, op_id);
                 for &(position, dst, src, class) in &ties {
                     let copy = self.target.emit_copy(
                         context,
@@ -259,7 +259,7 @@ impl Pass for BlockArgLoweringPass {
                     pairs.push((param, arg, class));
                 }
 
-                let op_ref = op_ref_in(context, block_id, op_id);
+                let op_ref = op_ref_in(context, op_id);
                 for (dst, src, class) in sequence_parallel_copies(context, pairs) {
                     let copy = self.target.emit_copy(
                         context,
@@ -359,7 +359,7 @@ impl Pass for AbiPrecolorPass {
             let entry = blocks
                 .first()
                 .and_then(|block| context.get_block(*block).op_ids().first().copied())
-                .map(|first| op_ref_in(context, blocks[0], first));
+                .map(|first| op_ref_in(context, first));
             let entry = || {
                 entry.clone().ok_or_else(|| {
                     PassError::InvalidRuleSet(
@@ -450,7 +450,7 @@ impl Pass for AbiPrecolorPass {
                         RegSlot::Value(value),
                     );
                     let copy_id = copy.id();
-                    let op_ref = op_ref_in(context, block_id, op_id);
+                    let op_ref = op_ref_in(context, op_id);
                     rewriter.insert_op_before(&op_ref, copy.as_ref())?;
                     context.set_op_operand(op_id, operand_index, outgoing);
                     pin_on(context, copy_id, outgoing, (rc, register.1))?;

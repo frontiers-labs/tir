@@ -58,10 +58,7 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
         .clone()
         .as_interface::<dyn LoopLike>()
         .expect("a counted loop carries ports");
-    let block = context
-        .parent_block(level.op)
-        .ok_or(PassError::MissingBlock("scf.for"))?;
-    let target = OperationRef::new(handle.clone(), Some(context.get_block(block)), None);
+    let target = OperationRef::new(handle.clone());
     let region = *handle.regions().last().expect("a loop has a body");
     let arguments = carried.carried_args();
 
@@ -100,12 +97,11 @@ fn copy_body(
     let block = context.get_block(context.get_region(copy).block_ids()[0]);
     let last = *block.op_ids().last().expect("a body is terminated");
     let leaving = context.get_op(last).operands().to_vec();
-    rewriter.erase_op(&OperationRef::new(
-        context.get_op(last),
-        Some(block.clone()),
-        None,
-    ))?;
-    let destination = target.block().expect("the loop sits in a block").id();
+    rewriter.erase_op(&OperationRef::new(context.get_op(last)))?;
+    let destination = target
+        .op()
+        .parent_block()
+        .expect("the loop sits in a block");
     let position = context
         .get_block(destination)
         .op_ids()

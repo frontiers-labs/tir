@@ -86,7 +86,7 @@ fn facts(context: &Context, op: &OperationRef) -> Vec<OperationRef> {
             for id in block.op_ids() {
                 let instance = context.get_op(id);
                 if instance.is::<DisjointOp>() {
-                    found.push(OperationRef::new(instance, Some(block.clone()), None));
+                    found.push(OperationRef::new(instance));
                 }
             }
         }

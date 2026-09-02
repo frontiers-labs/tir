@@ -93,10 +93,9 @@ pub(crate) fn erase_dead(
             let moved = use_counts.insert(published.number(), 0).unwrap_or(0);
             *use_counts.entry(observed.number()).or_default() += moved;
         }
-        let block = instance.parent_block().map(|b| context.get_block(b));
         // Read before the erase: the op's storage goes away with it.
         let used_regs = op_regs(&instance).uses;
-        rewriter.erase_op(&OperationRef::new(instance.clone(), block, None))?;
+        rewriter.erase_op(&OperationRef::new(instance.clone()))?;
 
         for used in used_regs {
             let id = used.number();

@@ -90,7 +90,7 @@ fn collect(context: &Context, root: &OpHandle, uses: &mut Vec<Use>) {
         for block in context.get_region(region).iter(context.clone()) {
             for op_id in block.op_ids() {
                 let instance = context.get_op(op_id);
-                let op = OperationRef::new(instance.clone(), Some(block.clone()), None);
+                let op = OperationRef::new(instance.clone());
                 collect(context, op.op(), uses);
                 if let Some(name) = instance
                     .clone()

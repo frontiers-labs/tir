@@ -327,11 +327,7 @@ impl Promoter<'_> {
         // A read of what nothing wrote stands on the allocation, so that one stays.
         let swept = alloca.filter(|_| self.stand_in.is_none());
         for op_id in dead.into_iter().chain(swept) {
-            let block = self
-                .context
-                .parent_block(op_id)
-                .map(|id| self.context.get_block(id));
-            rewriter.erase_op(&OperationRef::new(self.context.get_op(op_id), block, None))?;
+            rewriter.erase_op(&OperationRef::new(self.context.get_op(op_id)))?;
         }
         Ok(())
     }
