@@ -106,3 +106,19 @@ pub fn compile_asm_with_pipeline(source: &Path, pipeline: Option<&str>) -> Strin
     );
     String::from_utf8(output.stdout).expect("assembly should be UTF-8")
 }
+
+/// One `#[test]` per entry, each skipped when the host `cc` is unavailable and
+/// otherwise handing its arguments to `$check`.
+macro_rules! host_tests {
+    ($check:ident: $($(#[$attr:meta])* $name:ident => ($($arg:expr),+ $(,)?);)*) => {$(
+        $(#[$attr])*
+        #[test]
+        fn $name() {
+            if !cc_available() {
+                return;
+            }
+            $check($($arg),+);
+        }
+    )*};
+}
+pub(crate) use host_tests;
