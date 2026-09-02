@@ -1,0 +1,15 @@
+// The AArch64 aliases, the generic CPU names with and without the target
+// prefix, and the rejection of a CPU the target does not know.
+// RUN: tir mc --march=aarch64 --mcpu=generic-in-order --stage=isel %s | filecheck %s
+// RUN: tir mc --march=armv8-a --mcpu=generic-aarch64 --stage=isel %s | filecheck %s
+// RUN: tir mc --march=arm64 --mcpu=arm64-in-order --stage=isel %s | filecheck %s
+// RUN: not tir mc --march=arm64 --mcpu=cortex-a710 --stage=isel %s
+
+// CHECK: arm64.add
+module {
+  %fn_add = func.func @add(%0: !i32, %1: !i32) -> !i32 {
+    %2 = addi %0, %1 : !i32
+    func.return %2
+  }
+  module_end
+}

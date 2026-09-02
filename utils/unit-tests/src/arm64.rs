@@ -217,15 +217,6 @@ fn features(march: &str) -> Vec<Feature> {
 }
 
 #[test]
-fn accepts_arm64_aliases_and_generic_cpus() {
-    assert_eq!(
-        TargetConfig::parse("aarch64", Some("generic-in-order"), None).map(|c| c.canonical_name()),
-        Ok("arm64")
-    );
-    assert!(TargetConfig::parse("armv8-a", Some("generic-aarch64"), None).is_ok());
-}
-
-#[test]
 fn generic_cpu_names_resolve_machine_models() {
     let target = tir::backend::select_target("arm64", Some("generic-ooo"), None).unwrap();
     assert_eq!(target.default_machine(), Some("arm64-ooo"));
@@ -298,10 +289,4 @@ fn march_selects_cumulative_architecture_revisions() {
             Feature::ARMv9_4A64,
         ]
     );
-}
-
-#[test]
-fn rejects_unknown_march_or_cpu() {
-    assert!(TargetConfig::parse("rv64im", None, None).is_err());
-    assert!(TargetConfig::parse("arm64", Some("cortex-a710"), None).is_err());
 }

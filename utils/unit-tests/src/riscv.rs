@@ -297,22 +297,6 @@ fn features(march: &str, mattr: Option<&str>) -> Vec<Feature> {
 }
 
 #[test]
-fn march_accepts_gcc_style_isa_strings() {
-    assert_eq!(
-        TargetConfig::parse("rv64im", None, None).map(|c| c.canonical_name()),
-        Ok("riscv64")
-    );
-    assert_eq!(
-        TargetConfig::parse("rv32imac", None, None).map(|c| c.canonical_name()),
-        Ok("riscv32")
-    );
-    assert_eq!(
-        TargetConfig::parse("rv64gc_zba_zbb", None, None).map(|c| c.canonical_name()),
-        Ok("riscv64")
-    );
-}
-
-#[test]
 fn march_selects_extension_features() {
     assert_eq!(features("rv64i", None), vec![Feature::RV64I]);
     // On rv64 the M *W conjunctions (Zmmul64/RVM64) follow M automatically.
@@ -411,13 +395,6 @@ fn mattr_toggles_features() {
 }
 
 #[test]
-fn mcpu_accepts_target_prefixed_generic_names() {
-    assert!(TargetConfig::parse("rv32im", Some("riscv32-generic-in-order"), None).is_ok());
-    assert!(TargetConfig::parse("rv64im", Some("riscv32-generic-in-order"), None).is_err());
-    assert!(TargetConfig::parse("rv64im", Some("generic-in-order"), None).is_ok());
-}
-
-#[test]
 fn mcpu_resolves_machine_models() {
     let target = tir::backend::select_target("rv64im", Some("generic-ooo"), None).unwrap();
     assert_eq!(target.default_machine(), Some("rv64-ooo"));
@@ -484,17 +461,4 @@ fn counter_registers_follow_the_feature_set() {
     assert_eq!(rv32.len(), 6);
     assert!(rv32.contains(&("CSR", 0xC80, PerfCounter::CyclesHigh)));
     assert!(rv32.contains(&("CSR", 0xC82, PerfCounter::InstructionsRetiredHigh)));
-}
-
-#[test]
-fn base_isas_are_mutually_exclusive() {
-    assert!(TargetConfig::parse("rv32i", None, Some("+rv64i")).is_err());
-}
-
-#[test]
-fn unknown_or_malformed_march_is_rejected() {
-    assert!(TargetConfig::parse("rv64", None, None).is_err());
-    assert!(TargetConfig::parse("rv64zm", None, None).is_err());
-    assert!(TargetConfig::parse("mips", None, None).is_err());
-    assert!(TargetConfig::parse("rv64im", Some("riscv64-unknown-cpu"), None).is_err());
 }

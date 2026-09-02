@@ -1,6 +1,20 @@
 // RUN: tir mc --march=rv64im --mcpu=riscv64-generic-in-order --stage=isel %s | filecheck %s
 // RUN: tir mc --march=rv32im --mcpu=riscv32-generic-in-order --stage=isel %s | filecheck %s
 // RUN: not tir mc --march=rv64im --mcpu=riscv32-generic-in-order --stage=isel %s
+//
+// GCC-style ISA strings, with and without underscored extensions, and the
+// target-prefixed or bare generic CPU names.
+// RUN: tir mc --march=rv32imac --stage=isel %s | filecheck %s
+// RUN: tir mc --march=rv64gc_zba_zbb --stage=isel %s | filecheck %s
+// RUN: tir mc --march=rv64im --mcpu=generic-in-order --stage=isel %s | filecheck %s
+//
+// A malformed or unknown string is rejected, as is a CPU of another target and
+// a feature that names the other base ISA.
+// RUN: not tir mc --march=rv64 --stage=isel %s
+// RUN: not tir mc --march=rv64zm --stage=isel %s
+// RUN: not tir mc --march=mips --stage=isel %s
+// RUN: not tir mc --march=rv64im --mcpu=riscv64-unknown-cpu --stage=isel %s
+// RUN: not tir mc --march=rv32i --mattr=+rv64i --stage=isel %s
 
 // CHECK: riscv.add
 module {
