@@ -7,9 +7,8 @@ use crate::ast;
 use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
-    EncodingShape, get_encoding_shapes, isa_param_values, item_supports_isa, parse_literal_value,
-    resolve_isa_param_values, resolve_operand_constraints_for_instruction, resolve_operand_widths,
-    resolve_operands_for_instruction, resolve_params_for_instruction,
+    EncodingShape, get_encoding_shapes, isa_param_values, item_supports_isa,
+    resolve_operand_constraints_for_instruction, resolve_params_for_instruction,
 };
 use tir_graph::{Dag, NodeId};
 
@@ -181,19 +180,6 @@ fn find_trap_handler<'a>(
     None
 }
 
-/// Instruction operands with `bits<expr>` widths resolved for the target ISA
-/// (the ISA's own parameter values win over the cross-ISA maximum, so an
-/// instruction shared by RV32I and RV64I sees XLEN=32 on RV32I).
-fn resolved_operands<'a>(
-    ctx: &SmtCtx<'_>,
-    inst: &'a ast::Instruction,
-    item_cache: &HashMap<&'a str, &'a ast::Item>,
-) -> Vec<(String, Type)> {
-    let mut params = resolve_isa_param_values(inst, item_cache);
-    params.extend(ctx.isa_params.iter().map(|(k, v)| (k.clone(), *v)));
-    resolve_operand_widths(resolve_operands_for_instruction(inst, item_cache), &params)
-}
-
 impl SmtCtx<'_> {
     fn idx_width(&self, class: &str) -> u16 {
         self.classes
@@ -207,22 +193,6 @@ impl SmtCtx<'_> {
             return self.xlen;
         }
         self.classes.get(&class).map_or(self.xlen, |c| c.val_width)
-    }
-}
-
-/// Resolve a register-class parameter (`ENCODING_LEN`, `WIDTH`) to a number:
-/// either a literal or a `self.PARAM` reference into the target ISA.
-fn eval_class_param(
-    rc: &ast::RegisterClass,
-    name: &str,
-    isa_params: &HashMap<String, i64>,
-) -> Option<i64> {
-    match rc.parameters.get(name)? {
-        (_, Some(ast::Expr::Lit(ast::Lit::Int(li)))) => Some(parse_literal_value(li) as i64),
-        (_, Some(ast::Expr::Field(f))) if matches!(&*f.base, ast::Expr::Ident(id) if id.name == "self") => {
-            isa_params.get(f.member.as_str()).copied()
-        }
-        _ => None,
     }
 }
 
@@ -264,7 +234,7 @@ pub fn generate_smtlib<'a>(
     let mut classes = BTreeMap::new();
     let mut pc_classes = std::collections::HashSet::new();
     let class_param = |name: &str, rc: &ast::RegisterClass, default: u16| {
-        eval_class_param(rc, name, &isa_params).unwrap_or(default as i64) as u16
+        crate::semgen::eval_class_param(rc, name, &isa_params).unwrap_or(default as i64) as u16
     };
     let enc_len_of: HashMap<String, u16> = files
         .iter()
@@ -321,7 +291,8 @@ pub fn generate_smtlib<'a>(
         // encoded in an instruction) still needs a nonzero index width to hold
         // its per-register slot number, since a `(_ BitVec 0)` array index is
         // illegal in SMT.
-        let mut idx_width = eval_class_param(rc, "ENCODING_LEN", &isa_params).unwrap_or(5) as u16;
+        let mut idx_width =
+            crate::semgen::eval_class_param(rc, "ENCODING_LEN", &isa_params).unwrap_or(5) as u16;
         if idx_width == 0 {
             let max_idx = rc
                 .register_indices()
@@ -335,10 +306,12 @@ pub fn generate_smtlib<'a>(
             name.clone(),
             ClassInfo {
                 idx_width,
-                val_width: eval_class_param(rc, "WIDTH", &isa_params).unwrap_or(xlen as i64) as u16,
+                val_width: crate::semgen::eval_class_param(rc, "WIDTH", &isa_params)
+                    .unwrap_or(xlen as i64) as u16,
                 zero_index: rc.hardwired_zero_register_index(),
                 storage: storage_of(&name),
-                bit_offset: eval_class_param(rc, "BIT_OFFSET", &isa_params).unwrap_or(0) as u16,
+                bit_offset: crate::semgen::eval_class_param(rc, "BIT_OFFSET", &isa_params)
+                    .unwrap_or(0) as u16,
                 merge: class_write_merge(rc),
             },
         );
@@ -649,7 +622,7 @@ fn build_instructions<'a>(
         let name = i.name.to_lowercase();
         let uppercase_name = name.to_uppercase();
 
-        let operands = resolved_operands(ctx, i, item_cache);
+        let operands = crate::semgen::resolved_operands(&ctx.isa_params, i, item_cache);
         let smt_operands = build_smt_operands(ctx, &operands);
         let smt_operands_joined = smt_operands.join(" ");
         let operand_params = if smt_operands_joined.is_empty() {
@@ -1609,48 +1582,6 @@ impl SmtSymbolResolver<'_> {
     }
 }
 
-/// Evaluate a symbol-free subtree to a constant, mirroring the interpreter's
-/// width rules. Width expressions like `log2Ceil(self.XLEN) - 1` reach the
-/// emitter unfolded, so structural `Constant` matching is not enough.
-fn eval_const_subtree(
-    graph: &impl Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    node: NodeId,
-) -> Option<(u64, u32)> {
-    use tir_symbolic::lang::{SymKind, SymPayload};
-
-    let child = |idx: usize| eval_const_subtree(graph, graph.children(node).nth(idx)?);
-    let arith = |f: fn(u64, u64) -> u64| -> Option<(u64, u32)> {
-        let (a, wa) = child(0)?;
-        let (b, wb) = child(1)?;
-        let w = wa.max(wb);
-        let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
-        Some((f(a, b) & mask, w))
-    };
-
-    match graph.get_node(node) {
-        SymKind::Constant => match graph.get_leaf_data(node)? {
-            SymPayload::Int(i) => Some((i.to_u64(), i.width())),
-            _ => None,
-        },
-        SymKind::Add => arith(u64::wrapping_add),
-        SymKind::Sub => arith(u64::wrapping_sub),
-        SymKind::Mul => arith(u64::wrapping_mul),
-        SymKind::Log2Ceil => {
-            let (v, w) = child(0)?;
-            let result = if v <= 1 {
-                0u64
-            } else {
-                64 - (v - 1).leading_zeros() as u64
-            };
-            Some((result, w))
-        }
-        _ => None,
-    }
-}
-
 /// Store-conditional success: a valid reservation covering exactly `addr`.
 /// Shared by the `bits<1>` value facet and the memory-write effect, so both
 /// gate on the identical predicate.
@@ -1676,233 +1607,212 @@ fn amo_combine(op: u8, old: &str, val: &str) -> Option<String> {
 }
 
 fn emit_sem_expr(
-    graph: &impl Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
+    graph: &impl crate::semgen::ValueDag,
     node: NodeId,
     resolver: &SmtSymbolResolver<'_>,
 ) -> Option<SmtVal> {
-    use tir_symbolic::lang::{SymKind, SymPayload};
+    crate::semgen::emit(graph, node, &mut SmtTerm { resolver })
+}
 
-    let child_node = |idx: usize| graph.children(node).nth(idx);
-    let child = |idx: usize| emit_sem_expr(graph, child_node(idx)?, resolver);
-    let const_child =
-        |idx: usize| -> Option<u64> { Some(eval_const_subtree(graph, child_node(idx)?)?.0) };
-    // Result signedness `signed && signed` mirrors `APInt` binary ops.
-    let arith = |op: &str| -> Option<SmtVal> {
-        let (a, b, w, sa, sb) = coerce_smt(&child(0)?, &child(1)?);
-        Some(SmtVal::bv(format!("({} {} {})", op, a, b), w, sa && sb))
-    };
-    let cmp = |op: &str| -> Option<SmtVal> {
-        let (a, b, _, _, _) = coerce_smt(&child(0)?, &child(1)?);
-        Some(SmtVal::boolean(format!("({} {} {})", op, a, b)))
-    };
-    // Result width is the left operand's width; the amount is reinterpreted at
-    // that width, matching the interpreter's `amount.to_u64()`.
-    let shift = |op: &str, signed: fn(bool) -> bool| -> Option<SmtVal> {
-        let (lhs, wl, sl) = child(0)?.as_bv();
-        let (amt, wamt, samt) = child(1)?.as_bv();
-        let amt = if wamt > wl {
-            format!("((_ extract {} 0) {})", wl - 1, amt)
-        } else {
-            widen_smt(&amt, wamt, samt, wl)
-        };
-        Some(SmtVal::bv(
-            format!("({} {} {})", op, lhs, amt),
-            wl,
-            signed(sl),
-        ))
-    };
-    // `(read_mem_N st addr)` at the entry state, shared by plain loads,
-    // load-reserved, and the old-value facet of an atomic RMW.
-    let read_mem = |addr_idx: usize, bytes_idx: usize| -> Option<SmtVal> {
-        let (addr, w, s) = child(addr_idx)?.as_bv();
-        let bytes = const_child(bytes_idx)? as u16;
-        if !MEM_ACCESS_BYTES.contains(&bytes) {
-            return None;
-        }
-        let xlen = resolver.ctx.xlen as u32;
-        Some(SmtVal::bv(
-            resolver
-                .state
-                .read_memory(resolver.ctx.xlen, bytes, &fit_smt(&addr, w, s, xlen)),
-            bytes as u32 * 8,
-            false,
-        ))
-    };
+/// SMT-LIB's spelling of the shared term vocabulary. Comparisons stay `Bool`
+/// until they cross back into arithmetic, matching the interpreter's width-1
+/// integers.
+struct SmtTerm<'a, 'b> {
+    resolver: &'a SmtSymbolResolver<'b>,
+}
 
-    if let Some(op) = tir_symbolic::lang::scalar_op(*graph.get_node(node)) {
-        return match op.smt {
-            tir_symbolic::lang::SmtTemplate::Binary(name) => arith(name),
-            tir_symbolic::lang::SmtTemplate::Compare(name) => cmp(name),
-            tir_symbolic::lang::SmtTemplate::Shift(name) => match op.kind {
-                tir_symbolic::lang::SymKind::ShiftRightArithmetic => shift(name, |_| true),
-                tir_symbolic::lang::SymKind::ShiftRightLogic => shift(name, |_| false),
-                _ => shift(name, |signed| signed),
-            },
-            tir_symbolic::lang::SmtTemplate::Unary(name) => {
-                let (value, width, signed) = child(0)?.as_bv();
-                Some(SmtVal::bv(format!("({name} {value})"), width, signed))
-            }
-            tir_symbolic::lang::SmtTemplate::Concat => {
-                let (high, high_width, _) = child(0)?.as_bv();
-                let (low, low_width, _) = child(1)?.as_bv();
-                Some(SmtVal::bv(
-                    format!("(concat {high} {low})"),
-                    high_width + low_width,
-                    false,
-                ))
-            }
-        };
+impl crate::semgen::TermBackend for SmtTerm<'_, '_> {
+    type Val = SmtVal;
+
+    fn width(&self, value: &SmtVal) -> u32 {
+        value.as_bv().1
     }
 
-    match graph.get_node(node) {
-        SymKind::Symbol => match graph.get_leaf_data(node)? {
-            SymPayload::SymbolId(id) => resolver.resolve(*id),
-            _ => None,
-        },
-        SymKind::Constant => match graph.get_leaf_data(node)? {
-            SymPayload::Int(i) => {
-                let w = i.width();
-                let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
-                Some(SmtVal::bv(
-                    format!("(_ bv{} {})", i.to_u64() & mask, w),
-                    w,
-                    i.is_signed(),
-                ))
-            }
-            _ => None,
-        },
-        SymKind::If => {
-            let cond = child(0)?.as_bool();
-            let (t, e, w, st, se) = coerce_smt(&child(1)?, &child(2)?);
-            Some(SmtVal::bv(
-                format!("(ite {} {} {})", cond, t, e),
-                w,
-                st || se,
-            ))
-        }
-        SymKind::ZExt => {
-            let (e, w, _) = child(0)?.as_bv();
-            let target = const_child(1)? as u32;
-            if target < w {
+    fn signed(&self, value: &SmtVal) -> bool {
+        value.as_bv().2
+    }
+
+    fn supports(&self, _kind: tir_symbolic::lang::SymKind) -> bool {
+        true
+    }
+
+    fn constant(&mut self, width: u32, value: u64, signed: bool) -> SmtVal {
+        SmtVal::bv(format!("(_ bv{} {})", value, width), width, signed)
+    }
+
+    fn symbol(&mut self, id: u32) -> Option<SmtVal> {
+        self.resolver.resolve(id)
+    }
+
+    fn binary(
+        &mut self,
+        kind: tir_symbolic::lang::SymKind,
+        lhs: SmtVal,
+        rhs: SmtVal,
+        signed: bool,
+    ) -> SmtVal {
+        let (a, width, _) = lhs.as_bv();
+        let (b, _, _) = rhs.as_bv();
+        SmtVal::bv(format!("({} {} {})", smt_name(kind), a, b), width, signed)
+    }
+
+    fn compare(&mut self, kind: tir_symbolic::lang::SymKind, lhs: SmtVal, rhs: SmtVal) -> SmtVal {
+        SmtVal::boolean(format!(
+            "({} {} {})",
+            smt_name(kind),
+            lhs.as_bv().0,
+            rhs.as_bv().0
+        ))
+    }
+
+    fn shift(
+        &mut self,
+        kind: tir_symbolic::lang::SymKind,
+        lhs: SmtVal,
+        amount: SmtVal,
+        signed: bool,
+    ) -> SmtVal {
+        let (lhs, width, _) = lhs.as_bv();
+        SmtVal::bv(
+            format!("({} {} {})", smt_name(kind), lhs, amount.as_bv().0),
+            width,
+            signed,
+        )
+    }
+
+    fn unary(&mut self, kind: tir_symbolic::lang::SymKind, value: SmtVal) -> SmtVal {
+        let (value, width, signed) = value.as_bv();
+        SmtVal::bv(format!("({} {})", smt_name(kind), value), width, signed)
+    }
+
+    fn concat(&mut self, high: SmtVal, low: SmtVal) -> SmtVal {
+        let (high, high_width, _) = high.as_bv();
+        let (low, low_width, _) = low.as_bv();
+        SmtVal::bv(
+            format!("(concat {high} {low})"),
+            high_width + low_width,
+            false,
+        )
+    }
+
+    fn widen(&mut self, value: SmtVal, target: u32, signed: bool) -> SmtVal {
+        let (expr, width, _) = value.as_bv();
+        SmtVal::bv(
+            widen_smt(&expr, width, signed, target),
+            target.max(width),
+            signed,
+        )
+    }
+
+    fn slice(&mut self, value: SmtVal, high: u32, low: u32) -> SmtVal {
+        SmtVal::bv(
+            format!("((_ extract {} {}) {})", high, low, value.as_bv().0),
+            high - low + 1,
+            false,
+        )
+    }
+
+    fn ite(&mut self, condition: SmtVal, then: SmtVal, otherwise: SmtVal, signed: bool) -> SmtVal {
+        let (t, width, _) = then.as_bv();
+        SmtVal::bv(
+            format!(
+                "(ite {} {} {})",
+                condition.as_bool(),
+                t,
+                otherwise.as_bv().0
+            ),
+            width,
+            signed,
+        )
+    }
+
+    fn as_bool(&mut self, value: SmtVal) -> SmtVal {
+        SmtVal::boolean(value.as_bool())
+    }
+
+    fn special<G: crate::semgen::ValueDag>(
+        &mut self,
+        graph: &G,
+        node: NodeId,
+        emit: &mut dyn FnMut(&mut Self, NodeId) -> Option<SmtVal>,
+    ) -> Option<SmtVal> {
+        use tir_symbolic::lang::SymKind;
+        let child_node = |index: usize| graph.children(node).nth(index);
+        let const_child = |index: usize| -> Option<u64> {
+            Some(crate::semgen::eval_const(graph, child_node(index)?)?.0)
+        };
+        // `(read_mem_N st addr)` at the entry state, shared by plain loads,
+        // load-reserved, and the old-value facet of an atomic RMW.
+        let mut read_mem = |b: &mut Self, addr_idx: usize, bytes_idx: usize| -> Option<SmtVal> {
+            let (addr, w, s) = emit(b, child_node(addr_idx)?)?.as_bv();
+            let bytes = const_child(bytes_idx)? as u16;
+            if !MEM_ACCESS_BYTES.contains(&bytes) {
                 return None;
             }
+            let xlen = b.resolver.ctx.xlen as u32;
             Some(SmtVal::bv(
-                widen_smt(&e, w, false, target),
-                target.max(w),
+                b.resolver.state.read_memory(
+                    b.resolver.ctx.xlen,
+                    bytes,
+                    &fit_smt(&addr, w, s, xlen),
+                ),
+                bytes as u32 * 8,
                 false,
             ))
-        }
-        SymKind::SExt => {
-            let (e, w, _) = child(0)?.as_bv();
-            let target = const_child(1)? as u32;
-            if target < w {
-                return None;
-            }
-            Some(SmtVal::bv(
-                widen_smt(&e, w, true, target),
-                target.max(w),
-                true,
-            ))
-        }
-        SymKind::Bitcast => child(0),
-        SymKind::Extract => {
-            let (e, w, _) = child(0)?.as_bv();
-            let high = const_child(1)? as u32;
-            let low = const_child(2)? as u32;
-            if high < low {
-                return None;
-            }
-            let mul = child_node(0)?;
-            if low >= w && matches!(graph.get_node(mul), SymKind::Mul) {
-                // `extract(a * b, 2N-1, N)` is the TMDL idiom for the high half
-                // of a full multiply (e.g. RISC-V `mulh`); the interpreter
-                // recomputes it as a signed full-width product.
-                let m0 = emit_sem_expr(graph, graph.children(mul).next()?, resolver)?;
-                let m1 = emit_sem_expr(graph, graph.children(mul).nth(1)?, resolver)?;
-                let (a, b, wm, _, _) = coerce_smt(&m0, &m1);
-                if high >= 2 * wm {
-                    return None;
-                }
+        };
+        match graph.get_node(node) {
+            SymKind::Clamp => {
+                let input = emit(self, child_node(0)?)?;
+                let (_, _, signed) = input.as_bv();
+                let (lt, gt) = if signed {
+                    ("bvslt", "bvsgt")
+                } else {
+                    ("bvult", "bvugt")
+                };
+                let (i1, min, w1, _, _) = coerce_smt(&input, &emit(self, child_node(1)?)?);
+                let (i2, max, w2, _, _) = coerce_smt(&input, &emit(self, child_node(2)?)?);
+                let w = w1.max(w2);
+                let (i1, min, i2, max) = (
+                    widen_smt(&i1, w1, signed, w),
+                    widen_smt(&min, w1, false, w),
+                    widen_smt(&i2, w2, signed, w),
+                    widen_smt(&max, w2, false, w),
+                );
                 Some(SmtVal::bv(
                     format!(
-                        "((_ extract {} {}) (bvmul ((_ sign_extend {}) {}) ((_ sign_extend {}) {})))",
-                        high, low, wm, a, wm, b
+                        "(ite ({} {} {}) {} (ite ({} {} {}) {} {}))",
+                        lt, i1, min, min, gt, i2, max, max, i1
                     ),
-                    high - low + 1,
-                    false,
+                    w,
+                    signed,
                 ))
-            } else if high < w {
-                Some(SmtVal::bv(
-                    format!("((_ extract {} {}) {})", high, low, e),
-                    high - low + 1,
-                    false,
-                ))
-            } else {
-                None
             }
+            SymKind::LoadMemory | SymKind::LoadReserved => read_mem(self, 0, 1),
+            // The atomic RMW's value facet is the OLD word; the reservation is a
+            // state effect the behavior emitter sets.
+            SymKind::AtomicRmw => read_mem(self, 1, 2),
+            // Store-conditional's `bits<1>` value is its success predicate.
+            SymKind::StoreConditional => {
+                let (addr, w, s) = emit(self, child_node(0)?)?.as_bv();
+                let addr = fit_smt(&addr, w, s, self.resolver.ctx.xlen as u32);
+                Some(SmtVal::boolean(self.resolver.state.sc_success(&addr)))
+            }
+            // Stores and fences are effect statements, handled by the behavior
+            // emitter; floats, iterators and the rest have no bit-vector model.
+            _ => None,
         }
-        SymKind::Log2Ceil => {
-            let (v, w) = eval_const_subtree(graph, node)?;
-            Some(SmtVal::bv(format!("(_ bv{} {})", v, w), w, false))
-        }
-        SymKind::Clamp => {
-            let input = child(0)?;
-            let (_, _, signed) = input.as_bv();
-            let (lt, gt) = if signed {
-                ("bvslt", "bvsgt")
-            } else {
-                ("bvult", "bvugt")
-            };
-            let (i1, min, w1, _, _) = coerce_smt(&input, &child(1)?);
-            let (i2, max, w2, _, _) = coerce_smt(&input, &child(2)?);
-            let w = w1.max(w2);
-            let (i1, min, i2, max) = (
-                widen_smt(&i1, w1, signed, w),
-                widen_smt(&min, w1, false, w),
-                widen_smt(&i2, w2, signed, w),
-                widen_smt(&max, w2, false, w),
-            );
-            Some(SmtVal::bv(
-                format!(
-                    "(ite ({} {} {}) {} (ite ({} {} {}) {} {}))",
-                    lt, i1, min, min, gt, i2, max, max, i1
-                ),
-                w,
-                signed,
-            ))
-        }
-        SymKind::LoadMemory => read_mem(0, 1),
-        // Stores are effect statements, handled by `BehaviorEmitter::store`.
-        SymKind::StoreMemory | SymKind::Sqrt | SymKind::Fma => None,
-        // IEEE float arithmetic has no bit-vector model here.
-        SymKind::FAdd
-        | SymKind::FSub
-        | SymKind::FMul
-        | SymKind::FDiv
-        | SymKind::FMin
-        | SymKind::FMax
-        | SymKind::AsFloat
-        | SymKind::FCvt
-        | SymKind::SIToFP
-        | SymKind::UIToFP => None,
-        SymKind::FPToSI | SymKind::FPToUI => None,
-        SymKind::Map | SymKind::Zip | SymKind::IterConcat => None,
-        SymKind::Split | SymKind::Iota | SymKind::Reduce | SymKind::Arg => None,
-        // Load-reserved reads memory (the reservation is a state effect, set by
-        // `BehaviorEmitter`); the atomic RMW's value facet is the OLD word.
-        SymKind::LoadReserved => read_mem(0, 1),
-        SymKind::AtomicRmw => read_mem(1, 2),
-        // Store-conditional's `bits<1>` value is its success predicate.
-        SymKind::StoreConditional => {
-            let (addr, w, s) = child(0)?.as_bv();
-            let addr = fit_smt(&addr, w, s, resolver.ctx.xlen as u32);
-            Some(SmtVal::boolean(resolver.state.sc_success(&addr)))
-        }
-        // Fence is a statement-only effect (identity), handled by the emitter.
-        SymKind::Fence => None,
+    }
+}
+
+/// The SMT-LIB operator a scalar op is spelled with.
+fn smt_name(kind: tir_symbolic::lang::SymKind) -> &'static str {
+    match tir_symbolic::lang::scalar_op(kind).map(|op| op.smt) {
+        Some(
+            tir_symbolic::lang::SmtTemplate::Binary(name)
+            | tir_symbolic::lang::SmtTemplate::Compare(name)
+            | tir_symbolic::lang::SmtTemplate::Shift(name)
+            | tir_symbolic::lang::SmtTemplate::Unary(name),
+        ) => name,
         _ => unreachable!("operator has no SMT template"),
     }
 }
@@ -1940,7 +1850,8 @@ fn atomic_of_node(
     node: NodeId,
 ) -> Option<AtomicOp> {
     let children = graph.children(node).collect::<Vec<_>>();
-    let constant = |index: usize| eval_const_subtree(graph, *children.get(index)?).map(|v| v.0);
+    let constant =
+        |index: usize| crate::semgen::eval_const(graph, *children.get(index)?).map(|v| v.0);
     match graph.get_node(node) {
         tir_symbolic::lang::SymKind::LoadReserved => Some(AtomicOp::LoadReserved {
             addr: *children.first()?,
@@ -2224,7 +2135,7 @@ impl sem_expr_state::BehaviorEmitter for BehaviorEmitter<'_> {
         }
         let children = self.behavior.graph.children(value).collect::<Vec<_>>();
         let (byte_values, byte_root) = self.behavior.value_graph(*children.get(1)?)?;
-        let bytes = eval_const_subtree(&byte_values, byte_root)?.0 as u16;
+        let bytes = crate::semgen::eval_const(&byte_values, byte_root)?.0 as u16;
         if !MEM_ACCESS_BYTES.contains(&bytes) {
             return None;
         }
@@ -2471,7 +2382,7 @@ impl sem_expr_state::BehaviorEmitter for FlatBehaviorEmitter<'_> {
             .children(value)
             .collect::<Vec<_>>();
         let (byte_values, byte_root) = self.values.behavior.value_graph(*children.get(1)?)?;
-        let bytes = eval_const_subtree(&byte_values, byte_root)?.0 as u16;
+        let bytes = crate::semgen::eval_const(&byte_values, byte_root)?.0 as u16;
         if !MEM_ACCESS_BYTES.contains(&bytes) {
             return None;
         }
@@ -2634,11 +2545,15 @@ struct GraphMemOp {
 
 fn graph_memory_operations(behavior: &sem_expr_state::BehaviorGraph) -> Option<Vec<GraphMemOp>> {
     let mut operations = Vec::new();
-    let nodes = behavior
+    // In first-visit order, so the metadata lists an instruction's accesses
+    // the same way on every run.
+    let mut seen = std::collections::HashSet::new();
+    let nodes: Vec<_> = behavior
         .value_roots()
         .into_iter()
         .flat_map(|root| behavior.graph.preorder(root))
-        .collect::<std::collections::HashSet<_>>();
+        .filter(|node| seen.insert(*node))
+        .collect();
     for node in nodes {
         let children = behavior.graph.children(node).collect::<Vec<_>>();
         let (kind, address, bytes, reservation) = match behavior.graph.get_node(node) {
@@ -2654,7 +2569,7 @@ fn graph_memory_operations(behavior: &sem_expr_state::BehaviorGraph) -> Option<V
             addr: *children.get(address)?,
             bytes: {
                 let (values, root) = behavior.value_graph(*children.get(bytes)?)?;
-                eval_const_subtree(&values, root)?.0
+                crate::semgen::eval_const(&values, root)?.0
             },
             reservation,
         });
@@ -2666,7 +2581,8 @@ fn effect_memory_operations(
     behavior: &sem_expr_state::BehaviorGraph,
     effect: NodeId,
 ) -> Option<Vec<GraphMemOp>> {
-    let mut value_nodes = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut value_nodes = Vec::new();
     for node in behavior.graph.preorder(effect) {
         let children: Vec<_> = behavior.graph.children(node).collect();
         let roots: Vec<NodeId> = match behavior.graph.get_node(node) {
@@ -2684,7 +2600,12 @@ fn effect_memory_operations(
             _ => Vec::new(),
         };
         for root in roots {
-            value_nodes.extend(behavior.graph.preorder(root));
+            value_nodes.extend(
+                behavior
+                    .graph
+                    .preorder(root)
+                    .filter(|node| seen.insert(*node)),
+            );
         }
     }
     let mut operations = Vec::new();
@@ -2703,7 +2624,7 @@ fn effect_memory_operations(
             addr: *children.get(address)?,
             bytes: {
                 let (values, root) = behavior.value_graph(*children.get(bytes)?)?;
-                eval_const_subtree(&values, root)?.0
+                crate::semgen::eval_const(&values, root)?.0
             },
             reservation,
         });
@@ -2729,21 +2650,7 @@ fn build_smt_behavior<'a>(
     register_index_map: &HashMap<(String, String), u32>,
 ) -> Option<BehaviorMetadata> {
     let operands = operands.iter().cloned().collect::<HashMap<_, _>>();
-    let mut numeric_params: HashMap<String, i64> =
-        resolve_isa_param_values(instruction, item_cache);
-    // The target ISA's own values win over the cross-ISA maximum (an
-    // instruction shared by RV32I and RV64I must see XLEN=32 on RV32I).
-    numeric_params.extend(ctx.isa_params.iter().map(|(k, v)| (k.clone(), *v)));
-    numeric_params.extend(
-        resolve_params_for_instruction(instruction, item_cache)
-            .into_iter()
-            .filter_map(|(name, (_ty, val))| match val {
-                Some(ast::Expr::Lit(ast::Lit::Int(li))) => {
-                    Some((name, parse_literal_value_u128(&li) as i64))
-                }
-                _ => None,
-            }),
-    );
+    let numeric_params = crate::semgen::numeric_params(&ctx.isa_params, instruction, item_cache);
     let behavior_graph = sem_expr_state::lower_behavior(
         &instruction.behavior,
         ctx.trap_handler,
@@ -2858,7 +2765,7 @@ fn build_decoder<'a>(
 
     for i in &instructions {
         let name_upper = i.name.to_uppercase();
-        let operand_list = resolved_operands(ctx, i, item_cache);
+        let operand_list = crate::semgen::resolved_operands(&ctx.isa_params, i, item_cache);
         let operands: HashMap<String, Type> = operand_list.iter().cloned().collect();
         let params = resolve_params_for_instruction(i, item_cache);
         // Each shape is its own decoder: it fixes its own bits, and sema keeps
@@ -3042,7 +2949,7 @@ fn build_decoder<'a>(
 
     // Build a fallback: the first instruction with all-zero operands.
     let first = &instructions[0];
-    let first_ops = resolved_operands(ctx, first, item_cache);
+    let first_ops = crate::semgen::resolved_operands(&ctx.isa_params, first, item_cache);
     let fallback = {
         let zeros: Vec<String> = first_ops
             .iter()
@@ -3085,7 +2992,7 @@ fn build_decoder<'a>(
     // picked. `cargo xtask verify` discharges one per instruction.
     for i in &instructions {
         let name = i.name.to_lowercase();
-        let operand_list = resolved_operands(ctx, i, item_cache);
+        let operand_list = crate::semgen::resolved_operands(&ctx.isa_params, i, item_cache);
         let params = build_smt_operands(ctx, &operand_list).join(" ");
         let args = operand_list
             .iter()

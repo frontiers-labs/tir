@@ -13,6 +13,7 @@ mod parser;
 mod rustgen;
 mod sem_expr_state;
 mod sema;
+mod semgen;
 pub mod shapes;
 mod smtlibgen;
 mod typeck;

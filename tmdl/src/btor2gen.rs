@@ -25,13 +25,10 @@ use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
     EncodingShape, behavior_uses_todo, get_encoding_shapes, isa_param_values, item_supports_isa,
-    parse_literal_value, resolve_isa_param_values, resolve_operand_widths,
-    resolve_operands_for_instruction, resolve_params_for_instruction,
+    parse_literal_value, resolve_params_for_instruction,
 };
-use tir_graph::{Dag, NodeId};
-use tir_symbolic::lang::{SymKind as ExprKind, SymPayload as ExprPayload};
-
-type ExprPostGraph = sem_expr_state::ValueGraph;
+use tir_graph::NodeId;
+use tir_symbolic::lang::SymKind as ExprKind;
 
 // ---------------------------------------------------------------------------
 // Target context (register-file layout resolved against the ISA)
@@ -79,20 +76,6 @@ impl Ctx<'_> {
         self.classes
             .get(&class.to_lowercase())
             .is_some_and(|info| info.storage == self.retirement_storage)
-    }
-}
-
-fn eval_class_param(
-    rc: &ast::RegisterClass,
-    name: &str,
-    isa_params: &HashMap<String, i64>,
-) -> Option<i64> {
-    match rc.parameters.get(name)? {
-        (_, Some(ast::Expr::Lit(ast::Lit::Int(li)))) => Some(parse_literal_value(li) as i64),
-        (_, Some(ast::Expr::Field(f))) if matches!(&*f.base, ast::Expr::Ident(id) if id.name == "self") => {
-            isa_params.get(f.member.as_str()).copied()
-        }
-        _ => None,
     }
 }
 
@@ -157,233 +140,161 @@ impl Resolver<'_> {
     }
 }
 
-/// Fold a symbol-free subtree to a constant (width expressions such as
-/// `log2Ceil(self.XLEN) - 1` reach the emitter unfolded).
-fn eval_const(graph: &ExprPostGraph, node: NodeId) -> Option<(u64, u32)> {
-    let child = |idx: usize| eval_const(graph, graph.children(node).nth(idx)?);
-    let arith = |f: fn(u64, u64) -> u64| -> Option<(u64, u32)> {
-        let (a, wa) = child(0)?;
-        let (b, wb) = child(1)?;
-        let w = wa.max(wb);
-        let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
-        Some((f(a, b) & mask, w))
-    };
-    match graph.get_node(node) {
-        ExprKind::Constant => match graph.get_leaf_data(node)? {
-            ExprPayload::Int(i) => Some((i.to_u64(), i.width())),
-            _ => None,
-        },
-        ExprKind::Add => arith(u64::wrapping_add),
-        ExprKind::Sub => arith(u64::wrapping_sub),
-        ExprKind::Mul => arith(u64::wrapping_mul),
-        ExprKind::Log2Ceil => {
-            let (v, w) = child(0)?;
-            let r = if v <= 1 {
-                0
-            } else {
-                64 - (v - 1).leading_zeros() as u64
-            };
-            Some((r, w))
-        }
-        _ => None,
-    }
+/// BTOR2's spelling of the shared term vocabulary.
+struct Btor2Term<'a, 'b> {
+    b: &'a mut Btor2,
+    r: &'a Resolver<'b>,
 }
 
-fn emit(graph: &ExprPostGraph, node: NodeId, r: &Resolver<'_>, b: &mut Btor2) -> Option<Bv> {
-    let child_node = |idx: usize| graph.children(node).nth(idx);
-    let const_child = |idx: usize| -> Option<u64> { Some(eval_const(graph, child_node(idx)?)?.0) };
+impl crate::semgen::TermBackend for Btor2Term<'_, '_> {
+    type Val = Bv;
 
-    macro_rules! ch {
-        ($i:expr) => {
-            emit(graph, child_node($i)?, r, b)?
+    fn width(&self, value: &Bv) -> u32 {
+        value.width
+    }
+
+    fn signed(&self, value: &Bv) -> bool {
+        value.signed
+    }
+
+    fn supports(&self, kind: ExprKind) -> bool {
+        use ExprKind::*;
+        matches!(
+            kind,
+            Symbol
+                | Constant
+                | Add
+                | Sub
+                | Mul
+                | Div
+                | UDiv
+                | Or
+                | And
+                | Xor
+                | Eq
+                | Ne
+                | Lt
+                | Gt
+                | Ge
+                | ULt
+                | ULe
+                | UGt
+                | UGe
+                | ShiftLeft
+                | ShiftRightLogic
+                | ShiftRightArithmetic
+                | Bitcast
+                | Not
+                | If
+                | ZExt
+                | SExt
+                | Extract
+                | Log2Ceil
+                | Clamp
+        )
+    }
+
+    fn constant(&mut self, width: u32, value: u64, signed: bool) -> Bv {
+        Bv {
+            signed,
+            ..self.b.constant(width, value)
+        }
+    }
+
+    fn symbol(&mut self, id: u32) -> Option<Bv> {
+        self.r.resolve(id)
+    }
+
+    fn binary(&mut self, kind: ExprKind, lhs: Bv, rhs: Bv, signed: bool) -> Bv {
+        let operator = match kind {
+            ExprKind::Add => "add",
+            ExprKind::Sub => "sub",
+            ExprKind::Mul => "mul",
+            ExprKind::Div => "sdiv",
+            ExprKind::UDiv => "udiv",
+            ExprKind::Or => "or",
+            ExprKind::And => "and",
+            ExprKind::Xor => "xor",
+            _ => unreachable!("binary operator the backend declared unsupported"),
         };
-    }
-    macro_rules! arith {
-        ($op:expr) => {{
-            let (x, y) = (ch!(0), ch!(1));
-            let signed = x.signed && y.signed;
-            let (x, y) = b.coerce(x, y);
-            Some(b.binary($op, x, y, signed))
-        }};
-    }
-    macro_rules! cmp {
-        ($op:expr) => {{
-            let (x, y) = (ch!(0), ch!(1));
-            let (x, y) = b.coerce(x, y);
-            Some(b.compare($op, x, y))
-        }};
-    }
-    // Result width is the left operand's; the amount is reinterpreted at that
-    // width, matching the interpreter.
-    macro_rules! shift {
-        ($op:expr, $sgn:expr) => {{
-            let lhs = ch!(0);
-            let amt = ch!(1);
-            let amt = b.fit(amt, lhs.width);
-            let sgn: fn(bool) -> bool = $sgn;
-            Some(b.binary($op, lhs, amt, sgn(lhs.signed)))
-        }};
+        self.b.binary(operator, lhs, rhs, signed)
     }
 
-    match graph.get_node(node) {
-        ExprKind::Symbol => match graph.get_leaf_data(node)? {
-            ExprPayload::SymbolId(id) => r.resolve(*id),
-            _ => None,
-        },
-        ExprKind::Constant => match graph.get_leaf_data(node)? {
-            ExprPayload::Int(i) => {
-                let w = i.width();
-                let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
-                Some(Bv {
-                    signed: i.is_signed(),
-                    ..b.constant(w, i.to_u64() & mask)
-                })
-            }
-            _ => None,
-        },
-        ExprKind::Add => arith!("add"),
-        ExprKind::Sub => arith!("sub"),
-        ExprKind::Mul => arith!("mul"),
-        ExprKind::Div => arith!("sdiv"),
-        ExprKind::UDiv => arith!("udiv"),
-        ExprKind::Or => arith!("or"),
-        ExprKind::And => arith!("and"),
-        ExprKind::Xor => arith!("xor"),
-        ExprKind::Eq => cmp!("eq"),
-        ExprKind::Ne => cmp!("neq"),
-        ExprKind::Lt => cmp!("slt"),
-        ExprKind::Gt => cmp!("sgt"),
-        ExprKind::Ge => cmp!("sgte"),
-        ExprKind::ULt => cmp!("ult"),
-        ExprKind::ULe => cmp!("ulte"),
-        ExprKind::UGt => cmp!("ugt"),
-        ExprKind::UGe => cmp!("ugte"),
-        ExprKind::ShiftLeft => shift!("sll", |s| s),
-        ExprKind::ShiftRightLogic => shift!("srl", |_| false),
-        ExprKind::ShiftRightArithmetic => shift!("sra", |_| true),
-        ExprKind::Bitcast => Some(ch!(0)),
-        ExprKind::Not => {
-            let x = ch!(0);
-            Some(b.not(x))
+    fn compare(&mut self, kind: ExprKind, lhs: Bv, rhs: Bv) -> Bv {
+        let operator = match kind {
+            ExprKind::Eq => "eq",
+            ExprKind::Ne => "neq",
+            ExprKind::Lt => "slt",
+            ExprKind::Gt => "sgt",
+            ExprKind::Ge => "sgte",
+            ExprKind::ULt => "ult",
+            ExprKind::ULe => "ulte",
+            ExprKind::UGt => "ugt",
+            ExprKind::UGe => "ugte",
+            _ => unreachable!("comparison the backend declared unsupported"),
+        };
+        self.b.compare(operator, lhs, rhs)
+    }
+
+    fn shift(&mut self, kind: ExprKind, lhs: Bv, amount: Bv, signed: bool) -> Bv {
+        let operator = match kind {
+            ExprKind::ShiftLeft => "sll",
+            ExprKind::ShiftRightLogic => "srl",
+            _ => "sra",
+        };
+        self.b.binary(operator, lhs, amount, signed)
+    }
+
+    fn unary(&mut self, _kind: ExprKind, value: Bv) -> Bv {
+        self.b.not(value)
+    }
+
+    fn concat(&mut self, high: Bv, low: Bv) -> Bv {
+        self.b.concat(high, low)
+    }
+
+    fn widen(&mut self, value: Bv, target: u32, signed: bool) -> Bv {
+        self.b.widen(value, target, signed)
+    }
+
+    fn slice(&mut self, value: Bv, high: u32, low: u32) -> Bv {
+        self.b.slice(value, high, low)
+    }
+
+    fn ite(&mut self, condition: Bv, then: Bv, otherwise: Bv, signed: bool) -> Bv {
+        self.b.ite(condition, then, otherwise, signed)
+    }
+
+    fn as_bool(&mut self, value: Bv) -> Bv {
+        self.b.as_bool(value)
+    }
+
+    fn special<G: crate::semgen::ValueDag>(
+        &mut self,
+        graph: &G,
+        node: NodeId,
+        emit: &mut dyn FnMut(&mut Self, NodeId) -> Option<Bv>,
+    ) -> Option<Bv> {
+        if *graph.get_node(node) != ExprKind::Clamp {
+            return None;
         }
-        ExprKind::If => {
-            let cond = ch!(0);
-            let cond = b.as_bool(cond);
-            let (t, e) = (ch!(1), ch!(2));
-            let signed = t.signed || e.signed;
-            let (t, e) = b.coerce(t, e);
-            Some(b.ite(cond, t, e, signed))
-        }
-        ExprKind::ZExt => {
-            let x = ch!(0);
-            let target = const_child(1)? as u32;
-            if target < x.width {
-                return None;
-            }
-            Some(b.widen(x, target, false))
-        }
-        ExprKind::SExt => {
-            let x = ch!(0);
-            let target = const_child(1)? as u32;
-            if target < x.width {
-                return None;
-            }
-            Some(b.widen(x, target, true))
-        }
-        ExprKind::Extract => {
-            let high = const_child(1)? as u32;
-            let low = const_child(2)? as u32;
-            if high < low {
-                return None;
-            }
-            let mul = child_node(0)?;
-            if low >= ch!(0).width && matches!(graph.get_node(mul), ExprKind::Mul) {
-                // `extract(a * b, 2N-1, N)`: high half of a signed full multiply
-                // (RISC-V `mulh`). Recompute as a double-width signed product.
-                let m0 = emit(graph, graph.children(mul).next()?, r, b)?;
-                let m1 = emit(graph, graph.children(mul).nth(1)?, r, b)?;
-                let (m0, m1) = b.coerce(m0, m1);
-                let wm = m0.width;
-                if high >= 2 * wm {
-                    return None;
-                }
-                let m0 = b.widen(m0, 2 * wm, true);
-                let m1 = b.widen(m1, 2 * wm, true);
-                let prod = b.binary("mul", m0, m1, true);
-                Some(b.slice(prod, high, low))
-            } else {
-                let x = ch!(0);
-                if high >= x.width {
-                    return None;
-                }
-                Some(b.slice(x, high, low))
-            }
-        }
-        ExprKind::Log2Ceil => {
-            let (v, w) = eval_const(graph, node)?;
-            Some(b.constant(w, v))
-        }
-        ExprKind::Clamp => {
-            let input = ch!(0);
-            let (lt, gt) = if input.signed {
-                ("slt", "sgt")
-            } else {
-                ("ult", "ugt")
-            };
-            let min = ch!(1);
-            let max = ch!(2);
-            let w = input.width.max(min.width).max(max.width);
-            let input = b.widen(input, w, input.signed);
-            let min = b.widen(min, w, false);
-            let max = b.widen(max, w, false);
-            let below = b.compare(lt, input, min);
-            let above = b.compare(gt, input, max);
-            let hi = b.ite(above, max, input, input.signed);
-            Some(b.ite(below, min, hi, input.signed))
-        }
-        ExprKind::LoadMemory
-        | ExprKind::Theta
-        | ExprKind::StoreMemory
-        | ExprKind::Sqrt
-        | ExprKind::Fma
-        | ExprKind::SRem
-        | ExprKind::URem
-        | ExprKind::Neg
-        | ExprKind::Le
-        | ExprKind::Xnor
-        | ExprKind::Concat
-        | ExprKind::FAdd
-        | ExprKind::FSub
-        | ExprKind::FMul
-        | ExprKind::FDiv
-        | ExprKind::FMin
-        | ExprKind::FMax
-        | ExprKind::AsFloat
-        | ExprKind::FCvt
-        | ExprKind::SIToFP
-        | ExprKind::UIToFP
-        | ExprKind::FPToSI
-        | ExprKind::FPToUI
-        | ExprKind::Map
-        | ExprKind::Zip
-        | ExprKind::IterConcat
-        | ExprKind::Split
-        | ExprKind::Iota
-        | ExprKind::Reduce
-        | ExprKind::Arg
-        | ExprKind::LoadReserved
-        | ExprKind::StoreConditional
-        | ExprKind::AtomicRmw
-        | ExprKind::Fence
-        | ExprKind::StateAssign
-        | ExprKind::StateStore
-        | ExprKind::StateStoreConditional
-        | ExprKind::StateFence
-        | ExprKind::StateTrap
-        | ExprKind::StateBlock
-        | ExprKind::StateIf
-        | ExprKind::StateTry
-        | ExprKind::StateHandler => None,
+        let mut child = |b: &mut Self, index: usize| emit(b, graph.children(node).nth(index)?);
+        let input = child(self, 0)?;
+        let (lt, gt) = if input.signed {
+            ("slt", "sgt")
+        } else {
+            ("ult", "ugt")
+        };
+        let min = child(self, 1)?;
+        let max = child(self, 2)?;
+        let w = input.width.max(min.width).max(max.width);
+        let input = self.b.widen(input, w, input.signed);
+        let min = self.b.widen(min, w, false);
+        let max = self.b.widen(max, w, false);
+        let below = self.b.compare(lt, input, min);
+        let above = self.b.compare(gt, input, max);
+        let hi = self.b.ite(above, max, input, input.signed);
+        Some(self.b.ite(below, min, hi, input.signed))
     }
 }
 
@@ -434,7 +345,15 @@ impl Checker<'_> {
         };
         let (graph, root) = self.behavior.value_graph(expression)?;
         let mut b = self.b.borrow_mut();
-        emit(&graph, root, &resolver, &mut b).or_else(|| {
+        crate::semgen::emit(
+            &graph,
+            root,
+            &mut Btor2Term {
+                b: &mut b,
+                r: &resolver,
+            },
+        )
+        .or_else(|| {
             self.failed.set(true);
             None
         })
@@ -723,16 +642,6 @@ fn build_guard(b: &mut Btor2, insn: Bv, guards: &[(u16, u16, u128)]) -> Bv {
 // Top-level emission
 // ---------------------------------------------------------------------------
 
-fn resolved_operands(
-    ctx: &Ctx<'_>,
-    inst: &ast::Instruction,
-    item_cache: &HashMap<&str, &ast::Item>,
-) -> Vec<(String, Type)> {
-    let mut params = resolve_isa_param_values(inst, item_cache);
-    params.extend(ctx.isa_params.iter().map(|(k, v)| (k.clone(), *v)));
-    resolve_operand_widths(resolve_operands_for_instruction(inst, item_cache), &params)
-}
-
 struct PreparedInstruction<'a> {
     instruction: &'a ast::Instruction,
     operands: Vec<(String, Type)>,
@@ -781,8 +690,10 @@ pub fn generate_btor2<'a>(
         classes.insert(
             name,
             ClassInfo {
-                idx_width: eval_class_param(rc, "ENCODING_LEN", &isa_params).unwrap_or(5) as u16,
-                val_width: eval_class_param(rc, "WIDTH", &isa_params).unwrap_or(xlen as i64) as u16,
+                idx_width: crate::semgen::eval_class_param(rc, "ENCODING_LEN", &isa_params)
+                    .unwrap_or(5) as u16,
+                val_width: crate::semgen::eval_class_param(rc, "WIDTH", &isa_params)
+                    .unwrap_or(xlen as i64) as u16,
                 zero_index: rc.hardwired_zero_register_index(),
                 storage,
                 architectural_integer,
@@ -837,23 +748,9 @@ pub fn generate_btor2<'a>(
         if shapes.is_empty() {
             continue;
         }
-        let operands = resolved_operands(&ctx, instruction, item_cache);
-        let mut numeric_params = resolve_isa_param_values(instruction, item_cache);
-        numeric_params.extend(
-            ctx.isa_params
-                .iter()
-                .map(|(name, value)| (name.clone(), *value)),
-        );
-        numeric_params.extend(
-            resolve_params_for_instruction(instruction, item_cache)
-                .into_iter()
-                .filter_map(|(name, (_ty, value))| match value {
-                    Some(ast::Expr::Lit(ast::Lit::Int(literal))) => {
-                        Some((name, parse_literal_value(&literal) as i64))
-                    }
-                    _ => None,
-                }),
-        );
+        let operands = crate::semgen::resolved_operands(&ctx.isa_params, instruction, item_cache);
+        let numeric_params =
+            crate::semgen::numeric_params(&ctx.isa_params, instruction, item_cache);
         let Some(behavior) = sem_expr_state::lower_behavior(
             &instruction.behavior,
             None,
