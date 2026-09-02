@@ -74,54 +74,53 @@ pub(super) fn lower_to_ir(
         d.eprint();
         std::process::exit(1);
     });
-    lower_cir_structs(context, &module);
-    raise_loops(context, &module);
-    restructure(context, &module);
+    // Restructuring accepts CFG form only, so no `cir` operation may survive
+    // into it: struct ops become pointer arithmetic, loop ops become `scf.for`
+    // where the counted shape is provable and blocks with branches otherwise.
+    run_pass(
+        context,
+        &module,
+        "struct lowering",
+        false,
+        crate::passes::LowerCirStructsPass::new(),
+    );
+    run_pass(
+        context,
+        &module,
+        "loop raising",
+        true,
+        crate::passes::RaiseLoopsPass::new(),
+    );
+    run_pass(
+        context,
+        &module,
+        "restructuring",
+        true,
+        tir::passes::RestructurePass::new(),
+    );
     describe_target(context, &module, machine.as_ref())
 }
 
-/// Replace the frontend's struct operations with pointer arithmetic, so no
-/// `cir` operation survives in a function body: restructuring accepts CFG form
-/// only, and `cir` is not part of it.
-fn lower_cir_structs(context: &tir::Context, module: &tir::builtin::ModuleOp) {
+/// Run one pass over `module`, nested under every function when `per_function`,
+/// and exit with `label` on failure.
+fn run_pass(
+    context: &tir::Context,
+    module: &tir::builtin::ModuleOp,
+    label: &str,
+    per_function: bool,
+    pass: impl tir::Pass + 'static,
+) {
     use tir::Operation;
 
     let mut pm = tir::PassManager::new();
-    pm.add_pass(crate::passes::LowerCirStructsPass::new());
+    if per_function {
+        pm.nest::<tir::func::FuncOp>().add_pass(pass);
+    } else {
+        pm.add_pass(pass);
+    }
     pm.run(context, context.get_op(module.id()))
         .unwrap_or_else(|e| {
-            eprintln!("fcc: error: struct lowering failed: {e}");
-            std::process::exit(1);
-        });
-}
-
-/// Turn the `cir` loop ops codegen emits into `scf.for` where the counted shape
-/// is provable, and into blocks and branches where it is not. No `cir` operation
-/// survives into restructuring.
-fn raise_loops(context: &tir::Context, module: &tir::builtin::ModuleOp) {
-    use tir::Operation;
-
-    let mut pm = tir::PassManager::new();
-    pm.nest::<tir::func::FuncOp>()
-        .add_pass(crate::passes::RaiseLoopsPass::new());
-    pm.run(context, context.get_op(module.id()))
-        .unwrap_or_else(|e| {
-            eprintln!("fcc: error: loop raising failed: {e}");
-            std::process::exit(1);
-        });
-}
-
-/// Raise the flat graph of blocks codegen emits back to structured control
-/// flow. A function whose body is one block is left alone.
-fn restructure(context: &tir::Context, module: &tir::builtin::ModuleOp) {
-    use tir::Operation;
-
-    let mut pm = tir::PassManager::new();
-    pm.nest::<tir::func::FuncOp>()
-        .add_pass(tir::passes::RestructurePass::new());
-    pm.run(context, context.get_op(module.id()))
-        .unwrap_or_else(|e| {
-            eprintln!("fcc: error: restructuring failed: {e}");
+            eprintln!("fcc: error: {label} failed: {e}");
             std::process::exit(1);
         });
 }

@@ -181,7 +181,7 @@ impl<'a> IfExpr<'a> {
     }
 
     fn ternary(&mut self) -> i64 {
-        let val = self.or();
+        let val = self.binary(0);
         if matches!(self.peek(), Some(PreprocToken::Question)) {
             self.bump();
             let then = self.ternary();
@@ -195,153 +195,18 @@ impl<'a> IfExpr<'a> {
         }
     }
 
-    fn or(&mut self) -> i64 {
-        let mut val = self.and();
-        while matches!(self.peek(), Some(PreprocToken::Or)) {
-            self.bump();
-            let rhs = self.and();
-            val = ((val != 0) || (rhs != 0)) as i64;
-        }
-        val
-    }
-
-    fn and(&mut self) -> i64 {
-        let mut val = self.bit_or();
-        while matches!(self.peek(), Some(PreprocToken::And)) {
-            self.bump();
-            let rhs = self.bit_or();
-            val = ((val != 0) && (rhs != 0)) as i64;
-        }
-        val
-    }
-
-    fn bit_or(&mut self) -> i64 {
-        let mut val = self.bit_xor();
-        while matches!(self.peek(), Some(PreprocToken::BitOr)) {
-            self.bump();
-            val |= self.bit_xor();
-        }
-        val
-    }
-
-    fn bit_xor(&mut self) -> i64 {
-        let mut val = self.bit_and();
-        while matches!(self.peek(), Some(PreprocToken::BitXor)) {
-            self.bump();
-            val ^= self.bit_and();
-        }
-        val
-    }
-
-    fn bit_and(&mut self) -> i64 {
-        let mut val = self.equality();
-        while matches!(self.peek(), Some(PreprocToken::BitAnd)) {
-            self.bump();
-            val &= self.equality();
-        }
-        val
-    }
-
-    fn equality(&mut self) -> i64 {
-        let mut val = self.comparison();
-        loop {
-            match self.peek() {
-                Some(PreprocToken::Eq) => {
-                    self.bump();
-                    val = (val == self.comparison()) as i64;
-                }
-                Some(PreprocToken::Ne) => {
-                    self.bump();
-                    val = (val != self.comparison()) as i64;
-                }
-                _ => break,
-            }
-        }
-        val
-    }
-
-    fn comparison(&mut self) -> i64 {
-        let mut val = self.shift();
-        loop {
-            match self.peek() {
-                Some(PreprocToken::Lt) => {
-                    self.bump();
-                    val = (val < self.shift()) as i64;
-                }
-                Some(PreprocToken::Le) => {
-                    self.bump();
-                    val = (val <= self.shift()) as i64;
-                }
-                Some(PreprocToken::Gt) => {
-                    self.bump();
-                    val = (val > self.shift()) as i64;
-                }
-                Some(PreprocToken::Ge) => {
-                    self.bump();
-                    val = (val >= self.shift()) as i64;
-                }
-                _ => break,
-            }
-        }
-        val
-    }
-
-    fn shift(&mut self) -> i64 {
-        let mut val = self.additive();
-        loop {
-            match self.peek() {
-                Some(PreprocToken::Shl) => {
-                    self.bump();
-                    val <<= self.additive();
-                }
-                Some(PreprocToken::Shr) => {
-                    self.bump();
-                    val >>= self.additive();
-                }
-                _ => break,
-            }
-        }
-        val
-    }
-
-    fn additive(&mut self) -> i64 {
-        let mut val = self.multiplicative();
-        loop {
-            match self.peek() {
-                Some(PreprocToken::Plus) => {
-                    self.bump();
-                    val += self.multiplicative();
-                }
-                Some(PreprocToken::Minus) => {
-                    self.bump();
-                    val -= self.multiplicative();
-                }
-                _ => break,
-            }
-        }
-        val
-    }
-
-    fn multiplicative(&mut self) -> i64 {
+    /// Precedence climbing over the binary operators: every one is
+    /// left-associative, and an operand binds to the tightest operator on
+    /// either side of it.
+    fn binary(&mut self, min_prec: u8) -> i64 {
         let mut val = self.unary();
-        loop {
-            match self.peek() {
-                Some(PreprocToken::Star) => {
-                    self.bump();
-                    val *= self.unary();
-                }
-                Some(PreprocToken::Slash) => {
-                    self.bump();
-                    let r = self.unary();
-                    val = if r != 0 { val / r } else { 0 };
-                }
-                Some(PreprocToken::Percent) => {
-                    self.bump();
-                    let r = self.unary();
-                    val = if r != 0 { val % r } else { 0 };
-                }
-                _ => break,
+        while let Some((prec, apply)) = self.peek().and_then(binary_op) {
+            if prec < min_prec {
+                break;
             }
+            self.bump();
+            let rhs = self.binary(prec + 1);
+            val = apply(val, rhs);
         }
         val
     }
@@ -427,6 +292,36 @@ impl<'a> IfExpr<'a> {
             }
         }
     }
+}
+
+/// A binary operator's precedence, lowest first, and its `#if` arithmetic.
+/// Division by zero evaluates to zero rather than failing the directive.
+type BinaryOp = fn(i64, i64) -> i64;
+
+fn binary_op(tok: &PreprocToken) -> Option<(u8, BinaryOp)> {
+    use PreprocToken::*;
+    let op: (u8, BinaryOp) = match tok {
+        Or => (0, |a, b| (a != 0 || b != 0) as i64),
+        And => (1, |a, b| (a != 0 && b != 0) as i64),
+        BitOr => (2, |a, b| a | b),
+        BitXor => (3, |a, b| a ^ b),
+        BitAnd => (4, |a, b| a & b),
+        Eq => (5, |a, b| (a == b) as i64),
+        Ne => (5, |a, b| (a != b) as i64),
+        Lt => (6, |a, b| (a < b) as i64),
+        Le => (6, |a, b| (a <= b) as i64),
+        Gt => (6, |a, b| (a > b) as i64),
+        Ge => (6, |a, b| (a >= b) as i64),
+        Shl => (7, |a, b| a << b),
+        Shr => (7, |a, b| a >> b),
+        Plus => (8, |a, b| a + b),
+        Minus => (8, |a, b| a - b),
+        Star => (9, |a, b| a * b),
+        Slash => (9, |a, b| if b != 0 { a / b } else { 0 }),
+        Percent => (9, |a, b| if b != 0 { a % b } else { 0 }),
+        _ => return None,
+    };
+    Some(op)
 }
 
 // ---------------------------------------------------------------------------

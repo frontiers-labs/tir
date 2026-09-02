@@ -1,148 +1,80 @@
 mod fcc_bench;
-mod fcc_corpus;
 mod fcc_fuzz;
 mod fcc_torture;
 pub mod utils;
 mod verify_smt;
 
 use std::{env, path::PathBuf};
+
+use clap::Parser;
 use tmdl::{Action, Compiler, OutputKind};
 use xshell::{cmd, Shell};
 
+#[derive(Parser)]
+enum Task {
+    /// Build the TIR project
+    Build,
+    /// Build the project and run the check tests
+    Check,
+    /// Run the check tests without building first
+    CheckOnly,
+    /// Build the project documentation
+    Docs,
+    /// Run formal ISA verification against the Sail model
+    Verify {
+        /// One of riscv64, riscv32, armv8, x86_64
+        isa: String,
+        /// Passed through, e.g. `--shard k/N`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run differential ISA tests against a golden oracle (riscv/Spike)
+    IsaTestSuite,
+    /// Compile the pinned GCC C torture corpus through codegen and compare the
+    /// failures against the recorded baseline
+    FccTorture {
+        #[arg(long)]
+        bless: bool,
+        #[arg(long)]
+        fcc: Option<PathBuf>,
+    },
+    /// Time fcc and gcc -O0 on the passing torture execute cases and coremark;
+    /// print the sum, median ratio and slowest cases, and fail on a >10 % sum
+    /// regression against the baseline
+    FccBench(fcc_bench::Options),
+    /// Generate random UB-free C programs, compile them under different pass
+    /// pipelines and reference compilers, run the binaries and compare
+    /// observable behavior
+    FccFuzz(fcc_fuzz::Options),
+    /// Check the C ABI header is current and run the C smoke test
+    CapiSmoke,
+    /// Build the C ABI and run the Python test suite
+    PythonSmoke,
+    /// Build the C ABI and run the Haskell bindings smoke test (needs ghc)
+    HaskellSmoke,
+}
+
 fn main() -> anyhow::Result<()> {
-    let task = env::args().nth(1);
     let sh = Shell::new()?;
-    match task.as_deref() {
-        Some("help") => print_help(),
-        Some("build") => build(&sh)?,
-        Some("check") => {
+    match Task::parse() {
+        Task::Build => build(&sh),
+        Task::Check => {
             build(&sh)?;
-            check(&sh)?
+            check(&sh)
         }
-        Some("check-only") => check(&sh)?,
-        Some("docs") => build_docs(&sh)?,
-        Some("verify") => {
-            let isa = env::args().nth(2);
-            match isa.as_deref() {
-                Some(isa) => verify_smt::verify_smt(&sh, isa, env::args().skip(3))?,
-                _ => print_help(),
-            }
+        Task::CheckOnly => check(&sh),
+        Task::Docs => build_docs(&sh),
+        Task::Verify { isa, args } => verify_smt::verify_smt(&sh, &isa, args.into_iter()),
+        Task::IsaTestSuite => isa_test_suite(&sh),
+        Task::FccTorture { bless, fcc } => {
+            fcc_torture::run(&sh, &project_root(), bless, fcc.as_deref())
         }
-        Some("isa-test-suite") => isa_test_suite(&sh)?,
-        Some("fcc-torture") => {
-            let options = fcc_torture_options(env::args().skip(2))?;
-            fcc_torture::run(&sh, &project_root(), options.bless, options.fcc.as_deref())?;
-        }
-        Some("fcc-bench") => {
-            let options = fcc_bench_options(env::args().skip(2))?;
-            fcc_bench::run(&sh, &project_root(), options)?;
-        }
-        Some("fcc-corpus") => {
-            fcc_corpus::run(&sh, &project_root(), fcc_corpus_mode(env::args().skip(2))?)?;
-        }
-        Some("fcc-fuzz") => {
-            fcc_fuzz::run(
-                &sh,
-                &project_root(),
-                &fcc_fuzz_options(env::args().skip(2))?,
-            )?;
-        }
-        Some("capi-smoke") => capi_smoke(&sh)?,
-        Some("python-smoke") => python_smoke(&sh)?,
-        Some("haskell-smoke") => haskell_smoke(&sh)?,
-        _ => print_help(),
+        Task::FccBench(options) => fcc_bench::run(&sh, &project_root(), options),
+        Task::FccFuzz(options) => fcc_fuzz::run(&sh, &project_root(), &options),
+        Task::CapiSmoke => capi_smoke(&sh),
+        Task::PythonSmoke => python_smoke(&sh),
+        Task::HaskellSmoke => haskell_smoke(&sh),
     }
-    Ok(())
-}
-
-struct TortureOptions {
-    bless: bool,
-    fcc: Option<PathBuf>,
-}
-
-fn fcc_torture_options(mut args: impl Iterator<Item = String>) -> anyhow::Result<TortureOptions> {
-    let mut options = TortureOptions {
-        bless: false,
-        fcc: None,
-    };
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--bless" => options.bless = true,
-            "--fcc" => options.fcc = Some(PathBuf::from(take_value(&mut args, "--fcc")?)),
-            other => anyhow::bail!("unknown fcc-torture flag: {other}"),
-        }
-    }
-    Ok(options)
-}
-
-fn take_value(args: &mut impl Iterator<Item = String>, flag: &str) -> anyhow::Result<String> {
-    args.next()
-        .ok_or_else(|| anyhow::anyhow!("{flag} needs a value"))
-}
-
-fn fcc_bench_options(mut args: impl Iterator<Item = String>) -> anyhow::Result<fcc_bench::Options> {
-    let mut options = fcc_bench::Options {
-        fcc: None,
-        output: None,
-        baseline: None,
-    };
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--fcc" => options.fcc = Some(PathBuf::from(take_value(&mut args, "--fcc")?)),
-            "--output" => options.output = Some(PathBuf::from(take_value(&mut args, "--output")?)),
-            "--baseline" => {
-                options.baseline = Some(PathBuf::from(take_value(&mut args, "--baseline")?))
-            }
-            other => anyhow::bail!("unknown fcc-bench flag: {other}"),
-        }
-    }
-    Ok(options)
-}
-
-fn fcc_corpus_mode(mut args: impl Iterator<Item = String>) -> anyhow::Result<fcc_corpus::Mode> {
-    let Some(flag) = args.next() else {
-        return Ok(fcc_corpus::Mode::Report);
-    };
-    let mut directory = || {
-        args.next()
-            .map(PathBuf::from)
-            .ok_or_else(|| anyhow::anyhow!("{flag} needs a directory"))
-    };
-    match flag.as_str() {
-        "--baseline" => Ok(fcc_corpus::Mode::Baseline(directory()?)),
-        "--diff" => Ok(fcc_corpus::Mode::Diff(directory()?)),
-        "--determinism" => Ok(fcc_corpus::Mode::Determinism),
-        other => anyhow::bail!("unknown fcc-corpus flag: {other}"),
-    }
-}
-
-fn fcc_fuzz_options(mut args: impl Iterator<Item = String>) -> anyhow::Result<fcc_fuzz::Options> {
-    let mut options = fcc_fuzz::Options {
-        seed: 0,
-        iterations: 100,
-        corpus: false,
-        self_test: false,
-        replay: None,
-        render: None,
-        extract: None,
-        fcc: None,
-    };
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--seed" => options.seed = take_value(&mut args, "--seed")?.parse()?,
-            "--iterations" => {
-                options.iterations = take_value(&mut args, "--iterations")?.parse()?
-            }
-            "--fcc" => options.fcc = Some(PathBuf::from(take_value(&mut args, "--fcc")?)),
-            "--corpus" => options.corpus = true,
-            "--self-test" => options.self_test = true,
-            "--replay" => options.replay = Some(take_value(&mut args, "--replay")?.into()),
-            "--render" => options.render = Some(take_value(&mut args, "--render")?.into()),
-            "--extract" => options.extract = Some(take_value(&mut args, "--extract")?.into()),
-            other => anyhow::bail!("unknown fcc-fuzz flag: {other}"),
-        }
-    }
-    Ok(options)
 }
 
 fn build(sh: &Shell) -> anyhow::Result<()> {
@@ -365,40 +297,6 @@ fn haskell_smoke(sh: &Shell) -> anyhow::Result<()> {
     .run()?;
     cmd!(sh, "{bin}").run()?;
     Ok(())
-}
-
-fn print_help() {
-    eprintln!(
-        "Tasks:
-
-build            builds TIR project
-check            builds project and runs check tests
-check-only       only runs check tests without building the project
-verify <isa> [--shard k/N]
-                 run formal ISA verification. Available ISAs: riscv64, riscv32, armv8, x86_64
-isa-test-suite   run differential ISA tests against a golden oracle (riscv/Spike)
-fcc-torture [--bless] [--fcc <path>]
-                 compile the pinned GCC C torture corpus through codegen and
-                 compare the failures against the recorded baseline
-fcc-bench [--fcc <path>] [--output <file.json>] [--baseline <file.json>]
-                 time fcc and gcc -O0 on the passing torture execute cases and
-                 coremark; print the sum, median ratio and slowest cases, and
-                 fail on a >10 % sum regression against the baseline
-fcc-corpus [--baseline <dir> | --diff <dir> | --determinism]
-                 compile the fcc .c corpus to x86_64 asm and capture, diff or
-                 double-compile it
-fcc-fuzz [--seed N] [--iterations N] [--corpus] [--self-test] [--fcc <path>]
-         [--replay <dir>] [--render <file>] [--extract <dir>]
-                 generate random UB-free C programs, compile them under
-                 different pass pipelines and reference compilers, run the
-                 binaries and compare observable behavior
-capi-smoke       check the C ABI header is current and run the C smoke test
-python-smoke     build the C ABI and run the Python test suite
-haskell-smoke    build the C ABI and run the Haskell bindings smoke test (needs ghc)
-docs             builds project documentation
-help             shows this message
-"
-    )
 }
 
 fn project_root() -> PathBuf {

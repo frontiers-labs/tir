@@ -28,10 +28,6 @@ pub fn git_checkout(sh: &Shell, url: &str, tag: &str, dest: &str) -> anyhow::Res
     if let Some(parent) = dest_dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
-
-    if let Some(parent) = dest_dir.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let _ = cmd!(sh, "git clone --depth 1 --branch {tag} {url} {dest_dir}").run();
 
     Ok(())

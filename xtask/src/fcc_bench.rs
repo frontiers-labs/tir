@@ -31,9 +31,16 @@ const COREMARK_FLAGS: &[&str] = &[
 const REGRESSION_THRESHOLD: f64 = 1.10;
 const SLOWEST_SHOWN: usize = 10;
 
+#[derive(clap::Args)]
 pub struct Options {
+    /// An already built compiler to time, instead of building a debug one.
+    #[arg(long)]
     pub fcc: Option<PathBuf>,
+    /// Where to write this run's samples.
+    #[arg(long)]
     pub output: Option<PathBuf>,
+    /// A previous run's samples to compare against.
+    #[arg(long)]
     pub baseline: Option<PathBuf>,
 }
 

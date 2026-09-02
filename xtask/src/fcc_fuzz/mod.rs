@@ -47,18 +47,27 @@ const SHUFFLE_PIPELINE: &str = "func.func(promote,thread-state,shuffle-state,ins
 
 const CORPUS_DIRS: [&str; 3] = ["fcc/checks", "fcc/tests", "utils/unit-tests/src/fcc/corpus"];
 
+#[derive(clap::Args)]
 pub struct Options {
+    #[arg(long, default_value_t = 0)]
     pub seed: u64,
+    #[arg(long, default_value_t = 100)]
     pub iterations: usize,
+    #[arg(long)]
     pub corpus: bool,
+    #[arg(long)]
     pub self_test: bool,
     /// Re-run the defects recorded in this directory and report which are gone.
+    #[arg(long)]
     pub replay: Option<PathBuf>,
     /// Print one recorded defect as the issue it becomes.
+    #[arg(long)]
     pub render: Option<PathBuf>,
     /// Recover recorded defects from the open issues fed in on stdin.
+    #[arg(long)]
     pub extract: Option<PathBuf>,
     /// An already built compiler to test, instead of building a debug one.
+    #[arg(long)]
     pub fcc: Option<PathBuf>,
 }
 
