@@ -2767,7 +2767,6 @@ fn build_decoder<'a>(
         let name_upper = i.name.to_uppercase();
         let operand_list = crate::semgen::resolved_operands(&ctx.isa_params, i, item_cache);
         let operands: HashMap<String, Type> = operand_list.iter().cloned().collect();
-        let params = resolve_params_for_instruction(i, item_cache);
         // Each shape is its own decoder: it fixes its own bits, and sema keeps
         // any two of them apart in the word. The most specific goes first, so a
         // shape another one subsumes is still reachable.
@@ -2784,7 +2783,6 @@ fn build_decoder<'a>(
         });
         let shape_ctx = crate::utils::encoding_context(i, item_cache);
         for shape in &instruction_shapes {
-            let encoding_arms = &shape.arms;
             // The operands this shape spells narrowly under a signed fit test,
             // and how many bits of each it spells.
             let signed_fits: HashMap<String, u16> =
@@ -2792,80 +2790,20 @@ fn build_decoder<'a>(
                     .map(|predicate| signed_fit_widths(&predicate))
                     .unwrap_or_default();
 
-            // For each operand: collect (op_lo, op_hi, word_lo, word_hi) pieces.
-            let mut operand_pieces: HashMap<String, Vec<(u16, u16, u16, u16)>> = HashMap::new();
-            let mut guards: Vec<String> = vec![];
-
-            for arm in encoding_arms {
-                let word_lo = arm.start;
-                let word_hi = arm.end.unwrap_or(arm.start);
-                let word_width = word_hi - word_lo + 1;
-
-                match &arm.value {
-                    ast::Expr::Lit(ast::Lit::Int(li)) => {
-                        let val = parse_literal_value_u128(li);
-                        guards.push(format!(
-                            "(= ((_ extract {} {}) word) (_ bv{} {}))",
-                            word_hi, word_lo, val, word_width
-                        ));
-                    }
-                    ast::Expr::Ident(id) => {
-                        let name = &id.name;
-                        if operands.contains_key(name) {
-                            // The entire word field holds bits [0..word_width-1] of the operand.
-                            operand_pieces.entry(name.clone()).or_default().push((
-                                0,
-                                word_width - 1,
-                                word_lo,
-                                word_hi,
-                            ));
-                        } else if let Some((_, Some(ast::Expr::Lit(ast::Lit::Int(li))))) =
-                            params.get(name)
-                        {
-                            let val = parse_literal_value_u128(li);
-                            guards.push(format!(
-                                "(= ((_ extract {} {}) word) (_ bv{} {}))",
-                                word_hi, word_lo, val, word_width
-                            ));
-                        }
-                        // Unresolved param: no guard emitted (treated as don't-care).
-                    }
-                    ast::Expr::Slice(s) => {
-                        if let ast::Expr::Ident(id) = &*s.base
-                            && operands.contains_key(&id.name)
-                        {
-                            operand_pieces
-                                .entry(id.name.clone())
-                                .or_default()
-                                .push((s.lo, s.hi, word_lo, word_hi));
-                        }
-                    }
-                    ast::Expr::IndexAccess(s) => {
-                        if let ast::Expr::Ident(id) = &*s.base
-                            && operands.contains_key(&id.name)
-                        {
-                            operand_pieces
-                                .entry(id.name.clone())
-                                .or_default()
-                                .push((s.index, s.index, word_lo, word_hi));
-                        }
-                    }
-                    // `x as bits<n>`: the operand's low n bits.
-                    ast::Expr::Cast(cast) => {
-                        if let ast::Expr::Ident(id) = &*cast.x
-                            && operands.contains_key(&id.name)
-                        {
-                            operand_pieces.entry(id.name.clone()).or_default().push((
-                                0,
-                                word_width - 1,
-                                word_lo,
-                                word_hi,
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            let (fixed, mut operand_pieces) =
+                crate::semgen::decode_layout(shape, i, item_cache, &operands);
+            let mut guards: Vec<String> = fixed
+                .iter()
+                .map(|(word_hi, word_lo, value)| {
+                    format!(
+                        "(= ((_ extract {} {}) word) (_ bv{} {}))",
+                        word_hi,
+                        word_lo,
+                        value,
+                        word_hi - word_lo + 1
+                    )
+                })
+                .collect();
 
             let guard = match guards.len() {
                 0 => "true".to_string(),

@@ -25,7 +25,6 @@ use crate::error::TMDLError;
 use crate::sem_expr_state;
 use crate::utils::{
     EncodingShape, behavior_uses_todo, get_encoding_shapes, isa_param_values, item_supports_isa,
-    parse_literal_value, resolve_params_for_instruction,
 };
 use tir_graph::NodeId;
 use tir_symbolic::lang::SymKind as ExprKind;
@@ -499,80 +498,6 @@ impl sem_expr_state::BehaviorEmitter for Checker<'_> {
 // Decode: reconstruct operands and the match guard from the instruction word
 // ---------------------------------------------------------------------------
 
-type Pieces = HashMap<String, Vec<(u16, u16, u16, u16)>>;
-
-/// Collect fixed-field guards and per-operand bit pieces from the encoding,
-/// mirroring `smtlibgen::build_decoder`.
-fn decode_layout(
-    shape: &EncodingShape,
-    instruction: &ast::Instruction,
-    item_cache: &HashMap<&str, &ast::Item>,
-    operands: &HashMap<String, Type>,
-) -> (Vec<(u16, u16, u128)>, Pieces) {
-    let params = resolve_params_for_instruction(instruction, item_cache);
-    let mut guards = Vec::new();
-    let mut pieces: Pieces = HashMap::new();
-
-    for arm in &shape.arms {
-        let word_lo = arm.start;
-        let word_hi = arm.end.unwrap_or(arm.start);
-        match &arm.value {
-            ast::Expr::Lit(ast::Lit::Int(li)) => {
-                guards.push((word_hi, word_lo, parse_literal_value(li) as u128));
-            }
-            ast::Expr::Ident(id) => {
-                if operands.contains_key(&id.name) {
-                    let w = word_hi - word_lo;
-                    pieces
-                        .entry(id.name.clone())
-                        .or_default()
-                        .push((0, w, word_lo, word_hi));
-                } else if let Some((_, Some(ast::Expr::Lit(ast::Lit::Int(li))))) =
-                    params.get(&id.name)
-                {
-                    guards.push((word_hi, word_lo, parse_literal_value(li) as u128));
-                }
-            }
-            ast::Expr::Slice(s) => {
-                if let ast::Expr::Ident(id) = &*s.base
-                    && operands.contains_key(&id.name)
-                {
-                    pieces
-                        .entry(id.name.clone())
-                        .or_default()
-                        .push((s.lo, s.hi, word_lo, word_hi));
-                }
-            }
-            ast::Expr::IndexAccess(s) => {
-                if let ast::Expr::Ident(id) = &*s.base
-                    && operands.contains_key(&id.name)
-                {
-                    pieces
-                        .entry(id.name.clone())
-                        .or_default()
-                        .push((s.index, s.index, word_lo, word_hi));
-                }
-            }
-            // `x as bits<n>`: the operand's low n bits, in the n bits the arm
-            // spells.
-            ast::Expr::Cast(cast) => {
-                if let ast::Expr::Ident(id) = &*cast.x
-                    && operands.contains_key(&id.name)
-                {
-                    pieces.entry(id.name.clone()).or_default().push((
-                        0,
-                        word_hi - word_lo,
-                        word_lo,
-                        word_hi,
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-    (guards, pieces)
-}
-
 /// Reconstruct one operand from its word pieces, zero-filling gaps, then fit to
 /// `target_width`. When the encoding field is wider than the operand (e.g. the
 /// RV32 shift-immediate `shamt` occupies a 6-bit field but is 5 bits), the
@@ -835,7 +760,7 @@ pub fn generate_btor2<'a>(
         // pieces and width.
         for (shape_index, shape) in shapes.iter().enumerate() {
             let width = shape.width_bits;
-            let (guards, pieces) = decode_layout(shape, inst, item_cache, &operands);
+            let (guards, pieces) = crate::semgen::decode_layout(shape, inst, item_cache, &operands);
 
             // Decode operand addresses and immediates. Register values used by the
             // behavior come from ordered source slots in operand declaration order.
