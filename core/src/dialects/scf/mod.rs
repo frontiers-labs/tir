@@ -122,7 +122,6 @@ impl TokenScope for ForOp {
 
 impl tir::Verifiable for ForOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_single_block_region_has_terminator(context, self.body(), "scf.for body")?;
         verify_counter_type(context, self)?;
         verify_loop_carried(context, self)
     }
@@ -254,12 +253,6 @@ impl TokenScope for WhileOp {
 
 impl tir::Verifiable for WhileOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_single_block_region_has_terminator(
-            context,
-            self.condition_region(),
-            "scf.while condition",
-        )?;
-        verify_single_block_region_has_terminator(context, self.body(), "scf.while body")?;
         verify_while_condition(context, self)?;
         verify_loop_carried(context, self)
     }
@@ -390,8 +383,6 @@ impl tir::Conditional for IfOp {
 impl tir::Verifiable for IfOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         verify_i1_operand(context, self.condition(), "scf.if condition")?;
-        verify_single_block_region_has_terminator(context, self.then_body(), "scf.if then body")?;
-        verify_single_block_region_has_terminator(context, self.else_body(), "scf.if else body")?;
 
         // A value-producing `scf.if` is a γ merge: each arm must yield one value per
         // result, of the matching type; a resultless `scf.if` must yield nothing.
@@ -576,7 +567,6 @@ impl tir::Verifiable for SwitchOp {
                 .iter(context.clone())
                 .next()
                 .ok_or_else(|| Error::VerificationError(format!("{label} must contain a block")))?;
-            verify_single_block_region_has_terminator(context, block.clone(), &label)?;
             verify_region_yield(context, block.clone(), &result_types, &label)?;
             verify_arm_arguments(context, block, &self.inputs(), &label)?;
         }
@@ -1416,26 +1406,5 @@ fn verify_i1_operand(context: &Context, value: ValueId, label: &str) -> Result<(
             "{label} must have type i1"
         )));
     }
-    Ok(())
-}
-
-fn verify_single_block_region_has_terminator(
-    context: &Context,
-    block: tir::BlockHandle,
-    label: &str,
-) -> Result<(), Error> {
-    if block.op_ids().is_empty() {
-        return Err(Error::VerificationError(format!(
-            "{label} must contain at least one operation"
-        )));
-    }
-
-    let last_op = context.get_op(*block.op_ids().last().unwrap());
-    if last_op.as_interface::<dyn Terminator>().is_none() {
-        return Err(Error::VerificationError(format!(
-            "{label} must end with a terminator"
-        )));
-    }
-
     Ok(())
 }

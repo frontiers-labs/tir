@@ -31,11 +31,6 @@ impl Value {
         self.defining_op
     }
 
-    pub fn with_defining_op(mut self, op: OpId) -> Self {
-        self.set_defining_op(op);
-        self
-    }
-
     pub(crate) fn set_defining_op(&mut self, op: OpId) {
         self.defining_op = Some(op);
     }

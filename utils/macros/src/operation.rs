@@ -35,6 +35,11 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     }
     let state_accessors = make_state_accessors(&state);
     let state_output = state.output;
+    let same_type = interfaces.iter().any(|path| {
+        path.segments
+            .last()
+            .is_some_and(|segment| segment.ident == "SameOperandAndResultType")
+    });
     let has_results = !results.is_empty();
     // A `?`-prefixed result type makes the single result optional: the op may be built
     // with or without it. Used by structured control flow, whose value is absent when
@@ -289,14 +294,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    let operand_name_literals: Vec<_> = operands
-        .iter()
-        .map(|operand| {
-            let lit = proc_macro2::Literal::string(&operand.name);
-            quote! { #lit }
-        })
-        .collect();
-
     let operand_constraint_checkers: Vec<_> = operands
         .iter()
         .map(|operand| normalize_constraint_name(&operand.ty))
@@ -460,18 +457,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
             }
         }
     });
-
-    let interface_verifiers: Vec<_> = interfaces
-        .iter()
-        .map(|interface| {
-            quote! {
-                {
-                    let iface: &dyn #interface = self;
-                    iface.verify_interface(self, context)?;
-                }
-            }
-        })
-        .collect();
 
     let (state_builder_field, state_builder_default, state_builder_method, state_result_build) =
         if state.output {
@@ -700,6 +685,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
                     operand_checkers: &[#(__satisfies_constraint::<#operand_constraint_checkers>),*],
                     result_checkers: &[#(__satisfies_constraint::<#result_constraint_checkers>),*],
                     state_output: #state_output,
+                    same_type: #same_type,
                 };
                 tir::verify_opdef_operands(context, &self.0, <Self as tir::Operation>::name(), &SPEC)
             }
@@ -712,10 +698,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
                 )
             }
 
-            fn verify_interfaces(&self, context: &tir::Context) -> Result<(), tir::Error> {
-                #(#interface_verifiers)*
-                Ok(())
-            }
         }
 
         pub struct #builder_name {
@@ -773,10 +755,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
             #printer
 
             #parser
-
-            fn operand_names(&self) -> &'static [&'static str] {
-                &[#(#operand_name_literals),*]
-            }
 
             #semantic_expr_method
             #interface_registration_method

@@ -59,20 +59,6 @@ impl<'src, Tok: TokenLike<'src>> Parser<'src, Tok> {
         }
         res
     }
-
-    pub fn expect_symbol(&mut self, sym: Symbol) -> Result<(), (Span, crate::Error)> {
-        if self.peek().map(|t| t.is_symbol(sym)).unwrap_or(false) {
-            self.bump();
-            Ok(())
-        } else {
-            Err((
-                self.span(),
-                crate::Error::ExpectedToken(match sym {
-                    Symbol::Comma => ",",
-                }),
-            ))
-        }
-    }
 }
 
 impl<Tok> Cursor for Parser<'_, Tok> {

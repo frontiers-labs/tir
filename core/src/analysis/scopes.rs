@@ -11,7 +11,10 @@
 use crate::BlockHandle;
 
 use crate::builtin::TokenType;
-use crate::{BlockId, Context, OpHandle, OpId, RegionId, ValueId, ValueIds, scf};
+use crate::{
+    BlockId, Conditional, Context, EntryGuard, GuardedLoop, OpHandle, OpId, RegionId, ValueId,
+    ValueIds, scf,
+};
 
 /// The loop body's token scope: the value its `scf.break`/`scf.continue` name.
 pub fn loop_scope(context: &Context, body: RegionId) -> Option<ValueId> {
@@ -197,4 +200,32 @@ pub fn holder_in(context: &Context, block: BlockId, inner: BlockId) -> Option<Op
         }
         current = parent;
     }
+}
+
+/// The assumption each of `op`'s regions runs under, read off the operation's own
+/// interfaces: a [`Conditional`]'s guarded arm runs on its decision holding, and a
+/// tested loop's body runs on the condition its test region yields — which holds on
+/// every iteration, since the condition is spelled over the ports' per-iteration
+/// heads. A region a structured operation states nothing about (a switch case, a
+/// loop's own test) carries no fact.
+pub fn region_facts(op: &OpHandle) -> Vec<(RegionId, ValueId, bool)> {
+    if let Some(conditional) = op.clone().as_interface::<dyn Conditional>() {
+        return conditional.guarded_regions();
+    }
+    let Some(guard) = op.clone().as_interface::<dyn GuardedLoop>() else {
+        return Vec::new();
+    };
+    let EntryGuard::Region {
+        region: test,
+        condition,
+        ..
+    } = guard.entry_guard()
+    else {
+        return Vec::new();
+    };
+    op.regions()
+        .iter()
+        .filter(|&&region| region != test)
+        .map(|&region| (region, condition, true))
+        .collect()
 }

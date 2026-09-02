@@ -317,7 +317,7 @@ impl AbiPrecolorPass {
     }
 }
 
-fn mark_op(context: &Context, op_id: tir::OpId, name: &str, value: AttributeValue) {
+pub(crate) fn mark_op(context: &Context, op_id: tir::OpId, name: &str, value: AttributeValue) {
     let mut attrs = context.get_op(op_id).attributes().to_vec();
     attrs.push(context.named_attribute(name, value));
     context.set_op_attributes(op_id, attrs);

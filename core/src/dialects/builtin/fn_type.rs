@@ -47,13 +47,6 @@ impl FnType {
         let signature = (data.as_ref() as &dyn Any).downcast_ref::<FnType>()?;
         Some((signature.params(context), signature.ret(context)))
     }
-
-    /// Whether the signature accepts any number of further arguments.
-    pub fn is_variadic(&self) -> bool {
-        self.params
-            .last()
-            .is_some_and(|param| param.is_variadic_tail())
-    }
 }
 
 impl TypeConstraint for FnType {}

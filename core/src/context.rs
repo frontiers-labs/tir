@@ -1640,15 +1640,6 @@ impl Context {
         parser(name, &mut p, self).map_err(|(_, err)| err)
     }
 
-    pub fn parse_type_spec(&self, spec: &str) -> Result<TypeId, Error> {
-        let spec = spec.strip_prefix('!').unwrap_or(spec);
-        if let Some((dialect, name)) = spec.split_once('.') {
-            self.parse_type_mnemonic(dialect, name)
-        } else {
-            self.parse_type_mnemonic("builtin", spec)
-        }
-    }
-
     pub fn get_type_id(&self, ty: Arc<dyn Type>) -> TypeId {
         let hash = type_hash(&*ty);
         let mut inner = self.0.upgradable_read();

@@ -56,9 +56,6 @@ impl Pass for RestructurePass {
         _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        if op.as_op::<FuncOp>().is_none() {
-            return Ok(());
-        }
         let region = op.op().regions()[0];
         if context.get_region(region).block_ids().len() < 2 {
             return Ok(());

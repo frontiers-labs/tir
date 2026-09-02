@@ -51,9 +51,6 @@ impl Pass for AffineSchedulePass {
         rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        if op.as_op::<FuncOp>().is_none() {
-            return Ok(());
-        }
         let line = line_bytes(context, op);
         for view in nests_under(context, op.op().id) {
             schedule_nest(context, rewriter, &view, line)?;

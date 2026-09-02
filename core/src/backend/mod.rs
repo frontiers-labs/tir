@@ -48,7 +48,7 @@ pub use lexer::Token;
 pub use lexer::lex;
 pub use parser::{AsmCursor, AsmInstructionParser, AsmParser};
 pub use printer::{AsmPrintError, AsmPrinter};
-use tir::attributes::{AttributeValue, RegisterAttr};
+use tir::attributes::AttributeValue;
 use tir::sem::{AtomicRmwOp, MemOrdering};
 use tir::utils::APInt;
 
@@ -371,13 +371,6 @@ impl InstrInfo {
 }
 
 pub trait MachineInstruction {
-    fn verify_interface(
-        &self,
-        _this: &dyn tir::Operation,
-        _context: &tir::Context,
-    ) -> Result<(), tir::Error> {
-        Ok(())
-    }
     fn info(&self) -> &'static InstrInfo;
     fn instance(&self) -> &tir::OpHandle;
     fn mnemonic(&self) -> &'static str {
@@ -507,16 +500,6 @@ fn print_register(
     match (class.print_name)(index, false) {
         Some(name) => fmt.write(name),
         None => fmt.write(format!("{}[{}]", class.name(), index)),
-    }
-}
-
-pub fn register_attr(
-    op: &impl tir::Operation,
-    name: &str,
-) -> Option<(tir::backend::regalloc::RegClassId, u16)> {
-    match op.attr(name)? {
-        AttributeValue::Register(RegisterAttr::Physical { class, index }) => Some((class, index)),
-        _ => None,
     }
 }
 

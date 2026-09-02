@@ -66,9 +66,6 @@ impl Pass for ThreadStatePass {
         _rewriter: &mut Rewriter,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        if op.as_op::<FuncOp>().is_none() {
-            return Ok(());
-        }
         let Some(&body) = op.op().regions().first() else {
             return Ok(());
         };

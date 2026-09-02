@@ -18,12 +18,13 @@ mod node;
 mod pattern;
 mod rules;
 
+use crate::backend::regalloc::symbol_body_blocks;
 use std::collections::{HashMap, HashSet};
 
 use tir::BlockHandle;
 use tir::{
-    AnalysisManager, BlockId, Conditional, Context, EntryGuard, GuardedLoop, OpHandle, OpId,
-    Operation, OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
+    AnalysisManager, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
+    RegionId, Rewriter, TypeId, ValueId,
     analysis::{DefUse, DominatorTree, scopes},
     builtin::{trailing_state_operand, trailing_state_result},
     graph::{Dag, MutDag, NodeId, OperandConstraint},
@@ -455,28 +456,10 @@ impl Rule {
         self
     }
 
-    pub fn with_optional_result_register(mut self, register: Option<RegisterRequirement>) -> Self {
-        self.result_register = register;
-        self
-    }
-
-    /// Record that this target instruction bridges integer bits into a scalar
-    /// floating-point register, so floating constants can be rooted by selection.
-    pub fn with_float_constant_materializer(mut self, width: u32) -> Self {
-        self.float_constant_width = Some(width);
-        self
-    }
-
     /// Restrict immediate operand symbols to constants their encoding field can
     /// represent (see [`Rule::operand_imm_ranges`]).
     pub fn with_operand_imm_ranges(mut self, ranges: Vec<(u32, ImmRange)>) -> Self {
         self.operand_imm_ranges = ranges;
-        self
-    }
-
-    /// Mark this rule as a conditional branch (see [`RuleKind::CondBranch`]).
-    pub fn with_kind(mut self, kind: RuleKind) -> Self {
-        self.kind = kind;
         self
     }
 
@@ -1339,7 +1322,7 @@ impl InstructionSelectPass {
         // Unreachable blocks are absent from the dominator tree. A region's
         // blocks are absent for the same reason — the tree orders the function's
         // own blocks, and nothing yet orders sibling arms.
-        for block_id in function_blocks(context, op, true) {
+        for block_id in function_blocks(context, op) {
             let block = context.get_block(block_id);
             if block.is_empty() || visited.contains(&block_id) {
                 continue;
@@ -1357,7 +1340,7 @@ impl InstructionSelectPass {
         );
         // The regions were solved here, so the operations carrying them must not
         // solve graphs of their own when the walk reaches them.
-        for block_id in function_blocks(context, op, true) {
+        for block_id in function_blocks(context, op) {
             for op_id in context.get_block(block_id).op_ids() {
                 if !context.get_op(op_id).regions().is_empty() {
                     self.solved.insert(op_id);
@@ -1509,8 +1492,8 @@ impl InstructionSelectPass {
         let mut value_to_def = HashMap::new();
         let mut op_block = HashMap::new();
         let mut op_position = HashMap::new();
-        let block_ids = function_blocks(context, op, false);
-        for &block_id in &function_blocks(context, op, true) {
+        let block_ids = symbol_body_blocks(context, op);
+        for &block_id in &function_blocks(context, op) {
             for (position, op_id) in context.get_block(block_id).op_ids().into_iter().enumerate() {
                 op_block.insert(op_id, block_id);
                 op_position.insert(op_id, position);
@@ -1545,14 +1528,14 @@ impl InstructionSelectPass {
             // The structured operations' own control: the tests a destruction
             // branches on and the counter recurrences it advances, seeded before
             // saturation so the cover selects them like any other class.
-            for &block_id in &function_blocks(context, op, true) {
+            for &block_id in &function_blocks(context, op) {
                 for op_id in context.get_block(block_id).op_ids() {
                     let inner = context.get_op(op_id);
                     if inner.regions().is_empty() {
                         continue;
                     }
                     builder.build_region_control(&inner, block_id, &mut region_control);
-                    for (region, condition, holds) in region_entry_facts(&inner) {
+                    for (region, condition, holds) in scopes::region_facts(&inner) {
                         let Some(entry) = context.get_region(region).iter(context.clone()).next()
                         else {
                             continue;
@@ -1646,7 +1629,7 @@ impl InstructionSelectPass {
         // and a use inside a region is a use.
         let mut arg_block: HashMap<ValueId, BlockId> = HashMap::new();
         let mut operand_uses: HashMap<ValueId, usize> = HashMap::new();
-        for &block_id in &function_blocks(context, op, true) {
+        for &block_id in &function_blocks(context, op) {
             for argument in context.get_block(block_id).arguments() {
                 arg_block.insert(argument.id(), block_id);
             }
@@ -1660,7 +1643,7 @@ impl InstructionSelectPass {
         // the operation carrying that region. The read happens before that
         // operation finishes, so what spells the value has to precede it.
         let mut region_use: HashMap<ValueId, OpId> = HashMap::new();
-        for &block_id in &function_blocks(context, op, true) {
+        for &block_id in &function_blocks(context, op) {
             for op_id in context.get_block(block_id).op_ids() {
                 for operand in context.get_op(op_id).operands() {
                     let Some(def_block) = value_to_def
@@ -1780,7 +1763,7 @@ impl InstructionSelectPass {
         op: &OperationRef,
         rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
-        for block_id in function_blocks(context, op, true) {
+        for block_id in function_blocks(context, op) {
             let block = context.get_block(block_id);
             self.commit_block_solution(context, &block, rewriter)?;
         }
@@ -2830,23 +2813,21 @@ mod telemetry {
     }
 }
 
-/// The function's own blocks in region order and, under the region path, every
-/// block its operations nest — the structural order the walk reads them in.
-fn function_blocks(context: &Context, op: &OperationRef, nested: bool) -> Vec<BlockId> {
-    fn walk(context: &Context, regions: &[RegionId], nested: bool, out: &mut Vec<BlockId>) {
+/// The function's own blocks in region order and every block its operations
+/// nest — the structural order the walk reads them in.
+fn function_blocks(context: &Context, op: &OperationRef) -> Vec<BlockId> {
+    fn walk(context: &Context, regions: &[RegionId], out: &mut Vec<BlockId>) {
         for &region_id in regions {
             for block in context.get_region(region_id).iter(context.clone()) {
                 out.push(block.id());
-                if nested {
-                    for op_id in block.op_ids() {
-                        walk(context, &context.get_op(op_id).regions(), true, out);
-                    }
+                for op_id in block.op_ids() {
+                    walk(context, &context.get_op(op_id).regions(), out);
                 }
             }
         }
     }
     let mut blocks = Vec::new();
-    walk(context, &op.op().regions(), nested, &mut blocks);
+    walk(context, &op.op().regions(), &mut blocks);
     blocks
 }
 
@@ -2889,34 +2870,6 @@ fn value_match_allowed(
     }
     let class = fs.egraph.find(class);
     node::class_is_pure(&fs.egraph, class) || (fs.is_op_root(class) && !fs.is_shared(class))
-}
-
-/// The assumption each of `op`'s regions runs under, read off the operation's own
-/// interfaces: a [`Conditional`]'s guarded arm runs on its decision holding, and a
-/// tested loop's body runs on the condition its test region yields — which holds on
-/// every iteration, since the condition is spelled over the ports' per-iteration
-/// heads. Regions a structured operation states nothing about (a switch case, a
-/// loop's own test) carry no fact.
-fn region_entry_facts(op: &OpHandle) -> Vec<(RegionId, ValueId, bool)> {
-    if let Some(conditional) = op.clone().as_interface::<dyn Conditional>() {
-        return conditional.guarded_regions();
-    }
-    let Some(guard) = op.clone().as_interface::<dyn GuardedLoop>() else {
-        return Vec::new();
-    };
-    let EntryGuard::Region {
-        region: test,
-        condition,
-        ..
-    } = guard.entry_guard()
-    else {
-        return Vec::new();
-    };
-    op.regions()
-        .iter()
-        .filter(|&&region| region != test)
-        .map(|&region| (region, condition, true))
-        .collect()
 }
 
 /// Assert one entry fact in the current scope: the condition (and its defining

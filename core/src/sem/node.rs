@@ -188,18 +188,6 @@ impl SemNode {
         Self::projection(Kind::Sym(kind), value, args)
     }
 
-    /// A term a law introduced over the operation that rebuilds it: a gate grows
-    /// the port carrying the value out, an access is copied where it is needed.
-    pub fn introduced_at(kind: SymKind, op: OpId, args: Vec<Id>) -> Self {
-        Self {
-            kind: Kind::Sym(kind),
-            payload: None,
-            ty: None,
-            children: args,
-            prov: Prov::Op(op),
-        }
-    }
-
     fn projection(kind: Kind, value: ValueId, args: Vec<Id>) -> Self {
         Self {
             kind,

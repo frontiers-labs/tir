@@ -1,6 +1,6 @@
 use crate::sem::Value;
 use crate::utils::APInt;
-use crate::{BlockId, Context, Operation, RegionId, TypeId, ValueId};
+use crate::{BlockId, RegionId, TypeId, ValueId};
 
 /// Whether a symbol may be referenced from outside the module that defines it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,14 +28,6 @@ pub trait Symbol {
     /// Whether the symbol has a body here rather than naming an external
     /// definition.
     fn is_definition(&self) -> bool;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// A structured conditional (γ): disjoint sub-regions, one of which runs depending on
@@ -63,14 +55,6 @@ pub trait Conditional {
             .map(|(region, _, taken)| (region, taken.then_some(1)))
             .collect()
     }
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// Relative execution cost of an operation, consulted by cost-driven rewriters
@@ -81,26 +65,12 @@ pub trait OpCost {
     fn cost(&self) -> u32 {
         1
     }
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// An operation that yields a compile-time constant integer, exposed generically so
 /// rewriters can read the value without knowing the concrete constant op.
 pub trait ConstantLike {
     fn constant_value(&self) -> APInt;
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// Folds an operation over constant operands. The `operation!` macro derives this
@@ -111,51 +81,21 @@ pub trait ConstantFold {
     /// `operands[i]` is the constant value of operand `i`. Returns the folded
     /// result, or `None` when this op cannot fold these operands.
     fn fold(&self, operands: &[Value]) -> Option<Value>;
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// An operation that produces its results and does nothing else: no memory
 /// effect, no control flow, no machine state. Dead code elimination may erase
 /// one whose results go unread, whether or not it declares semantics.
-pub trait Pure {
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
-}
+pub trait Pure {}
 
 pub trait Commutative {
     fn is_commutative(&self) -> bool {
         true
     }
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// An arithmetic operation over integer values.
-pub trait IntegerArithmetic {
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
-}
+pub trait IntegerArithmetic {}
 
 pub trait Terminator {
     fn is_terminator(&self) -> bool {
@@ -165,28 +105,12 @@ pub trait Terminator {
     fn successors(&self) -> Vec<BlockId> {
         Vec::new()
     }
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// An operation whose selected region entry arguments define non-forwarding
 /// control tokens.
 pub trait TokenScope {
     fn token_scope_regions(&self) -> Vec<RegionId>;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// A terminator that transfers control to successor blocks within the same region,
@@ -197,14 +121,6 @@ pub trait BranchTerminator {
     /// One entry per outgoing control-flow edge: the successor block and the values
     /// forwarded to its block arguments, in argument order.
     fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)>;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// A structured loop (θ) with `n` carried ports. Port `j` starts at `inits()[j]`,
@@ -223,27 +139,6 @@ pub trait LoopLike {
     fn latched(&self) -> Vec<ValueId>;
     /// The op's results: the carried values at loop exit.
     fn finals(&self) -> Vec<ValueId>;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        let arities = [
-            self.inits().len(),
-            self.carried_args().len(),
-            self.latched().len(),
-            self.finals().len(),
-        ];
-        if arities.iter().any(|&n| n != arities[0]) {
-            return Err(crate::Error::VerificationError(format!(
-                "loop carried ports must be aligned: {} inits, {} carried arguments, \
-                 {} latched values, {} results",
-                arities[0], arities[1], arities[2], arities[3]
-            )));
-        }
-        Ok(())
-    }
 }
 
 /// How the two sides of an [`EntryGuard::Less`] comparison are ordered.
@@ -297,14 +192,6 @@ pub enum EntryGuard {
 pub trait GuardedLoop {
     /// The condition under which the loop's first iteration runs.
     fn entry_guard(&self) -> EntryGuard;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// A [`GuardedLoop`] whose iterations are counted: a counter starts at
@@ -326,14 +213,6 @@ pub trait CountedLoop {
     fn upper_bound(&self) -> ValueId;
     /// What the counter gains each iteration.
     fn step(&self) -> ValueId;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// A [`BranchTerminator`] whose successor edges run under a known boolean fact — e.g.
@@ -344,45 +223,12 @@ pub trait BranchGuard {
     /// For each guarded successor edge, the value known to equal a boolean when that
     /// edge is taken (`true` => 1, `false` => 0).
     fn guarded_successors(&self) -> Vec<(BlockId, ValueId, bool)>;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// An operation whose operands and results all carry one type. Memory state ports
 /// are exempt: `!state` describes a side channel, not the value being computed.
-pub trait SameOperandAndResultType {
-    fn verify_interface(
-        &self,
-        this: &dyn Operation,
-        context: &Context,
-    ) -> Result<(), crate::Error> {
-        let types: Vec<_> = this
-            .operands()
-            .iter()
-            .chain(this.handle().results().iter())
-            .map(|&value| context.get_value(value).ty())
-            .filter(|&ty| {
-                (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<crate::builtin::StateType>()
-                    .is_none()
-            })
-            .collect();
-
-        if !types.windows(2).all(|pair| pair[0] == pair[1]) {
-            return Err(crate::Error::VerificationError(
-                "operand and result types must be the same".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-}
+/// Checked by [`verify_opdef_operands`](crate::verify_opdef_operands).
+pub trait SameOperandAndResultType {}
 
 /// Identifies an operation that creates a memory location eligible for local SSA
 /// promotion. Implementations describe the location generically rather than tying
@@ -390,14 +236,6 @@ pub trait SameOperandAndResultType {
 pub trait PromotableAllocation {
     /// The SSA value that names the promotable memory location.
     fn promoted_location(&self) -> ValueId;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// Identifies an operation that reads a value from a memory location.
@@ -417,14 +255,6 @@ pub trait MemoryRead {
     fn state_result(&self) -> Option<ValueId> {
         None
     }
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// Identifies an operation that writes a value to a memory location.
@@ -440,13 +270,5 @@ pub trait MemoryWrite {
     /// The memory state the write produces, absent until state has been threaded.
     fn state_result(&self) -> Option<ValueId> {
         None
-    }
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> Result<(), crate::Error> {
-        Ok(())
     }
 }

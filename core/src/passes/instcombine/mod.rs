@@ -29,9 +29,8 @@ use tir_relational::{ClassId as Id, Engine, Extraction};
 
 use crate::analysis::scopes;
 use crate::{
-    AnalysisManager, BlockId, Conditional, ConstantLike, Context, EntryGuard, GuardedLoop,
-    LoopLike, MemoryRead, MemoryWrite, OpId, OperationRef, Pass, PassError, PassTarget, RegionId,
-    Rewriter, TypeId, ValueId,
+    AnalysisManager, BlockId, ConstantLike, Context, LoopLike, MemoryRead, MemoryWrite, OpId,
+    OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
     attributes::AttributeValue,
     builtin::{StateType, ops},
     func::FuncOp,
@@ -72,9 +71,6 @@ impl Pass for InstCombinePass {
         rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        if op.as_op::<FuncOp>().is_none() {
-            return Ok(());
-        }
         let root = op.op().id;
         let mut seeded = seed::seed(context, root);
         let loop_ports = std::mem::take(&mut seeded.loop_ports);
@@ -469,7 +465,7 @@ impl Driver<'_> {
             if instance.regions().is_empty() {
                 continue;
             }
-            let guarded = region_facts(&instance);
+            let guarded = scopes::region_facts(&instance);
             for sub in instance.regions() {
                 match guarded.iter().find(|&&(r, ..)| r == sub) {
                     Some(&(_, value, holds)) => {
@@ -883,34 +879,6 @@ impl Driver<'_> {
         let op = target.op().id;
         self.context.get_value(value).defining_op() == Some(op) || self.dominates_op(value, op)
     }
-}
-
-/// The assumption each of `op`'s regions runs under, read off the operation's own
-/// interfaces: a [`Conditional`]'s guarded arm runs on its decision holding, and a
-/// tested loop's body runs on the condition its test region yields — which holds on
-/// every iteration, since the condition is spelled over the ports' per-iteration
-/// heads. A region a structured operation states nothing about (a switch case, a
-/// loop's own test) carries no fact.
-fn region_facts(op: &crate::OpHandle) -> Vec<(RegionId, ValueId, bool)> {
-    if let Some(conditional) = op.clone().as_interface::<dyn Conditional>() {
-        return conditional.guarded_regions();
-    }
-    let Some(guard) = op.clone().as_interface::<dyn GuardedLoop>() else {
-        return Vec::new();
-    };
-    let EntryGuard::Region {
-        region: test,
-        condition,
-        ..
-    } = guard.entry_guard()
-    else {
-        return Vec::new();
-    };
-    op.regions()
-        .iter()
-        .filter(|&&region| region != test)
-        .map(|&region| (region, condition, true))
-        .collect()
 }
 
 /// How a literal is written down. A class holds one node per bit pattern however

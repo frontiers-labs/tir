@@ -944,7 +944,12 @@ impl RegisterAllocationPass {
                         context.set_op_operand(op_id, position, fixed);
                         copy
                     };
-                    mark_coalescable(context, copy.id());
+                    prealloc::mark_op(
+                        context,
+                        copy.id(),
+                        prealloc::COALESCABLE_COPY_ATTR,
+                        AttributeValue::Bool(true),
+                    );
                     precolor.insert(fixed.number(), (class, index));
                 }
                 strip_attr(context, op_id, crate::backend::PINS_ATTR);
@@ -1363,15 +1368,6 @@ pub(crate) fn op_ref_in(context: &Context, block_id: BlockId, op_id: OpId) -> Op
         Some(context.get_block(block_id)),
         None,
     )
-}
-
-/// Mark a copy the allocator may coalesce away: it reads the endpoints as an
-/// affinity and erases the copy when both land in one register.
-fn mark_coalescable(context: &Context, op_id: OpId) {
-    let mut attributes = context.get_op(op_id).attributes().to_vec();
-    attributes
-        .push(context.named_attribute(prealloc::COALESCABLE_COPY_ATTR, AttributeValue::Bool(true)));
-    context.set_op_attributes(op_id, attributes);
 }
 
 /// One frame slot's memory, as the spill rewrite lays it down inside a block.

@@ -385,11 +385,8 @@ operation! {
 
 impl tir::Verifiable for DisjointOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let [_, lhs_size, _, rhs_size] = self.operands()[..] else {
-            return Err(Error::VerificationError(
-                "ptr.disjoint takes two addresses and their sizes".to_string(),
-            ));
-        };
+        let operands = self.operands();
+        let (lhs_size, rhs_size) = (operands[1], operands[3]);
         if context.get_value(lhs_size).ty() != context.get_value(rhs_size).ty() {
             return Err(Error::VerificationError(
                 "ptr.disjoint sizes must have one type".to_string(),
@@ -458,33 +455,13 @@ operation! {
     MemcpyOp {
         name: "memcpy",
         dialect: "ptr",
-        verifier: "true",
         operands: O {
             destination: "crate::ptr::PtrType",
             source: "crate::ptr::PtrType",
-            size: "crate::builtin::IntegerType",
+            size: "crate::Integer<64>",
         },
         interfaces: [crate::interp::Interp],
         state: "in_out",
-    }
-}
-
-impl tir::Verifiable for MemcpyOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let size_type = context.get_type_data(context.get_value(self.operands()[2]).ty());
-        let Some(size_type) =
-            (size_type.as_ref() as &dyn Any).downcast_ref::<crate::builtin::IntegerType>()
-        else {
-            return Err(Error::VerificationError(
-                "ptr.memcpy size must have integer type".to_string(),
-            ));
-        };
-        if size_type.width() != 64 {
-            return Err(Error::VerificationError(
-                "ptr.memcpy size must have type i64".to_string(),
-            ));
-        }
-        Ok(())
     }
 }
 
@@ -492,38 +469,13 @@ operation! {
     MemsetOp {
         name: "memset",
         dialect: "ptr",
-        verifier: "true",
         operands: O {
             destination: "crate::ptr::PtrType",
-            value: "crate::builtin::IntegerType",
-            size: "crate::builtin::IntegerType",
+            value: "crate::Integer<8>",
+            size: "crate::Integer<64>",
         },
         interfaces: [MemoryWrite, crate::interp::Interp],
         state: "in_out",
-    }
-}
-
-impl tir::Verifiable for MemsetOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let value_type = context.get_type_data(context.get_value(self.operands()[1]).ty());
-        let value_type = (value_type.as_ref() as &dyn Any)
-            .downcast_ref::<crate::builtin::IntegerType>()
-            .unwrap();
-        if value_type.width() != 8 {
-            return Err(Error::VerificationError(
-                "ptr.memset value must have type i8".to_string(),
-            ));
-        }
-        let size_type = context.get_type_data(context.get_value(self.operands()[2]).ty());
-        let size_type = (size_type.as_ref() as &dyn Any)
-            .downcast_ref::<crate::builtin::IntegerType>()
-            .unwrap();
-        if size_type.width() != 64 {
-            return Err(Error::VerificationError(
-                "ptr.memset size must have type i64".to_string(),
-            ));
-        }
-        Ok(())
     }
 }
 

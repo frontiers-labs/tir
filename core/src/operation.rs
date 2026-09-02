@@ -181,10 +181,6 @@ pub trait Operation: 'static + Send + Sync + Any + Verifiable + OpDefVerifiable 
         self.handle().attr(name)
     }
 
-    fn operand_names(&self) -> &'static [&'static str] {
-        &[]
-    }
-
     fn semantic_expr(&self, _g: &mut crate::sem::SemGraph) -> Option<crate::graph::NodeId> {
         None
     }
@@ -204,13 +200,11 @@ pub trait Operation: 'static + Send + Sync + Any + Verifiable + OpDefVerifiable 
     /// Order of verification:
     /// 1. Operands verification - all operands must exist and value types must match.
     /// 2. Attributes verification - all DSL-defined attributes must have a value and types must match.
-    /// 3. Interface verification - same operand types, etc...
-    /// 4. Region verification - all basic blocks must end with a terminator, there must be at least one basic block.
-    /// 5. Custom verification - additional constraints imposed by dialect authors.
+    /// 3. Region verification - all basic blocks must end with a terminator, there must be at least one basic block.
+    /// 4. Custom verification - additional constraints imposed by dialect authors.
     fn verify(&self, context: &Context) -> Result<(), crate::Error> {
         self.verify_operands(context)?;
         self.verify_attributes(context)?;
-        self.verify_interfaces(context)?;
 
         for r in self.regions() {
             r.verify(context)?;
@@ -417,11 +411,6 @@ pub trait OpDefVerifiable {
     /// Verify attributes are correct. For each attribute that is defined in the DSL
     /// a value must exist and its types must match.
     fn verify_attributes(&self, context: &Context) -> Result<(), crate::Error>;
-    /// Verify interfaces. For each implemented interface a verify_interface
-    /// function is called.
-    fn verify_interfaces(&self, _context: &Context) -> Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// Static operand/result specification for [`OpDefVerifiable`], emitted per op by
@@ -432,6 +421,9 @@ pub struct OpDefSpec {
     pub operand_checkers: &'static [fn(&dyn crate::Type) -> bool],
     pub result_checkers: &'static [fn(&dyn crate::Type) -> bool],
     pub state_output: bool,
+    /// The op implements `SameOperandAndResultType`: every operand and value
+    /// result carries one type.
+    pub same_type: bool,
 }
 
 /// The constraint a field's declared type names, with the optional (`?`) and
@@ -629,6 +621,22 @@ pub fn verify_opdef_operands(
             spec.result_checkers[idx],
             constraint_name(field.ty),
         )?;
+    }
+
+    if spec.same_type {
+        let state = crate::builtin::StateType::new(context);
+        let mut types = operands
+            .iter()
+            .chain(results[..value_results_len].iter())
+            .map(|&value| context.get_value(value).ty())
+            .filter(|&ty| ty != state);
+        if let Some(first) = types.next()
+            && types.any(|ty| ty != first)
+        {
+            return Err(crate::Error::VerificationError(
+                "operand and result types must be the same".to_string(),
+            ));
+        }
     }
 
     Ok(())

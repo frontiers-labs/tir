@@ -184,14 +184,6 @@ impl Memory {
 /// including any trailing `!state` result.
 pub trait Interp {
     fn evaluate(&self, operands: &[Value], memory: &mut Memory) -> Result<Vec<Value>>;
-
-    fn verify_interface(
-        &self,
-        _this: &dyn Operation,
-        _context: &Context,
-    ) -> std::result::Result<(), crate::Error> {
-        Ok(())
-    }
 }
 
 /// Interpret `function` (a `func.func`) over `arguments` and return the values

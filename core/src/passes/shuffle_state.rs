@@ -58,9 +58,6 @@ impl Pass for ShuffleStatePass {
         _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        if op.as_op::<FuncOp>().is_none() {
-            return Ok(());
-        }
         let state = StateType::new(context);
         for region in op.op().regions().to_vec() {
             self.shuffle_region(context, region, state);
