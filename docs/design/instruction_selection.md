@@ -475,7 +475,12 @@ instruction patterns still match them.
 
 Each `Rule`'s pattern is compiled once (`compile_isel_pattern`) into a
 a `tir_relational::Plan<SemNode>`. Operand leaves become
-`Var::Symbol` holes (capture points — the match's substitution binds them);
+`Var::Symbol` holes (capture points — the match's substitution binds them).
+There is one hole per operand *symbol*, not per occurrence: a behavior that
+reads an operand twice — `idiv` leaves `eax - (eax / dst) * dst` in edx — is a
+non-linear pattern, and the two readings must land on one e-class. Sharing the
+hole is what makes the query's own "a variable two atoms share binds one class"
+check answer for it;
 interior nodes become typed/untyped templates, with per-node register /
 immediate / width requirements kept in `node_meta`. `specificity` counts
 type-constrained nodes — the tie-breaker (see below).

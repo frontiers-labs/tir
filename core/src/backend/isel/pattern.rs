@@ -269,6 +269,15 @@ impl CompiledIselPattern {
     }
 }
 
+/// What a compiled pattern node is shared by. A term is shared by the node that
+/// spells it; an operand is shared by the symbol it names, so a rule reading one
+/// operand twice matches one class rather than two unrelated ones.
+#[derive(PartialEq, Eq, Hash)]
+enum Shared {
+    Term(NodeId),
+    Operand(u32),
+}
+
 pub(crate) fn compile_isel_pattern(
     rule_index: usize,
     expr: &SemGraph,
@@ -399,6 +408,20 @@ fn lower(nodes: &[PatternNode], root: Id) -> (Plan<SemNode>, Vec<u32>) {
     let mut captures = Vec::new();
     let mut seen = vec![false; nodes.len()];
     visit(nodes, root, &mut seen, &mut atoms, &mut captures);
+    // One hole per operand, so a match binds an operand a rule reads twice once
+    // and the query's own equality check answers for the second reading.
+    debug_assert!(
+        {
+            let mut symbols: Vec<u32> = captures
+                .iter()
+                .filter_map(|&node| nodes[node as usize].symbol())
+                .collect();
+            symbols.sort_unstable();
+            symbols.dedup();
+            symbols.len() == captures.len()
+        },
+        "an operand is one capture"
+    );
     (
         Plan::compile(Query::tree(nodes.len() as u32, root.0, atoms)),
         captures,
@@ -476,13 +499,17 @@ fn compile_isel_pattern_node(
     node: NodeId,
     nodes: &mut Vec<PatternNode>,
     node_meta: &mut Vec<PatternNodeMeta>,
-    memo: &mut HashMap<NodeId, Id>,
+    memo: &mut HashMap<Shared, Id>,
     inferred_types: &[SemType],
     operand_constraints: &[(u32, OperandConstraint)],
     operand_registers: &[(u32, RegisterRequirement)],
     operand_imm_ranges: &[(u32, ImmRange)],
 ) -> Option<Id> {
-    if let Some(compiled) = memo.get(&node).copied() {
+    let key = match (expr.get_node(node), expr.get_leaf_data(node)) {
+        (SymKind::Symbol, Some(SymPayload::SymbolId(symbol))) => Shared::Operand(*symbol),
+        _ => Shared::Term(node),
+    };
+    if let Some(compiled) = memo.get(&key).copied() {
         return Some(compiled);
     }
 
@@ -577,6 +604,6 @@ fn compile_isel_pattern_node(
         }
     };
 
-    memo.insert(node, compiled);
+    memo.insert(key, compiled);
     Some(compiled)
 }

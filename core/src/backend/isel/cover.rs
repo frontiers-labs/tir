@@ -28,13 +28,11 @@ impl CaptureBindings {
         }
     }
 
-    pub(crate) fn bind(&mut self, symbol: u32, class: Id) -> bool {
-        if let Some((_, existing)) = self.entries.iter().find(|(sym, _)| *sym == symbol) {
-            *existing == class
-        } else {
-            self.entries.push((symbol, class));
-            true
-        }
+    /// Bind `symbol` to the class the match found for it. A pattern holds one
+    /// capture per operand, so a symbol is bound once and there is no second
+    /// reading to disagree with.
+    pub(crate) fn bind(&mut self, symbol: u32, class: Id) {
+        self.entries.push((symbol, class));
     }
 
     pub(crate) fn to_rule_match(
