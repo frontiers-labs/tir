@@ -636,3 +636,96 @@ fn subtree_touches_memory(context: &Context, op: &OpHandle) -> bool {
         .flat_map(|&region| scopes::region_ops(context, region))
         .any(|op_id| touches_memory(&context.get_op(op_id)))
 }
+
+/// Remove the memory order from `function`, leaving the program it ordered.
+///
+/// Answers whether anything came off; idempotent.
+pub fn unthread(
+    context: &Context,
+    rewriter: &mut Rewriter,
+    function: &OpHandle,
+) -> Result<bool, PassError> {
+    let Some(&body) = function.regions().first() else {
+        return Ok(false);
+    };
+    let ops = scopes::region_ops(context, body);
+    if !already_threaded(context, &ops) {
+        return Ok(false);
+    }
+    let state = StateType::new(context);
+    let is_state =
+        |value: &ValueId| context.has_value(*value) && context.get_value(*value).ty() == state;
+
+    for &op in &ops {
+        while context.get_op(op).operands().last().is_some_and(is_state) {
+            context.pop_operand(op);
+        }
+    }
+    for block in blocks_under(context, body) {
+        let handle = context.get_block(block);
+        while handle
+            .arguments()
+            .last()
+            .is_some_and(|argument| context.has_value(argument.id()) && argument.ty() == state)
+        {
+            context.remove_block_argument(block, handle.arguments().len() - 1);
+        }
+    }
+    for &op in &ops {
+        while context.get_op(op).results().last().is_some_and(is_state) {
+            context.pop_result(op);
+        }
+    }
+    for &op in &ops {
+        if context.get_op(op).dialect().as_str() == "state" {
+            rewriter.erase_op(&OperationRef::new(context.get_op(op)))?;
+        }
+    }
+    Ok(true)
+}
+
+fn blocks_under(context: &Context, region: crate::RegionId) -> Vec<crate::BlockId> {
+    let mut blocks = Vec::new();
+    for block in context.get_region(region).iter(context.clone()) {
+        blocks.push(block.id());
+        for op_id in block.op_ids() {
+            for nested in context.get_op(op_id).regions() {
+                blocks.extend(blocks_under(context, nested));
+            }
+        }
+    }
+    blocks
+}
+
+/// [`unthread`] as a pass. No production pipeline runs it; it exists so a
+/// pipeline can prove the round trip.
+#[derive(Default)]
+pub struct UnthreadPass;
+
+impl UnthreadPass {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+crate::register_pass!(UnthreadPass, "unthread");
+
+impl Pass for UnthreadPass {
+    fn name(&self) -> &'static str {
+        "unthread"
+    }
+
+    fn target(&self) -> PassTarget {
+        PassTarget::operation::<FuncOp>()
+    }
+
+    fn run(
+        &mut self,
+        operation: &OperationRef,
+        context: &Context,
+        rewriter: &mut Rewriter,
+        _analyses: &AnalysisManager,
+    ) -> Result<(), PassError> {
+        unthread(context, rewriter, operation.op()).map(|_| ())
+    }
+}
