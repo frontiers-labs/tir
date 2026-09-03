@@ -1,0 +1,18 @@
+// RUN: not tir opt --pass dce<1> %s 2>&1 | filecheck %s --check-prefix=NOARGS
+// RUN: not tir opt --pass dce<1 %s 2>&1 | filecheck %s --check-prefix=UNCLOSED
+// RUN: tir opt --pass dce %s | filecheck %s --check-prefix=PLAIN
+
+// A pass name may carry an argument list the pass parses itself. A pass that
+// takes none says so rather than letting the text fall through to the parser's
+// "unexpected trailing input", which named the grammar instead of the pass.
+
+module {
+  %0 = func.func @f(%1: !i32) -> !i32 {
+    func.return %1
+  }
+  module_end
+}
+
+// NOARGS: pass 'dce' takes no arguments
+// UNCLOSED: missing '>'
+// PLAIN: func.func @f

@@ -12,16 +12,21 @@ use crate::{Context, OpHandle, OpId, Operation, Value, analysis::AnalysisManager
 /// requires touching the tool.
 pub struct PassInfo {
     pub name: &'static str,
-    pub ctor: fn() -> Box<dyn Pass>,
+    /// Builds the pass from the text a pipeline spelled between `<` and `>`.
+    pub ctor: fn(&str) -> Result<Box<dyn Pass>, String>,
 }
 
 /// Link-time registry of every pass reachable in the final binary.
 #[distributed_slice]
 pub static PASSES: [PassInfo];
 
-/// Construct a registered pass by name, or `None` if no pass owns that name.
-pub fn build_pass(name: &str) -> Option<Box<dyn Pass>> {
-    PASSES.iter().find(|p| p.name == name).map(|p| (p.ctor)())
+/// Construct a registered pass from the name and argument list a pipeline
+/// spelled, or `None` if no pass owns that name.
+pub fn build_pass(name: &str, args: &str) -> Option<Result<Box<dyn Pass>, String>> {
+    PASSES
+        .iter()
+        .find(|p| p.name == name)
+        .map(|p| (p.ctor)(args))
 }
 
 /// Names of all registered passes, for help text and diagnostics.
@@ -33,7 +38,9 @@ pub fn registered_passes() -> Vec<&'static str> {
 
 /// Register a pass under `name` so the pipeline parser can build it.
 ///
-/// `ty` must implement [`Pass`] and expose a `new() -> Self` constructor.
+/// `ty` must implement [`Pass`] and expose a `new() -> Self` constructor. The
+/// three-argument form registers a pass a pipeline may parameterise as
+/// `name<args>`; `parse` turns that text into the pass.
 #[macro_export]
 macro_rules! register_pass {
     ($ty:ty, $name:expr) => {
@@ -42,7 +49,29 @@ macro_rules! register_pass {
             #[linkme(crate = $crate::linkme)]
             static REGISTRATION: $crate::PassInfo = $crate::PassInfo {
                 name: $name,
-                ctor: || ::std::boxed::Box::new(<$ty>::new()),
+                ctor: |args| {
+                    if !args.is_empty() {
+                        return ::std::result::Result::Err(format!(
+                            "pass '{}' takes no arguments",
+                            $name
+                        ));
+                    }
+                    ::std::result::Result::Ok(::std::boxed::Box::new(<$ty>::new()))
+                },
+            };
+        };
+    };
+    ($ty:ty, $name:expr, $parse:path) => {
+        const _: () = {
+            #[$crate::linkme::distributed_slice($crate::PASSES)]
+            #[linkme(crate = $crate::linkme)]
+            static REGISTRATION: $crate::PassInfo = $crate::PassInfo {
+                name: $name,
+                ctor: |args| {
+                    $parse(args).map(|pass| {
+                        ::std::boxed::Box::new(pass) as ::std::boxed::Box<dyn $crate::Pass>
+                    })
+                },
             };
         };
     };
@@ -50,13 +79,18 @@ macro_rules! register_pass {
 
 /// Parse an MLIR-style pass pipeline into a [`PassManager`].
 ///
-/// The grammar is a comma-separated list of elements, where each element is a
-/// registered pass name, an op-nesting `op(inner-pipeline)`, or a capped
-/// fixpoint `fixpoint<N>(inner-pipeline)`. The op name may be
-/// dialect-qualified (`func.func`) or bare (`func`). Example:
-/// `func.func(instcombine)` runs `instcombine` nested inside every function;
-/// `fixpoint<3>(func.func(instcombine))` repeats that up to three times, or
-/// until a round changes nothing.
+/// The grammar is a comma-separated list of elements:
+///
+/// ```text
+/// element := ident ('<' args '>')? ('(' list ')')?
+/// ```
+///
+/// A bare ident is a registered pass. An ident with `<args>` is a pass that
+/// parses those arguments itself, as `inline<40,5>` does. An ident with a
+/// parenthesised list nests that list inside every matching op, and the name
+/// may be dialect-qualified (`func.func`) or bare (`func`). `fixpoint` is the
+/// one reserved name: `fixpoint<3>(func.func(instcombine))` repeats its list up
+/// to three times, or until a round changes nothing.
 pub fn parse_pipeline(spec: &str) -> Result<PassManager, String> {
     let mut parser = PipelineParser {
         bytes: spec.as_bytes(),
@@ -72,6 +106,17 @@ pub fn parse_pipeline(spec: &str) -> Result<PassManager, String> {
         ));
     }
     Ok(pm)
+}
+
+fn parse_cap(args: Option<&str>) -> Result<u8, String> {
+    let digits = args.ok_or_else(|| "expected '<cap>' after 'fixpoint'".to_string())?;
+    let cap: u8 = digits
+        .parse()
+        .map_err(|_| format!("invalid fixpoint cap '{digits}'"))?;
+    if cap == 0 {
+        return Err("fixpoint cap must be at least 1".to_string());
+    }
+    Ok(cap)
 }
 
 struct PipelineParser<'a> {
@@ -114,65 +159,58 @@ impl PipelineParser<'_> {
         }
     }
 
-    /// `<N>` after `fixpoint`, the iteration cap.
-    fn parse_cap(&mut self) -> Result<u8, String> {
+    fn parse_args(&mut self) -> Result<Option<String>, String> {
         if self.pos >= self.bytes.len() || self.bytes[self.pos] != b'<' {
-            return Err("expected '<cap>' after 'fixpoint'".to_string());
+            return Ok(None);
         }
         self.pos += 1;
         let start = self.pos;
-        while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
+        while self.pos < self.bytes.len() && self.bytes[self.pos] != b'>' {
             self.pos += 1;
         }
-        let digits = String::from_utf8_lossy(&self.bytes[start..self.pos]).into_owned();
-        let cap: u8 = digits
-            .parse()
-            .map_err(|_| format!("invalid fixpoint cap '{digits}'"))?;
-        if cap == 0 {
-            return Err("fixpoint cap must be at least 1".to_string());
+        if self.pos == self.bytes.len() {
+            return Err("missing '>' in pass arguments".to_string());
         }
-        if self.pos >= self.bytes.len() || self.bytes[self.pos] != b'>' {
-            return Err("missing '>' in fixpoint cap".to_string());
-        }
+        let args = String::from_utf8_lossy(&self.bytes[start..self.pos]).into_owned();
         self.pos += 1;
-        Ok(cap)
+        Ok(Some(args))
     }
 
     fn parse_element(&mut self, pm: &mut PassManager) -> Result<(), String> {
         self.skip_ws();
         let name = self.parse_ident()?;
+        let args = self.parse_args()?;
+        self.skip_ws();
+        let opens_list = self.pos < self.bytes.len() && self.bytes[self.pos] == b'(';
+
         if name == "fixpoint" {
-            let cap = self.parse_cap()?;
-            self.skip_ws();
-            if self.pos >= self.bytes.len() || self.bytes[self.pos] != b'(' {
+            let cap = parse_cap(args.as_deref())?;
+            if !opens_list {
                 return Err("expected '(' after 'fixpoint<cap>'".to_string());
             }
-            self.pos += 1;
-            let nested = pm.fixpoint(cap);
-            self.parse_list(nested)?;
-            self.skip_ws();
-            if self.pos >= self.bytes.len() || self.bytes[self.pos] != b')' {
-                return Err("missing ')' in pass pipeline".to_string());
-            }
-            self.pos += 1;
-            return Ok(());
+            return self.parse_nested(pm.fixpoint(cap));
         }
+        if opens_list {
+            if args.is_some() {
+                return Err(format!("op nesting '{name}' takes no arguments"));
+            }
+            return self.parse_nested(pm.nest_parsed(name));
+        }
+        let pass = build_pass(&name, args.as_deref().unwrap_or_default())
+            .ok_or_else(|| format!("unknown pass '{name}'"))??;
+        pm.add_boxed_pass(pass);
+        Ok(())
+    }
+
+    fn parse_nested(&mut self, nested: &mut PassManager) -> Result<(), String> {
+        self.pos += 1;
+        self.parse_list(nested)?;
         self.skip_ws();
-        if self.pos < self.bytes.len() && self.bytes[self.pos] == b'(' {
-            self.pos += 1;
-            let nested = pm.nest_parsed(name);
-            self.parse_list(nested)?;
-            self.skip_ws();
-            if self.pos >= self.bytes.len() || self.bytes[self.pos] != b')' {
-                return Err("missing ')' in pass pipeline".to_string());
-            }
-            self.pos += 1;
-            Ok(())
-        } else {
-            let pass = build_pass(&name).ok_or_else(|| format!("unknown pass '{name}'"))?;
-            pm.add_boxed_pass(pass);
-            Ok(())
+        if self.pos >= self.bytes.len() || self.bytes[self.pos] != b')' {
+            return Err("missing ')' in pass pipeline".to_string());
         }
+        self.pos += 1;
+        Ok(())
     }
 }
 
