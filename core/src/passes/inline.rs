@@ -42,6 +42,15 @@ impl std::str::FromStr for InlineBudget {
     }
 }
 
+/// How large a caller may already be before it stops taking copies.
+///
+/// Not a growth bound: the simplifier's saturation is superlinear in the size of
+/// the function it runs on, so what a copy costs is set by the caller it lands
+/// in rather than by how much it adds. Measured against `gcc.c-torture`
+/// `memset-2.c`, where one 36-op callee inlined into an 1839-op caller moves
+/// instcombine from 70 ms to 2.3 s. The largest function in CoreMark is 354 ops, which stays eligible.
+const MAX_CALLER_OPS: u32 = 400;
+
 pub struct InlinePass {
     budget: InlineBudget,
 }
@@ -77,11 +86,16 @@ impl Pass for InlinePass {
         let mut graph = CallGraph::read(context, module.op());
         for index in graph.callees_first() {
             let caller = graph.nodes[index].func;
+            let mut caller_ops = cost_of(context, caller);
             let mut edited = false;
             for site in std::mem::take(&mut graph.nodes[index].sites) {
+                if caller_ops >= MAX_CALLER_OPS {
+                    break;
+                }
                 if !self.admits(context, &graph, &site) {
                     continue;
                 }
+                caller_ops += cost_of(context, graph.nodes[site.callee].func);
                 if !edited {
                     // Before the first splice: erasing a call whose state
                     // result is still named leaves the split behind it holding
@@ -223,10 +237,27 @@ impl CallGraph {
             }
         }
         let components: Vec<usize> = self.nodes.iter().map(|node| node.component).collect();
+        let mut members = vec![0usize; self.nodes.len()];
+        for &component in &components {
+            members[component] += 1;
+        }
+        // A component of one is still non-trivial when its member calls itself,
+        // and a callee that can reach itself is never inlined into anyone: a
+        // copy of it holds the same call, so there is no depth to bound.
+        let mut recursive: Vec<bool> = components
+            .iter()
+            .map(|&component| members[component] > 1)
+            .collect();
+        for node in &self.nodes {
+            for site in &node.sites {
+                if site.callee == site.caller {
+                    recursive[site.callee] = true;
+                }
+            }
+        }
         for node in &mut self.nodes {
-            let caller = node.component;
             for site in &mut node.sites {
-                site.recursive = components[site.callee] == caller;
+                site.recursive = recursive[site.callee];
             }
         }
     }
