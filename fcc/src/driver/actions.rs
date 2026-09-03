@@ -15,11 +15,12 @@ pub enum OptLevel {
     O3,
 }
 
-/// The mid-end a level asks for: how many times a round may repeat, and
-/// whether loop scheduling is part of it.
+/// The mid-end a level asks for: how many times a round may repeat, how much
+/// callee a call site may take on, and whether loop scheduling is part of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rounds {
     pub cap: u8,
+    pub inline: tir::passes::InlineBudget,
     pub affine: bool,
 }
 
@@ -30,14 +31,26 @@ impl OptLevel {
             OptLevel::O0 => None,
             OptLevel::O1 => Some(Rounds {
                 cap: 1,
+                inline: tir::passes::InlineBudget {
+                    max_ops: 15,
+                    per_constant_arg: 0,
+                },
                 affine: false,
             }),
             OptLevel::O2 => Some(Rounds {
                 cap: 3,
+                inline: tir::passes::InlineBudget {
+                    max_ops: 40,
+                    per_constant_arg: 5,
+                },
                 affine: true,
             }),
             OptLevel::O3 => Some(Rounds {
                 cap: 5,
+                inline: tir::passes::InlineBudget {
+                    max_ops: 100,
+                    per_constant_arg: 5,
+                },
                 affine: true,
             }),
         }

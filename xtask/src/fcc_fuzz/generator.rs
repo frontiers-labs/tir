@@ -185,7 +185,7 @@ impl Generator {
     }
 
     fn program(&mut self) -> String {
-        let count = 1 + self.rng.below(2) as usize;
+        let count = 1 + self.rng.below(4) as usize;
         for index in 0..count {
             let name = format!("f{index}");
             let body = self.function_body();

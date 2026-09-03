@@ -217,12 +217,12 @@ pub(super) fn emit_machine_code(
         pm.nest::<tir::func::FuncOp>()
             .add_pass(tir::passes::InstCombinePass::new());
     } else if let Some(rounds) = opts.opt_level.rounds() {
-        // Construction's last step: the locals the frontend spelled as slots
-        // become the values the regions carry on ports. It opens no allocation
-        // and answers no fact a round derives, so it runs once, ahead of them.
-        pm.nest::<tir::func::FuncOp>()
-            .add_pass(tir::passes::PromotePass::new());
-        let round = pm.fixpoint(rounds.cap).nest::<tir::func::FuncOp>();
+        let fixpoint = pm.fixpoint(rounds.cap);
+        fixpoint.add_pass(tir::passes::InlinePass::new(rounds.inline));
+        let round = fixpoint.nest::<tir::func::FuncOp>();
+        // Inlining is the only thing that makes a slot promotable that was
+        // not, so promote follows it inside the round.
+        round.add_pass(tir::passes::PromotePass::new());
         round.add_pass(tir::passes::ThreadStatePass::new());
         round.add_pass(tir::passes::InstCombinePass::new());
         if rounds.affine {
