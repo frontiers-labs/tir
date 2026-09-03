@@ -1631,6 +1631,10 @@ impl FnCodegen<'_> {
         ) else {
             return value;
         };
+        // A comparison's C type is `int` but its value is `!i1`, so the widths
+        // below describe the source type and not what is being converted.
+        let value =
+            self.promote_boolean_result(value, lower_type(self.context, self.typed, source));
         let target_ty = lower_type(self.context, self.typed, target);
         if source_width < target_width {
             if self.typed.integer_is_signed(source).unwrap() {
