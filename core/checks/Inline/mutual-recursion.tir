@@ -1,0 +1,20 @@
+// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+
+// Neither edge inside a non-trivial component is inlined, in either direction.
+
+module {
+  %fn_ping = func.func @ping(%x: !i32) -> !i32 {
+    %r = func.call %fn_pong(%x : !i32) -> !i32
+    func.return %r
+  }
+  %fn_pong = func.func @pong(%y: !i32) -> !i32 {
+    %r = func.call %fn_ping(%y : !i32) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @ping
+// CHECK: func.call
+// CHECK-LABEL: func.func @pong
+// CHECK: func.call

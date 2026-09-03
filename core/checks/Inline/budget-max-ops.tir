@@ -1,0 +1,34 @@
+// RUN: tir opt --pass inline<3,0> --verify %s | filecheck %s
+
+// Cost is the op count of the body and its nested regions, less the constants a
+// caller would have folded anyway and the terminators. `small` is three and is
+// taken; `big` is four and is refused.
+
+module {
+  %fn_small = func.func @small(%a: !i32) -> !i32 {
+    %c = constant {value = 1} : !i32
+    %1 = addi %a, %c : !i32
+    %2 = addi %1, %c : !i32
+    %3 = addi %2, %c : !i32
+    func.return %3
+  }
+  %fn_big = func.func @big(%b: !i32) -> !i32 {
+    %c = constant {value = 1} : !i32
+    %1 = addi %b, %c : !i32
+    %2 = addi %1, %c : !i32
+    %3 = addi %2, %c : !i32
+    %4 = addi %3, %c : !i32
+    func.return %4
+  }
+  %fn_main = func.func @main(%x: !i32, %y: !i32) -> !i32 {
+    %r = func.call %fn_small(%x : !i32) -> !i32
+    %s = func.call %fn_big(%y : !i32) -> !i32
+    %t = addi %r, %s : !i32
+    func.return %t
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @main
+// CHECK: func.call
+// CHECK-NOT: func.call

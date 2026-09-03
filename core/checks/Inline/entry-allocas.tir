@@ -1,0 +1,28 @@
+// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+
+// C gives a callee's locals function lifetime and `promote` takes only an
+// entry-block slot, so the callee's allocations land at the head of the caller's
+// entry block however deep in it the call stood.
+
+module {
+  %fn_box = func.func @box(%a: !i32) -> !i32 {
+    %slot = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %a, %slot
+    %v = ptr.load %slot : !i32
+    func.return %v
+  }
+  %fn_main = func.func @main(%x: !i32) -> !i32 {
+    %c = constant {value = 7} : !i32
+    %d = addi %x, %c : !i32
+    %r = func.call %fn_box(%d : !i32) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32)
+// CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
+// CHECK: %[[D:[0-9]+]] = addi %[[X]], %{{[0-9]+}} : !i32
+// CHECK-NEXT: ptr.store %[[D]], %[[SLOT]]
+// CHECK-NEXT: %[[V:[0-9]+]] = ptr.load %[[SLOT]] : !i32
+// CHECK-NEXT: func.return %[[V]]

@@ -1,0 +1,28 @@
+// RUN: tir opt --pass inline<3,5> --verify %s | filecheck %s
+
+// A constant argument is the fact the callee body was missing, so it buys
+// budget: the same four-op callee the bare budget refuses is taken where the
+// caller knows what it is passing, and refused where it does not.
+
+module {
+  %fn_big = func.func @big(%b: !i32) -> !i32 {
+    %c = constant {value = 1} : !i32
+    %1 = addi %b, %c : !i32
+    %2 = addi %1, %c : !i32
+    %3 = addi %2, %c : !i32
+    %4 = addi %3, %c : !i32
+    func.return %4
+  }
+  %fn_main = func.func @main(%x: !i32) -> !i32 {
+    %k = constant {value = 2} : !i32
+    %known = func.call %fn_big(%k : !i32) -> !i32
+    %unknown = func.call %fn_big(%x : !i32) -> !i32
+    %t = addi %known, %unknown : !i32
+    func.return %t
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @main
+// CHECK: func.call
+// CHECK-NOT: func.call

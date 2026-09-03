@@ -1,0 +1,26 @@
+// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+
+// Tarjan emits sinks first, so `mid` is flattened before `top` is considered
+// and one run of the pass leaves no call anywhere. It is also what makes the
+// cost a caller is charged the real one.
+
+module {
+  %fn_bottom = func.func @bottom(%a: !i32) -> !i32 {
+    %s = addi %a, %a : !i32
+    func.return %s
+  }
+  %fn_mid = func.func @mid(%b: !i32) -> !i32 {
+    %r = func.call %fn_bottom(%b : !i32) -> !i32
+    func.return %r
+  }
+  %fn_top = func.func @top(%c: !i32) -> !i32 {
+    %r = func.call %fn_mid(%c : !i32) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-NOT: func.call
+// CHECK-LABEL: func.func @top(%[[C:[0-9]+]]: !i32)
+// CHECK-NEXT: %[[S:[0-9]+]] = addi %[[C]], %[[C]] : !i32
+// CHECK-NEXT: func.return %[[S]]

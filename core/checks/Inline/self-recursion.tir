@@ -1,0 +1,15 @@
+// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+
+// A call to the function it sits in is never inlined. There is no depth limit
+// because there is no depth: the callee shares a component with the caller.
+
+module {
+  %fn_loop = func.func @loop(%x: !i32) -> !i32 {
+    %r = func.call %fn_loop(%x : !i32) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @loop
+// CHECK: func.call

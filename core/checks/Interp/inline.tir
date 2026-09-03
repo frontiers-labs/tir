@@ -1,0 +1,35 @@
+// RUN: tir interp %s | filecheck %s
+// RUN: tir opt --pass inline<1000,0> %s | tir interp - | filecheck %s
+
+// The program the inliner leaves behind computes what the one it was handed
+// computed: a cell the caller owns and the callee writes through, a slot the
+// callee owns, and a result read back after each call. Two call sites, so the
+// callee's slot is hoisted twice and the copies must not share it.
+
+module {
+  %fn_bump = func.func private @bump(%cell: !ptr.p<!i32>, %a: !i32) -> !i32 {
+    %slot = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %a, %slot
+    %v = ptr.load %cell : !i32
+    %held = ptr.load %slot : !i32
+    %s = addi %v, %held : !i32
+    ptr.store %s, %cell
+    func.return %s
+  }
+  %fn_main = func.func @main() -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %three = constant {value = 3} : !i32
+    %four = constant {value = 4} : !i32
+    %cell = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %zero, %cell
+    %r = func.call %fn_bump(%cell, %three : !ptr.p<!i32>, !i32) -> !i32
+    %s = func.call %fn_bump(%cell, %four : !ptr.p<!i32>, !i32) -> !i32
+    %w = ptr.load %cell : !i32
+    %t = addi %r, %s : !i32
+    %u = addi %t, %w : !i32
+    func.return %u
+  }
+  module_end
+}
+
+// CHECK: i32 17

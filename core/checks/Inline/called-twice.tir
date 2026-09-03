@@ -1,0 +1,24 @@
+// RUN: tir opt --pass inline<0,0> --verify %s | filecheck %s
+
+// Two call sites means the copy joins the original instead of replacing it, so
+// the size rule decides and at this budget it refuses. The λ stays, with both
+// calls on it.
+
+module {
+  %fn_twice = func.func private @twice(%a: !i32) -> !i32 {
+    %1 = addi %a, %a : !i32
+    func.return %1
+  }
+  %fn_main = func.func @main(%x: !i32, %y: !i32) -> !i32 {
+    %r = func.call %fn_twice(%x : !i32) -> !i32
+    %s = func.call %fn_twice(%y : !i32) -> !i32
+    %t = addi %r, %s : !i32
+    func.return %t
+  }
+  module_end
+}
+
+// CHECK: func.func private @twice
+// CHECK-LABEL: func.func @main
+// CHECK: func.call
+// CHECK: func.call

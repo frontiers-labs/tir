@@ -1,0 +1,48 @@
+// RUN: tir opt --pass inline<1000,0>,func.func(thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(thread-state,instcombine) --verify %s | filecheck %s --check-prefix=CALL
+
+// What inlining is for. The threader wraps a call in `state.join`/`state.split`
+// because a call touches every object the outside can reach, and that pair is a
+// wall: a split's results are fresh classes to the e-graph, and the join in
+// front of it is opaque for the same reason, so a store before the call never
+// reaches a load after it.
+//
+// Splicing the body and rewiring the pair would keep the wall. Instead the
+// caller is unthreaded and the round's `thread-state` draws the order again over
+// the flattened body, where both loads are ordinary forwardable reads. The CALL
+// prefix is the same fixture with the call left standing, for the contrast.
+
+module {
+  %g = global @g align 4 bytes [0, 0, 0, 0]
+  %h = global @h align 4 bytes [0, 0, 0, 0]
+  %fn_bump = func.func private @bump(%a: !i32) -> !i32 {
+    %v = ptr.load %g : !i32
+    %s = addi %v, %a : !i32
+    ptr.store %s, %g
+    func.return %s
+  }
+  %fn_main = func.func @main(%x: !i32) -> !i32 {
+    ptr.store %x, %g
+    ptr.store %x, %h
+    %r = func.call %fn_bump(%x : !i32) -> !i32
+    %w = ptr.load %h : !i32
+    %t = addi %r, %w : !i32
+    func.return %t
+  }
+  module_end
+}
+
+// Both loads forwarded, the overwritten store to @g gone, no call and no seam.
+// CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32)
+// CHECK-NOT: func.call
+// CHECK-NOT: state.split
+// CHECK-NOT: ptr.load
+// CHECK: %[[S:[0-9]+]] = addi %[[X]], %[[X]] : !i32
+// CHECK: %{{[0-9]+}} = addi %[[S]], %[[X]] : !i32
+
+// With the call standing, the seam blocks both: the load of @h survives it.
+// CALL-LABEL: func.func @main
+// CALL: state.join
+// CALL: func.call
+// CALL: state.split
+// CALL: ptr.load

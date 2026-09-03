@@ -1,0 +1,20 @@
+// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+
+// A callee that arrived through a pointer names no λ. Devirtualisation is a
+// later instance of this specializer, under a guard, and not this one.
+
+module {
+  %fn_add = func.func @add(%a: !i32) -> !i32 {
+    %s = addi %a, %a : !i32
+    func.return %s
+  }
+  %fn_main = func.func @main(%p: !ptr.p, %x: !i32) -> !i32 {
+    %f = ptr_to_fn %p : !fn<(!i32) -> !i32>
+    %r = func.call %f(%x : !i32) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: %[[F:[0-9]+]] = ptr_to_fn
+// CHECK: func.call %[[F]](

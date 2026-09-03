@@ -1,0 +1,23 @@
+// RUN: tir opt --pass inline<0,0> --verify %s | filecheck %s
+
+// A private λ with one call site costs nothing however large it is: the copy
+// replaces the original rather than joining it, and the λ nothing names is then
+// erased. This pass is the only thing in the tree that deletes a dead λ.
+
+module {
+  %fn_once = func.func private @once(%a: !i32) -> !i32 {
+    %1 = addi %a, %a : !i32
+    %2 = addi %1, %1 : !i32
+    %3 = addi %2, %2 : !i32
+    func.return %3
+  }
+  %fn_main = func.func @main(%x: !i32) -> !i32 {
+    %r = func.call %fn_once(%x : !i32) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-NOT: @once
+// CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32)
+// CHECK-NEXT: %[[A:[0-9]+]] = addi %[[X]], %[[X]] : !i32

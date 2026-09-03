@@ -2,6 +2,7 @@
 
 pub mod affine;
 pub mod dce;
+pub mod inline;
 pub mod instcombine;
 pub mod lower_memory_intrinsics;
 pub mod lower_ptr_disjoint;
@@ -14,6 +15,7 @@ pub mod thread_state;
 
 pub use affine::AffineSchedulePass;
 pub use dce::DeadCodeEliminationPass;
+pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombinePass;
 pub use lower_memory_intrinsics::LowerMemoryIntrinsicsPass;
 pub use lower_ptr_disjoint::LowerPtrDisjointPass;
@@ -22,7 +24,7 @@ pub use promote::PromotePass;
 pub use restructure::RestructurePass;
 pub use shuffle_state::ShuffleStatePass;
 pub use symbol_uniqueness::CheckUniqueSymbolsPass;
-pub use thread_state::ThreadStatePass;
+pub use thread_state::{ThreadStatePass, UnthreadPass, unthread};
 
 use crate::{
     ConstantLike, Context, OpHandle, OpId, OperationRef, PassError, Pure, RegionId, Rewriter,

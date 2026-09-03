@@ -1,0 +1,15 @@
+// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+
+// A callee this module only declares has no body to splice, so it is not an
+// edge of the graph at all.
+
+module {
+  %fn_ext = func.declare @ext(!i32) -> !i32
+  %fn_main = func.func @main(%x: !i32) -> !i32 {
+    %r = func.call %fn_ext(%x : !i32) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.call %{{[0-9]+}}(

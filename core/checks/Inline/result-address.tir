@@ -1,0 +1,21 @@
+// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+
+// An `sret` callee inlines like any other: the destination is the first
+// argument and the body writes through it, so the caller's result follows the
+// pointer the return handed back.
+
+module {
+  %fn_make = func.func @make(%d: !ptr.p, %v: !i64) -> !ptr.p result_address {
+    ptr.store %v, %d
+    func.return %d
+  }
+  %fn_caller = func.func @caller(%dest: !ptr.p, %n: !i64) -> !ptr.p {
+    %r = func.call %fn_make(%dest, %n : !ptr.p, !i64) -> !ptr.p result_address
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @caller(%[[DEST:[0-9]+]]: !ptr.p, %[[N:[0-9]+]]: !i64)
+// CHECK-NEXT: ptr.store %[[N]], %[[DEST]]
+// CHECK-NEXT: func.return %[[DEST]]

@@ -1,0 +1,20 @@
+// RUN: tir opt --pass inline<0,0> --verify %s | filecheck %s
+
+// No budget is no inlining. The callee is public, because a private callee with
+// one call site is a move rather than a copy and the policy takes it at any
+// budget: that rule is pinned in called-once.tir.
+
+module {
+  %fn_add = func.func @add(%a: !i32, %b: !i32) -> !i32 {
+    %s = addi %a, %b : !i32
+    func.return %s
+  }
+  %fn_main = func.func @main(%x: !i32, %y: !i32) -> !i32 {
+    %r = func.call %fn_add(%x, %y : !i32, !i32) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @main
+// CHECK: func.call

@@ -1,0 +1,24 @@
+// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+
+// The callee's parameters become the caller's arguments by substitution, and
+// the value its return named becomes the call's result. Nothing in the copy
+// names the parameters afterwards, so the λ is dead and goes with them.
+
+module {
+  %fn_add = func.func private @add(%a: !i32, %b: !i32) -> !i32 {
+    %s = addi %a, %b : !i32
+    func.return %s
+  }
+  %fn_main = func.func @main(%x: !i32, %y: !i32) -> !i32 {
+    %r = func.call %fn_add(%x, %y : !i32, !i32) -> !i32
+    %t = muli %r, %x : !i32
+    func.return %t
+  }
+  module_end
+}
+
+// CHECK-NOT: func.call
+// CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32)
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[X]], %[[Y]] : !i32
+// CHECK-NEXT: %[[T:[0-9]+]] = muli %[[SUM]], %[[X]] : !i32
+// CHECK-NEXT: func.return %[[T]]
