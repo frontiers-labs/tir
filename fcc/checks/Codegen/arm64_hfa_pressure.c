@@ -10,9 +10,12 @@ double pressured(double a, double b, double c, double d, double e, double f,
     return a + quad.values[0];
 }
 
+extern double sink_pressured(double a, double b, double c, double d, double e,
+                             double f, struct Quad quad);
+
 double call_pressured(double a, double b, double c, double d, double e, double f,
                       struct Quad quad) {
-    return pressured(a, b, c, d, e, f, quad);
+    return sink_pressured(a, b, c, d, e, f, quad);
 }
 
 // CHECK: %{{[0-9]+}} = func.func @pressured(
@@ -34,4 +37,4 @@ double call_pressured(double a, double b, double c, double d, double e, double f
 // ASM: str {{d[0-9]+}}, [sp, 8]
 // ASM: str {{d[0-9]+}}, [sp, 16]
 // ASM: str {{d[0-9]+}}, [sp, 24]
-// ASM: bl pressured
+// ASM: bl sink_pressured

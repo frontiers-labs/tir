@@ -26,6 +26,9 @@ fn reduced_pipeline_preserves_backend_semantics() {
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fcc/checks/Inputs/custom_pipeline_alias.c");
     let expected = compile_asm(&source);
-    let custom = compile_asm_with_pipeline(&source, Some("func.func(promote,thread-state,affine)"));
+    let custom = compile_asm_with_pipeline(
+        &source,
+        Some("inline<40,5>,func.func(promote,thread-state,affine)"),
+    );
     assert_eq!(custom, expected);
 }

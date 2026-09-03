@@ -14,8 +14,10 @@ double consume_pair(struct Pair pair) {
     return pair.left + pair.right;
 }
 
+extern double sink_pair(struct Pair pair);
+
 double call_consume_pair(struct Pair pair) {
-    return consume_pair(pair);
+    return sink_pair(pair);
 }
 
 struct Quad make_quad(double a, double b, double c, double d) {
@@ -35,7 +37,7 @@ struct Quad make_quad(double a, double b, double c, double d) {
 // ASM: str d0
 // ASM: str d1
 // ASM-LABEL: call_consume_pair:
-// ASM: bl consume_pair
+// ASM: bl sink_pair
 // A four-double HFA is passed and returned in d0-d3, element i in d(i): the
 // stores pin the parameter-to-field mapping, the loads pin the field-to-result
 // mapping. d3 needs no reload when it still holds element 3.

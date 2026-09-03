@@ -11,9 +11,12 @@ long pressured(long a, long b, long c, long d, long e, long f, long g,
     return value.integer;
 }
 
+extern long sink_pressured(long a, long b, long c, long d, long e, long f,
+                           long g, struct Mixed value);
+
 long call_pressured(long a, long b, long c, long d, long e, long f, long g,
                     struct Mixed value) {
-    return pressured(a, b, c, d, e, f, g, value);
+    return sink_pressured(a, b, c, d, e, f, g, value);
 }
 
 // CHECK: %{{[0-9]+}} = func.func @pressured(
@@ -32,4 +35,4 @@ long call_pressured(long a, long b, long c, long d, long e, long f, long g,
 // ASM-LABEL: call_pressured:
 // ASM: str {{x[0-9]+}}, [sp, 0]
 // ASM: str {{x[0-9]+}}, [sp, 8]
-// ASM: bl pressured
+// ASM: bl sink_pressured

@@ -9,8 +9,10 @@ long consume_large(struct Large value, long tail) {
     return value.values[0] + value.values[1] + value.values[2] + tail;
 }
 
+extern long sink_large(struct Large value, long tail);
+
 long forward_large(struct Large value, long tail) {
-    return consume_large(value, tail);
+    return sink_large(value, tail);
 }
 
 // CHECK: %{{[0-9]+}} = func.func @consume_large(%[[VALUE:[0-9]+]]: !tuple<!i64, !i64, !i64>, %{{[0-9]+}}: !i64) -> !i64 {
@@ -32,4 +34,4 @@ long forward_large(struct Large value, long tail) {
 // ASM: mov [rsp + 8], {{.*}}
 // ASM: mov [rsp + 16], {{.*}}
 // ASM: mov rdi, {{.*}}
-// ASM: call consume_large
+// ASM: call sink_large

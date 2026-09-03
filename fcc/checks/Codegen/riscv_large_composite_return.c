@@ -10,8 +10,10 @@ struct Large make_large(long a, long b, long c) {
     return result;
 }
 
+extern struct Large sink_large(long a, long b, long c);
+
 struct Large forward_large(long a, long b, long c) {
-    return make_large(a, b, c);
+    return sink_large(a, b, c);
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @make_large(
@@ -30,5 +32,5 @@ struct Large forward_large(long a, long b, long c) {
 // ASM: sd x11,
 // ASM-LABEL: forward_large:
 // ASM: c.mv x10,
-// ASM: jal x1, make_large
+// ASM: jal x1, sink_large
 // ASM: jal x1, memcpy
