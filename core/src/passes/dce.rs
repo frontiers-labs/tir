@@ -51,7 +51,7 @@ impl Pass for DeadCodeEliminationPass {
         }
 
         let defuse = analyses.get::<DefUse>(context, op.op().id);
-        erase_dead(context, rewriter, &defuse)
+        erase_dead_with(context, rewriter, &defuse, true)
     }
 }
 
@@ -67,6 +67,19 @@ pub(crate) fn erase_dead(
     rewriter: &mut Rewriter,
     defuse: &DefUse,
 ) -> Result<(), PassError> {
+    erase_dead_with(context, rewriter, defuse, false)
+}
+
+/// `regions` admits a gate or a loop nothing under which can be told to have
+/// happened. A rewrite's own commit leaves that alone: the control it orphaned
+/// is still the shape the rewrite was read against, and removing it is this
+/// pass's sweep rather than the rewriter's.
+fn erase_dead_with(
+    context: &Context,
+    rewriter: &mut Rewriter,
+    defuse: &DefUse,
+    regions: bool,
+) -> Result<(), PassError> {
     // Live read counts, retired as dead readers are erased.
     let mut use_counts = defuse.use_counts();
     // LIFO over walk order visits consumers before their producers.
@@ -77,7 +90,7 @@ pub(crate) fn erase_dead(
             continue;
         }
         let instance = context.get_op(op_id);
-        if !is_erasable(context, &instance, &use_counts) {
+        if !is_erasable(context, &instance, &use_counts, regions) {
             continue;
         }
 
@@ -122,9 +135,20 @@ pub(crate) fn erase_dead(
 /// either, and its readers are handed the state it observed. Where no chain is
 /// threaded a write publishes nothing, defines nothing, and the last test below
 /// leaves it alone.
-fn is_erasable(context: &Context, instance: &OpHandle, use_counts: &HashMap<u32, usize>) -> bool {
-    if !instance.regions().is_empty() || instance.clone().as_interface::<dyn Terminator>().is_some()
-    {
+fn is_erasable(
+    context: &Context,
+    instance: &OpHandle,
+    use_counts: &HashMap<u32, usize>,
+    regions: bool,
+) -> bool {
+    if instance.clone().as_interface::<dyn Terminator>().is_some() {
+        return false;
+    }
+    // A gate or a loop is an ordinary def-use question once nothing under it can
+    // be told to have happened: the arms a decided gate leaves behind are the
+    // common case, and they are what every later pass would otherwise walk.
+    let pure_regions = regions && !instance.regions().is_empty() && pure_subtree(context, instance);
+    if !instance.regions().is_empty() && !pure_regions {
         return false;
     }
     // A machine instruction states its effects in its `InstrInfo`; the purity
@@ -154,6 +178,7 @@ fn is_erasable(context: &Context, instance: &OpHandle, use_counts: &HashMap<u32,
             && !writes_memory
             && !forwards_state
             && !allocation
+            && !pure_regions
             && !super::is_pure_value(instance) =>
         {
             return false;
@@ -185,4 +210,20 @@ fn is_erasable(context: &Context, instance: &OpHandle, use_counts: &HashMap<u32,
     }
     // Only a value-producing op is a DCE candidate; a def-less pure op is left alone.
     defines
+}
+
+/// Whether nothing under `instance`'s regions can be told to have happened: no
+/// access, no call, nothing holding a physical register. A nested region op is
+/// read through, since everything it holds is in the same walk.
+fn pure_subtree(context: &Context, instance: &OpHandle) -> bool {
+    instance.regions().iter().all(|&region| {
+        crate::analysis::scopes::region_ops(context, region)
+            .into_iter()
+            .all(|op| {
+                let inner = context.get_op(op);
+                inner.clone().as_interface::<dyn Terminator>().is_some()
+                    || !inner.regions().is_empty()
+                    || super::is_pure_value(&inner)
+            })
+    })
 }

@@ -39,7 +39,7 @@ const EXTRA_PIPELINES: [&str; 6] = [
     // Every eligible call site taken, which is the shape the rest of the
     // mid-end has to stay correct on: bodies spliced into bodies, and callers
     // handed back unthreaded for the round to thread again.
-    "fixpoint<3>(inline<1000,0>,func.func(promote,thread-state,instcombine,affine,instcombine))",
+    "fixpoint<3>(inline<1000,0>,func.func(promote,thread-state,instcombine,dce,affine,instcombine))",
     // The inverse on its own, with no inliner to justify it: threading a
     // function the strip just emptied has to derive the same order every time.
     "func.func(promote),fixpoint<3>(func.func(thread-state,unthread,thread-state,instcombine))",

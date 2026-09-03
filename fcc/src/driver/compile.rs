@@ -225,6 +225,9 @@ pub(super) fn emit_machine_code(
         round.add_pass(tir::passes::PromotePass::new());
         round.add_pass(tir::passes::ThreadStatePass::new());
         round.add_pass(tir::passes::InstCombinePass::new());
+        // Inlining is what makes a gate's decision a constant, and the arms it
+        // then cannot reach are what the rest of the round would walk.
+        round.add_pass(tir::passes::DeadCodeEliminationPass::new());
         if rounds.affine {
             // Loop scheduling reads the chains too, and what it leaves behind — a
             // rebuilt nest, an unrolled body — is address arithmetic nobody has
