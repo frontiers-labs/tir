@@ -606,6 +606,7 @@ impl Analyzer<'_> {
                 name,
                 ret,
                 has_parameter_type_list,
+                ..
             }) => (
                 name,
                 self.function_type(node, ret, has_parameter_type_list),

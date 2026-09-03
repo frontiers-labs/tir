@@ -277,6 +277,7 @@ pub enum AstLeaf {
         name: String,
         ret: CType,
         has_parameter_type_list: bool,
+        is_static: bool,
     },
     Param {
         name: String,

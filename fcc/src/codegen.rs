@@ -384,6 +384,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
     let mut global_strings = BTreeMap::new();
     let mut defined_functions = HashSet::new();
     let mut declared_functions = HashSet::new();
+    let mut internal_functions = HashSet::new();
     // Entities already given storage: an initialized definition claims the
     // object outright, and repeated tentative definitions reserve it once.
     let mut reserved_globals = HashSet::new();
@@ -409,6 +410,12 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                 let (entity, sig) = lower_signature(context, typed, item)?;
                 if ast.get_node(item).kind == AstKind::Function {
                     defined_functions.insert(entity);
+                }
+                if let Some(AstLeaf::Function {
+                    is_static: true, ..
+                }) = ast.get_leaf_data(item)
+                {
+                    internal_functions.insert(entity);
                 }
                 signatures.insert(entity, sig);
             }
@@ -511,6 +518,14 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     &global_strings,
                     &mut symbols,
                 )?;
+                if internal_functions.contains(&node_entity(typed, item)) {
+                    let mut attributes = func_op.attributes().to_vec();
+                    attributes.push(context.named_attribute(
+                        "sym_visibility",
+                        AttributeValue::Str("private".to_string().into()),
+                    ));
+                    context.set_op_attributes(func_op.id(), attributes);
+                }
                 module.body().append_op(func_op);
             }
             AstKind::Global => {

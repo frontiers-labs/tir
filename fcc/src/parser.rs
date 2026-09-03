@@ -1209,19 +1209,20 @@ where
         .collect::<Vec<_>>()
         .delimited_by(just(Token::LParen), just(Token::RParen));
     let storage = choice((
-        just(Token::KwExtern).ignored(),
-        just(Token::KwStatic).ignored(),
-        just(Token::KwInline).ignored(),
+        just(Token::KwExtern).to(false),
+        just(Token::KwStatic).to(true),
+        just(Token::KwInline).to(false),
     ))
     .repeated()
-    .ignored();
+    .collect::<Vec<bool>>()
+    .map(|specifiers| specifiers.contains(&true));
 
-    let header = storage.ignore_then(ctype().then(ident()).then(params));
+    let header = storage.then(ctype().then(ident()).then(params));
     let definition_header = header.clone().then_ignore(just(Token::LBrace)).map_with(
         |header, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
             let st = &mut e.state().0;
             st.push_scope();
-            for &param in &header.1 {
+            for &param in &header.1.1 {
                 if let Some(AstLeaf::Param { name, .. }) = st.ast.get_leaf_data(param)
                     && !name.is_empty()
                 {
@@ -1236,7 +1237,7 @@ where
         .collect::<Vec<_>>()
         .then_ignore(close_scope());
     let definition = definition_header.then(body).map_with(
-        |(((ret, name), params), body), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+        |((is_static, ((ret, name), params)), body), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
             let tok = e.span().start;
             let st = &mut e.state().0;
             let id = st.add(AstKind::Function, tok);
@@ -1247,6 +1248,7 @@ where
                     name,
                     ret,
                     has_parameter_type_list,
+                    is_static,
                 },
             );
             let params = params
@@ -1260,7 +1262,7 @@ where
         },
     );
     let prototype = header.then_ignore(just(Token::Semicolon)).map_with(
-        |((ret, name), params), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+        |(is_static, ((ret, name), params)), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
             let tok = e.span().start;
             let st = &mut e.state().0;
             let id = st.add(AstKind::Prototype, tok);
@@ -1271,6 +1273,7 @@ where
                     name,
                     ret,
                     has_parameter_type_list,
+                    is_static,
                 },
             );
             let params = params
@@ -2245,6 +2248,10 @@ fn parse_external_tokens(
         .storage
         .iter()
         .any(|tok| matches!(tok, Token::KwExtern));
+    let is_static = specs
+        .storage
+        .iter()
+        .any(|tok| matches!(tok, Token::KwStatic));
     let mut nodes = Vec::new();
     if let Some(type_decl) = specs.type_decl {
         nodes.push(type_decl);
@@ -2291,6 +2298,7 @@ fn parse_external_tokens(
                     name: decl.name,
                     ret,
                     has_parameter_type_list,
+                    is_static,
                 },
             );
             for param in params {
