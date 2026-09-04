@@ -1936,6 +1936,111 @@ impl Call {
                 let width = self.arguments[1].lower_with_ctx(ctx);
                 ctx.add_node(tir_symbolic::lang::SymKind::ZExt, &[input, width])
             }
+            BuiltinFunction::Load
+            | BuiltinFunction::Store
+            | BuiltinFunction::LoadReserved
+            | BuiltinFunction::StoreConditional
+            | BuiltinFunction::AtomicRmw
+            | BuiltinFunction::Fence
+            | BuiltinFunction::FenceI => self.lower_memory_builtin(builtin, ctx),
+            // trap has no semantic-expression form; codegen intercepts trap
+            // calls before lowering, so reaching here means the behavior used
+            // it in a value position.
+            BuiltinFunction::Trap => {
+                ctx.had_error = true;
+                ctx.add_int_const(tir_adt::APInt::new(64, 0))
+            }
+            BuiltinFunction::Split => {
+                // `split(x, n)` cuts x into n equal lanes; `split(x, n, w)`
+                // takes n lanes of w bits from the low end (the RVV shape,
+                // where `vl`/SEW bound the active elements independent of the
+                // register's total width).
+                assert!(
+                    matches!(self.arguments.len(), 2 | 3),
+                    "split requires 2 or 3 arguments"
+                );
+                let children: Vec<_> = self
+                    .arguments
+                    .iter()
+                    .map(|arg| arg.lower_with_ctx(ctx))
+                    .collect();
+                ctx.add_node(tir_symbolic::lang::SymKind::Split, &children)
+            }
+            BuiltinFunction::Concat => {
+                assert!(
+                    !self.arguments.is_empty(),
+                    "concat requires at least 1 argument"
+                );
+                let iters: Vec<_> = self
+                    .arguments
+                    .iter()
+                    .map(|arg| arg.lower_with_ctx(ctx))
+                    .collect();
+                ctx.add_node(tir_symbolic::lang::SymKind::IterConcat, &iters)
+            }
+            BuiltinFunction::Zip => {
+                assert!(
+                    self.arguments.len() >= 2,
+                    "zip requires at least 2 arguments"
+                );
+                let children: Vec<_> = self
+                    .arguments
+                    .iter()
+                    .map(|arg| arg.lower_with_ctx(ctx))
+                    .collect();
+                ctx.add_node(tir_symbolic::lang::SymKind::Zip, &children)
+            }
+            BuiltinFunction::Iota => {
+                assert!(self.arguments.len() == 2, "iota requires 2 arguments");
+                let count = self.arguments[0].lower_with_ctx(ctx);
+                let width = self.arguments[1].lower_with_ctx(ctx);
+                ctx.add_node(tir_symbolic::lang::SymKind::Iota, &[count, width])
+            }
+            BuiltinFunction::Map => {
+                assert!(self.arguments.len() == 2, "map requires 2 arguments");
+                let iter = self.arguments[0].lower_with_ctx(ctx);
+                let body = ctx.lower_lambda_body(&self.arguments[1]);
+                ctx.add_node(tir_symbolic::lang::SymKind::Map, &[iter, body])
+            }
+            BuiltinFunction::Reduce => {
+                assert!(self.arguments.len() == 2, "reduce requires 2 arguments");
+                let iter = self.arguments[0].lower_with_ctx(ctx);
+                let body = ctx.lower_lambda_body(&self.arguments[1]);
+                ctx.add_node(tir_symbolic::lang::SymKind::Reduce, &[iter, body])
+            }
+            BuiltinFunction::FAdd
+            | BuiltinFunction::FSub
+            | BuiltinFunction::FMul
+            | BuiltinFunction::FDiv
+            | BuiltinFunction::FMin
+            | BuiltinFunction::FMax
+            | BuiltinFunction::AsFloat
+            | BuiltinFunction::FCvt
+            | BuiltinFunction::Fma
+            | BuiltinFunction::Sqrt
+            | BuiltinFunction::SIToFP
+            | BuiltinFunction::UIToFP
+            | BuiltinFunction::FPToSI
+            | BuiltinFunction::FPToUI => self.lower_float_builtin(builtin, ctx),
+            // `todo()` marks unmodeled semantics; rustgen suppresses selection-rule
+            // and `execute()` lowering for such behaviors, so this is never reached.
+            BuiltinFunction::Todo => {
+                unreachable!("todo() has no semantics to lower")
+            }
+        }
+    }
+
+    fn lower_memory_builtin<
+        G: tir_graph::MutDag<
+                Node = tir_symbolic::lang::SymKind,
+                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
+            >,
+    >(
+        &self,
+        builtin: &BuiltinFunction,
+        ctx: &mut SemaExprLoweringCtx<'_, G>,
+    ) -> tir_graph::NodeId {
+        match builtin {
             BuiltinFunction::Load => {
                 assert!(
                     matches!(self.arguments.len(), 3 | 4),
@@ -2027,71 +2132,21 @@ impl Call {
                 let kind = ctx.add_int_const(tir_adt::APInt::new(1, 1));
                 ctx.add_node(tir_symbolic::lang::SymKind::Fence, &[zero, zero, kind])
             }
-            // trap has no semantic-expression form; codegen intercepts trap
-            // calls before lowering, so reaching here means the behavior used
-            // it in a value position.
-            BuiltinFunction::Trap => {
-                ctx.had_error = true;
-                ctx.add_int_const(tir_adt::APInt::new(64, 0))
-            }
-            BuiltinFunction::Split => {
-                // `split(x, n)` cuts x into n equal lanes; `split(x, n, w)`
-                // takes n lanes of w bits from the low end (the RVV shape,
-                // where `vl`/SEW bound the active elements independent of the
-                // register's total width).
-                assert!(
-                    matches!(self.arguments.len(), 2 | 3),
-                    "split requires 2 or 3 arguments"
-                );
-                let children: Vec<_> = self
-                    .arguments
-                    .iter()
-                    .map(|arg| arg.lower_with_ctx(ctx))
-                    .collect();
-                ctx.add_node(tir_symbolic::lang::SymKind::Split, &children)
-            }
-            BuiltinFunction::Concat => {
-                assert!(
-                    !self.arguments.is_empty(),
-                    "concat requires at least 1 argument"
-                );
-                let iters: Vec<_> = self
-                    .arguments
-                    .iter()
-                    .map(|arg| arg.lower_with_ctx(ctx))
-                    .collect();
-                ctx.add_node(tir_symbolic::lang::SymKind::IterConcat, &iters)
-            }
-            BuiltinFunction::Zip => {
-                assert!(
-                    self.arguments.len() >= 2,
-                    "zip requires at least 2 arguments"
-                );
-                let children: Vec<_> = self
-                    .arguments
-                    .iter()
-                    .map(|arg| arg.lower_with_ctx(ctx))
-                    .collect();
-                ctx.add_node(tir_symbolic::lang::SymKind::Zip, &children)
-            }
-            BuiltinFunction::Iota => {
-                assert!(self.arguments.len() == 2, "iota requires 2 arguments");
-                let count = self.arguments[0].lower_with_ctx(ctx);
-                let width = self.arguments[1].lower_with_ctx(ctx);
-                ctx.add_node(tir_symbolic::lang::SymKind::Iota, &[count, width])
-            }
-            BuiltinFunction::Map => {
-                assert!(self.arguments.len() == 2, "map requires 2 arguments");
-                let iter = self.arguments[0].lower_with_ctx(ctx);
-                let body = ctx.lower_lambda_body(&self.arguments[1]);
-                ctx.add_node(tir_symbolic::lang::SymKind::Map, &[iter, body])
-            }
-            BuiltinFunction::Reduce => {
-                assert!(self.arguments.len() == 2, "reduce requires 2 arguments");
-                let iter = self.arguments[0].lower_with_ctx(ctx);
-                let body = ctx.lower_lambda_body(&self.arguments[1]);
-                ctx.add_node(tir_symbolic::lang::SymKind::Reduce, &[iter, body])
-            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn lower_float_builtin<
+        G: tir_graph::MutDag<
+                Node = tir_symbolic::lang::SymKind,
+                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
+            >,
+    >(
+        &self,
+        builtin: &BuiltinFunction,
+        ctx: &mut SemaExprLoweringCtx<'_, G>,
+    ) -> tir_graph::NodeId {
+        match builtin {
             BuiltinFunction::FAdd
             | BuiltinFunction::FSub
             | BuiltinFunction::FMul
@@ -2173,11 +2228,7 @@ impl Call {
                 let width = self.arguments[1].lower_with_ctx(ctx);
                 ctx.add_node(tir_symbolic::lang::SymKind::FPToUI, &[input, width])
             }
-            // `todo()` marks unmodeled semantics; rustgen suppresses selection-rule
-            // and `execute()` lowering for such behaviors, so this is never reached.
-            BuiltinFunction::Todo => {
-                unreachable!("todo() has no semantics to lower")
-            }
+            _ => unreachable!(),
         }
     }
 }

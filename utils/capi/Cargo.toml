@@ -17,3 +17,6 @@ tir-x86_64.workspace = true
 
 [build-dependencies]
 cbindgen = "0.28"
+
+[lints]
+workspace = true

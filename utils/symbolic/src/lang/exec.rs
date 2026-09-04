@@ -530,26 +530,97 @@ fn eval_node<V, M: Memory>(
         }
     }
 
-    let result = match graph.get_kind(node) {
+    let result = match *graph.get_kind(node) {
         SymKind::Map | SymKind::Reduce => {
             unreachable!("map/reduce handled before child pre-evaluation")
         }
-        SymKind::Arg => {
-            let SymPayload::Int(idx) = graph.get_leaf_data(node).unwrap() else {
-                panic!("Arg node must have Int payload");
-            };
-            let idx = idx.to_u64() as usize;
-            let binding = args.last().expect("Arg evaluated outside a lambda");
-            match binding {
-                // Pair binding (Zip lanes or Reduce acc/lane pack): index positionally.
-                Value::Iterator(parts) => parts[idx].clone(),
-                // Scalar binding: the single argument of a unary lambda.
-                scalar => {
-                    assert!(idx == 0, "scalar lambda argument has only index 0");
-                    scalar.clone()
-                }
-            }
+        SymKind::Arg => eval_arg(graph, node, args),
+        kind @ (SymKind::Symbol | SymKind::Constant) => eval_leaf(graph, node, kind, symbols),
+        kind @ (SymKind::Zip | SymKind::Split | SymKind::IterConcat | SymKind::Iota) => {
+            eval_iterator(graph, node, kind, &c)
         }
+        kind @ (SymKind::Add | SymKind::Sub | SymKind::Mul | SymKind::Div) => eval_arith(kind, &c),
+        kind @ (SymKind::Eq
+        | SymKind::Ne
+        | SymKind::Lt
+        | SymKind::Le
+        | SymKind::Gt
+        | SymKind::Ge) => eval_compare(kind, &c),
+        kind @ (SymKind::FAdd
+        | SymKind::FSub
+        | SymKind::FMul
+        | SymKind::FDiv
+        | SymKind::FMin
+        | SymKind::FMax
+        | SymKind::AsFloat
+        | SymKind::FCvt
+        | SymKind::SIToFP
+        | SymKind::UIToFP
+        | SymKind::FPToSI
+        | SymKind::FPToUI) => eval_float(kind, &c),
+        kind @ (SymKind::If | SymKind::Theta | SymKind::Clamp) => eval_control(kind, &c),
+        kind @ (SymKind::Fma
+        | SymKind::Sqrt
+        | SymKind::Log2Ceil
+        | SymKind::Bitcast
+        | SymKind::Extract
+        | SymKind::ZExt
+        | SymKind::SExt) => eval_math(graph, node, cache, kind, &c),
+        kind @ (SymKind::LoadMemory | SymKind::StoreMemory) => eval_memory(kind, &c, memory)?,
+        kind @ (SymKind::LoadReserved
+        | SymKind::StoreConditional
+        | SymKind::AtomicRmw
+        | SymKind::Fence) => eval_atomic(kind, &c, memory)?,
+        _ => unreachable!("operator has no concrete evaluator"),
+    };
+
+    cache[node.index()] = Some(result.clone());
+    Ok(result)
+}
+
+fn eval_arg<V>(
+    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+    node: NodeId,
+    args: &[Value],
+) -> Value {
+    let SymPayload::Int(idx) = graph.get_leaf_data(node).unwrap() else {
+        panic!("Arg node must have Int payload");
+    };
+    let idx = idx.to_u64() as usize;
+    let binding = args.last().expect("Arg evaluated outside a lambda");
+    match binding {
+        // Pair binding (Zip lanes or Reduce acc/lane pack): index positionally.
+        Value::Iterator(parts) => parts[idx].clone(),
+        // Scalar binding: the single argument of a unary lambda.
+        scalar => {
+            assert!(idx == 0, "scalar lambda argument has only index 0");
+            scalar.clone()
+        }
+    }
+}
+
+fn eval_leaf<V>(
+    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+    node: NodeId,
+    kind: SymKind,
+    symbols: &[Value],
+) -> Value {
+    match (kind, graph.get_leaf_data(node).unwrap()) {
+        (SymKind::Symbol, SymPayload::SymbolId(id)) => symbols[*id as usize].clone(),
+        (SymKind::Symbol, _) => panic!("Symbol node must have SymbolId payload"),
+        (_, SymPayload::Int(v)) => Value::Int(v.clone()),
+        (_, SymPayload::Float(v)) => Value::Float(v.clone()),
+        _ => panic!("Constant node must have Int or Float payload"),
+    }
+}
+
+fn eval_iterator<V>(
+    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+    node: NodeId,
+    kind: SymKind,
+    c: &impl Fn(usize) -> Value,
+) -> Value {
+    match kind {
         SymKind::Zip => {
             let arity = graph.children(node).count();
             let iters: Vec<Vec<Value>> = (0..arity)
@@ -596,7 +667,7 @@ fn eval_node<V, M: Memory>(
             }
             concat_lanes(Value::Iterator(lanes))
         }
-        SymKind::Iota => {
+        _ => {
             let count = as_int!(c(0), "iota").to_u64();
             let width = as_int!(c(1), "iota").to_u64() as u32;
             Value::Iterator(
@@ -605,25 +676,31 @@ fn eval_node<V, M: Memory>(
                     .collect(),
             )
         }
-        SymKind::Symbol => {
-            let SymPayload::SymbolId(id) = graph.get_leaf_data(node).unwrap() else {
-                panic!("Symbol node must have SymbolId payload");
-            };
-            symbols[*id as usize].clone()
-        }
-        SymKind::Constant => match graph.get_leaf_data(node).unwrap() {
-            SymPayload::Int(v) => Value::Int(v.clone()),
-            SymPayload::Float(v) => Value::Float(v.clone()),
-            _ => panic!("Constant node must have Int or Float payload"),
-        },
+    }
+}
 
-        // ── Arithmetic (int or float) ──────────────────────────────────────
+fn eval_arith(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
+    match kind {
         SymKind::Add => arith_op!(c, add, add, "add"),
         SymKind::Sub => arith_op!(c, sub, sub, "sub"),
         SymKind::Mul => arith_op!(c, mul, mul, "mul"),
-        SymKind::Div => arith_op!(c, sdiv, div, "div"),
+        _ => arith_op!(c, sdiv, div, "div"),
+    }
+}
 
-        // ── Floating point ─────────────────────────────────────────────────
+fn eval_compare(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
+    match kind {
+        SymKind::Eq => Value::Int(APInt::new(1, bool_result(scalar_equal(c(0), c(1))))),
+        SymKind::Ne => Value::Int(APInt::new(1, bool_result(!scalar_equal(c(0), c(1))))),
+        SymKind::Lt => cmp_op!(c, slt, lt, "lt"),
+        SymKind::Le => cmp_op!(c, sle, le, "le"),
+        SymKind::Gt => cmp_op!(c, sgt, gt, "gt"),
+        _ => cmp_op!(c, sge, ge, "ge"),
+    }
+}
+
+fn eval_float(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
+    match kind {
         SymKind::FAdd => float_binop(c(0), c(1), APFloat::add, "fadd"),
         SymKind::FSub => float_binop(c(0), c(1), APFloat::sub, "fsub"),
         SymKind::FMul => float_binop(c(0), c(1), APFloat::mul, "fmul"),
@@ -671,21 +748,16 @@ fn eval_node<V, M: Memory>(
             let width = as_int!(c(1), "fptosi").to_u64() as u32;
             Value::Int(APInt::new_signed(width, value))
         }
-        SymKind::FPToUI => {
+        _ => {
             let value = as_float!(c(0), "fptoui").to_f64() as u64;
             let width = as_int!(c(1), "fptoui").to_u64() as u32;
             Value::Int(APInt::new(width, value))
         }
+    }
+}
 
-        // ── Bitwise (int only) ─────────────────────────────────────────────
-        SymKind::Eq => Value::Int(APInt::new(1, bool_result(scalar_equal(c(0), c(1))))),
-        SymKind::Ne => Value::Int(APInt::new(1, bool_result(!scalar_equal(c(0), c(1))))),
-        SymKind::Lt => cmp_op!(c, slt, lt, "lt"),
-        SymKind::Le => cmp_op!(c, sle, le, "le"),
-        SymKind::Gt => cmp_op!(c, sgt, gt, "gt"),
-        SymKind::Ge => cmp_op!(c, sge, ge, "ge"),
-
-        // ── Control ────────────────────────────────────────────────────────
+fn eval_control(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
+    match kind {
         SymKind::If => {
             let cond_zero = match c(0) {
                 Value::Int(i) => i.is_zero(),
@@ -695,7 +767,7 @@ fn eval_node<V, M: Memory>(
             if cond_zero { c(2) } else { c(1) }
         }
         SymKind::Theta => panic!("theta requires loop-sequence semantics"),
-        SymKind::Clamp => {
+        _ => {
             let input = as_int!(c(0), "clamp");
             let min = as_int!(c(1), "clamp");
             let max = as_int!(c(2), "clamp");
@@ -718,8 +790,17 @@ fn eval_node<V, M: Memory>(
 
             Value::Int(result)
         }
+    }
+}
 
-        // ── Math (int or float) ────────────────────────────────────────────
+fn eval_math<V>(
+    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+    node: NodeId,
+    cache: &[Option<Value>],
+    kind: SymKind,
+    c: &impl Fn(usize) -> Value,
+) -> Value {
+    match kind {
         SymKind::Fma => match c(0) {
             Value::Int(a) => {
                 let (a, b) = coerce_ints(a, as_int!(c(1), "fma"));
@@ -750,39 +831,52 @@ fn eval_node<V, M: Memory>(
             Value::Int(APInt::new(a.width(), result))
         }
         SymKind::Bitcast => Value::RawBits(as_raw_bits(c(0))),
-
-        SymKind::Extract => {
-            let value = as_int!(c(0), "extract");
-            let high = as_int!(c(1), "extract").to_u64() as u32;
-            let low = as_int!(c(2), "extract").to_u64() as u32;
-            // `extract(a*b, 2N-1, N)` is the TMDL idiom for a full-multiply high half
-            // (e.g. `mulh`); `Mul` keeps only the low N bits, so when the slice lies
-            // wholly past the product width, recompute it as a signed full-width product.
-            let mul = graph.children(node).next().expect("extract has children");
-            if low >= value.width() && matches!(graph.get_kind(mul), SymKind::Mul) {
-                let (a, b) = coerce_ints(
-                    as_int!(child_val(graph, mul, 0, cache), "extract"),
-                    as_int!(child_val(graph, mul, 1, cache), "extract"),
-                );
-                let product_high = a.with_signed(true).mulh(&b.with_signed(true));
-                Value::Int(product_high.extract_bits(high - a.width(), low - a.width()))
-            } else {
-                Value::Int(value.extract_bits(high, low))
-            }
-        }
+        SymKind::Extract => eval_extract(graph, node, cache, c),
         SymKind::ZExt => {
             let value = as_int!(c(0), "zext");
             let width = as_int!(c(1), "zext").to_u64() as u32;
             Value::Int(value.zero_extend(width))
         }
-        SymKind::SExt => {
+        _ => {
             let value = as_int!(c(0), "sext");
             let width = as_int!(c(1), "sext").to_u64() as u32;
             // Force signed: `extract` yields unsigned, but sext must use the current MSB.
             Value::Int(value.with_signed(true).sign_extend(width))
         }
+    }
+}
 
-        // ── Memory ─────────────────────────────────────────────────────────
+fn eval_extract<V>(
+    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+    node: NodeId,
+    cache: &[Option<Value>],
+    c: &impl Fn(usize) -> Value,
+) -> Value {
+    let value = as_int!(c(0), "extract");
+    let high = as_int!(c(1), "extract").to_u64() as u32;
+    let low = as_int!(c(2), "extract").to_u64() as u32;
+    // `extract(a*b, 2N-1, N)` is the TMDL idiom for a full-multiply high half
+    // (e.g. `mulh`); `Mul` keeps only the low N bits, so when the slice lies
+    // wholly past the product width, recompute it as a signed full-width product.
+    let mul = graph.children(node).next().expect("extract has children");
+    if low >= value.width() && matches!(graph.get_kind(mul), SymKind::Mul) {
+        let (a, b) = coerce_ints(
+            as_int!(child_val(graph, mul, 0, cache), "extract"),
+            as_int!(child_val(graph, mul, 1, cache), "extract"),
+        );
+        let product_high = a.with_signed(true).mulh(&b.with_signed(true));
+        Value::Int(product_high.extract_bits(high - a.width(), low - a.width()))
+    } else {
+        Value::Int(value.extract_bits(high, low))
+    }
+}
+
+fn eval_memory<M: Memory>(
+    kind: SymKind,
+    c: &impl Fn(usize) -> Value,
+    memory: &mut M,
+) -> Result<Value, M::Error> {
+    let result = match kind {
         SymKind::LoadMemory => {
             let address = as_int!(c(0), "load").to_u64();
             let size = as_int!(c(1), "load").to_u64() as usize;
@@ -794,7 +888,7 @@ fn eval_node<V, M: Memory>(
                 Value::Int(APInt::new((size as u32) * 8, value))
             }
         }
-        SymKind::StoreMemory => {
+        _ => {
             let address = as_int!(c(0), "store").to_u64();
             let size = as_int!(c(1), "store").to_u64() as usize;
             if size > 8 {
@@ -804,8 +898,16 @@ fn eval_node<V, M: Memory>(
             }
             Value::Int(APInt::new(1, 0))
         }
+    };
+    Ok(result)
+}
 
-        // ── Atomics ────────────────────────────────────────────────────────
+fn eval_atomic<M: Memory>(
+    kind: SymKind,
+    c: &impl Fn(usize) -> Value,
+    memory: &mut M,
+) -> Result<Value, M::Error> {
+    let result = match kind {
         SymKind::LoadReserved => {
             let address = as_int!(c(0), "load_reserved").to_u64();
             let size = as_int!(c(1), "load_reserved").to_u64() as usize;
@@ -843,17 +945,14 @@ fn eval_node<V, M: Memory>(
             let old = memory.atomic_rmw(op, address, size, value, ord)?;
             Value::Int(APInt::new((size as u32) * 8, old))
         }
-        SymKind::Fence => {
+        _ => {
             let pred = as_int!(c(0), "fence").to_u64() as u32;
             let succ = as_int!(c(1), "fence").to_u64() as u32;
             let kind = as_int!(c(2), "fence").to_u64() as u32;
             memory.fence(pred, succ, kind)?;
             Value::Int(APInt::new(1, 0))
         }
-        _ => unreachable!("operator has no concrete evaluator"),
     };
-
-    cache[node.index()] = Some(result.clone());
     Ok(result)
 }
 

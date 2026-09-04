@@ -72,6 +72,87 @@ pub fn analyze(files: &[ast::File], text_only: bool) -> Vec<(String, Diag)> {
     diags
 }
 
+fn abi_kind_name(kind: ast::AbiValueKind) -> &'static str {
+    match kind {
+        ast::AbiValueKind::Int => "int",
+        ast::AbiValueKind::Float => "float",
+        ast::AbiValueKind::Vector => "vector",
+    }
+}
+
+fn check_abi_arg_overflow(file_name: &str, abi: &ast::Abi, diags: &mut Vec<(String, Diag)>) {
+    let args_by_kind: HashMap<_, _> = abi
+        .args
+        .iter()
+        .map(|sequence| (sequence.kind, sequence))
+        .collect();
+    for sequence in &abi.args {
+        if let Some(ast::AbiOverflow::Kind(target)) = sequence.overflow
+            && !args_by_kind.contains_key(&target)
+        {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    sequence.span,
+                    format!(
+                        "ABI '{}' {} argument overflow references undeclared {} sequence",
+                        abi.name,
+                        abi_kind_name(sequence.kind),
+                        abi_kind_name(target)
+                    ),
+                ),
+            ));
+        }
+    }
+    let mut reported_cycle_kinds = HashSet::new();
+    for sequence in &abi.args {
+        if reported_cycle_kinds.contains(&sequence.kind) {
+            continue;
+        }
+        let mut path = Vec::new();
+        let mut positions = HashMap::new();
+        let mut kind = sequence.kind;
+        loop {
+            if let Some(&position) = positions.get(&kind) {
+                let mut cycle = path[position..].to_vec();
+                cycle.push(kind);
+                reported_cycle_kinds.extend(cycle.iter().copied());
+                let display = cycle
+                    .iter()
+                    .map(|kind| abi_kind_name(*kind))
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        sequence.span,
+                        format!(
+                            "ABI '{}' argument overflow chain contains a cycle: {display}",
+                            abi.name
+                        ),
+                    ),
+                ));
+                break;
+            }
+            positions.insert(kind, path.len());
+            path.push(kind);
+            let Some(next) = args_by_kind.get(&kind).and_then(|sequence| {
+                if let Some(ast::AbiOverflow::Kind(next)) = sequence.overflow {
+                    Some(next)
+                } else {
+                    None
+                }
+            }) else {
+                break;
+            };
+            if !args_by_kind.contains_key(&next) {
+                break;
+            }
+            kind = next;
+        }
+    }
+}
+
 fn check_abis(files: &[ast::File], item_cache: &HashMap<&str, &ast::Item>) -> Vec<(String, Diag)> {
     let classes: HashMap<&str, &ast::RegisterClass> = files
         .iter()
@@ -211,11 +292,6 @@ fn check_abis(files: &[ast::File], item_cache: &HashMap<&str, &ast::Item>) -> Ve
                 }
                 registers
             };
-            let kind_name = |kind| match kind {
-                ast::AbiValueKind::Int => "int",
-                ast::AbiValueKind::Float => "float",
-                ast::AbiValueKind::Vector => "vector",
-            };
 
             for (passes, direction) in [(&abi.args, "argument"), (&abi.rets, "return")] {
                 let mut seen = HashSet::new();
@@ -228,7 +304,7 @@ fn check_abis(files: &[ast::File], item_cache: &HashMap<&str, &ast::Item>) -> Ve
                                 format!(
                                     "ABI '{}' declares more than one {} {direction} sequence",
                                     abi.name,
-                                    kind_name(pass.kind)
+                                    abi_kind_name(pass.kind)
                                 ),
                             ),
                         ));
@@ -290,7 +366,7 @@ fn check_abis(files: &[ast::File], item_cache: &HashMap<&str, &ast::Item>) -> Ve
                                 format!(
                                     "ABI '{}' {} {direction} sequence contains duplicate register '{}'",
                                     abi.name,
-                                    kind_name(pass.kind),
+                                    abi_kind_name(pass.kind),
                                     display
                                 ),
                             ),
@@ -345,76 +421,7 @@ fn check_abis(files: &[ast::File], item_cache: &HashMap<&str, &ast::Item>) -> Ve
                 }
             }
 
-            let args_by_kind: HashMap<_, _> = abi
-                .args
-                .iter()
-                .map(|sequence| (sequence.kind, sequence))
-                .collect();
-            for sequence in &abi.args {
-                if let Some(ast::AbiOverflow::Kind(target)) = sequence.overflow
-                    && !args_by_kind.contains_key(&target)
-                {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            sequence.span,
-                            format!(
-                                "ABI '{}' {} argument overflow references undeclared {} sequence",
-                                abi.name,
-                                kind_name(sequence.kind),
-                                kind_name(target)
-                            ),
-                        ),
-                    ));
-                }
-            }
-            let mut reported_cycle_kinds = HashSet::new();
-            for sequence in &abi.args {
-                if reported_cycle_kinds.contains(&sequence.kind) {
-                    continue;
-                }
-                let mut path = Vec::new();
-                let mut positions = HashMap::new();
-                let mut kind = sequence.kind;
-                loop {
-                    if let Some(&position) = positions.get(&kind) {
-                        let mut cycle = path[position..].to_vec();
-                        cycle.push(kind);
-                        reported_cycle_kinds.extend(cycle.iter().copied());
-                        let display = cycle
-                            .iter()
-                            .map(|kind| kind_name(*kind))
-                            .collect::<Vec<_>>()
-                            .join(" -> ");
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                sequence.span,
-                                format!(
-                                    "ABI '{}' argument overflow chain contains a cycle: {display}",
-                                    abi.name
-                                ),
-                            ),
-                        ));
-                        break;
-                    }
-                    positions.insert(kind, path.len());
-                    path.push(kind);
-                    let Some(next) = args_by_kind.get(&kind).and_then(|sequence| {
-                        if let Some(ast::AbiOverflow::Kind(next)) = sequence.overflow {
-                            Some(next)
-                        } else {
-                            None
-                        }
-                    }) else {
-                        break;
-                    };
-                    if !args_by_kind.contains_key(&next) {
-                        break;
-                    }
-                    kind = next;
-                }
-            }
+            check_abi_arg_overflow(&file.file_name, abi, &mut diags);
         }
     }
 
@@ -595,592 +602,440 @@ fn check_performance_model(
     // `unit` (at most once) and may only `use` resources declared in that machine.
     for file in files {
         for machine in file.machines() {
-            let mut resource_names: HashSet<&str> = HashSet::new();
-            for res in &machine.resources {
-                if !resource_names.insert(res.name.as_str()) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            res.span,
-                            format!(
-                                "duplicate resource '{}' in machine '{}'",
-                                res.name, machine.name
-                            ),
-                        ),
-                    ));
-                }
-            }
-
-            let mut modeled_resource_names = resource_names.clone();
-            let mut group_names: HashSet<&str> = HashSet::new();
-            for group in &machine.resource_groups {
-                if !group_names.insert(group.name.as_str())
-                    || !modeled_resource_names.insert(group.name.as_str())
-                {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            group.span,
-                            format!(
-                                "duplicate resource group '{}' in machine '{}'",
-                                group.name, machine.name
-                            ),
-                        ),
-                    ));
-                }
-            }
-            let resource_groups: HashMap<&str, &ast::ResourceExpr> = machine
-                .resource_groups
-                .iter()
-                .map(|group| (group.name.as_str(), &group.resources))
-                .collect();
-            for group in &machine.resource_groups {
-                if resource_group_is_cyclic(
-                    group.name.as_str(),
-                    &resource_groups,
-                    &mut HashSet::new(),
-                ) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            group.span,
-                            format!("cyclic resource group '{}'", group.name),
-                        ),
-                    ));
-                }
-            }
-            for group in &machine.resource_groups {
-                if has_non_positive_occupancy(&group.resources) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(group.span, "resource occupancy must be positive"),
-                    ));
-                }
-                for referenced in resource_references(&group.resources) {
-                    if !modeled_resource_names.contains(referenced) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                group.span,
-                                format!(
-                                    "group '{}' references unknown resource '{}' in machine '{}'",
-                                    group.name, referenced, machine.name
-                                ),
-                            ),
-                        ));
-                    }
-                }
-            }
-
-            let frontend_decoder_names: HashSet<&str> = machine
-                .frontend
-                .iter()
-                .flat_map(|frontend| frontend.decode.decoders.iter())
-                .map(|decoder| decoder.name.as_str())
-                .collect();
-            if let Some(frontend) = &machine.frontend {
-                for (name, value) in [
-                    ("bytes_per_cycle", frontend.fetch.bytes_per_cycle),
-                    ("window_bytes", frontend.fetch.window_bytes),
-                    ("alignment", frontend.fetch.alignment),
-                    ("queue_bytes", frontend.fetch.queue_bytes),
-                ] {
-                    if value <= 0 {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                frontend.fetch.span,
-                                format!("frontend fetch {name} must be positive"),
-                            ),
-                        ));
-                    }
-                }
-                for (name, value) in [
-                    ("uops_per_cycle", frontend.decode.uops_per_cycle),
-                    ("queue_uops", frontend.decode.queue_uops),
-                ] {
-                    if value <= 0 {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                frontend.decode.span,
-                                format!("frontend decode {name} must be positive"),
-                            ),
-                        ));
-                    }
-                }
-                for decoder in &frontend.decode.decoders {
-                    if decoder.max_uops_per_instruction <= 0 {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                decoder.span,
-                                format!(
-                                    "frontend decoder '{}' max_uops_per_instruction must be positive",
-                                    decoder.name
-                                ),
-                            ),
-                        ));
-                    }
-                }
-                let mut decoder_names = HashSet::new();
-                for decoder in &frontend.decode.decoders {
-                    if !decoder_names.insert(decoder.name.as_str()) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                decoder.span,
-                                format!("duplicate frontend decoder '{}'", decoder.name),
-                            ),
-                        ));
-                    }
-                }
-                if frontend.decode.slots.is_empty() {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            frontend.decode.span,
-                            "frontend decode must declare at least one slot",
-                        ),
-                    ));
-                }
-                for slot in &frontend.decode.slots {
-                    if !decoder_names.contains(slot.as_str()) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                frontend.decode.span,
-                                format!("frontend decode slot references unknown decoder '{slot}'"),
-                            ),
-                        ));
-                    }
-                }
-                if let Some(cache) = &frontend.decoded_cache {
-                    for (name, value) in [
-                        ("sets", cache.sets),
-                        ("ways", cache.ways),
-                        ("line_bytes", cache.line_bytes),
-                        ("line_uops", cache.line_uops),
-                        ("deliver_uops_per_cycle", cache.deliver_uops_per_cycle),
-                    ] {
-                        if value <= 0 {
-                            diags.push((
-                                file.file_name.clone(),
-                                Rich::custom(
-                                    cache.span,
-                                    format!("frontend decoded_cache {name} must be positive"),
-                                ),
-                            ));
-                        }
-                    }
-                }
-            }
-
-            // `reg_file` names must be unique and resolve to a physical register
-            // file (the root of a register class's inheritance chain) of a class
-            // available to one of this machine's ISAs.
-            let class_map: HashMap<String, &ast::RegisterClass> = files
-                .iter()
-                .flat_map(|f| f.register_classes())
-                .map(|rc| (rc.name.clone(), rc))
-                .collect();
-            let machine_isas: HashSet<&str> = machine.for_isas.iter().map(String::as_str).collect();
-            let valid_files: HashSet<&str> = class_map
-                .values()
-                .filter(|rc| {
-                    rc.for_isas
-                        .iter()
-                        .any(|i| machine_isas.contains(i.as_str()))
-                })
-                .map(|rc| rc.register_file(&class_map))
-                .collect();
-            let mut reg_file_names: HashSet<&str> = HashSet::new();
-            for (name, _) in &machine.reg_files {
-                if !reg_file_names.insert(name.as_str()) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            machine.span,
-                            format!(
-                                "duplicate reg_file '{}' in machine '{}'",
-                                name, machine.name
-                            ),
-                        ),
-                    ));
-                }
-                if !valid_files.contains(name.as_str()) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            machine.span,
-                            format!(
-                                "machine '{}' declares reg_file '{}' which is not a physical register file of its ISA(s)",
-                                machine.name, name
-                            ),
-                        ),
-                    ));
-                }
-            }
-
-            let phase_names: HashSet<&str> =
-                machine.pipeline.iter().map(|p| p.name.as_str()).collect();
-
-            let mut bound_units: HashSet<&str> = HashSet::new();
-            for bind in &machine.binds {
-                if bind.decode_uops.is_some_and(|count| count <= 0) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(bind.span, "decode_uops must be positive"),
-                    ));
-                }
-                if let Some(message) =
-                    eliminated_conflict(bind.eliminated, bind.latency, &bind.uses, &bind.uops)
-                {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(bind.span, message.to_string()),
-                    ));
-                }
-                if bind.decode_cycles.is_some_and(|cycles| cycles <= 0) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(bind.span, "decode_cycles must be positive"),
-                    ));
-                }
-                if let Some(decoder) = &bind.decoder {
-                    if !frontend_decoder_names.contains(decoder.as_str()) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                bind.span,
-                                format!(
-                                    "bind for unit '{}' references unknown frontend decoder '{}'",
-                                    bind.unit, decoder
-                                ),
-                            ),
-                        ));
-                    } else if machine.frontend.as_ref().is_some_and(|frontend| {
-                        !frontend_has_capable_decoder(
-                            frontend,
-                            Some(decoder),
-                            effective_decode_uops(bind.decode_uops, &bind.uops),
-                        )
-                    }) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                bind.span,
-                                format!(
-                                    "bind for unit '{}' frontend has no capable '{}' decoder slot",
-                                    bind.unit, decoder
-                                ),
-                            ),
-                        ));
-                    }
-                } else if machine.frontend.as_ref().is_some_and(|frontend| {
-                    !frontend_has_capable_decoder(
-                        frontend,
-                        None,
-                        effective_decode_uops(bind.decode_uops, &bind.uops),
-                    )
-                }) {
-                    let uops = effective_decode_uops(bind.decode_uops, &bind.uops);
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            bind.span,
-                            format!(
-                                "bind for unit '{}' frontend has no decoder slot capable of {uops} micro-ops",
-                                bind.unit
-                            ),
-                        ),
-                    ));
-                }
-                // Phase-based `reads`/`writes` must name a stage in this machine's
-                // pipeline (and so require a `pipeline` block to exist at all).
-                for phase in bind.reads.iter().chain(bind.writes.iter()) {
-                    if !phase_names.contains(phase.as_str()) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                bind.span,
-                                format!(
-                                    "bind for unit '{}' references phase '{}' not in machine '{}' pipeline",
-                                    bind.unit, phase, machine.name
-                                ),
-                            ),
-                        ));
-                    }
-                }
-
-                match item_cache.get(bind.unit.as_str()) {
-                    Some(ast::Item::Unit(_)) => {}
-                    Some(_) => diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            bind.span,
-                            format!(
-                                "'{}' bound in machine '{}' is not a unit",
-                                bind.unit, machine.name
-                            ),
-                        ),
-                    )),
-                    None => diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            bind.span,
-                            format!(
-                                "machine '{}' binds unknown unit '{}'",
-                                machine.name, bind.unit
-                            ),
-                        ),
-                    )),
-                }
-
-                if !bound_units.insert(bind.unit.as_str()) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            bind.span,
-                            format!(
-                                "duplicate bind for unit '{}' in machine '{}'",
-                                bind.unit, machine.name
-                            ),
-                        ),
-                    ));
-                }
-
-                for used in &bind.uses {
-                    if !resource_names.contains(used.as_str()) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                bind.span,
-                                format!(
-                                    "bind for unit '{}' uses unknown resource '{}' in machine '{}'",
-                                    bind.unit, used, machine.name
-                                ),
-                            ),
-                        ));
-                    }
-                }
-                for uop in &bind.uops {
-                    if uop.count <= 0 {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(uop.span, "micro-op count must be positive"),
-                        ));
-                    }
-                    if has_non_positive_occupancy(&uop.resources) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(uop.span, "resource occupancy must be positive"),
-                        ));
-                    }
-                    for referenced in resource_references(&uop.resources) {
-                        if !modeled_resource_names.contains(referenced) {
-                            diags.push((
-                                file.file_name.clone(),
-                                Rich::custom(
-                                    uop.span,
-                                    format!(
-                                        "bind for unit '{}' micro-op references unknown resource '{}' in machine '{}'",
-                                        bind.unit, referenced, machine.name
-                                    ),
-                                ),
-                            ));
-                        }
-                    }
-                }
-            }
-
-            // Overrides target a real instruction (at most once), use this
-            // machine's resources, and reference real pipeline phases.
-            let mut overridden: HashSet<&str> = HashSet::new();
-            for ov in &machine.overrides {
-                if ov.decode_uops.is_some_and(|count| count <= 0) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(ov.span, "decode_uops must be positive"),
-                    ));
-                }
-                if let Some(message) =
-                    eliminated_conflict(ov.eliminated, ov.latency, &ov.uses, &ov.uops)
-                {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(ov.span, message.to_string()),
-                    ));
-                }
-                if ov.decode_cycles.is_some_and(|cycles| cycles <= 0) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(ov.span, "decode_cycles must be positive"),
-                    ));
-                }
-                if let Some(decoder) = &ov.decoder
-                    && !frontend_decoder_names.contains(decoder.as_str())
-                {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            ov.span,
-                            format!(
-                                "override for '{}' references unknown frontend decoder '{}'",
-                                ov.instruction, decoder
-                            ),
-                        ),
-                    ));
-                }
-                match item_cache.get(ov.instruction.as_str()) {
-                    Some(ast::Item::Instruction(_)) => {}
-                    Some(_) => diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            ov.span,
-                            format!(
-                                "override target '{}' in machine '{}' is not an instruction",
-                                ov.instruction, machine.name
-                            ),
-                        ),
-                    )),
-                    None => diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            ov.span,
-                            format!(
-                                "machine '{}' overrides unknown instruction '{}'",
-                                machine.name, ov.instruction
-                            ),
-                        ),
-                    )),
-                }
-                if !overridden.insert(ov.instruction.as_str()) {
-                    diags.push((
-                        file.file_name.clone(),
-                        Rich::custom(
-                            ov.span,
-                            format!(
-                                "duplicate override for instruction '{}' in machine '{}'",
-                                ov.instruction, machine.name
-                            ),
-                        ),
-                    ));
-                }
-                for used in &ov.uses {
-                    if !resource_names.contains(used.as_str()) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                ov.span,
-                                format!(
-                                    "override for '{}' uses unknown resource '{}' in machine '{}'",
-                                    ov.instruction, used, machine.name
-                                ),
-                            ),
-                        ));
-                    }
-                }
-                for uop in &ov.uops {
-                    if uop.count <= 0 {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(uop.span, "micro-op count must be positive"),
-                        ));
-                    }
-                    if has_non_positive_occupancy(&uop.resources) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(uop.span, "resource occupancy must be positive"),
-                        ));
-                    }
-                    for referenced in resource_references(&uop.resources) {
-                        if !modeled_resource_names.contains(referenced) {
-                            diags.push((
-                                file.file_name.clone(),
-                                Rich::custom(
-                                    uop.span,
-                                    format!(
-                                        "override for '{}' micro-op references unknown resource '{}' in machine '{}'",
-                                        ov.instruction, referenced, machine.name
-                                    ),
-                                ),
-                            ));
-                        }
-                    }
-                }
-                for phase in ov.reads.iter().chain(ov.writes.iter()) {
-                    if !phase_names.contains(phase.as_str()) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                ov.span,
-                                format!(
-                                    "override for '{}' references phase '{}' not in machine '{}' pipeline",
-                                    ov.instruction, phase, machine.name
-                                ),
-                            ),
-                        ));
-                    }
-                }
-            }
-
-            // Fusion rules name instruction mnemonics on both sides.
-            if !machine.fusions.is_empty() {
-                let known_mnemonics: HashSet<String> = files
+            let file_name = file.file_name.as_str();
+            let (resources, modeled) = check_machine_resources(file_name, machine, &mut diags);
+            let names = MachineNames {
+                resources,
+                modeled,
+                frontend_decoders: machine
+                    .frontend
                     .iter()
-                    .flat_map(|f| f.instructions())
-                    .filter_map(|inst| {
-                        let params = resolve_params_for_instruction(inst, item_cache);
-                        params
-                            .get("MNEMONIC")
-                            .and_then(|(_, value)| value.as_ref())
-                            .and_then(as_string_literal)
-                    })
-                    .collect();
-                for fusion in &machine.fusions {
-                    for mnemonic in fusion.first.iter().chain(fusion.second.iter()) {
-                        if !known_mnemonics.contains(mnemonic) {
-                            diags.push((
-                                file.file_name.clone(),
-                                Rich::custom(
-                                    fusion.span,
-                                    format!(
-                                        "fusion mnemonic '{}' matches no instruction",
-                                        mnemonic
-                                    ),
-                                ),
-                            ));
-                        }
-                    }
+                    .flat_map(|frontend| frontend.decode.decoders.iter())
+                    .map(|decoder| decoder.name.as_str())
+                    .collect(),
+                phases: machine.pipeline.iter().map(|p| p.name.as_str()).collect(),
+            };
+            check_machine_frontend(file_name, machine, &mut diags);
+            check_machine_reg_files(file_name, machine, files, &mut diags);
+            check_machine_binds(file_name, machine, item_cache, &names, &mut diags);
+            check_machine_overrides(file_name, machine, item_cache, &names, &mut diags);
+            check_machine_fusions(file_name, machine, files, item_cache, &mut diags);
+            check_machine_forwards(file_name, machine, &names, &mut diags);
+        }
+    }
+
+    diags
+}
+
+struct MachineNames<'a> {
+    resources: HashSet<&'a str>,
+    modeled: HashSet<&'a str>,
+    frontend_decoders: HashSet<&'a str>,
+    phases: HashSet<&'a str>,
+}
+
+fn check_machine_resources<'a>(
+    file_name: &str,
+    machine: &'a ast::Machine,
+    diags: &mut Vec<(String, Diag)>,
+) -> (HashSet<&'a str>, HashSet<&'a str>) {
+    let mut resource_names: HashSet<&str> = HashSet::new();
+    for res in &machine.resources {
+        if !resource_names.insert(res.name.as_str()) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    res.span,
+                    format!(
+                        "duplicate resource '{}' in machine '{}'",
+                        res.name, machine.name
+                    ),
+                ),
+            ));
+        }
+    }
+
+    let mut modeled_resource_names = resource_names.clone();
+    let mut group_names: HashSet<&str> = HashSet::new();
+    for group in &machine.resource_groups {
+        if !group_names.insert(group.name.as_str())
+            || !modeled_resource_names.insert(group.name.as_str())
+        {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    group.span,
+                    format!(
+                        "duplicate resource group '{}' in machine '{}'",
+                        group.name, machine.name
+                    ),
+                ),
+            ));
+        }
+    }
+    let resource_groups: HashMap<&str, &ast::ResourceExpr> = machine
+        .resource_groups
+        .iter()
+        .map(|group| (group.name.as_str(), &group.resources))
+        .collect();
+    for group in &machine.resource_groups {
+        if resource_group_is_cyclic(group.name.as_str(), &resource_groups, &mut HashSet::new()) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    group.span,
+                    format!("cyclic resource group '{}'", group.name),
+                ),
+            ));
+        }
+    }
+    for group in &machine.resource_groups {
+        if has_non_positive_occupancy(&group.resources) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(group.span, "resource occupancy must be positive"),
+            ));
+        }
+        for referenced in resource_references(&group.resources) {
+            if !modeled_resource_names.contains(referenced) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        group.span,
+                        format!(
+                            "group '{}' references unknown resource '{}' in machine '{}'",
+                            group.name, referenced, machine.name
+                        ),
+                    ),
+                ));
+            }
+        }
+    }
+    (resource_names, modeled_resource_names)
+}
+
+fn check_machine_frontend(
+    file_name: &str,
+    machine: &ast::Machine,
+    diags: &mut Vec<(String, Diag)>,
+) {
+    if let Some(frontend) = &machine.frontend {
+        for (name, value) in [
+            ("bytes_per_cycle", frontend.fetch.bytes_per_cycle),
+            ("window_bytes", frontend.fetch.window_bytes),
+            ("alignment", frontend.fetch.alignment),
+            ("queue_bytes", frontend.fetch.queue_bytes),
+        ] {
+            if value <= 0 {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        frontend.fetch.span,
+                        format!("frontend fetch {name} must be positive"),
+                    ),
+                ));
+            }
+        }
+        for (name, value) in [
+            ("uops_per_cycle", frontend.decode.uops_per_cycle),
+            ("queue_uops", frontend.decode.queue_uops),
+        ] {
+            if value <= 0 {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        frontend.decode.span,
+                        format!("frontend decode {name} must be positive"),
+                    ),
+                ));
+            }
+        }
+        for decoder in &frontend.decode.decoders {
+            if decoder.max_uops_per_instruction <= 0 {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        decoder.span,
+                        format!(
+                            "frontend decoder '{}' max_uops_per_instruction must be positive",
+                            decoder.name
+                        ),
+                    ),
+                ));
+            }
+        }
+        let mut decoder_names = HashSet::new();
+        for decoder in &frontend.decode.decoders {
+            if !decoder_names.insert(decoder.name.as_str()) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        decoder.span,
+                        format!("duplicate frontend decoder '{}'", decoder.name),
+                    ),
+                ));
+            }
+        }
+        if frontend.decode.slots.is_empty() {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    frontend.decode.span,
+                    "frontend decode must declare at least one slot",
+                ),
+            ));
+        }
+        for slot in &frontend.decode.slots {
+            if !decoder_names.contains(slot.as_str()) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        frontend.decode.span,
+                        format!("frontend decode slot references unknown decoder '{slot}'"),
+                    ),
+                ));
+            }
+        }
+        if let Some(cache) = &frontend.decoded_cache {
+            for (name, value) in [
+                ("sets", cache.sets),
+                ("ways", cache.ways),
+                ("line_bytes", cache.line_bytes),
+                ("line_uops", cache.line_uops),
+                ("deliver_uops_per_cycle", cache.deliver_uops_per_cycle),
+            ] {
+                if value <= 0 {
+                    diags.push((
+                        file_name.to_string(),
+                        Rich::custom(
+                            cache.span,
+                            format!("frontend decoded_cache {name} must be positive"),
+                        ),
+                    ));
                 }
             }
+        }
+    }
+}
 
-            // Forwards run between this machine's resources, each pair at most once.
-            let mut fwd_pairs: HashSet<(&str, &str)> = HashSet::new();
-            for fw in &machine.forwards {
-                for (which, res) in [("source", &fw.from), ("target", &fw.to)] {
-                    if !resource_names.contains(res.as_str()) {
-                        diags.push((
-                            file.file_name.clone(),
-                            Rich::custom(
-                                fw.span,
-                                format!(
-                                    "forward {} '{}' is not a resource of machine '{}'",
-                                    which, res, machine.name
-                                ),
-                            ),
-                        ));
-                    }
-                }
-                if !fwd_pairs.insert((fw.from.as_str(), fw.to.as_str())) {
+fn check_machine_reg_files(
+    file_name: &str,
+    machine: &ast::Machine,
+    files: &[ast::File],
+    diags: &mut Vec<(String, Diag)>,
+) {
+    let class_map: HashMap<String, &ast::RegisterClass> = files
+        .iter()
+        .flat_map(|f| f.register_classes())
+        .map(|rc| (rc.name.clone(), rc))
+        .collect();
+    let machine_isas: HashSet<&str> = machine.for_isas.iter().map(String::as_str).collect();
+    let valid_files: HashSet<&str> = class_map
+        .values()
+        .filter(|rc| {
+            rc.for_isas
+                .iter()
+                .any(|i| machine_isas.contains(i.as_str()))
+        })
+        .map(|rc| rc.register_file(&class_map))
+        .collect();
+    let mut reg_file_names: HashSet<&str> = HashSet::new();
+    for (name, _) in &machine.reg_files {
+        if !reg_file_names.insert(name.as_str()) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    machine.span,
+                    format!(
+                        "duplicate reg_file '{}' in machine '{}'",
+                        name, machine.name
+                    ),
+                ),
+            ));
+        }
+        if !valid_files.contains(name.as_str()) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    machine.span,
+                    format!(
+                        "machine '{}' declares reg_file '{}' which is not a physical register file of its ISA(s)",
+                        machine.name, name
+                    ),
+                ),
+            ));
+        }
+    }
+}
+
+fn check_machine_binds(
+    file_name: &str,
+    machine: &ast::Machine,
+    item_cache: &HashMap<&str, &ast::Item>,
+    names: &MachineNames<'_>,
+    diags: &mut Vec<(String, Diag)>,
+) {
+    let mut bound_units: HashSet<&str> = HashSet::new();
+    for bind in &machine.binds {
+        if bind.decode_uops.is_some_and(|count| count <= 0) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(bind.span, "decode_uops must be positive"),
+            ));
+        }
+        if let Some(message) =
+            eliminated_conflict(bind.eliminated, bind.latency, &bind.uses, &bind.uops)
+        {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(bind.span, message.to_string()),
+            ));
+        }
+        if bind.decode_cycles.is_some_and(|cycles| cycles <= 0) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(bind.span, "decode_cycles must be positive"),
+            ));
+        }
+        if let Some(decoder) = &bind.decoder {
+            if !names.frontend_decoders.contains(decoder.as_str()) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        bind.span,
+                        format!(
+                            "bind for unit '{}' references unknown frontend decoder '{}'",
+                            bind.unit, decoder
+                        ),
+                    ),
+                ));
+            } else if machine.frontend.as_ref().is_some_and(|frontend| {
+                !frontend_has_capable_decoder(
+                    frontend,
+                    Some(decoder),
+                    effective_decode_uops(bind.decode_uops, &bind.uops),
+                )
+            }) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        bind.span,
+                        format!(
+                            "bind for unit '{}' frontend has no capable '{}' decoder slot",
+                            bind.unit, decoder
+                        ),
+                    ),
+                ));
+            }
+        } else if machine.frontend.as_ref().is_some_and(|frontend| {
+            !frontend_has_capable_decoder(
+                frontend,
+                None,
+                effective_decode_uops(bind.decode_uops, &bind.uops),
+            )
+        }) {
+            let uops = effective_decode_uops(bind.decode_uops, &bind.uops);
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    bind.span,
+                    format!(
+                        "bind for unit '{}' frontend has no decoder slot capable of {uops} micro-ops",
+                        bind.unit
+                    ),
+                ),
+            ));
+        }
+        // Phase-based `reads`/`writes` must name a stage in this machine's
+        // pipeline (and so require a `pipeline` block to exist at all).
+        for phase in bind.reads.iter().chain(bind.writes.iter()) {
+            if !names.phases.contains(phase.as_str()) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        bind.span,
+                        format!(
+                            "bind for unit '{}' references phase '{}' not in machine '{}' pipeline",
+                            bind.unit, phase, machine.name
+                        ),
+                    ),
+                ));
+            }
+        }
+
+        match item_cache.get(bind.unit.as_str()) {
+            Some(ast::Item::Unit(_)) => {}
+            Some(_) => diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    bind.span,
+                    format!(
+                        "'{}' bound in machine '{}' is not a unit",
+                        bind.unit, machine.name
+                    ),
+                ),
+            )),
+            None => diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    bind.span,
+                    format!(
+                        "machine '{}' binds unknown unit '{}'",
+                        machine.name, bind.unit
+                    ),
+                ),
+            )),
+        }
+
+        if !bound_units.insert(bind.unit.as_str()) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    bind.span,
+                    format!(
+                        "duplicate bind for unit '{}' in machine '{}'",
+                        bind.unit, machine.name
+                    ),
+                ),
+            ));
+        }
+
+        for used in &bind.uses {
+            if !names.resources.contains(used.as_str()) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        bind.span,
+                        format!(
+                            "bind for unit '{}' uses unknown resource '{}' in machine '{}'",
+                            bind.unit, used, machine.name
+                        ),
+                    ),
+                ));
+            }
+        }
+        for uop in &bind.uops {
+            if uop.count <= 0 {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(uop.span, "micro-op count must be positive"),
+                ));
+            }
+            if has_non_positive_occupancy(&uop.resources) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(uop.span, "resource occupancy must be positive"),
+                ));
+            }
+            for referenced in resource_references(&uop.resources) {
+                if !names.modeled.contains(referenced) {
                     diags.push((
-                        file.file_name.clone(),
+                        file_name.to_string(),
                         Rich::custom(
-                            fw.span,
+                            uop.span,
                             format!(
-                                "duplicate forward '{}' => '{}' in machine '{}'",
-                                fw.from, fw.to, machine.name
+                                "bind for unit '{}' micro-op references unknown resource '{}' in machine '{}'",
+                                bind.unit, referenced, machine.name
                             ),
                         ),
                     ));
@@ -1188,8 +1043,217 @@ fn check_performance_model(
             }
         }
     }
+}
 
-    diags
+fn check_machine_overrides(
+    file_name: &str,
+    machine: &ast::Machine,
+    item_cache: &HashMap<&str, &ast::Item>,
+    names: &MachineNames<'_>,
+    diags: &mut Vec<(String, Diag)>,
+) {
+    // Overrides target a real instruction (at most once), use this
+    // machine's resources, and reference real pipeline phases.
+    let mut overridden: HashSet<&str> = HashSet::new();
+    for ov in &machine.overrides {
+        if ov.decode_uops.is_some_and(|count| count <= 0) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(ov.span, "decode_uops must be positive"),
+            ));
+        }
+        if let Some(message) = eliminated_conflict(ov.eliminated, ov.latency, &ov.uses, &ov.uops) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(ov.span, message.to_string()),
+            ));
+        }
+        if ov.decode_cycles.is_some_and(|cycles| cycles <= 0) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(ov.span, "decode_cycles must be positive"),
+            ));
+        }
+        if let Some(decoder) = &ov.decoder
+            && !names.frontend_decoders.contains(decoder.as_str())
+        {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    ov.span,
+                    format!(
+                        "override for '{}' references unknown frontend decoder '{}'",
+                        ov.instruction, decoder
+                    ),
+                ),
+            ));
+        }
+        match item_cache.get(ov.instruction.as_str()) {
+            Some(ast::Item::Instruction(_)) => {}
+            Some(_) => diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    ov.span,
+                    format!(
+                        "override target '{}' in machine '{}' is not an instruction",
+                        ov.instruction, machine.name
+                    ),
+                ),
+            )),
+            None => diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    ov.span,
+                    format!(
+                        "machine '{}' overrides unknown instruction '{}'",
+                        machine.name, ov.instruction
+                    ),
+                ),
+            )),
+        }
+        if !overridden.insert(ov.instruction.as_str()) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    ov.span,
+                    format!(
+                        "duplicate override for instruction '{}' in machine '{}'",
+                        ov.instruction, machine.name
+                    ),
+                ),
+            ));
+        }
+        for used in &ov.uses {
+            if !names.resources.contains(used.as_str()) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        ov.span,
+                        format!(
+                            "override for '{}' uses unknown resource '{}' in machine '{}'",
+                            ov.instruction, used, machine.name
+                        ),
+                    ),
+                ));
+            }
+        }
+        for uop in &ov.uops {
+            if uop.count <= 0 {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(uop.span, "micro-op count must be positive"),
+                ));
+            }
+            if has_non_positive_occupancy(&uop.resources) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(uop.span, "resource occupancy must be positive"),
+                ));
+            }
+            for referenced in resource_references(&uop.resources) {
+                if !names.modeled.contains(referenced) {
+                    diags.push((
+                        file_name.to_string(),
+                        Rich::custom(
+                            uop.span,
+                            format!(
+                                "override for '{}' micro-op references unknown resource '{}' in machine '{}'",
+                                ov.instruction, referenced, machine.name
+                            ),
+                        ),
+                    ));
+                }
+            }
+        }
+        for phase in ov.reads.iter().chain(ov.writes.iter()) {
+            if !names.phases.contains(phase.as_str()) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        ov.span,
+                        format!(
+                            "override for '{}' references phase '{}' not in machine '{}' pipeline",
+                            ov.instruction, phase, machine.name
+                        ),
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn check_machine_fusions(
+    file_name: &str,
+    machine: &ast::Machine,
+    files: &[ast::File],
+    item_cache: &HashMap<&str, &ast::Item>,
+    diags: &mut Vec<(String, Diag)>,
+) {
+    // Fusion rules name instruction mnemonics on both sides.
+    if !machine.fusions.is_empty() {
+        let known_mnemonics: HashSet<String> = files
+            .iter()
+            .flat_map(|f| f.instructions())
+            .filter_map(|inst| {
+                let params = resolve_params_for_instruction(inst, item_cache);
+                params
+                    .get("MNEMONIC")
+                    .and_then(|(_, value)| value.as_ref())
+                    .and_then(as_string_literal)
+            })
+            .collect();
+        for fusion in &machine.fusions {
+            for mnemonic in fusion.first.iter().chain(fusion.second.iter()) {
+                if !known_mnemonics.contains(mnemonic) {
+                    diags.push((
+                        file_name.to_string(),
+                        Rich::custom(
+                            fusion.span,
+                            format!("fusion mnemonic '{}' matches no instruction", mnemonic),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn check_machine_forwards(
+    file_name: &str,
+    machine: &ast::Machine,
+    names: &MachineNames<'_>,
+    diags: &mut Vec<(String, Diag)>,
+) {
+    // Forwards run between this machine's resources, each pair at most once.
+    let mut fwd_pairs: HashSet<(&str, &str)> = HashSet::new();
+    for fw in &machine.forwards {
+        for (which, res) in [("source", &fw.from), ("target", &fw.to)] {
+            if !names.resources.contains(res.as_str()) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        fw.span,
+                        format!(
+                            "forward {} '{}' is not a resource of machine '{}'",
+                            which, res, machine.name
+                        ),
+                    ),
+                ));
+            }
+        }
+        if !fwd_pairs.insert((fw.from.as_str(), fw.to.as_str())) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(
+                    fw.span,
+                    format!(
+                        "duplicate forward '{}' => '{}' in machine '{}'",
+                        fw.from, fw.to, machine.name
+                    ),
+                ),
+            ));
+        }
+    }
 }
 
 fn resource_references(expr: &ast::ResourceExpr) -> Vec<&str> {

@@ -9,3 +9,6 @@ doctest = false
 
 [dependencies]
 tir.workspace = true
+
+[lints]
+workspace = true

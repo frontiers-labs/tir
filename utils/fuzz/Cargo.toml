@@ -55,3 +55,6 @@ path = "fuzz_targets/restructure.rs"
 test = false
 doc = false
 bench = false
+
+[lints]
+workspace = true

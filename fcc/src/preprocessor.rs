@@ -344,6 +344,13 @@ fn is_skipping(stack: &[CondState]) -> bool {
     stack.iter().any(|s| !matches!(s, CondState::Active))
 }
 
+fn directive_identifier(pp: &mut Lexer<'_, PreprocToken>) -> String {
+    match pp.next() {
+        Some(Ok(PreprocToken::Identifier(n))) => n,
+        _ => String::new(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TokenStream
 // ---------------------------------------------------------------------------
@@ -496,40 +503,7 @@ impl TokenStream {
         let skipping = is_skipping(&self.cond_stack);
 
         match pp.next() {
-            Some(Ok(PreprocToken::Define)) if !skipping => {
-                let name = match pp.next() {
-                    Some(Ok(PreprocToken::Identifier(n))) => n,
-                    _ => {
-                        self.skip_line(source.len(), pp.remainder());
-                        return;
-                    }
-                };
-                let remainder = pp.remainder();
-                let definition_text = logical_line(remainder);
-                let definition = if definition_text.starts_with('(') {
-                    let Some(parameters_end) = definition_text.find(')') else {
-                        self.skip_line(source.len(), remainder);
-                        return;
-                    };
-                    let parameters = &definition_text[1..parameters_end];
-                    let parameters = if parameters.trim().is_empty() {
-                        Vec::new()
-                    } else {
-                        parameters
-                            .split(',')
-                            .map(|parameter| parameter.trim().to_string())
-                            .collect()
-                    };
-                    MacroDefinition::Function {
-                        parameters,
-                        replacement: lex_replacement(&definition_text[parameters_end + 1..]),
-                    }
-                } else {
-                    MacroDefinition::Object(lex_replacement(&definition_text))
-                };
-                self.defines.insert(name, definition);
-                self.skip_line(source.len(), remainder);
-            }
+            Some(Ok(PreprocToken::Define)) if !skipping => self.process_define(source, pp),
 
             Some(Ok(PreprocToken::Undef)) if !skipping => {
                 if let Some(Ok(PreprocToken::Identifier(n))) = pp.next() {
@@ -541,76 +515,18 @@ impl TokenStream {
             Some(Ok(directive @ (PreprocToken::Include | PreprocToken::IncludeNext)))
                 if !skipping =>
             {
-                let remainder = pp.remainder();
-                let include = logical_line(remainder);
-                let include = include.trim_start();
-                let (delimiter, quoted) = match include.chars().next() {
-                    Some('"') => ('"', true),
-                    Some('<') => ('>', false),
-                    _ => {
-                        self.skip_line(source.len(), remainder);
-                        return;
-                    }
-                };
-                let Some(end) = include[1..].find(delimiter) else {
-                    self.skip_line(source.len(), remainder);
-                    return;
-                };
-                let path = include[1..end + 1].to_string();
-                self.skip_line(source.len(), remainder);
-                let resolved = if directive == PreprocToken::IncludeNext {
-                    self.resolve_include_next(&path)
-                } else {
-                    self.resolve_include(&path, quoted)
-                };
-                match resolved {
-                    Some((resolved, content, include_search_index)) => {
-                        let file = intern_file(&resolved.to_string_lossy(), &content);
-                        self.frames.push(Frame {
-                            source: file_source(file),
-                            offset: 0,
-                            file,
-                            path: resolved,
-                            include_search_index,
-                        });
-                    }
-                    None => {
-                        let span = Span::new(self.current_file(), directive_start);
-                        self.diagnostics
-                            .push(MissingInclude::new(span, path).into());
-                    }
-                }
+                self.process_include(source, directive_start, directive, pp);
             }
 
             Some(Ok(PreprocToken::Ifdef)) => {
-                let name = match pp.next() {
-                    Some(Ok(PreprocToken::Identifier(n))) => n,
-                    _ => String::new(),
-                };
-                let state = if skipping {
-                    CondState::OuterSkip
-                } else if self.defines.contains_key(&name) {
-                    CondState::Active
-                } else {
-                    CondState::Inactive
-                };
-                self.cond_stack.push(state);
+                let defined = self.defines.contains_key(&directive_identifier(&mut pp));
+                self.push_cond(skipping, defined);
                 self.skip_line(source.len(), pp.remainder());
             }
 
             Some(Ok(PreprocToken::Ifndef)) => {
-                let name = match pp.next() {
-                    Some(Ok(PreprocToken::Identifier(n))) => n,
-                    _ => String::new(),
-                };
-                let state = if skipping {
-                    CondState::OuterSkip
-                } else if !self.defines.contains_key(&name) {
-                    CondState::Active
-                } else {
-                    CondState::Inactive
-                };
-                self.cond_stack.push(state);
+                let defined = self.defines.contains_key(&directive_identifier(&mut pp));
+                self.push_cond(skipping, !defined);
                 self.skip_line(source.len(), pp.remainder());
             }
 
@@ -623,14 +539,7 @@ impl TokenStream {
                         &self.defines,
                         Span::new(self.current_file(), directive_start),
                     ) != 0;
-                let state = if skipping {
-                    CondState::OuterSkip
-                } else if result {
-                    CondState::Active
-                } else {
-                    CondState::Inactive
-                };
-                self.cond_stack.push(state);
+                self.push_cond(skipping, result);
                 self.skip_line(source.len(), remainder);
             }
 
@@ -638,72 +547,24 @@ impl TokenStream {
                 let remainder = pp.remainder();
                 let expression = logical_line(remainder);
                 let span = Span::new(self.current_file(), directive_start);
-                if let Some(top) = self.cond_stack.last_mut() {
-                    *top = match *top {
-                        CondState::Inactive => {
-                            if eval_if_expr(&expression, &self.defines, span) != 0 {
-                                CondState::Active
-                            } else {
-                                CondState::Inactive
-                            }
-                        }
-                        CondState::Active => CondState::Done,
-                        other => other,
-                    };
-                }
+                self.advance_cond(|this| eval_if_expr(&expression, &this.defines, span) != 0);
                 self.skip_line(source.len(), remainder);
             }
 
             Some(Ok(PreprocToken::Elifdef)) => {
-                let name = match pp.next() {
-                    Some(Ok(PreprocToken::Identifier(n))) => n,
-                    _ => String::new(),
-                };
-                if let Some(top) = self.cond_stack.last_mut() {
-                    *top = match *top {
-                        CondState::Inactive => {
-                            if self.defines.contains_key(&name) {
-                                CondState::Active
-                            } else {
-                                CondState::Inactive
-                            }
-                        }
-                        CondState::Active => CondState::Done,
-                        other => other,
-                    };
-                }
+                let name = directive_identifier(&mut pp);
+                self.advance_cond(|this| this.defines.contains_key(&name));
                 self.skip_line(source.len(), pp.remainder());
             }
 
             Some(Ok(PreprocToken::Elifndef)) => {
-                let name = match pp.next() {
-                    Some(Ok(PreprocToken::Identifier(n))) => n,
-                    _ => String::new(),
-                };
-                if let Some(top) = self.cond_stack.last_mut() {
-                    *top = match *top {
-                        CondState::Inactive => {
-                            if !self.defines.contains_key(&name) {
-                                CondState::Active
-                            } else {
-                                CondState::Inactive
-                            }
-                        }
-                        CondState::Active => CondState::Done,
-                        other => other,
-                    };
-                }
+                let name = directive_identifier(&mut pp);
+                self.advance_cond(|this| !this.defines.contains_key(&name));
                 self.skip_line(source.len(), pp.remainder());
             }
 
             Some(Ok(PreprocToken::Else)) => {
-                if let Some(top) = self.cond_stack.last_mut() {
-                    *top = match *top {
-                        CondState::Inactive => CondState::Active,
-                        CondState::Active => CondState::Done,
-                        other => other,
-                    };
-                }
+                self.advance_cond(|_| true);
                 self.skip_line(source.len(), pp.remainder());
             }
 
@@ -728,6 +589,118 @@ impl TokenStream {
 
             _ => self.skip_line(source.len(), pp.remainder()),
         }
+    }
+
+    fn process_define(&mut self, source: &str, mut pp: Lexer<'_, PreprocToken>) {
+        let name = match pp.next() {
+            Some(Ok(PreprocToken::Identifier(n))) => n,
+            _ => {
+                self.skip_line(source.len(), pp.remainder());
+                return;
+            }
+        };
+        let remainder = pp.remainder();
+        let definition_text = logical_line(remainder);
+        let definition = if definition_text.starts_with('(') {
+            let Some(parameters_end) = definition_text.find(')') else {
+                self.skip_line(source.len(), remainder);
+                return;
+            };
+            let parameters = &definition_text[1..parameters_end];
+            let parameters = if parameters.trim().is_empty() {
+                Vec::new()
+            } else {
+                parameters
+                    .split(',')
+                    .map(|parameter| parameter.trim().to_string())
+                    .collect()
+            };
+            MacroDefinition::Function {
+                parameters,
+                replacement: lex_replacement(&definition_text[parameters_end + 1..]),
+            }
+        } else {
+            MacroDefinition::Object(lex_replacement(&definition_text))
+        };
+        self.defines.insert(name, definition);
+        self.skip_line(source.len(), remainder);
+    }
+
+    fn process_include(
+        &mut self,
+        source: &str,
+        directive_start: usize,
+        directive: PreprocToken,
+        pp: Lexer<'_, PreprocToken>,
+    ) {
+        let remainder = pp.remainder();
+        let include = logical_line(remainder);
+        let include = include.trim_start();
+        let (delimiter, quoted) = match include.chars().next() {
+            Some('"') => ('"', true),
+            Some('<') => ('>', false),
+            _ => {
+                self.skip_line(source.len(), remainder);
+                return;
+            }
+        };
+        let Some(end) = include[1..].find(delimiter) else {
+            self.skip_line(source.len(), remainder);
+            return;
+        };
+        let path = include[1..end + 1].to_string();
+        self.skip_line(source.len(), remainder);
+        let resolved = if directive == PreprocToken::IncludeNext {
+            self.resolve_include_next(&path)
+        } else {
+            self.resolve_include(&path, quoted)
+        };
+        match resolved {
+            Some((resolved, content, include_search_index)) => {
+                let file = intern_file(&resolved.to_string_lossy(), &content);
+                self.frames.push(Frame {
+                    source: file_source(file),
+                    offset: 0,
+                    file,
+                    path: resolved,
+                    include_search_index,
+                });
+            }
+            None => {
+                let span = Span::new(self.current_file(), directive_start);
+                self.diagnostics
+                    .push(MissingInclude::new(span, path).into());
+            }
+        }
+    }
+
+    fn push_cond(&mut self, skipping: bool, active: bool) {
+        let state = if skipping {
+            CondState::OuterSkip
+        } else if active {
+            CondState::Active
+        } else {
+            CondState::Inactive
+        };
+        self.cond_stack.push(state);
+    }
+
+    fn advance_cond(&mut self, active: impl FnOnce(&Self) -> bool) {
+        let Some(&top) = self.cond_stack.last() else {
+            return;
+        };
+        let next = match top {
+            CondState::Inactive => {
+                if active(self) {
+                    CondState::Active
+                } else {
+                    CondState::Inactive
+                }
+            }
+            CondState::Active => CondState::Done,
+            other => other,
+        };
+        *self.cond_stack.last_mut().unwrap() = next;
     }
 
     fn next_unexpanded(&mut self) -> Option<ExpansionToken> {

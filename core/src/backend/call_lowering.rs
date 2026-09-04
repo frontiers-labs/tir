@@ -197,110 +197,11 @@ impl CallLowering {
         };
         let argument_offset = usize::from(result_address.is_some());
 
-        let mut tuple_arguments = Vec::new();
-        let mut lowered_arguments = Vec::with_capacity(args.len());
-        for (argument_index, (arg, alignment)) in
-            args.into_iter().zip(argument_alignments).enumerate()
-        {
-            // The elements the preparation pass recorded describe the argument
-            // on their own, so a tuple whose producing call has already been
-            // lowered away need not be read back.
-            if let Some(elements) = self
-                .tuple_argument_elements
-                .get(&(op.op().id, argument_index + argument_offset))
-            {
-                lowered_arguments.push((elements.clone(), alignment));
-                continue;
-            }
-            let ty = context.get_type_data(context.get_value(arg).ty());
-            if (ty.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<TupleType>()
-                .is_none()
-            {
-                lowered_arguments.push((vec![arg], alignment));
-                continue;
-            }
-            let defining_op = context.get_value(arg).defining_op().ok_or_else(|| {
-                PassError::InvalidRuleSet("tuple call argument has no scalar elements".to_string())
-            })?;
-            let tuple = context
-                .get_op(defining_op)
-                .clone()
-                .as_op::<MakeTupleOp>()
-                .ok_or_else(|| {
-                    PassError::InvalidRuleSet(
-                        "tuple call argument has no scalar elements".to_string(),
-                    )
-                })?;
-            lowered_arguments.push((tuple.operands().to_vec(), alignment));
-            tuple_arguments.push((defining_op, arg));
-        }
+        let (lowered_arguments, tuple_arguments) =
+            self.flatten_arguments(context, op, args, argument_alignments, argument_offset)?;
 
-        let mut next_slot = HashMap::new();
-        if result_address.is_some() {
-            reserve_indirect_result_argument(self.abi, &mut next_slot);
-        }
-        let mut argument_values = Vec::new();
-        let mut argument_locations = Vec::new();
-        let mut stack_args = 0u32;
-        for (values, alignment) in lowered_arguments {
-            let mut trial_slots = next_slot.clone();
-            align_argument_group(
-                self.abi,
-                alignment,
-                values
-                    .iter()
-                    .map(|&value| value_kind(context, self.abi, value)),
-                &mut trial_slots,
-            );
-            let direct = if self.abi.argument_group_fits_register_limit(values.len()) {
-                values
-                    .iter()
-                    .map(|&value| {
-                        next_argument_register(
-                            self.abi,
-                            None,
-                            value_kind(context, self.abi, value),
-                            &mut trial_slots,
-                        )
-                    })
-                    .collect::<Option<Vec<_>>>()
-            } else {
-                None
-            };
-            if let Some(registers) = direct {
-                next_slot = trial_slots;
-                argument_values.extend(values);
-                argument_locations.extend(registers.into_iter().map(ArgumentLocation::Register));
-                continue;
-            }
-
-            for &value in &values {
-                if self.abi.argument_group_rollback() == GroupRollback::Exhaust {
-                    exhaust_argument_registers(
-                        self.abi,
-                        value_kind(context, self.abi, value),
-                        &mut next_slot,
-                    );
-                }
-                let class = stack_class(self.abi, value_kind(context, self.abi, value))
-                    .ok_or_else(|| {
-                        PassError::InvalidRuleSet("ABI has no argument sequence".to_string())
-                    })?;
-                argument_values.push(value);
-                argument_locations.push(ArgumentLocation::Stack {
-                    class,
-                    offset: i64::from(stack_args * self.abi.stack.slot_size),
-                });
-                stack_args += 1;
-            }
-        }
-        let outgoing_size = if stack_args == 0 {
-            0
-        } else {
-            let bytes = stack_args * self.abi.stack.slot_size;
-            bytes.div_ceil(self.abi.stack.align) * self.abi.stack.align
-        };
+        let (argument_values, argument_locations, outgoing_size) =
+            self.assign_argument_locations(context, lowered_arguments, result_address.is_some())?;
 
         let indirect_class = self
             .abi
@@ -482,57 +383,7 @@ impl CallLowering {
         if let Some(tuple) =
             (result_type.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>()
         {
-            let registers = tuple_return_registers(context, self.abi, tuple)?;
-            let mut extracts = Vec::new();
-            for user in enclosing_def_use(context, op)?.users_of(result.number()) {
-                if self
-                    .tuple_argument_elements
-                    .keys()
-                    .any(|(call, _)| call == user)
-                {
-                    continue;
-                }
-                let instance = context.get_op(*user);
-                if instance.operands().first() != Some(&result) {
-                    return Err(PassError::InvalidRuleSet(
-                        "tuple call result has a non-extraction use".to_string(),
-                    ));
-                }
-                let extract = instance.clone().as_op::<TupleGetOp>().ok_or_else(|| {
-                    PassError::InvalidRuleSet(
-                        "tuple call result has a non-extraction use".to_string(),
-                    )
-                })?;
-                let register = registers.get(extract.index()).copied().ok_or_else(|| {
-                    PassError::InvalidRuleSet("tuple extraction index is out of bounds".to_string())
-                })?;
-                extracts.push((
-                    extract.index(),
-                    extract.result(),
-                    register,
-                    OperationRef::new(instance),
-                ));
-            }
-            extracts.sort_by_key(|(index, result, ..)| (*index, result.number()));
-
-            for &(_, extracted, register, _) in &extracts {
-                // The copy takes over the extraction's value: it is the one the
-                // rest of the function — and this pass's own record of the
-                // tuple's elements — already names.
-                context.retype_value(
-                    extracted,
-                    crate::backend::RegClassType::new(context, register.0),
-                );
-                let copy =
-                    self.emitter
-                        .copy(context, RegSlot::Value(extracted), RegSlot::Phys(register));
-                rewriter.insert_op_before(op, copy.as_ref())?;
-            }
-            for (_, _, _, extract) in extracts {
-                rewriter.erase_op_keeping_results(&extract)?;
-            }
-            rewriter.erase_op(op)?;
-            erase_dead_tuple_arguments(context, rewriter, &tuple_arguments)?;
+            self.lower_tuple_result(context, op, rewriter, result, tuple, &tuple_arguments)?;
             return Ok(true);
         }
 
@@ -552,7 +403,201 @@ impl CallLowering {
         erase_dead_tuple_arguments(context, rewriter, &tuple_arguments)?;
         Ok(true)
     }
+
+    /// Expand every tuple argument into the scalars the convention passes,
+    /// and name the constructions that lowering may leave dead.
+    fn flatten_arguments(
+        &self,
+        context: &Context,
+        op: &OperationRef,
+        args: Vec<ValueId>,
+        argument_alignments: Vec<u64>,
+        argument_offset: usize,
+    ) -> Result<(ArgumentGroups, Vec<(OpId, ValueId)>), PassError> {
+        let mut tuple_arguments = Vec::new();
+        let mut lowered_arguments = Vec::with_capacity(args.len());
+        for (argument_index, (arg, alignment)) in
+            args.into_iter().zip(argument_alignments).enumerate()
+        {
+            // The elements the preparation pass recorded describe the argument
+            // on their own, so a tuple whose producing call has already been
+            // lowered away need not be read back.
+            if let Some(elements) = self
+                .tuple_argument_elements
+                .get(&(op.op().id, argument_index + argument_offset))
+            {
+                lowered_arguments.push((elements.clone(), alignment));
+                continue;
+            }
+            let ty = context.get_type_data(context.get_value(arg).ty());
+            if (ty.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<TupleType>()
+                .is_none()
+            {
+                lowered_arguments.push((vec![arg], alignment));
+                continue;
+            }
+            let defining_op = context.get_value(arg).defining_op().ok_or_else(|| {
+                PassError::InvalidRuleSet("tuple call argument has no scalar elements".to_string())
+            })?;
+            let tuple = context
+                .get_op(defining_op)
+                .clone()
+                .as_op::<MakeTupleOp>()
+                .ok_or_else(|| {
+                    PassError::InvalidRuleSet(
+                        "tuple call argument has no scalar elements".to_string(),
+                    )
+                })?;
+            lowered_arguments.push((tuple.operands().to_vec(), alignment));
+            tuple_arguments.push((defining_op, arg));
+        }
+        Ok((lowered_arguments, tuple_arguments))
+    }
+
+    /// Place every argument group in registers where the convention has room
+    /// for the whole group, and on the outgoing stack otherwise.
+    fn assign_argument_locations(
+        &self,
+        context: &Context,
+        lowered_arguments: ArgumentGroups,
+        has_result_address: bool,
+    ) -> Result<(Vec<ValueId>, Vec<ArgumentLocation>, u32), PassError> {
+        let mut next_slot = HashMap::new();
+        if has_result_address {
+            reserve_indirect_result_argument(self.abi, &mut next_slot);
+        }
+        let mut argument_values = Vec::new();
+        let mut argument_locations = Vec::new();
+        let mut stack_args = 0u32;
+        for (values, alignment) in lowered_arguments {
+            let mut trial_slots = next_slot.clone();
+            align_argument_group(
+                self.abi,
+                alignment,
+                values
+                    .iter()
+                    .map(|&value| value_kind(context, self.abi, value)),
+                &mut trial_slots,
+            );
+            let direct = if self.abi.argument_group_fits_register_limit(values.len()) {
+                values
+                    .iter()
+                    .map(|&value| {
+                        next_argument_register(
+                            self.abi,
+                            None,
+                            value_kind(context, self.abi, value),
+                            &mut trial_slots,
+                        )
+                    })
+                    .collect::<Option<Vec<_>>>()
+            } else {
+                None
+            };
+            if let Some(registers) = direct {
+                next_slot = trial_slots;
+                argument_values.extend(values);
+                argument_locations.extend(registers.into_iter().map(ArgumentLocation::Register));
+                continue;
+            }
+
+            for &value in &values {
+                if self.abi.argument_group_rollback() == GroupRollback::Exhaust {
+                    exhaust_argument_registers(
+                        self.abi,
+                        value_kind(context, self.abi, value),
+                        &mut next_slot,
+                    );
+                }
+                let class = stack_class(self.abi, value_kind(context, self.abi, value))
+                    .ok_or_else(|| {
+                        PassError::InvalidRuleSet("ABI has no argument sequence".to_string())
+                    })?;
+                argument_values.push(value);
+                argument_locations.push(ArgumentLocation::Stack {
+                    class,
+                    offset: i64::from(stack_args * self.abi.stack.slot_size),
+                });
+                stack_args += 1;
+            }
+        }
+        let outgoing_size = if stack_args == 0 {
+            0
+        } else {
+            let bytes = stack_args * self.abi.stack.slot_size;
+            bytes.div_ceil(self.abi.stack.align) * self.abi.stack.align
+        };
+        Ok((argument_values, argument_locations, outgoing_size))
+    }
+
+    /// Rewrite every extraction of a tuple result into a copy out of the
+    /// register the convention returned that element in.
+    fn lower_tuple_result(
+        &self,
+        context: &Context,
+        op: &OperationRef,
+        rewriter: &mut Rewriter,
+        result: ValueId,
+        tuple: &TupleType,
+        tuple_arguments: &[(OpId, ValueId)],
+    ) -> Result<(), PassError> {
+        let registers = tuple_return_registers(context, self.abi, tuple)?;
+        let mut extracts = Vec::new();
+        for user in enclosing_def_use(context, op)?.users_of(result.number()) {
+            if self
+                .tuple_argument_elements
+                .keys()
+                .any(|(call, _)| call == user)
+            {
+                continue;
+            }
+            let instance = context.get_op(*user);
+            if instance.operands().first() != Some(&result) {
+                return Err(PassError::InvalidRuleSet(
+                    "tuple call result has a non-extraction use".to_string(),
+                ));
+            }
+            let extract = instance.clone().as_op::<TupleGetOp>().ok_or_else(|| {
+                PassError::InvalidRuleSet("tuple call result has a non-extraction use".to_string())
+            })?;
+            let register = registers.get(extract.index()).copied().ok_or_else(|| {
+                PassError::InvalidRuleSet("tuple extraction index is out of bounds".to_string())
+            })?;
+            extracts.push((
+                extract.index(),
+                extract.result(),
+                register,
+                OperationRef::new(instance),
+            ));
+        }
+        extracts.sort_by_key(|(index, result, ..)| (*index, result.number()));
+
+        for &(_, extracted, register, _) in &extracts {
+            // The copy takes over the extraction's value: it is the one the
+            // rest of the function — and this pass's own record of the
+            // tuple's elements — already names.
+            context.retype_value(
+                extracted,
+                crate::backend::RegClassType::new(context, register.0),
+            );
+            let copy =
+                self.emitter
+                    .copy(context, RegSlot::Value(extracted), RegSlot::Phys(register));
+            rewriter.insert_op_before(op, copy.as_ref())?;
+        }
+        for (_, _, _, extract) in extracts {
+            rewriter.erase_op_keeping_results(&extract)?;
+        }
+        rewriter.erase_op(op)?;
+        erase_dead_tuple_arguments(context, rewriter, tuple_arguments)?;
+        Ok(())
+    }
 }
+
+/// The scalars each call argument lowers to, with the alignment of the group
+/// they came from.
+type ArgumentGroups = Vec<(Vec<ValueId>, u64)>;
 
 fn insert_tuple_extractions(
     context: &Context,

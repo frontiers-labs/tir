@@ -73,6 +73,66 @@ fn prf_gate(
     }
 }
 
+fn reference_operands_ready(
+    model: &MachineModel,
+    base: &[ScoreboardInstr],
+    slot: &ScoreboardInstr,
+    issue: &[u64],
+    reg_writer: &HashMap<(String, u16), usize>,
+) -> u64 {
+    let mut operands_ready = 0u64;
+    for u in &slot.uses {
+        if let Some(&j) = reg_writer.get(u) {
+            let producer = &base[j % base.len()];
+            operands_ready =
+                operands_ready.max(issue[j] + edge_latency(model, producer, &slot.class));
+        }
+    }
+    operands_ready
+}
+
+fn earliest_lane_cycle(slot: &ScoreboardInstr, lanes: &HashMap<&str, Vec<u64>>, mut t: u64) -> u64 {
+    for r in slot.class.resources {
+        if let Some(lane_set) = lanes.get(*r) {
+            t = t.max(lane_set.iter().copied().min().unwrap_or(0));
+        }
+    }
+    t
+}
+
+fn reserve_lanes(slot: &ScoreboardInstr, lanes: &mut HashMap<&str, Vec<u64>>, busy_until: u64) {
+    for r in slot.class.resources {
+        if let Some(lane) = lanes
+            .get_mut(*r)
+            .and_then(|s| s.iter_mut().min_by_key(|c| **c))
+        {
+            *lane = busy_until;
+        }
+    }
+}
+
+fn reference_score_branch(
+    predictor: &mut dyn BranchPredictor,
+    branch: &BranchOutcome,
+    index: usize,
+    resolved: u64,
+    penalty: u64,
+    redirect: &mut u64,
+    handler: &mut Option<&mut dyn EventHandler>,
+) -> u64 {
+    let predicted = predictor.predict(branch.pc, branch.target);
+    let mut mispredicts = 0;
+    if predicted != branch.taken {
+        mispredicts = 1;
+        *redirect = (*redirect).max(resolved + penalty);
+        if let Some(h) = handler.as_mut() {
+            h.mispredicted(index, resolved, *redirect);
+        }
+    }
+    predictor.update(branch.pc, branch.target, branch.taken);
+    mispredicts
+}
+
 /// The pre-refactor closed-form engine, kept verbatim as the oracle for the
 /// differential test below: the cycle-stepped [`run`] must reproduce it
 /// bit-for-bit (cycle count, mispredicts, and the full event trace) on every
@@ -132,50 +192,34 @@ fn run_reference(
         if let Some(h) = handler.as_mut() {
             h.dispatched(d, i);
         }
-        let mut operands_ready = 0u64;
-        for u in &slot.uses {
-            if let Some(&j) = reg_writer.get(u) {
-                let producer = &base[j % base.len()];
-                operands_ready =
-                    operands_ready.max(issue[j] + edge_latency(model, producer, &slot.class));
-            }
-        }
+        let operands_ready = reference_operands_ready(model, base, slot, &issue, &reg_writer);
         let mut t = d.max(operands_ready);
         if config.in_order && i > 0 {
             t = t.max(issue[i - 1]);
         }
-        for r in slot.class.resources {
-            if let Some(lane_set) = lanes.get(*r) {
-                t = t.max(lane_set.iter().copied().min().unwrap_or(0));
-            }
-        }
+        t = earliest_lane_cycle(slot, &lanes, t);
         issue[i] = t;
         if let Some(h) = handler.as_mut() {
             h.issued(t, i);
         }
-        let busy_until = t + u64::from(slot.class.rthroughput.max(1));
-        for r in slot.class.resources {
-            if let Some(lane) = lanes
-                .get_mut(*r)
-                .and_then(|s| s.iter_mut().min_by_key(|c| **c))
-            {
-                *lane = busy_until;
-            }
-        }
+        reserve_lanes(
+            slot,
+            &mut lanes,
+            t + u64::from(slot.class.rthroughput.max(1)),
+        );
         for def in &slot.defs {
             reg_writer.insert(def.clone(), i);
         }
         if let (Some(p), Some(br)) = (predictor.as_mut(), &slot.branch) {
-            let predicted = p.predict(br.pc, br.target);
-            if predicted != br.taken {
-                mispredicts += 1;
-                let resolved = issue[i] + u64::from(slot.class.latency);
-                redirect = redirect.max(resolved + config.mispredict_penalty);
-                if let Some(h) = handler.as_mut() {
-                    h.mispredicted(i, resolved, redirect);
-                }
-            }
-            p.update(br.pc, br.target, br.taken);
+            mispredicts += reference_score_branch(
+                *p,
+                br,
+                i,
+                issue[i] + u64::from(slot.class.latency),
+                config.mispredict_penalty,
+                &mut redirect,
+                &mut handler,
+            );
         }
         let complete = issue[i] + u64::from(slot.class.latency);
         retire[i] = complete.max(if i > 0 { retire[i - 1] } else { 0 });

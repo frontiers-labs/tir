@@ -1,3 +1,100 @@
+fn machine_model_ts(
+    machine: &ast::Machine,
+    machine_id: usize,
+    scheduled: &[(String, String, String, Vec<String>)],
+) -> (proc_macro2::Ident, proc_macro2::TokenStream) {
+    let id_lit = proc_macro2::Literal::usize_unsuffixed(machine_id);
+
+    let pipeline_lits = machine.pipeline.iter().map(|p| {
+        let name_lit = proc_macro2::Literal::string(&p.name);
+        let prot_ts = protection_ts(p.protection);
+        quote! {
+            tir::backend::sched::PipelinePhase { name: #name_lit, protection: #prot_ts }
+        }
+    });
+
+    let forward_lits = machine.forwards.iter().map(|f| {
+        let from_lit = proc_macro2::Literal::string(&f.from);
+        let to_lit = proc_macro2::Literal::string(&f.to);
+        let lat_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(f.latency));
+        quote! {
+            tir::backend::sched::Forward { from: #from_lit, to: #to_lit, latency: #lat_lit }
+        }
+    });
+
+    let resource_lits = machine.resources.iter().map(|r| {
+        let name_lit = proc_macro2::Literal::string(&r.name);
+        let units_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(r.units));
+        quote! { tir::backend::sched::ProcUnit { name: #name_lit, units: #units_lit } }
+    });
+
+    let buffer_lits = machine.buffers.iter().map(|(name, size)| {
+        let name_lit = proc_macro2::Literal::string(name);
+        let size_lit = proc_macro2::Literal::u32_unsuffixed(clamp_u32(*size));
+        quote! { tir::backend::sched::BufferSize { name: #name_lit, size: #size_lit } }
+    });
+
+    let reg_file_lits = machine.reg_files.iter().map(|(name, count)| {
+        let name_lit = proc_macro2::Literal::string(name);
+        let count_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(*count));
+        quote! { tir::backend::sched::RegFile { name: #name_lit, count: #count_lit } }
+    });
+
+    let name_lit = proc_macro2::Literal::string(&machine.name);
+    let issue_width_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(
+        machine.issue_width.unwrap_or(1).max(1),
+    ));
+    let fn_ident = format_ident!("{}_model", to_snake_case(&machine.name));
+    let frontend = frontend_ts(machine.frontend.as_ref());
+
+    // Fusion rules are declared over mnemonics; the engine matches op
+    // names, so expand each mnemonic to every op named after it.
+    let ops_with_mnemonics = |mnemonics: &[String]| -> Vec<proc_macro2::Literal> {
+        scheduled
+            .iter()
+            .filter(|(_, _, mnemonic, _)| mnemonics.iter().any(|m| m == mnemonic))
+            .map(|(_, operation, _, _)| proc_macro2::Literal::string(operation))
+            .collect()
+    };
+    let fusion_lits: Vec<_> = machine
+        .fusions
+        .iter()
+        .map(|fusion| {
+            let first = ops_with_mnemonics(&fusion.first);
+            let second = ops_with_mnemonics(&fusion.second);
+            quote! {
+                tir::backend::sched::FusionGroup {
+                    first: &[#(#first),*],
+                    second: &[#(#second),*],
+                }
+            }
+        })
+        .collect();
+
+    let screaming = to_snake_case(&machine.name).to_uppercase();
+    let model_ident = format_ident!("{screaming}_MODEL");
+    let model = quote! {
+        static #model_ident: tir::backend::sched::MachineModel =
+            tir::backend::sched::MachineModel {
+                name: #name_lit,
+                id: #id_lit,
+                issue_width: #issue_width_lit,
+                frontend: #frontend,
+                resources: &[#(#resource_lits),*],
+                buffers: &[#(#buffer_lits),*],
+                pipeline: &[#(#pipeline_lits),*],
+                forwards: &[#(#forward_lits),*],
+                reg_files: &[#(#reg_file_lits),*],
+                fusions: &[#(#fusion_lits),*],
+            };
+
+        pub fn #fn_ident() -> tir::backend::sched::MachineModel {
+            #model_ident
+        }
+    };
+    (fn_ident, model)
+}
+
 /// Emit one `static <MACHINE>_MODEL` (plus the `fn <machine>_model()` accessor that
 /// returns it) per TMDL `machine` block, and resolve every instruction's `unit`
 /// membership against each machine's `bind`s into a concrete scheduling class.
@@ -68,95 +165,8 @@ fn emit_machine_models<'a>(
         for (index, class) in entries.iter().enumerate() {
             per_instruction[index].push(sched_class_ident(class, &mut class_pool));
         }
-        let id_lit = proc_macro2::Literal::usize_unsuffixed(machine_id);
-
-        let pipeline_lits = machine.pipeline.iter().map(|p| {
-            let name_lit = proc_macro2::Literal::string(&p.name);
-            let prot_ts = protection_ts(p.protection);
-            quote! {
-                tir::backend::sched::PipelinePhase { name: #name_lit, protection: #prot_ts }
-            }
-        });
-
-        let forward_lits = machine.forwards.iter().map(|f| {
-            let from_lit = proc_macro2::Literal::string(&f.from);
-            let to_lit = proc_macro2::Literal::string(&f.to);
-            let lat_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(f.latency));
-            quote! {
-                tir::backend::sched::Forward { from: #from_lit, to: #to_lit, latency: #lat_lit }
-            }
-        });
-
-        let resource_lits = machine.resources.iter().map(|r| {
-            let name_lit = proc_macro2::Literal::string(&r.name);
-            let units_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(r.units));
-            quote! { tir::backend::sched::ProcUnit { name: #name_lit, units: #units_lit } }
-        });
-
-        let buffer_lits = machine.buffers.iter().map(|(name, size)| {
-            let name_lit = proc_macro2::Literal::string(name);
-            let size_lit = proc_macro2::Literal::u32_unsuffixed(clamp_u32(*size));
-            quote! { tir::backend::sched::BufferSize { name: #name_lit, size: #size_lit } }
-        });
-
-        let reg_file_lits = machine.reg_files.iter().map(|(name, count)| {
-            let name_lit = proc_macro2::Literal::string(name);
-            let count_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(*count));
-            quote! { tir::backend::sched::RegFile { name: #name_lit, count: #count_lit } }
-        });
-
-        let name_lit = proc_macro2::Literal::string(&machine.name);
-        let issue_width_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(
-            machine.issue_width.unwrap_or(1).max(1),
-        ));
-        let fn_ident = format_ident!("{}_model", to_snake_case(&machine.name));
-        let frontend = frontend_ts(machine.frontend.as_ref());
-
-        // Fusion rules are declared over mnemonics; the engine matches op
-        // names, so expand each mnemonic to every op named after it.
-        let ops_with_mnemonics = |mnemonics: &[String]| -> Vec<proc_macro2::Literal> {
-            scheduled
-                .iter()
-                .filter(|(_, _, mnemonic, _)| mnemonics.iter().any(|m| m == mnemonic))
-                .map(|(_, operation, _, _)| proc_macro2::Literal::string(operation))
-                .collect()
-        };
-        let fusion_lits: Vec<_> = machine
-            .fusions
-            .iter()
-            .map(|fusion| {
-                let first = ops_with_mnemonics(&fusion.first);
-                let second = ops_with_mnemonics(&fusion.second);
-                quote! {
-                    tir::backend::sched::FusionGroup {
-                        first: &[#(#first),*],
-                        second: &[#(#second),*],
-                    }
-                }
-            })
-            .collect();
-
-        let screaming = to_snake_case(&machine.name).to_uppercase();
-        let model_ident = format_ident!("{screaming}_MODEL");
-        model_fns.push(quote! {
-            static #model_ident: tir::backend::sched::MachineModel =
-                tir::backend::sched::MachineModel {
-                    name: #name_lit,
-                    id: #id_lit,
-                    issue_width: #issue_width_lit,
-                    frontend: #frontend,
-                    resources: &[#(#resource_lits),*],
-                    buffers: &[#(#buffer_lits),*],
-                    pipeline: &[#(#pipeline_lits),*],
-                    forwards: &[#(#forward_lits),*],
-                    reg_files: &[#(#reg_file_lits),*],
-                    fusions: &[#(#fusion_lits),*],
-                };
-
-            pub fn #fn_ident() -> tir::backend::sched::MachineModel {
-                #model_ident
-            }
-        });
+        let (fn_ident, model) = machine_model_ts(machine, machine_id, &scheduled);
+        model_fns.push(model);
 
         // Select by the machine name, and by its alias when one is declared, so
         // the tool-facing name lives in TMDL next to the machine.

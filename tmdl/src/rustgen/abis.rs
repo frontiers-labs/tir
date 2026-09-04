@@ -97,6 +97,80 @@ fn abi_expr_value(
         .ok_or_else(|| TMDLError::Codegen(format!("ABI '{}' stack expression is not constant", abi.name)))
 }
 
+fn caller_saved_registers(
+    files: &[ast::File],
+    classes: &HashMap<String, &ast::RegisterClass>,
+    excluded: &HashSet<(String, u16)>,
+) -> Vec<proc_macro2::TokenStream> {
+    let mut caller_saved = Vec::new();
+    let mut seen = HashSet::new();
+    for class in files.iter().flat_map(|file| file.register_classes()) {
+        let class_id = reg_class_id(&class.name);
+        let file = class.register_file(classes).to_string();
+        // A status flag carries no encoding slot and is never allocated, so
+        // it is not one of `indexed_registers`; a call destroys it all the
+        // same — the flags a compare left behind do not survive the callee,
+        // and that is the edge that keeps a call out from between a compare
+        // and the branch reading it. Its index is its position in the class,
+        // which is how the implicit-register facts name it.
+        for (position, register) in class.resolve_registers().enumerate() {
+            let index = match register.encoding_index() {
+                Some(index) => index,
+                None if register.traits.contains(&ast::RegisterTrait::StatusFlag) => {
+                    position as u16
+                }
+                None => continue,
+            };
+            let identity = (file.clone(), index);
+            if !excluded.contains(&identity) && seen.insert(identity) {
+                caller_saved.push(quote! { (#class_id, #index) });
+            }
+        }
+    }
+    caller_saved
+}
+
+fn abi_stack_layout_ts(
+    abi: &ast::Abi,
+    item_cache: &HashMap<&str, &ast::Item>,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    let stack = abi.stack.as_ref().ok_or_else(|| {
+        TMDLError::Codegen(format!("ABI '{}' does not declare a stack layout", abi.name))
+    })?;
+    let align = abi_expr_value(stack.align.as_ref().ok_or_else(|| {
+        TMDLError::Codegen(format!("ABI '{}' stack has no alignment", abi.name))
+    })?, abi, item_cache)?;
+    let slot_size = abi_expr_value(stack.slot_size.as_ref().ok_or_else(|| {
+        TMDLError::Codegen(format!("ABI '{}' stack has no slot size", abi.name))
+    })?, abi, item_cache)?;
+    let red_zone = abi_expr_value(stack.red_zone.as_ref().ok_or_else(|| {
+        TMDLError::Codegen(format!("ABI '{}' stack has no red zone", abi.name))
+    })?, abi, item_cache)?;
+    let grows_down = match stack.grows {
+        Some(ast::AbiStackGrowth::Down) => true,
+        Some(ast::AbiStackGrowth::Up) => false,
+        None => {
+            return Err(TMDLError::Codegen(format!(
+                "ABI '{}' stack has no growth direction",
+                abi.name
+            )));
+        }
+    };
+    let save_style = match stack.save_style.unwrap_or(ast::AbiSaveStyle::FrameSlots) {
+        ast::AbiSaveStyle::FrameSlots => quote! { tir::backend::abi::SaveStyle::FrameSlots },
+        ast::AbiSaveStyle::PushPop => quote! { tir::backend::abi::SaveStyle::PushPop },
+    };
+    Ok(quote! {
+        tir::backend::abi::StackLayout {
+            align: #align,
+            slot_size: #slot_size,
+            red_zone: #red_zone,
+            grows_down: #grows_down,
+            save_style: #save_style,
+        }
+    })
+}
+
 fn emit_abi_info(
     files: &[ast::File],
     item_cache: &HashMap<&str, &ast::Item>,
@@ -110,32 +184,7 @@ fn emit_abi_info(
 
     for abi in files.iter().flat_map(|file| file.abis()) {
         let name = abi.alias.as_deref().unwrap_or(&abi.name);
-        let stack = abi.stack.as_ref().ok_or_else(|| {
-            TMDLError::Codegen(format!("ABI '{}' does not declare a stack layout", abi.name))
-        })?;
-        let align = abi_expr_value(stack.align.as_ref().ok_or_else(|| {
-            TMDLError::Codegen(format!("ABI '{}' stack has no alignment", abi.name))
-        })?, abi, item_cache)?;
-        let slot_size = abi_expr_value(stack.slot_size.as_ref().ok_or_else(|| {
-            TMDLError::Codegen(format!("ABI '{}' stack has no slot size", abi.name))
-        })?, abi, item_cache)?;
-        let red_zone = abi_expr_value(stack.red_zone.as_ref().ok_or_else(|| {
-            TMDLError::Codegen(format!("ABI '{}' stack has no red zone", abi.name))
-        })?, abi, item_cache)?;
-        let grows_down = match stack.grows {
-            Some(ast::AbiStackGrowth::Down) => true,
-            Some(ast::AbiStackGrowth::Up) => false,
-            None => {
-                return Err(TMDLError::Codegen(format!(
-                    "ABI '{}' stack has no growth direction",
-                    abi.name
-                )));
-            }
-        };
-        let save_style = match stack.save_style.unwrap_or(ast::AbiSaveStyle::FrameSlots) {
-            ast::AbiSaveStyle::FrameSlots => quote! { tir::backend::abi::SaveStyle::FrameSlots },
-            ast::AbiSaveStyle::PushPop => quote! { tir::backend::abi::SaveStyle::PushPop },
-        };
+        let stack_layout = abi_stack_layout_ts(abi, item_cache)?;
 
         let role = |name: &str| -> Result<Option<(proc_macro2::TokenStream, String, u16)>, TMDLError> {
             abi.roles
@@ -193,31 +242,7 @@ fn emit_abi_info(
         if let Some((_, file, index)) = &fp {
             excluded.insert((file.clone(), *index));
         }
-        let mut caller_saved = Vec::new();
-        let mut seen = HashSet::new();
-        for class in files.iter().flat_map(|file| file.register_classes()) {
-            let class_id = reg_class_id(&class.name);
-            let file = class.register_file(&classes).to_string();
-            // A status flag carries no encoding slot and is never allocated, so
-            // it is not one of `indexed_registers`; a call destroys it all the
-            // same — the flags a compare left behind do not survive the callee,
-            // and that is the edge that keeps a call out from between a compare
-            // and the branch reading it. Its index is its position in the class,
-            // which is how the implicit-register facts name it.
-            for (position, register) in class.resolve_registers().enumerate() {
-                let index = match register.encoding_index() {
-                    Some(index) => index,
-                    None if register.traits.contains(&ast::RegisterTrait::StatusFlag) => {
-                        position as u16
-                    }
-                    None => continue,
-                };
-                let identity = (file.clone(), index);
-                if !excluded.contains(&identity) && seen.insert(identity) {
-                    caller_saved.push(quote! { (#class_id, #index) });
-                }
-            }
-        }
+        let caller_saved = caller_saved_registers(files, &classes, &excluded);
 
         let callee_saved = callee_saved.into_iter().map(|(register, _, _)| register);
         let reserved = reserved.into_iter().map(|(register, _, _)| register);
@@ -245,13 +270,7 @@ fn emit_abi_info(
         entries.push(quote! {
             tir::backend::abi::AbiInfo {
                 name: #name,
-                stack: tir::backend::abi::StackLayout {
-                    align: #align,
-                    slot_size: #slot_size,
-                    red_zone: #red_zone,
-                    grows_down: #grows_down,
-                    save_style: #save_style,
-                },
+                stack: #stack_layout,
                 sp: #sp,
                 ra: #ra,
                 fp: #fp,

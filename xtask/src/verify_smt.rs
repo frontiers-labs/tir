@@ -1565,17 +1565,170 @@ struct TraceInfo {
     excluded: Option<String>,
 }
 
+fn exclude(info: &mut TraceInfo, reason: String) {
+    if info.excluded.is_none() {
+        info.excluded = Some(reason);
+    }
+}
+
+fn analyze_register_read(
+    spec: &IsaSpec,
+    info: &mut TraceInfo,
+    defined_vars: &std::collections::HashSet<String>,
+    name: &str,
+    fields: &[String],
+    value: &tir_verify::TraceValue,
+) {
+    if spec.ignore_regs.contains(&name) {
+        return;
+    }
+    // A bitfield flag register (x86 `rflags`) read: each mapped bit
+    // of the symbolic initial value relates to a flag slot.
+    if let Some((flag_name, _, bit_map)) = spec.flag_reg {
+        if name == flag_name {
+            let value = unwrap_bits_struct(value);
+            if value.smt.starts_with('v') && !defined_vars.contains(&value.smt) {
+                for (slot, bit) in bit_map {
+                    info.flag_reads.push((*slot, value.smt.clone(), *bit));
+                }
+            }
+            return;
+        }
+    }
+    if spec.mmio_regs.contains(&name) {
+        exclude(
+            info,
+            format!("reads MMIO-backed register {name} (platform memory map)"),
+        );
+        return;
+    }
+    if spec.struct_reg == Some(name) {
+        // Mapped fields (NZCV) relate to TMDL state; other fields
+        // (EL, nRW, ...) are pinned by each path's assertions.
+        if let Some(field) = fields.first() {
+            let full = format!("{name}.{field}");
+            if let Some(i) = spec.extra_regs.iter().position(|(n, _, _, _)| *n == full) {
+                let reg = MappedReg::Slot(i);
+                if let Some(field_value) = value.fields.get(field) {
+                    if field_value.smt.starts_with('v')
+                        && !info.writes.contains_key(&reg)
+                        && !defined_vars.contains(&field_value.smt)
+                    {
+                        info.reads.push((reg, field_value.smt.clone()));
+                    }
+                }
+            }
+        }
+        return;
+    }
+    // Bitfield registers (RISC-V mstatus, mtvec, mcause) carry
+    // their value in a single-field struct literal.
+    let value = unwrap_bits_struct(value);
+    match map_register(spec, name) {
+        Some(reg) => {
+            let concrete = value.smt.starts_with('#');
+            if !info.writes.contains_key(&reg) && (concrete || !defined_vars.contains(&value.smt)) {
+                info.reads.push((reg, value.smt.clone()));
+            }
+        }
+        None if value.symbolic => {
+            exclude(info, format!("reads unmapped register {}", name));
+        }
+        None => {}
+    }
+}
+
+fn analyze_register_write(
+    spec: &IsaSpec,
+    info: &mut TraceInfo,
+    name: &str,
+    fields: &[String],
+    value: &tir_verify::TraceValue,
+) {
+    if spec.ignore_regs.contains(&name) {
+        return;
+    }
+    // A write of the bitfield flag register: record each mapped bit
+    // as that flag slot's final value (last write wins).
+    if let Some((flag_name, _, bit_map)) = spec.flag_reg {
+        if name == flag_name {
+            let value = unwrap_bits_struct(value);
+            for (slot, bit) in bit_map {
+                info.flag_writes
+                    .insert(*slot, format!("((_ extract {bit} {bit}) {})", value.smt));
+            }
+            return;
+        }
+    }
+    if spec.struct_reg == Some(name) {
+        let mapped = fields.first().and_then(|field| {
+            let full = format!("{name}.{field}");
+            let i = spec.extra_regs.iter().position(|(n, _, _, _)| *n == full)?;
+            Some((i, value.fields.get(field)?))
+        });
+        match mapped {
+            Some((i, field_value)) => {
+                info.writes
+                    .insert(MappedReg::Slot(i), field_value.smt.clone());
+            }
+            None => exclude(
+                info,
+                format!("writes unmapped {name} field (trap/system path)"),
+            ),
+        }
+        return;
+    }
+    match map_register(spec, name) {
+        Some(MappedReg::X(n)) if Some(n) == spec.zero_reg => {}
+        Some(reg) => {
+            info.writes
+                .insert(reg, unwrap_bits_struct(value).smt.clone());
+        }
+        None => exclude(
+            info,
+            format!("writes unmapped register {} (trap/system path)", name),
+        ),
+    }
+}
+
+fn analyze_memory_access(
+    info: &mut TraceInfo,
+    is_read: bool,
+    kind: &tir_verify::TraceValue,
+    address: &tir_verify::TraceValue,
+    value: &tir_verify::TraceValue,
+    bytes: u32,
+) {
+    if !is_plain_access(kind) {
+        exclude(info, format!("non-plain memory access {}", kind.smt));
+        return;
+    }
+    if !matches!(bytes, 1 | 2 | 4 | 8) {
+        exclude(info, format!("unsupported access width {}", bytes));
+        return;
+    }
+    let access = MemAccess {
+        value: value.smt.clone(),
+        address: address.smt.clone(),
+        bytes,
+    };
+    if is_read {
+        if !info.mem_writes.is_empty() {
+            exclude(info, "memory read after write".to_string());
+            return;
+        }
+        info.mem_reads.push(access);
+    } else {
+        info.mem_writes.push(access);
+    }
+}
+
 fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo {
     let mut info = TraceInfo::default();
     // Variables bound by `define-const`: reads returning them are read-backs
     // of values the model computed (e.g. Sail writes `nextPC = PC + 4` and
     // reads it back later), not symbolic initial state.
     let mut defined_vars = std::collections::HashSet::new();
-    let exclude = |info: &mut TraceInfo, reason: String| {
-        if info.excluded.is_none() {
-            info.excluded = Some(reason);
-        }
-    };
 
     for event in events {
         match event {
@@ -1583,118 +1736,12 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
                 name,
                 fields,
                 value,
-            } => {
-                if spec.ignore_regs.contains(&name.as_str()) {
-                    continue;
-                }
-                // A bitfield flag register (x86 `rflags`) read: each mapped bit
-                // of the symbolic initial value relates to a flag slot.
-                if let Some((flag_name, _, bit_map)) = spec.flag_reg {
-                    if name == flag_name {
-                        let value = unwrap_bits_struct(value);
-                        if value.smt.starts_with('v') && !defined_vars.contains(&value.smt) {
-                            for (slot, bit) in bit_map {
-                                info.flag_reads.push((*slot, value.smt.clone(), *bit));
-                            }
-                        }
-                        continue;
-                    }
-                }
-                if spec.mmio_regs.contains(&name.as_str()) {
-                    exclude(
-                        &mut info,
-                        format!("reads MMIO-backed register {name} (platform memory map)"),
-                    );
-                    continue;
-                }
-                if spec.struct_reg == Some(name) {
-                    // Mapped fields (NZCV) relate to TMDL state; other fields
-                    // (EL, nRW, ...) are pinned by each path's assertions.
-                    if let Some(field) = fields.first() {
-                        let full = format!("{name}.{field}");
-                        if let Some(i) = spec.extra_regs.iter().position(|(n, _, _, _)| *n == full)
-                        {
-                            let reg = MappedReg::Slot(i);
-                            if let Some(field_value) = value.fields.get(field) {
-                                if field_value.smt.starts_with('v')
-                                    && !info.writes.contains_key(&reg)
-                                    && !defined_vars.contains(&field_value.smt)
-                                {
-                                    info.reads.push((reg, field_value.smt.clone()));
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                }
-                // Bitfield registers (RISC-V mstatus, mtvec, mcause) carry
-                // their value in a single-field struct literal.
-                let value = unwrap_bits_struct(value);
-                match map_register(spec, name) {
-                    Some(reg) => {
-                        let concrete = value.smt.starts_with('#');
-                        if !info.writes.contains_key(&reg)
-                            && (concrete || !defined_vars.contains(&value.smt))
-                        {
-                            info.reads.push((reg, value.smt.clone()));
-                        }
-                    }
-                    None if value.symbolic => {
-                        exclude(&mut info, format!("reads unmapped register {}", name));
-                    }
-                    None => {}
-                }
-            }
+            } => analyze_register_read(spec, &mut info, &defined_vars, name, fields, value),
             tir_verify::TraceEvent::WriteRegister {
                 name,
                 fields,
                 value,
-            } => {
-                if spec.ignore_regs.contains(&name.as_str()) {
-                    continue;
-                }
-                // A write of the bitfield flag register: record each mapped bit
-                // as that flag slot's final value (last write wins).
-                if let Some((flag_name, _, bit_map)) = spec.flag_reg {
-                    if name == flag_name {
-                        let value = unwrap_bits_struct(value);
-                        for (slot, bit) in bit_map {
-                            info.flag_writes
-                                .insert(*slot, format!("((_ extract {bit} {bit}) {})", value.smt));
-                        }
-                        continue;
-                    }
-                }
-                if spec.struct_reg == Some(name) {
-                    let mapped = fields.first().and_then(|field| {
-                        let full = format!("{name}.{field}");
-                        let i = spec.extra_regs.iter().position(|(n, _, _, _)| *n == full)?;
-                        Some((i, value.fields.get(field)?))
-                    });
-                    match mapped {
-                        Some((i, field_value)) => {
-                            info.writes
-                                .insert(MappedReg::Slot(i), field_value.smt.clone());
-                        }
-                        None => exclude(
-                            &mut info,
-                            format!("writes unmapped {name} field (trap/system path)"),
-                        ),
-                    }
-                    continue;
-                }
-                match map_register(spec, name) {
-                    Some(MappedReg::X(n)) if Some(n) == spec.zero_reg => {}
-                    Some(reg) => {
-                        info.writes
-                            .insert(reg, unwrap_bits_struct(value).smt.clone());
-                    }
-                    None => exclude(
-                        &mut info,
-                        format!("writes unmapped register {} (trap/system path)", name),
-                    ),
-                }
-            }
+            } => analyze_register_write(spec, &mut info, name, fields, value),
             tir_verify::TraceEvent::Declare { declaration } => {
                 if declaration.contains("(_ BitVec ") || declaration.ends_with(" Bool)") {
                     info.declares.push(declaration.clone());
@@ -1725,36 +1772,13 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
                 address,
                 value,
                 bytes,
-            }
-            | tir_verify::TraceEvent::WriteMemory {
+            } => analyze_memory_access(&mut info, true, kind, address, value, *bytes),
+            tir_verify::TraceEvent::WriteMemory {
                 kind,
                 address,
                 value,
                 bytes,
-            } => {
-                if !is_plain_access(kind) {
-                    exclude(&mut info, format!("non-plain memory access {}", kind.smt));
-                    continue;
-                }
-                if !matches!(bytes, 1 | 2 | 4 | 8) {
-                    exclude(&mut info, format!("unsupported access width {}", bytes));
-                    continue;
-                }
-                let access = MemAccess {
-                    value: value.smt.clone(),
-                    address: address.smt.clone(),
-                    bytes: *bytes,
-                };
-                if matches!(event, tir_verify::TraceEvent::ReadMemory { .. }) {
-                    if !info.mem_writes.is_empty() {
-                        exclude(&mut info, "memory read after write".to_string());
-                        continue;
-                    }
-                    info.mem_reads.push(access);
-                } else {
-                    info.mem_writes.push(access);
-                }
-            }
+            } => analyze_memory_access(&mut info, false, kind, address, value, *bytes),
         }
     }
     // A completing x86 instruction always advances the PC; a path that never
@@ -1810,15 +1834,12 @@ fn flat_read_memory(xlen: u32, bytes: u32, state: &str, address: &str) -> String
         .expect("memory access has at least one byte")
 }
 
-fn build_query(
+fn emit_state_transition(
     spec: &IsaSpec,
     model: &FlatModel,
     instr: &Instruction,
     case: &[u64],
-    trace: &TraceInfo,
-    modeled_cause: Option<(&str, &[u64])>,
 ) -> String {
-    let xlen = spec.xlen;
     let mut q = String::from("(set-logic QF_AUFBV)\n(set-option :produce-models true)\n");
     for field in &model.fields {
         let _ = writeln!(q, "(declare-const st0_{} {})", field.name, field.sort);
@@ -1854,6 +1875,23 @@ fn build_query(
             );
         }
     }
+    q
+}
+
+/// Assumptions on the addresses this instance may form: PC alignment on a
+/// fixed-width ISA, canonical (low-half) addresses on x86-64.
+fn emit_address_assumptions(
+    spec: &IsaSpec,
+    model: &FlatModel,
+    instr: &Instruction,
+    case: &[u64],
+) -> String {
+    let mut q = String::new();
+    // A value is (low-half) canonical when bits 63..47 are all zero: a valid
+    // user x86-64 linear address that the model's 52-bit physical masking leaves
+    // unchanged. Non-canonical accesses/jumps `#GP`, which TMDL's flat model
+    // does not track.
+    let canonical = |v: &str| format!("(= ((_ extract 63 47) {v}) (_ bv0 17))");
 
     // Fixed-width ISAs align the PC to the concrete instruction width. x86
     // pins the PC to a concrete aligned value in its config instead.
@@ -1868,12 +1906,6 @@ fn build_query(
             );
         }
     }
-
-    // A value is (low-half) canonical when bits 63..47 are all zero: a valid
-    // user x86-64 linear address that the model's 52-bit physical masking leaves
-    // unchanged. Non-canonical accesses/jumps `#GP`, which TMDL's flat model
-    // does not track.
-    let canonical = |v: &str| format!("(= ((_ extract 63 47) {v}) (_ bv0 17))");
 
     if spec.canonical_addrs {
         // Any address the branch target resolves to (an indirect jump register,
@@ -1913,17 +1945,29 @@ fn build_query(
             }
         }
     }
+    q
+}
 
-    for decl in &trace.declares {
-        q.push_str(decl);
-        q.push('\n');
-    }
+/// Pin the symbolic initial values the model read back to TMDL's initial state.
+fn emit_trace_read_constraints(
+    spec: &IsaSpec,
+    model: &FlatModel,
+    instr: &Instruction,
+    case: &[u64],
+    trace: &TraceInfo,
+) -> String {
+    let mut q = String::new();
+    let xlen = spec.xlen;
     let gw = spec.gpr_idx_width();
     let width_bytes = instr.width_bytes(case);
     let slot_access = |i: usize, state: &str| {
         let (_, class, slot, w) = spec.extra_regs[i];
         flat_read_register(model, class, state, &format!("(_ bv{} {})", slot, w))
     };
+    for decl in &trace.declares {
+        q.push_str(decl);
+        q.push('\n');
+    }
     // A read of a bitfield flag register pins each mapped bit of the symbolic
     // initial value to that flag slot's initial TMDL state.
     if let Some((_, class, _)) = spec.flag_reg {
@@ -1947,7 +1991,30 @@ fn build_query(
         };
         let _ = writeln!(q, "(assert (= {} {}))", var, init);
     }
+    q
+}
 
+fn build_query(
+    spec: &IsaSpec,
+    model: &FlatModel,
+    instr: &Instruction,
+    case: &[u64],
+    trace: &TraceInfo,
+    modeled_cause: Option<(&str, &[u64])>,
+) -> String {
+    let xlen = spec.xlen;
+    let mut q = emit_state_transition(spec, model, instr, case);
+    q.push_str(&emit_address_assumptions(spec, model, instr, case));
+    q.push_str(&emit_trace_read_constraints(
+        spec, model, instr, case, trace,
+    ));
+
+    let gw = spec.gpr_idx_width();
+    let width_bytes = instr.width_bytes(case);
+    let slot_access = |i: usize, state: &str| {
+        let (_, class, slot, w) = spec.extra_regs[i];
+        flat_read_register(model, class, state, &format!("(_ bv{} {})", slot, w))
+    };
     let mut final_eq: Vec<String> = (0..spec.reg_count)
         .filter(|n| Some(*n) != spec.zero_reg)
         .map(|n| {

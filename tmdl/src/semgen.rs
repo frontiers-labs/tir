@@ -135,49 +135,7 @@ pub(crate) fn emit<B: TermBackend>(
         |index: usize| -> Option<u64> { Some(eval_const(graph, child_node(index)?)?.0) };
 
     if let Some(op) = scalar_op(kind) {
-        return match op.smt {
-            SmtTemplate::Binary(_) => {
-                let (x, y) = (
-                    emit(graph, child_node(0)?, b)?,
-                    emit(graph, child_node(1)?, b)?,
-                );
-                // Result signedness `signed && signed` mirrors `APInt` binary ops.
-                let signed = b.signed(&x) && b.signed(&y);
-                let (x, y) = b.coerce(x, y);
-                Some(b.binary(kind, x, y, signed))
-            }
-            SmtTemplate::Compare(_) => {
-                let (x, y) = (
-                    emit(graph, child_node(0)?, b)?,
-                    emit(graph, child_node(1)?, b)?,
-                );
-                let (x, y) = b.coerce(x, y);
-                Some(b.compare(kind, x, y))
-            }
-            // The result width is the left operand's; the amount is
-            // reinterpreted at that width, matching the interpreter.
-            SmtTemplate::Shift(_) => {
-                let lhs = emit(graph, child_node(0)?, b)?;
-                let amount = emit(graph, child_node(1)?, b)?;
-                let width = b.width(&lhs);
-                let amount = b.fit(amount, width);
-                let signed = match kind {
-                    SymKind::ShiftRightArithmetic => true,
-                    SymKind::ShiftRightLogic => false,
-                    _ => b.signed(&lhs),
-                };
-                Some(b.shift(kind, lhs, amount, signed))
-            }
-            SmtTemplate::Unary(_) => {
-                let x = emit(graph, child_node(0)?, b)?;
-                Some(b.unary(kind, x))
-            }
-            SmtTemplate::Concat => {
-                let high = emit(graph, child_node(0)?, b)?;
-                let low = emit(graph, child_node(1)?, b)?;
-                Some(b.concat(high, low))
-            }
-        };
+        return emit_scalar_op(graph, node, kind, &op.smt, b);
     }
 
     match kind {
@@ -213,40 +171,98 @@ pub(crate) fn emit<B: TermBackend>(
             Some(b.widen(x, target, kind == SymKind::SExt))
         }
         SymKind::Bitcast => emit(graph, child_node(0)?, b),
-        SymKind::Extract => {
-            let x = emit(graph, child_node(0)?, b)?;
-            let high = const_child(1)? as u32;
-            let low = const_child(2)? as u32;
-            if high < low {
-                return None;
-            }
-            let mul = child_node(0)?;
-            if low >= b.width(&x) && matches!(graph.get_node(mul), SymKind::Mul) {
-                // `extract(a * b, 2N-1, N)` is the TMDL idiom for the high half
-                // of a full multiply (RISC-V `mulh`); the interpreter recomputes
-                // it as a signed double-width product.
-                let m0 = emit(graph, graph.children(mul).next()?, b)?;
-                let m1 = emit(graph, graph.children(mul).nth(1)?, b)?;
-                let (m0, m1) = b.coerce(m0, m1);
-                let wm = b.width(&m0);
-                if high >= 2 * wm {
-                    return None;
-                }
-                let m0 = b.widen(m0, 2 * wm, true);
-                let m1 = b.widen(m1, 2 * wm, true);
-                let product = b.binary(SymKind::Mul, m0, m1, true);
-                Some(b.slice(product, high, low))
-            } else if high < b.width(&x) {
-                Some(b.slice(x, high, low))
-            } else {
-                None
-            }
-        }
+        SymKind::Extract => emit_extract(graph, node, b),
         SymKind::Log2Ceil => {
             let (v, w) = eval_const(graph, node)?;
             Some(b.constant(w, v, false))
         }
         _ => b.special(graph, node, &mut |b, child| emit(graph, child, b)),
+    }
+}
+
+fn emit_scalar_op<B: TermBackend>(
+    graph: &impl ValueDag,
+    node: NodeId,
+    kind: SymKind,
+    template: &SmtTemplate,
+    b: &mut B,
+) -> Option<B::Val> {
+    let child_node = |index: usize| graph.children(node).nth(index);
+    match template {
+        SmtTemplate::Binary(_) => {
+            let (x, y) = (
+                emit(graph, child_node(0)?, b)?,
+                emit(graph, child_node(1)?, b)?,
+            );
+            // Result signedness `signed && signed` mirrors `APInt` binary ops.
+            let signed = b.signed(&x) && b.signed(&y);
+            let (x, y) = b.coerce(x, y);
+            Some(b.binary(kind, x, y, signed))
+        }
+        SmtTemplate::Compare(_) => {
+            let (x, y) = (
+                emit(graph, child_node(0)?, b)?,
+                emit(graph, child_node(1)?, b)?,
+            );
+            let (x, y) = b.coerce(x, y);
+            Some(b.compare(kind, x, y))
+        }
+        // The result width is the left operand's; the amount is
+        // reinterpreted at that width, matching the interpreter.
+        SmtTemplate::Shift(_) => {
+            let lhs = emit(graph, child_node(0)?, b)?;
+            let amount = emit(graph, child_node(1)?, b)?;
+            let width = b.width(&lhs);
+            let amount = b.fit(amount, width);
+            let signed = match kind {
+                SymKind::ShiftRightArithmetic => true,
+                SymKind::ShiftRightLogic => false,
+                _ => b.signed(&lhs),
+            };
+            Some(b.shift(kind, lhs, amount, signed))
+        }
+        SmtTemplate::Unary(_) => {
+            let x = emit(graph, child_node(0)?, b)?;
+            Some(b.unary(kind, x))
+        }
+        SmtTemplate::Concat => {
+            let high = emit(graph, child_node(0)?, b)?;
+            let low = emit(graph, child_node(1)?, b)?;
+            Some(b.concat(high, low))
+        }
+    }
+}
+
+fn emit_extract<B: TermBackend>(graph: &impl ValueDag, node: NodeId, b: &mut B) -> Option<B::Val> {
+    let child_node = |index: usize| graph.children(node).nth(index);
+    let const_child =
+        |index: usize| -> Option<u64> { Some(eval_const(graph, child_node(index)?)?.0) };
+    let x = emit(graph, child_node(0)?, b)?;
+    let high = const_child(1)? as u32;
+    let low = const_child(2)? as u32;
+    if high < low {
+        return None;
+    }
+    let mul = child_node(0)?;
+    if low >= b.width(&x) && matches!(graph.get_node(mul), SymKind::Mul) {
+        // `extract(a * b, 2N-1, N)` is the TMDL idiom for the high half
+        // of a full multiply (RISC-V `mulh`); the interpreter recomputes
+        // it as a signed double-width product.
+        let m0 = emit(graph, graph.children(mul).next()?, b)?;
+        let m1 = emit(graph, graph.children(mul).nth(1)?, b)?;
+        let (m0, m1) = b.coerce(m0, m1);
+        let wm = b.width(&m0);
+        if high >= 2 * wm {
+            return None;
+        }
+        let m0 = b.widen(m0, 2 * wm, true);
+        let m1 = b.widen(m1, 2 * wm, true);
+        let product = b.binary(SymKind::Mul, m0, m1, true);
+        Some(b.slice(product, high, low))
+    } else if high < b.width(&x) {
+        Some(b.slice(x, high, low))
+    } else {
+        None
     }
 }
 

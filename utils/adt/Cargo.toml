@@ -7,3 +7,6 @@ edition = "2024"
 
 [dev-dependencies]
 proptest.workspace = true
+
+[lints]
+workspace = true

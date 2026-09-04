@@ -68,14 +68,516 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         )
     };
 
+    let region_accessors = make_region_accessors(&regions);
+    let region_pieces = make_region_pieces(&regions);
+
+    let parser = if custom_format {
+        make_custom_parser()
+    } else {
+        make_parser(
+            &builder_name,
+            &regions,
+            &operand_names,
+            &attributes,
+            has_results,
+            result_variadic,
+            &state,
+        )
+    };
+
+    let attribute_verifier = make_attribute_verifier(&attributes);
+
+    let operand_pieces = make_operand_pieces(&operands, &state);
+
+    // An op that declares `sem` can be folded over constant operands by evaluating
+    // that expression, so derive `ConstantFold` for it automatically (unless the op
+    // already lists the interface, e.g. a hand-written fold).
+    let has_sem = sem.is_some();
+    let already_lists_fold = interfaces.iter().any(|path| {
+        path.segments
+            .last()
+            .is_some_and(|seg| seg.ident == "ConstantFold")
+    });
+    let derive_constant_fold = has_sem && !already_lists_fold;
+    let constant_fold_impl = if derive_constant_fold {
+        quote! {
+            impl tir::ConstantFold for #struct_name {
+                fn fold(&self, operands: &[tir::sem::Value]) -> Option<tir::sem::Value> {
+                    tir::sem::fold_with_sem(self, operands)
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+    let mut interfaces = interfaces;
+    if derive_constant_fold {
+        interfaces.push(syn::parse_quote!(tir::ConstantFold));
+    }
+
+    let (sem_hooks_impl, semantic_expr_method, as_sem_expr_impl) =
+        make_sem_impls(&sem, &struct_name, &operands, has_results);
+
+    let interface_registration_method = if interfaces.is_empty() {
+        quote! {}
+    } else {
+        let registrations = interfaces.iter().map(|interface| {
+            quote! {
+                context.register_operation_interface::<#struct_name, dyn #interface>();
+            }
+        });
+        quote! {
+            fn register_interfaces(context: &tir::Context) {
+                #(#registrations)*
+            }
+        }
+    };
+
+    let interface_impls = interfaces.iter().map(|interface| {
+        quote! {
+            impl tir::ImplementsOpInterface<dyn #interface> for #struct_name {
+                fn into_interface(self: Box<Self>) -> Box<dyn #interface> {
+                    self
+                }
+            }
+        }
+    });
+
+    let state_pieces = make_state_builder_pieces(&state);
+    let result_pieces = make_result_pieces(has_results, result_variadic, result_optional);
+    let attr_fn_params: Vec<_> = attributes
+        .iter()
+        .map(|attr| {
+            let name = op_fn_ident(&attr.name);
+            quote! { #name: impl Into<tir::attributes::AttributeValue> }
+        })
+        .collect();
+
+    let attr_fn_builders: Vec<_> = attributes
+        .iter()
+        .map(|attr| {
+            let name_ident = op_fn_ident(&attr.name);
+            let name_str = attr.name.clone();
+            quote! {
+                builder = builder.attr(#name_str, #name_ident.into());
+            }
+        })
+        .collect();
+
+    let verifiable_impl = if custom_verifier {
+        quote! {}
+    } else {
+        quote! { impl tir::Verifiable for #struct_name {} }
+    };
+
+    let schema_ident = format_ident!("__TIR_OP_SCHEMA_{}", struct_name);
+    let schema_registration = emit_schema(
+        &struct_name,
+        &dialect,
+        &name,
+        &operands,
+        &results,
+        &attributes,
+        &interfaces,
+    );
+    let opdef_verifier = emit_opdef_verifier(
+        &struct_name,
+        &schema_ident,
+        &operands,
+        &results,
+        state_output,
+        same_type,
+    );
+
+    let builder_code = emit_builder(
+        &builder_name,
+        &struct_name,
+        &region_pieces,
+        &operand_pieces,
+        &result_pieces,
+        &state_pieces,
+        &attribute_verifier,
+    );
+    let result_accessor = &result_pieces.accessor;
+    let op_fn_code = emit_op_fn(
+        &op_fn_name,
+        &builder_name,
+        &region_pieces,
+        &operand_pieces,
+        &result_pieces,
+        &attr_fn_params,
+        &attr_fn_builders,
+    );
+
+    quote! {
+        pub struct #struct_name(tir::OpHandle);
+
+        #schema_registration
+        #opdef_verifier
+
+        #(#interface_impls)*
+        #verifiable_impl
+        #sem_hooks_impl
+        #as_sem_expr_impl
+        #constant_fold_impl
+
+        #builder_code
+
+        impl #struct_name {
+            #region_accessors
+            #result_accessor
+            #state_accessors
+        }
+
+        impl tir::Operation for #struct_name {
+            fn name() -> &'static str
+            where
+                Self: Sized
+            {
+                #name
+            }
+
+            fn dialect() -> &'static str
+            where
+                Self: Sized
+            {
+                #dialect
+            }
+
+            fn id(&self) -> tir::OpId {
+                self.0.id
+            }
+
+            fn handle(&self) -> &tir::OpHandle {
+                &self.0
+            }
+
+            fn from_op_instance(instance: tir::OpHandle) -> Self {
+                assert_eq!(instance.name(), tir::OperationName::of::<Self>());
+                #struct_name(instance)
+            }
+
+            fn from_op_instance_dyn(instance: tir::OpHandle) -> Box<dyn tir::Operation> {
+                assert_eq!(instance.name(), tir::OperationName::of::<Self>());
+                Box::new(#struct_name(instance))
+            }
+
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
+
+            #printer
+
+            #parser
+
+            #semantic_expr_method
+            #interface_registration_method
+        }
+
+        impl From<&#struct_name> for tir::OpId {
+            fn from(v: &#struct_name) -> tir::OpId {
+                use tir::Operation;
+                v.id()
+            }
+        }
+
+        impl From<#struct_name> for tir::OpId {
+            fn from(v: #struct_name) -> tir::OpId {
+                use tir::Operation;
+                v.id()
+            }
+        }
+
+        #op_fn_code
+    }
+    .into()
+}
+type TokenStreams = Vec<proc_macro2::TokenStream>;
+
+fn emit_schema(
+    struct_name: &Ident,
+    dialect: &str,
+    name: &str,
+    operands: &[ValueSpec],
+    results: &[ValueSpec],
+    attributes: &[AttrSpec],
+    interfaces: &[Path],
+) -> proc_macro2::TokenStream {
+    let operand_schema_entries = operands.iter().map(|o| {
+        let (n, t, v) = (&o.name, &o.ty, o.variadic);
+        quote! { tir::FieldSchema { name: #n, ty: #t, variadic: #v } }
+    });
+    let result_schema_entries = results.iter().map(|r| {
+        let (n, t, v) = (&r.name, &r.ty, r.variadic);
+        quote! { tir::FieldSchema { name: #n, ty: #t, variadic: #v } }
+    });
+    let attr_schema_entries = attributes.iter().map(|a| {
+        let (n, t) = (&a.name, &a.ty);
+        quote! { tir::AttrSchema { name: #n, ty: #t } }
+    });
+    let interface_schema_entries = interfaces
+        .iter()
+        .map(|p| p.segments.last().unwrap().ident.to_string());
+
+    let schema_ident = format_ident!("__TIR_OP_SCHEMA_{}", struct_name);
+    quote! {
+        #[allow(non_upper_case_globals)]
+        #[tir::linkme::distributed_slice(tir::OP_SCHEMAS)]
+        #[linkme(crate = tir::linkme)]
+        static #schema_ident: tir::OpSchema = tir::OpSchema {
+            dialect: #dialect,
+            name: #name,
+            operands: &[#(#operand_schema_entries),*],
+            results: &[#(#result_schema_entries),*],
+            attributes: &[#(#attr_schema_entries),*],
+            interfaces: &[#(#interface_schema_entries),*],
+        };
+    }
+}
+
+fn emit_opdef_verifier(
+    struct_name: &Ident,
+    schema_ident: &Ident,
+    operands: &[ValueSpec],
+    results: &[ValueSpec],
+    state_output: bool,
+    same_type: bool,
+) -> proc_macro2::TokenStream {
+    let operand_constraint_checkers: Vec<_> = operands
+        .iter()
+        .map(|operand| normalize_constraint_name(&operand.ty))
+        .map(|name| parse_constraint_tokens(&name))
+        .collect();
+
+    let result_constraint_checkers: Vec<_> = results
+        .iter()
+        .map(|result| normalize_constraint_name(&result.ty))
+        .map(|name| parse_constraint_tokens(&name))
+        .collect();
+
+    quote! {
+        impl tir::OpDefVerifiable for #struct_name {
+            fn verify_operands(&self, context: &tir::Context) -> Result<(), tir::Error> {
+                fn __satisfies_constraint<C: tir::TypeConstraint + 'static>(ty: &dyn tir::Type) -> bool {
+                    C::satisfies(ty)
+                }
+                static SPEC: tir::OpDefSpec = tir::OpDefSpec {
+                    schema: &#schema_ident,
+                    operand_checkers: &[#(__satisfies_constraint::<#operand_constraint_checkers>),*],
+                    result_checkers: &[#(__satisfies_constraint::<#result_constraint_checkers>),*],
+                    state_output: #state_output,
+                    same_type: #same_type,
+                };
+                tir::verify_opdef_operands(context, &self.0, <Self as tir::Operation>::name(), &SPEC)
+            }
+            fn verify_attributes(&self, context: &tir::Context) -> Result<(), tir::Error> {
+                tir::verify_opdef_attributes(
+                    context,
+                    &self.0,
+                    <Self as tir::Operation>::name(),
+                    #schema_ident.attributes,
+                )
+            }
+
+        }
+    }
+}
+
+fn emit_builder(
+    builder_name: &Ident,
+    struct_name: &Ident,
+    regions: &RegionPieces,
+    operands: &OperandPieces,
+    results: &ResultPieces,
+    state: &StatePieces,
+    attribute_verifier: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let (region_fields, region_defaults, region_builders, region_fills) = (
+        &regions.fields,
+        &regions.defaults,
+        &regions.builders,
+        &regions.fills,
+    );
+    let (operand_fields, operand_defaults, operand_builders, operand_collect) = (
+        &operands.fields,
+        &operands.defaults,
+        &operands.builders,
+        &operands.collect,
+    );
+    let segment_sizes_setup = &operands.segment_sizes_setup;
+    let attributes_binding = &operands.attributes_binding;
+    let segment_sizes_attr = &operands.segment_sizes_attr;
+    let (result_builder_field, result_builder_default, result_builder_method, result_build) = (
+        &results.builder_field,
+        &results.builder_default,
+        &results.builder_method,
+        &results.build,
+    );
+    let (state_builder_field, state_builder_default, state_builder_method, state_result_build) = (
+        &state.builder_field,
+        &state.builder_default,
+        &state.builder_method,
+        &state.result_build,
+    );
+
+    quote! {
+        pub struct #builder_name {
+            context: tir::Context,
+            attributes: Vec<tir::attributes::NamedAttribute>,
+            #(#region_fields,)*
+            #(#operand_fields,)*
+            #result_builder_field
+            #state_builder_field
+        }
+
+        impl #builder_name {
+            pub fn new(context: &tir::Context) -> #builder_name {
+                Self {
+                    context: context.clone(),
+                    attributes: vec![],
+                    #(#region_defaults,)*
+                    #(#operand_defaults,)*
+                    #result_builder_default
+                    #state_builder_default
+                }
+            }
+
+            #(#region_builders)*
+            #(#operand_builders)*
+            #result_builder_method
+            #state_builder_method
+
+            pub fn attr(mut self, name: &str, value: tir::attributes::AttributeValue) -> Self {
+                let attribute = self.context.named_attribute(name, value);
+                self.attributes.push(attribute);
+                self
+            }
+
+            /// [`Self::attr`] for a name already interned in the context.
+            pub fn attr_sym(mut self, name: tir::Sym, value: tir::attributes::AttributeValue) -> Self {
+                self.attributes.push(tir::attributes::NamedAttribute::new(name, value));
+                self
+            }
+
+            pub fn build(self) -> #struct_name {
+                let mut regions = vec![];
+
+                #(#region_fills)*
+
+                #attribute_verifier
+
+                let mut operand_vec: Vec<tir::ValueId> = vec![];
+                #segment_sizes_setup
+                #(#operand_collect)*
+
+                #result_build
+                #state_result_build
+
+                #attributes_binding
+                #segment_sizes_attr
+
+                let instance = tir::OpInstance::new::<#struct_name>(
+                    self.context.as_context_ref(),
+                    operand_vec,
+                    result_vec,
+                    regions,
+                    attributes,
+                );
+
+                let instance = self.context.add_operation(instance);
+
+                #struct_name(instance)
+            }
+        }
+    }
+}
+
+fn emit_op_fn(
+    op_fn_name: &Ident,
+    builder_name: &Ident,
+    regions: &RegionPieces,
+    operands: &OperandPieces,
+    results: &ResultPieces,
+    attr_fn_params: &TokenStreams,
+    attr_fn_builders: &TokenStreams,
+) -> proc_macro2::TokenStream {
+    let (region_fn_params, region_fn_builders) = (&regions.fn_params, &regions.fn_builders);
+    let (operand_fn_params, operand_fn_builders) = (&operands.fn_params, &operands.fn_builders);
+    let (result_fn_param, result_fn_builder) = (&results.fn_param, &results.fn_builder);
+
+    quote! {
+        // Generated: one parameter per declared port, which for a machine
+        // instruction is however many registers it names.
+        #[allow(clippy::too_many_arguments)]
+        pub fn #op_fn_name(
+            context: &tir::Context,
+            #(#operand_fn_params,)*
+            #(#attr_fn_params,)*
+            #result_fn_param
+            #(#region_fn_params,)*
+        ) -> #builder_name {
+            let mut builder = #builder_name::new(context);
+            #(#operand_fn_builders)*
+            #(#attr_fn_builders)*
+            #result_fn_builder
+            #(#region_fn_builders)*
+            builder
+        }
+    }
+}
+
+struct StatePieces {
+    builder_field: proc_macro2::TokenStream,
+    builder_default: proc_macro2::TokenStream,
+    builder_method: proc_macro2::TokenStream,
+    result_build: proc_macro2::TokenStream,
+}
+
+fn make_state_builder_pieces(state: &StatePorts) -> StatePieces {
+    if state.output {
+        StatePieces {
+            builder_field: quote! { state_result: bool, },
+            builder_default: quote! { state_result: false, },
+            builder_method: quote! {
+                pub fn state_result(mut self) -> Self {
+                    self.state_result = true;
+                    self
+                }
+            },
+            result_build: quote! {
+                let mut result_vec = result_vec;
+                if self.state_result {
+                    let ty = tir::builtin::StateType::new(&self.context);
+                    result_vec.push(self.context.create_value(ty, None).id());
+                }
+            },
+        }
+    } else {
+        StatePieces {
+            builder_field: quote! {},
+            builder_default: quote! {},
+            builder_method: quote! {},
+            result_build: quote! {},
+        }
+    }
+}
+
+struct RegionPieces {
+    fields: TokenStreams,
+    defaults: TokenStreams,
+    builders: TokenStreams,
+    fills: TokenStreams,
+    fn_params: TokenStreams,
+    fn_builders: TokenStreams,
+}
+
+fn make_region_pieces(regions: &[Region]) -> RegionPieces {
     let mut region_fills = vec![];
     let mut region_fields = vec![];
     let mut region_defaults = vec![];
     let mut region_builders = vec![];
 
-    let region_accessors = make_region_accessors(&regions);
-
-    for r in &regions {
+    for r in regions {
         let name = format_ident!("{}", r.name);
 
         let name_str = r.name.clone();
@@ -137,30 +639,62 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         }
     }
 
-    let parser = if custom_format {
-        make_custom_parser()
-    } else {
-        make_parser(
-            &builder_name,
-            &regions,
-            &operand_names,
-            &attributes,
-            has_results,
-            result_variadic,
-            &state,
-        )
-    };
+    let region_fn_params: Vec<_> = regions
+        .iter()
+        .map(|region| {
+            let name = format_ident!("{}", region.name);
+            if region.variadic {
+                quote! { #name: Vec<tir::RegionId> }
+            } else {
+                quote! { #name: Option<tir::RegionId> }
+            }
+        })
+        .collect();
 
-    let attribute_verifier = make_attribute_verifier(&attributes);
+    let region_fn_builders: Vec<_> = regions
+        .iter()
+        .map(|region| {
+            let name = format_ident!("{}", region.name);
+            if region.variadic {
+                quote! { builder = builder.#name(#name); }
+            } else {
+                quote! {
+                    if let Some(region) = #name {
+                        builder = builder.#name(region);
+                    }
+                }
+            }
+        })
+        .collect();
 
-    // Operand support in builder
+    RegionPieces {
+        fields: region_fields,
+        defaults: region_defaults,
+        builders: region_builders,
+        fills: region_fills,
+        fn_params: region_fn_params,
+        fn_builders: region_fn_builders,
+    }
+}
+
+struct OperandPieces {
+    fields: TokenStreams,
+    defaults: TokenStreams,
+    builders: TokenStreams,
+    fn_params: TokenStreams,
+    fn_builders: TokenStreams,
+    collect: TokenStreams,
+    segment_sizes_setup: proc_macro2::TokenStream,
+    attributes_binding: proc_macro2::TokenStream,
+    segment_sizes_attr: proc_macro2::TokenStream,
+}
+
+fn make_operand_pieces(operands: &[ValueSpec], state: &StatePorts) -> OperandPieces {
     let mut operand_fields = vec![];
     let mut operand_defaults = vec![];
     let mut operand_builders = vec![];
     let mut operand_fn_params = vec![];
     let mut operand_fn_builders = vec![];
-
-    let has_variadic = operands.iter().any(|o| o.variadic);
 
     for (index, operand) in operands.iter().enumerate() {
         let field = format_ident!("{}", operand.name);
@@ -222,6 +756,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         }
     }
 
+    let has_variadic = operands.iter().any(|o| o.variadic);
     // Collect operands in declaration order. Variadic ops additionally record each
     // declared operand's segment size in the `operand_segment_sizes` attribute so
     // groups can be recovered; fixed-arity ops keep the original simple collection.
@@ -283,60 +818,34 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    // Result support
-    let result_accessor = if has_results {
-        quote! {
-            pub fn result(&self) -> tir::ValueId {
-                self.0.results()[0]
-            }
-        }
-    } else {
-        quote! {}
-    };
-
-    let operand_constraint_checkers: Vec<_> = operands
-        .iter()
-        .map(|operand| normalize_constraint_name(&operand.ty))
-        .map(|name| parse_constraint_tokens(&name))
-        .collect();
-
-    let result_constraint_checkers: Vec<_> = results
-        .iter()
-        .map(|result| normalize_constraint_name(&result.ty))
-        .map(|name| parse_constraint_tokens(&name))
-        .collect();
-
-    // An op that declares `sem` can be folded over constant operands by evaluating
-    // that expression, so derive `ConstantFold` for it automatically (unless the op
-    // already lists the interface, e.g. a hand-written fold).
-    let has_sem = sem.is_some();
-    let already_lists_fold = interfaces.iter().any(|path| {
-        path.segments
-            .last()
-            .is_some_and(|seg| seg.ident == "ConstantFold")
-    });
-    let derive_constant_fold = has_sem && !already_lists_fold;
-    let constant_fold_impl = if derive_constant_fold {
-        quote! {
-            impl tir::ConstantFold for #struct_name {
-                fn fold(&self, operands: &[tir::sem::Value]) -> Option<tir::sem::Value> {
-                    tir::sem::fold_with_sem(self, operands)
-                }
-            }
-        }
-    } else {
-        quote! {}
-    };
-    let mut interfaces = interfaces;
-    if derive_constant_fold {
-        interfaces.push(syn::parse_quote!(tir::ConstantFold));
+    OperandPieces {
+        fields: operand_fields,
+        defaults: operand_defaults,
+        builders: operand_builders,
+        fn_params: operand_fn_params,
+        fn_builders: operand_fn_builders,
+        collect: operand_collect,
+        segment_sizes_setup,
+        attributes_binding,
+        segment_sizes_attr,
     }
+}
 
-    // The `sem = "..."` declaration is lowered at run time by tir-symbolic's graph
-    // builder. The op provides the operand-symbol map plus the hooks the builder
-    // needs: `$splice` atoms call op methods, and width-changing ops read the op's
-    // result width.
-    let (sem_hooks_impl, semantic_expr_method, as_sem_expr_impl) = if let Some(sem) = &sem {
+/// The `sem = "..."` declaration is lowered at run time by tir-symbolic's graph
+/// builder. The op provides the operand-symbol map plus the hooks the builder
+/// needs: `$splice` atoms call op methods, and width-changing ops read the op's
+/// result width.
+fn make_sem_impls(
+    sem: &Option<Sem>,
+    struct_name: &Ident,
+    operands: &[ValueSpec],
+    has_results: bool,
+) -> (
+    proc_macro2::TokenStream,
+    proc_macro2::TokenStream,
+    proc_macro2::TokenStream,
+) {
+    if let Some(sem) = sem {
         let src = &sem.src;
         let sym_pairs: Vec<proc_macro2::TokenStream> = operands
             .iter()
@@ -431,55 +940,33 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         (hooks, sem_method, as_impl)
     } else {
         (quote! {}, quote! {}, quote! {})
-    };
+    }
+}
 
-    let interface_registration_method = if interfaces.is_empty() {
-        quote! {}
+struct ResultPieces {
+    accessor: proc_macro2::TokenStream,
+    builder_field: proc_macro2::TokenStream,
+    builder_default: proc_macro2::TokenStream,
+    builder_method: proc_macro2::TokenStream,
+    fn_param: proc_macro2::TokenStream,
+    fn_builder: proc_macro2::TokenStream,
+    build: proc_macro2::TokenStream,
+}
+
+fn make_result_pieces(
+    has_results: bool,
+    result_variadic: bool,
+    result_optional: bool,
+) -> ResultPieces {
+    let result_accessor = if has_results {
+        quote! {
+            pub fn result(&self) -> tir::ValueId {
+                self.0.results()[0]
+            }
+        }
     } else {
-        let registrations = interfaces.iter().map(|interface| {
-            quote! {
-                context.register_operation_interface::<#struct_name, dyn #interface>();
-            }
-        });
-        quote! {
-            fn register_interfaces(context: &tir::Context) {
-                #(#registrations)*
-            }
-        }
+        quote! {}
     };
-
-    let interface_impls = interfaces.iter().map(|interface| {
-        quote! {
-            impl tir::ImplementsOpInterface<dyn #interface> for #struct_name {
-                fn into_interface(self: Box<Self>) -> Box<dyn #interface> {
-                    self
-                }
-            }
-        }
-    });
-
-    let (state_builder_field, state_builder_default, state_builder_method, state_result_build) =
-        if state.output {
-            (
-                quote! { state_result: bool, },
-                quote! { state_result: false, },
-                quote! {
-                    pub fn state_result(mut self) -> Self {
-                        self.state_result = true;
-                        self
-                    }
-                },
-                quote! {
-                    let mut result_vec = result_vec;
-                    if self.state_result {
-                        let ty = tir::builtin::StateType::new(&self.context);
-                        result_vec.push(self.context.create_value(ty, None).id());
-                    }
-                },
-            )
-        } else {
-            (quote! {}, quote! {}, quote! {}, quote! {})
-        };
 
     let result_builder_field = if !has_results {
         quote! {}
@@ -548,53 +1035,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         quote! { builder = builder.result_type(result_type); }
     };
 
-    let attr_fn_params: Vec<_> = attributes
-        .iter()
-        .map(|attr| {
-            let name = op_fn_ident(&attr.name);
-            quote! { #name: impl Into<tir::attributes::AttributeValue> }
-        })
-        .collect();
-
-    let attr_fn_builders: Vec<_> = attributes
-        .iter()
-        .map(|attr| {
-            let name_ident = op_fn_ident(&attr.name);
-            let name_str = attr.name.clone();
-            quote! {
-                builder = builder.attr(#name_str, #name_ident.into());
-            }
-        })
-        .collect();
-
-    let region_fn_params: Vec<_> = regions
-        .iter()
-        .map(|region| {
-            let name = format_ident!("{}", region.name);
-            if region.variadic {
-                quote! { #name: Vec<tir::RegionId> }
-            } else {
-                quote! { #name: Option<tir::RegionId> }
-            }
-        })
-        .collect();
-
-    let region_fn_builders: Vec<_> = regions
-        .iter()
-        .map(|region| {
-            let name = format_ident!("{}", region.name);
-            if region.variadic {
-                quote! { builder = builder.#name(#name); }
-            } else {
-                quote! {
-                    if let Some(region) = #name {
-                        builder = builder.#name(region);
-                    }
-                }
-            }
-        })
-        .collect();
-
     let result_build = if !has_results {
         quote! {
             let result_vec: Vec<tir::ValueId> = vec![];
@@ -627,232 +1067,15 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         }
     };
 
-    let verifiable_impl = if custom_verifier {
-        quote! {}
-    } else {
-        quote! { impl tir::Verifiable for #struct_name {} }
-    };
-
-    let operand_schema_entries = operands.iter().map(|o| {
-        let (n, t, v) = (&o.name, &o.ty, o.variadic);
-        quote! { tir::FieldSchema { name: #n, ty: #t, variadic: #v } }
-    });
-    let result_schema_entries = results.iter().map(|r| {
-        let (n, t, v) = (&r.name, &r.ty, r.variadic);
-        quote! { tir::FieldSchema { name: #n, ty: #t, variadic: #v } }
-    });
-    let attr_schema_entries = attributes.iter().map(|a| {
-        let (n, t) = (&a.name, &a.ty);
-        quote! { tir::AttrSchema { name: #n, ty: #t } }
-    });
-    let interface_schema_entries = interfaces
-        .iter()
-        .map(|p| p.segments.last().unwrap().ident.to_string());
-
-    let schema_ident = format_ident!("__TIR_OP_SCHEMA_{}", struct_name);
-    let schema_registration = quote! {
-        #[allow(non_upper_case_globals)]
-        #[tir::linkme::distributed_slice(tir::OP_SCHEMAS)]
-        #[linkme(crate = tir::linkme)]
-        static #schema_ident: tir::OpSchema = tir::OpSchema {
-            dialect: #dialect,
-            name: #name,
-            operands: &[#(#operand_schema_entries),*],
-            results: &[#(#result_schema_entries),*],
-            attributes: &[#(#attr_schema_entries),*],
-            interfaces: &[#(#interface_schema_entries),*],
-        };
-    };
-
-    quote! {
-        pub struct #struct_name(tir::OpHandle);
-
-        #schema_registration
-
-        #(#interface_impls)*
-        #verifiable_impl
-        #sem_hooks_impl
-        #as_sem_expr_impl
-        #constant_fold_impl
-
-        impl tir::OpDefVerifiable for #struct_name {
-            fn verify_operands(&self, context: &tir::Context) -> Result<(), tir::Error> {
-                fn __satisfies_constraint<C: tir::TypeConstraint + 'static>(ty: &dyn tir::Type) -> bool {
-                    C::satisfies(ty)
-                }
-                static SPEC: tir::OpDefSpec = tir::OpDefSpec {
-                    schema: &#schema_ident,
-                    operand_checkers: &[#(__satisfies_constraint::<#operand_constraint_checkers>),*],
-                    result_checkers: &[#(__satisfies_constraint::<#result_constraint_checkers>),*],
-                    state_output: #state_output,
-                    same_type: #same_type,
-                };
-                tir::verify_opdef_operands(context, &self.0, <Self as tir::Operation>::name(), &SPEC)
-            }
-            fn verify_attributes(&self, context: &tir::Context) -> Result<(), tir::Error> {
-                tir::verify_opdef_attributes(
-                    context,
-                    &self.0,
-                    <Self as tir::Operation>::name(),
-                    #schema_ident.attributes,
-                )
-            }
-
-        }
-
-        pub struct #builder_name {
-            context: tir::Context,
-            attributes: Vec<tir::attributes::NamedAttribute>,
-            #(#region_fields,)*
-            #(#operand_fields,)*
-            #result_builder_field
-            #state_builder_field
-        }
-
-        impl #struct_name {
-            #region_accessors
-            #result_accessor
-            #state_accessors
-        }
-
-        impl tir::Operation for #struct_name {
-            fn name() -> &'static str
-            where
-                Self: Sized
-            {
-                #name
-            }
-
-            fn dialect() -> &'static str
-            where
-                Self: Sized
-            {
-                #dialect
-            }
-
-            fn id(&self) -> tir::OpId {
-                self.0.id
-            }
-
-            fn handle(&self) -> &tir::OpHandle {
-                &self.0
-            }
-
-            fn from_op_instance(instance: tir::OpHandle) -> Self {
-                assert_eq!(instance.name(), tir::OperationName::of::<Self>());
-                #struct_name(instance)
-            }
-
-            fn from_op_instance_dyn(instance: tir::OpHandle) -> Box<dyn tir::Operation> {
-                assert_eq!(instance.name(), tir::OperationName::of::<Self>());
-                Box::new(#struct_name(instance))
-            }
-
-            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-                self
-            }
-
-            #printer
-
-            #parser
-
-            #semantic_expr_method
-            #interface_registration_method
-        }
-
-        impl #builder_name {
-            pub fn new(context: &tir::Context) -> #builder_name {
-                Self {
-                    context: context.clone(),
-                    attributes: vec![],
-                    #(#region_defaults,)*
-                    #(#operand_defaults,)*
-                    #result_builder_default
-                    #state_builder_default
-                }
-            }
-
-            #(#region_builders)*
-            #(#operand_builders)*
-            #result_builder_method
-            #state_builder_method
-
-            pub fn attr(mut self, name: &str, value: tir::attributes::AttributeValue) -> Self {
-                let attribute = self.context.named_attribute(name, value);
-                self.attributes.push(attribute);
-                self
-            }
-
-            /// [`Self::attr`] for a name already interned in the context.
-            pub fn attr_sym(mut self, name: tir::Sym, value: tir::attributes::AttributeValue) -> Self {
-                self.attributes.push(tir::attributes::NamedAttribute::new(name, value));
-                self
-            }
-
-            pub fn build(self) -> #struct_name {
-                let mut regions = vec![];
-
-                #(#region_fills)*
-
-                #attribute_verifier
-
-                let mut operand_vec: Vec<tir::ValueId> = vec![];
-                #segment_sizes_setup
-                #(#operand_collect)*
-
-                #result_build
-                #state_result_build
-
-                #attributes_binding
-                #segment_sizes_attr
-
-                let instance = tir::OpInstance::new::<#struct_name>(
-                    self.context.as_context_ref(),
-                    operand_vec,
-                    result_vec,
-                    regions,
-                    attributes,
-                );
-
-                let instance = self.context.add_operation(instance);
-
-                #struct_name(instance)
-            }
-        }
-
-        impl From<&#struct_name> for tir::OpId {
-            fn from(v: &#struct_name) -> tir::OpId {
-                use tir::Operation;
-                v.id()
-            }
-        }
-
-        impl From<#struct_name> for tir::OpId {
-            fn from(v: #struct_name) -> tir::OpId {
-                use tir::Operation;
-                v.id()
-            }
-        }
-
-        // Generated: one parameter per declared port, which for a machine
-        // instruction is however many registers it names.
-        #[allow(clippy::too_many_arguments)]
-        pub fn #op_fn_name(
-            context: &tir::Context,
-            #(#operand_fn_params,)*
-            #(#attr_fn_params,)*
-            #result_fn_param
-            #(#region_fn_params,)*
-        ) -> #builder_name {
-            let mut builder = #builder_name::new(context);
-            #(#operand_fn_builders)*
-            #(#attr_fn_builders)*
-            #result_fn_builder
-            #(#region_fn_builders)*
-            builder
-        }
+    ResultPieces {
+        accessor: result_accessor,
+        builder_field: result_builder_field,
+        builder_default: result_builder_default,
+        builder_method: result_builder_method,
+        fn_param: result_fn_param,
+        fn_builder: result_fn_builder,
+        build: result_build,
     }
-    .into()
 }
 
 /// The optional `!state` ports an op declares with `state: "in" | "out" | "in_out"`.

@@ -12,3 +12,6 @@ tir.workspace = true
 thiserror.workspace = true
 logos.workspace = true
 chumsky.workspace = true
+
+[lints]
+workspace = true

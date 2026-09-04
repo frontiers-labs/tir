@@ -79,6 +79,13 @@ libfuzzer-sys = "0.4"
 proptest = "1.11.0"
 typed-arena = "2"
 
+[workspace.lints.clippy]
+# A function past this threshold has more branching than a reader can hold at
+# once; split it rather than raising the bar.
+cognitive_complexity = "warn"
+# A function body past this is a module in disguise; threshold in clippy.toml.
+too_many_lines = "warn"
+
 [profile.bench]
 debug = true
 lto = "thin"

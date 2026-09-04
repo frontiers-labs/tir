@@ -20,3 +20,6 @@ harness = false
 [[bench]]
 name = "egg_math"
 harness = false
+
+[lints]
+workspace = true

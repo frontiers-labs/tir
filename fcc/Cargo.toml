@@ -28,3 +28,6 @@ path = "bin.rs"
 [[bench]]
 name = "codegen"
 harness = false
+
+[lints]
+workspace = true

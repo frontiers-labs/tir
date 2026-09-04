@@ -741,18 +741,7 @@ pub fn run(
         if i >= width {
             d = d.max(dispatch[i - width] + 1);
         }
-        // Window: reclaim ROB slots retired by `d`; if the ROB is still full,
-        // wait for its oldest in-flight instruction to retire. `rob.len() ==
-        // window` holds exactly when the old closed form's `retire[i-window] > d`.
-        while rob.front().is_some_and(|&r| r <= d) {
-            rob.pop_front();
-        }
-        if rob.len() >= window {
-            d = d.max(*rob.front().unwrap());
-            while rob.front().is_some_and(|&r| r <= d) {
-                rob.pop_front();
-            }
-        }
+        d = reclaim_rob(&mut rob, window, d);
         d = d.max(redirect);
         if let Some(prf) = prf {
             prf_gate(&mut d, slot, prf, &mut prf_inflight);
@@ -762,20 +751,7 @@ pub fn run(
         if let Some(mem) = mem.as_deref_mut() {
             d += mem.fetch_stall(pc, d);
         }
-        if let Some(frontend) = &model.frontend {
-            let decoded = frontend.decoded_cache.as_ref().and_then(|cache| {
-                frontend_state.reserve_decoded_cache(cache, &slot.class, pc, slot.width_bytes, d)
-            });
-            if let Some(decoded) = decoded {
-                d = decoded;
-            } else {
-                d = frontend_state.reserve_fetch(frontend, pc, slot.width_bytes, d);
-                d = frontend_state.reserve_decode(frontend, &slot.class, d);
-                if let Some(cache) = &frontend.decoded_cache {
-                    frontend_state.fill_decoded_cache(cache, &slot.class, pc, slot.width_bytes);
-                }
-            }
-        }
+        d = frontend_delivery_cycle(model, &mut frontend_state, slot, pc, d);
         cycle = d;
         dispatch[i] = cycle;
         if let Some(h) = handler.as_mut() {
@@ -784,17 +760,8 @@ pub fn run(
 
         // Operands ready: the latest forwarding-aware producer result. A
         // dependency-breaking idiom reads none of its sources.
-        let mut operands_ready = 0u64;
-        if !is_zero_idiom(slot) {
-            for u in &slot.uses {
-                if let Some(&j) = reg_writer.get(u) {
-                    let producer = &base[j % base.len()];
-                    operands_ready = operands_ready
-                        .max(issue[j] + edge_latency(model, producer, &slot.class))
-                        .max(result_extra[j]);
-                }
-            }
-        }
+        let operands_ready =
+            operands_ready_cycle(model, base, slot, &issue, &result_extra, &reg_writer);
 
         let mut t = cycle.max(operands_ready);
         if config.in_order && i > 0 {
@@ -824,16 +791,15 @@ pub fn run(
         // outcome, and stall the front end on a mispredict until the branch
         // resolves plus the refetch penalty.
         if let (Some(p), Some(br)) = (predictor.as_mut(), &slot.branch) {
-            let predicted = p.predict(br.pc, br.target);
-            if predicted != br.taken {
-                mispredicts += 1;
-                let resolved = issue[i] + instr_latency(slot);
-                redirect = redirect.max(resolved + config.mispredict_penalty);
-                if let Some(h) = handler.as_mut() {
-                    h.mispredicted(i, resolved, redirect);
-                }
-            }
-            p.update(br.pc, br.target, br.taken);
+            mispredicts += score_branch(
+                *p,
+                br,
+                i,
+                issue[i] + instr_latency(slot),
+                config.mispredict_penalty,
+                &mut redirect,
+                &mut handler,
+            );
         }
 
         // In-order retire: completes at its (possibly memory-dependent) result
@@ -851,15 +817,7 @@ pub fn run(
         rob.push_back(retire[i]);
 
         if let Some(prf) = prf {
-            for (class, _) in &slot.defs {
-                let file = prf.file_of(class);
-                if prf.capacity.contains_key(file) {
-                    prf_inflight
-                        .entry(file.to_string())
-                        .or_default()
-                        .push_back(retire[i]);
-                }
-            }
+            record_prf_allocation(prf, &slot.defs, retire[i], &mut prf_inflight);
         }
     }
 
@@ -871,6 +829,87 @@ pub fn run(
         cycles,
         instructions: n as u64,
         mispredicts,
+    }
+}
+
+/// Advance `d` past the ROB window: reclaim slots retired by `d`, and if the
+/// ROB is still full, wait for its oldest in-flight instruction to retire.
+fn reclaim_rob(rob: &mut Rob, window: usize, mut d: u64) -> u64 {
+    while rob.front().is_some_and(|&r| r <= d) {
+        rob.pop_front();
+    }
+    if rob.len() >= window {
+        d = d.max(*rob.front().unwrap());
+        while rob.front().is_some_and(|&r| r <= d) {
+            rob.pop_front();
+        }
+    }
+    d
+}
+
+/// The cycle this instance's operands are ready: the latest forwarding-aware
+/// producer result. A dependency-breaking idiom reads none of its sources.
+fn operands_ready_cycle(
+    model: &MachineModel,
+    base: &[ScoreboardInstr],
+    slot: &ScoreboardInstr,
+    issue: &[u64],
+    result_extra: &[u64],
+    reg_writer: &HashMap<(String, u16), usize>,
+) -> u64 {
+    let mut ready = 0u64;
+    if is_zero_idiom(slot) {
+        return ready;
+    }
+    for u in &slot.uses {
+        if let Some(&j) = reg_writer.get(u) {
+            let producer = &base[j % base.len()];
+            ready = ready
+                .max(issue[j] + edge_latency(model, producer, &slot.class))
+                .max(result_extra[j]);
+        }
+    }
+    ready
+}
+
+/// Compare the predicted direction to the recorded outcome, stalling the front
+/// end past `redirect` on a mispredict. Returns the mispredict count to add.
+fn score_branch(
+    predictor: &mut dyn BranchPredictor,
+    branch: &BranchOutcome,
+    index: usize,
+    resolved: u64,
+    penalty: u64,
+    redirect: &mut u64,
+    handler: &mut Option<&mut dyn EventHandler>,
+) -> u64 {
+    let predicted = predictor.predict(branch.pc, branch.target);
+    let mut mispredicts = 0;
+    if predicted != branch.taken {
+        mispredicts = 1;
+        *redirect = (*redirect).max(resolved + penalty);
+        if let Some(h) = handler.as_mut() {
+            h.mispredicted(index, resolved, *redirect);
+        }
+    }
+    predictor.update(branch.pc, branch.target, branch.taken);
+    mispredicts
+}
+
+fn record_prf_allocation(
+    prf: &Prf,
+    defs: &[(String, u16)],
+    retire: u64,
+    inflight: &mut HashMap<String, VecDeque<u64>>,
+) {
+    for (class, _) in defs {
+        let file = prf.file_of(class);
+        if prf.capacity.contains_key(file) {
+            inflight
+                .entry(file.to_string())
+                .or_default()
+                .push_back(retire);
+        }
     }
 }
 
@@ -907,21 +946,7 @@ fn run_ooo_compute(
     } else {
         config.window
     };
-    let mut dependencies = vec![Vec::new(); n];
-    let mut writers = HashMap::new();
-    for i in 0..n {
-        let slot = &base[i % base.len()];
-        if !is_zero_idiom(slot) {
-            for register in &slot.uses {
-                if let Some(&producer) = writers.get(register) {
-                    dependencies[i].push(producer);
-                }
-            }
-        }
-        for register in &slot.defs {
-            writers.insert(register.clone(), i);
-        }
-    }
+    let dependencies = build_dependencies(base, n);
 
     let mut lanes: HashMap<&'static str, Vec<u64>> = model
         .resources
@@ -941,22 +966,15 @@ fn run_ooo_compute(
     let mut cycle = 0u64;
 
     while retired < n {
-        while let Some(&index) = active.front() {
-            if !completed[index].is_some_and(|complete| complete <= cycle) {
-                break;
-            }
-            active.pop_front();
-            retired += 1;
-            if let Some(prf) = prf {
-                for (file, count) in register_file_counts(&base[index % base.len()].defs, prf) {
-                    let used = prf_used.entry(file).or_default();
-                    *used = used.saturating_sub(count);
-                }
-            }
-            if let Some(h) = handler.as_mut() {
-                h.retired(cycle, index);
-            }
-        }
+        retired += retire_completed(
+            base,
+            &mut active,
+            &completed,
+            cycle,
+            prf,
+            &mut prf_used,
+            &mut handler,
+        );
 
         let mut dispatched_this_cycle = 0usize;
         while next_dispatch < n
@@ -991,33 +1009,12 @@ fn run_ooo_compute(
                 continue;
             }
             let slot = &base[index % base.len()];
-            let operands_ready = dependencies[index].iter().all(|&producer| {
-                issued[producer].is_some_and(|producer_issue| {
-                    let producer_slot = &base[producer % base.len()];
-                    producer_issue + edge_latency(model, producer_slot, &slot.class) <= cycle
-                })
-            });
-            if !operands_ready {
+            if !operands_ready(model, base, slot, &dependencies[index], &issued, cycle) {
                 continue;
             }
-            let mut chosen = Vec::new();
-            if !renamed(slot) {
-                let mut candidate_lanes = lanes.clone();
-                if reserve_class_resources(
-                    &slot.class,
-                    &mut candidate_lanes,
-                    cycle,
-                    &mut chosen,
-                    &usage,
-                ) != cycle
-                {
-                    continue;
-                }
-                lanes = candidate_lanes;
-                for (resource, cycles) in &chosen {
-                    *usage.entry(resource).or_default() += u64::from(*cycles);
-                }
-            }
+            let Some(chosen) = reserve_lanes_at(slot, &mut lanes, &mut usage, cycle) else {
+                continue;
+            };
             issued[index] = Some(cycle);
             completed[index] = Some(cycle + instr_latency(slot));
             issued_this_cycle += 1;
@@ -1041,6 +1038,98 @@ fn run_ooo_compute(
         instructions: n as u64,
         mispredicts: 0,
     }
+}
+
+/// Program-order producer indices per instruction, over the unrolled trace.
+fn build_dependencies(base: &[ScoreboardInstr], n: usize) -> Vec<Vec<usize>> {
+    let mut dependencies = vec![Vec::new(); n];
+    let mut writers = HashMap::new();
+    for i in 0..n {
+        let slot = &base[i % base.len()];
+        if !is_zero_idiom(slot) {
+            for register in &slot.uses {
+                if let Some(&producer) = writers.get(register) {
+                    dependencies[i].push(producer);
+                }
+            }
+        }
+        for register in &slot.defs {
+            writers.insert(register.clone(), i);
+        }
+    }
+    dependencies
+}
+
+/// Retire the in-order prefix of `active` that has completed by `cycle`,
+/// releasing its physical registers. Returns how many retired.
+fn retire_completed(
+    base: &[ScoreboardInstr],
+    active: &mut VecDeque<usize>,
+    completed: &[Option<u64>],
+    cycle: u64,
+    prf: Option<&Prf>,
+    prf_used: &mut HashMap<String, u16>,
+    handler: &mut Option<&mut dyn EventHandler>,
+) -> usize {
+    let mut retired = 0;
+    while let Some(&index) = active.front() {
+        if !completed[index].is_some_and(|complete| complete <= cycle) {
+            break;
+        }
+        active.pop_front();
+        retired += 1;
+        if let Some(prf) = prf {
+            for (file, count) in register_file_counts(&base[index % base.len()].defs, prf) {
+                let used = prf_used.entry(file).or_default();
+                *used = used.saturating_sub(count);
+            }
+        }
+        if let Some(h) = handler.as_mut() {
+            h.retired(cycle, index);
+        }
+    }
+    retired
+}
+
+fn operands_ready(
+    model: &MachineModel,
+    base: &[ScoreboardInstr],
+    slot: &ScoreboardInstr,
+    dependencies: &[usize],
+    issued: &[Option<u64>],
+    cycle: u64,
+) -> bool {
+    dependencies.iter().all(|&producer| {
+        issued[producer].is_some_and(|producer_issue| {
+            let producer_slot = &base[producer % base.len()];
+            producer_issue + edge_latency(model, producer_slot, &slot.class) <= cycle
+        })
+    })
+}
+
+/// Reserve this instance's functional-unit lanes at exactly `cycle`, or `None`
+/// when no route is free then; a renamed instance reserves nothing.
+fn reserve_lanes_at(
+    slot: &ScoreboardInstr,
+    lanes: &mut HashMap<&'static str, Vec<u64>>,
+    usage: &mut HashMap<&'static str, u64>,
+    cycle: u64,
+) -> Option<Vec<(&'static str, u16)>> {
+    let mut chosen = Vec::new();
+    if renamed(slot) {
+        return Some(chosen);
+    }
+    let mut candidate_lanes = lanes.clone();
+    if reserve_class_resources(&slot.class, &mut candidate_lanes, cycle, &mut chosen, usage)
+        != cycle
+    {
+        return None;
+    }
+    *lanes = candidate_lanes;
+    for (resource, cycles) in &chosen {
+        *usage.entry(resource).or_default() += u64::from(*cycles);
+    }
+    Some(chosen)
 }
 
 fn frontend_delivery_cycle(

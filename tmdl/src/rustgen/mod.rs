@@ -182,6 +182,13 @@ pub fn generate_rust_modules<'a>(
     })
 }
 
+/// Generated instruction tables are data spelled as code, so the size and
+/// branching lints have no maintainer to serve here; the .tmdl source is what
+/// gets reviewed.
+pub(crate) fn generated_lint_allow() -> proc_macro2::TokenStream {
+    quote! { #[allow(clippy::cognitive_complexity, clippy::too_many_lines)] }
+}
+
 fn format_rust(tokens: proc_macro2::TokenStream) -> String {
     prettyplease::unparse(&syn::parse2(tokens).unwrap())
 }
@@ -207,8 +214,10 @@ fn emit_module_aggregation(
     modules: &[proc_macro2::Ident],
     text_only: bool,
 ) -> proc_macro2::TokenStream {
+    let lint_allow = generated_lint_allow();
     let syntax = text_only.then(|| {
         quote! {
+            #lint_allow
             pub fn asm_syntax() -> &'static [tir::backend::asm_syntax::InstrSyntax] {
                 static SYNTAX: std::sync::LazyLock<
                     Vec<tir::backend::asm_syntax::InstrSyntax>,
@@ -222,6 +231,7 @@ fn emit_module_aggregation(
         }
     });
     quote! {
+        #lint_allow
         fn get_instruction_parsers(
             features: &[Feature],
         ) -> (
@@ -255,6 +265,7 @@ fn emit_module_aggregation(
             &INFOS
         }
 
+        #lint_allow
         pub fn decode_instruction(context: &tir::Context, word: u32) -> Option<tir::OpId> {
             #(if let Some(op) = #modules::decode_instruction(context, word) {
                 return Some(op);

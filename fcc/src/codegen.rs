@@ -3327,353 +3327,21 @@ impl FnCodegen<'_> {
                     let label = self.strings[value].clone();
                     LoweredExpr::Value(self.symbols.data(self.context, &label))
                 }
-                AstKind::Var => {
-                    let AstLeaf::Var(name) = ast.get_leaf_data(node).unwrap() else {
-                        unreachable!("var node carries a var payload");
-                    };
-                    if let Some(value) = ast.get_annotation(node).and_then(|info| info.constant) {
-                        let ty = lower_type(self.context, self.typed, node_type(self.typed, node));
-                        LoweredExpr::Value(
-                            self.builder
-                                .append_op(b::constant(self.context, value, ty).build())
-                                .result(),
-                        )
-                    } else if ast
-                        .get_annotation(node)
-                        .is_some_and(|info| info.category == ValueCategory::Function)
-                    {
-                        // A function's address is data: the λ value itself never
-                        // lives in memory.
-                        let signature = self.signatures[&node_entity(self.typed, node)].clone();
-                        let lambda = self.symbols.function(self.context, name, &signature);
-                        let ptr_ty = PtrType::opaque(self.context);
-                        LoweredExpr::Value(
-                            self.builder
-                                .append_op(b::fn_to_ptr(self.context, lambda, ptr_ty).build())
-                                .result(),
-                        )
-                    } else {
-                        let entity = node_entity(self.typed, node);
-                        if let Some(slot) = self.locals.get(&entity).copied() {
-                            LoweredExpr::Address {
-                                ptr: slot.ptr,
-                                elem: slot.elem,
-                            }
-                        } else {
-                            let global = self.globals[&entity].clone();
-                            LoweredExpr::Address {
-                                ptr: self.symbols.data(self.context, &global.name),
-                                elem: global.elem,
-                            }
-                        }
-                    }
-                }
-                AstKind::Member => {
-                    let AstLeaf::Member { indirect, .. } = ast.get_leaf_data(node).unwrap() else {
-                        unreachable!("member node carries a member payload");
-                    };
-                    let base_node = ast.children(node).next().unwrap();
-                    let base_value = self.values[&base_node];
-                    let base_ptr = if *indirect {
-                        self.materialize(base_value)
-                    } else if let LoweredExpr::Address { ptr, .. } = base_value {
-                        ptr
-                    } else {
-                        return Err(unsupported(
-                            ast,
-                            node,
-                            "non-addressable member base".to_string(),
-                        ));
-                    };
-                    let elem = lower_type(self.context, self.typed, node_type(self.typed, node));
-                    let ptr_ty = PtrType::opaque(self.context);
-                    let field = ast.get_annotation(node).unwrap().member_index.unwrap() as u64;
-                    let base_ty = node_type(self.typed, base_node);
-                    let record = match self.typed.types().kind(base_ty) {
-                        TypeKind::Record(id) => self.typed.record(*id).unwrap(),
-                        TypeKind::Pointer(pointee) => {
-                            let TypeKind::Record(id) = self.typed.types().kind(*pointee) else {
-                                unreachable!("member base has a record type")
-                            };
-                            self.typed.record(*id).unwrap()
-                        }
-                        _ => unreachable!("member base has a record type"),
-                    };
-                    let member = self.builder.append_op(
-                        cir::ops::get_member(
-                            self.context,
-                            base_ptr,
-                            field,
-                            record.name.as_str(),
-                            ptr_ty,
-                        )
-                        .build(),
-                    );
-                    LoweredExpr::Address {
-                        ptr: member.result(),
-                        elem,
-                    }
-                }
-                kind @ (AstKind::Call | AstKind::CallExpr) => {
-                    let designator_ty = ast
-                        .get_annotation(node)
-                        .and_then(|semantics| semantics.call_designator_ty)
-                        .expect("semantic analysis records the call designator type");
-                    let (name, sig, callee, arguments) = if kind == AstKind::Call {
-                        let AstLeaf::Call(name) = ast.get_leaf_data(node).unwrap() else {
-                            unreachable!("call node carries a call payload");
-                        };
-                        let entity = node_entity(self.typed, node);
-                        let (sig, callee) = match self.typed.types().kind(designator_ty) {
-                            TypeKind::Function { .. } => (self.signatures[&entity].clone(), None),
-                            TypeKind::Pointer(pointee) => {
-                                let sig =
-                                    classify_function_type(self.context, self.typed, *pointee);
-                                let callee = if let Some(slot) = self.locals.get(&entity).copied() {
-                                    self.materialize(LoweredExpr::Address {
-                                        ptr: slot.ptr,
-                                        elem: slot.elem,
-                                    })
-                                } else {
-                                    let global = self.globals[&entity].clone();
-                                    let address = self.symbols.data(self.context, &global.name);
-                                    self.materialize(LoweredExpr::Address {
-                                        ptr: address,
-                                        elem: global.elem,
-                                    })
-                                };
-                                (sig, Some(callee))
-                            }
-                            _ => unreachable!("call designator is a function or function pointer"),
-                        };
-                        (
-                            Some(name.clone()),
-                            sig,
-                            callee,
-                            ast.children(node).collect::<Vec<_>>(),
-                        )
-                    } else {
-                        let children = ast.children(node).collect::<Vec<_>>();
-                        let callee_node = children[0];
-                        let function_ty = match self.typed.types().kind(designator_ty) {
-                            TypeKind::Function { .. } => designator_ty,
-                            TypeKind::Pointer(pointee) => *pointee,
-                            _ => unreachable!(
-                                "call expression designator is a function or function pointer"
-                            ),
-                        };
-                        (
-                            None,
-                            classify_function_type(self.context, self.typed, function_ty),
-                            Some(self.materialize(self.values[&callee_node])),
-                            children[1..].to_vec(),
-                        )
-                    };
-                    let mut args = Vec::new();
-                    let mut argument_alignments = Vec::new();
-                    for (index, &argument) in arguments.iter().enumerate() {
-                        let expression = self.values[&argument];
-                        if let Some(parameter) = sig.params.get(index) {
-                            args.extend(self.lower_abi_argument(argument, expression, parameter)?);
-                            if parameter.grouped {
-                                argument_alignments.push(parameter.alignment);
-                            } else {
-                                argument_alignments
-                                    .extend(std::iter::repeat_n(1, parameter.pieces.len()));
-                            }
-                        } else {
-                            args.push(self.materialize(expression));
-                            argument_alignments.push(1);
-                        }
-                    }
-                    let source_ty = node_type(self.typed, node);
-                    let elem = lower_type(self.context, self.typed, source_ty);
-                    // Direct and indirect calls differ only in where the callee
-                    // comes from: a λ of the module, or a loaded address.
-                    let callee = match callee {
-                        Some(address) => {
-                            let ty = FnType::new(
-                                self.context,
-                                &sig.argument_types(self.context),
-                                sig.ret.ty,
-                            );
-                            self.builder
-                                .append_op(b::ptr_to_fn(self.context, address, ty).build())
-                                .result()
-                        }
-                        None => {
-                            let name = name.clone().expect("direct call has a symbol name");
-                            self.symbols.function(self.context, &name, &sig)
-                        }
-                    };
-                    if sig.ret.indirect {
-                        let (size, align) = source_type_layout(self.typed, source_ty);
-                        let slot = self.alloca(elem, size, align);
-                        args.insert(0, slot.ptr);
-                        argument_alignments.insert(0, 1);
-                        let mut call = func_ops::CallOpBuilder::new(self.context)
-                            .callee(callee)
-                            .args(args)
-                            .result_address()
-                            .result_type(sig.ret.ty);
-                        if argument_alignments.iter().any(|&alignment| alignment > 1) {
-                            call = call.argument_alignments(&argument_alignments);
-                        }
-                        self.builder.append_op(call.build());
-                        LoweredExpr::Address {
-                            ptr: slot.ptr,
-                            elem,
-                        }
-                    } else {
-                        let result = {
-                            let mut call = func_ops::CallOpBuilder::new(self.context)
-                                .callee(callee)
-                                .args(args)
-                                .result_type(sig.ret.ty);
-                            if argument_alignments.iter().any(|&alignment| alignment > 1) {
-                                call = call.argument_alignments(&argument_alignments);
-                            }
-                            self.builder.append_op(call.build()).result()
-                        };
-                        if let Some(pieces) = sig.ret.aggregate.as_deref() {
-                            let (size, align) = source_type_layout(self.typed, source_ty);
-                            let (abi_size, abi_align) = abi_storage_layout(self.context, pieces)
-                                .expect("classified aggregate returns use scalar ABI pieces");
-                            let slot = self.alloca(elem, size.max(abi_size), align.max(abi_align));
-                            for (index, piece) in pieces.iter().enumerate() {
-                                let value = if pieces.len() == 1 {
-                                    result
-                                } else {
-                                    self.builder
-                                        .append_op(
-                                            b::TupleGetOpBuilder::new(self.context)
-                                                .tuple(result)
-                                                .attr("index", AttributeValue::UInt(index as u64))
-                                                .result_type(piece.ty)
-                                                .build(),
-                                        )
-                                        .result()
-                                };
-                                let address = self.offset_address(slot.ptr, piece.offset);
-                                self.builder
-                                    .append_op(p::store(self.context, value, address).build());
-                            }
-                            LoweredExpr::Address {
-                                ptr: slot.ptr,
-                                elem,
-                            }
-                        } else {
-                            LoweredExpr::Value(result)
-                        }
-                    }
-                }
+                AstKind::Var => self.lower_var(node)?,
+                AstKind::Member => self.lower_member(node)?,
+                kind @ (AstKind::Call | AstKind::CallExpr) => self.lower_call(node, kind)?,
                 kind @ (AstKind::Add
                 | AstKind::Sub
                 | AstKind::Mul
                 | AstKind::Div
-                | AstKind::Mod) => {
-                    let mut children = ast.children(node);
-                    let lhs_node = children.next().unwrap();
-                    let rhs_node = children.next().unwrap();
-                    let lhs = self.values[&lhs_node];
-                    let rhs = self.values[&rhs_node];
-                    let l = self.materialize(lhs);
-                    let r = self.materialize(rhs);
-                    let source_ty = node_type(self.typed, node);
-                    let lhs_ty = converted_node_type(self.typed, lhs_node);
-                    let rhs_ty = converted_node_type(self.typed, rhs_node);
-                    let value = match (
-                        kind,
-                        self.typed.types().kind(lhs_ty),
-                        self.typed.types().kind(rhs_ty),
-                    ) {
-                        (AstKind::Sub, TypeKind::Pointer(_), TypeKind::Pointer(_)) => {
-                            self.lower_pointer_difference(l, r, lhs_ty, source_ty)
-                        }
-                        (
-                            AstKind::Add | AstKind::Sub,
-                            TypeKind::Pointer(_),
-                            TypeKind::Integer(_),
-                        ) => self.lower_pointer_offset(l, r, rhs_ty, lhs_ty, kind == AstKind::Sub),
-                        (AstKind::Add, TypeKind::Integer(_), TypeKind::Pointer(_)) => {
-                            self.lower_pointer_offset(r, l, lhs_ty, rhs_ty, false)
-                        }
-                        _ if matches!(self.typed.types().kind(source_ty), TypeKind::Double) => {
-                            self.lower_double_binary(kind, l, r)
-                        }
-                        _ => self.lower_integer_binary(kind, l, r, source_ty),
-                    };
-                    LoweredExpr::Value(value)
-                }
+                | AstKind::Mod) => self.lower_arithmetic(node, kind)?,
                 kind @ (AstKind::BitAnd
                 | AstKind::BitXor
                 | AstKind::BitOr
                 | AstKind::Shl
-                | AstKind::Shr) => {
-                    let mut children = ast.children(node);
-                    let lhs_node = children.next().unwrap();
-                    let rhs_node = children.next().unwrap();
-                    let result_ty =
-                        lower_type(self.context, self.typed, node_type(self.typed, node));
-                    let lhs = self.materialize(self.values[&lhs_node]);
-                    let rhs = self.materialize(self.values[&rhs_node]);
-                    let lhs = self.promote_boolean_result(lhs, result_ty);
-                    let rhs = self.promote_boolean_result(rhs, result_ty);
-                    LoweredExpr::Value(self.lower_integer_binary(
-                        kind,
-                        lhs,
-                        rhs,
-                        node_type(self.typed, node),
-                    ))
-                }
+                | AstKind::Shr) => self.lower_bitwise(node, kind)?,
                 kind @ (AstKind::Neg | AstKind::Pos | AstKind::Not | AstKind::BitNot) => {
-                    let child = ast.children(node).next().unwrap();
-                    let operand = self.materialize(self.values[&child]);
-                    let result_ty =
-                        lower_type(self.context, self.typed, node_type(self.typed, node));
-                    let value = match kind {
-                        AstKind::Pos => operand,
-                        AstKind::Neg
-                            if matches!(
-                                self.typed.types().kind(node_type(self.typed, node)),
-                                TypeKind::Double
-                            ) =>
-                        {
-                            let zero = self
-                                .builder
-                                .append_op(b::constantf(self.context, 0.0, result_ty).build())
-                                .result();
-                            self.builder
-                                .append_op(b::subf(self.context, zero, operand, result_ty).build())
-                                .result()
-                        }
-                        AstKind::Neg => {
-                            let zero = self
-                                .builder
-                                .append_op(b::constant(self.context, 0, result_ty).build())
-                                .result();
-                            self.builder
-                                .append_op(b::subi(self.context, zero, operand, result_ty).build())
-                                .result()
-                        }
-                        AstKind::BitNot => {
-                            let ones = self
-                                .builder
-                                .append_op(b::constant(self.context, -1, result_ty).build())
-                                .result();
-                            self.builder
-                                .append_op(b::xori(self.context, operand, ones, result_ty).build())
-                                .result()
-                        }
-                        AstKind::Not => {
-                            let comparison = self.compare_against_zero(operand, "eq");
-                            self.builder
-                                .append_op(b::extui(self.context, comparison, result_ty).build())
-                                .result()
-                        }
-                        _ => unreachable!(),
-                    };
-                    LoweredExpr::Value(value)
+                    self.lower_unary(node, kind)?
                 }
                 AstKind::AddressOf => {
                     let child = ast.children(node).next().unwrap();
@@ -3702,117 +3370,19 @@ impl FnCodegen<'_> {
                 }
                 kind
                 @ (AstKind::PreInc | AstKind::PreDec | AstKind::PostInc | AstKind::PostDec) => {
-                    let child = ast.children(node).next().unwrap();
-                    let LoweredExpr::Address { ptr, elem } = self.values[&child] else {
-                        return Err(unsupported(
-                            ast,
-                            node,
-                            "non-addressable increment operand".to_string(),
-                        ));
-                    };
-                    let old = self
-                        .builder
-                        .append_op(p::load(self.context, ptr, elem).build())
-                        .result();
-                    let operand_ty = node_type(self.typed, child);
-                    let increment = matches!(kind, AstKind::PreInc | AstKind::PostInc);
-                    let new =
-                        if let TypeKind::Pointer(pointee) = self.typed.types().kind(operand_ty) {
-                            let offset_ty =
-                                IntegerType::new(self.context, self.typed.target().pointer_width());
-                            let size = source_type_layout(self.typed, *pointee).0 as i64;
-                            let offset = self
-                                .builder
-                                .append_op(
-                                    b::constant(
-                                        self.context,
-                                        if increment { size } else { -size },
-                                        offset_ty,
-                                    )
-                                    .build(),
-                                )
-                                .result();
-                            self.builder
-                                .append_op(p::ptradd(self.context, old, offset, elem).build())
-                                .result()
-                        } else {
-                            let one = self
-                                .builder
-                                .append_op(b::constant(self.context, 1, elem).build())
-                                .result();
-                            if increment {
-                                self.builder
-                                    .append_op(b::addi(self.context, old, one, elem).build())
-                                    .result()
-                            } else {
-                                self.builder
-                                    .append_op(b::subi(self.context, old, one, elem).build())
-                                    .result()
-                            }
-                        };
-                    self.builder
-                        .append_op(p::store(self.context, new, ptr).build());
-                    LoweredExpr::Value(if matches!(kind, AstKind::PostInc | AstKind::PostDec) {
-                        old
-                    } else {
-                        new
-                    })
+                    self.lower_increment(node, kind)?
                 }
                 kind @ (AstKind::Lt
                 | AstKind::Gt
                 | AstKind::Le
                 | AstKind::Ge
                 | AstKind::Eq
-                | AstKind::Ne) => {
-                    let mut children = ast.children(node);
-                    let lhs_node = children.next().unwrap();
-                    let rhs_node = children.next().unwrap();
-                    let lhs = self.materialize(self.values[&lhs_node]);
-                    let rhs = self.materialize(self.values[&rhs_node]);
-                    // The common type of the usual arithmetic conversions, not
-                    // the operand's own type: it decides signed vs unsigned.
-                    let operand_ty = converted_node_type(self.typed, lhs_node);
-                    let value = match self.typed.types().kind(operand_ty) {
-                        TypeKind::Double => self.lower_double_compare(kind, lhs, rhs),
-                        TypeKind::Pointer(_) | TypeKind::Array(_, _) => {
-                            let predicate = match kind {
-                                AstKind::Lt => "ult",
-                                AstKind::Gt => "ugt",
-                                AstKind::Le => "ule",
-                                AstKind::Ge => "uge",
-                                AstKind::Eq => "eq",
-                                _ => "ne",
-                            };
-                            self.lower_pointer_compare(predicate, lhs, rhs)
-                        }
-                        _ => self.lower_integer_compare(kind, lhs, rhs, operand_ty),
-                    };
-                    LoweredExpr::Value(value)
-                }
+                | AstKind::Ne) => self.lower_comparison(node, kind)?,
                 AstKind::Comma => {
                     let rhs = ast.children(node).nth(1).unwrap();
                     LoweredExpr::Value(self.materialize(self.values[&rhs]))
                 }
-                AstKind::Cast => {
-                    let child = ast.children(node).next().unwrap();
-                    let value = self.materialize(self.values[&child]);
-                    let source = node_type(self.typed, child);
-                    let target = node_type(self.typed, node);
-                    let value = if self.typed.integer_width(source).is_some()
-                        && matches!(self.typed.types().kind(target), TypeKind::Pointer(_))
-                        && ast
-                            .get_annotation(child)
-                            .is_some_and(|semantics| semantics.constant == Some(0))
-                    {
-                        let target = lower_type(self.context, self.typed, target);
-                        self.builder
-                            .append_op(p::null(self.context, target).build())
-                            .result()
-                    } else {
-                        self.convert_scalar(value, source, target)
-                    };
-                    LoweredExpr::Value(value)
-                }
+                AstKind::Cast => self.lower_cast(node)?,
                 kind @ (AstKind::AddAssign
                 | AstKind::SubAssign
                 | AstKind::MulAssign
@@ -3822,83 +3392,8 @@ impl FnCodegen<'_> {
                 | AstKind::ShrAssign
                 | AstKind::AndAssign
                 | AstKind::XorAssign
-                | AstKind::OrAssign) => {
-                    let mut children = ast.children(node);
-                    let lhs_node = children.next().unwrap();
-                    let LoweredExpr::Address { ptr, elem } = self.values[&lhs_node] else {
-                        return Err(unsupported(
-                            ast,
-                            node,
-                            "non-addressable compound assignment".to_string(),
-                        ));
-                    };
-                    let rhs_node = children.next().unwrap();
-                    let rhs = self.materialize(self.values[&rhs_node]);
-                    let lhs = self
-                        .builder
-                        .append_op(p::load(self.context, ptr, elem).build())
-                        .result();
-                    let source_ty = node_type(self.typed, lhs_node);
-                    let value = if let TypeKind::Pointer(_) = self.typed.types().kind(source_ty) {
-                        self.lower_pointer_offset(
-                            lhs,
-                            rhs,
-                            node_type(self.typed, rhs_node),
-                            source_ty,
-                            kind == AstKind::SubAssign,
-                        )
-                    } else {
-                        let operand_ty = converted_node_type(self.typed, rhs_node);
-                        let lhs = self.convert_scalar(lhs, source_ty, operand_ty);
-                        let result = match self.typed.types().kind(operand_ty) {
-                            TypeKind::Double => self.lower_double_binary(kind, lhs, rhs),
-                            _ => self.lower_integer_binary(kind, lhs, rhs, operand_ty),
-                        };
-                        self.convert_scalar(result, operand_ty, source_ty)
-                    };
-                    self.builder
-                        .append_op(p::store(self.context, value, ptr).build());
-                    LoweredExpr::Value(value)
-                }
-                AstKind::AssignExpr => {
-                    let mut children = ast.children(node);
-                    let lhs_node = children.next().unwrap();
-                    let lhs = self.values[&lhs_node];
-                    let rhs = self.values[&children.next().unwrap()];
-                    let LoweredExpr::Address { ptr, elem } = lhs else {
-                        return Err(unsupported(
-                            ast,
-                            node,
-                            "non-addressable assignment".to_string(),
-                        ));
-                    };
-                    if let TypeKind::Record(id) =
-                        self.typed.types().kind(node_type(self.typed, lhs_node))
-                    {
-                        let LoweredExpr::Address { ptr: source, .. } = rhs else {
-                            return Err(unsupported(
-                                ast,
-                                node,
-                                "non-addressable struct source".to_string(),
-                            ));
-                        };
-                        self.builder.append_op(
-                            cir::ops::copy_struct(
-                                self.context,
-                                ptr,
-                                source,
-                                self.typed.record(*id).unwrap().name.as_str(),
-                            )
-                            .build(),
-                        );
-                        LoweredExpr::Address { ptr, elem }
-                    } else {
-                        let value = self.materialize(rhs);
-                        self.builder
-                            .append_op(p::store(self.context, value, ptr).build());
-                        LoweredExpr::Value(value)
-                    }
-                }
+                | AstKind::OrAssign) => self.lower_compound_assign(node, kind)?,
+                AstKind::AssignExpr => self.lower_assignment(node)?,
                 // The richer operators (division, comparison, logical, unary,
                 // calls) are parsed but not yet lowered; stub them out for now.
                 kind => {
@@ -3918,6 +3413,565 @@ impl FnCodegen<'_> {
         }
     }
 
+    fn lower_var(&mut self, node: NodeId) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let AstLeaf::Var(name) = ast.get_leaf_data(node).unwrap() else {
+                unreachable!("var node carries a var payload");
+            };
+            if let Some(value) = ast.get_annotation(node).and_then(|info| info.constant) {
+                let ty = lower_type(self.context, self.typed, node_type(self.typed, node));
+                LoweredExpr::Value(
+                    self.builder
+                        .append_op(b::constant(self.context, value, ty).build())
+                        .result(),
+                )
+            } else if ast
+                .get_annotation(node)
+                .is_some_and(|info| info.category == ValueCategory::Function)
+            {
+                // A function's address is data: the λ value itself never
+                // lives in memory.
+                let signature = self.signatures[&node_entity(self.typed, node)].clone();
+                let lambda = self.symbols.function(self.context, name, &signature);
+                let ptr_ty = PtrType::opaque(self.context);
+                LoweredExpr::Value(
+                    self.builder
+                        .append_op(b::fn_to_ptr(self.context, lambda, ptr_ty).build())
+                        .result(),
+                )
+            } else {
+                let entity = node_entity(self.typed, node);
+                if let Some(slot) = self.locals.get(&entity).copied() {
+                    LoweredExpr::Address {
+                        ptr: slot.ptr,
+                        elem: slot.elem,
+                    }
+                } else {
+                    let global = self.globals[&entity].clone();
+                    LoweredExpr::Address {
+                        ptr: self.symbols.data(self.context, &global.name),
+                        elem: global.elem,
+                    }
+                }
+            }
+        };
+        Ok(expression)
+    }
+
+    fn lower_member(&mut self, node: NodeId) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let AstLeaf::Member { indirect, .. } = ast.get_leaf_data(node).unwrap() else {
+                unreachable!("member node carries a member payload");
+            };
+            let base_node = ast.children(node).next().unwrap();
+            let base_value = self.values[&base_node];
+            let base_ptr = if *indirect {
+                self.materialize(base_value)
+            } else if let LoweredExpr::Address { ptr, .. } = base_value {
+                ptr
+            } else {
+                return Err(unsupported(
+                    ast,
+                    node,
+                    "non-addressable member base".to_string(),
+                ));
+            };
+            let elem = lower_type(self.context, self.typed, node_type(self.typed, node));
+            let ptr_ty = PtrType::opaque(self.context);
+            let field = ast.get_annotation(node).unwrap().member_index.unwrap() as u64;
+            let base_ty = node_type(self.typed, base_node);
+            let record = match self.typed.types().kind(base_ty) {
+                TypeKind::Record(id) => self.typed.record(*id).unwrap(),
+                TypeKind::Pointer(pointee) => {
+                    let TypeKind::Record(id) = self.typed.types().kind(*pointee) else {
+                        unreachable!("member base has a record type")
+                    };
+                    self.typed.record(*id).unwrap()
+                }
+                _ => unreachable!("member base has a record type"),
+            };
+            let member = self.builder.append_op(
+                cir::ops::get_member(self.context, base_ptr, field, record.name.as_str(), ptr_ty)
+                    .build(),
+            );
+            LoweredExpr::Address {
+                ptr: member.result(),
+                elem,
+            }
+        };
+        Ok(expression)
+    }
+
+    fn lower_call(&mut self, node: NodeId, kind: AstKind) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let designator_ty = ast
+                .get_annotation(node)
+                .and_then(|semantics| semantics.call_designator_ty)
+                .expect("semantic analysis records the call designator type");
+            let (name, sig, callee, arguments) = if kind == AstKind::Call {
+                let AstLeaf::Call(name) = ast.get_leaf_data(node).unwrap() else {
+                    unreachable!("call node carries a call payload");
+                };
+                let entity = node_entity(self.typed, node);
+                let (sig, callee) = match self.typed.types().kind(designator_ty) {
+                    TypeKind::Function { .. } => (self.signatures[&entity].clone(), None),
+                    TypeKind::Pointer(pointee) => {
+                        let sig = classify_function_type(self.context, self.typed, *pointee);
+                        let callee = if let Some(slot) = self.locals.get(&entity).copied() {
+                            self.materialize(LoweredExpr::Address {
+                                ptr: slot.ptr,
+                                elem: slot.elem,
+                            })
+                        } else {
+                            let global = self.globals[&entity].clone();
+                            let address = self.symbols.data(self.context, &global.name);
+                            self.materialize(LoweredExpr::Address {
+                                ptr: address,
+                                elem: global.elem,
+                            })
+                        };
+                        (sig, Some(callee))
+                    }
+                    _ => unreachable!("call designator is a function or function pointer"),
+                };
+                (
+                    Some(name.clone()),
+                    sig,
+                    callee,
+                    ast.children(node).collect::<Vec<_>>(),
+                )
+            } else {
+                let children = ast.children(node).collect::<Vec<_>>();
+                let callee_node = children[0];
+                let function_ty = match self.typed.types().kind(designator_ty) {
+                    TypeKind::Function { .. } => designator_ty,
+                    TypeKind::Pointer(pointee) => *pointee,
+                    _ => {
+                        unreachable!("call expression designator is a function or function pointer")
+                    }
+                };
+                (
+                    None,
+                    classify_function_type(self.context, self.typed, function_ty),
+                    Some(self.materialize(self.values[&callee_node])),
+                    children[1..].to_vec(),
+                )
+            };
+            let mut args = Vec::new();
+            let mut argument_alignments = Vec::new();
+            for (index, &argument) in arguments.iter().enumerate() {
+                let expression = self.values[&argument];
+                if let Some(parameter) = sig.params.get(index) {
+                    args.extend(self.lower_abi_argument(argument, expression, parameter)?);
+                    if parameter.grouped {
+                        argument_alignments.push(parameter.alignment);
+                    } else {
+                        argument_alignments.extend(std::iter::repeat_n(1, parameter.pieces.len()));
+                    }
+                } else {
+                    args.push(self.materialize(expression));
+                    argument_alignments.push(1);
+                }
+            }
+            let source_ty = node_type(self.typed, node);
+            let elem = lower_type(self.context, self.typed, source_ty);
+            // Direct and indirect calls differ only in where the callee
+            // comes from: a λ of the module, or a loaded address.
+            let callee = match callee {
+                Some(address) => {
+                    let ty =
+                        FnType::new(self.context, &sig.argument_types(self.context), sig.ret.ty);
+                    self.builder
+                        .append_op(b::ptr_to_fn(self.context, address, ty).build())
+                        .result()
+                }
+                None => {
+                    let name = name.clone().expect("direct call has a symbol name");
+                    self.symbols.function(self.context, &name, &sig)
+                }
+            };
+            if sig.ret.indirect {
+                let (size, align) = source_type_layout(self.typed, source_ty);
+                let slot = self.alloca(elem, size, align);
+                args.insert(0, slot.ptr);
+                argument_alignments.insert(0, 1);
+                let mut call = func_ops::CallOpBuilder::new(self.context)
+                    .callee(callee)
+                    .args(args)
+                    .result_address()
+                    .result_type(sig.ret.ty);
+                if argument_alignments.iter().any(|&alignment| alignment > 1) {
+                    call = call.argument_alignments(&argument_alignments);
+                }
+                self.builder.append_op(call.build());
+                LoweredExpr::Address {
+                    ptr: slot.ptr,
+                    elem,
+                }
+            } else {
+                let result = {
+                    let mut call = func_ops::CallOpBuilder::new(self.context)
+                        .callee(callee)
+                        .args(args)
+                        .result_type(sig.ret.ty);
+                    if argument_alignments.iter().any(|&alignment| alignment > 1) {
+                        call = call.argument_alignments(&argument_alignments);
+                    }
+                    self.builder.append_op(call.build()).result()
+                };
+                if let Some(pieces) = sig.ret.aggregate.as_deref() {
+                    let (size, align) = source_type_layout(self.typed, source_ty);
+                    let (abi_size, abi_align) = abi_storage_layout(self.context, pieces)
+                        .expect("classified aggregate returns use scalar ABI pieces");
+                    let slot = self.alloca(elem, size.max(abi_size), align.max(abi_align));
+                    for (index, piece) in pieces.iter().enumerate() {
+                        let value = if pieces.len() == 1 {
+                            result
+                        } else {
+                            self.builder
+                                .append_op(
+                                    b::TupleGetOpBuilder::new(self.context)
+                                        .tuple(result)
+                                        .attr("index", AttributeValue::UInt(index as u64))
+                                        .result_type(piece.ty)
+                                        .build(),
+                                )
+                                .result()
+                        };
+                        let address = self.offset_address(slot.ptr, piece.offset);
+                        self.builder
+                            .append_op(p::store(self.context, value, address).build());
+                    }
+                    LoweredExpr::Address {
+                        ptr: slot.ptr,
+                        elem,
+                    }
+                } else {
+                    LoweredExpr::Value(result)
+                }
+            }
+        };
+        Ok(expression)
+    }
+
+    fn lower_arithmetic(&mut self, node: NodeId, kind: AstKind) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let mut children = ast.children(node);
+            let lhs_node = children.next().unwrap();
+            let rhs_node = children.next().unwrap();
+            let lhs = self.values[&lhs_node];
+            let rhs = self.values[&rhs_node];
+            let l = self.materialize(lhs);
+            let r = self.materialize(rhs);
+            let source_ty = node_type(self.typed, node);
+            let lhs_ty = converted_node_type(self.typed, lhs_node);
+            let rhs_ty = converted_node_type(self.typed, rhs_node);
+            let value = match (
+                kind,
+                self.typed.types().kind(lhs_ty),
+                self.typed.types().kind(rhs_ty),
+            ) {
+                (AstKind::Sub, TypeKind::Pointer(_), TypeKind::Pointer(_)) => {
+                    self.lower_pointer_difference(l, r, lhs_ty, source_ty)
+                }
+                (AstKind::Add | AstKind::Sub, TypeKind::Pointer(_), TypeKind::Integer(_)) => {
+                    self.lower_pointer_offset(l, r, rhs_ty, lhs_ty, kind == AstKind::Sub)
+                }
+                (AstKind::Add, TypeKind::Integer(_), TypeKind::Pointer(_)) => {
+                    self.lower_pointer_offset(r, l, lhs_ty, rhs_ty, false)
+                }
+                _ if matches!(self.typed.types().kind(source_ty), TypeKind::Double) => {
+                    self.lower_double_binary(kind, l, r)
+                }
+                _ => self.lower_integer_binary(kind, l, r, source_ty),
+            };
+            LoweredExpr::Value(value)
+        };
+        Ok(expression)
+    }
+
+    fn lower_bitwise(&mut self, node: NodeId, kind: AstKind) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let mut children = ast.children(node);
+            let lhs_node = children.next().unwrap();
+            let rhs_node = children.next().unwrap();
+            let result_ty = lower_type(self.context, self.typed, node_type(self.typed, node));
+            let lhs = self.materialize(self.values[&lhs_node]);
+            let rhs = self.materialize(self.values[&rhs_node]);
+            let lhs = self.promote_boolean_result(lhs, result_ty);
+            let rhs = self.promote_boolean_result(rhs, result_ty);
+            LoweredExpr::Value(self.lower_integer_binary(
+                kind,
+                lhs,
+                rhs,
+                node_type(self.typed, node),
+            ))
+        };
+        Ok(expression)
+    }
+
+    fn lower_unary(&mut self, node: NodeId, kind: AstKind) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let child = ast.children(node).next().unwrap();
+            let operand = self.materialize(self.values[&child]);
+            let result_ty = lower_type(self.context, self.typed, node_type(self.typed, node));
+            let value = match kind {
+                AstKind::Pos => operand,
+                AstKind::Neg
+                    if matches!(
+                        self.typed.types().kind(node_type(self.typed, node)),
+                        TypeKind::Double
+                    ) =>
+                {
+                    let zero = self
+                        .builder
+                        .append_op(b::constantf(self.context, 0.0, result_ty).build())
+                        .result();
+                    self.builder
+                        .append_op(b::subf(self.context, zero, operand, result_ty).build())
+                        .result()
+                }
+                AstKind::Neg => {
+                    let zero = self
+                        .builder
+                        .append_op(b::constant(self.context, 0, result_ty).build())
+                        .result();
+                    self.builder
+                        .append_op(b::subi(self.context, zero, operand, result_ty).build())
+                        .result()
+                }
+                AstKind::BitNot => {
+                    let ones = self
+                        .builder
+                        .append_op(b::constant(self.context, -1, result_ty).build())
+                        .result();
+                    self.builder
+                        .append_op(b::xori(self.context, operand, ones, result_ty).build())
+                        .result()
+                }
+                AstKind::Not => {
+                    let comparison = self.compare_against_zero(operand, "eq");
+                    self.builder
+                        .append_op(b::extui(self.context, comparison, result_ty).build())
+                        .result()
+                }
+                _ => unreachable!(),
+            };
+            LoweredExpr::Value(value)
+        };
+        Ok(expression)
+    }
+
+    fn lower_increment(&mut self, node: NodeId, kind: AstKind) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let child = ast.children(node).next().unwrap();
+            let LoweredExpr::Address { ptr, elem } = self.values[&child] else {
+                return Err(unsupported(
+                    ast,
+                    node,
+                    "non-addressable increment operand".to_string(),
+                ));
+            };
+            let old = self
+                .builder
+                .append_op(p::load(self.context, ptr, elem).build())
+                .result();
+            let operand_ty = node_type(self.typed, child);
+            let increment = matches!(kind, AstKind::PreInc | AstKind::PostInc);
+            let new = if let TypeKind::Pointer(pointee) = self.typed.types().kind(operand_ty) {
+                let offset_ty = IntegerType::new(self.context, self.typed.target().pointer_width());
+                let size = source_type_layout(self.typed, *pointee).0 as i64;
+                let offset = self
+                    .builder
+                    .append_op(
+                        b::constant(
+                            self.context,
+                            if increment { size } else { -size },
+                            offset_ty,
+                        )
+                        .build(),
+                    )
+                    .result();
+                self.builder
+                    .append_op(p::ptradd(self.context, old, offset, elem).build())
+                    .result()
+            } else {
+                let one = self
+                    .builder
+                    .append_op(b::constant(self.context, 1, elem).build())
+                    .result();
+                if increment {
+                    self.builder
+                        .append_op(b::addi(self.context, old, one, elem).build())
+                        .result()
+                } else {
+                    self.builder
+                        .append_op(b::subi(self.context, old, one, elem).build())
+                        .result()
+                }
+            };
+            self.builder
+                .append_op(p::store(self.context, new, ptr).build());
+            LoweredExpr::Value(if matches!(kind, AstKind::PostInc | AstKind::PostDec) {
+                old
+            } else {
+                new
+            })
+        };
+        Ok(expression)
+    }
+
+    fn lower_comparison(&mut self, node: NodeId, kind: AstKind) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let mut children = ast.children(node);
+            let lhs_node = children.next().unwrap();
+            let rhs_node = children.next().unwrap();
+            let lhs = self.materialize(self.values[&lhs_node]);
+            let rhs = self.materialize(self.values[&rhs_node]);
+            // The common type of the usual arithmetic conversions, not
+            // the operand's own type: it decides signed vs unsigned.
+            let operand_ty = converted_node_type(self.typed, lhs_node);
+            let value = match self.typed.types().kind(operand_ty) {
+                TypeKind::Double => self.lower_double_compare(kind, lhs, rhs),
+                TypeKind::Pointer(_) | TypeKind::Array(_, _) => {
+                    let predicate = match kind {
+                        AstKind::Lt => "ult",
+                        AstKind::Gt => "ugt",
+                        AstKind::Le => "ule",
+                        AstKind::Ge => "uge",
+                        AstKind::Eq => "eq",
+                        _ => "ne",
+                    };
+                    self.lower_pointer_compare(predicate, lhs, rhs)
+                }
+                _ => self.lower_integer_compare(kind, lhs, rhs, operand_ty),
+            };
+            LoweredExpr::Value(value)
+        };
+        Ok(expression)
+    }
+
+    fn lower_cast(&mut self, node: NodeId) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let child = ast.children(node).next().unwrap();
+            let value = self.materialize(self.values[&child]);
+            let source = node_type(self.typed, child);
+            let target = node_type(self.typed, node);
+            let value = if self.typed.integer_width(source).is_some()
+                && matches!(self.typed.types().kind(target), TypeKind::Pointer(_))
+                && ast
+                    .get_annotation(child)
+                    .is_some_and(|semantics| semantics.constant == Some(0))
+            {
+                let target = lower_type(self.context, self.typed, target);
+                self.builder
+                    .append_op(p::null(self.context, target).build())
+                    .result()
+            } else {
+                self.convert_scalar(value, source, target)
+            };
+            LoweredExpr::Value(value)
+        };
+        Ok(expression)
+    }
+
+    fn lower_compound_assign(
+        &mut self,
+        node: NodeId,
+        kind: AstKind,
+    ) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let mut children = ast.children(node);
+            let lhs_node = children.next().unwrap();
+            let LoweredExpr::Address { ptr, elem } = self.values[&lhs_node] else {
+                return Err(unsupported(
+                    ast,
+                    node,
+                    "non-addressable compound assignment".to_string(),
+                ));
+            };
+            let rhs_node = children.next().unwrap();
+            let rhs = self.materialize(self.values[&rhs_node]);
+            let lhs = self
+                .builder
+                .append_op(p::load(self.context, ptr, elem).build())
+                .result();
+            let source_ty = node_type(self.typed, lhs_node);
+            let value = if let TypeKind::Pointer(_) = self.typed.types().kind(source_ty) {
+                self.lower_pointer_offset(
+                    lhs,
+                    rhs,
+                    node_type(self.typed, rhs_node),
+                    source_ty,
+                    kind == AstKind::SubAssign,
+                )
+            } else {
+                let operand_ty = converted_node_type(self.typed, rhs_node);
+                let lhs = self.convert_scalar(lhs, source_ty, operand_ty);
+                let result = match self.typed.types().kind(operand_ty) {
+                    TypeKind::Double => self.lower_double_binary(kind, lhs, rhs),
+                    _ => self.lower_integer_binary(kind, lhs, rhs, operand_ty),
+                };
+                self.convert_scalar(result, operand_ty, source_ty)
+            };
+            self.builder
+                .append_op(p::store(self.context, value, ptr).build());
+            LoweredExpr::Value(value)
+        };
+        Ok(expression)
+    }
+
+    fn lower_assignment(&mut self, node: NodeId) -> Result<LoweredExpr, Diagnostic> {
+        let ast = self.ast;
+        let expression = {
+            let mut children = ast.children(node);
+            let lhs_node = children.next().unwrap();
+            let lhs = self.values[&lhs_node];
+            let rhs = self.values[&children.next().unwrap()];
+            let LoweredExpr::Address { ptr, elem } = lhs else {
+                return Err(unsupported(
+                    ast,
+                    node,
+                    "non-addressable assignment".to_string(),
+                ));
+            };
+            if let TypeKind::Record(id) = self.typed.types().kind(node_type(self.typed, lhs_node)) {
+                let LoweredExpr::Address { ptr: source, .. } = rhs else {
+                    return Err(unsupported(
+                        ast,
+                        node,
+                        "non-addressable struct source".to_string(),
+                    ));
+                };
+                self.builder.append_op(
+                    cir::ops::copy_struct(
+                        self.context,
+                        ptr,
+                        source,
+                        self.typed.record(*id).unwrap().name.as_str(),
+                    )
+                    .build(),
+                );
+                LoweredExpr::Address { ptr, elem }
+            } else {
+                let value = self.materialize(rhs);
+                self.builder
+                    .append_op(p::store(self.context, value, ptr).build());
+                LoweredExpr::Value(value)
+            }
+        };
+        Ok(expression)
+    }
     fn lower_logical(&mut self, node: NodeId, kind: AstKind) -> Result<LoweredExpr, Diagnostic> {
         let mut children = self.ast.children(node);
         let lhs_node = children.next().unwrap();

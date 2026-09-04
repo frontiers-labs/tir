@@ -12,3 +12,6 @@ tir.workspace = true
 
 [build-dependencies]
 tmdl.workspace = true
+
+[lints]
+workspace = true

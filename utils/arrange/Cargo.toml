@@ -9,3 +9,6 @@ edition = "2024"
 
 [lib]
 doctest = false
+
+[lints]
+workspace = true

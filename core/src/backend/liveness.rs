@@ -13,7 +13,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use tir::backend::regalloc::RegClassId;
-use tir::{BlockId, Context, ValueId};
+use tir::{BlockId, Context, OpId, ValueId};
 
 pub use crate::analysis::defuse::{OpRegs, PhysReg, execution_regs, op_regs};
 
@@ -127,7 +127,27 @@ pub fn analyze(
     let referenced = referenced_vregs(context, blocks);
     let mut value_classes: HashMap<ValueId, Option<RegClassId>> = HashMap::new();
 
-    // 1. Gather per-block, per-op register info; discover vreg classes.
+    let block_infos = collect_block_infos(
+        context,
+        blocks,
+        &referenced,
+        &mut result,
+        &mut value_classes,
+    );
+    let (live_in, live_out) = solve_live_sets(&block_infos, blocks.first().copied(), &successors);
+    build_interference(&mut result, &block_infos, &live_in, &live_out);
+
+    result
+}
+
+/// Per-block, per-op register info; discovers vreg classes along the way.
+fn collect_block_infos(
+    context: &Context,
+    blocks: &[BlockId],
+    referenced: &BTreeSet<u32>,
+    result: &mut Liveness,
+    value_classes: &mut HashMap<ValueId, Option<RegClassId>>,
+) -> Vec<BlockInfo> {
     let mut block_infos: Vec<BlockInfo> = Vec::new();
     for &block_id in blocks {
         let block = context.get_block(block_id);
@@ -153,54 +173,15 @@ pub fn analyze(
         }
 
         for op_id in block.op_ids() {
-            let op = context.get_op(op_id);
-            let slots = crate::backend::reg_slots(&op);
-            let regs = crate::analysis::defuse::op_regs_from(&op, &slots);
-            let port_classes = slot_classes(&slots);
-
-            let mut def_vregs = Vec::new();
-            let mut use_vregs = Vec::new();
-            let mut clobbers = Vec::new();
-            let mut phys_uses = Vec::new();
-
-            for value in regs.uses.iter().filter(|v| is_register(context, **v)) {
-                let id = value.number();
-                record_class(
-                    &mut result,
-                    context,
-                    *value,
-                    slot_class(&port_classes, *value),
-                    &mut value_classes,
-                );
-                result.vregs.insert(id);
-                use_vregs.push(id);
-                if !defined.contains(&id) {
-                    exposed_uses.insert(id);
-                }
-            }
-            for value in regs.defs.iter().filter(|v| is_register(context, **v)) {
-                let id = value.number();
-                record_class(
-                    &mut result,
-                    context,
-                    *value,
-                    slot_class(&port_classes, *value),
-                    &mut value_classes,
-                );
-                result.vregs.insert(id);
-                def_vregs.push(id);
-                defined.insert(id);
-                block_defs.insert(id);
-            }
-            phys_uses.extend(regs.phys_uses.iter().copied());
-            clobbers.extend(regs.phys_defs.iter().copied());
-
-            ops.push(OpInfo {
-                def_vregs,
-                use_vregs,
-                clobbers,
-                phys_uses,
-            });
+            ops.push(collect_op_info(
+                context,
+                op_id,
+                result,
+                value_classes,
+                &mut exposed_uses,
+                &mut defined,
+                &mut block_defs,
+            ));
         }
 
         block_infos.push(BlockInfo {
@@ -211,8 +192,74 @@ pub fn analyze(
             defs: block_defs,
         });
     }
+    block_infos
+}
 
-    // 2. Backward dataflow for live-in / live-out to a fixpoint.
+fn collect_op_info(
+    context: &Context,
+    op_id: OpId,
+    result: &mut Liveness,
+    value_classes: &mut HashMap<ValueId, Option<RegClassId>>,
+    exposed_uses: &mut BTreeSet<u32>,
+    defined: &mut BTreeSet<u32>,
+    block_defs: &mut BTreeSet<u32>,
+) -> OpInfo {
+    let op = context.get_op(op_id);
+    let slots = crate::backend::reg_slots(&op);
+    let regs = crate::analysis::defuse::op_regs_from(&op, &slots);
+    let port_classes = slot_classes(&slots);
+
+    let mut def_vregs = Vec::new();
+    let mut use_vregs = Vec::new();
+    let mut clobbers = Vec::new();
+    let mut phys_uses = Vec::new();
+
+    for value in regs.uses.iter().filter(|v| is_register(context, **v)) {
+        let id = value.number();
+        record_class(
+            result,
+            context,
+            *value,
+            slot_class(&port_classes, *value),
+            value_classes,
+        );
+        result.vregs.insert(id);
+        use_vregs.push(id);
+        if !defined.contains(&id) {
+            exposed_uses.insert(id);
+        }
+    }
+    for value in regs.defs.iter().filter(|v| is_register(context, **v)) {
+        let id = value.number();
+        record_class(
+            result,
+            context,
+            *value,
+            slot_class(&port_classes, *value),
+            value_classes,
+        );
+        result.vregs.insert(id);
+        def_vregs.push(id);
+        defined.insert(id);
+        block_defs.insert(id);
+    }
+    phys_uses.extend(regs.phys_uses.iter().copied());
+    clobbers.extend(regs.phys_defs.iter().copied());
+
+    OpInfo {
+        def_vregs,
+        use_vregs,
+        clobbers,
+        phys_uses,
+    }
+}
+
+/// Backward dataflow for live-in / live-out to a fixpoint.
+fn solve_live_sets(
+    block_infos: &[BlockInfo],
+    entry: Option<BlockId>,
+    successors: &impl Fn(BlockId) -> Vec<BlockId>,
+) -> (Vec<BTreeSet<u32>>, Vec<BTreeSet<u32>>) {
     let index: HashMap<BlockId, usize> = block_infos
         .iter()
         .enumerate()
@@ -226,10 +273,9 @@ pub fn analyze(
     // those copies would look dead and their registers could be reused. The entry
     // block's parameters are the function arguments: defined by the ABI, pinned by
     // pre-coloring, and never live-in.
-    let entry = blocks.first().copied();
     let mut has_pred: HashSet<BlockId> = HashSet::new();
-    for &block_id in blocks {
-        for succ in successors(block_id) {
+    for info in block_infos {
+        for succ in successors(info.block) {
             has_pred.insert(succ);
         }
     }
@@ -268,7 +314,16 @@ pub fn analyze(
         }
     }
 
-    // 3. Backward scan within each block to build the interference relation.
+    (live_in, live_out)
+}
+
+/// Backward scan within each block to build the interference relation.
+fn build_interference(
+    result: &mut Liveness,
+    block_infos: &[BlockInfo],
+    live_in: &[BTreeSet<u32>],
+    live_out: &[BTreeSet<u32>],
+) {
     for (i, info) in block_infos.iter().enumerate() {
         result.live_in.insert(info.block, live_in[i].clone());
 
@@ -281,47 +336,7 @@ pub fn analyze(
         let mut live_phys: HashSet<PhysReg> = HashSet::new();
 
         for op in info.ops.iter().rev() {
-            // A physical clobber conflicts with everything live across this op.
-            for phys in &op.clobbers {
-                for &l in &live {
-                    result.forbid(l, *phys);
-                }
-            }
-            // A physical register read later and still live across this op cannot
-            // hold any vreg live here, nor a vreg this op defines: overlap is
-            // resolved downstream by the same `phys_overlap` path as clobbers.
-            for phys in &live_phys {
-                for &l in &live {
-                    result.forbid(l, *phys);
-                }
-                for &d in &op.def_vregs {
-                    result.forbid(d, *phys);
-                }
-            }
-            // Each defined vreg interferes with all currently-live vregs and with
-            // the op's other defs.
-            for &d in &op.def_vregs {
-                for &l in &live {
-                    result.add_interference(d, l);
-                }
-                for &d2 in &op.def_vregs {
-                    result.add_interference(d, d2);
-                }
-            }
-            for &d in &op.def_vregs {
-                live.remove(&d);
-            }
-            // A physical write ends the live range of that register (going backward).
-            for phys in &op.clobbers {
-                live_phys.remove(phys);
-            }
-            for &u in &op.use_vregs {
-                live.insert(u);
-            }
-            // A physical read starts (going backward) a live range for that register.
-            for phys in &op.phys_uses {
-                live_phys.insert(*phys);
-            }
+            scan_op(result, op, &mut live, &mut live_phys);
         }
 
         // Block arguments are all simultaneously live at entry, so they pairwise
@@ -340,8 +355,57 @@ pub fn analyze(
             }
         }
     }
+}
 
-    result
+/// One step of the backward scan: record what `op` conflicts with, then move
+/// the live sets past it.
+fn scan_op(
+    result: &mut Liveness,
+    op: &OpInfo,
+    live: &mut HashSet<u32>,
+    live_phys: &mut HashSet<PhysReg>,
+) {
+    // A physical clobber conflicts with everything live across this op.
+    for phys in &op.clobbers {
+        for &l in live.iter() {
+            result.forbid(l, *phys);
+        }
+    }
+    // A physical register read later and still live across this op cannot
+    // hold any vreg live here, nor a vreg this op defines: overlap is
+    // resolved downstream by the same `phys_overlap` path as clobbers.
+    for phys in live_phys.iter() {
+        for &l in live.iter() {
+            result.forbid(l, *phys);
+        }
+        for &d in &op.def_vregs {
+            result.forbid(d, *phys);
+        }
+    }
+    // Each defined vreg interferes with all currently-live vregs and with
+    // the op's other defs.
+    for &d in &op.def_vregs {
+        for &l in live.iter() {
+            result.add_interference(d, l);
+        }
+        for &d2 in &op.def_vregs {
+            result.add_interference(d, d2);
+        }
+    }
+    for &d in &op.def_vregs {
+        live.remove(&d);
+    }
+    // A physical write ends the live range of that register (going backward).
+    for phys in &op.clobbers {
+        live_phys.remove(phys);
+    }
+    for &u in &op.use_vregs {
+        live.insert(u);
+    }
+    // A physical read starts (going backward) a live range for that register.
+    for phys in &op.phys_uses {
+        live_phys.insert(*phys);
+    }
 }
 
 /// The class each resolved register slot narrows its value to. A value read

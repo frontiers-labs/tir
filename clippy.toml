@@ -1,0 +1,2 @@
+# A function body past this is a module in disguise; split it instead.
+too-many-lines-threshold = 400

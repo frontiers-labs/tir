@@ -12,3 +12,6 @@ xshell = "0.2.7"
 tir-isa-test-suite = { path = "../utils/isa-test-suite" }
 tir-verify = { path = "../utils/verify" }
 tmdl.workspace = true
+
+[lints]
+workspace = true

@@ -13,3 +13,6 @@ crossbeam = "0.8.4"
 isla-lib = { git = "https://github.com/rems-project/isla", rev = "7f6882b3f468fe34df38ae3ffc0aede5baa0e7d6" }
 sha2 = "0.8.2"
 serde = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true

@@ -1466,19 +1466,8 @@ impl InstructionSelectPass {
         // Function-wide value/op layout: with a single `value_to_def` a cross-block
         // operand expands to its defining expression naturally (no remat special
         // case), and a block argument / entry input stays an `Input` leaf.
-        let mut value_to_def = HashMap::new();
-        let mut op_block = HashMap::new();
-        let mut op_position = HashMap::new();
+        let (value_to_def, op_block, op_position) = function_value_layout(context, blocks);
         let block_ids = symbol_body_blocks(context, op);
-        for &block_id in blocks {
-            for (position, op_id) in context.get_block(block_id).op_ids().into_iter().enumerate() {
-                op_block.insert(op_id, block_id);
-                op_position.insert(op_id, position);
-                for result in context.get_op(op_id).results() {
-                    value_to_def.insert(result, op_id);
-                }
-            }
-        }
 
         // Pointer width is a data layout fact, so it comes from the layout in
         // scope at this function, over the target's own — the same layout the
@@ -1490,164 +1479,44 @@ impl InstructionSelectPass {
         );
         let pointer_width = layout.as_ref().and_then(crate::DataLayout::pointer_size);
 
-        // Lower every block's ops through one builder so its `value_to_class`
-        // memoization unifies classes across blocks (cross-block CSE). Class ids
-        // are resolved through `find` afterwards because saturation may merge them.
         let mut egraph = SemEGraph::new();
-        let mut prepared: HashMap<ValueId, ConditionExpr> = HashMap::new();
-        let mut region_facts: HashMap<BlockId, (ValueId, bool)> = HashMap::new();
-        let mut region_control = builder::RegionControl::default();
-        let (value_to_class, mut roots_by_op, mut constant_candidates) = {
-            let mut builder =
-                SemDagBuilder::new(context, &value_to_def, &mut egraph, pointer_width);
-            let seeds = builder.build_blocks(&block_ids, &self.float_constant_materializer_widths);
-
-            // The structured operations' own control: the tests a destruction
-            // branches on and the counter recurrences it advances, seeded before
-            // saturation so the cover selects them like any other class.
-            for &block_id in blocks {
-                for op_id in context.get_block(block_id).op_ids() {
-                    let inner = context.get_op(op_id);
-                    if inner.regions().is_empty() {
-                        continue;
-                    }
-                    builder.build_region_control(&inner, block_id, &mut region_control);
-                    for (region, condition, holds) in scopes::region_facts(&inner) {
-                        let Some(entry) = context.get_region(region).iter(context.clone()).next()
-                        else {
-                            continue;
-                        };
-                        region_facts.insert(entry.id(), (condition, holds));
-                        if let std::collections::hash_map::Entry::Vacant(slot) =
-                            prepared.entry(condition)
-                        {
-                            slot.insert(ConditionExpr {
-                                condition: builder.build_from_value(condition),
-                                compare: builder.build_defining_compare(condition),
-                            });
-                        }
-                    }
-                }
-            }
-
-            (
-                builder.value_to_class,
-                seeds.roots_by_op,
-                seeds.constant_candidates,
-            )
-        };
+        let mut lowering = self.lower_blocks(
+            context,
+            blocks,
+            &block_ids,
+            &value_to_def,
+            &mut egraph,
+            pointer_width,
+        );
 
         // Standalone constants have no semantic root. When the target patterns
         // describe a matching materializer, their operand-built class becomes
         // the op root so the cover can select the materializing instructions.
-        constant_candidates.retain(|(op, class)| {
+        lowering.constant_candidates.retain(|(op, class)| {
             context.get_op(*op).is::<crate::builtin::ConstantFOp>()
                 || class_int_binding(&egraph, *class).is_some()
         });
-        for &(op_id, class) in &constant_candidates {
-            roots_by_op.entry(op_id).or_insert(class);
+        for &(op_id, class) in &lowering.constant_candidates {
+            lowering.roots_by_op.entry(op_id).or_insert(class);
         }
 
         rewrites::saturate(context, &mut egraph, &self.theory, Default::default());
 
         crate::memstats::egraph_census("isel", &egraph);
 
-        // Canonicalize the side tables through `find`: saturation may merge classes,
-        // so every id recorded against the pre-saturation graph is re-resolved here.
-        let mut ops_by_root: HashMap<Id, Vec<OpId>> = HashMap::new();
-        let mut op_root: HashMap<OpId, Id> = HashMap::new();
-        for (&op, &root) in &roots_by_op {
-            let class = egraph.find(root);
-            ops_by_root.entry(class).or_default().push(op);
-            op_root.insert(op, class);
-        }
-        // `roots_by_op` iterates in hash order; the per-class lists decide
-        // emission order, so they are sorted into program order.
-        for ops in ops_by_root.values_mut() {
-            ops.sort_unstable();
-        }
-
-        // Every value a class computes: the input leaves it interned plus every op
-        // result rooting it (a result never used as an operand is absent from
-        // `value_to_class`). Sorted and deduped for a deterministic binding order.
-        //
-        // A `!state` value names memory, not a register. It is interned like any
-        // other operand — a memory term is a term over the chain it reads — but
-        // no tile ever materializes it, so it is not one of the values a class
-        // can be bound to or remapped onto.
-        let state_ty = crate::builtin::StateType::new(context);
-        let mut class_values: HashMap<Id, Vec<ValueId>> = HashMap::new();
-        for (&value, &class) in &value_to_class {
-            if context.get_value(value).ty() == state_ty {
-                continue;
-            }
-            class_values
-                .entry(egraph.find(class))
-                .or_default()
-                .push(value);
-        }
-        for values in class_values.values_mut() {
-            values.sort_by_key(|v| v.number());
-            values.dedup();
-        }
-
-        let mut value_block: HashMap<ValueId, Option<BlockId>> = HashMap::new();
-        for values in class_values.values() {
-            for &value in values {
-                value_block
-                    .entry(value)
-                    .or_insert_with(|| value_to_def.get(&value).map(|op| op_block[op]));
-            }
-        }
-
-        // A value used as an operand by more than one consumer must stay a register.
-        // Every block a region holds counts here too: its arguments are written by
-        // the edges entering it, so they hold their value only where it has run,
-        // and a use inside a region is a use.
-        let mut arg_block: HashMap<ValueId, BlockId> = HashMap::new();
-        let mut operand_uses: HashMap<ValueId, usize> = HashMap::new();
-        for &block_id in blocks {
-            for argument in context.get_block(block_id).arguments() {
-                arg_block.insert(argument.id(), block_id);
-            }
-            for op_id in context.get_block(block_id).op_ids() {
-                for operand in context.get_op(op_id).operands() {
-                    *operand_uses.entry(operand).or_insert(0) += 1;
-                }
-            }
-        }
-        // Where a value is read from inside a region hanging off its own block:
-        // the operation carrying that region. The read happens before that
-        // operation finishes, so what spells the value has to precede it.
-        let mut region_use: HashMap<ValueId, OpId> = HashMap::new();
-        for &block_id in blocks {
-            for op_id in context.get_block(block_id).op_ids() {
-                for operand in context.get_op(op_id).operands() {
-                    let Some(def_block) = value_to_def
-                        .get(&operand)
-                        .map(|def| op_block[def])
-                        .or_else(|| arg_block.get(&operand).copied())
-                    else {
-                        continue;
-                    };
-                    if def_block == block_id {
-                        continue;
-                    }
-                    let Some(carrier) = enclosing_carrier(context, block_id, def_block) else {
-                        continue;
-                    };
-                    let earlier = region_use
-                        .get(&operand)
-                        .is_none_or(|held| op_position[&carrier] < op_position[held]);
-                    if earlier {
-                        region_use.insert(operand, carrier);
-                    }
-                }
-            }
-        }
+        let (ops_by_root, op_root) = canonical_roots(&egraph, &lowering.roots_by_op);
+        let (class_values, value_block) = class_value_tables(
+            context,
+            &egraph,
+            &lowering.value_to_class,
+            &value_to_def,
+            &op_block,
+        );
+        let (arg_block, operand_uses, region_use) =
+            region_uses(context, blocks, &value_to_def, &op_block, &op_position);
 
         let mut shared_classes = HashSet::new();
-        for (&op, &root) in &roots_by_op {
+        for (&op, &root) in &lowering.roots_by_op {
             if context
                 .get_op(op)
                 .results()
@@ -1658,55 +1527,9 @@ impl InstructionSelectPass {
             }
         }
 
-        let needs_register = |result: ValueId, class: Id, def_block: BlockId| {
-            let unselected_use = def_use.users_of(result.number()).iter().any(|user| {
-                if roots_by_op.contains_key(user) {
-                    return false;
-                }
-                // A destruction's branch recomputes the test it reads.
-                !region_control.test_conditions.contains(&(*user, result))
-            });
-            let cross_block = def_use
-                .users_of(result.number())
-                .iter()
-                .any(|user| op_block.get(user).copied() != Some(def_block));
-            let cross_block_register = cross_block
-                && class_int_binding(&egraph, class).is_some_and(|value| {
-                    !self
-                        .constant_materializer_ranges
-                        .iter()
-                        .any(|range| range.contains(&value))
-                })
-                || cross_block && class_int_binding(&egraph, class).is_none();
-            unselected_use || cross_block_register
-        };
-        // A low-bit truncation re-views its source's register, so demand lands
-        // on the chased source class — the one a tile can define.
-        let chase = |egraph: &SemEGraph, class: Id| {
-            let mut class = egraph.find(class);
-            while let Some(source) = low_extract_source(egraph, class) {
-                class = source;
-            }
-            class
-        };
-        let mut demand = HashSet::new();
-        for (&op_id, &class) in &roots_by_op {
-            let def_block = op_block[&op_id];
-            for result in context.get_op(op_id).results() {
-                if needs_register(result, class, def_block) {
-                    demand.insert((chase(&egraph, class), def_block));
-                }
-            }
-        }
-        for &(op_id, class) in &constant_candidates {
-            let def_block = op_block[&op_id];
-            for result in context.get_op(op_id).results() {
-                if needs_register(result, class, def_block) {
-                    demand.insert((chase(&egraph, class), def_block));
-                }
-            }
-        }
-        for aux in region_control.aux.values_mut() {
+        let demand = self.register_demand(context, &egraph, def_use, &lowering, &op_block);
+
+        for aux in lowering.region_control.aux.values_mut() {
             for (.., class) in aux.iter_mut() {
                 *class = egraph.find(*class);
             }
@@ -1724,10 +1547,133 @@ impl InstructionSelectPass {
             region_use,
             shared_classes,
             demand,
+            prepared: lowering.prepared,
+            region_facts: lowering.region_facts,
+            region_aux: lowering.region_control.aux,
+        }
+    }
+
+    /// Lower every block's ops through one builder so its `value_to_class`
+    /// memoization unifies classes across blocks (cross-block CSE). Class ids
+    /// are resolved through `find` afterwards because saturation may merge them.
+    fn lower_blocks(
+        &self,
+        context: &Context,
+        blocks: &[BlockId],
+        block_ids: &[BlockId],
+        value_to_def: &HashMap<ValueId, OpId>,
+        egraph: &mut SemEGraph,
+        pointer_width: Option<u32>,
+    ) -> BlockLowering {
+        let mut prepared: HashMap<ValueId, ConditionExpr> = HashMap::new();
+        let mut region_facts: HashMap<BlockId, (ValueId, bool)> = HashMap::new();
+        let mut region_control = builder::RegionControl::default();
+        let mut builder = SemDagBuilder::new(context, value_to_def, egraph, pointer_width);
+        let seeds = builder.build_blocks(block_ids, &self.float_constant_materializer_widths);
+
+        // The structured operations' own control: the tests a destruction
+        // branches on and the counter recurrences it advances, seeded before
+        // saturation so the cover selects them like any other class.
+        for &block_id in blocks {
+            for op_id in context.get_block(block_id).op_ids() {
+                let inner = context.get_op(op_id);
+                if inner.regions().is_empty() {
+                    continue;
+                }
+                builder.build_region_control(&inner, block_id, &mut region_control);
+                for (region, condition, holds) in scopes::region_facts(&inner) {
+                    let Some(entry) = context.get_region(region).iter(context.clone()).next()
+                    else {
+                        continue;
+                    };
+                    region_facts.insert(entry.id(), (condition, holds));
+                    if let std::collections::hash_map::Entry::Vacant(slot) =
+                        prepared.entry(condition)
+                    {
+                        slot.insert(ConditionExpr {
+                            condition: builder.build_from_value(condition),
+                            compare: builder.build_defining_compare(condition),
+                        });
+                    }
+                }
+            }
+        }
+
+        BlockLowering {
+            value_to_class: builder.value_to_class,
+            roots_by_op: seeds.roots_by_op,
+            constant_candidates: seeds.constant_candidates,
             prepared,
             region_facts,
-            region_aux: region_control.aux,
+            region_control,
         }
+    }
+
+    /// The (class, block) pairs a tile must leave in a register: a use no tile
+    /// covers, or a use in another block.
+    fn register_demand(
+        &self,
+        context: &Context,
+        egraph: &SemEGraph,
+        def_use: &DefUse,
+        lowering: &BlockLowering,
+        op_block: &HashMap<OpId, BlockId>,
+    ) -> HashSet<(Id, BlockId)> {
+        let BlockLowering {
+            roots_by_op,
+            constant_candidates,
+            region_control,
+            ..
+        } = lowering;
+        let needs_register = |result: ValueId, class: Id, def_block: BlockId| {
+            let unselected_use = def_use.users_of(result.number()).iter().any(|user| {
+                if roots_by_op.contains_key(user) {
+                    return false;
+                }
+                // A destruction's branch recomputes the test it reads.
+                !region_control.test_conditions.contains(&(*user, result))
+            });
+            let cross_block = def_use
+                .users_of(result.number())
+                .iter()
+                .any(|user| op_block.get(user).copied() != Some(def_block));
+            let cross_block_register = cross_block
+                && class_int_binding(egraph, class).is_some_and(|value| {
+                    !self
+                        .constant_materializer_ranges
+                        .iter()
+                        .any(|range| range.contains(&value))
+                })
+                || cross_block && class_int_binding(egraph, class).is_none();
+            unselected_use || cross_block_register
+        };
+        // A low-bit truncation re-views its source's register, so demand lands
+        // on the chased source class — the one a tile can define.
+        let chase = |egraph: &SemEGraph, class: Id| {
+            let mut class = egraph.find(class);
+            while let Some(source) = low_extract_source(egraph, class) {
+                class = source;
+            }
+            class
+        };
+        let mut demand = HashSet::new();
+        for (&op_id, &class) in roots_by_op {
+            let def_block = op_block[&op_id];
+            for result in context.get_op(op_id).results() {
+                if needs_register(result, class, def_block) {
+                    demand.insert((chase(egraph, class), def_block));
+                }
+            }
+        }
+        for &(op_id, class) in constant_candidates {
+            let def_block = op_block[&op_id];
+            for result in context.get_op(op_id).results() {
+                if needs_register(result, class, def_block) {
+                    demand.insert((chase(egraph, class), def_block));
+                }
+            }
+        }
+        demand
     }
 
     /// Commit every block of the function and then destruct what carries regions:
@@ -2912,4 +2858,163 @@ impl Pass for InstructionSelectPass {
         self.commit_block_solution(context, &context.get_block(block), rewriter)?;
         Ok(())
     }
+}
+
+/// What lowering every block of a function into one e-graph yields.
+struct BlockLowering {
+    value_to_class: HashMap<ValueId, Id>,
+    roots_by_op: HashMap<OpId, Id>,
+    constant_candidates: Vec<(OpId, Id)>,
+    prepared: HashMap<ValueId, ConditionExpr>,
+    region_facts: HashMap<BlockId, (ValueId, bool)>,
+    region_control: builder::RegionControl,
+}
+
+/// Where every value is defined, and where every operation sits.
+#[allow(clippy::type_complexity)]
+fn function_value_layout(
+    context: &Context,
+    blocks: &[BlockId],
+) -> (
+    HashMap<ValueId, OpId>,
+    HashMap<OpId, BlockId>,
+    HashMap<OpId, usize>,
+) {
+    let mut value_to_def = HashMap::new();
+    let mut op_block = HashMap::new();
+    let mut op_position = HashMap::new();
+    for &block_id in blocks {
+        for (position, op_id) in context.get_block(block_id).op_ids().into_iter().enumerate() {
+            op_block.insert(op_id, block_id);
+            op_position.insert(op_id, position);
+            for result in context.get_op(op_id).results() {
+                value_to_def.insert(result, op_id);
+            }
+        }
+    }
+    (value_to_def, op_block, op_position)
+}
+
+/// Canonicalize the op roots through `find`: saturation may merge classes, so
+/// every id recorded against the pre-saturation graph is re-resolved here.
+fn canonical_roots(
+    egraph: &SemEGraph,
+    roots_by_op: &HashMap<OpId, Id>,
+) -> (HashMap<Id, Vec<OpId>>, HashMap<OpId, Id>) {
+    let mut ops_by_root: HashMap<Id, Vec<OpId>> = HashMap::new();
+    let mut op_root: HashMap<OpId, Id> = HashMap::new();
+    for (&op, &root) in roots_by_op {
+        let class = egraph.find(root);
+        ops_by_root.entry(class).or_default().push(op);
+        op_root.insert(op, class);
+    }
+    // `roots_by_op` iterates in hash order; the per-class lists decide
+    // emission order, so they are sorted into program order.
+    for ops in ops_by_root.values_mut() {
+        ops.sort_unstable();
+    }
+    (ops_by_root, op_root)
+}
+
+/// Every value a class computes: the input leaves it interned plus every op
+/// result rooting it (a result never used as an operand is absent from
+/// `value_to_class`). Sorted and deduped for a deterministic binding order.
+///
+/// A `!state` value names memory, not a register. It is interned like any
+/// other operand — a memory term is a term over the chain it reads — but
+/// no tile ever materializes it, so it is not one of the values a class
+/// can be bound to or remapped onto.
+fn class_value_tables(
+    context: &Context,
+    egraph: &SemEGraph,
+    value_to_class: &HashMap<ValueId, Id>,
+    value_to_def: &HashMap<ValueId, OpId>,
+    op_block: &HashMap<OpId, BlockId>,
+) -> (HashMap<Id, Vec<ValueId>>, HashMap<ValueId, Option<BlockId>>) {
+    let state_ty = crate::builtin::StateType::new(context);
+    let mut class_values: HashMap<Id, Vec<ValueId>> = HashMap::new();
+    for (&value, &class) in value_to_class {
+        if context.get_value(value).ty() == state_ty {
+            continue;
+        }
+        class_values
+            .entry(egraph.find(class))
+            .or_default()
+            .push(value);
+    }
+    for values in class_values.values_mut() {
+        values.sort_by_key(|v| v.number());
+        values.dedup();
+    }
+
+    let mut value_block: HashMap<ValueId, Option<BlockId>> = HashMap::new();
+    for values in class_values.values() {
+        for &value in values {
+            value_block
+                .entry(value)
+                .or_insert_with(|| value_to_def.get(&value).map(|op| op_block[op]));
+        }
+    }
+    (class_values, value_block)
+}
+
+/// Where block arguments live, how many operands read each value, and — for a
+/// value read from inside a region hanging off its own block — the operation
+/// carrying that region. The read happens before that operation finishes, so
+/// what spells the value has to precede it.
+#[allow(clippy::type_complexity)]
+fn region_uses(
+    context: &Context,
+    blocks: &[BlockId],
+    value_to_def: &HashMap<ValueId, OpId>,
+    op_block: &HashMap<OpId, BlockId>,
+    op_position: &HashMap<OpId, usize>,
+) -> (
+    HashMap<ValueId, BlockId>,
+    HashMap<ValueId, usize>,
+    HashMap<ValueId, OpId>,
+) {
+    // A value used as an operand by more than one consumer must stay a register.
+    // Every block a region holds counts here too: its arguments are written by
+    // the edges entering it, so they hold their value only where it has run,
+    // and a use inside a region is a use.
+    let mut arg_block: HashMap<ValueId, BlockId> = HashMap::new();
+    let mut operand_uses: HashMap<ValueId, usize> = HashMap::new();
+    for &block_id in blocks {
+        for argument in context.get_block(block_id).arguments() {
+            arg_block.insert(argument.id(), block_id);
+        }
+        for op_id in context.get_block(block_id).op_ids() {
+            for operand in context.get_op(op_id).operands() {
+                *operand_uses.entry(operand).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut region_use: HashMap<ValueId, OpId> = HashMap::new();
+    for &block_id in blocks {
+        for op_id in context.get_block(block_id).op_ids() {
+            for operand in context.get_op(op_id).operands() {
+                let Some(def_block) = value_to_def
+                    .get(&operand)
+                    .map(|def| op_block[def])
+                    .or_else(|| arg_block.get(&operand).copied())
+                else {
+                    continue;
+                };
+                if def_block == block_id {
+                    continue;
+                }
+                let Some(carrier) = enclosing_carrier(context, block_id, def_block) else {
+                    continue;
+                };
+                let earlier = region_use
+                    .get(&operand)
+                    .is_none_or(|held| op_position[&carrier] < op_position[held]);
+                if earlier {
+                    region_use.insert(operand, carrier);
+                }
+            }
+        }
+    }
+    (arg_block, operand_uses, region_use)
 }

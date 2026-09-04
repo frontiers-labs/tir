@@ -72,6 +72,14 @@ fn write_overview(
         writeln!(output, "\n{doc}")?;
     }
 
+    write_isas(files, &mut output)?;
+    write_registers(files, &mut output)?;
+    write_abis(files, &mut output)?;
+
+    Ok(())
+}
+
+fn write_isas(files: &[ast::File], mut output: impl Write) -> Result<(), TMDLError> {
     writeln!(output, "\n## Instruction sets")?;
     for isa in files.iter().flat_map(ast::File::isas) {
         writeln!(output, "\n### `{}`", isa.name)?;
@@ -94,6 +102,10 @@ fn write_overview(
         }
     }
 
+    Ok(())
+}
+
+fn write_registers(files: &[ast::File], mut output: impl Write) -> Result<(), TMDLError> {
     let register_classes = files
         .iter()
         .flat_map(ast::File::register_classes)
@@ -155,6 +167,10 @@ fn write_overview(
         }
     }
 
+    Ok(())
+}
+
+fn write_abis(files: &[ast::File], mut output: impl Write) -> Result<(), TMDLError> {
     let abis = files.iter().flat_map(ast::File::abis).collect::<Vec<_>>();
     if !abis.is_empty() {
         writeln!(output, "\n## Calling conventions")?;

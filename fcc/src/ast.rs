@@ -416,9 +416,19 @@ pub fn render(ast: &Ast) -> String {
 fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
     use std::fmt::Write;
 
+    let kind = ast.get_node(id).kind;
+    let label = payload_label(ast, id).unwrap_or_else(|| format!("{kind:?}"));
+
+    writeln!(out, "{:indent$}{label}", "", indent = depth * 2).unwrap();
+}
+
+/// Label for the kinds that carry an [`AstLeaf`]; the rest are named by their kind.
+fn payload_label(ast: &Ast, id: NodeId) -> Option<String> {
+    declaration_label(ast, id).or_else(|| expression_label(ast, id))
+}
+
+fn declaration_label(ast: &Ast, id: NodeId) -> Option<String> {
     let label = match ast.get_node(id).kind {
-        AstKind::TranslationUnit => "TranslationUnit".to_string(),
-        AstKind::DeclGroup => "DeclGroup".to_string(),
         AstKind::RecordDecl => match ast.get_leaf_data(id) {
             Some(AstLeaf::Record { kind, name, .. }) => {
                 let kind = match kind {
@@ -488,12 +498,17 @@ fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
             Some(AstLeaf::Param { name, ty }) => format!("Param {name:?}: {}", render_ctype(ty)),
             _ => unreachable!(),
         },
-        AstKind::VarArgs => "VarArgs".to_string(),
         AstKind::Decl => match ast.get_leaf_data(id) {
             Some(AstLeaf::Decl { name, ty }) => format!("Decl {name:?}: {}", render_ctype(ty)),
             _ => unreachable!(),
         },
-        AstKind::InitializerList => "InitializerList".to_string(),
+        _ => return None,
+    };
+    Some(label)
+}
+
+fn expression_label(ast: &Ast, id: NodeId) -> Option<String> {
+    let label = match ast.get_node(id).kind {
         AstKind::DesignatedInitializer => match ast.get_leaf_data(id) {
             Some(AstLeaf::DesignatedInitializer(InitializerDesignator::Field(name))) => {
                 format!("FieldDesignator {name:?}")
@@ -507,27 +522,6 @@ fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
             Some(AstLeaf::Assign(name)) => format!("Assign {name:?}"),
             _ => unreachable!(),
         },
-        AstKind::AssignExpr => "AssignExpr".to_string(),
-        AstKind::AddAssign => "AddAssign".to_string(),
-        AstKind::SubAssign => "SubAssign".to_string(),
-        AstKind::MulAssign => "MulAssign".to_string(),
-        AstKind::DivAssign => "DivAssign".to_string(),
-        AstKind::ModAssign => "ModAssign".to_string(),
-        AstKind::ShlAssign => "ShlAssign".to_string(),
-        AstKind::ShrAssign => "ShrAssign".to_string(),
-        AstKind::AndAssign => "AndAssign".to_string(),
-        AstKind::XorAssign => "XorAssign".to_string(),
-        AstKind::OrAssign => "OrAssign".to_string(),
-        AstKind::Return => "Return".to_string(),
-        AstKind::Block => "Block".to_string(),
-        AstKind::ExprStmt => "ExprStmt".to_string(),
-        AstKind::If => "If".to_string(),
-        AstKind::While => "While".to_string(),
-        AstKind::DoWhile => "DoWhile".to_string(),
-        AstKind::For => "For".to_string(),
-        AstKind::Switch => "Switch".to_string(),
-        AstKind::Case => "Case".to_string(),
-        AstKind::Default => "Default".to_string(),
         AstKind::Goto => match ast.get_leaf_data(id) {
             Some(AstLeaf::Label(name)) => format!("Goto {name:?}"),
             _ => unreachable!(),
@@ -536,53 +530,18 @@ fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
             Some(AstLeaf::Label(name)) => format!("Label {name:?}"),
             _ => unreachable!(),
         },
-        AstKind::Break => "Break".to_string(),
-        AstKind::Continue => "Continue".to_string(),
-        AstKind::Empty => "Empty".to_string(),
-        AstKind::Add => "Add".to_string(),
-        AstKind::Sub => "Sub".to_string(),
-        AstKind::Mul => "Mul".to_string(),
-        AstKind::Div => "Div".to_string(),
-        AstKind::Mod => "Mod".to_string(),
-        AstKind::Shl => "Shl".to_string(),
-        AstKind::Shr => "Shr".to_string(),
-        AstKind::Lt => "Lt".to_string(),
-        AstKind::Gt => "Gt".to_string(),
-        AstKind::Le => "Le".to_string(),
-        AstKind::Ge => "Ge".to_string(),
-        AstKind::Eq => "Eq".to_string(),
-        AstKind::Ne => "Ne".to_string(),
-        AstKind::BitAnd => "BitAnd".to_string(),
-        AstKind::BitXor => "BitXor".to_string(),
-        AstKind::BitOr => "BitOr".to_string(),
-        AstKind::LogAnd => "LogAnd".to_string(),
-        AstKind::LogOr => "LogOr".to_string(),
-        AstKind::Conditional => "Conditional".to_string(),
-        AstKind::Comma => "Comma".to_string(),
         AstKind::Cast => match ast.get_leaf_data(id) {
             Some(AstLeaf::Type(ty)) => format!("Cast {}", render_ctype(ty)),
             _ => unreachable!(),
         },
-        AstKind::SizeofExpr => "SizeofExpr".to_string(),
         AstKind::SizeofType => match ast.get_leaf_data(id) {
             Some(AstLeaf::Type(ty)) => format!("SizeofType {}", render_ctype(ty)),
             _ => unreachable!(),
         },
-        AstKind::Neg => "Neg".to_string(),
-        AstKind::Pos => "Pos".to_string(),
-        AstKind::Not => "Not".to_string(),
-        AstKind::BitNot => "BitNot".to_string(),
-        AstKind::AddressOf => "AddressOf".to_string(),
-        AstKind::Deref => "Deref".to_string(),
-        AstKind::PreInc => "PreInc".to_string(),
-        AstKind::PreDec => "PreDec".to_string(),
-        AstKind::PostInc => "PostInc".to_string(),
-        AstKind::PostDec => "PostDec".to_string(),
         AstKind::Call => match ast.get_leaf_data(id) {
             Some(AstLeaf::Call(name)) => format!("Call {name:?}"),
             _ => unreachable!(),
         },
-        AstKind::CallExpr => "CallExpr".to_string(),
         AstKind::Member => match ast.get_leaf_data(id) {
             Some(AstLeaf::Member { name, indirect }) => {
                 format!("Member {}{name}", if *indirect { "->" } else { "." })
@@ -609,7 +568,7 @@ fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
             Some(AstLeaf::Character(value)) => format!("Character {value}"),
             _ => unreachable!(),
         },
+        _ => return None,
     };
-
-    writeln!(out, "{:indent$}{label}", "", indent = depth * 2).unwrap();
+    Some(label)
 }

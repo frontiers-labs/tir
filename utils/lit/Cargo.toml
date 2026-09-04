@@ -25,3 +25,6 @@ tempfile = "3.27.0"
 [[test]]
 name = "lit"
 harness = false
+
+[lints]
+workspace = true

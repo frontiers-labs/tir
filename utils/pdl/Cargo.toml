@@ -25,3 +25,6 @@ syn.workspace = true
 name = "tir-pdl"
 path = "src/main.rs"
 required-features = ["cli"]
+
+[lints]
+workspace = true

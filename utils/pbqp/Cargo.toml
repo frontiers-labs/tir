@@ -11,3 +11,6 @@ criterion = { workspace = true }
 [[bench]]
 name = "pbqp"
 harness = false
+
+[lints]
+workspace = true

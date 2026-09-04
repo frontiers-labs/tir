@@ -37,3 +37,6 @@ tir-lit.workspace = true
 logos.workspace = true
 proptest.workspace = true
 tempfile = "3.27.0"
+
+[lints]
+workspace = true

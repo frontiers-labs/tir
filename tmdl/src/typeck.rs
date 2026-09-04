@@ -285,6 +285,278 @@ fn constrain(
     }
 }
 
+fn infer_call<'a>(
+    call: &'a ast::Call,
+    env: &TypeEnv,
+    tvg: &mut TypeVarGen,
+    subst: &mut Substitution,
+    cache: &mut TypeCache<'a>,
+    diags: &mut Vec<(String, Diag)>,
+    file_name: &str,
+) -> Option<Type> {
+    let ty = match &*call.callee {
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Clamp) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Integer
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Extract) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Var(tvg.fresh())
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Bitcast) => {
+            let input = call.arguments.first()?;
+            let ty = infer(input, env, tvg, subst, cache, diags, file_name);
+            for arg in &call.arguments[1..] {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            ty.apply(subst)
+        }
+        // `todo()` stands in for unmodeled semantics; it takes no arguments
+        // and unifies with whatever context uses it.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Todo) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Var(tvg.fresh())
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Log2Ceil) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            // A count: Integer in spec-time expressions (widths), but a
+            // small bitvector when computed from a runtime register value.
+            Type::Var(tvg.fresh())
+        }
+        // `regnum(op)` -> bits<ENCODING_LEN>: the operand's encoding index.
+        // The width is the operand class's `ENCODING_LEN`, not tracked here;
+        // a fresh var lets the surrounding comparison fix it.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Regnum) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Var(tvg.fresh())
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::SExt)
+        | ast::Expr::BuiltinFunction(ast::BuiltinFunction::ZExt)
+        | ast::Expr::BuiltinFunction(ast::BuiltinFunction::Load)
+        | ast::Expr::BuiltinFunction(ast::BuiltinFunction::LoadReserved) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Var(tvg.fresh())
+        }
+        // `store_conditional(addr, bytes, value, ordering)` -> bits<1>: the
+        // success flag. Arguments carry the address/value/ordering.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::StoreConditional) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Bits(1)
+        }
+        // `atomic_rmw(op, addr, bytes, value, ordering)` -> bits<_>: the old
+        // memory word. `op` is a bare op-selector identifier, not a value, so
+        // it is validated but never run through inference.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::AtomicRmw) => {
+            match call.arguments.first() {
+                Some(ast::Expr::Ident(id)) if ast::atomic_rmw_op_code(&id.name).is_some() => {}
+                _ => {
+                    diags.push((
+                        file_name.to_string(),
+                        Rich::custom(
+                            call.span,
+                            format!(
+                                "atomic_rmw op must be one of: {}",
+                                ast::ATOMIC_RMW_OPS.join(", ")
+                            ),
+                        ),
+                    ));
+                }
+            }
+            for arg in call.arguments.iter().skip(1) {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Var(tvg.fresh())
+        }
+        // `fence(pred, succ)` / `fence_i()` are effect-only statements.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Fence | ast::BuiltinFunction::FenceI) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Integer
+        }
+        // Float arithmetic: both operands and the result share one type
+        // (the register bits reinterpreted as the width's binary format).
+        ast::Expr::BuiltinFunction(
+            ast::BuiltinFunction::FAdd
+            | ast::BuiltinFunction::FSub
+            | ast::BuiltinFunction::FMul
+            | ast::BuiltinFunction::FDiv
+            | ast::BuiltinFunction::FMin
+            | ast::BuiltinFunction::FMax,
+        ) => {
+            let lhs_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+            for arg in &call.arguments[1..] {
+                let arg_ty = infer(arg, env, tvg, subst, cache, diags, file_name);
+                constrain(&arg_ty, &lhs_ty, subst, call.span, diags, file_name);
+            }
+            lhs_ty.apply(subst)
+        }
+        ast::Expr::BuiltinFunction(
+            ast::BuiltinFunction::SIToFP
+            | ast::BuiltinFunction::UIToFP
+            | ast::BuiltinFunction::AsFloat
+            | ast::BuiltinFunction::FCvt
+            | ast::BuiltinFunction::Fma
+            | ast::BuiltinFunction::Sqrt,
+        ) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Var(tvg.fresh())
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::FPToSI | ast::BuiltinFunction::FPToUI) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Var(tvg.fresh())
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Store)
+        | ast::Expr::BuiltinFunction(ast::BuiltinFunction::Trap) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Integer
+        }
+        // `split(bits, n)` -> vec<bits<_>>: the input is some bitvector; each
+        // lane is a bitvector whose width (input / n) is not tracked here.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Split) => {
+            let bits_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+            for arg in &call.arguments[1..] {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            constrain(
+                &bits_ty,
+                &Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]),
+                subst,
+                call.span,
+                diags,
+                file_name,
+            );
+            vec_ty(Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]))
+        }
+        // `concat(iter)` -> bits<_>: joins an iterator's lanes into a bitvector
+        // whose width is the sum of the lane widths, not tracked here.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Concat) => {
+            let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+            constrain(
+                &iter_ty,
+                &vec_ty(Type::Var(tvg.fresh())),
+                subst,
+                call.span,
+                diags,
+                file_name,
+            );
+            Type::Con("bits".into(), vec![Type::Var(tvg.fresh())])
+        }
+        // `iota(n, w)` -> vec<bits<w>>: lane indices 0..n-1. The lane width
+        // comes from the second argument, not tracked here.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Iota) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            vec_ty(Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]))
+        }
+        // `zip(a, b, ...)` -> vec<pair<A, B, ...>>: combines iterators
+        // lane-wise; a `map` lambda with one parameter per zipped iterator
+        // destructures each lane.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Zip) => {
+            let mut components = Vec::with_capacity(call.arguments.len());
+            for arg in &call.arguments {
+                let arg_ty = infer(arg, env, tvg, subst, cache, diags, file_name);
+                let component = Type::Var(tvg.fresh());
+                constrain(
+                    &arg_ty,
+                    &vec_ty(component.clone()),
+                    subst,
+                    call.span,
+                    diags,
+                    file_name,
+                );
+                components.push(component);
+            }
+            vec_ty(Type::Con("pair".into(), components))
+        }
+        // `map(iter, |x| ...)` -> vec<R>: applies the lambda to each lane. A
+        // two-parameter lambda destructures a zipped pair element.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Map) => {
+            let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+            let elem = Type::Var(tvg.fresh());
+            constrain(
+                &iter_ty,
+                &vec_ty(elem.clone()),
+                subst,
+                call.span,
+                diags,
+                file_name,
+            );
+            let param_tys = map_param_tys(&elem.apply(subst), &call.arguments[1], tvg, subst);
+            let ret = infer_lambda(
+                &call.arguments[1],
+                &param_tys,
+                env,
+                tvg,
+                subst,
+                cache,
+                diags,
+                file_name,
+            );
+            vec_ty(ret)
+        }
+        // `reduce(iter, |acc, x| ...)` -> R: left-folds the lambda over the
+        // lanes; the accumulator, each lane and the result share one type.
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::Reduce) => {
+            let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
+            let elem = Type::Var(tvg.fresh());
+            constrain(
+                &iter_ty,
+                &vec_ty(elem.clone()),
+                subst,
+                call.span,
+                diags,
+                file_name,
+            );
+            let elem = elem.apply(subst);
+            let ret = infer_lambda(
+                &call.arguments[1],
+                &[elem.clone(), elem.clone()],
+                env,
+                tvg,
+                subst,
+                cache,
+                diags,
+                file_name,
+            );
+            constrain(&ret, &elem, subst, call.span, diags, file_name);
+            elem.apply(subst)
+        }
+        callee => {
+            let callee_ty = infer(callee, env, tvg, subst, cache, diags, file_name);
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            match callee_ty.apply(subst) {
+                Type::Fn(_, ret) => *ret,
+                _ => Type::Var(tvg.fresh()),
+            }
+        }
+    };
+    Some(ty)
+}
+
 fn infer<'a>(
     expr: &'a ast::Expr,
     env: &TypeEnv,
@@ -479,271 +751,9 @@ fn infer<'a>(
             }
         }
 
-        ast::Expr::Call(call) => match &*call.callee {
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Clamp) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Integer
-            }
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Extract) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Var(tvg.fresh())
-            }
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Bitcast) => {
-                let Some(input) = call.arguments.first() else {
-                    return Type::Var(tvg.fresh());
-                };
-                let ty = infer(input, env, tvg, subst, cache, diags, file_name);
-                for arg in &call.arguments[1..] {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                ty.apply(subst)
-            }
-            // `todo()` stands in for unmodeled semantics; it takes no arguments
-            // and unifies with whatever context uses it.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Todo) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Var(tvg.fresh())
-            }
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Log2Ceil) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                // A count: Integer in spec-time expressions (widths), but a
-                // small bitvector when computed from a runtime register value.
-                Type::Var(tvg.fresh())
-            }
-            // `regnum(op)` -> bits<ENCODING_LEN>: the operand's encoding index.
-            // The width is the operand class's `ENCODING_LEN`, not tracked here;
-            // a fresh var lets the surrounding comparison fix it.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Regnum) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Var(tvg.fresh())
-            }
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::SExt)
-            | ast::Expr::BuiltinFunction(ast::BuiltinFunction::ZExt)
-            | ast::Expr::BuiltinFunction(ast::BuiltinFunction::Load)
-            | ast::Expr::BuiltinFunction(ast::BuiltinFunction::LoadReserved) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Var(tvg.fresh())
-            }
-            // `store_conditional(addr, bytes, value, ordering)` -> bits<1>: the
-            // success flag. Arguments carry the address/value/ordering.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::StoreConditional) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Bits(1)
-            }
-            // `atomic_rmw(op, addr, bytes, value, ordering)` -> bits<_>: the old
-            // memory word. `op` is a bare op-selector identifier, not a value, so
-            // it is validated but never run through inference.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::AtomicRmw) => {
-                match call.arguments.first() {
-                    Some(ast::Expr::Ident(id)) if ast::atomic_rmw_op_code(&id.name).is_some() => {}
-                    _ => {
-                        diags.push((
-                            file_name.to_string(),
-                            Rich::custom(
-                                call.span,
-                                format!(
-                                    "atomic_rmw op must be one of: {}",
-                                    ast::ATOMIC_RMW_OPS.join(", ")
-                                ),
-                            ),
-                        ));
-                    }
-                }
-                for arg in call.arguments.iter().skip(1) {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Var(tvg.fresh())
-            }
-            // `fence(pred, succ)` / `fence_i()` are effect-only statements.
-            ast::Expr::BuiltinFunction(
-                ast::BuiltinFunction::Fence | ast::BuiltinFunction::FenceI,
-            ) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Integer
-            }
-            // Float arithmetic: both operands and the result share one type
-            // (the register bits reinterpreted as the width's binary format).
-            ast::Expr::BuiltinFunction(
-                ast::BuiltinFunction::FAdd
-                | ast::BuiltinFunction::FSub
-                | ast::BuiltinFunction::FMul
-                | ast::BuiltinFunction::FDiv
-                | ast::BuiltinFunction::FMin
-                | ast::BuiltinFunction::FMax,
-            ) => {
-                let lhs_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
-                for arg in &call.arguments[1..] {
-                    let arg_ty = infer(arg, env, tvg, subst, cache, diags, file_name);
-                    constrain(&arg_ty, &lhs_ty, subst, call.span, diags, file_name);
-                }
-                lhs_ty.apply(subst)
-            }
-            ast::Expr::BuiltinFunction(
-                ast::BuiltinFunction::SIToFP
-                | ast::BuiltinFunction::UIToFP
-                | ast::BuiltinFunction::AsFloat
-                | ast::BuiltinFunction::FCvt
-                | ast::BuiltinFunction::Fma
-                | ast::BuiltinFunction::Sqrt,
-            ) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Var(tvg.fresh())
-            }
-            ast::Expr::BuiltinFunction(
-                ast::BuiltinFunction::FPToSI | ast::BuiltinFunction::FPToUI,
-            ) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Var(tvg.fresh())
-            }
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Store)
-            | ast::Expr::BuiltinFunction(ast::BuiltinFunction::Trap) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                Type::Integer
-            }
-            // `split(bits, n)` -> vec<bits<_>>: the input is some bitvector; each
-            // lane is a bitvector whose width (input / n) is not tracked here.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Split) => {
-                let bits_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
-                for arg in &call.arguments[1..] {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                constrain(
-                    &bits_ty,
-                    &Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]),
-                    subst,
-                    call.span,
-                    diags,
-                    file_name,
-                );
-                vec_ty(Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]))
-            }
-            // `concat(iter)` -> bits<_>: joins an iterator's lanes into a bitvector
-            // whose width is the sum of the lane widths, not tracked here.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Concat) => {
-                let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
-                constrain(
-                    &iter_ty,
-                    &vec_ty(Type::Var(tvg.fresh())),
-                    subst,
-                    call.span,
-                    diags,
-                    file_name,
-                );
-                Type::Con("bits".into(), vec![Type::Var(tvg.fresh())])
-            }
-            // `iota(n, w)` -> vec<bits<w>>: lane indices 0..n-1. The lane width
-            // comes from the second argument, not tracked here.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Iota) => {
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                vec_ty(Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]))
-            }
-            // `zip(a, b, ...)` -> vec<pair<A, B, ...>>: combines iterators
-            // lane-wise; a `map` lambda with one parameter per zipped iterator
-            // destructures each lane.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Zip) => {
-                let mut components = Vec::with_capacity(call.arguments.len());
-                for arg in &call.arguments {
-                    let arg_ty = infer(arg, env, tvg, subst, cache, diags, file_name);
-                    let component = Type::Var(tvg.fresh());
-                    constrain(
-                        &arg_ty,
-                        &vec_ty(component.clone()),
-                        subst,
-                        call.span,
-                        diags,
-                        file_name,
-                    );
-                    components.push(component);
-                }
-                vec_ty(Type::Con("pair".into(), components))
-            }
-            // `map(iter, |x| ...)` -> vec<R>: applies the lambda to each lane. A
-            // two-parameter lambda destructures a zipped pair element.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Map) => {
-                let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
-                let elem = Type::Var(tvg.fresh());
-                constrain(
-                    &iter_ty,
-                    &vec_ty(elem.clone()),
-                    subst,
-                    call.span,
-                    diags,
-                    file_name,
-                );
-                let param_tys = map_param_tys(&elem.apply(subst), &call.arguments[1], tvg, subst);
-                let ret = infer_lambda(
-                    &call.arguments[1],
-                    &param_tys,
-                    env,
-                    tvg,
-                    subst,
-                    cache,
-                    diags,
-                    file_name,
-                );
-                vec_ty(ret)
-            }
-            // `reduce(iter, |acc, x| ...)` -> R: left-folds the lambda over the
-            // lanes; the accumulator, each lane and the result share one type.
-            ast::Expr::BuiltinFunction(ast::BuiltinFunction::Reduce) => {
-                let iter_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
-                let elem = Type::Var(tvg.fresh());
-                constrain(
-                    &iter_ty,
-                    &vec_ty(elem.clone()),
-                    subst,
-                    call.span,
-                    diags,
-                    file_name,
-                );
-                let elem = elem.apply(subst);
-                let ret = infer_lambda(
-                    &call.arguments[1],
-                    &[elem.clone(), elem.clone()],
-                    env,
-                    tvg,
-                    subst,
-                    cache,
-                    diags,
-                    file_name,
-                );
-                constrain(&ret, &elem, subst, call.span, diags, file_name);
-                elem.apply(subst)
-            }
-            callee => {
-                let callee_ty = infer(callee, env, tvg, subst, cache, diags, file_name);
-                for arg in &call.arguments {
-                    infer(arg, env, tvg, subst, cache, diags, file_name);
-                }
-                match callee_ty.apply(subst) {
-                    Type::Fn(_, ret) => *ret,
-                    _ => Type::Var(tvg.fresh()),
-                }
-            }
+        ast::Expr::Call(call) => match infer_call(call, env, tvg, subst, cache, diags, file_name) {
+            Some(ty) => ty,
+            None => return Type::Var(tvg.fresh()),
         },
 
         // base[hi..lo] → bits<hi - lo + 1>  (inclusive on both ends)
