@@ -38,9 +38,10 @@ enum Task {
         #[arg(long)]
         fcc: Option<PathBuf>,
     },
-    /// Time fcc and gcc -O0 on the passing torture execute cases and coremark;
-    /// print the sum, median ratio and slowest cases, and fail on a >10 % sum
-    /// regression against the baseline
+    /// Time fcc and gcc at -O0 and -O2 on the passing torture execute cases and
+    /// coremark, recording fcc's peak RSS; print the sums, median ratio and
+    /// slowest cases, and fail on a >10 % time or >2 % peak regression against
+    /// the baseline
     FccBench(fcc_bench::Options),
     /// Generate random UB-free C programs, compile them under different pass
     /// pipelines and reference compilers, run the binaries and compare
