@@ -24,7 +24,9 @@ pub fn import(context: &Context, module: &ast::Module) -> Result<builtin::Module
     }
     let bindings = callees.bind(context, &m, &builder);
     builder.append_op(bops::module_end(context).build());
-    context.rebind_operands(tir::Operation::id(&m), &bindings);
+    for (&old, &new) in &bindings {
+        context.replace_value_uses(old, new);
+    }
     Ok(m)
 }
 

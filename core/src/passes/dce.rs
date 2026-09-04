@@ -7,8 +7,6 @@
 //! physical-register write counts as a side effect, so nothing is eligible
 //! after allocation.
 
-use std::collections::HashMap;
-
 use crate::analysis::{DefUse, execution_regs, op_regs};
 use crate::backend::SymbolOp;
 use crate::builtin::{StateType, trailing_state_operand, trailing_state_result};
@@ -80,8 +78,6 @@ fn erase_dead_with(
     defuse: &DefUse,
     regions: bool,
 ) -> Result<(), PassError> {
-    // Live read counts, retired as dead readers are erased.
-    let mut use_counts = defuse.use_counts();
     // LIFO over walk order visits consumers before their producers.
     let mut queue: Vec<OpId> = defuse.ops().to_vec();
 
@@ -90,7 +86,7 @@ fn erase_dead_with(
             continue;
         }
         let instance = context.get_op(op_id);
-        if !is_erasable(context, &instance, &use_counts, regions) {
+        if !is_erasable(context, &instance, regions) {
             continue;
         }
 
@@ -103,20 +99,16 @@ fn erase_dead_with(
             trailing_state_operand(context, &instance),
         ) {
             context.replace_value_uses(published, observed);
-            let moved = use_counts.insert(published.number(), 0).unwrap_or(0);
-            *use_counts.entry(observed.number()).or_default() += moved;
         }
         // Read before the erase: the op's storage goes away with it.
         let used_regs = op_regs(&instance).uses;
         rewriter.erase_op(&OperationRef::new(instance.clone()))?;
 
+        // The erase retired the op's own reads, so a value it held alone is
+        // now unread and its producers are candidates in turn.
         for used in used_regs {
-            let id = used.number();
-            if let Some(count) = use_counts.get_mut(&id) {
-                *count -= 1;
-                if *count == 0 {
-                    queue.extend_from_slice(defuse.defs_of(id));
-                }
+            if !context.is_used(used) {
+                queue.extend_from_slice(defuse.defs_of(used.number()));
             }
         }
     }
@@ -135,12 +127,7 @@ fn erase_dead_with(
 /// either, and its readers are handed the state it observed. Where no chain is
 /// threaded a write publishes nothing, defines nothing, and the last test below
 /// leaves it alone.
-fn is_erasable(
-    context: &Context,
-    instance: &OpHandle,
-    use_counts: &HashMap<u32, usize>,
-    regions: bool,
-) -> bool {
+fn is_erasable(context: &Context, instance: &OpHandle, regions: bool) -> bool {
     if instance.clone().as_interface::<dyn Terminator>().is_some() {
         return false;
     }
@@ -201,10 +188,7 @@ fn is_erasable(
         .filter(|def| !(forwards_state && is_state(def)))
     {
         defines = true;
-        if use_counts
-            .get(&def.number())
-            .is_some_and(|&count| count > 0)
-        {
+        if context.is_used(*def) {
             return false;
         }
     }

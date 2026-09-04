@@ -19,7 +19,7 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
 
     parse_attribute_aliases(&mut parser, context)?;
     let op = parse_single_op(&mut parser, context)?;
-    bind_forward_references(&mut parser, context, op.id())?;
+    bind_forward_references(&mut parser, context)?;
     let any: Box<dyn Any> = op.into_any();
     any.downcast::<T>()
         .map(|t| *t)
@@ -35,23 +35,21 @@ pub fn parse_op(context: &Context, src: &str) -> Result<Box<dyn Operation>, (Spa
     parser.forbid_forward_references();
     parse_attribute_aliases(&mut parser, context)?;
     let op = parse_single_op(&mut parser, context)?;
-    bind_forward_references(&mut parser, context, op.id())?;
+    bind_forward_references(&mut parser, context)?;
     Ok(op)
 }
 
 /// Point every use of a placeholder at the value its name turned out to name.
-fn bind_forward_references(
-    parser: &mut TextParser<'_>,
-    context: &Context,
-    root: crate::OpId,
-) -> ParseResult<()> {
+fn bind_forward_references(parser: &mut TextParser<'_>, context: &Context) -> ParseResult<()> {
     let bindings = parser
         .forward_bindings()
         .map_err(|error| (parser.span(), error))?;
     if bindings.is_empty() {
         return Ok(());
     }
-    context.rebind_operands(root, &bindings.into_iter().collect());
+    for (old, new) in bindings {
+        context.replace_value_uses(old, new);
+    }
     Ok(())
 }
 

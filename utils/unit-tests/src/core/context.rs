@@ -2,7 +2,7 @@
 
 use tir::{
     builtin, func, scf, BlockHandle, BlockId, Commutative, Context, IRFormatter, OpId, Operand,
-    Operation, RegionId, StagedRegion, ValueId,
+    Operation, RegionId, StagedRegion, Use, ValueId,
 };
 
 /// `module { func demo(%cond) { %c = 1; scf.if %cond { %old = 7; scf.yield }; return } }`
@@ -110,7 +110,7 @@ fn a_discarded_staging_leaves_the_tree_untouched() {
     assert_eq!(context.op_version(f.if_op), if_version);
     assert!(!context.has_operation(staged_op), "staged ops are dropped");
     assert!(
-        !tir::analysis::DefUse::new(&context, f.func).is_used(f.constant.number()),
+        !context.is_used(f.constant),
         "a discarded staging leaves no uses of live values behind"
     );
 }
@@ -166,10 +166,7 @@ fn staged_ops_keep_their_live_operands() {
     );
     assert_eq!(context.parent_block(add.id()), Some(block));
     assert_eq!(context.parent_region(block), Some(f.then_region));
-    assert_eq!(
-        tir::analysis::DefUse::new(&context, f.func).users_of(f.constant.number()),
-        [add.id(); 2]
-    );
+    assert_eq!(context.users_of(f.constant), [add.id(); 2]);
     tir::verify_op_tree(&context, f.func).expect("the committed tree verifies");
 }
 
@@ -215,7 +212,7 @@ fn a_commit_remaps_uses_of_replaced_values() {
         vec![fresh.result(); 2],
         "surviving uses read the staged replacement"
     );
-    assert!(!tir::analysis::DefUse::new(&context, f.module).is_used(f.old.number()));
+    assert!(!context.is_used(f.old));
 }
 
 #[test]
@@ -735,4 +732,102 @@ fn identifies_operations_by_type() {
     assert!(!instance.is::<tir::func::FuncOp>());
     assert_eq!(instance.name(), OperationName::of::<ModuleOp>());
     assert_eq!(instance.dialect(), DialectName::of::<BuiltinDialect>());
+}
+
+#[test]
+fn uses_of_lists_each_operand_slot() {
+    let context = Context::with_default_dialects();
+    let (_, _, body) = module_with_function(&context);
+    let i32_ty = builtin::IntegerType::new(&context, 32);
+    let c = builtin::ops::constant(&context, 1, i32_ty).build();
+    body.append(c.id());
+    let add = builtin::ops::addi(&context, c.result(), c.result(), i32_ty).build();
+    body.append(add.id());
+
+    assert_eq!(
+        context.uses_of(c.result()),
+        [Use::new(add.id(), 0), Use::new(add.id(), 1)]
+    );
+    assert_eq!(context.users_of(c.result()), [add.id(); 2]);
+    assert_eq!(context.use_count(c.result()), 2);
+    assert!(context.is_used(c.result()));
+    assert!(!context.is_used(add.result()));
+}
+
+/// A function body holding `%c = 1` and `%add = addi %c, %c`.
+fn add_fixture(context: &Context) -> (ValueId, ValueId, OpId) {
+    let (_, _, body) = module_with_function(context);
+    let i32_ty = builtin::IntegerType::new(context, 32);
+    let c = builtin::ops::constant(context, 1, i32_ty).build();
+    body.append(c.id());
+    let d = builtin::ops::constant(context, 2, i32_ty).build();
+    body.append(d.id());
+    let add = builtin::ops::addi(context, c.result(), c.result(), i32_ty).build();
+    body.append(add.id());
+    (c.result(), d.result(), add.id())
+}
+
+#[test]
+fn setting_one_operand_moves_one_use() {
+    let context = Context::with_default_dialects();
+    let (c, d, add) = add_fixture(&context);
+
+    context.set_op_operand(add, 1, d);
+
+    assert_eq!(context.uses_of(c), [Use::new(add, 0)]);
+    assert_eq!(context.uses_of(d), [Use::new(add, 1)]);
+}
+
+#[test]
+fn setting_every_operand_relinks_the_uses() {
+    let context = Context::with_default_dialects();
+    let (c, d, add) = add_fixture(&context);
+
+    context.set_op_operands(add, vec![d]);
+
+    assert!(!context.is_used(c));
+    assert_eq!(context.uses_of(d), [Use::new(add, 0)]);
+}
+
+#[test]
+fn appending_and_popping_an_operand_tracks_its_use() {
+    let context = Context::with_default_dialects();
+    let (_, d, add) = add_fixture(&context);
+
+    context.append_operand(add, d);
+    assert_eq!(context.uses_of(d), [Use::new(add, 2)]);
+
+    context.pop_operand(add);
+    assert!(!context.is_used(d));
+}
+
+#[test]
+fn use_indices_follow_a_port_into_its_place() {
+    let context = Context::with_default_dialects();
+    let (_, d, add) = add_fixture(&context);
+    let state = builtin::StateType::new(&context);
+    let token = context.create_value(state, None).id();
+
+    context.append_operand(add, token);
+    context.append_port_operand(add, d);
+
+    let operands = context.get_op(add).operands();
+    for r#use in context.uses_of(d) {
+        assert_eq!(operands[r#use.index], d);
+    }
+    assert_eq!(context.uses_of(token), [Use::new(add, 3)]);
+}
+
+#[test]
+fn replacing_value_uses_reaches_a_detached_op() {
+    let context = Context::with_default_dialects();
+    let (c, d, _) = add_fixture(&context);
+    let i32_ty = builtin::IntegerType::new(&context, 32);
+    let detached = builtin::ops::addi(&context, c, c, i32_ty).build();
+
+    context.replace_value_uses(c, d);
+
+    assert_eq!(context.get_op(detached.id()).operands().as_slice(), [d; 2]);
+    assert!(!context.is_used(c));
+    assert_eq!(context.use_count(d), 4);
 }

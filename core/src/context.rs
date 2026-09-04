@@ -27,7 +27,7 @@ use crate::{
     ptr::PtrDialect,
     region::{RegionHandle, RegionId},
     ty::{Type, TypeParser},
-    value::{Value, ValueId},
+    value::{Use, Value, ValueId},
     vector::VectorDialect,
 };
 
@@ -211,6 +211,11 @@ struct ContextInstance {
     /// entered. The counterpart of [`Value::defining_op`] for values no operation
     /// defines, and what bounds the scope a use of such a value can sit in.
     value_block: Vec<Option<BlockId>>,
+    /// Use lists: value index → the operand slots naming it, one entry per slot.
+    /// Maintained by every operand mutator below, so it mirrors what live op
+    /// storage holds whether or not the op sits in the tree; it is what makes
+    /// "who reads this value" O(uses) instead of a walk.
+    value_uses: Vec<Vec<Use>>,
     /// Structural version per op, bumped along the spine root-ward by every
     /// tree edit; see [`Context::op_version`].
     op_version: Vec<u32>,
@@ -285,6 +290,52 @@ impl ContextInstance {
 
     fn erase_value(&mut self, id: ValueId) {
         self.values.erase(id.index(), |value| value.id().index());
+    }
+
+    /// Record every operand slot of `op` under the value it holds.
+    fn link_operands(&mut self, op: OpId) {
+        for (index, value) in self.operand_slots(op) {
+            self.link_use(value, Use::new(op, index));
+        }
+    }
+
+    /// Forget every operand slot of `op`. Reads `op`'s storage, so it runs
+    /// before the op is erased or its operands are rewritten wholesale.
+    fn unlink_operands(&mut self, op: OpId) {
+        for (index, value) in self.operand_slots(op) {
+            self.unlink_use(value, Use::new(op, index));
+        }
+    }
+
+    /// `op`'s operands paired with their slot indices, copied out so the table
+    /// they are recorded in can be borrowed mutably.
+    fn operand_slots(&self, op: OpId) -> Vec<(usize, ValueId)> {
+        self.op(op)
+            .map(|instance| instance.operands().iter().copied().enumerate().collect())
+            .unwrap_or_default()
+    }
+
+    fn link_use(&mut self, value: ValueId, r#use: Use) {
+        if value.index() >= self.value_uses.len() {
+            self.value_uses.resize_with(value.index() + 1, Vec::new);
+        }
+        self.value_uses[value.index()].push(r#use);
+    }
+
+    fn unlink_use(&mut self, value: ValueId, r#use: Use) {
+        let Some(uses) = self.value_uses.get_mut(value.index()) else {
+            return;
+        };
+        if let Some(position) = uses.iter().position(|held| *held == r#use) {
+            uses.remove(position);
+        }
+    }
+
+    fn uses(&self, value: ValueId) -> &[Use] {
+        self.value_uses
+            .get(value.index())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// The op enclosing `block`, if the block sits in a region owned by one.
@@ -386,6 +437,7 @@ impl Context {
             op_parent: Vec::new(),
             block_parent: Vec::new(),
             value_block: Vec::new(),
+            value_uses: Vec::new(),
             op_version: Vec::new(),
             dirty_ops: Vec::new(),
             dialects: HashMap::new(),
@@ -555,6 +607,7 @@ impl Context {
             }
 
             inner.ops.put(op_id.index(), instance);
+            inner.link_operands(op_id);
             op_id
         };
 
@@ -631,9 +684,12 @@ impl Context {
             Some(old) if old != new => {}
             _ => return,
         }
+        let old = inner.op(id).expect("live op").operands()[index];
         if let Some(op) = inner.op_mut(id) {
             op.replace_operand_at(index, new);
         }
+        inner.unlink_use(old, Use::new(id, index));
+        inner.link_use(new, Use::new(id, index));
         inner.edit_op(id);
     }
 
@@ -642,10 +698,13 @@ impl Context {
     /// to explicit copies.
     pub fn set_op_operands(&self, id: OpId, operands: Vec<ValueId>) {
         let mut inner = self.0.write();
-        if let Some(op) = inner.op_mut(id) {
-            op.set_operands(operands);
-            inner.edit_op(id);
+        if inner.op(id).is_none() {
+            return;
         }
+        inner.unlink_operands(id);
+        inner.op_mut(id).expect("live op").set_operands(operands);
+        inner.link_operands(id);
+        inner.edit_op(id);
     }
 
     /// Replace a single operation's SSA result at `index`, moving the
@@ -715,95 +774,90 @@ impl Context {
 
     /// Replace every SSA operand use of `old` with `new`.
     ///
-    /// The green core keeps no use lists, so the uses are found by walking the
-    /// scope a use of `old` can sit in (see [`Context::use_scope`]); the
-    /// [`DefUse`](crate::analysis::DefUse) analysis is the cached index passes
-    /// query. The edit applies to the tree: a use in a block an edit has taken
-    /// out of it is not rewritten, which is what
-    /// [`StagedRegion::replace_value`] exists for. Attributes naming a value are
-    /// left untouched: they record where the ABI places a value, not a read of
-    /// it.
+    /// The use list names the reading slots directly, so the edit costs one
+    /// write per use and reaches every live operation — including ones a
+    /// rewrite has taken out of the tree or has not put in it yet. Attributes
+    /// naming a value are left untouched: they record where the ABI places a
+    /// value, not a read of it.
     pub fn replace_value_uses(&self, old: ValueId, new: ValueId) {
         if old == new {
             return;
         }
 
-        let ops = match self.use_scope(old) {
-            Some(root) => self.ops_under(root),
-            None => self.live_ops(),
-        };
-
         let mut inner = self.0.write();
-        for op in ops {
-            let uses_old = inner
-                .op(op)
-                .is_some_and(|instance| instance.operands().contains(&old));
-            if !uses_old {
+        let uses = std::mem::take(match inner.value_uses.get_mut(old.index()) {
+            Some(uses) => uses,
+            None => return,
+        });
+        let mut edited: Option<OpId> = None;
+        for r#use in uses {
+            let Some(instance) = inner.op_mut(r#use.op) else {
                 continue;
+            };
+            instance.replace_operand_at(r#use.index, new);
+            inner.link_use(new, r#use);
+            if edited != Some(r#use.op) {
+                inner.edit_op(r#use.op);
+                edited = Some(r#use.op);
             }
-            if let Some(instance) = inner.op_mut(op) {
-                instance.replace_operand_uses(old, new);
-            }
-            inner.edit_op(op);
         }
     }
 
-    /// Point every operand use under `root` at the value `bindings` maps it to.
-    ///
-    /// Frontends and the text parser name a module-level λ or δ before its
-    /// definition exists, then bind the placeholders they used once the whole
-    /// module is in.
-    pub fn rebind_operands(&self, root: OpId, bindings: &HashMap<ValueId, ValueId>) {
-        let instance = self.get_op(root);
-        let operands = instance.operands();
-        if operands.iter().any(|value| bindings.contains_key(value)) {
-            let rebound = operands
-                .iter()
-                .map(|value| bindings.get(value).copied().unwrap_or(*value))
-                .collect();
-            self.set_op_operands(root, rebound);
-        }
-        for region in instance.regions() {
-            for block in self.get_region(region).block_ids() {
-                for child in self.get_block(block).op_ids() {
-                    self.rebind_operands(child, bindings);
+    /// Rebuild the use lists from live operation storage and compare. A
+    /// mismatch means an operand mutator skipped its bookkeeping, which every
+    /// def-use query would then answer wrongly; the pass manager runs this
+    /// after each mutating pass when IR verification is on.
+    pub fn verify_use_lists(&self) -> Result<(), Error> {
+        let inner = self.0.read();
+        let mut expected: Vec<Vec<Use>> = vec![Vec::new(); inner.value_uses.len()];
+        for index in inner.ops.live_ids() {
+            let op = OpId::new(index as u32);
+            for (slot, value) in inner.op(op).expect("live op").operands().iter().enumerate() {
+                if value.index() >= expected.len() {
+                    expected.resize_with(value.index() + 1, Vec::new);
                 }
+                expected[value.index()].push(Use::new(op, slot));
             }
         }
-    }
-
-    /// The operation whose subtree holds every use of `value`: the one enclosing
-    /// its definition, since SSA confines a use to the region tree the definition
-    /// sits in. `None` for a value whose def-site left the tree, which forces a
-    /// scan of everything live.
-    fn use_scope(&self, value: ValueId) -> Option<OpId> {
-        let inner = self.0.read();
-        match inner.value(value)?.defining_op() {
-            Some(op) => inner.enclosing_op_of(op),
-            None => inner.enclosing_op(*slab_get(&inner.value_block, value.index())?),
+        for (index, mut expected) in expected.into_iter().enumerate() {
+            let mut held = inner.value_uses.get(index).cloned().unwrap_or_default();
+            let key = |r#use: &Use| (r#use.op.index(), r#use.index);
+            expected.sort_unstable_by_key(key);
+            held.sort_unstable_by_key(key);
+            if expected != held {
+                return Err(Error::VerificationError(format!(
+                    "use list of value {index} holds {held:?}, but operands say {expected:?}"
+                )));
+            }
         }
+        Ok(())
     }
 
-    /// Every operation nested under `root`, at any depth.
-    fn ops_under(&self, root: OpId) -> Vec<OpId> {
-        let blocks: Vec<BlockId> = self
-            .get_op(root)
-            .regions()
+    /// Every operand slot holding `value`, in the order the uses were recorded.
+    ///
+    /// This is the def-use chain: it lists what live operation storage holds,
+    /// whether or not the reading op sits in the tree. Attributes naming a
+    /// value are not uses — they record where the ABI places it, not a read.
+    pub fn uses_of(&self, value: ValueId) -> Vec<Use> {
+        self.0.read().uses(value).to_vec()
+    }
+
+    /// The operations reading `value`, one entry per operand slot.
+    pub fn users_of(&self, value: ValueId) -> Vec<OpId> {
+        self.0
+            .read()
+            .uses(value)
             .iter()
-            .flat_map(|region| self.get_region(*region).block_ids())
-            .collect();
-        self.subtree(&blocks).0
+            .map(|r#use| r#use.op)
+            .collect()
     }
 
-    /// Every live op, in id order. Walks the slot table, not the dense storage:
-    /// an erase reorders the latter.
-    fn live_ops(&self) -> Vec<OpId> {
-        let inner = self.0.read();
-        inner
-            .ops
-            .live_ids()
-            .map(|index| OpId::new(index as u32))
-            .collect()
+    pub fn is_used(&self, value: ValueId) -> bool {
+        !self.0.read().uses(value).is_empty()
+    }
+
+    pub fn use_count(&self, value: ValueId) -> usize {
+        self.0.read().uses(value).len()
     }
 
     pub fn has_value(&self, id: ValueId) -> bool {
@@ -925,6 +979,7 @@ impl Context {
             return;
         };
         instance.push_operand(value);
+        let index = instance.operands().len() - 1;
         if let Some(attribute) = instance
             .attributes_mut()
             .iter_mut()
@@ -934,6 +989,7 @@ impl Context {
         {
             *last += 1;
         }
+        inner.link_use(value, Use::new(op, index));
         inner.edit_op(op);
     }
 
@@ -960,6 +1016,11 @@ impl Context {
         let Some(instance) = inner.op_mut(op) else {
             return;
         };
+        let dropped = instance
+            .operands()
+            .last()
+            .copied()
+            .map(|value| (value, instance.operands().len() - 1));
         instance.pop_operand();
         if let Some(attribute) = instance
             .attributes_mut()
@@ -969,6 +1030,9 @@ impl Context {
             && let Some(crate::attributes::AttributeValue::UInt(last)) = sizes.last_mut()
         {
             *last -= 1;
+        }
+        if let Some((value, index)) = dropped {
+            inner.unlink_use(value, Use::new(op, index));
         }
         inner.edit_op(op);
     }
@@ -1082,8 +1146,13 @@ impl Context {
             return last;
         };
         let mut inner = self.0.write();
-        if let Some(instance) = inner.op_mut(op) {
-            instance.rotate_operands_from(index);
+        if inner.op(op).is_some() {
+            inner.unlink_operands(op);
+            inner
+                .op_mut(op)
+                .expect("live op")
+                .rotate_operands_from(index);
+            inner.link_operands(op);
             inner.edit_op(op);
         }
         index
@@ -1161,25 +1230,6 @@ impl Context {
         for &(old, new) in &staged.remap {
             self.replace_value_uses(old, new);
         }
-    }
-
-    /// Every op and block under `blocks`, transitively through nested regions.
-    /// Collected without the context lock held, so no region lock is ever taken
-    /// under it.
-    fn subtree(&self, blocks: &[BlockId]) -> (Vec<OpId>, Vec<BlockId>) {
-        let mut pending = blocks.to_vec();
-        let mut visited_blocks = Vec::new();
-        let mut ops = Vec::new();
-        while let Some(block) = pending.pop() {
-            visited_blocks.push(block);
-            for op in self.get_block(block).op_ids() {
-                ops.push(op);
-                for region in self.get_op(op).regions() {
-                    pending.extend(self.get_region(region).block_ids());
-                }
-            }
-        }
-        (ops, visited_blocks)
     }
 
     /// Take the subtree under `blocks` out of the live IR and give its storage
@@ -1264,6 +1314,7 @@ impl Context {
     fn free(&self, owned: Owned) {
         let mut inner = self.0.write();
         for op in owned.ops {
+            inner.unlink_operands(op);
             inner.erase_op(op);
             clear_slot(&mut inner.op_parent, op.index());
         }

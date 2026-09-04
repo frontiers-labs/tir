@@ -841,14 +841,6 @@ impl OpInstance {
         self.operand_count = operands.len() as u32;
     }
 
-    pub(crate) fn replace_operand_uses(&mut self, old: ValueId, new: ValueId) {
-        for port in &mut self.ports[..self.operand_count as usize] {
-            if *port == old.number() {
-                *port = new.number();
-            }
-        }
-    }
-
     pub(crate) fn push_operand(&mut self, value: ValueId) {
         self.ports.insert(self.operand_end(), value.number());
         self.operand_count += 1;

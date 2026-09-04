@@ -41,7 +41,6 @@ pub fn lower_function_and_return(
             Some(AttributeValue::Str(name)) => name.to_string(),
             _ => "unknown".to_string(),
         };
-        let def_use = tir::analysis::DefUse::new(context, func.id());
         let mut tuple_extracts = Vec::new();
         let mut arguments = Vec::new();
         let function_arguments = func.body().arguments().to_vec();
@@ -80,8 +79,8 @@ pub fn lower_function_and_return(
 
             let element_types = tuple.elements(context);
             let mut elements = vec![None; element_types.len()];
-            for user in def_use.users_of(argument.id().number()) {
-                let extract_instance = context.get_op(*user);
+            for user in context.users_of(argument.id()) {
+                let extract_instance = context.get_op(user);
                 if extract_instance.operands().first() != Some(&argument.id()) {
                     continue;
                 }
@@ -99,7 +98,7 @@ pub fn lower_function_and_return(
                     }
                     None => *element = Some(extract.result()),
                 }
-                tuple_extracts.push(*user);
+                tuple_extracts.push(user);
             }
 
             let group = element_types
@@ -211,10 +210,7 @@ pub fn lower_function_and_return(
                 .build(),
         )?;
         if let Some((value, defining_op)) = tuple_source {
-            let enclosing = context.parent_op(defining_op).ok_or_else(|| {
-                PassError::InvalidRuleSet("tuple construction has no enclosing op".to_string())
-            })?;
-            if tir::analysis::DefUse::new(context, enclosing).is_used(value.number()) {
+            if !context.has_operation(defining_op) || context.is_used(value) {
                 return Ok(true);
             }
             rewriter.erase_op(&OperationRef::new(context.get_op(defining_op)))?;

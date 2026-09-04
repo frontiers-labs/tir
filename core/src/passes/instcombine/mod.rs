@@ -188,7 +188,7 @@ impl Driver<'_> {
         // readers that are all region exits leaves a literal the commit's sweep
         // erases again, which is an edit that changes nothing and a round that
         // never reaches its fixpoint.
-        let readers = self.rewritable_readers(value, target);
+        let readers = self.rewritable_readers(value);
         if readers.is_empty() {
             return Ok(());
         }
@@ -205,35 +205,18 @@ impl Driver<'_> {
         Ok(())
     }
 
-    /// The operations under the region `target` sits in that read `value` and
-    /// that a rewrite may rebind. Region exits are not among them: an exit
-    /// forwarding `value` already carries it in a register, and a literal there
-    /// buys an instruction for nothing.
-    fn rewritable_readers(&self, value: ValueId, target: &OperationRef) -> Vec<OpId> {
-        let Some(region) = self
+    /// The operations that read `value` and that a rewrite may rebind. Region
+    /// exits are not among them: an exit forwarding `value` already carries it
+    /// in a register, and a literal there buys an instruction for nothing.
+    fn rewritable_readers(&self, value: ValueId) -> Vec<OpId> {
+        let mut readers: Vec<OpId> = self
             .context
-            .get_op(target.op().id)
-            .parent_block()
-            .and_then(|block| self.context.parent_region(block))
-        else {
-            return Vec::new();
-        };
-        let mut readers = Vec::new();
-        let mut pending = vec![region];
-        while let Some(region) = pending.pop() {
-            for block in self.context.get_region(region).iter(self.context.clone()) {
-                for op_id in block.op_ids() {
-                    let op = self.context.get_op(op_id);
-                    pending.extend(op.regions());
-                    if scopes::region_exit_kind(&op).is_some() {
-                        continue;
-                    }
-                    if op.operands().contains(&value) {
-                        readers.push(op_id);
-                    }
-                }
-            }
-        }
+            .users_of(value)
+            .into_iter()
+            .filter(|&op_id| scopes::region_exit_kind(&self.context.get_op(op_id)).is_none())
+            .collect();
+        readers.sort_unstable();
+        readers.dedup();
         readers
     }
 

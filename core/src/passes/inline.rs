@@ -210,7 +210,7 @@ impl CallGraph {
             }
         }
         for node in &mut nodes {
-            node.users = uses_of(context, module, node.value);
+            node.users = context.use_count(node.value) as u32;
         }
 
         let mut graph = Self {
@@ -403,8 +403,6 @@ fn splice(
     }
 
     if let Some(returned) = returned {
-        // After splicing, not before: `replace_value_uses` skips blocks that
-        // are not in the tree.
         context.replace_value_uses(call.result(), returned);
     }
     rewriter.erase_op(&site.call)?;
@@ -412,7 +410,7 @@ fn splice(
 
     let caller = context.get_op(graph.nodes[site.caller].func);
     let tuples = fold_tuple_gets(context, rewriter, &ops_under(context, &caller))?;
-    erase_unused(context, rewriter, &caller, &tuples)?;
+    erase_unused(context, rewriter, &tuples)?;
     Ok(copied)
 }
 
@@ -453,11 +451,10 @@ fn fold_tuple_gets(
 fn erase_unused(
     context: &Context,
     rewriter: &mut Rewriter,
-    caller: &OpHandle,
     candidates: &[(OpId, ValueId)],
 ) -> Result<(), PassError> {
     for &(op, value) in candidates {
-        if context.has_operation(op) && uses_of(context, caller, value) == 0 {
+        if context.has_operation(op) && !context.is_used(value) {
             rewriter.erase_op(&OperationRef::new(context.get_op(op)))?;
         }
     }
@@ -535,14 +532,4 @@ fn collect_calls(context: &Context, root: &OpHandle, calls: &mut Vec<OperationRe
             calls.push(OperationRef::new(instance));
         }
     }
-}
-
-fn uses_of(context: &Context, root: &OpHandle, value: ValueId) -> u32 {
-    let mut total = 0;
-    for op in region_ops(context, root) {
-        let instance = context.get_op(op);
-        total += uses_of(context, &instance, value);
-        total += instance.operands().iter().filter(|&&v| v == value).count() as u32;
-    }
-    total
 }

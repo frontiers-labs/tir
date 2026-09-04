@@ -374,7 +374,6 @@ fn nested_pass_manager_rewrites_ops() {
 
     let func = func_ops::lambda(&context, "demo", IntegerType::new(&context, 32), &region).build();
     let func_body = func.body();
-    let func_id = func.id();
 
     let func_builder = func_body.clone();
     let add = ops::addi(
@@ -408,11 +407,7 @@ fn nested_pass_manager_rewrites_ops() {
     // The def-use chain followed the rewrite: param0 is now read by the subi
     // (the replacement), not by the erased addi.
     let subi_id = func_body.op_ids()[0];
-    assert_eq!(
-        tir::analysis::DefUse::new(&context, func_id)
-            .users_of(func_body.arguments()[0].id().number()),
-        [subi_id]
-    );
+    assert_eq!(context.users_of(func_body.arguments()[0].id()), [subi_id]);
 
     // The replaced-out addi is gone from the arena, not just the block.
     assert!(
@@ -443,14 +438,14 @@ fn erasing_an_op_drops_its_operand_uses() {
     let neg_id = neg.id();
     let neg_ref = OperationRef::new(context.get_op(neg_id));
     body.append_op(neg);
-    let argument = body.arguments()[0].id().number();
-    assert!(tir::analysis::DefUse::new(&context, func.id()).is_used(argument));
+    let argument = body.arguments()[0].id();
+    assert!(context.is_used(argument));
 
     let mut rewriter = Rewriter::new(context.clone());
     rewriter.erase_op(&neg_ref).expect("erase should succeed");
 
     assert!(
-        !tir::analysis::DefUse::new(&context, func.id()).is_used(argument),
+        !context.is_used(argument),
         "erasing the only consumer must leave the value unused"
     );
     // The erased op is gone from the arena, not just the block.

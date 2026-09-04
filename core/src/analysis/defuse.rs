@@ -5,10 +5,11 @@
 //! value: the literals its register slots hold, and the caller-saved set a call
 //! destroys.
 //!
-//! [`DefUse`] indexes those per-op defs and uses across every op nested under a
-//! root: def-use chains (`users_of`) answer "who reads this value", use-def
-//! chains (`defs_of`) answer "who wrote the value this op reads". Liveness and
-//! register allocation share [`op_regs`] for their own ordered scans.
+//! [`DefUse`] indexes the defs of every op nested under a root, so use-def
+//! chains (`defs_of`) answer "who wrote the value this op reads"; the readers
+//! of a value come from the context's use lists ([`Context::users_of`]).
+//! Liveness and register allocation share [`op_regs`] for their own ordered
+//! scans.
 
 use std::collections::HashMap;
 
@@ -147,13 +148,14 @@ pub fn execution_regs(op: &OpHandle) -> OpRegs {
     regs
 }
 
-/// Def-use and use-def chains for every op nested under a root operation.
-/// Physical registers are excluded: they are not SSA-numbered and their
-/// lifetimes are liveness's business.
+/// Use-def chains and a walk order for every op nested under a root operation.
+///
+/// Def-use chains live on the [`Context`] itself, which keeps a use list per
+/// value; what a walk still has to answer is which ops write a value — machine
+/// IR after block-parameter destruction has several producers per value — and
+/// in which order the ops appear.
 #[derive(Default)]
 pub struct DefUse {
-    /// Value → ops that read it, in walk order (def-use direction).
-    users: HashMap<u32, Vec<OpId>>,
     /// Value → ops that write it (use-def direction). Empty for values defined
     /// by block arguments.
     defs: HashMap<u32, Vec<OpId>>,
@@ -176,9 +178,6 @@ impl DefUse {
                     for def in instance.results() {
                         result.defs.entry(def.number()).or_default().push(op_id);
                     }
-                    for used in instance.operands() {
-                        result.users.entry(used.number()).or_default().push(op_id);
-                    }
                 }
             }
         }
@@ -190,27 +189,9 @@ impl DefUse {
         &self.ops
     }
 
-    /// The ops reading `value`.
-    pub fn users_of(&self, value: u32) -> &[OpId] {
-        self.users.get(&value).map(Vec::as_slice).unwrap_or(&[])
-    }
-
     /// The ops writing `value`.
     pub fn defs_of(&self, value: u32) -> &[OpId] {
         self.defs.get(&value).map(Vec::as_slice).unwrap_or(&[])
-    }
-
-    pub fn is_used(&self, value: u32) -> bool {
-        !self.users_of(value).is_empty()
-    }
-
-    /// The number of reading ops per value, as a mutable starting point for
-    /// worklist algorithms that retire uses as they erase ops.
-    pub fn use_counts(&self) -> HashMap<u32, usize> {
-        self.users
-            .iter()
-            .map(|(&value, users)| (value, users.len()))
-            .collect()
     }
 }
 

@@ -135,7 +135,9 @@ impl Symbols {
             bindings.insert(placeholder, context.get_op(declaration).results()[0]);
             module.body().append(declaration);
         }
-        context.rebind_operands(tir::Operation::id(module), &bindings);
+        for (&old, &new) in &bindings {
+            context.replace_value_uses(old, new);
+        }
     }
 }
 

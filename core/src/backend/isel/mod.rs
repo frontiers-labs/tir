@@ -25,7 +25,7 @@ use tir::BlockHandle;
 use tir::{
     AnalysisManager, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
     RegionId, Rewriter, TypeId, ValueId,
-    analysis::{DefUse, DominatorTree, scopes},
+    analysis::{DominatorTree, scopes},
     builtin::{trailing_state_operand, trailing_state_result},
     graph::{Dag, MutDag, NodeId, OperandConstraint},
     sem::{
@@ -1283,10 +1283,9 @@ impl InstructionSelectPass {
             return false;
         }
         let dom = analyses.get::<DominatorTree>(context, root);
-        let def_use = analyses.get::<DefUse>(context, root);
 
         let blocks = function_blocks(context, op);
-        let mut fs = self.build_function_selection(context, op, &def_use, &blocks);
+        let mut fs = self.build_function_selection(context, op, &blocks);
         // A fact-free block sees exactly the base graph, so every value pattern's
         // e-match is block-independent: search once here and reuse for all such
         // blocks (fact-bearing blocks re-search under their scope).
@@ -1460,7 +1459,6 @@ impl InstructionSelectPass {
         &self,
         context: &Context,
         op: &OperationRef,
-        def_use: &DefUse,
         blocks: &[BlockId],
     ) -> FunctionSelection {
         // Function-wide value/op layout: with a single `value_to_def` a cross-block
@@ -1527,7 +1525,7 @@ impl InstructionSelectPass {
             }
         }
 
-        let demand = self.register_demand(context, &egraph, def_use, &lowering, &op_block);
+        let demand = self.register_demand(context, &egraph, &lowering, &op_block);
 
         for aux in lowering.region_control.aux.values_mut() {
             for (.., class) in aux.iter_mut() {
@@ -1615,7 +1613,6 @@ impl InstructionSelectPass {
         &self,
         context: &Context,
         egraph: &SemEGraph,
-        def_use: &DefUse,
         lowering: &BlockLowering,
         op_block: &HashMap<OpId, BlockId>,
     ) -> HashSet<(Id, BlockId)> {
@@ -1626,15 +1623,15 @@ impl InstructionSelectPass {
             ..
         } = lowering;
         let needs_register = |result: ValueId, class: Id, def_block: BlockId| {
-            let unselected_use = def_use.users_of(result.number()).iter().any(|user| {
+            let users = context.users_of(result);
+            let unselected_use = users.iter().any(|user| {
                 if roots_by_op.contains_key(user) {
                     return false;
                 }
                 // A destruction's branch recomputes the test it reads.
                 !region_control.test_conditions.contains(&(*user, result))
             });
-            let cross_block = def_use
-                .users_of(result.number())
+            let cross_block = users
                 .iter()
                 .any(|user| op_block.get(user).copied() != Some(def_block));
             let cross_block_register = cross_block

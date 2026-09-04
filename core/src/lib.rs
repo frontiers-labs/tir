@@ -79,7 +79,7 @@ pub use symbol_table::{SymbolEntry, SymbolTable};
 pub use target_env::{TARGET_ENV, TargetEnv, target_env_spec};
 pub use tir_adt::Sym;
 pub use ty::{Any, Type, TypeConstraint, TypeId, TypeParser};
-pub use value::{Value, ValueId};
+pub use value::{Use, Value, ValueId};
 
 pub use dialects::builtin;
 pub use dialects::builtin::Integer;

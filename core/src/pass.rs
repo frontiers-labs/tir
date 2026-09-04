@@ -743,6 +743,12 @@ impl PassManager {
                 let mutated = context.op_version(root.op.id) != version_before;
                 let dirty = context.take_dirty_ops();
                 if mutated && verify_ir.unwrap_or_else(ir_verification_enabled) {
+                    context
+                        .verify_use_lists()
+                        .map_err(|error| PassError::InvalidIR {
+                            pass: pass.name(),
+                            error,
+                        })?;
                     let result = if is_machine_ir(context, root.op.id) {
                         crate::backend::verify_machine_ir(context, root.op.id)
                     } else {

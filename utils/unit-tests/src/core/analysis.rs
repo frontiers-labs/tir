@@ -154,19 +154,19 @@ fn chains_over_ssa_ops() {
     let du = am.get::<DefUse>(&context, func.id());
 
     // The block argument is read twice by the add and defined by no op.
-    assert_eq!(du.users_of(arg_id.number()), [sum.id(), sum.id()]);
+    assert_eq!(context.users_of(arg_id), [sum.id(), sum.id()]);
     assert!(du.defs_of(arg_id.number()).is_empty());
 
     assert_eq!(du.defs_of(sum_val.number()), [sum.id()]);
-    assert_eq!(du.users_of(sum_val.number()), [call.id()]);
+    assert_eq!(context.users_of(sum_val), [call.id()]);
 
     // Call arguments count as uses, and its result chains on.
-    assert!(du.is_used(sum_val.number()));
+    assert!(context.is_used(sum_val));
     assert_eq!(du.defs_of(call_result.number()), [call.id()]);
-    assert_eq!(du.users_of(call_result.number()), [ret.id()]);
+    assert_eq!(context.users_of(call_result), [ret.id()]);
 
-    assert!(!du.is_used(dead.result().number()));
-    assert_eq!(du.use_counts()[&arg_id.number()], 2);
+    assert!(!context.is_used(dead.result()));
+    assert_eq!(context.use_count(arg_id), 2);
 }
 
 /// Whether a slot was reached: the smallest lattice with something to say.

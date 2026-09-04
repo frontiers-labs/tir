@@ -256,7 +256,7 @@ impl FactDomain for Derivation<'_> {
     /// offset it adds where that offset is a constant.
     fn transfer(&self, node: ValueId, facts: &mut Facts<ValueId, PointerFact>) {
         let fact = facts.get(node);
-        for &user in self.defuse.users_of(node.number()) {
+        for user in self.context.users_of(node) {
             let instance = self.context.get_op(user);
             if !instance.is::<PtrAddOp>() || instance.operands()[0] != node {
                 continue;

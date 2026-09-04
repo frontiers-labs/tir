@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use tir::Symbol;
-use tir::analysis::DefUse;
 use tir::attributes::AttributeValue;
 use tir::builtin::PtrToFnOp;
 use tir::builtin::{
@@ -544,15 +543,15 @@ impl CallLowering {
     ) -> Result<(), PassError> {
         let registers = tuple_return_registers(context, self.abi, tuple)?;
         let mut extracts = Vec::new();
-        for user in enclosing_def_use(context, op)?.users_of(result.number()) {
+        for user in context.users_of(result) {
             if self
                 .tuple_argument_elements
                 .keys()
-                .any(|(call, _)| call == user)
+                .any(|(call, _)| *call == user)
             {
                 continue;
             }
-            let instance = context.get_op(*user);
+            let instance = context.get_op(user);
             if instance.operands().first() != Some(&result) {
                 return Err(PassError::InvalidRuleSet(
                     "tuple call result has a non-extraction use".to_string(),
@@ -619,25 +618,13 @@ fn insert_tuple_extractions(
     Ok(elements)
 }
 
-/// The use index of the function `op` sits in, rebuilt on demand: the pass has no
-/// analysis manager to cache it in, and rewrites it as it goes.
-fn enclosing_def_use(context: &Context, op: &OperationRef) -> Result<DefUse, PassError> {
-    let root = context.parent_op(op.op().id).ok_or_else(|| {
-        PassError::InvalidRuleSet("call lowering needs an enclosing function".to_string())
-    })?;
-    Ok(DefUse::new(context, root))
-}
-
 fn erase_dead_tuple_arguments(
     context: &Context,
     rewriter: &mut Rewriter,
     tuple_arguments: &[(OpId, ValueId)],
 ) -> Result<(), PassError> {
     for &(tuple, value) in tuple_arguments {
-        let root = context.parent_op(tuple).ok_or_else(|| {
-            PassError::InvalidRuleSet("tuple construction has no enclosing op".to_string())
-        })?;
-        if DefUse::new(context, root).is_used(value.number()) {
+        if !context.has_operation(tuple) || context.is_used(value) {
             continue;
         }
         rewriter.erase_op(&OperationRef::new(context.get_op(tuple)))?;

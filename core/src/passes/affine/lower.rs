@@ -696,34 +696,7 @@ fn outside(context: &Context, root: OpId, value: ValueId) -> bool {
     true
 }
 
-/// Whether anything beside the nest itself names `value`. SSA confines a use to
-/// the region the definition sits in, so that region's tree is the whole search.
+/// Whether anything beside the nest itself names `value`.
 fn is_used(context: &Context, root: OpId, value: ValueId) -> bool {
-    let Some(region) = context
-        .parent_block(root)
-        .and_then(|b| context.parent_region(b))
-    else {
-        return true;
-    };
-    let mut pending: Vec<OpId> = context
-        .get_region(region)
-        .block_ids()
-        .into_iter()
-        .flat_map(|block| context.get_block(block).op_ids())
-        .collect();
-    while let Some(op_id) = pending.pop() {
-        if op_id == root {
-            continue;
-        }
-        let op = context.get_op(op_id);
-        if op.operands().contains(&value) {
-            return true;
-        }
-        for nested in op.regions().to_vec() {
-            for block in context.get_region(nested).block_ids() {
-                pending.extend(context.get_block(block).op_ids());
-            }
-        }
-    }
-    false
+    context.users_of(value).into_iter().any(|user| user != root)
 }

@@ -39,3 +39,17 @@ impl Value {
         self.ty = ty;
     }
 }
+
+/// One operand slot naming a value: the reading operation and the slot's index
+/// among its operands. An op reading a value twice owns two uses of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Use {
+    pub op: OpId,
+    pub index: usize,
+}
+
+impl Use {
+    pub fn new(op: OpId, index: usize) -> Self {
+        Self { op, index }
+    }
+}

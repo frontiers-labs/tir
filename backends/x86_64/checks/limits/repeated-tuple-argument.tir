@@ -1,0 +1,18 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+// The same aggregate passed twice leaves one dead `make_tuple`, which call
+// lowering erases once: the second visit of the pair must see it gone rather
+// than ask for its parent.
+
+module {
+  %fn_consume = func.declare @consume(!tuple<!i64, !i64>, !tuple<!i64, !i64>) -> !i64
+  %fn_forward = func.func @forward(%0: !i64, %1: !i64) -> !i64 {
+    %2 = make_tuple %0, %1 : !tuple<!i64, !i64>
+    %3 = func.call %fn_consume(%2, %2 : !tuple<!i64, !i64>, !tuple<!i64, !i64>) -> !i64
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK:      asm.vcall {callee = "consume"
+// CHECK-NOT:  make_tuple
