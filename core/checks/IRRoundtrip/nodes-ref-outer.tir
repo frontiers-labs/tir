@@ -1,0 +1,17 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+// An unordered region reads values defined by an enclosing region the same way
+// an ordered one does.
+
+module {
+  %fn_main = func.func @main() -> !i32 {
+    %0 = ptr.load %counter : !i32
+    -> %0
+  }
+  %counter = global @counter align 4 bytes [7, 0, 0, 0]
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @main() -> !i32 {
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %[[C:[0-9]+]] : !i32
+// CHECK: %[[C]] = global @counter align 4 bytes [7, 0, 0, 0]

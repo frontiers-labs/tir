@@ -1,0 +1,17 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+// A function body written as an unordered region: no blocks, no terminator, and
+// a trailing `->` line naming the values the region produces.
+
+module {
+  %fn_twice = func.func @twice(%0: !i32) -> !i32 {
+    %1 = addi %0, %0 : !i32
+    -> %1
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @twice(%[[A:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT: %[[Y:[0-9]+]] = addi %[[A]], %[[A]] : !i32
+// CHECK-NEXT: -> %[[Y]]
+// CHECK-NEXT: }

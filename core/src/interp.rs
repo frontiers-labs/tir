@@ -206,8 +206,12 @@ fn function_region(context: &Context, function: OpId, index: usize) -> RegionId 
 }
 
 fn region_arguments(context: &Context, region: RegionId) -> Vec<ValueId> {
-    let block = context.get_block(context.get_region(region).block_ids()[0]);
-    block.arguments().iter().map(|v| v.id()).collect()
+    context
+        .get_region(region)
+        .ports()
+        .iter()
+        .map(|v| v.id())
+        .collect()
 }
 
 struct Interpreter<'c> {
@@ -232,6 +236,9 @@ enum Flow {
 
 impl Interpreter<'_> {
     fn exec_region(&mut self, region: RegionId) -> Result<Flow> {
+        if self.context.get_region(region).is_nodes() {
+            return self.exec_nodes_region(region);
+        }
         let mut current = self.context.get_region(region).block_ids()[0];
         loop {
             match self.exec_block(current)? {
@@ -250,6 +257,48 @@ impl Interpreter<'_> {
                 }
                 flow => return Ok(flow),
             }
+        }
+    }
+
+    /// An unordered region has nothing to run in order: the values it produces
+    /// are asked for, and each operation runs once, after the ones it reads.
+    fn exec_nodes_region(&mut self, region: RegionId) -> Result<Flow> {
+        let results = self.context.get_region(region).results();
+        let mut evaluated = std::collections::HashSet::new();
+        for &result in &results {
+            self.demand(result, region, &mut evaluated)?;
+        }
+        results
+            .iter()
+            .map(|&result| self.value_of(result))
+            .collect::<Result<Vec<_>>>()
+            .map(Flow::Values)
+    }
+
+    /// Bind `value`, running the operation defining it — and, first, everything
+    /// that operation reads, its nested regions included. A value some
+    /// enclosing region defines is already bound; an operation already run
+    /// stays run, once per region invocation.
+    fn demand(
+        &mut self,
+        value: ValueId,
+        region: RegionId,
+        evaluated: &mut std::collections::HashSet<OpId>,
+    ) -> Result<()> {
+        let Some(op_id) = self.context.get_value(value).defining_op() else {
+            return Ok(());
+        };
+        if self.context.parent_nodes_region(op_id) != Some(region) || !evaluated.insert(op_id) {
+            return Ok(());
+        }
+        for value in crate::region::values_read(self.context, op_id) {
+            self.demand(value, region, evaluated)?;
+        }
+        match self.exec_control(op_id)? {
+            None => Ok(()),
+            Some(flow) => Err(InterpError::Message(format!(
+                "an unordered region has no control flow to take ({flow:?})"
+            ))),
         }
     }
 
@@ -549,9 +598,13 @@ impl Interpreter<'_> {
         for (param, value) in params.into_iter().zip(arguments) {
             self.env.insert(param, value);
         }
+        let nodes = self.context.get_region(body_region).is_nodes();
         let outcome = self.exec_region(body_region);
         let result = match outcome? {
             Flow::Return(values) => Ok(values),
+            // An unordered body has no return: the values it names are what the
+            // call produces.
+            Flow::Values(values) if nodes => Ok(values),
             other => Err(InterpError::Message(format!(
                 "@{} ended without func.return ({other:?})",
                 func.symbol_name()

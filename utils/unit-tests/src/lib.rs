@@ -129,5 +129,6 @@ mod core {
     mod machine_ir;
     mod pass;
     mod regalloc;
+    mod region;
     mod sem;
 }

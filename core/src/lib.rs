@@ -45,15 +45,15 @@ pub mod parse;
 
 pub use analysis::{Analysis, AnalysisManager};
 pub use block::{Block, BlockHandle, BlockId};
-pub use context::{Context, ContextIterator, ContextRef, GetFromContext, StagedRegion};
+pub use context::{Context, ContextIterator, ContextRef, GetFromContext, Parent, StagedRegion};
 pub use diagnostics::{print_error_range, print_parse_error};
 pub use dialect::{Dialect, OperationParser};
 pub use error::Error;
 pub use interfaces::{
     BranchGuard, BranchTerminator, Commutative, Conditional, ConstantFold, ConstantLike,
     CountedLoop, EntryGuard, GuardOrdering, GuardedLoop, IntegerArithmetic, LoopLike, MemoryRead,
-    MemoryWrite, OpCost, PromotableAllocation, Pure, SameOperandAndResultType, Symbol, Terminator,
-    TokenScope, Visibility,
+    MemoryWrite, OpCost, PromotableAllocation, Pure, RegionExit, SameOperandAndResultType, Symbol,
+    Terminator, TokenScope, Visibility,
 };
 pub use interp::{Interp, InterpError, Memory as InterpMemory, Value as InterpValue};
 pub use ir_formatter::IRFormatter;
@@ -70,7 +70,7 @@ pub use pass::{
     parse_pipeline, registered_passes, report_pass_timing,
 };
 pub use print::print_ir;
-pub use region::{Region, RegionHandle, RegionId};
+pub use region::{Region, RegionBody, RegionHandle, RegionId, RegionKind};
 pub use schema::{
     AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, TYPE_SCHEMAS, TypeArg, TypeParam, TypeParamKind,
     TypeSchema, build_type, schema_json, type_schema_json,

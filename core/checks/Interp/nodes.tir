@@ -1,0 +1,14 @@
+// RUN: tir interp %s --args=5 | filecheck %s
+
+// An unordered region evaluates by demand from the values it produces.
+
+module {
+  %fn_main = func.func @main(%0: !i32) -> !i32 {
+    %2 = addi %1, %1 : !i32
+    %1 = muli %0, %0 : !i32
+    -> %2
+  }
+  module_end
+}
+
+// CHECK: i32 50

@@ -12,7 +12,7 @@ operation! {
             addressing_model: "Str",
             memory_model: "Str",
         },
-        regions: R { body: Region { single_block: true, } }
+        regions: R { body: Region { kind: Blocks, } }
     }
 }
 

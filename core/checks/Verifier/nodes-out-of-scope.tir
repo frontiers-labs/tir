@@ -1,0 +1,18 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+// Nothing sequences an unordered region against a sibling, so a value defined
+// in one is not available in the other.
+
+module {
+  %fn_a = func.func @a(%0: !i32) -> !i32 {
+    %1 = addi %0, %0 : !i32
+    func.return %1
+  }
+  %fn_b = func.func @b(%2: !i32) -> !i32 {
+    %3 = addi %1, %2 : !i32
+    -> %3
+  }
+  module_end
+}
+
+// CHECK: is defined outside the unordered region reading it

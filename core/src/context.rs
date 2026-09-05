@@ -134,6 +134,14 @@ impl GenerationTable {
     }
 }
 
+/// What holds an operation: a block of an ordered region, or an unordered
+/// region directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Parent {
+    Block(BlockId),
+    Region(RegionId),
+}
+
 /// Entities an erase reclaims, gathered before the context lock is taken.
 #[derive(Default)]
 struct Owned {
@@ -154,10 +162,11 @@ struct ContextInstance {
     /// erased, so an id alone no longer identifies an entity across an erase;
     /// the pair of id and generation does. See [`OpHandle`].
     generations: Generations,
-    /// Reverse index from an operation to the block that holds it, maintained by
-    /// `Block`'s membership mutators. Lets `parent_block` answer in O(1) instead of
-    /// scanning every block's operation list.
-    op_parent: Vec<Option<BlockId>>,
+    /// Reverse index from an operation to whatever holds it, maintained by
+    /// `Block`'s membership mutators and by [`Context::set_region_nodes`]. Lets
+    /// `parent_block` answer in O(1) instead of scanning every block's
+    /// operation list.
+    op_parent: Vec<Option<Parent>>,
     /// Reverse index from a block to the region that holds it, maintained by
     /// [`Region::add_block`]. Together with [`Region::parent_op`] it lets walks
     /// climb from an op to its enclosing ops.
@@ -166,6 +175,9 @@ struct ContextInstance {
     /// entered. The counterpart of [`Value::defining_op`] for values no operation
     /// defines, and what bounds the scope a use of such a value can sit in.
     value_block: Vec<Option<BlockId>>,
+    /// Def-site index for the ports of an unordered region, the counterpart of
+    /// `value_block` for the arguments a region owns itself.
+    value_region: Vec<Option<RegionId>>,
     /// Ports: every op's operands, results and region ids, in one cell per op
     /// drawn from a size-classed pool.
     runs: Runs,
@@ -593,10 +605,12 @@ impl ContextInstance {
         self.region(region)?.parent_op()
     }
 
-    /// The op enclosing `op`, walking out through its block and region.
+    /// The op enclosing `op`, walking out through whatever holds it.
     fn enclosing_op_of(&self, op: OpId) -> Option<OpId> {
-        let block = *slab_get(&self.op_parent, op.index())?;
-        self.enclosing_op(block)
+        match *slab_get(&self.op_parent, op.index())? {
+            Parent::Block(block) => self.enclosing_op(block),
+            Parent::Region(region) => self.region(region)?.parent_op(),
+        }
     }
 
     fn bump_version(&mut self, op: OpId) {
@@ -688,6 +702,7 @@ impl Context {
             op_parent: Vec::new(),
             block_parent: Vec::new(),
             value_block: Vec::new(),
+            value_region: Vec::new(),
             runs: Runs::default(),
             attr_runs: AttrRuns::default(),
             first_use: Vec::new(),
@@ -1181,6 +1196,19 @@ impl Context {
         slab_get(&inner.value_block, id.index()).is_some()
     }
 
+    /// Whether `id` is an argument a region owns itself, rather than one its
+    /// entry block owns or a value some operation defines.
+    pub fn is_region_port(&self, id: ValueId) -> bool {
+        self.region_of_port(id).is_some()
+    }
+
+    /// The region `id` is a port of, or `None` when it is a block argument or
+    /// an operation defines it.
+    pub fn region_of_port(&self, id: ValueId) -> Option<RegionId> {
+        let inner = self.0.read();
+        slab_get(&inner.value_region, id.index()).copied()
+    }
+
     /// The block `id` is an argument of, or `None` when an operation defines it.
     pub fn block_of_argument(&self, id: ValueId) -> Option<BlockId> {
         let inner = self.0.read();
@@ -1193,6 +1221,60 @@ impl Context {
         let region_id = RegionId::new(inner.regions.insert(Region::new()));
         drop(inner);
         self.region_handle(region_id)
+    }
+
+    /// Create an unordered region holding `ops`, taking `ports` as its own
+    /// arguments and producing `results`.
+    ///
+    /// The operations pass into the region's ownership here: nothing but this
+    /// region holds them, and their parent link says so.
+    pub fn create_nodes_region(
+        &self,
+        ports: Vec<Value>,
+        ops: Vec<OpId>,
+        results: Vec<ValueId>,
+    ) -> RegionHandle {
+        let region = self.create_region();
+        self.set_region_nodes(region.id(), ports, ops, results);
+        region
+    }
+
+    /// Make an empty region unordered; see [`Context::create_nodes_region`].
+    /// The parser uses this: which kind a region is only becomes clear once its
+    /// body has been read.
+    pub(crate) fn set_region_nodes(
+        &self,
+        region: RegionId,
+        ports: Vec<Value>,
+        ops: Vec<OpId>,
+        results: Vec<ValueId>,
+    ) {
+        let mut inner = self.0.write();
+        let port_ids: Vec<ValueId> = ports.iter().map(Value::id).collect();
+        let held = ops.clone();
+        assert!(
+            matches!(
+                inner.region(region).expect("live region").body(),
+                crate::region::RegionBody::Blocks(blocks) if blocks.is_empty(),
+            ),
+            "only an empty ordered region becomes unordered",
+        );
+        let entry = inner.region_mut(region).expect("live region");
+        let parent = entry.parent_op();
+        *entry = Region::new_nodes(ports, ops, results);
+        if let Some(parent) = parent {
+            entry.set_parent_op(parent);
+        }
+        for port in port_ids {
+            slab_put(&mut inner.value_region, port.index(), region);
+        }
+        for op in held {
+            debug_assert!(
+                slab_get(&inner.op_parent, op.index()).is_none(),
+                "an operation joins an unordered region from nowhere else",
+            );
+            slab_put(&mut inner.op_parent, op.index(), Parent::Region(region));
+        }
     }
 
     /// Mint a handle for a live region; see [`Context::op_handle`].
@@ -1594,6 +1676,16 @@ impl Context {
                         continue;
                     }
                     owned.regions.push(region);
+                    if handle.is_nodes() {
+                        owned.values.extend(handle.ports().iter().map(Value::id));
+                        ops.extend(
+                            handle
+                                .op_ids()
+                                .into_iter()
+                                .filter(|op| self.parent_nodes_region(*op) == Some(region)),
+                        );
+                        continue;
+                    }
                     let held = handle
                         .block_ids()
                         .into_iter()
@@ -1637,6 +1729,7 @@ impl Context {
         for value in owned.values {
             inner.erase_value(value);
             clear_slot(&mut inner.value_block, value.index());
+            clear_slot(&mut inner.value_region, value.index());
         }
         for block in owned.blocks {
             inner.erase_block(block);
@@ -1677,7 +1770,7 @@ impl Context {
         if let Some(entry) = inner.block_mut(block) {
             entry.operations_mut().insert(index, op);
         }
-        slab_put(&mut inner.op_parent, op.index(), block);
+        slab_put(&mut inner.op_parent, op.index(), Parent::Block(block));
         inner.edit_block(block);
     }
 
@@ -1687,7 +1780,7 @@ impl Context {
         if let Some(entry) = inner.block_mut(block) {
             entry.operations_mut().push(op);
         }
-        slab_put(&mut inner.op_parent, op.index(), block);
+        slab_put(&mut inner.op_parent, op.index(), Parent::Block(block));
         inner.edit_block(block);
     }
 
@@ -1704,7 +1797,7 @@ impl Context {
         if let Some(slot) = inner.op_parent.get_mut(old.index()) {
             *slot = None;
         }
-        slab_put(&mut inner.op_parent, new.index(), block);
+        slab_put(&mut inner.op_parent, new.index(), Parent::Block(block));
         inner.edit_block(block);
         true
     }
@@ -1803,6 +1896,51 @@ impl Context {
             .to_vec()
     }
 
+    pub(crate) fn region_is_nodes(&self, region: RegionId) -> bool {
+        matches!(
+            self.0.read().region(region).expect("live region").body(),
+            crate::region::RegionBody::Nodes { .. }
+        )
+    }
+
+    /// Every operation the region holds; see [`RegionHandle::op_ids`].
+    pub(crate) fn region_op_ids(&self, region: RegionId) -> Vec<OpId> {
+        let blocks = {
+            let inner = self.0.read();
+            match inner.region(region).expect("live region").body() {
+                crate::region::RegionBody::Nodes { ops, .. } => return ops.clone(),
+                crate::region::RegionBody::Blocks(blocks) => blocks.clone(),
+            }
+        };
+        blocks
+            .into_iter()
+            .flat_map(|block| self.get_block(block).op_ids())
+            .collect()
+    }
+
+    /// See [`RegionHandle::ports`].
+    pub(crate) fn region_ports(&self, region: RegionId) -> Vec<Value> {
+        let entry = {
+            let inner = self.0.read();
+            match inner.region(region).expect("live region").body() {
+                crate::region::RegionBody::Nodes { ports, .. } => return ports.clone(),
+                crate::region::RegionBody::Blocks(blocks) => match blocks.first() {
+                    Some(entry) => *entry,
+                    None => return Vec::new(),
+                },
+            }
+        };
+        self.get_block(entry).arguments()
+    }
+
+    /// See [`RegionHandle::results`].
+    pub(crate) fn region_results(&self, region: RegionId) -> Vec<ValueId> {
+        match self.0.read().region(region).expect("live region").body() {
+            crate::region::RegionBody::Nodes { results, .. } => results.clone(),
+            crate::region::RegionBody::Blocks(_) => Vec::new(),
+        }
+    }
+
     pub(crate) fn add_block_to_region(&self, region: RegionId, block: BlockId) {
         let mut inner = self.0.write();
         if let Some(entry) = inner.region_mut(region) {
@@ -1838,7 +1976,27 @@ impl Context {
     /// root op, or one detached by a rewrite). Maintained by `Block`'s membership
     /// mutators; see [`ContextInstance::op_parent`].
     pub fn parent_block(&self, op: OpId) -> Option<BlockId> {
-        slab_get(&self.0.read().op_parent, op.index()).copied()
+        match slab_get(&self.0.read().op_parent, op.index()) {
+            Some(Parent::Block(block)) => Some(*block),
+            _ => None,
+        }
+    }
+
+    /// The unordered region holding `op` directly, or `None` for an op that
+    /// sits in a block or in no region at all.
+    pub fn parent_nodes_region(&self, op: OpId) -> Option<RegionId> {
+        match slab_get(&self.0.read().op_parent, op.index()) {
+            Some(Parent::Region(region)) => Some(*region),
+            _ => None,
+        }
+    }
+
+    /// The region holding `op`, through its block where it has one.
+    pub fn region_of_op(&self, op: OpId) -> Option<RegionId> {
+        match slab_get(&self.0.read().op_parent, op.index()).copied()? {
+            Parent::Region(region) => Some(region),
+            Parent::Block(block) => self.parent_region(block),
+        }
     }
 
     /// The operation enclosing `op`: the owner of the region holding `op`'s

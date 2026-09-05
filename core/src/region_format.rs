@@ -59,6 +59,9 @@ pub fn print_region(
     context: &Context,
     region: &RegionHandle,
 ) -> Result<(), std::fmt::Error> {
+    if region.is_nodes() {
+        return print_nodes_region(fmt, context, region);
+    }
     let numbers = region_block_numbers(region, context);
     fmt.push_region_block_numbers(numbers);
     fmt.writeln(" {")?;
@@ -76,6 +79,33 @@ pub fn print_region(
     fmt.pop();
     fmt.writeln("}")?;
     fmt.pop_region_block_numbers();
+    Ok(())
+}
+
+/// An unordered region prints in the evaluation order its dependencies impose,
+/// then names the values it produces on one trailing `->` line. A cycle has no
+/// such order; the verifier reports it, and printing falls back to insertion
+/// order so a broken region can still be read.
+fn print_nodes_region(
+    fmt: &mut IRFormatter,
+    context: &Context,
+    region: &RegionHandle,
+) -> Result<(), std::fmt::Error> {
+    let ops =
+        crate::region::topological_order(context, region.id()).unwrap_or_else(|_| region.op_ids());
+    fmt.writeln(" {")?;
+    fmt.push();
+    for op in ops {
+        context.get_op(op).as_dyn_op().print(fmt)?;
+    }
+    fmt.write("->")?;
+    for (index, result) in region.results().iter().enumerate() {
+        fmt.write(if index == 0 { " " } else { ", " })?;
+        fmt.write(format!("%{}", result.number()))?;
+    }
+    fmt.writeln("")?;
+    fmt.pop();
+    fmt.writeln("}")?;
     Ok(())
 }
 

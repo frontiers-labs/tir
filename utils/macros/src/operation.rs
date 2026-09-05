@@ -185,6 +185,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         &schema_ident,
         &operands,
         &results,
+        &regions,
         state_output,
         same_type,
     );
@@ -364,9 +365,14 @@ fn emit_opdef_verifier(
     schema_ident: &Ident,
     operands: &[ValueSpec],
     results: &[ValueSpec],
+    regions: &[Region],
     state_output: bool,
     same_type: bool,
 ) -> proc_macro2::TokenStream {
+    let region_kinds: Vec<_> = regions
+        .iter()
+        .map(|region| format_ident!("{}", region.kind))
+        .collect();
     let operand_constraint_checkers: Vec<_> = operands
         .iter()
         .map(|operand| normalize_constraint_name(&operand.ty))
@@ -390,6 +396,7 @@ fn emit_opdef_verifier(
                     operand_checkers: &[#(__satisfies_constraint::<#operand_constraint_checkers>),*],
                     result_checkers: &[#(__satisfies_constraint::<#result_constraint_checkers>),*],
                     state_output: #state_output,
+                    region_kinds: &[#(tir::RegionKind::#region_kinds),*],
                     same_type: #same_type,
                 };
                 tir::verify_opdef_operands(context, &self.0, <Self as tir::Operation>::name(), &SPEC)
@@ -650,7 +657,7 @@ fn make_region_pieces(regions: &[Region]) -> RegionPieces {
            }
         });
 
-        if r.single_block {
+        if r.blocked() {
             region_fills.push(quote! {
                 let region = if self.#name.is_some() {
                     self.#name.unwrap()
@@ -1200,10 +1207,20 @@ struct Sem {
 
 struct Region {
     name: String,
-    single_block: bool,
+    /// What the region's body may be: `Blocks` (a control-flow graph), `Nodes`
+    /// (an unordered dependence graph), or `Any` for an op that accepts either.
+    kind: String,
     /// A `variadic: true` region declares a group of zero or more regions rather than
     /// one, for an op whose arity is decided per instance (an n-ary conditional).
     variadic: bool,
+}
+
+impl Region {
+    /// Whether the region's body is a block list, so the op's accessor hands
+    /// back the entry block rather than the region.
+    fn blocked(&self) -> bool {
+        self.kind != "Nodes"
+    }
 }
 
 #[derive(Clone)]
@@ -1415,7 +1432,7 @@ fn get_regions(expr: &Expr) -> Option<Vec<Region>> {
                     let name = field_name(f);
                     Region {
                         name,
-                        single_block: true,
+                        kind: region_kind(&f.expr),
                         variadic: has_true_flag(&f.expr, "variadic"),
                     }
                 })
@@ -1424,6 +1441,21 @@ fn get_regions(expr: &Expr) -> Option<Vec<Region>> {
     } else {
         None
     }
+}
+
+/// The `kind:` a `Region { .. }` declares, defaulting to `Blocks`.
+fn region_kind(expr: &Expr) -> String {
+    let Expr::Struct(s) = expr else {
+        return "Blocks".to_string();
+    };
+    s.fields
+        .iter()
+        .find(|f| field_name(f) == "kind")
+        .and_then(|f| match &f.expr {
+            Expr::Path(path) => Some(path.path.require_ident().ok()?.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "Blocks".to_string())
 }
 
 /// Whether a `Region { .. }` declaration sets `flag: true`.
@@ -1544,8 +1576,8 @@ fn make_region_accessors(regions: &[Region]) -> proc_macro2::TokenStream {
     let accessors = regions.iter().enumerate().map(|(index, region)| {
         if region.variadic {
             make_variadic_region_accessor(region, index)
-        } else if region.single_block {
-            make_single_block_region_accessor(region, index)
+        } else if region.blocked() {
+            make_entry_block_region_accessor(region, index)
         } else {
             make_region_accessor(region, index)
         }
@@ -1575,7 +1607,7 @@ fn make_variadic_region_accessor(region: &Region, index: usize) -> proc_macro2::
     }
 }
 
-fn make_single_block_region_accessor(region: &Region, index: usize) -> proc_macro2::TokenStream {
+fn make_entry_block_region_accessor(region: &Region, index: usize) -> proc_macro2::TokenStream {
     let func_name = format_ident!("{}", region.name);
 
     quote! {
@@ -1690,8 +1722,8 @@ fn make_generic_printer(
         quote! {}
     };
 
-    let regions = if regions.len() == 1 && regions[0].single_block && !regions[0].variadic {
-        make_single_block_region_printer(&regions[0], 0)
+    let regions = if regions.len() == 1 && !regions[0].variadic {
+        make_region_printer(&regions[0], 0)
     } else {
         quote! {}
     };
@@ -1732,7 +1764,7 @@ fn make_generic_printer(
     }
 }
 
-fn make_single_block_region_printer(region: &Region, index: usize) -> proc_macro2::TokenStream {
+fn make_region_printer(region: &Region, index: usize) -> proc_macro2::TokenStream {
     let _ = region;
     quote! {
         {
@@ -1796,20 +1828,19 @@ fn make_parser(
             quote! { (#name, #ty) }
         })
         .collect();
-    let (region_parsers, region_builders) =
-        if regions.len() == 1 && regions[0].single_block && !regions[0].variadic {
-            let region_name = format_ident!("{}", regions[0].name);
-            (
-                quote! {
-                   let #region_name = parser.parse_region(context)?.id();
-                },
-                quote! {
-                    .#region_name(#region_name)
-                },
-            )
-        } else {
-            (quote! {}, quote! {})
-        };
+    let (region_parsers, region_builders) = if regions.len() == 1 && !regions[0].variadic {
+        let region_name = format_ident!("{}", regions[0].name);
+        (
+            quote! {
+               let #region_name = parser.parse_region(context)?.id();
+            },
+            quote! {
+                .#region_name(#region_name)
+            },
+        )
+    } else {
+        (quote! {}, quote! {})
+    };
 
     let operand_parsers: Vec<_> = operands
         .iter()

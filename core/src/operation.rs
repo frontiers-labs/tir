@@ -256,9 +256,7 @@ pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), E
             }
         }
         for region_id in instance.regions().iter().rev() {
-            for block in context.get_region(*region_id).iter(context.clone()) {
-                worklist.extend(block.op_ids().iter().rev());
-            }
+            worklist.extend(context.get_region(*region_id).op_ids().iter().rev());
         }
     }
     for (value, taken) in &consumers {
@@ -335,11 +333,8 @@ fn verify_op_tree_ops(context: &Context, op_id: OpId) -> Result<(), Error> {
     instance.clone().as_dyn_op().verify(context)?;
 
     for region_id in instance.regions().to_vec() {
-        let region = context.get_region(region_id);
-        for block in region.iter(context.clone()) {
-            for child in block.op_ids() {
-                verify_op_tree_ops(context, child)?;
-            }
+        for child in context.get_region(region_id).op_ids() {
+            verify_op_tree_ops(context, child)?;
         }
     }
 
@@ -364,22 +359,22 @@ fn verify_token_region_arguments(context: &Context, instance: &OpHandle) -> Resu
         .as_interface::<dyn crate::TokenScope>()
         .map(|scope| scope.token_scope_regions())
         .unwrap_or_default();
-    let regions = instance.regions();
-    for (region_index, region_id) in regions.iter().enumerate() {
-        for (block_index, block) in context
-            .get_region(*region_id)
-            .iter(context.clone())
-            .enumerate()
-        {
-            for argument in block.arguments() {
-                if argument.ty() != token {
-                    continue;
-                }
-                if block_index != 0 || !scope_regions.contains(&regions[region_index]) {
-                    return Err(Error::VerificationError(
-                        "token values are only allowed as loop body entry arguments".to_string(),
-                    ));
-                }
+    for region_id in instance.regions().iter() {
+        let region = context.get_region(*region_id);
+        let entry = scope_regions.contains(region_id);
+        let arguments = region.ports().into_iter().map(|port| (entry, port)).chain(
+            region
+                .block_ids()
+                .into_iter()
+                .skip(1)
+                .flat_map(|block| context.get_block(block).arguments())
+                .map(|argument| (false, argument)),
+        );
+        for (allowed, argument) in arguments {
+            if argument.ty() == token && !allowed {
+                return Err(Error::VerificationError(
+                    "token values are only allowed as loop body entry arguments".to_string(),
+                ));
             }
         }
     }
@@ -422,6 +417,10 @@ pub struct OpDefSpec {
     pub operand_checkers: &'static [fn(&dyn crate::Type) -> bool],
     pub result_checkers: &'static [fn(&dyn crate::Type) -> bool],
     pub state_output: bool,
+    /// What each declared region's body may be, positionally. Checked against
+    /// what the op actually holds, so an op declaring blocks cannot be handed
+    /// an unordered region.
+    pub region_kinds: &'static [crate::RegionKind],
     /// The op implements `SameOperandAndResultType`: every operand and value
     /// result carries one type.
     pub same_type: bool,
@@ -463,11 +462,12 @@ fn verify_def_value(
         }
         None => {
             let detail = if kind == "operand" {
-                "has no defining op and is not a block argument"
+                "has no defining op and is not an argument"
             } else {
                 "has no defining op"
             };
-            if kind != "operand" || !context.is_block_argument(value_id) {
+            let argument = context.is_block_argument(value_id) || context.is_region_port(value_id);
+            if kind != "operand" || !argument {
                 return Err(crate::Error::VerificationError(format!(
                     "{op_name} {kind} '{value_name}' value %{id} {detail}",
                     id = value_id.number()
@@ -494,6 +494,7 @@ pub fn verify_opdef_operands(
     op_name: &str,
     spec: &OpDefSpec,
 ) -> Result<(), crate::Error> {
+    verify_region_kinds(context, instance, op_name, spec)?;
     let operands = &instance.operands();
     let results = instance.results();
     let operand_fields = spec.schema.operands;
@@ -640,6 +641,39 @@ pub fn verify_opdef_operands(
         }
     }
 
+    Ok(())
+}
+
+/// Checks each region an op holds against the kind its declaration allows.
+fn verify_region_kinds(
+    context: &Context,
+    instance: &OpHandle,
+    op_name: &str,
+    spec: &OpDefSpec,
+) -> Result<(), crate::Error> {
+    for (index, region) in instance.regions().iter().enumerate() {
+        // A variadic group is declared once and holds every region from its
+        // position on, so the last declaration covers whatever follows it.
+        let Some(kind) = spec
+            .region_kinds
+            .get(index)
+            .or_else(|| spec.region_kinds.last())
+        else {
+            break;
+        };
+        let nodes = context.get_region(*region).is_nodes();
+        let allowed = match kind {
+            crate::RegionKind::Blocks => !nodes,
+            crate::RegionKind::Nodes => nodes,
+            crate::RegionKind::Any => true,
+        };
+        if !allowed {
+            return Err(crate::Error::VerificationError(format!(
+                "{op_name} declares a {kind:?} region, but holds {}",
+                if nodes { "an unordered one" } else { "blocks" }
+            )));
+        }
+    }
     Ok(())
 }
 

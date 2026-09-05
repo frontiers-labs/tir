@@ -1,0 +1,14 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+// An unordered region has no control to transfer, so it has no place for a
+// terminator.
+
+module {
+  %fn_a = func.func @a(%0: !i32) -> !i32 {
+    func.return %0
+    -> %0
+  }
+  module_end
+}
+
+// CHECK: func.return is a terminator

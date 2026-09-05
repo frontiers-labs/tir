@@ -49,10 +49,8 @@ fn collect_aliases(context: &Context, op: OpId, aliases: &mut Vec<(String, Attri
     }
 
     for region in instance.regions() {
-        for block in context.get_region(region).iter(context.clone()) {
-            for child in block.op_ids() {
-                collect_aliases(context, child, aliases);
-            }
+        for child in context.get_region(region).op_ids() {
+            collect_aliases(context, child, aliases);
         }
     }
 }

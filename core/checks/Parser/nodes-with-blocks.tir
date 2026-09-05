@@ -1,0 +1,14 @@
+// RUN: not tir opt %s 2>&1 | filecheck %s
+
+// A region cannot be both: naming results makes it unordered, and an unordered
+// region has no blocks for a branch to name.
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    cfg.br ^bb0
+    -> %0
+  }
+  module_end
+}
+
+// CHECK: no blocks

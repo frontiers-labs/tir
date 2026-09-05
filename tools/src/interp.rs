@@ -34,10 +34,9 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
 
     let function = find_function(&context, module.id(), &args.function)?;
     let body_region = context.get_op(function).regions().to_vec()[0];
-    let body_block = context.get_region(body_region).block_ids()[0];
     let parameters: Vec<tir::TypeId> = context
-        .get_block(body_block)
-        .arguments()
+        .get_region(body_region)
+        .ports()
         .iter()
         .map(|v| v.ty())
         .collect();

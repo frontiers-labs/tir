@@ -1,0 +1,16 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+// A function returning nothing names nothing: the results line is bare.
+
+module {
+  %fn_f = func.func @f(%0: !i32) {
+    %1 = addi %0, %0 : !i32
+    ->
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !i32) {
+// CHECK-NEXT: %{{[0-9]+}} = addi
+// CHECK-NEXT: ->
+// CHECK-NEXT: }

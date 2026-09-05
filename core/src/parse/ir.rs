@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::attributes::{AttributeValue, NamedAttribute};
 use crate::block::BlockId;
-use crate::value::Value;
-use crate::{Context, Error, Operation};
+use crate::value::{Value, ValueId};
+use crate::{Context, Error, OpId, Operation};
 
 use super::common::{Cursor, Span};
 use super::text::Parser as TextParser;
@@ -184,6 +184,14 @@ impl<'src> TextParser<'src> {
         self.parse_region_with_entry_args(context, vec![])
     }
 
+    /// Parse a region body, ordered or unordered.
+    ///
+    /// Which one it is, the text says: a `^label:` makes it a control-flow
+    /// graph, a trailing `-> %v, ...` line makes it a dependence graph, and a
+    /// body with neither is an ordered region of one implicit block. So the
+    /// entry block is created only once something needs it, and `entry_args`
+    /// become that block's arguments or, in an unordered body, the region's own
+    /// ports.
     pub fn parse_region_with_entry_args(
         &mut self,
         context: &Context,
@@ -194,22 +202,21 @@ impl<'src> TextParser<'src> {
         }
 
         let region = context.create_region();
-        let entry = context.create_block(entry_args);
-        region.add_block(entry.id());
-
-        let mut current = entry.clone();
         let enclosing = self.region_parse.take();
         self.region_parse = Some(super::text::RegionParseState {
-            labels: HashMap::from([("bb0".to_string(), entry.id())]),
-            defined: HashSet::from(["bb0".to_string()]),
+            region: region.id(),
+            labels: HashMap::new(),
+            defined: HashSet::new(),
+            entry: None,
+            arguments: entry_args,
         });
 
-        let result = self.parse_region_body(context, &region, &mut current);
+        let result = self.parse_region_body(context, &region);
         let state = self.region_parse.take();
         self.region_parse = enclosing;
-        result?;
+        let results = result?;
 
-        let state = state.expect("the region parse scope survives its region");
+        let mut state = state.expect("the region parse scope survives its region");
         if let Some(name) = state
             .labels
             .keys()
@@ -220,44 +227,137 @@ impl<'src> TextParser<'src> {
                 Error::VerificationError(format!("block ^{name} is referenced but never defined")),
             ));
         }
+        match results {
+            Some((ops, results)) => {
+                let ports = std::mem::take(&mut state.arguments);
+                context.set_region_nodes(region.id(), ports, ops, results);
+            }
+            None => {
+                // A body with no statements at all still owns the block its
+                // arguments belong to.
+                if state.entry.is_none() {
+                    let block = context.create_block(std::mem::take(&mut state.arguments));
+                    region.add_block(block.id());
+                }
+            }
+        }
         Ok(region)
     }
 
+    /// The statements between the braces. Answers with the operations and
+    /// results of an unordered body, or `None` when the body was ordered.
     fn parse_region_body(
         &mut self,
         context: &Context,
         region: &RegionHandle,
-        current: &mut BlockHandle,
-    ) -> ParseResult<()> {
-        let entry = current.clone();
-        let mut entry_open = true;
+    ) -> ParseResult<Option<(Vec<OpId>, Vec<ValueId>)>> {
+        let mut current: Option<BlockHandle> = None;
+        let mut loose: Vec<OpId> = vec![];
         loop {
             self.skip_trivia();
             if self.parse_token("}") {
-                return Ok(());
+                self.flush_loose(context, region, &mut current, &loose);
+                return Ok(None);
+            }
+
+            if let Some(results) = self.try_parse_region_results(context)? {
+                if current.is_some() || !region.block_ids().is_empty() {
+                    return Err((
+                        self.span(),
+                        Error::VerificationError(
+                            "an unordered region names its results, so it has no blocks"
+                                .to_string(),
+                        ),
+                    ));
+                }
+                if !self.parse_token("}") {
+                    return Err((self.span(), Error::ExpectedToken("}")));
+                }
+                return Ok(Some((loose, results)));
             }
 
             if let Some((label, block_args, attrs)) = self.try_parse_block_label(context)? {
+                self.flush_loose(context, region, &mut current, &loose);
+                loose.clear();
+                let entry = self.entry_block(context, region);
                 let state = self
                     .region_parse
                     .as_mut()
                     .expect("block labels require an active region parse scope");
-                if entry_open && !state.labels.contains_key(&label) {
-                    state.labels.insert(label.clone(), entry.id());
+                if current.is_none() && !state.labels.contains_key(&label) {
+                    state.labels.insert(label.clone(), entry);
                     state.defined.insert(label.clone());
                 }
-                entry_open = false;
-                *current = self.block_at_label(context, region, &label, block_args)?;
+                let block = self.block_at_label(context, region, &label, block_args)?;
                 for attr in attrs {
-                    current.set_attr(&context.resolve(attr.name), attr.value);
+                    block.set_attr(&context.resolve(attr.name), attr.value);
                 }
+                current = Some(block);
                 continue;
             }
 
-            entry_open = false;
             let op = parse_single_op(self, context)?;
-            current.append(op.id());
+            match &current {
+                Some(block) => block.append(op.id()),
+                None => loose.push(op.id()),
+            }
         }
+    }
+
+    /// Give the operations parsed before any block label to the entry block,
+    /// which an ordered body turns out to have after all.
+    fn flush_loose(
+        &mut self,
+        context: &Context,
+        region: &RegionHandle,
+        current: &mut Option<BlockHandle>,
+        loose: &[OpId],
+    ) {
+        if current.is_some() || loose.is_empty() {
+            return;
+        }
+        let entry = self.entry_block(context, region);
+        let block = context.get_block(entry);
+        for op in loose {
+            block.append(*op);
+        }
+        *current = Some(block);
+    }
+
+    /// The region's entry block, creating it — with the region's arguments, and
+    /// under the name `bb0` — the first time it is asked for.
+    fn entry_block(&mut self, context: &Context, region: &RegionHandle) -> BlockId {
+        let state = self
+            .region_parse
+            .as_mut()
+            .expect("a region body parses inside its own scope");
+        if let Some(entry) = state.entry {
+            return entry;
+        }
+        let arguments = std::mem::take(&mut state.arguments);
+        let block = context.create_block(arguments);
+        region.add_block(block.id());
+        let state = self.region_parse.as_mut().expect("scope checked above");
+        state.entry = Some(block.id());
+        state.labels.insert("bb0".to_string(), block.id());
+        state.defined.insert("bb0".to_string());
+        block.id()
+    }
+
+    /// The `-> %a, %b` line closing an unordered region, if that is what comes
+    /// next. An empty result list is written as a bare `->`.
+    fn try_parse_region_results(&mut self, context: &Context) -> ParseResult<Option<Vec<ValueId>>> {
+        if !self.parse_token("->") {
+            return Ok(None);
+        }
+        let mut results = vec![];
+        while let Some(name) = self.parse_value_ref().map(str::to_string) {
+            results.push(self.resolve_value(context, &name));
+            if !self.parse_token(",") {
+                break;
+            }
+        }
+        Ok(Some(results))
     }
 
     pub(crate) fn resolve_region_block_label(
@@ -266,6 +366,14 @@ impl<'src> TextParser<'src> {
         name: &str,
         block_arg_types: &[crate::TypeId],
     ) -> Result<BlockId, (Span, Error)> {
+        // The entry block is implicit and printed as `^bb0`, so a branch back to
+        // it is what brings it into being when nothing else has.
+        if name == "bb0"
+            && let Some(region) = self.region_parse.as_ref().map(|state| state.region)
+        {
+            let region = context.get_region(region);
+            self.entry_block(context, &region);
+        }
         let Some(state) = &mut self.region_parse else {
             // Detached parses (no region scope) address blocks by raw id.
             return name

@@ -50,7 +50,7 @@ operation! {
         },
         regions: R {
             body: Region {
-                single_block: true,
+                kind: Blocks,
             }
         },
         interfaces: [LoopLike, GuardedLoop, CountedLoop, TokenScope],
@@ -183,10 +183,10 @@ operation! {
         },
         regions: R {
             condition_region: Region {
-                single_block: true,
+                kind: Blocks,
             },
             body: Region {
-                single_block: true,
+                kind: Blocks,
             }
         },
         interfaces: [LoopLike, GuardedLoop, TokenScope],
@@ -352,10 +352,10 @@ operation! {
         },
         regions: R {
             then_body: Region {
-                single_block: true,
+                kind: Blocks,
             },
             else_body: Region {
-                single_block: true,
+                kind: Blocks,
             }
         },
         interfaces: [Conditional],
@@ -483,7 +483,7 @@ operation! {
         },
         regions: R {
             arms: Region {
-                single_block: true,
+                kind: Blocks,
                 variadic: true,
             }
         },

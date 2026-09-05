@@ -12,7 +12,7 @@ operation! {
         verifier: "true",
         regions: R {
             body: Region {
-                single_block: true,
+                kind: Blocks,
             }
         }
     }

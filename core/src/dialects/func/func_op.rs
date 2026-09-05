@@ -4,7 +4,7 @@ use crate::operation;
 use crate::symbol_table::{symbol_name_of, visibility_of};
 
 use crate as tir;
-use crate::{Context, Error, Operation, Symbol, Terminator, Visibility};
+use crate::{Context, Error, Operation, RegionExit, Symbol, Terminator, Visibility};
 
 operation! {
     FuncOp {
@@ -22,7 +22,7 @@ operation! {
         },
         regions: R {
             body: Region {
-                single_block: true,
+                kind: Any,
             }
         }
     }
@@ -36,12 +36,7 @@ pub fn lambda(
     ret_type: tir::TypeId,
     body: &tir::RegionHandle,
 ) -> FuncOpBuilder {
-    let parameters: Vec<_> = context
-        .get_block(body.block_ids()[0])
-        .arguments()
-        .iter()
-        .map(tir::Value::ty)
-        .collect();
+    let parameters: Vec<_> = body.ports().iter().map(tir::Value::ty).collect();
     FuncOpBuilder::new(context)
         .sym_name(name)
         .ret_type(ret_type)
@@ -97,6 +92,18 @@ impl FuncOpBuilder {
 }
 
 impl FuncOp {
+    /// The region holding the body, whichever kind it is. [`FuncOp::body`]
+    /// answers with the entry block, which only an ordered body has.
+    pub fn body_region(&self) -> tir::RegionHandle {
+        use tir::Operation;
+        self.regions().next().expect("a function owns its body")
+    }
+
+    /// The function's parameters: the body region's arguments.
+    pub fn parameters(&self) -> Vec<tir::Value> {
+        self.body_region().ports()
+    }
+
     /// The λ value this definition produces: what a call to it takes as callee.
     pub fn fn_value(&self) -> tir::ValueId {
         self.result()
@@ -130,7 +137,7 @@ impl Symbol for FuncOp {
     }
 
     fn symbol_signature(&self) -> Option<Vec<tir::TypeId>> {
-        Some(self.body().arguments().iter().map(tir::Value::ty).collect())
+        Some(self.parameters().iter().map(tir::Value::ty).collect())
     }
 
     fn symbol_result_type(&self) -> Option<tir::TypeId> {
@@ -167,8 +174,7 @@ impl FuncOp {
 
         // Print parameters from entry block arguments
         let context = self.0.context.upgrade();
-        let block = self.body();
-        let args = block.arguments();
+        let args = self.parameters();
 
         fmt.write("(")?;
         for (i, arg) in args.iter().enumerate() {
@@ -290,10 +296,52 @@ impl FuncOp {
     }
 }
 
+impl FuncOp {
+    /// An unordered body names the values it produces, so what it names is what
+    /// the signature says the function returns. An ordered body says the same
+    /// thing through its [`RegionExit`] operations.
+    fn verify_nodes_results(&self, context: &Context) -> Result<(), Error> {
+        let body = self.body_region();
+        if !body.is_nodes() {
+            return Ok(());
+        }
+        let state = tir::builtin::StateType::new(context);
+        let produced: Vec<tir::TypeId> = body
+            .results()
+            .iter()
+            .map(|result| context.get_value(*result).ty())
+            .filter(|ty| *ty != state)
+            .collect();
+        let declared = match self.ret_type() {
+            unit if unit == UnitType::new(context) => vec![],
+            ty => vec![ty],
+        };
+        if produced == declared {
+            return Ok(());
+        }
+        let spell = |types: &[tir::TypeId]| match types {
+            [one] => context.type_to_string(*one),
+            many => format!(
+                "({})",
+                many.iter()
+                    .map(|ty| context.type_to_string(*ty))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        Err(Error::VerificationError(format!(
+            "function '@{}' produces {}, but its signature returns {}",
+            self.symbol_name(),
+            spell(&produced),
+            spell(&declared)
+        )))
+    }
+}
+
 impl tir::Verifiable for FuncOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        super::verify_argument_alignments(self, self.body().arguments().len(), "function")?;
-        let parameters: Vec<_> = self.body().arguments().iter().map(tir::Value::ty).collect();
+        super::verify_argument_alignments(self, self.parameters().len(), "function")?;
+        let parameters: Vec<_> = self.parameters().iter().map(tir::Value::ty).collect();
         super::verify_noalias_arguments(self, context, &parameters)?;
         let expected = tir::builtin::FnType::new(context, &parameters, self.ret_type());
         if context.get_value(self.fn_value()).ty() != expected {
@@ -304,10 +352,11 @@ impl tir::Verifiable for FuncOp {
                 context.type_to_string(expected)
             )));
         }
+        self.verify_nodes_results(context)?;
         if !self.has_result_address() {
             return Ok(());
         }
-        let Some(argument) = self.body().arguments().first().cloned() else {
+        let Some(argument) = self.parameters().first().cloned() else {
             return Err(Error::VerificationError(
                 "result-address function requires a destination argument".to_string(),
             ));
@@ -332,7 +381,7 @@ operation! {
         operands: O {
             value: "?Any",
         },
-        interfaces: [Terminator],
+        interfaces: [Terminator, RegionExit],
         state: "in",
     }
 }
@@ -349,3 +398,12 @@ impl ReturnOp {
 }
 
 impl Terminator for ReturnOp {}
+
+impl RegionExit for ReturnOp {
+    /// Everything the return carries, memory state included: what the region
+    /// hands back is the whole tuple, so an unordered body naming the same
+    /// values in its `->` line binds exactly the same thing.
+    fn exit_values(&self) -> Vec<tir::ValueId> {
+        self.operands().to_vec()
+    }
+}

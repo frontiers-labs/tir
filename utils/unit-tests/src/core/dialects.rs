@@ -271,7 +271,7 @@ tir::helpers::operation! {
         dialect: "test",
         regions: R {
             body: Region {
-                single_block: true,
+                kind: Blocks,
             }
         },
         interfaces: [tir::GuardedLoop],

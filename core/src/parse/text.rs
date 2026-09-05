@@ -6,13 +6,21 @@ use crate::parse::common::{Cursor, Span};
 use crate::value::ValueId;
 
 pub(crate) struct RegionParseState {
+    /// The region being parsed, so a block the text names can join it.
+    pub region: crate::RegionId,
     /// Every label seen so far, whether defined by `^name:` or only referenced
     /// as a successor. A referenced-only label owns a block that joins the
     /// region once its definition appears.
     pub labels: HashMap<String, BlockId>,
     /// The labels whose defining `^name:` has been parsed. The entry block is
-    /// born defined under the name `bb0`.
+    /// defined under the name `bb0` as soon as it exists.
     pub defined: HashSet<String>,
+    /// The region's entry block, created the first time the text needs one. An
+    /// unordered body never does: it holds operations, not blocks.
+    pub entry: Option<BlockId>,
+    /// The arguments the region was opened with, until they become the entry
+    /// block's arguments or the region's own ports.
+    pub arguments: Vec<crate::Value>,
 }
 
 pub struct Parser<'src> {
