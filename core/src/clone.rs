@@ -70,7 +70,7 @@ fn clone_region_into(context: &Context, region: RegionId, mapping: &mut Mapping)
                 copy
             })
             .collect();
-        let copy = context.create_block(arguments);
+        let copy = context.create_block_with_dependencies(arguments, block.dep_arguments().len());
         mapping.blocks.insert(block.id(), copy.id());
         clone.add_block(copy.id());
     }
@@ -110,7 +110,15 @@ fn clone_nodes_region_into(context: &Context, region: RegionId, mapping: &mut Ma
         .into_iter()
         .map(|result| remap_value(result, mapping))
         .collect();
-    context.create_nodes_region(ports, ops, results).id()
+    context
+        .create_nodes_region(
+            ports,
+            source.dep_arguments().len(),
+            ops,
+            results,
+            source.dep_results().len(),
+        )
+        .id()
 }
 
 fn clone_op_into(context: &Context, op: OpId, mapping: &mut Mapping) -> OpId {
@@ -150,7 +158,8 @@ fn clone_op_into(context: &Context, op: OpId, mapping: &mut Mapping) -> OpId {
         results,
         regions,
         attributes,
-    );
+    )
+    .with_dependency_counts(source.dep_operands().len(), source.dep_results().len());
     context.add_operation(instance).id
 }
 

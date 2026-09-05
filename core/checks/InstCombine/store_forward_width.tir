@@ -5,9 +5,9 @@
 
 module {
   %fn_f = func.func @f(%0: !ptr.p, %1: !i32) -> !i16 {
-    %2 = state.entry_state : !state
-    ptr.store %1, %0 state(%2 -> %3)
-    %4 = ptr.load %0 : !i16 state(%3)
+    | %2 = state.entry_state
+    | %3 = ptr.store %1, %0 | %2
+    %4 = ptr.load %0 | %3 : !i16
     func.return %4
   }
   module_end

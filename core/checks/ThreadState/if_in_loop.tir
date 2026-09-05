@@ -24,14 +24,14 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @h
-// CHECK: %[[FINAL:[0-9]+]] = scf.for %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %{{[0-9]+}}) -> !state {
-// CHECK-NEXT: %[[GATE:[0-9]+]] = scf.if %3 args(%[[CARRIED]]) -> !state (%[[T:[0-9]+]]) {
-// CHECK-NEXT: ptr.store %4, %{{[0-9]+}} state(%[[T]] -> %[[T1:[0-9]+]])
-// CHECK-NEXT: scf.yield %[[T1]]
+// CHECK: | %[[FINAL:[0-9]+]] = scf.for %0, %1, %2 iter_args(| %[[CARRIED:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK-NEXT: | %[[GATE:[0-9]+]] = scf.if %3 args(| %[[CARRIED]]) (| %[[T:[0-9]+]]) {
+// CHECK-NEXT: | %[[T1:[0-9]+]] = ptr.store %4, %{{[0-9]+}} | %[[T]]
+// CHECK-NEXT: scf.yield | %[[T1]]
 // CHECK-NEXT: }
-// CHECK-NEXT: else (%[[E:[0-9]+]]) {
-// CHECK-NEXT: scf.yield %[[E]]
+// CHECK-NEXT: else (| %[[E:[0-9]+]]) {
+// CHECK-NEXT: scf.yield | %[[E]]
 // CHECK-NEXT: }
-// CHECK-NEXT: scf.yield %[[GATE]]
+// CHECK-NEXT: scf.yield | %[[GATE]]
 // CHECK-NEXT: }
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[FINAL]] -> %{{[0-9]+}})
+// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[FINAL]] : !i32

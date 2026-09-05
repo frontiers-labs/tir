@@ -271,7 +271,7 @@ under the same fork/join discipline the mid-end's chains have:
 `verify_machine_ir` runs `verify_state_forks` over the selected function and
 holds every port to naming a definition that exists.
 
-Destruction leaves a `!state` block parameter for every chain a region carried,
+Destruction leaves a dependency block parameter for every chain a region carried,
 and it means "the memory this block is entered with" — not a join of named edges.
 A `vbr` has an operand slot and carries the incoming state into it; a selected
 conditional branch has none, and minting a block to carry a value nothing moves

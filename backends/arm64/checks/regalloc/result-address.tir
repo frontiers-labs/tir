@@ -16,4 +16,4 @@ module {
 // CHECK: arm64.store_doubleword {rt = %{{[0-9]+}}:{{x[0-9]+}}, rn = %{{[0-9]+}}:x8, imm = 0}
 // CHECK-LABEL: asm.symbol {name = "caller"
 // CHECK: arm64.orr {rd = %{{[0-9]+}}:x2, rn = x31, rm = %{{[0-9]+}}:{{x[0-9]+}}}
-// CHECK: asm.vcall {callee = "make_large"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "make_large"

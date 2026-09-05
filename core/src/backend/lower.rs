@@ -43,7 +43,7 @@ pub fn lower_function_and_return(
         };
         let mut tuple_extracts = Vec::new();
         let mut arguments = Vec::new();
-        let function_arguments = func.body().arguments().to_vec();
+        let function_arguments = func.body().value_arguments().to_vec();
         let mut argument_alignments = func.argument_alignments();
         if argument_alignments.is_empty() {
             argument_alignments.resize(function_arguments.len(), 1);
@@ -130,15 +130,14 @@ pub fn lower_function_and_return(
         // reach machine instructions without being defined by one, so they are
         // retyped through the same map. A tuple parameter is not a register: its
         // elements are, and they were retyped above.
-        let state = tir::builtin::StateType::new(context);
+        // A dependency parameter names the memory the join is entered with. It
+        // lives in no register, so there is no class to give it.
         for block in context
             .get_region(op.op().regions()[0])
             .iter(context.clone())
         {
-            for (index, argument) in block.arguments().iter().enumerate() {
-                // A `!state` parameter names the memory the join is entered
-                // with. It lives in no register, so there is no class to give it.
-                if argument.ty() == state || type_class(context, argument.ty()).is_some() {
+            for (index, argument) in block.value_arguments().iter().enumerate() {
+                if type_class(context, argument.ty()).is_some() {
                     continue;
                 }
                 let ty = context.get_type_data(argument.ty());

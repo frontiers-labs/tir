@@ -222,20 +222,20 @@ fn memory_interfaces_expose_the_state_chain() {
         .size(4)
         .align(4)
         .result_type(ptr_ty)
-        .state_result()
+        .dep_result()
         .build();
     let entry_state = allocation.state_result().unwrap();
 
     let store = StoreOpBuilder::new(&context)
         .value(value_id)
         .ptr(allocation.result())
-        .state(entry_state)
-        .state_result()
+        .dep_operand(entry_state)
+        .dep_result()
         .build();
     let load = LoadOpBuilder::new(&context)
         .ptr(allocation.result())
         .result_type(i32_ty)
-        .state(store.state_result().unwrap())
+        .dep_operand(store.state_result().unwrap())
         .build();
 
     let write: &dyn MemoryWrite = &store;

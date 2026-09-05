@@ -13,12 +13,11 @@
 //! because moving it would change a program the representation does not claim
 //! to order.
 
-use crate::builtin::StateType;
 use crate::func::FuncOp;
 use crate::utils::Rng;
 use crate::{
     AnalysisManager, BlockHandle, Context, OpHandle, OpId, OperationRef, Pass, PassError,
-    PassTarget, RegionId, Rewriter, TypeId, ValueId,
+    PassTarget, RegionId, Rewriter, ValueId,
 };
 use std::collections::HashMap;
 
@@ -58,29 +57,28 @@ impl Pass for ShuffleStatePass {
         _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        let state = StateType::new(context);
         for region in op.op().regions().to_vec() {
-            self.shuffle_region(context, region, state);
+            self.shuffle_region(context, region);
         }
         Ok(())
     }
 }
 
 impl ShuffleStatePass {
-    fn shuffle_region(&mut self, context: &Context, region: RegionId, state: TypeId) {
+    fn shuffle_region(&mut self, context: &Context, region: RegionId) {
         for block in context.get_region(region).iter(context.clone()) {
             for op_id in block.op_ids() {
                 for nested in context.get_op(op_id).regions() {
-                    self.shuffle_region(context, nested, state);
+                    self.shuffle_region(context, nested);
                 }
             }
-            self.shuffle_block(context, &block, state);
+            self.shuffle_block(context, &block);
         }
     }
 
     /// Give `block` another order of the same edges. The terminator stays last:
     /// what leaves a region is not a scheduling question.
-    fn shuffle_block(&mut self, context: &Context, block: &BlockHandle, state: TypeId) {
+    fn shuffle_block(&mut self, context: &Context, block: &BlockHandle) {
         let op_ids = block.op_ids();
         let Some((&terminator, body)) = op_ids.split_last() else {
             return;
@@ -90,7 +88,7 @@ impl ShuffleStatePass {
         }
         if !body
             .iter()
-            .all(|&op_id| ordered_by_edges(context, &context.get_op(op_id), state))
+            .all(|&op_id| ordered_by_edges(context, &context.get_op(op_id)))
         {
             return;
         }
@@ -166,21 +164,17 @@ fn subtree_operands(context: &Context, op: OpId) -> Vec<ValueId> {
 }
 
 /// Whether the edges say where `op` may run: it opens a memory, so nothing does;
-/// it observes a state, so the chain does; or it is a value the vocabulary spells,
-/// so its operands do. An operation holding regions is read through them — one
-/// whose regions carry no state and hold nothing else touches no memory at all.
-fn ordered_by_edges(context: &Context, op: &OpHandle, state: TypeId) -> bool {
+/// it observes a dependency, so the chain does; or it is a value the vocabulary
+/// spells, so its operands do. An operation holding regions is read through
+/// them — one whose regions carry no dependency and hold nothing else touches
+/// no memory at all.
+fn ordered_by_edges(context: &Context, op: &OpHandle) -> bool {
     // An allocation opens a memory of its own, so nothing orders it: what reaches
     // into that memory names the pointer it defines, and that edge is enough.
     if op.has_interface::<dyn crate::PromotableAllocation>() {
         return true;
     }
-    let names_state = |values: &[ValueId]| {
-        values
-            .iter()
-            .any(|&value| context.has_value(value) && context.get_value(value).ty() == state)
-    };
-    if names_state(&op.operands()) || names_state(&op.results()) {
+    if !op.dep_operands().is_empty() || !op.dep_results().is_empty() {
         return true;
     }
     if super::is_pure_value(op) {
@@ -195,7 +189,7 @@ fn ordered_by_edges(context: &Context, op: &OpHandle, state: TypeId) -> bool {
                     block
                         .op_ids()
                         .iter()
-                        .all(|&nested| ordered_by_edges(context, &context.get_op(nested), state))
+                        .all(|&nested| ordered_by_edges(context, &context.get_op(nested)))
                 })
         })
 }

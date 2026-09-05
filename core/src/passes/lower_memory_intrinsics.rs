@@ -154,7 +154,7 @@ fn threaded_call(
         .args(args)
         .result_type(result_type);
     if let Some(state) = state {
-        builder = builder.state(state).state_result();
+        builder = builder.dep_operand(state).dep_result();
     }
     builder.build()
 }
@@ -172,7 +172,7 @@ fn replace_threaded(
 ) -> Result<(), PassError> {
     if let (Some(published), Some(new)) = (
         published,
-        crate::builtin::trailing_state_result(context, &context.get_op(call.id())),
+        context.get_op(call.id()).dep_results().first().copied(),
     ) {
         context.replace_value_uses(published, new);
     }

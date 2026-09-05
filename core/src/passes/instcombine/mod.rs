@@ -32,7 +32,7 @@ use crate::{
     AnalysisManager, BlockId, ConstantLike, Context, LoopLike, MemoryRead, MemoryWrite, OpId,
     OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
     attributes::{AttributeValue, Predicate},
-    builtin::{StateType, ops},
+    builtin::ops,
     func::FuncOp,
     utils::APInt,
 };
@@ -146,7 +146,7 @@ impl Driver<'_> {
                 continue;
             };
             let target = self.at(first);
-            for argument in block.arguments() {
+            for argument in block.value_arguments() {
                 self.rewire(argument.id(), extraction, &target, rewriter)?;
             }
         }
@@ -178,9 +178,6 @@ impl Driver<'_> {
         rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
         let ty = self.context.get_value(value).ty();
-        if ty == StateType::new(self.context) {
-            return Ok(());
-        }
         let Some(&class) = self.value_class.get(&value) else {
             return Ok(());
         };
@@ -226,14 +223,14 @@ impl Driver<'_> {
             if !self.context.has_operation(op_id) {
                 continue;
             }
-            let rebound = self
-                .context
-                .get_op(op_id)
+            let reader = self.context.get_op(op_id);
+            let rebound = reader
                 .operands()
                 .iter()
                 .map(|&operand| if operand == value { new_value } else { operand })
                 .collect();
-            self.context.set_op_operands(op_id, rebound);
+            self.context
+                .set_op_operands(op_id, rebound, reader.dep_operands().len());
         }
     }
 
@@ -270,7 +267,8 @@ impl Driver<'_> {
                 .iter()
                 .map(|&operand| if operand == taken { earlier } else { operand })
                 .collect();
-            self.context.set_op_operands(op_id, operands);
+            self.context
+                .set_op_operands(op_id, operands, instance.dep_operands().len());
             return Ok(());
         }
         // A read leaves memory as it found it, so the state it publishes is the
@@ -288,9 +286,9 @@ impl Driver<'_> {
             (None, [value]) => *value,
             // A gate, a loop or a call names no single value to replace, but each
             // of its results is worth what its class is worth to whoever reads it.
-            (None, results) => {
+            (None, _) => {
                 let target = self.at(op_id);
-                for &result in results {
+                for result in instance.value_results() {
                     self.rewire(result, extraction, &target, rewriter)?;
                 }
                 return Ok(());
@@ -315,7 +313,8 @@ impl Driver<'_> {
         // after every read of a fork, and the reads it stands for are still there
         // naming the state before it, so handing that state on would leave the
         // write taking it unordered against them.
-        if ty == StateType::new(self.context)
+        let replacing_dependency = state_edge.is_none() && !instance.dep_results().is_empty();
+        if replacing_dependency
             && !(instance.regions().is_empty()
                 && instance.has_interface::<dyn MemoryWrite>()
                 && instance.operands().contains(&new_value))

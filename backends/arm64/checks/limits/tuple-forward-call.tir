@@ -11,8 +11,8 @@ module {
   module_end
 }
 
-// CHECK: asm.vcall {callee = "make_pair"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "make_pair"
 // CHECK: arm64.fmov_reg64
 // CHECK: arm64.fmov_reg64
-// CHECK: asm.vcall {callee = "consume"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "consume"
 // CHECK: asm.vret

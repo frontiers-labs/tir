@@ -12,7 +12,13 @@ use super::common::{Cursor, Span};
 use super::text::Parser as TextParser;
 
 type ParseResult<T> = Result<T, (Span, Error)>;
-type BlockLabel = (String, Vec<(String, crate::TypeId)>, Vec<NamedAttribute>);
+/// An unordered body: its operations, its results, and how many trailing
+/// results are dependencies.
+type NodesBody = (Vec<OpId>, Vec<ValueId>, usize);
+type BlockLabel = (String, BlockArguments, Vec<NamedAttribute>);
+/// The `(%a: !ty | %d)` argument list of a block label: the value arguments
+/// with their types, and the names of the dependency arguments.
+type BlockArguments = (Vec<(String, crate::TypeId)>, Vec<String>);
 
 pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, Error)> {
     let mut parser = TextParser::new(src);
@@ -84,30 +90,11 @@ pub(crate) fn parse_single_op<'src>(
 ) -> Result<Box<dyn Operation>, (Span, Error)> {
     parser.skip_trivia();
 
-    // Optional SSA result assignment prefix (e.g. "%2 =" or "%2, %3 ="). The builder
-    // allocates the concrete ValueIds; we bind the textual names to them once the op
-    // exists so later operands resolve by name rather than by a literal id.
-    let mark = parser.pos();
-    let mut result_names = Vec::new();
-    loop {
-        match parser.parse_value_ref() {
-            Some(name) => result_names.push(name.to_string()),
-            None => {
-                result_names.clear();
-                break;
-            }
-        }
-        if parser.parse_token(",") {
-            continue;
-        }
-        if !parser.parse_token("=") {
-            result_names.clear();
-        }
-        break;
-    }
-    if result_names.is_empty() {
-        parser.set_pos(mark);
-    }
+    // Optional result binding prefix: `%2 =`, `%2, %3 =`, `%2 | %4 =` or `| %4 =`,
+    // the names after the `|` binding dependencies. The builder allocates the
+    // concrete ValueIds; the names are bound once the op exists so later
+    // operands resolve by name rather than by a literal id.
+    let (result_names, dep_names) = parse_result_prefix(parser)?;
 
     if let Some(name) = parser.parse_ident() {
         let (dialect, name) = if parser.parse_token(".") {
@@ -127,14 +114,44 @@ pub(crate) fn parse_single_op<'src>(
 
         let op = op_parser(parser, context)?;
         coerce_predicates(parser, context, dialect, name, op.id())?;
-        let results = context.get_op(op.id()).results().to_vec();
-        for (name, result) in result_names.iter().zip(results) {
+        let handle = context.get_op(op.id());
+        for (name, result) in result_names.iter().zip(handle.value_results()) {
+            parser.define_value(name, result);
+        }
+        // A dependency the op's own parser did not produce is one the text
+        // says it does: the ports memory order threads through an op are its
+        // own to carry, at whatever count the binding names.
+        let deps = handle.dep_results();
+        for (index, name) in dep_names.iter().enumerate() {
+            let result = deps
+                .get(index)
+                .copied()
+                .unwrap_or_else(|| context.append_dep_result(op.id()));
             parser.define_value(name, result);
         }
         Ok(op)
     } else {
         Err((parser.span(), Error::ExpectedOpName))
     }
+}
+
+/// The names a `%a, %b | %c =` prefix binds, values then dependencies; both
+/// empty where the line binds nothing, with the cursor left where it was.
+fn parse_result_prefix(parser: &mut TextParser<'_>) -> ParseResult<(Vec<String>, Vec<String>)> {
+    let mark = parser.pos();
+    let mut result_names = Vec::new();
+    while let Some(name) = parser.parse_value_ref() {
+        result_names.push(name.to_string());
+        if !parser.parse_token(",") {
+            break;
+        }
+    }
+    let dep_names = crate::dependency::parse_dep_names(parser).unwrap_or_default();
+    if (result_names.is_empty() && dep_names.is_empty()) || !parser.parse_token("=") {
+        parser.set_pos(mark);
+        return Ok((Vec::new(), Vec::new()));
+    }
+    Ok((result_names, dep_names))
 }
 
 /// Retype the `Str` attributes an op declares as `Predicate`: the attribute
@@ -197,6 +214,17 @@ impl<'src> TextParser<'src> {
         context: &Context,
         entry_args: Vec<Value>,
     ) -> Result<RegionHandle, (Span, Error)> {
+        self.parse_region_with_entry_args_and_deps(context, entry_args, vec![])
+    }
+
+    /// [`Self::parse_region_with_entry_args`] where the region is also entered
+    /// on the dependencies `dep_args`, trailing its value arguments.
+    pub fn parse_region_with_entry_args_and_deps(
+        &mut self,
+        context: &Context,
+        entry_args: Vec<Value>,
+        dep_args: Vec<Value>,
+    ) -> Result<RegionHandle, (Span, Error)> {
         if !self.parse_token("{") {
             return Err((self.span(), Error::ExpectedToken("{")));
         }
@@ -209,6 +237,7 @@ impl<'src> TextParser<'src> {
             defined: HashSet::new(),
             entry: None,
             arguments: entry_args,
+            dep_arguments: dep_args,
         });
 
         let result = self.parse_region_body(context, &region);
@@ -228,15 +257,16 @@ impl<'src> TextParser<'src> {
             ));
         }
         match results {
-            Some((ops, results)) => {
-                let ports = std::mem::take(&mut state.arguments);
-                context.set_region_nodes(region.id(), ports, ops, results);
+            Some((ops, results, dep_results)) => {
+                let (ports, dep_ports) = state.take_arguments();
+                context.set_region_nodes(region.id(), ports, dep_ports, ops, results, dep_results);
             }
             None => {
                 // A body with no statements at all still owns the block its
                 // arguments belong to.
                 if state.entry.is_none() {
-                    let block = context.create_block(std::mem::take(&mut state.arguments));
+                    let (arguments, deps) = state.take_arguments();
+                    let block = context.create_block_with_dependencies(arguments, deps);
                     region.add_block(block.id());
                 }
             }
@@ -250,7 +280,7 @@ impl<'src> TextParser<'src> {
         &mut self,
         context: &Context,
         region: &RegionHandle,
-    ) -> ParseResult<Option<(Vec<OpId>, Vec<ValueId>)>> {
+    ) -> ParseResult<Option<NodesBody>> {
         let mut current: Option<BlockHandle> = None;
         let mut loose: Vec<OpId> = vec![];
         loop {
@@ -260,7 +290,7 @@ impl<'src> TextParser<'src> {
                 return Ok(None);
             }
 
-            if let Some(results) = self.try_parse_region_results(context)? {
+            if let Some((results, dep_results)) = self.try_parse_region_results(context)? {
                 if current.is_some() || !region.block_ids().is_empty() {
                     return Err((
                         self.span(),
@@ -273,7 +303,7 @@ impl<'src> TextParser<'src> {
                 if !self.parse_token("}") {
                     return Err((self.span(), Error::ExpectedToken("}")));
                 }
-                return Ok(Some((loose, results)));
+                return Ok(Some((loose, results, dep_results)));
             }
 
             if let Some((label, block_args, attrs)) = self.try_parse_block_label(context)? {
@@ -334,8 +364,8 @@ impl<'src> TextParser<'src> {
         if let Some(entry) = state.entry {
             return entry;
         }
-        let arguments = std::mem::take(&mut state.arguments);
-        let block = context.create_block(arguments);
+        let (arguments, deps) = state.take_arguments();
+        let block = context.create_block_with_dependencies(arguments, deps);
         region.add_block(block.id());
         let state = self.region_parse.as_mut().expect("scope checked above");
         state.entry = Some(block.id());
@@ -344,9 +374,14 @@ impl<'src> TextParser<'src> {
         block.id()
     }
 
-    /// The `-> %a, %b` line closing an unordered region, if that is what comes
-    /// next. An empty result list is written as a bare `->`.
-    fn try_parse_region_results(&mut self, context: &Context) -> ParseResult<Option<Vec<ValueId>>> {
+    /// The `-> %a, %b | %c` line closing an unordered region, if that is what
+    /// comes next: the values it produces, then the dependencies it hands on.
+    /// Answers every result with how many trailing ones are dependencies; an
+    /// empty result list is written as a bare `->`.
+    fn try_parse_region_results(
+        &mut self,
+        context: &Context,
+    ) -> ParseResult<Option<(Vec<ValueId>, usize)>> {
         if !self.parse_token("->") {
             return Ok(None);
         }
@@ -357,7 +392,10 @@ impl<'src> TextParser<'src> {
                 break;
             }
         }
-        Ok(Some(results))
+        let deps = crate::dependency::parse_dep_operands(self, context)?;
+        let dep_count = deps.len();
+        results.extend(deps);
+        Ok(Some((results, dep_count)))
     }
 
     pub(crate) fn resolve_region_block_label(
@@ -365,6 +403,7 @@ impl<'src> TextParser<'src> {
         context: &Context,
         name: &str,
         block_arg_types: &[crate::TypeId],
+        dep_arguments: usize,
     ) -> Result<BlockId, (Span, Error)> {
         // The entry block is implicit and printed as `^bb0`, so a branch back to
         // it is what brings it into being when nothing else has.
@@ -392,7 +431,7 @@ impl<'src> TextParser<'src> {
 
         if let Some(id) = state.labels.get(name) {
             let block = context.get_block(*id);
-            if !block_arg_types.is_empty() && block.arguments().is_empty() {
+            if (!block_arg_types.is_empty() || dep_arguments > 0) && block.arguments().is_empty() {
                 return Err((
                     self.span(),
                     Error::VerificationError(format!(
@@ -406,8 +445,11 @@ impl<'src> TextParser<'src> {
         let block_args = block_arg_types
             .iter()
             .map(|ty| context.create_value(*ty, None))
+            .chain(
+                (0..dep_arguments).map(|_| context.create_value(crate::TypeId::DEPENDENCY, None)),
+            )
             .collect();
-        let block = context.create_block(block_args);
+        let block = context.create_block_with_dependencies(block_args, dep_arguments);
         state.labels.insert(name.to_string(), block.id());
         Ok(block.id())
     }
@@ -421,7 +463,7 @@ impl<'src> TextParser<'src> {
         let block_args = if self.parse_token("(") {
             self.parse_block_argument_list(context)?
         } else {
-            vec![]
+            (vec![], vec![])
         };
 
         let attrs = if self.parse_token("{") {
@@ -482,15 +524,23 @@ impl<'src> TextParser<'src> {
         }
     }
 
+    /// The `%a: !ty, %b: !ty | %c, %d)` list after a label's opening paren.
     fn parse_block_argument_list(
         &mut self,
         context: &Context,
-    ) -> Result<Vec<(String, crate::TypeId)>, (Span, Error)> {
+    ) -> Result<BlockArguments, (Span, Error)> {
         let mut args = vec![];
 
         loop {
             if self.parse_token(")") {
-                return Ok(args);
+                return Ok((args, vec![]));
+            }
+            if self.peek_char() == Some('|') {
+                let deps = crate::dependency::parse_dep_names(self)?;
+                if !self.parse_token(")") {
+                    return Err((self.span(), Error::ExpectedToken(")")));
+                }
+                return Ok((args, deps));
             }
 
             let name = self
@@ -508,9 +558,9 @@ impl<'src> TextParser<'src> {
             args.push((name, ty));
 
             if self.parse_token(")") {
-                return Ok(args);
+                return Ok((args, vec![]));
             }
-            if !self.parse_token(",") {
+            if !self.parse_token(",") && self.peek_char() != Some('|') {
                 return Err((self.span(), Error::ExpectedToken(",")));
             }
         }
@@ -521,7 +571,7 @@ impl<'src> TextParser<'src> {
         context: &Context,
         region: &RegionHandle,
         label: &str,
-        named_args: Vec<(String, crate::TypeId)>,
+        (named_args, dep_names): BlockArguments,
     ) -> Result<BlockHandle, (Span, Error)> {
         let state = self
             .region_parse
@@ -533,7 +583,7 @@ impl<'src> TextParser<'src> {
         // the block join the region here, in definition order.
         if let Some(id) = state.labels.get(label).copied() {
             let block = context.get_block(id);
-            if !named_args.is_empty() && block.arguments().is_empty() {
+            if (!named_args.is_empty() || !dep_names.is_empty()) && block.arguments().is_empty() {
                 return Err((
                     self.span(),
                     Error::VerificationError(format!(
@@ -541,7 +591,10 @@ impl<'src> TextParser<'src> {
                     )),
                 ));
             }
-            for ((name, _), arg) in named_args.iter().zip(block.arguments()) {
+            for ((name, _), arg) in named_args.iter().zip(block.value_arguments()) {
+                self.define_value(name, arg.id());
+            }
+            for (name, arg) in dep_names.iter().zip(block.dep_arguments()) {
                 self.define_value(name, arg.id());
             }
             let state = self.region_parse.as_mut().expect("scope checked above");
@@ -554,11 +607,21 @@ impl<'src> TextParser<'src> {
         let block_args: Vec<Value> = named_args
             .iter()
             .map(|(_, ty)| context.create_value(*ty, None))
+            .chain(
+                dep_names
+                    .iter()
+                    .map(|_| context.create_value(crate::TypeId::DEPENDENCY, None)),
+            )
             .collect();
-        for ((name, _), arg) in named_args.iter().zip(&block_args) {
+        for (name, arg) in named_args
+            .iter()
+            .map(|(name, _)| name)
+            .chain(&dep_names)
+            .zip(&block_args)
+        {
             self.define_value(name, arg.id());
         }
-        let block = context.create_block(block_args);
+        let block = context.create_block_with_dependencies(block_args, dep_names.len());
         region.add_block(block.id());
         let state = self.region_parse.as_mut().expect("scope checked above");
         state.labels.insert(label.to_string(), block.id());

@@ -3,7 +3,7 @@
 // A `.tir` function arrives as a raw CFG carrying no memory order at all. The
 // backend restructures it and threads the chains itself, so selection sees one
 // chain model whatever the input was: the arm's store and the join's load are
-// on the slot's chain, and the join reads it as a `!state` parameter.
+// on the slot's chain, and the join reads it as a dependency parameter.
 
 module {
   %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i1) -> !i32 {
@@ -19,9 +19,9 @@ module {
   module_end
 }
 
-// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK: ^{{bb[0-9]+}}(%[[ARM:[0-9]+]]: !state):
-// CHECK: x86_64.mov_store32 {{.*}} state(%[[ARM]] -> %[[STORED:[0-9]+]])
+// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK: ^{{bb[0-9]+}}(| %[[ARM:[0-9]+]]):
+// CHECK: | %[[STORED:[0-9]+]] = x86_64.mov_store32 {{.*}} | %[[ARM]]
 // CHECK-NEXT: asm.vbr %[[STORED]] ^[[JOIN:bb[0-9]+]]
-// CHECK: ^[[JOIN]](%[[MERGED:[0-9]+]]: !state):
-// CHECK-NEXT: x86_64.mov_load32 {{.*}} state(%[[MERGED]] -> %{{[0-9]+}})
+// CHECK: ^[[JOIN]](| %[[MERGED:[0-9]+]]):
+// CHECK-NEXT: | %{{[0-9]+}} = x86_64.mov_load32 {{.*}} | %[[MERGED]]

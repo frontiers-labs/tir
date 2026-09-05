@@ -1,0 +1,13 @@
+// RUN: not tir opt --verify %s
+
+// A dependency carries no bits: naming one where a value belongs is an error,
+// not a value of some opaque type.
+
+module {
+  %fn_bad = func.func @bad() -> !i32 {
+    | %0 = state.entry_state
+    %1 = addi %0, %0 : !i32
+    func.return %1
+  }
+  module_end
+}

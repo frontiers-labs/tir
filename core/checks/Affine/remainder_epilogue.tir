@@ -55,11 +55,11 @@ module {data_layout = #data_layout} {
 // CHECK-NEXT: %[[COVERED:[0-9]+]] = muli %[[TILES]], %[[T]]
 // CHECK-NEXT: %[[LAST:[0-9]+]] = addi %[[LB]], %[[COVERED]]
 // The whole tiles run first, and the symbolic dimension runs inside each.
-// CHECK-NEXT: %[[FINAL:[0-9]+]], %[[S0:[0-9]+]], %[[S1:[0-9]+]] = scf.for %[[LB]], %[[LAST]], %[[T]] iter_args(%[[TO:[0-9]+]] = %[[LB]]
+// CHECK-NEXT: %[[FINAL:[0-9]+]] | %[[S0:[0-9]+]], %[[S1:[0-9]+]] = scf.for %[[LB]], %[[LAST]], %[[T]] iter_args(%[[TO:[0-9]+]] = %[[LB]]
 // CHECK-NEXT: %[[END:[0-9]+]] = addi %[[TO]], %[[T]]
 // CHECK-NEXT: scf.for %[[TO]], %[[END]], %{{[0-9]+}}
 // CHECK-NEXT: scf.for %{{[0-9]+}}, %[[N]], %{{[0-9]+}}
 // Then one copy over what is left, entered where the tiles stopped and on the
 // chains they left behind.
-// CHECK: scf.for %[[FINAL]], %[[UB]], %{{[0-9]+}} iter_args(%{{[0-9]+}} = %[[FINAL]], %{{[0-9]+}} = %[[S0]], %{{[0-9]+}} = %[[S1]])
+// CHECK: scf.for %[[FINAL]], %[[UB]], %{{[0-9]+}} iter_args(%{{[0-9]+}} = %[[FINAL]] | %{{[0-9]+}} = %[[S0]], %{{[0-9]+}} = %[[S1]])
 // CHECK-NEXT: scf.for %{{[0-9]+}}, %[[N]], %{{[0-9]+}}

@@ -8,16 +8,16 @@
 
 module {
   %fn_f = func.func @f(%0: !i1, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) {
-    %4 = state.entry_state : !state
-    %5 = scf.if %0 args(%4) -> !state (%6) {
-      ptr.store %2, %1 state(%6 -> %7)
-      ptr.store %3, %1 state(%7 -> %8)
-      scf.yield %8
-    } else (%9) {
-      ptr.store %2, %1 state(%9 -> %10)
-      scf.yield %10
+    | %4 = state.entry_state
+    | %5 = scf.if %0 args(| %4) (| %6) {
+      | %7 = ptr.store %2, %1 | %6
+      | %8 = ptr.store %3, %1 | %7
+      scf.yield | %8
+    } else (| %9) {
+      | %10 = ptr.store %2, %1 | %9
+      scf.yield | %10
     }
-    func.return state(%5)
+    func.return | %5
   }
   module_end
 }

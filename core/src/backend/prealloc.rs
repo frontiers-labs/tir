@@ -230,16 +230,13 @@ impl Pass for BlockArgLoweringPass {
                 // leave the rest of the parameter holding whatever the
                 // destination carried before; such a class only decides the copy
                 // when the type names no file at all.
-                let state = tir::builtin::StateType::new(context);
+                // A dependency port is memory order, not a register: nothing
+                // moves across the edge, and the parameter simply names the
+                // chain the join is entered on.
+                let value_params = context.get_block(dest).value_arguments().len();
                 let mut pairs: Vec<(ValueId, ValueId, RegClassId)> = Vec::new();
-                for (&param, &arg) in params.iter().zip(args.iter()) {
+                for (&param, &arg) in params.iter().zip(args.iter()).take(value_params) {
                     if param == arg {
-                        continue;
-                    }
-                    // A `!state` port is memory order, not a register: nothing
-                    // moves across the edge, and the parameter simply names the
-                    // chain the join is entered on.
-                    if context.get_value(param).ty() == state {
                         continue;
                     }
                     let class = info
@@ -277,7 +274,7 @@ impl Pass for BlockArgLoweringPass {
                         AttributeValue::Bool(true),
                     );
                 }
-                context.set_op_operands(op_id, Vec::new());
+                context.set_op_operands(op_id, Vec::new(), 0);
             }
         }
         Ok(())

@@ -1,4 +1,4 @@
-use crate::parse::common::{Cursor, Span};
+use crate::parse::common::Span;
 use crate::{Context, Error, IRFormatter, Operation, dialect, operation};
 
 use crate as tir;
@@ -15,14 +15,40 @@ dialect! {
     }
 }
 
+// The memory a function is entered with, one op per chain. Spelled
+// `| %s = state.entry_state`: it carries dependencies and nothing else.
 operation! {
     EntryStateOp {
         name: "entry_state",
         dialect: "state",
-        results: R {
-            result: "crate::builtin::StateType",
-        },
+        format: "custom",
+        verifier: "true",
         interfaces: [crate::interp::Interp],
+    }
+}
+
+impl EntryStateOp {
+    /// The chain this op opens.
+    pub fn result(&self) -> tir::ValueId {
+        self.0.dep_results()[0]
+    }
+
+    fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
+        tir::dependency::print_result_prefix(fmt, &self.0)?;
+        fmt.write("state.entry_state\n")
+    }
+
+    fn custom_parse(
+        _parser: &mut crate::parse::text::Parser,
+        context: &Context,
+    ) -> Result<Box<dyn Operation>, (Span, Error)> {
+        Ok(Box::new(EntryStateOpBuilder::new(context).build()))
+    }
+}
+
+impl tir::Verifiable for EntryStateOp {
+    fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
+        expect_deps(&self.0, 0, 1)
     }
 }
 
@@ -35,26 +61,21 @@ operation! {
         name: "join",
         dialect: "state",
         format: "custom",
-        operands: O {
-            states: "*crate::builtin::StateType",
-        },
-        results: R {
-            result: "crate::builtin::StateType",
-        },
+        verifier: "true",
         interfaces: [crate::interp::Interp],
     }
 }
 
 impl JoinOp {
+    /// The merged memory.
+    pub fn result(&self) -> tir::ValueId {
+        self.0.dep_results()[0]
+    }
+
     fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
-        fmt.write(format!("%{} = state.join", self.result().number()))?;
-        for (index, state) in self.operands().iter().enumerate() {
-            fmt.write(if index == 0 { " " } else { ", " })?;
-            fmt.write(format!("%{}", state.number()))?;
-        }
-        fmt.write(" : ")?;
-        context.print_type(context.get_value(self.result()).ty(), fmt)?;
+        tir::dependency::print_result_prefix(fmt, &self.0)?;
+        fmt.write("state.join")?;
+        tir::dependency::print_dep_operands(fmt, &self.0)?;
         fmt.write("\n")
     }
 
@@ -62,25 +83,22 @@ impl JoinOp {
         parser: &mut crate::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (Span, Error)> {
-        let mut states = vec![];
-        while let Some(reference) = parser.parse_value_ref() {
-            states.push(parser.resolve_value(context, reference));
-            if !parser.parse_token(",") {
-                break;
-            }
+        let mut builder = JoinOpBuilder::new(context);
+        for state in tir::dependency::parse_dep_operands(parser, context)? {
+            builder = builder.dep_operand(state);
         }
-        if !parser.parse_token(":") {
-            return Err((parser.span(), Error::ExpectedToken(":")));
+        Ok(Box::new(builder.build()))
+    }
+}
+
+impl tir::Verifiable for JoinOp {
+    fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
+        if self.0.dep_operands().is_empty() {
+            return Err(Error::VerificationError(
+                "state.join merges at least one dependency".to_string(),
+            ));
         }
-        let result_type = parser
-            .parse_type(context)?
-            .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-        Ok(Box::new(
-            JoinOpBuilder::new(context)
-                .states(states)
-                .result_type(result_type)
-                .build(),
-        ))
+        expect_deps(&self.0, self.0.dep_operands().len(), 1)
     }
 }
 
@@ -93,12 +111,7 @@ operation! {
         name: "split",
         dialect: "state",
         format: "custom",
-        operands: O {
-            state: "crate::builtin::StateType",
-        },
-        results: R {
-            states: "*crate::builtin::StateType",
-        },
+        verifier: "true",
         interfaces: [crate::interp::Interp],
     }
 }
@@ -106,25 +119,18 @@ operation! {
 impl SplitOp {
     /// The one memory the chains crossing this split carry on from.
     pub fn observed(&self) -> tir::ValueId {
-        self.operands()[0]
+        self.0.dep_operands()[0]
     }
 
     /// One state per chain crossing the split.
     pub fn states(&self) -> Vec<tir::ValueId> {
-        self.0.results().to_vec()
+        self.0.dep_results().to_vec()
     }
 
     fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
-        for (index, state) in self.states().iter().enumerate() {
-            fmt.write(if index == 0 { "" } else { ", " })?;
-            fmt.write(format!("%{}", state.number()))?;
-        }
-        fmt.write(format!(" = state.split %{} : ", self.observed().number()))?;
-        for (index, state) in self.states().iter().enumerate() {
-            fmt.write(if index == 0 { "" } else { ", " })?;
-            context.print_type(context.get_value(*state).ty(), fmt)?;
-        }
+        tir::dependency::print_result_prefix(fmt, &self.0)?;
+        fmt.write("state.split")?;
+        tir::dependency::print_dep_operands(fmt, &self.0)?;
         fmt.write("\n")
     }
 
@@ -132,29 +138,37 @@ impl SplitOp {
         parser: &mut crate::parse::text::Parser,
         context: &Context,
     ) -> Result<Box<dyn Operation>, (Span, Error)> {
-        let reference = parser
-            .parse_value_ref()
-            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?;
-        let state = parser.resolve_value(context, reference);
-        if !parser.parse_token(":") {
-            return Err((parser.span(), Error::ExpectedToken(":")));
+        let mut builder = SplitOpBuilder::new(context);
+        for state in tir::dependency::parse_dep_operands(parser, context)? {
+            builder = builder.dep_operand(state);
         }
-        let mut types = vec![];
-        loop {
-            types.push(
-                parser
-                    .parse_type(context)?
-                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?,
-            );
-            if !parser.parse_token(",") {
-                break;
-            }
-        }
-        Ok(Box::new(
-            SplitOpBuilder::new(context)
-                .state(state)
-                .result_types(types)
-                .build(),
-        ))
+        Ok(Box::new(builder.build()))
     }
+}
+
+impl tir::Verifiable for SplitOp {
+    fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
+        if self.0.dep_results().is_empty() {
+            return Err(Error::VerificationError(
+                "state.split names at least one chain".to_string(),
+            ));
+        }
+        expect_deps(&self.0, 1, self.0.dep_results().len())
+    }
+}
+
+/// These ops carry nothing but dependencies, at the arity given.
+fn expect_deps(op: &tir::OpHandle, operands: usize, results: usize) -> Result<(), Error> {
+    let (dialect, name) = (op.dialect(), op.name());
+    if !op.value_operands().is_empty() || !op.value_results().is_empty() {
+        return Err(Error::VerificationError(format!(
+            "{dialect}.{name} carries only dependencies"
+        )));
+    }
+    if op.dep_operands().len() != operands || op.dep_results().len() != results {
+        return Err(Error::VerificationError(format!(
+            "{dialect}.{name} takes {operands} dependencies and produces {results}"
+        )));
+    }
+    Ok(())
 }

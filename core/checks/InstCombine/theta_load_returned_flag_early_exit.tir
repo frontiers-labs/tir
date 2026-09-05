@@ -44,7 +44,7 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @find
 // CHECK-NOT: ptr.alloca {size = 1
-// CHECK: %[[INIT:[0-9]+]] = ptr.load %3 : !i32
+// CHECK: %[[INIT:[0-9]+]] | %{{[0-9]+}} = ptr.load %3 | %{{[0-9]+}} : !i32
 // CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] = scf.while iter_args(%{{[0-9]+}} = %4, %{{[0-9]+}} = %[[INIT]]) -> !i1, !i32 {
 // CHECK: do scope(%[[SCOPE:[0-9]+]])(%[[FLAG:[0-9]+]], %[[VALUE:[0-9]+]]) {
 // CHECK: %[[RAISED:[0-9]+]] = constant {value = 1} : !i1

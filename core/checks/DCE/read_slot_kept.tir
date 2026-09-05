@@ -17,5 +17,5 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: ptr.alloca
 // CHECK: ptr.store %0, %1
-// CHECK: %2 = ptr.load %1
+// CHECK: %2 | %{{[0-9]+}} = ptr.load %1
 // CHECK: func.return %2

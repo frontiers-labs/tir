@@ -22,9 +22,9 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[X:[0-9]+]], %[[Y:[0-9]+]] = scf.for %0, %1, %2 iter_args(%[[A:[0-9]+]] = %{{[0-9]+}}, %[[B:[0-9]+]] = %{{[0-9]+}}) -> !state, !state {
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A]] -> %[[A1:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[B]] -> %[[B1:[0-9]+]])
-// CHECK-NEXT: scf.yield %[[A1]], %[[B1]]
+// CHECK: | %[[X:[0-9]+]], %[[Y:[0-9]+]] = scf.for %0, %1, %2 iter_args(| %[[A:[0-9]+]] = %{{[0-9]+}}, %[[B:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK-NEXT: %{{[0-9]+}} | %[[A1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A]] : !i32
+// CHECK-NEXT: | %[[B1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[B]]
+// CHECK-NEXT: scf.yield | %[[A1]], %[[B1]]
 // CHECK-NEXT: }
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[Y]] -> %{{[0-9]+}})
+// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[Y]] : !i32

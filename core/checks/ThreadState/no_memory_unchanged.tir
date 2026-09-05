@@ -13,5 +13,5 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @pure
 // CHECK-NOT: state.entry_state
-// CHECK-NOT: state(
+// CHECK-NOT: |
 // CHECK: func.return %1

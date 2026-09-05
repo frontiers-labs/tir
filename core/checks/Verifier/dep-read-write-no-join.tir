@@ -1,0 +1,15 @@
+// RUN: not tir opt --verify %s
+
+// A write after a read of the same dependency must take what the read left, or
+// the join of what several reads left: taking the read's own input leaves the
+// two unordered.
+
+module {
+  %fn_bad = func.func @bad(%0: !i32) {
+    %1 | %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 | %4 = ptr.load %1 | %2 : !i32
+    | %5 = ptr.store %0, %1 | %2
+    func.return
+  }
+  module_end
+}

@@ -168,11 +168,16 @@ structural equality. Dialects define types with `#[derive(TirType)]` and
 register them alongside their ops. Verification uses `TypeConstraint`
 predicates on operand/result declarations.
 
-One type matters architecturally: **`!state`** (builtin). It is opaque,
-carries no data, and types the memory-ordering edges of §6. It is an
-ordinary type: state values flow through region ports, loop carries, and
-yields with no special cases in scf or the verifier beyond the memory
-discipline (§6.4).
+One kind of value is not typed at all: a **dependency**, the memory-ordering
+edge of §6. A dependency carries no data, so it has no type to spell; what
+marks it is its position. Every operand, result, block-argument and region-port
+list is two partitions, the values first and the dependencies trailing, and
+the counts live on the operation, block or region (`value_operands()` /
+`dep_operands()` and their kin). The text puts the dependencies after a `|` on
+either side, without types: `%v | %s1 = ptr.load %p | %s0 : !i32`. Dependencies
+flow through region ports, loop carries and yields like any other value, with
+no special cases in scf or the verifier beyond the memory discipline (§6.4) and
+the partition check that keeps a dependency out of a value slot.
 
 Attributes are `(name, AttributeValue)` pairs on ops; `AttributeValue` is the
 closed data enum (ints, strings, arrays, dicts, registers, types, blocks).
@@ -299,28 +304,30 @@ it, accesses disagreeing on a type — keeps every access and reaches
 
 ## 6. Memory: explicit state
 
-Memory identity and ordering are def-use edges over `!state` values, in the
+Memory identity and ordering are def-use edges over dependency values, in the
 IR itself. No pass recomputes chains; no seeder invents serial numbers. The
 edges are the *whole* memory dependence relation of the middle-end: order is
 derived from them, not the other way round (§6.3).
 
 ### 6.1 Ports
 
-| Op | State ports |
+| Op | Dependency ports |
 |---|---|
 | `ptr.alloca` | *produces* the initial state of its slot's chain (alongside the pointer) |
-| `ptr.load` | *takes* a state operand and produces one: the memory it observed, which the join closing its fork names |
-| `ptr.store`, `ptr.memset` | take state, produce state |
+| `ptr.load` | *takes* a dependency and produces one: the memory it observed, which the join closing its fork names |
+| `ptr.store`, `ptr.memset` | take one, produce one |
 | `ptr.memcpy`, `func.call` | take and produce the one state every chain they may touch was merged into |
-| `func.return` | optional trailing state operand: every chain the caller can reach, merged |
-| `state.entry_state` (nullary) | produces one chain's initial state at region entry, one op per chain |
-| `state.join` | takes any number of states, produces the memory they merge into |
-| `state.split` | takes one state, produces one name per chain carrying on from it |
+| `func.return` | optional dependency operand: every chain the caller can reach, merged |
+| `state.entry_state` | produces one chain's initial state at region entry, one op per chain: `\| %s = state.entry_state` |
+| `state.join` | takes any number of dependencies, produces the memory they merge into |
+| `state.split` | takes one dependency, produces one name per chain carrying on from it |
 
-No chain enters a function *signature*: a call's arguments must be exactly what
-the callee's `!fn` type takes, and ABI lowering maps region arguments to
-registers — a state argument would break both. Hence the entry-state op and the
-trailing return operand.
+These ports are the dependency partitions of §2: a pass grows them with
+`grow_dep_port`, `append_dep_operand` and `append_dep_result`, and `unthread`
+truncates every list at its partition. No chain enters a function *signature*:
+a call's arguments must be exactly what the callee's `!fn` type takes, and ABI
+lowering maps region arguments to registers — a dependency parameter would
+break both. Hence the entry-state op and the return's dependency operand.
 
 The chains survive the backend boundary. A machine opcode whose `InstrInfo`
 effects touch memory declares `state: "in_out"` and carries the chain of the
@@ -332,8 +339,9 @@ construction to encoding, and §6.4's discipline is checked on both sides of
 selection — `observes_only` reads a machine instruction's declared effects where
 a mid-end op has the memory interfaces instead, and an instruction that writes
 nothing observes whatever state it names, a load and a branch alike. Register
-allocation is the one thing blind to all of it: a `!state` value lives in no
-register, so liveness and colouring pass it over (`son-backend` B2).
+allocation is the one thing blind to all of it: a dependency lives in no
+register, and the register slots only ever name the value partitions, so
+liveness and colouring never see one (`son-backend` B2).
 
 ### 6.2 Chains
 
@@ -344,7 +352,7 @@ promotion rewrites §7.2):
 - **One chain per object.** Every base object the facts tell apart from all the
   others the function names — a global, a parameter, a stack slot — is a memory
   of its own, threaded through every access to it and flowing through structured
-  ops as ordinary carried/yielded `!state` values.
+  ops as ordinary carried/yielded dependencies.
 - A pointer the facts cannot read back may name any object they cannot rule it
   out of. Where a function holds such an access, only the slots no such pointer
   can reach keep chains of their own; every other object shares the
@@ -389,7 +397,7 @@ missing edge is a divergence with a reproducer.
 
 ### 6.4 Discipline (verified)
 
-- A `!state` value names the memory at one point, so at most one operation may
+- A dependency names the memory at one point, so at most one operation may
   *change* it: a second would describe two futures for one memory. Everything
   else naming it observes it — a read, or a `state.join`, which names the memory
   its inputs merge into — and any number of those may. One operation naming a
@@ -493,7 +501,7 @@ outside identity.
   `lb < ub` for counted loops, the condition region seeded over the inits
   for general ones. No IR is rewritten to make this seeding possible.
 - Memory ops seed as `LoadMemory(addr, bytes, meta, state)` /
-  `StoreMemory(addr, bytes, value, space, state)` over the actual `!state`
+  `StoreMemory(addr, bytes, value, space, state)` over the actual dependency
   edges, unioned with op identity. Identity *is* the state operand: loads
   agreeing on address and chain hash-cons; loads on different chains never
   meet.
@@ -548,7 +556,7 @@ view construction *is* value numbering; commit is the elimination.
   `CountedLoop` nest with intact bounds, which is the reason counted loops
   are not rotated away. Per depth the bounds as affine forms over the outer
   counters and the values the nest was entered with; per `MemoryRead`/
-  `MemoryWrite` the chain its `!state` operand is rooted at, the object its
+  `MemoryWrite` the chain its dependency operand is rooted at, the object its
   address is derived from and the offset into it; per pair of accesses on
   one chain the distances the single-equation GCD/bounded test admits, a
   range-disjointness predicate where the two objects differ, or nothing
@@ -638,5 +646,5 @@ interfaces; allocate nothing into the Context; never cache across versions
 yourself.
 
 **Consume memory semantics.** Read `MemoryRead`/`MemoryWrite` state
-accessors and follow `!state` edges. Do not re-derive aliasing from
+accessors and follow dependency edges. Do not re-derive aliasing from
 addresses; chain membership *is* the aliasing statement.

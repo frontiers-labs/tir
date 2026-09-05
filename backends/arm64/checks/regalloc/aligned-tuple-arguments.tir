@@ -23,4 +23,4 @@ module {
 // CHECK-LABEL: asm.symbol {name = "forward"
 // CHECK: arm64.orr {rd = x2, rn = x31, rm = %{{[0-9]+}}:{{x[0-9]+}}}
 // CHECK: arm64.orr {rd = x3, rn = x31, rm = %{{[0-9]+}}:{{x[0-9]+}}}
-// CHECK: asm.vcall {callee = "consume"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "consume"

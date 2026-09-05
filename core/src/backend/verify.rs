@@ -66,9 +66,8 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
 /// block is entered on. A port naming a definition selection took away is an
 /// edge to nothing, and these edges are the memory order from here to encoding.
 fn verify_state_operands(context: &Context, op: &OpHandle) -> Result<(), Error> {
-    let state = tir::builtin::StateType::new(context);
-    for value in op.operands().iter().copied() {
-        if !context.has_value(value) || context.get_value(value).ty() != state {
+    for value in op.dep_operands().iter().copied() {
+        if !context.has_value(value) {
             continue;
         }
         let defined = match context.get_value(value).defining_op() {
@@ -113,8 +112,8 @@ fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
         )));
     }
     // Every SSA position is some port's: a surplus operand or result would be
-    // read by nothing, and a missing one shifts every later port. The trailing
-    // `!state` ports are memory order, not registers, and are not counted.
+    // read by nothing, and a missing one shifts every later port. The
+    // dependency ports are memory order, not registers, and are not counted.
     let (values_read, values_written) = slots.iter().fold((0, 0), |(read, written), slot| {
         match (slot.slot, slot.port.def) {
             (RegSlot::Value(_), false) => (read + 1, written),
@@ -122,14 +121,7 @@ fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
             _ => (read, written),
         }
     });
-    let state = tir::builtin::StateType::new(context);
-    let registers = |values: &[ValueId]| {
-        values
-            .iter()
-            .filter(|value| !context.has_value(**value) || context.get_value(**value).ty() != state)
-            .count()
-    };
-    let (operands, results) = (registers(&op.operands()), registers(&op.results()));
+    let (operands, results) = (op.value_operands().len(), op.value_results().len());
     if !crate::backend::reg_ports(op).is_empty()
         && (values_read != operands || values_written != results)
     {
@@ -262,7 +254,7 @@ fn register_values(context: &Context, symbol: &OpHandle) -> Vec<ValueId> {
         for block in context.get_region(region).iter(context.clone()) {
             for op_id in block.op_ids() {
                 let op = context.get_op(op_id);
-                for value in op.operands().iter().chain(op.results().iter()) {
+                for value in op.value_operands().iter().chain(op.value_results().iter()) {
                     record(*value, &mut seen, &mut values);
                 }
             }

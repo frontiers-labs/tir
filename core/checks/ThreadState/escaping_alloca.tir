@@ -17,9 +17,9 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: ptr.store %1, %{{[0-9]+}} state(%[[ENTRY]] -> %[[S1:[0-9]+]])
-// CHECK-NEXT: func.call %{{[0-9]+}}(%{{[0-9]+}} : !ptr.p<!i32>) state(%[[S1]] -> %[[S2:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[S2]] -> %[[S3:[0-9]+]])
-// CHECK-NEXT: func.return %{{[0-9]+}} state(%[[S3]])
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %1, %{{[0-9]+}} | %[[ENTRY]]
+// CHECK-NEXT: | %[[S2:[0-9]+]] = func.call %{{[0-9]+}}(%{{[0-9]+}} : !ptr.p<!i32>) | %[[S1]]
+// CHECK-NEXT: %{{[0-9]+}} | %[[S3:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S2]] : !i32
+// CHECK-NEXT: func.return %{{[0-9]+}} | %[[S3]]

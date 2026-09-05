@@ -31,11 +31,11 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @spin
-// CHECK: do scope(%[[SCOPE:[0-9]+]])(%[[BODY:[0-9]+]]) {
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[BODY]] -> %[[A:[0-9]+]])
-// CHECK-NEXT: %[[FIRST:[0-9]+]] = scf.if %0 args(%[[A]]) -> !state (%[[T:[0-9]+]]) {
-// CHECK-NEXT: scf.continue %[[SCOPE]], %[[T]]
-// CHECK: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[FIRST]] -> %[[B:[0-9]+]])
-// CHECK-NEXT: %[[SECOND:[0-9]+]] = scf.if %0 args(%[[B]]) -> !state (%[[U:[0-9]+]]) {
-// CHECK-NEXT: scf.break %[[SCOPE]], %[[U]]
-// CHECK: scf.yield %[[SECOND]]
+// CHECK: do scope(%[[SCOPE:[0-9]+]])(| %[[BODY:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} | %[[A:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[BODY]] : !i32
+// CHECK-NEXT: | %[[FIRST:[0-9]+]] = scf.if %0 args(| %[[A]]) (| %[[T:[0-9]+]]) {
+// CHECK-NEXT: scf.continue %[[SCOPE]] | %[[T]]
+// CHECK: | %[[B:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[FIRST]]
+// CHECK-NEXT: | %[[SECOND:[0-9]+]] = scf.if %0 args(| %[[B]]) (| %[[U:[0-9]+]]) {
+// CHECK-NEXT: scf.break %[[SCOPE]] | %[[U]]
+// CHECK: scf.yield | %[[SECOND]]

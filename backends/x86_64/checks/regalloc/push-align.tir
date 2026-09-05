@@ -15,7 +15,7 @@ module {
 
 // CHECK: x86_64.push
 // CHECK-NOT: x86_64.add_imm {dst = rsp
-// CHECK: asm.vcall {callee = "g"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "g"
 // CHECK-NOT: x86_64.add_imm {dst = rsp
 // CHECK: x86_64.pop
 // CHECK: asm.vret

@@ -16,7 +16,7 @@ module {
   module_end
 }
 
-// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: x86_64.mov_load32 {{.*}} state(%[[ENTRY]] -> %[[READ:[0-9]+]])
-// CHECK-NEXT: x86_64.mov_store32 {{.*}} state(%[[READ]] -> %[[WRITTEN:[0-9]+]])
-// CHECK-NEXT: x86_64.mov_load32 {{.*}} state(%[[WRITTEN]] -> %{{[0-9]+}})
+// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[READ:[0-9]+]] = x86_64.mov_load32 {{.*}} | %[[ENTRY]]
+// CHECK-NEXT: | %[[WRITTEN:[0-9]+]] = x86_64.mov_store32 {{.*}} | %[[READ]]
+// CHECK-NEXT: | %{{[0-9]+}} = x86_64.mov_load32 {{.*}} | %[[WRITTEN]]

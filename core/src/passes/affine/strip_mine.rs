@@ -48,8 +48,9 @@ pub fn strip_mine(
         .regions()
         .last()
         .ok_or(PassError::RewriteFailed(op))?;
+    let deps = handle.dep_results().len();
     let types: Vec<TypeId> = handle
-        .results()
+        .value_results()
         .iter()
         .map(|&result| context.get_value(result).ty())
         .collect();
@@ -59,7 +60,7 @@ pub fn strip_mine(
         .get_block(context.get_region(body).block_ids()[0])
         .arguments()
         .len()
-        != types.len()
+        != types.len() + deps
     {
         return Err(PassError::RewriteFailed(op));
     }
@@ -84,43 +85,58 @@ pub fn strip_mine(
     let tile_args: Vec<Value> = types
         .iter()
         .map(|&ty| context.create_value(ty, None))
+        .chain((0..deps).map(|_| context.create_value(TypeId::DEPENDENCY, None)))
         .collect();
-    let tile_block = context.create_block(tile_args.clone());
+    let tile_block = context.create_block_with_dependencies(tile_args.clone(), deps);
     tile_region.add_block(tile_block.id());
     let base = tile_args[port].id();
     let end = tile_block.append_op(b::addi(context, base, stride.result(), ty).build());
-    let inner = tile_block.append_op(
-        scf::ForOpBuilder::new(context)
-            .lower_bound(base)
-            .upper_bound(end.result())
+    let ports = |ports: &[ValueId], body: crate::RegionId, lower, upper, step| {
+        let (values, deps) = ports.split_at(ports.len() - deps);
+        let mut builder = scf::ForOpBuilder::new(context)
+            .lower_bound(lower)
+            .upper_bound(upper)
             .step(step)
-            .inits(tile_args.iter().map(Value::id).collect())
+            .inits(values.to_vec())
             .result_types(types.clone())
-            .body(crate::clone::clone_region(context, body))
-            .build(),
-    );
+            .body(body);
+        for &dep in deps {
+            builder = builder.dep_operand(dep).dep_result();
+        }
+        builder.build()
+    };
+    let inner = tile_block.append_op(ports(
+        &tile_args.iter().map(Value::id).collect::<Vec<_>>(),
+        crate::clone::clone_region(context, body),
+        base,
+        end.result(),
+        step,
+    ));
     let mut yielded = context.get_op(inner.id()).results().to_vec();
     yielded[port] = end.result();
-    tile_block.append_op(scf::r#yield(context, yielded).build());
-    let main = scf::ForOpBuilder::new(context)
-        .lower_bound(lower)
-        .upper_bound(last.result())
-        .step(stride.result())
-        .inits(carried.inits())
-        .result_types(types.clone())
-        .body(tile_region.id())
-        .build();
+    let (values, dep_values) = yielded.split_at(yielded.len() - deps);
+    let mut yield_op = scf::r#yield(context, values.to_vec());
+    for &dep in dep_values {
+        yield_op = yield_op.dep_operand(dep);
+    }
+    tile_block.append_op(yield_op.build());
+    let main = ports(
+        &carried.inits(),
+        tile_region.id(),
+        lower,
+        last.result(),
+        stride.result(),
+    );
     rewriter.insert_op_before(&target, &main)?;
 
     let left = context.get_op(main.id()).results().to_vec();
-    let remainder = scf::ForOpBuilder::new(context)
-        .lower_bound(left[port])
-        .upper_bound(upper)
-        .step(step)
-        .inits(left)
-        .result_types(types)
-        .body(crate::clone::clone_region(context, body))
-        .build();
+    let remainder = ports(
+        &left,
+        crate::clone::clone_region(context, body),
+        left[port],
+        upper,
+        step,
+    );
     rewriter.insert_op_before(&target, &remainder)?;
 
     let results: Vec<ValueId> = context.get_op(remainder.id()).results().to_vec();

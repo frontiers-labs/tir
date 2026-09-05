@@ -17,13 +17,16 @@ pub struct RegionId(u32);
 pub enum RegionBody {
     Blocks(Vec<BlockId>),
     Nodes {
-        /// The region's own arguments. An ordered region has these too — they
-        /// are its entry block's arguments; see [`RegionHandle::ports`].
+        /// The region's own arguments, values first and dependencies trailing.
+        /// An ordered region has these too — they are its entry block's
+        /// arguments; see [`RegionHandle::ports`].
         ports: Vec<Value>,
+        dep_ports: u32,
         ops: Vec<OpId>,
         /// The values the region produces, in the order the enclosing operation
-        /// binds them.
+        /// binds them, with the dependencies it hands on trailing.
         results: Vec<ValueId>,
+        dep_results: u32,
     },
 }
 
@@ -54,12 +57,20 @@ impl Region {
         }
     }
 
-    pub(crate) fn new_nodes(ports: Vec<Value>, ops: Vec<OpId>, results: Vec<ValueId>) -> Region {
+    pub(crate) fn new_nodes(
+        ports: Vec<Value>,
+        dep_ports: usize,
+        ops: Vec<OpId>,
+        results: Vec<ValueId>,
+        dep_results: usize,
+    ) -> Region {
         Region {
             body: RegionBody::Nodes {
                 ports,
+                dep_ports: dep_ports as u32,
                 ops,
                 results,
+                dep_results: dep_results as u32,
             },
             parent_op: OpId::invalid(),
         }
@@ -72,6 +83,7 @@ impl Region {
                 ports,
                 ops,
                 results,
+                ..
             } => {
                 ports.capacity() * std::mem::size_of::<Value>()
                     + ops.capacity() * std::mem::size_of::<OpId>()
@@ -177,17 +189,44 @@ impl RegionHandle {
         self.context().region_op_ids(self.id)
     }
 
-    /// The region's arguments: its own for an unordered region, its entry
-    /// block's for an ordered one — the same values either way, so a reader
-    /// need not know which kind it holds.
+    /// The region's arguments, values first and dependencies trailing: its own
+    /// for an unordered region, its entry block's for an ordered one — the same
+    /// values either way, so a reader need not know which kind it holds.
     pub fn ports(&self) -> Vec<Value> {
         self.context().region_ports(self.id)
     }
 
-    /// The values an unordered region produces; empty for an ordered one, which
-    /// binds its results through its [`crate::RegionExit`] operations instead.
+    /// The arguments that carry a value.
+    pub fn value_arguments(&self) -> Vec<Value> {
+        let mut ports = self.ports();
+        ports.truncate(ports.len() - self.context().region_dep_counts(self.id).0);
+        ports
+    }
+
+    /// The arguments that are dependencies.
+    pub fn dep_arguments(&self) -> Vec<Value> {
+        let ports = self.ports();
+        ports[ports.len() - self.context().region_dep_counts(self.id).0..].to_vec()
+    }
+
+    /// The values an unordered region produces, dependencies trailing; empty
+    /// for an ordered one, which binds its results through its
+    /// [`crate::RegionExit`] operations instead.
     pub fn results(&self) -> Vec<ValueId> {
         self.context().region_results(self.id)
+    }
+
+    /// The results that carry a value.
+    pub fn value_results(&self) -> Vec<ValueId> {
+        let mut results = self.results();
+        results.truncate(results.len() - self.context().region_dep_counts(self.id).1);
+        results
+    }
+
+    /// The results that are dependencies.
+    pub fn dep_results(&self) -> Vec<ValueId> {
+        let results = self.results();
+        results[results.len() - self.context().region_dep_counts(self.id).1..].to_vec()
     }
 
     /// Replace the whole block list at once. Only [`Context::replace_region_contents`]

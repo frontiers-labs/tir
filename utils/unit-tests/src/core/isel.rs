@@ -1061,17 +1061,17 @@ fn memory_ops_select_via_interfaces() {
     // starts where it is allocated.
     let slot_ty = tir::ptr::PtrType::typed(&context, i32_ty);
     let slot = tir::ptr::ops::alloca(&context, 4u64, 4u64, slot_ty)
-        .state_result()
+        .dep_result()
         .build();
     let allocated = slot.state_result().expect("the allocation opens a chain");
     let store = tir::ptr::ops::store(&context, args[0], slot.result())
-        .state(allocated)
-        .state_result()
+        .dep_operand(allocated)
+        .dep_result()
         .build();
     let stored = store.state_result().expect("the store publishes a state");
     let loaded = tir::ptr::ops::load(&context, slot.result(), i32_ty)
-        .state(stored)
-        .state_result()
+        .dep_operand(stored)
+        .dep_result()
         .build();
     let result = loaded.result();
     func.body().append_op(slot);

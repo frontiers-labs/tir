@@ -178,12 +178,14 @@ pub fn emit_with(
     // as its trailing ports: the state the IR access read, and the state it
     // published, taken over as this instruction's own definition.
     let effects = spec.info.effects;
+    let mut deps = (0, 0);
     if effects.reads || effects.writes {
         let state = req
             .state
             .ok_or_else(|| PassError::RewriteFailed(req.op_id()))?;
         operand_values.push(state.observed);
         result_values.extend(state.published);
+        deps = (1, state.published.is_some() as usize);
     }
     let instance = NewOp::new_dynamic(
         spec.op,
@@ -192,7 +194,8 @@ pub fn emit_with(
         result_values,
         vec![],
         attributes,
-    );
+    )
+    .with_dependency_counts(deps.0, deps.1);
     Ok((spec.wrap)(context.add_operation(instance)))
 }
 

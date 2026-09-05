@@ -14,10 +14,10 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @axpy
-// CHECK-NEXT: %[[UNKNOWN:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %[[Y:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %[[X:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[X]] -> %[[X1:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[Y]] -> %[[Y1:[0-9]+]])
-// CHECK-NEXT: %[[EXPORT:[0-9]+]] = state.join %[[UNKNOWN]], %[[Y1]], %[[X1]] : !state
-// CHECK-NEXT: func.return state(%[[EXPORT]])
+// CHECK-NEXT: | %[[UNKNOWN:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[Y:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[X:[0-9]+]] = state.entry_state
+// CHECK-NEXT: %{{[0-9]+}} | %[[X1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[X]] : !i32
+// CHECK-NEXT: | %[[Y1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[Y]]
+// CHECK-NEXT: | %[[EXPORT:[0-9]+]] = state.join | %[[UNKNOWN]], %[[Y1]], %[[X1]]
+// CHECK-NEXT: func.return | %[[EXPORT]]

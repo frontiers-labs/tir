@@ -513,7 +513,7 @@ fn every_edit_bumps_the_spine() {
             let b = context.create_value(i32, None);
             let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
             body.append(add.id());
-            context.set_op_operands(add.id(), vec![b.id(), b.id()]);
+            context.set_op_operands(add.id(), vec![b.id(), b.id()], 0);
         }),
         ("replace value uses", |context, body| {
             let i32 = builtin::IntegerType::new(context, 32);
@@ -783,7 +783,7 @@ fn setting_every_operand_relinks_the_uses() {
     let context = Context::with_default_dialects();
     let (c, d, add) = add_fixture(&context);
 
-    context.set_op_operands(add, vec![d]);
+    context.set_op_operands(add, vec![d], 0);
 
     assert!(!context.is_used(c));
     assert_eq!(context.uses_of(d), [Use::new(add, 0)]);
@@ -805,10 +805,9 @@ fn appending_and_popping_an_operand_tracks_its_use() {
 fn use_indices_follow_a_port_into_its_place() {
     let context = Context::with_default_dialects();
     let (_, d, add) = add_fixture(&context);
-    let state = builtin::StateType::new(&context);
-    let token = context.create_value(state, None).id();
+    let token = context.create_dependency();
 
-    context.append_operand(add, token);
+    context.append_dep_operand(add, token);
     context.append_port_operand(add, d);
 
     let operands = context.get_op(add).operands();
@@ -832,12 +831,12 @@ fn replacing_value_uses_reaches_a_detached_op() {
     assert_eq!(context.use_count(d), 4);
 }
 
-/// The whole point of the storage layout: an operation is twenty-eight bytes
+/// The whole point of the storage layout: an operation is thirty-two bytes
 /// and a value twelve, so a hive chunk holds thousands of either and neither
 /// costs an allocation of its own. A field added without a plan breaks this.
 #[test]
 fn stored_entities_keep_their_size_budget() {
-    assert_eq!(std::mem::size_of::<tir::OpInstance>(), 28);
+    assert_eq!(std::mem::size_of::<tir::OpInstance>(), 32);
     assert_eq!(std::mem::size_of::<tir::Value>(), 12);
     // An attribute is its interned name plus an `AttributeValue`, whose widest
     // variant is `RegisterAttr::Assigned`.
@@ -850,10 +849,10 @@ fn stored_entities_keep_their_size_budget() {
 fn growing_an_op_promotes_its_run_and_keeps_its_uses() {
     let context = Context::with_default_dialects();
     let (c, d, add) = add_fixture(&context);
-    let state = builtin::StateType::new(&context);
+    let i32_ty = builtin::IntegerType::new(&context, 32);
 
     let extra: Vec<ValueId> = (0..5)
-        .map(|_| context.create_value(state, None).id())
+        .map(|_| context.create_value(i32_ty, None).id())
         .collect();
     for value in &extra {
         context.append_operand(add, *value);

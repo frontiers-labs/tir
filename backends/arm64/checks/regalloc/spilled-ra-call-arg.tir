@@ -33,4 +33,4 @@ module {
 
 // CHECK: arm64.orr {rd = %{{[0-9]+}}:[[SAVE:x[0-9]+]], rn = x31, rm = %{{[0-9]+}}:x0}
 // CHECK: arm64.orr {rd = x0
-// CHECK: asm.vcall {callee = "ext"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "ext"

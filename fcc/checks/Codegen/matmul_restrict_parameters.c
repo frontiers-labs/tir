@@ -20,9 +20,9 @@ void matmul_restrict_parameters(int *restrict a, int *restrict b,
 }
 
 // IR-LABEL: func.func @matmul_restrict_parameters
-// IR: scf.for {{.*}} iter_args(%[[I:[0-9]+]] = {{.*}} -> !i32, !state, !state, !state {
-// IR-NEXT: scf.for {{.*}} iter_args(%[[K:[0-9]+]] = {{.*}} -> !i32, !state, !state, !state {
-// IR-NEXT: scf.for {{.*}} iter_args(%[[J:[0-9]+]] = {{.*}} -> !i32, !state, !state, !state {
+// IR: scf.for {{.*}} iter_args(%[[I:[0-9]+]] = {{.*}} -> !i32 {
+// IR-NEXT: scf.for {{.*}} iter_args(%[[K:[0-9]+]] = {{.*}} -> !i32 {
+// IR-NEXT: scf.for {{.*}} iter_args(%[[J:[0-9]+]] = {{.*}} -> !i32 {
 // IR: shli %[[I]]
 // IR: addi %{{[0-9]+}}, %[[J]]
 // IR: shli %[[I]]

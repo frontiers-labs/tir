@@ -39,8 +39,8 @@ module {data_layout = #data_layout} {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @touch
 // The counter the outer loop enters on is still the one the row index reads.
-// CHECK: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[OUTER:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}})
-// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[INNER:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}})
+// CHECK: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[OUTER:[0-9]+]] = %{{[0-9]+}} | %{{[0-9]+}} = %{{[0-9]+}})
+// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[INNER:[0-9]+]] = %{{[0-9]+}} | %{{[0-9]+}} = %{{[0-9]+}})
 // CHECK-NEXT: %[[A:[0-9]+]] = extsi %[[OUTER]]
 // CHECK-NEXT: %[[B:[0-9]+]] = extsi %[[INNER]]
 // CHECK-NEXT: muli %[[B]], %{{[0-9]+}}

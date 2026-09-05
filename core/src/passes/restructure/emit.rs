@@ -129,8 +129,10 @@ impl Emitter<'_> {
     ) -> Result<(), PassError> {
         match args {
             Some(args) => {
-                let operands = self.port_values(args, block, env)?;
-                self.context.set_op_operands(op, operands);
+                let args = self.deps_last(args);
+                let operands = self.port_values(&args, block, env)?;
+                self.context
+                    .set_op_operands(op, operands, self.dep_count(&args));
             }
             None => {
                 self.bind_undefined_reads(op, block, env)?;
@@ -170,10 +172,8 @@ impl Emitter<'_> {
         env: &mut Env,
     ) -> Result<(), PassError> {
         let ports = self.ports(arms, self.live.at(continuation).clone());
-        let types = ports
-            .iter()
-            .map(|&var| self.cfg.var_types[var])
-            .collect::<Vec<_>>();
+        let types = self.value_types(&ports);
+        let deps = self.dep_count(&ports);
         let regions = arms
             .iter()
             .map(|arm| self.arm(arm, &ports, env))
@@ -182,23 +182,27 @@ impl Emitter<'_> {
         let op = match decision {
             Decision::If(pred) => {
                 let condition = self.read_src(block, env, pred)?;
-                scf::IfOpBuilder::new(self.context)
+                let mut gate = scf::IfOpBuilder::new(self.context)
                     .condition(condition)
                     .then_body(regions[0])
                     .else_body(regions[1])
-                    .result_types(types)
-                    .build()
-                    .id()
+                    .result_types(types);
+                for _ in 0..deps {
+                    gate = gate.dep_result();
+                }
+                gate.build().id()
             }
             Decision::Switch(var, cases) => {
                 let predicate = self.read(block, env, var)?;
-                scf::SwitchOpBuilder::new(self.context)
+                let mut gate = scf::SwitchOpBuilder::new(self.context)
                     .predicate(predicate)
                     .cases(cases)
                     .arms(regions)
-                    .result_types(types)
-                    .build()
-                    .id()
+                    .result_types(types);
+                for _ in 0..deps {
+                    gate = gate.dep_result();
+                }
+                gate.build().id()
             }
         };
         self.context.get_block(block).append(op);
@@ -216,12 +220,7 @@ impl Emitter<'_> {
         let mut inner = env.clone();
         self.statements(arm, block.id(), &mut inner)?;
         let yielded = self.port_values(ports, block.id(), &inner)?;
-        block.append(
-            scf::YieldOpBuilder::new(self.context)
-                .values(yielded)
-                .build()
-                .id(),
-        );
+        block.append(self.yield_ports(yielded, self.dep_count(ports)).id());
         Ok(region.id())
     }
 
@@ -239,18 +238,10 @@ impl Emitter<'_> {
         let mut needed = self.live.at(self.cfg.loops[id].body_entry).clone();
         needed.extend(self.live.along(self.cfg, &exit));
         let ports = self.ports(&[body], needed);
-        let types = ports
-            .iter()
-            .map(|&var| self.cfg.var_types[var])
-            .collect::<Vec<_>>();
+        let deps = self.dep_count(&ports);
 
         let condition_region = self.context.create_region();
-        let condition_block = self.context.create_block(
-            types
-                .iter()
-                .map(|&ty| self.context.create_value(ty, None))
-                .collect(),
-        );
+        let condition_block = self.port_block(&ports);
         condition_region.add_block(condition_block.id());
         let mut inner = env.clone();
         for (port, argument) in ports.iter().zip(condition_block.arguments()) {
@@ -259,41 +250,35 @@ impl Emitter<'_> {
         self.statements(body, condition_block.id(), &mut inner)?;
         let repeat = self.read_src(condition_block.id(), &inner, pred)?;
         let carried = self.port_values(&ports, condition_block.id(), &inner)?;
-        condition_block.append(
-            scf::ConditionOpBuilder::new(self.context)
-                .condition(repeat)
-                .values(carried)
-                .build()
-                .id(),
-        );
+        let (values, dep_values) = carried.split_at(carried.len() - deps);
+        let mut condition = scf::ConditionOpBuilder::new(self.context)
+            .condition(repeat)
+            .values(values.to_vec());
+        for &dep in dep_values {
+            condition = condition.dep_operand(dep);
+        }
+        condition_block.append(condition.build().id());
 
         // The body region only hands the carried values back: the iteration
         // itself lives in the condition region, which is what makes the loop
         // tail-controlled.
         let body_region = self.context.create_region();
-        let body_block = self.context.create_block(
-            types
-                .iter()
-                .map(|&ty| self.context.create_value(ty, None))
-                .collect(),
-        );
+        let body_block = self.port_block(&ports);
         body_region.add_block(body_block.id());
         let latched = body_block.arguments().iter().map(Value::id).collect();
-        body_block.append(
-            scf::YieldOpBuilder::new(self.context)
-                .values(latched)
-                .build()
-                .id(),
-        );
+        body_block.append(self.yield_ports(latched, deps).id());
 
         let inits = self.port_values(&ports, block, env)?;
-        let op = scf::WhileOpBuilder::new(self.context)
+        let (values, dep_values) = inits.split_at(inits.len() - deps);
+        let mut loop_op = scf::WhileOpBuilder::new(self.context)
             .condition_region(condition_region.id())
             .body(body_region.id())
-            .inits(inits)
-            .result_types(types)
-            .build()
-            .id();
+            .inits(values.to_vec())
+            .result_types(self.value_types(&ports));
+        for &dep in dep_values {
+            loop_op = loop_op.dep_operand(dep).dep_result();
+        }
+        let op = loop_op.build().id();
         self.context.get_block(block).append(op);
         self.bind_results(op, &ports, env);
         Ok(())
@@ -313,7 +298,46 @@ impl Emitter<'_> {
         for arm in arms {
             assigned.extend(self.assigned(arm));
         }
-        assigned.intersection(&needed).copied().collect()
+        let ports: Vec<VarId> = assigned.intersection(&needed).copied().collect();
+        self.deps_last(&ports)
+    }
+
+    /// `ports` with the dependencies moved after the values: the order every
+    /// port list keeps its two partitions in.
+    fn deps_last(&self, ports: &[VarId]) -> Vec<VarId> {
+        let is_dep = |var: &VarId| self.cfg.var_types[*var] == TypeId::DEPENDENCY;
+        let mut ordered: Vec<VarId> = ports.iter().copied().filter(|var| !is_dep(var)).collect();
+        ordered.extend(ports.iter().copied().filter(is_dep));
+        ordered
+    }
+
+    /// How many trailing ports of a [`Self::deps_last`] list are dependencies.
+    fn dep_count(&self, ports: &[VarId]) -> usize {
+        ports
+            .iter()
+            .filter(|var| self.cfg.var_types[**var] == TypeId::DEPENDENCY)
+            .count()
+    }
+
+    /// The types of the value ports: the dependencies trailing `ports` name none.
+    fn value_types(&self, ports: &[VarId]) -> Vec<TypeId> {
+        ports[..ports.len() - self.dep_count(ports)]
+            .iter()
+            .map(|&var| self.cfg.var_types[var])
+            .collect()
+    }
+
+    /// A block entered on `ports`: one argument per value, then one dependency
+    /// per chain.
+    fn port_block(&self, ports: &[VarId]) -> crate::BlockHandle {
+        let deps = self.dep_count(ports);
+        let arguments = self
+            .value_types(ports)
+            .into_iter()
+            .chain(std::iter::repeat_n(TypeId::DEPENDENCY, deps))
+            .map(|ty| self.context.create_value(ty, None))
+            .collect();
+        self.context.create_block_with_dependencies(arguments, deps)
     }
 
     /// The variables a statement tree leaves with a new value.
@@ -367,6 +391,16 @@ impl Emitter<'_> {
 
     /// One value per port, read from `env` or invented where nothing reaching
     /// this point ever assigned the variable.
+    /// A yield of `values`, the trailing `deps` of which are dependencies.
+    fn yield_ports(&self, values: Vec<ValueId>, deps: usize) -> scf::YieldOp {
+        let (values, dep_values) = values.split_at(values.len() - deps);
+        let mut yield_op = scf::YieldOpBuilder::new(self.context).values(values.to_vec());
+        for &dep in dep_values {
+            yield_op = yield_op.dep_operand(dep);
+        }
+        yield_op.build()
+    }
+
     fn port_values(
         &self,
         ports: &[VarId],

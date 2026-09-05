@@ -2,7 +2,7 @@
 
 module {
   %fn_bad = func.func @bad(%0: !ptr.p, %1: !i32) {
-    %2 = ptr.load %0 : !i32 state(%1)
+    %2 = ptr.load %0 | %1 : !i32
     func.return
   }
   module_end

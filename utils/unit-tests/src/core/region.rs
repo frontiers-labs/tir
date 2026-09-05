@@ -16,8 +16,10 @@ fn quad(context: &Context) -> (OpId, OpId) {
     let quad = ops::addi(context, double.result(), double.result(), i32_ty).build();
     let body = context.create_nodes_region(
         vec![port],
+        0,
         vec![double.id(), quad.id()],
         vec![quad.result()],
+        0,
     );
     let function = func::ops::lambda(context, "quad", i32_ty, &body).build();
     let module = builtin::ops::module(context, None).build();

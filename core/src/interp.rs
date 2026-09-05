@@ -14,8 +14,8 @@ use crate::{
     BlockId, Conditional, ConstantLike, Context, CountedLoop, DataLayout, LoopLike, OpId,
     Operation, RegionId, Symbol, ValueId,
     builtin::{
-        ConstantFOp, ConstantOp, FloatType, IntegerType, MakeTupleOp, StateType, TokenType,
-        TupleGetOp, UnitType,
+        ConstantFOp, ConstantOp, FloatType, IntegerType, MakeTupleOp, TokenType, TupleGetOp,
+        UnitType,
     },
     func::{CallOp, FuncOp, ReturnOp},
     ptr::{AllocaOp, LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp},
@@ -26,7 +26,8 @@ use crate::{
 
 /// A concrete interpreter value: integers of explicit width, floats, tuples,
 /// pointers as byte offsets into one flat memory, and the linear/ordering
-/// tokens (`!state`, `!token`) that carry no bits.
+/// token (`!token`) that carries no bits. Dependencies are never bound: they
+/// order evaluation and evaluate to nothing.
 #[derive(Clone, Debug)]
 pub enum Value {
     Int(APInt),
@@ -35,7 +36,6 @@ pub enum Value {
     Ptr(u64),
     /// A λ node: what a call takes as its callee.
     Function(OpId),
-    State,
     Token,
     Unit,
 }
@@ -180,8 +180,8 @@ impl Memory {
 }
 
 /// Concrete evaluation of one leaf operation: `operands[i]` is the value of
-/// operand `i`; the returned values bind to the op's results in order,
-/// including any trailing `!state` result.
+/// value operand `i`; the returned values bind to the op's value results in
+/// order. Dependencies carry nothing and are neither passed nor returned.
 pub trait Interp {
     fn evaluate(&self, operands: &[Value], memory: &mut Memory) -> Result<Vec<Value>>;
 }
@@ -268,7 +268,9 @@ impl Interpreter<'_> {
         for &result in &results {
             self.demand(result, region, &mut evaluated)?;
         }
-        results
+        self.context
+            .get_region(region)
+            .value_results()
             .iter()
             .map(|&result| self.value_of(result))
             .collect::<Result<Vec<_>>>()
@@ -314,7 +316,7 @@ impl Interpreter<'_> {
     }
 
     fn bind_results(&mut self, op_id: OpId, values: Vec<Value>) {
-        let results = self.context.get_op(op_id).results().to_vec();
+        let results = self.context.get_op(op_id).value_results().to_vec();
         for (result, value) in results.into_iter().zip(values) {
             self.env.insert(result, value);
         }
@@ -339,18 +341,7 @@ impl Interpreter<'_> {
             return Ok(Some(Flow::Values(self.operand_values(&instance)?)));
         }
         if instance.is::<ReturnOp>() {
-            let mut values = self.operand_values(&instance)?;
-            // A threaded `!state` operand names memory flowing out of the
-            // function; it is not part of the returned tuple.
-            let state = StateType::new(self.context);
-            if instance
-                .operands()
-                .last()
-                .is_some_and(|&last| self.context.get_value(last).ty() == state)
-            {
-                values.pop();
-            }
-            return Ok(Some(Flow::Return(values)));
+            return Ok(Some(Flow::Return(self.operand_values(&instance)?)));
         }
         if instance.is::<BreakOp>() || instance.is::<ContinueOp>() {
             let mut carried = self.operand_values(&instance)?;
@@ -570,13 +561,7 @@ impl Interpreter<'_> {
             .iter()
             .map(|&arg| self.value_of(arg))
             .collect::<Result<_>>()?;
-        let mut returned = self.call_function(definition, arguments)?;
-        // The call's own `!state` result, when present, is the callee's
-        // outgoing memory chain.
-        if op.state_result().is_some() {
-            returned.push(Value::State);
-        }
-        Ok(Flow::Values(returned))
+        Ok(Flow::Values(self.call_function(definition, arguments)?))
     }
 
     fn call_function(&mut self, function: OpId, arguments: Vec<Value>) -> Result<Vec<Value>> {
@@ -618,7 +603,7 @@ impl Interpreter<'_> {
 
     fn operand_values(&self, instance: &crate::OpHandle) -> Result<Vec<Value>> {
         instance
-            .operands()
+            .value_operands()
             .iter()
             .map(|&operand| self.value_of(operand))
             .collect()
@@ -711,7 +696,7 @@ fn to_sem_value(value: &Value, pointer_width: u32) -> Result<sem::Value> {
         Value::Int(int) => sem::Value::Int(int.clone()),
         Value::Float(float) => sem::Value::Float(float.clone()),
         Value::Ptr(address) => sem::Value::Int(APInt::new(pointer_width, *address)),
-        Value::Tuple(_) | Value::Function(_) | Value::State | Value::Token | Value::Unit => {
+        Value::Tuple(_) | Value::Function(_) | Value::Token | Value::Unit => {
             return Err(InterpError::Message(
                 "value kind has no semantic-expression form".into(),
             ));
@@ -849,30 +834,26 @@ impl Interp for TupleGetOp {
 
 impl Interp for EntryStateOp {
     fn evaluate(&self, _operands: &[Value], _memory: &mut Memory) -> Result<Vec<Value>> {
-        Ok(vec![Value::State])
+        Ok(Vec::new())
     }
 }
 
 impl Interp for JoinOp {
     fn evaluate(&self, _operands: &[Value], _memory: &mut Memory) -> Result<Vec<Value>> {
-        Ok(vec![Value::State])
+        Ok(Vec::new())
     }
 }
 
 impl Interp for SplitOp {
     fn evaluate(&self, _operands: &[Value], _memory: &mut Memory) -> Result<Vec<Value>> {
-        Ok(vec![Value::State; self.states().len()])
+        Ok(Vec::new())
     }
 }
 
 impl Interp for AllocaOp {
     fn evaluate(&self, _operands: &[Value], memory: &mut Memory) -> Result<Vec<Value>> {
         let address = memory.alloc(self.size(), self.align());
-        let mut results = vec![Value::Ptr(address)];
-        if self.state_result().is_some() {
-            results.push(Value::State);
-        }
-        Ok(results)
+        Ok(vec![Value::Ptr(address)])
     }
 }
 
@@ -886,11 +867,7 @@ impl Interp for LoadOp {
         };
         let ty = context.get_value(self.result()).ty();
         let value = read_typed(memory, context.get_type_data(ty).as_ref(), *address)?;
-        let mut results = vec![value];
-        if self.state_result().is_some() {
-            results.push(Value::State);
-        }
-        Ok(results)
+        Ok(vec![value])
     }
 }
 
@@ -909,11 +886,7 @@ impl Interp for StoreOp {
             *address,
             &operands[0],
         )?;
-        let mut results = Vec::new();
-        if self.state_result().is_some() {
-            results.push(Value::State);
-        }
-        Ok(results)
+        Ok(Vec::new())
     }
 }
 
@@ -932,11 +905,7 @@ impl Interp for MemcpyOp {
         let size = operands[2].to_i64().unwrap_or_default() as u64;
         let bytes = memory.read(*source, size)?;
         memory.write(*destination, &bytes)?;
-        let mut results = Vec::new();
-        if self.state_result().is_some() {
-            results.push(Value::State);
-        }
-        Ok(results)
+        Ok(Vec::new())
     }
 }
 
@@ -950,11 +919,7 @@ impl Interp for MemsetOp {
         let fill = operands[1].to_i64().unwrap_or_default() as u8;
         let size = operands[2].to_i64().unwrap_or_default() as u64;
         memory.write(*destination, &vec![fill; size as usize])?;
-        let mut results = Vec::new();
-        if self.state_result().is_some() {
-            results.push(Value::State);
-        }
-        Ok(results)
+        Ok(Vec::new())
     }
 }
 

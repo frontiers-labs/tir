@@ -31,13 +31,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes};
 use crate::analysis::{AliasFacts, AnalysisManager, Base, PointerFact};
-use crate::builtin::StateType;
 use crate::func::{CallOp, FuncOp, ReturnOp};
 use crate::ptr::MemcpyOp;
 use crate::state::{EntryStateOpBuilder, JoinOpBuilder, SplitOpBuilder};
 use crate::{
     Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation, OperationRef, Pass, PassError,
-    PassTarget, PromotableAllocation, Rewriter, TypeId, ValueId, scf,
+    PassTarget, PromotableAllocation, Rewriter, ValueId, scf,
 };
 
 #[derive(Default)]
@@ -102,7 +101,6 @@ impl Pass for ThreadStatePass {
 
         // Every chain but a slot's starts at the memory the function was entered
         // with; a slot's starts where it is allocated.
-        let state = StateType::new(context);
         let mut chains = BTreeMap::new();
         let rooted_at_entry = std::iter::once(Chain::Conservative).chain(
             objects
@@ -113,14 +111,13 @@ impl Pass for ThreadStatePass {
                 .map(Chain::Object),
         );
         for (index, chain) in rooted_at_entry.enumerate() {
-            let root = EntryStateOpBuilder::new(context).result_type(state).build();
+            let root = EntryStateOpBuilder::new(context).dep_result().build();
             entry_block.insert(index, root.id());
             chains.insert(chain, ChainState::opened(root.result()));
         }
 
         Threader {
             context,
-            state,
             objects,
             chains,
             scopes: Vec::new(),
@@ -196,7 +193,6 @@ impl Objects<'_> {
 
 struct Threader<'a> {
     context: &'a Context,
-    state: TypeId,
     objects: Objects<'a>,
     /// The state each chain has reached at the point being walked.
     chains: BTreeMap<Chain, ChainState>,
@@ -211,7 +207,7 @@ impl Threader<'_> {
             let op = self.context.get_op(op_id);
             match classify(&op) {
                 Some(Kind::Open(slot)) if self.opens(slot) => {
-                    let result = self.context.grow_port(op_id, self.state, None, |_, _| None);
+                    let result = self.context.grow_dep_port(op_id, None, |_, _| None);
                     self.chains.insert(
                         Chain::Object(Base::Alloca(slot)),
                         ChainState::opened(result),
@@ -220,31 +216,31 @@ impl Threader<'_> {
                 Some(Kind::Read(address)) => {
                     let chain = self.chain(address);
                     let observed = self.chains[&chain].written;
-                    let result =
-                        self.context
-                            .grow_port(op_id, self.state, Some(observed), |_, _| None);
+                    let result = self
+                        .context
+                        .grow_dep_port(op_id, Some(observed), |_, _| None);
                     self.chain_mut(chain).reads.push(result);
                 }
                 Some(Kind::Write(address)) => {
                     let chain = self.chain(address);
                     let observed = self.settle(chain, op_id);
-                    let result =
-                        self.context
-                            .grow_port(op_id, self.state, Some(observed), |_, _| None);
+                    let result = self
+                        .context
+                        .grow_dep_port(op_id, Some(observed), |_, _| None);
                     self.chains.insert(chain, ChainState::opened(result));
                 }
                 Some(Kind::Clobber) => {
                     let exposed = self.exposed();
                     let observed = self.merge(&exposed, op_id);
-                    let result =
-                        self.context
-                            .grow_port(op_id, self.state, Some(observed), |_, _| None);
+                    let result = self
+                        .context
+                        .grow_dep_port(op_id, Some(observed), |_, _| None);
                     self.spread(&exposed, result, op_id);
                 }
                 Some(Kind::Export) => {
                     let exposed = self.exposed();
                     let exported = self.merge(&exposed, op_id);
-                    self.context.append_operand(op_id, exported);
+                    self.context.append_dep_operand(op_id, exported);
                 }
                 // A slot the facts cannot tell from another object opens no chain
                 // of its own: its accesses join the conservative one.
@@ -258,7 +254,7 @@ impl Threader<'_> {
                         .to_vec();
                     for chain in chains {
                         let leaving = self.settle(chain, op_id);
-                        self.context.append_operand(op_id, leaving);
+                        self.context.append_dep_operand(op_id, leaving);
                     }
                 }
                 None if subtree_touches_memory(self.context, &op)
@@ -305,7 +301,7 @@ impl Threader<'_> {
             .map(|entry| {
                 carried
                     .iter()
-                    .map(|_| context.append_block_argument(entry.id(), self.state).id())
+                    .map(|_| context.append_dep_block_argument(entry.id()).id())
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -338,7 +334,7 @@ impl Threader<'_> {
             // A region that leaves through an exit fed the ports along that edge.
             if self.exit_chains(&context.get_op(terminator)).is_none() {
                 for value in leaving {
-                    context.append_operand(terminator, value);
+                    context.append_dep_operand(terminator, value);
                 }
             }
         }
@@ -349,12 +345,12 @@ impl Threader<'_> {
 
         for &chain in &carried {
             let init = self.settle(chain, op.id);
-            context.append_operand(op.id, init);
+            context.append_dep_operand(op.id, init);
         }
         for &chain in &carried {
             // The ports the op already carries are wired up; all that is left is
             // the result naming the state it leaves behind.
-            let result = context.grow_port(op.id, self.state, None, |_, _| None);
+            let result = context.grow_dep_port(op.id, None, |_, _| None);
             self.chains.insert(chain, ChainState::opened(result));
         }
     }
@@ -454,10 +450,11 @@ impl Threader<'_> {
             self.chains.insert(*only, ChainState::opened(state));
             return;
         }
-        let op = SplitOpBuilder::new(self.context)
-            .state(state)
-            .result_types(vec![self.state; chains.len()])
-            .build();
+        let mut op = SplitOpBuilder::new(self.context).dep_operand(state);
+        for _ in chains {
+            op = op.dep_result();
+        }
+        let op = op.build();
         let block = self.block_of(after);
         block.insert(self.position_of(after) + 1, op.id());
         for (&chain, &named) in chains.iter().zip(op.states().iter()) {
@@ -466,10 +463,11 @@ impl Threader<'_> {
     }
 
     fn join(&mut self, states: Vec<ValueId>, before: OpId) -> ValueId {
-        let op = JoinOpBuilder::new(self.context)
-            .states(states)
-            .result_type(self.state)
-            .build();
+        let mut op = JoinOpBuilder::new(self.context).dep_result();
+        for state in states {
+            op = op.dep_operand(state);
+        }
+        let op = op.build();
         self.block_of(before)
             .insert(self.position_of(before), op.id());
         op.result()
@@ -610,19 +608,15 @@ fn threadable(context: &Context, block: &BlockHandle) -> bool {
     })
 }
 
-/// Whether `op` can carry a chain across its regions as a port.
-/// Whether any operation already names a memory state.
+/// Whether any operation already names a dependency.
 fn already_threaded(context: &Context, ops: &[OpId]) -> bool {
-    let state = StateType::new(context);
     ops.iter().any(|&op_id| {
         let op = context.get_op(op_id);
-        op.operands()
-            .iter()
-            .chain(op.results().iter())
-            .any(|&value| context.get_value(value).ty() == state)
+        !op.dep_operands().is_empty() || !op.dep_results().is_empty()
     })
 }
 
+/// Whether `op` can carry a chain across its regions as a port.
 fn carries_state(op: &OpHandle) -> bool {
     op.is::<scf::ForOp>()
         || op.is::<scf::WhileOp>()
@@ -652,29 +646,14 @@ pub fn unthread(
     if !already_threaded(context, &ops) {
         return Ok(false);
     }
-    let state = StateType::new(context);
-    let is_state =
-        |value: &ValueId| context.has_value(*value) && context.get_value(*value).ty() == state;
-
     for &op in &ops {
-        while context.get_op(op).operands().last().is_some_and(is_state) {
-            context.pop_operand(op);
-        }
+        context.clear_dep_operands(op);
     }
     for block in blocks_under(context, body) {
-        let handle = context.get_block(block);
-        while handle
-            .arguments()
-            .last()
-            .is_some_and(|argument| context.has_value(argument.id()) && argument.ty() == state)
-        {
-            context.remove_block_argument(block, handle.arguments().len() - 1);
-        }
+        context.clear_dep_arguments(block);
     }
     for &op in &ops {
-        while context.get_op(op).results().last().is_some_and(is_state) {
-            context.pop_result(op);
-        }
+        context.clear_dep_results(op);
     }
     for &op in &ops {
         if context.get_op(op).dialect().as_str() == "state" {

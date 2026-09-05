@@ -16,7 +16,7 @@ module {
   module_end
 }
 
-// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: riscv.lw {{.*}} state(%[[ENTRY]] -> %[[READ:[0-9]+]])
-// CHECK-NEXT: riscv.sw {{.*}} state(%[[READ]] -> %[[WRITTEN:[0-9]+]])
-// CHECK-NEXT: riscv.lw {{.*}} state(%[[WRITTEN]] -> %{{[0-9]+}})
+// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[READ:[0-9]+]] = riscv.lw {{.*}} | %[[ENTRY]]
+// CHECK-NEXT: | %[[WRITTEN:[0-9]+]] = riscv.sw {{.*}} | %[[READ]]
+// CHECK-NEXT: | %{{[0-9]+}} = riscv.lw {{.*}} | %[[WRITTEN]]

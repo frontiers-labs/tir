@@ -26,5 +26,5 @@ module {
 }
 
 // CHECK: asm.symbol {{.*}}caller
-// CHECK: asm.vcall {callee = "callee"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "callee"
 // CHECK: asm.symbol {{.*}}callee

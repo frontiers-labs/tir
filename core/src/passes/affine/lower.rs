@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use crate::analysis::affine::{AffineForm, AffineView};
-use crate::builtin::{StateType, ops as b};
+use crate::builtin::ops as b;
 use crate::{
     BlockHandle, Context, CountedLoop, LoopLike, OpId, Operation, OperationRef, PassError,
     RegionId, Rewriter, TypeId, Value, ValueId, scf,
@@ -44,7 +44,6 @@ pub(super) struct Nest {
     /// The states the nest is entered with and the results it leaves them in.
     entry_states: Vec<ValueId>,
     exit_states: Vec<ValueId>,
-    state: TypeId,
 }
 
 /// A bound of the rebuilt nest. The nest is rectangular, so every bound is
@@ -96,13 +95,12 @@ impl Nest {
 
     /// Read the nest, or refuse it.
     pub(super) fn read(context: &Context, view: &AffineView) -> Option<Self> {
-        let state = StateType::new(context);
         let mut bounds = Vec::new();
         let mut states: Option<usize> = None;
         for (depth, level) in view.loops.iter().enumerate() {
             let op = context.get_op(level.op);
             let counted = op.clone().as_interface::<dyn CountedLoop>()?;
-            let ports = ports(context, level.op, level.counter, state)?;
+            let ports = ports(context, level.op, level.counter)?;
             if *states.get_or_insert(ports.states.len()) != ports.states.len() {
                 return None;
             }
@@ -121,12 +119,12 @@ impl Nest {
 
         let root = context.get_op(view.root);
         let innermost = view.loops.last()?;
-        let inner_ports = ports(context, innermost.op, innermost.counter, state)?;
+        let inner_ports = ports(context, innermost.op, innermost.counter)?;
         let body = *context.get_op(innermost.op).regions().last()?;
         crate::analysis::affine::body_block(context, innermost.op)?;
 
         let carried = root.clone().as_interface::<dyn LoopLike>()?;
-        let root_ports = ports(context, view.root, view.loops[0].counter, state)?;
+        let root_ports = ports(context, view.root, view.loops[0].counter)?;
         // The counter the nest leaves behind is not a counter of the rebuilt
         // nest, so nothing may be reading it.
         if root_ports
@@ -155,7 +153,6 @@ impl Nest {
                 .iter()
                 .map(|&port| carried.finals()[port])
                 .collect(),
-            state,
         })
     }
 }
@@ -169,7 +166,8 @@ struct Ports {
     states: Vec<usize>,
 }
 
-fn ports(context: &Context, op: OpId, counter: Option<ValueId>, state: TypeId) -> Option<Ports> {
+fn ports(context: &Context, op: OpId, counter: Option<ValueId>) -> Option<Ports> {
+    let deps = context.get_op(op).dep_results().len();
     let carried = context.get_op(op).as_interface::<dyn LoopLike>()?;
     let arguments = carried.carried_args();
     // A loop whose body opens a token scope holds a `break` or a `continue`, and
@@ -183,7 +181,7 @@ fn ports(context: &Context, op: OpId, counter: Option<ValueId>, state: TypeId) -
     for (port, &argument) in arguments.iter().enumerate() {
         if Some(argument) == counter {
             counter_port = Some(port);
-        } else if context.get_value(argument).ty() == state {
+        } else if port >= arguments.len() - deps {
             states.push(port);
         } else {
             return None;
@@ -211,12 +209,7 @@ fn chains_through(context: &Context, view: &AffineView, depth: usize, outer: &Po
     let Some(carried) = context.get_op(inner).as_interface::<dyn LoopLike>() else {
         return false;
     };
-    let Some(ports) = ports(
-        context,
-        inner,
-        view.loops[depth + 1].counter,
-        StateType::new(context),
-    ) else {
+    let Some(ports) = ports(context, inner, view.loops[depth + 1].counter) else {
         return false;
     };
     // Nothing else may sit between the two: an op that merges chains would be
@@ -468,26 +461,27 @@ impl<'a> Lowering<'a> {
             .chain(
                 states
                     .iter()
-                    .map(|_| self.context.create_value(self.nest.state, None)),
+                    .map(|_| self.context.create_value(TypeId::DEPENDENCY, None)),
             )
             .collect();
         let inner_states: Vec<ValueId> = arguments[1..].iter().map(Value::id).collect();
-        let block = self.context.create_block(arguments);
+        let block = self
+            .context
+            .create_block_with_dependencies(arguments, states.len());
         let region = self.context.create_region();
         region.add_block(block.id());
 
-        let mut types = vec![ty];
-        types.extend(states.iter().map(|_| self.nest.state));
-        let mut inits = vec![lower];
-        inits.extend(states.iter().copied());
-        let loop_op = scf::ForOpBuilder::new(self.context)
+        let mut builder = scf::ForOpBuilder::new(self.context)
             .lower_bound(lower)
             .upper_bound(upper)
             .step(step)
-            .inits(inits)
-            .result_types(types)
-            .body(region.id())
-            .build();
+            .inits(vec![lower])
+            .result_types(vec![ty])
+            .body(region.id());
+        for &state in &states {
+            builder = builder.dep_operand(state).dep_result();
+        }
+        let loop_op = builder.build();
         self.place(site, loop_op.id());
         if key == dimension {
             self.built.insert(dimension, loop_op.id());
@@ -503,9 +497,11 @@ impl<'a> Lowering<'a> {
 
         let latch = b::addi(self.context, counter.id(), step, ty).build();
         self.context.get_block(block.id()).append(latch.id());
-        let mut yielded = vec![latch.result()];
-        yielded.extend(left);
-        let terminator = scf::r#yield(self.context, yielded).build();
+        let mut terminator = scf::r#yield(self.context, vec![latch.result()]);
+        for state in left {
+            terminator = terminator.dep_operand(state);
+        }
+        let terminator = terminator.build();
         self.context.get_block(block.id()).append(terminator.id());
 
         let results = self.context.get_op(loop_op.id()).results().to_vec();

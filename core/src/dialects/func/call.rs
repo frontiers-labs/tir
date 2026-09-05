@@ -62,7 +62,7 @@ impl CallOp {
     }
 
     pub fn args(&self) -> Vec<ValueId> {
-        self.operands()[1..self.operands().len() - self.state_operand().is_some() as usize].to_vec()
+        self.value_operands()[1..].to_vec()
     }
 
     pub fn has_result_address(&self) -> bool {
@@ -87,8 +87,15 @@ impl CallOp {
         let ret_type = context.get_value(self.result()).ty();
         let is_unit = ret_type == UnitType::new(&context);
 
+        // A unit result is not spelled, so the binding is written by hand:
+        // the value, the dependencies, and `=` only where something is bound.
+        let published = self.0.dep_results();
         if !is_unit {
-            fmt.write(format!("%{} = ", self.result().number()))?;
+            fmt.write(format!("%{}", self.result().number()))?;
+        }
+        tir::dependency::print_dep_list(fmt, &published, !is_unit)?;
+        if !is_unit || !published.is_empty() {
+            fmt.write(" = ")?;
         }
         fmt.write(format!("func.call %{}", self.callee().number()))?;
 
@@ -122,7 +129,7 @@ impl CallOp {
             fmt.write(format!(" callee @{symbol}"))?;
         }
         super::print_argument_alignments(fmt, &self.argument_alignments())?;
-        crate::builtin::print_state_clause(fmt, self.state_operand(), self.state_result())?;
+        tir::dependency::print_dep_operands(fmt, &self.0)?;
         fmt.write("\n")
     }
 
@@ -150,17 +157,12 @@ impl CallOp {
             .transpose()?;
         let argument_alignments = super::parse_argument_alignments(parser, context)?;
 
-        let state = crate::builtin::parse_state_clause(parser, context)?;
-
         let mut builder = CallOpBuilder::new(context)
             .callee(callee)
             .args(args)
             .result_type(ret_type);
-        if let Some(operand) = state.operand {
-            builder = builder.state(operand);
-        }
-        if state.result_name.is_some() {
-            builder = builder.state_result();
+        for dep in tir::dependency::parse_dep_operands(parser, context)? {
+            builder = builder.dep_operand(dep);
         }
         if result_address {
             builder = builder.result_address();
@@ -171,9 +173,7 @@ impl CallOp {
         if let Some(argument_alignments) = argument_alignments {
             builder = builder.attr("argument_alignments", argument_alignments);
         }
-        let op = builder.build();
-        bind_state_result(parser, &state, op.state_result());
-        Ok(Box::new(op))
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -281,17 +281,6 @@ fn parse_ret_type(
             .ok_or_else(|| (parser.span(), Error::ExpectedType))
     } else {
         Ok(UnitType::new(context))
-    }
-}
-
-/// Bind the name a parsed `state(... -> %n)` clause gave the state the op produces.
-fn bind_state_result(
-    parser: &mut tir::parse::text::Parser,
-    state: &crate::builtin::StateClause,
-    result: Option<ValueId>,
-) {
-    if let (Some(name), Some(result)) = (state.result_name.as_deref(), result) {
-        parser.define_value(name, result);
     }
 }
 

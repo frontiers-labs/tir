@@ -410,6 +410,13 @@ pub fn print_machine_op<T: tir::Operation>(
 ) -> Result<(), std::fmt::Error> {
     let handle = op.handle().clone();
     let context = handle.context.upgrade();
+    // The registers an instruction defines are its slots; only the chain it
+    // leaves behind is bound ahead of the mnemonic.
+    let published = handle.dep_results();
+    tir::dependency::print_dep_list(fmt, &published, false)?;
+    if !published.is_empty() {
+        fmt.write(" = ")?;
+    }
     fmt.write(format!("{}.{}", T::dialect(), T::name()))?;
     let slots = registers::reg_slots(&handle);
     let mut first = true;
@@ -454,12 +461,8 @@ pub fn print_machine_op<T: tir::Operation>(
         fmt.write("}")?;
     }
     // Memory order is an operand like any other: an instruction that touches
-    // memory names the state it observed and the one it leaves behind.
-    tir::builtin::print_state_clause(
-        fmt,
-        tir::builtin::trailing_state_operand(&context, &handle),
-        tir::builtin::trailing_state_result(&context, &handle),
-    )?;
+    // memory names the chain it observed after its registers.
+    tir::dependency::print_dep_operands(fmt, &handle)?;
     fmt.write("\n")
 }
 
@@ -474,13 +477,13 @@ pub fn print_machine_op<T: tir::Operation>(
 /// know the chain.
 pub fn forward_state(context: &tir::Context, old: &tir::OpHandle, new: &dyn tir::Operation) {
     let (Some(observed), Some(published)) = (
-        tir::builtin::trailing_state_operand(context, old),
-        tir::builtin::trailing_state_result(context, old),
+        old.dep_operands().first().copied(),
+        old.dep_results().first().copied(),
     ) else {
         return;
     };
-    context.append_operand(new.id(), observed);
-    context.adopt_result(new.id(), published);
+    context.append_dep_operand(new.id(), observed);
+    context.adopt_dep_result(new.id(), published);
 }
 
 /// Whether the operation exists only to name a memory state: the root of a

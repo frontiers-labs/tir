@@ -312,8 +312,9 @@ impl<'a> Destructor<'a> {
 
     /// A counted loop is destructed rotated: the zero-trip guard branches into the
     /// body, which advances the counter and tests it again on its own back edge. The
-    /// counter enters the body as a trailing argument — a value only this destruction
-    /// mints, which is why it is not a port of the loop.
+    /// counter enters the body as its last value argument, ahead of the chains the
+    /// loop carries — a value only this destruction mints, which is why it is not
+    /// a port of the loop.
     fn lower_counted_loop(
         &mut self,
         rewriter: &mut Rewriter,
@@ -342,6 +343,7 @@ impl<'a> Destructor<'a> {
             ));
         }
         let inits = self.mapped(&loop_like.inits());
+        let deps = op.dep_operands().len();
         let continuation = self.split_after(rewriter, &block, op);
         self.add_block(body.id());
         self.add_block(continuation.id());
@@ -358,12 +360,13 @@ impl<'a> Destructor<'a> {
         }
         self.erase(rewriter, op)?;
 
-        // Selection minted the counter as a trailing body argument only where no
-        // carried port already counted; where one did, the ports are the whole edge.
+        // Selection minted the counter as the body's last value argument only
+        // where no carried port already counted; where one did, the ports are
+        // the whole edge.
         let minted = body.arguments().len() > inits.len();
         let mut entry = inits.clone();
         if minted {
-            entry.push(self.value(lower));
+            entry.insert(entry.len() - deps, self.value(lower));
         }
         self.branch(
             &block,
@@ -376,7 +379,7 @@ impl<'a> Destructor<'a> {
 
         let mut back = self.mapped(&latched);
         if minted {
-            back.push(self.aux_value(op, AuxSlot::Advance)?);
+            back.insert(back.len() - deps, self.aux_value(op, AuxSlot::Advance)?);
         }
         let exit = self.mapped(&latched);
         let terminator = self.terminator(&body)?;
@@ -494,11 +497,12 @@ impl<'a> Destructor<'a> {
             return Ok(());
         }
         // A taken edge has no operand slot to carry assignments in, so one that
-        // performs any goes through a block only it reaches. A `!state`
+        // performs any goes through a block only it reaches. A dependency
         // argument is not an assignment — nothing moves for it, and the
         // parameter names the chain the join is entered on — so an edge
         // carrying only those needs no block of its own.
-        let target = if taken_args.iter().any(|&value| !self.is_state(value)) {
+        let deps = self.context.get_block(taken).dep_arguments().len();
+        let target = if taken_args.len() > deps {
             trampoline(
                 self.context,
                 Some(self.region),
@@ -563,10 +567,6 @@ impl<'a> Destructor<'a> {
                 Err(Self::decline(op, "a counter advance is not a branch"))
             }
         }
-    }
-
-    fn is_state(&self, value: ValueId) -> bool {
-        self.context.get_value(value).ty() == tir::builtin::StateType::new(self.context)
     }
 
     fn value(&self, value: ValueId) -> ValueId {
@@ -637,8 +637,12 @@ impl<'a> Destructor<'a> {
         let block = self.context.get_block(block.id());
         let position = block.op_ids().iter().position(|id| *id == op.id).unwrap();
         let continuation = rewriter.split_block(block.id(), position + 1);
-        for result in op.results() {
+        for result in op.value_results() {
             self.context.adopt_block_argument(continuation.id(), result);
+        }
+        for result in op.dep_results() {
+            self.context
+                .adopt_dep_block_argument(continuation.id(), result);
         }
         self.context.get_block(continuation.id())
     }

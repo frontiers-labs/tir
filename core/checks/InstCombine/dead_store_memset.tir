@@ -6,10 +6,10 @@
 
 module {
   %fn_f = func.func @f(%0: !ptr.p, %1: !i8, %2: !i64) {
-    %3 = state.entry_state : !state
-    ptr.memset %0, %1, %2 state(%3 -> %4)
-    ptr.store %1, %0 state(%4 -> %5)
-    func.return state(%5)
+    | %3 = state.entry_state
+    | %4 = ptr.memset %0, %1, %2 | %3
+    | %5 = ptr.store %1, %0 | %4
+    func.return | %5
   }
   module_end
 }

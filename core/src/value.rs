@@ -33,6 +33,12 @@ impl Value {
         self.ty
     }
 
+    /// Whether this value is a dependency: an ordering edge carrying no bits,
+    /// living in the trailing dependency partition of whatever names it.
+    pub fn is_dependency(&self) -> bool {
+        self.ty == TypeId::DEPENDENCY
+    }
+
     /// The operation defining this value, or `None` for a block or region
     /// argument.
     pub fn defining_op(&self) -> Option<OpId> {

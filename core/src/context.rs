@@ -453,13 +453,61 @@ impl ContextInstance {
     /// would need relinking; callers pass an `at` no earlier than the end of
     /// the operand group, and the shifted entries are then results and regions,
     /// which sit in no use list.
-    /// Append `value` to `op`'s results. Results sit in no use list, so only
-    /// the region ids after them move.
-    fn append_result_port(&mut self, op: OpId, value: ValueId) {
+    /// Append `value` to `op`'s results — at the end of the dependency
+    /// partition when it is one, ahead of it otherwise. Results sit in no use
+    /// list, so only the ports after the slot move.
+    fn append_result_port(&mut self, op: OpId, value: ValueId, dependency: bool) {
         let instance = self.op(op).expect("live op");
-        let at = (instance.operand_count + instance.result_count) as usize;
+        let mut at = (instance.operand_count + instance.result_count) as usize;
+        if !dependency {
+            at -= instance.dep_result_count as usize;
+        }
         self.insert_port(op, at, value.number());
-        self.op_mut(op).expect("live op").result_count += 1;
+        let instance = self.op_mut(op).expect("live op");
+        instance.result_count += 1;
+        if dependency {
+            instance.dep_result_count += 1;
+        }
+    }
+
+    /// Put `value` at operand position `index`, shifting the operands after it
+    /// along. Appending at the end is one slot write; anything else moves
+    /// linked entries, so the run is rewritten and every use relinked.
+    fn insert_operand(&mut self, op: OpId, index: usize, value: ValueId) {
+        let count = self.op(op).expect("live op").operand_count as usize;
+        if index == count {
+            self.insert_port(op, index, value.number());
+            self.op_mut(op).expect("live op").operand_count += 1;
+            let entry = self.entry_of(op, index);
+            self.link_use(value, entry);
+            return;
+        }
+        let (mut operands, results, regions) = self.ports(op);
+        operands.insert(index, value.number());
+        self.set_ports(op, &operands, &results, &regions);
+    }
+
+    /// Drop the operand at `index`; see [`ContextInstance::insert_operand`].
+    fn remove_operand(&mut self, op: OpId, index: usize) {
+        let (mut operands, results, regions) = self.ports(op);
+        operands.remove(index);
+        self.set_ports(op, &operands, &results, &regions);
+    }
+
+    /// Grow or shrink the last operand segment by `delta`, where the op tracks
+    /// segments: an appended or dropped value operand belongs to the trailing
+    /// variadic group.
+    fn adjust_last_segment(&mut self, op: OpId, delta: i64) {
+        let segment_sizes = self.names.intern("operand_segment_sizes");
+        if let Some(attribute) = self
+            .op_attrs_mut(op)
+            .iter_mut()
+            .find(|attribute| attribute.name == segment_sizes)
+            && let crate::attributes::AttributeValue::Array(sizes) = &mut attribute.value
+            && let Some(crate::attributes::AttributeValue::UInt(last)) = sizes.last_mut()
+        {
+            *last = (*last as i64 + delta) as u64;
+        }
     }
 
     fn insert_port(&mut self, op: OpId, at: usize, id: u32) {
@@ -897,6 +945,8 @@ impl Context {
                 run: RunId::NONE,
                 operand_count: op.operands.len() as u16,
                 result_count: op.results.len() as u16,
+                dep_operand_count: op.dep_operands,
+                dep_result_count: op.dep_results,
                 region_count: op.regions.len() as u16,
                 attrs: AttrRunId::NONE,
                 attr_count: op.attributes.len() as u16,
@@ -1025,10 +1075,11 @@ impl Context {
         inner.edit_op(id);
     }
 
-    /// Replace all of an operation's SSA operands. Register allocation uses this
-    /// to clear a branch's forwarded block arguments once they have been lowered
+    /// Replace all of an operation's SSA operands, the trailing `dep_operands`
+    /// of `operands` being its dependencies. Register allocation uses this to
+    /// clear a branch's forwarded block arguments once they have been lowered
     /// to explicit copies.
-    pub fn set_op_operands(&self, id: OpId, operands: Vec<ValueId>) {
+    pub fn set_op_operands(&self, id: OpId, operands: Vec<ValueId>, dep_operands: usize) {
         let mut inner = self.0.write();
         if inner.op(id).is_none() {
             return;
@@ -1036,6 +1087,7 @@ impl Context {
         let (_, results, regions) = inner.ports(id);
         let operands: Vec<u32> = operands.iter().map(|value| value.number()).collect();
         inner.set_ports(id, &operands, &results, &regions);
+        inner.op_mut(id).expect("live op").dep_operand_count = dep_operands as u16;
         inner.edit_op(id);
     }
 
@@ -1091,6 +1143,12 @@ impl Context {
             .insert_with(|handle| Value::new(ValueId::from_number(handle), ty, defining_op));
         inner.clear_uses(ValueId::from_number(handle));
         inner.values.get(handle).expect("just inserted").clone()
+    }
+
+    /// Mint a dependency: a value carrying no bits, whose only meaning is the
+    /// ordering edges that name it.
+    pub fn create_dependency(&self) -> ValueId {
+        self.create_value(TypeId::DEPENDENCY, None).id()
     }
 
     pub fn get_value(&self, id: ValueId) -> Value {
@@ -1231,11 +1289,13 @@ impl Context {
     pub fn create_nodes_region(
         &self,
         ports: Vec<Value>,
+        dep_ports: usize,
         ops: Vec<OpId>,
         results: Vec<ValueId>,
+        dep_results: usize,
     ) -> RegionHandle {
         let region = self.create_region();
-        self.set_region_nodes(region.id(), ports, ops, results);
+        self.set_region_nodes(region.id(), ports, dep_ports, ops, results, dep_results);
         region
     }
 
@@ -1246,8 +1306,10 @@ impl Context {
         &self,
         region: RegionId,
         ports: Vec<Value>,
+        dep_ports: usize,
         ops: Vec<OpId>,
         results: Vec<ValueId>,
+        dep_results: usize,
     ) {
         let mut inner = self.0.write();
         let port_ids: Vec<ValueId> = ports.iter().map(Value::id).collect();
@@ -1261,7 +1323,7 @@ impl Context {
         );
         let entry = inner.region_mut(region).expect("live region");
         let parent = entry.parent_op();
-        *entry = Region::new_nodes(ports, ops, results);
+        *entry = Region::new_nodes(ports, dep_ports, ops, results, dep_results);
         if let Some(parent) = parent {
             entry.set_parent_op(parent);
         }
@@ -1291,10 +1353,22 @@ impl Context {
     }
 
     pub fn create_block(&self, arguments: Vec<Value>) -> BlockHandle {
+        self.create_block_with_dependencies(arguments, 0)
+    }
+
+    /// [`Context::create_block`] where the trailing `dep_arguments` of
+    /// `arguments` are dependencies.
+    pub fn create_block_with_dependencies(
+        &self,
+        arguments: Vec<Value>,
+        dep_arguments: usize,
+    ) -> BlockHandle {
         let mut inner = self.0.write();
 
         let argument_ids: Vec<ValueId> = arguments.iter().map(Value::id).collect();
-        let block_id = BlockId::new(inner.blocks.insert(Block::new(arguments)));
+        let mut block = Block::new(arguments);
+        block.set_dep_argument_count(dep_arguments);
+        let block_id = BlockId::new(inner.blocks.insert(block));
         for argument in argument_ids {
             slab_put(&mut inner.value_block, argument.index(), block_id);
         }
@@ -1315,17 +1389,20 @@ impl Context {
         self.block_handle_in(&self.0.read(), id)
     }
 
-    /// Append `value`'s type as a new entry argument of `block` and return the
-    /// argument. Block ids are stable across the edit, so branches naming this
-    /// block keep pointing at it.
+    /// Append a value argument of type `ty` to `block`, ahead of its
+    /// dependencies, and return it. Block ids are stable across the edit, so
+    /// branches naming this block keep pointing at it.
     pub fn append_block_argument(&self, block: BlockId, ty: TypeId) -> Value {
         let value = self.create_value(ty, None);
-        let mut inner = self.0.write();
-        if let Some(entry) = inner.block_mut(block) {
-            entry.arguments_mut().push(value.clone());
-            slab_put(&mut inner.value_block, value.id().index(), block);
-            inner.edit_block(block);
-        }
+        self.place_block_argument(block, value.clone(), false);
+        value
+    }
+
+    /// Append a dependency argument to `block`: one more chain the block is
+    /// entered on.
+    pub fn append_dep_block_argument(&self, block: BlockId) -> Value {
+        let value = self.create_value(TypeId::DEPENDENCY, None);
+        self.place_block_argument(block, value.clone(), true);
         value
     }
 
@@ -1337,21 +1414,44 @@ impl Context {
     /// away, so what an operation produced becomes the parameter of the block
     /// continuing it.
     pub fn adopt_block_argument(&self, block: BlockId, value: ValueId) {
+        self.adopt_argument(block, value, false);
+    }
+
+    /// [`Context::adopt_block_argument`] for a dependency.
+    pub fn adopt_dep_block_argument(&self, block: BlockId, value: ValueId) {
+        self.adopt_argument(block, value, true);
+    }
+
+    fn adopt_argument(&self, block: BlockId, value: ValueId, dependency: bool) {
+        let Some(adopted) = self.0.read().value(value).cloned() else {
+            return;
+        };
+        let adopted = Value::new(value, adopted.ty(), None);
+        if self.place_block_argument(block, adopted, dependency) {
+            self.0
+                .write()
+                .value_mut(value)
+                .expect("live value")
+                .clear_defining_op();
+        }
+    }
+
+    /// Put `argument` where it belongs among `block`'s arguments: at the end of
+    /// the dependencies when it is one, ahead of them otherwise.
+    fn place_block_argument(&self, block: BlockId, argument: Value, dependency: bool) -> bool {
         let mut inner = self.0.write();
-        let Some(ty) = inner.value(value).map(Value::ty) else {
-            return;
-        };
-        let adopted = Value::new(value, ty, None);
         let Some(entry) = inner.block_mut(block) else {
-            return;
+            return false;
         };
-        entry.arguments_mut().push(adopted);
-        inner
-            .value_mut(value)
-            .expect("live value")
-            .clear_defining_op();
-        slab_put(&mut inner.value_block, value.index(), block);
+        let deps = entry.dep_argument_count();
+        let at = entry.arguments().len() - if dependency { 0 } else { deps };
+        entry.arguments_mut().insert(at, argument.clone());
+        if dependency {
+            entry.set_dep_argument_count(deps + 1);
+        }
+        slab_put(&mut inner.value_block, argument.id().index(), block);
         inner.edit_block(block);
+        true
     }
 
     /// Drop `block`'s `index`-th argument and return it. Nothing may read the
@@ -1359,6 +1459,10 @@ impl Context {
     pub fn remove_block_argument(&self, block: BlockId, index: usize) -> Value {
         let mut inner = self.0.write();
         let entry = inner.block_mut(block).expect("live block");
+        let deps = entry.dep_argument_count();
+        if index >= entry.arguments().len() - deps {
+            entry.set_dep_argument_count(deps - 1);
+        }
         let argument = entry.arguments_mut().remove(index);
         clear_slot(&mut inner.value_block, argument.id().index());
         inner.erase_value(argument.id());
@@ -1366,85 +1470,138 @@ impl Context {
         argument
     }
 
-    /// Append `value` to `op`'s trailing variadic operand group, keeping the
-    /// segment sizes that describe the grouping in step.
+    /// Drop every dependency argument of `block`.
+    pub fn clear_dep_arguments(&self, block: BlockId) {
+        while let Some(last) = self.get_block(block).dep_arguments().len().checked_sub(1) {
+            let values = self.get_block(block).arguments().len() - last - 1;
+            self.remove_block_argument(block, values + last);
+        }
+    }
+
+    /// Append `value` to `op`'s value operands, ahead of its dependencies,
+    /// keeping the segment sizes that describe the trailing variadic group in
+    /// step.
     pub fn append_operand(&self, op: OpId, value: ValueId) {
         let mut inner = self.0.write();
-        let segment_sizes = inner.names.intern("operand_segment_sizes");
-        if inner.op(op).is_none() {
+        let Some(instance) = inner.op(op) else {
             return;
-        }
-        let index = inner.op(op).expect("live op").operand_count as usize;
-        inner.insert_port(op, index, value.number());
-        inner.op_mut(op).expect("live op").operand_count += 1;
-        let entry = inner.entry_of(op, index);
-        inner.link_use(value, entry);
-        if let Some(attribute) = inner
-            .op_attrs_mut(op)
-            .iter_mut()
-            .find(|attribute| attribute.name == segment_sizes)
-            && let crate::attributes::AttributeValue::Array(sizes) = &mut attribute.value
-            && let Some(crate::attributes::AttributeValue::UInt(last)) = sizes.last_mut()
-        {
-            *last += 1;
-        }
+        };
+        let index = (instance.operand_count - instance.dep_operand_count) as usize;
+        inner.insert_operand(op, index, value);
+        inner.adjust_last_segment(op, 1);
         inner.edit_op(op);
     }
 
-    /// Append `value` to `op`'s results, moving its definition onto `op`. A
-    /// lowering that replaces an instruction hands the replacement the state the
-    /// original published this way, so the chain crosses the rewrite intact.
+    /// Append `value` to `op`'s dependencies: one more chain it observes.
+    pub fn append_dep_operand(&self, op: OpId, value: ValueId) {
+        let mut inner = self.0.write();
+        let Some(instance) = inner.op(op) else {
+            return;
+        };
+        let index = instance.operand_count as usize;
+        inner.insert_operand(op, index, value);
+        inner.op_mut(op).expect("live op").dep_operand_count += 1;
+        inner.edit_op(op);
+    }
+
+    /// Append `value` to `op`'s value results, moving its definition onto `op`.
     pub fn adopt_result(&self, op: OpId, value: ValueId) {
+        self.adopt_result_port(op, value, false);
+    }
+
+    /// Append `value` to `op`'s dependency results, moving its definition onto
+    /// `op`. A lowering that replaces an instruction hands the replacement the
+    /// chain the original published this way, so the chain crosses the rewrite
+    /// intact.
+    pub fn adopt_dep_result(&self, op: OpId, value: ValueId) {
+        self.adopt_result_port(op, value, true);
+    }
+
+    fn adopt_result_port(&self, op: OpId, value: ValueId, dependency: bool) {
         let mut inner = self.0.write();
         if inner.op(op).is_none() {
             return;
         }
-        inner.append_result_port(op, value);
+        inner.append_result_port(op, value, dependency);
         if let Some(value) = inner.value_mut(value) {
             value.set_defining_op(op);
         }
         inner.edit_op(op);
     }
 
-    /// Drop `op`'s last operand, keeping the segment sizes that describe the
-    /// grouping in step. The inverse of [`Context::append_operand`].
+    /// Give `op` one more dependency result: a chain it leaves behind.
+    pub fn append_dep_result(&self, op: OpId) -> ValueId {
+        let value = self.create_dependency();
+        self.adopt_dep_result(op, value);
+        value
+    }
+
+    /// Drop `op`'s last value operand, keeping the segment sizes that describe
+    /// the grouping in step. The inverse of [`Context::append_operand`].
     pub fn pop_operand(&self, op: OpId) {
         let mut inner = self.0.write();
-        let segment_sizes = inner.names.intern("operand_segment_sizes");
-        let count = match inner.op(op) {
-            Some(instance) if instance.operand_count > 0 => instance.operand_count as usize,
+        let values = match inner.op(op) {
+            Some(instance) if instance.operand_count > instance.dep_operand_count => {
+                (instance.operand_count - instance.dep_operand_count) as usize
+            }
             _ => return,
         };
-        let entry = inner.entry_of(op, count - 1);
-        let value = ValueId::from_number(inner.runs.entry(entry).id);
-        inner.unlink_use(value, entry);
-        inner.remove_port(op, count - 1);
-        inner.op_mut(op).expect("live op").operand_count -= 1;
-        if let Some(attribute) = inner
-            .op_attrs_mut(op)
-            .iter_mut()
-            .find(|attribute| attribute.name == segment_sizes)
-            && let crate::attributes::AttributeValue::Array(sizes) = &mut attribute.value
-            && let Some(crate::attributes::AttributeValue::UInt(last)) = sizes.last_mut()
-        {
-            *last -= 1;
-        }
+        inner.remove_operand(op, values - 1);
+        inner.adjust_last_segment(op, -1);
         inner.edit_op(op);
     }
 
-    /// Drop `op`'s last result. Nothing may read it: it stops being a definition
-    /// with the edit. The inverse of the result [`Context::grow_port`] adds.
+    /// Drop every dependency operand of `op`.
+    pub fn clear_dep_operands(&self, op: OpId) {
+        let mut inner = self.0.write();
+        let deps = match inner.op(op) {
+            Some(instance) if instance.dep_operand_count > 0 => instance.dep_operand_count as usize,
+            _ => return,
+        };
+        let (mut operands, results, regions) = inner.ports(op);
+        operands.truncate(operands.len() - deps);
+        inner.set_ports(op, &operands, &results, &regions);
+        inner.op_mut(op).expect("live op").dep_operand_count = 0;
+        inner.edit_op(op);
+    }
+
+    /// Drop `op`'s last value result. Nothing may read it: it stops being a
+    /// definition with the edit. The inverse of the result [`Context::grow_port`]
+    /// adds.
     pub fn pop_result(&self, op: OpId) {
         let mut inner = self.0.write();
         let at = match inner.op(op) {
-            Some(instance) if instance.result_count > 0 => {
-                (instance.operand_count + instance.result_count) as usize - 1
+            Some(instance) if instance.result_count > instance.dep_result_count => {
+                (instance.operand_count + instance.result_count - instance.dep_result_count)
+                    as usize
+                    - 1
             }
             _ => return,
         };
         let result = inner.remove_port(op, at);
         inner.op_mut(op).expect("live op").result_count -= 1;
         inner.erase_value(ValueId::from_number(result));
+        inner.edit_op(op);
+    }
+
+    /// Drop every dependency result of `op`. Nothing may read them.
+    pub fn clear_dep_results(&self, op: OpId) {
+        let mut inner = self.0.write();
+        let Some(instance) = inner.op(op) else {
+            return;
+        };
+        let (deps, mut end) = (
+            instance.dep_result_count as usize,
+            (instance.operand_count + instance.result_count) as usize,
+        );
+        for _ in 0..deps {
+            end -= 1;
+            let result = inner.remove_port(op, end);
+            inner.erase_value(ValueId::from_number(result));
+        }
+        let instance = inner.op_mut(op).expect("live op");
+        instance.result_count -= deps as u16;
+        instance.dep_result_count = 0;
         inner.edit_op(op);
     }
 
@@ -1459,127 +1616,84 @@ impl Context {
     /// is returned.
     ///
     /// This is the one edit that keeps results, region arguments and yields
-    /// consistent; the ports it grows are what scalar promotion, state threading
-    /// and a view commit all materialize.
+    /// consistent; the ports it grows are what scalar promotion and a view
+    /// commit materialize.
     pub fn grow_port(
         &self,
         op: OpId,
         ty: TypeId,
         init: Option<ValueId>,
-        mut latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
+        latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
     ) -> ValueId {
-        let instance = self.get_op(op);
+        self.grow_port_with(
+            op,
+            init,
+            latch,
+            |entry| self.append_block_argument(entry, ty).id(),
+            |op, value| self.append_operand(op, value),
+        );
+        self.append_result(op, ty)
+    }
 
+    /// [`Context::grow_port`] for a dependency: the port state threading grows
+    /// to carry a chain across a loop or a gate.
+    pub fn grow_dep_port(
+        &self,
+        op: OpId,
+        init: Option<ValueId>,
+        latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
+    ) -> ValueId {
+        self.grow_port_with(
+            op,
+            init,
+            latch,
+            |entry| self.append_dep_block_argument(entry).id(),
+            |op, value| self.append_dep_operand(op, value),
+        );
+        self.append_dep_result(op)
+    }
+
+    fn grow_port_with(
+        &self,
+        op: OpId,
+        init: Option<ValueId>,
+        mut latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
+        argument: impl Fn(BlockId) -> ValueId,
+        operand: impl Fn(OpId, ValueId),
+    ) {
+        let instance = self.get_op(op);
         for region in instance.regions() {
-            let entry = self.get_region(region).block_ids()[0];
-            let incoming = init.map(|_| {
-                let argument = self.append_block_argument(entry, ty).id();
-                self.place_argument(entry, ty);
-                argument
-            });
+            let entry = self.get_region(region).entry_block();
+            let incoming = init.map(|_| argument(entry));
             if let Some(latched) = latch(region, incoming) {
                 let terminator = *self
                     .get_block(entry)
                     .op_ids()
                     .last()
                     .expect("a region is terminated");
-                self.append_operand(terminator, latched);
-                self.place_operand(terminator, ty);
+                operand(terminator, latched);
             }
         }
         if let Some(init) = init {
-            self.append_operand(op, init);
-            self.place_operand(op, ty);
+            operand(op, init);
         }
-        let result = self.append_result(op, ty);
-        self.place_result(op, ty);
-        result
     }
 
     /// Carry one more port on `op`, an edge [`Context::grow_port`] does not reach:
     /// an `scf.break`/`scf.continue` feeds the port it leaves through, so it takes
     /// the value where a port belongs among its operands. Answers the index the
-    /// value took, which is the port's own: what belongs to a port stays where the
-    /// port was placed, however much later the value it carries is known.
+    /// value took, which is the port's own.
     pub fn append_port_operand(&self, op: OpId, value: ValueId) -> usize {
-        let ty = self.get_value(value).ty();
         self.append_operand(op, value);
-        self.place_operand(op, ty)
+        self.get_op(op).value_operands().len() - 1
     }
 
-    /// Where the port of type `ty` just appended to `values` belongs: ahead of
-    /// the trailing `!state` ports, which are read off the end. `None` when it is
-    /// already there — a state port joins them, and an op no chain crosses has
-    /// none for it to precede.
-    fn port_index(&self, values: &[ValueId], ty: TypeId) -> Option<usize> {
-        let state = crate::builtin::StateType::new(self);
-        if ty == state {
-            return None;
-        }
-        values
-            .iter()
-            .position(|&value| self.has_value(value) && self.get_value(value).ty() == state)
-    }
-
-    /// Move the port just appended to `op`'s results into the place it belongs.
-    fn place_result(&self, op: OpId, ty: TypeId) {
-        let Some(index) = self.port_index(&self.get_op(op).results(), ty) else {
-            return;
-        };
-        let mut inner = self.0.write();
-        if let Some(instance) = inner.op(op) {
-            let start = instance.operand_count as usize + index;
-            let end = (instance.operand_count + instance.result_count) as usize;
-            let run = instance.run;
-            inner.runs.entries_mut(run)[start..end].rotate_right(1);
-            inner.edit_op(op);
-        }
-    }
-
-    /// The same for the operand just appended, answering where it ended up.
-    /// Rotating within the trailing variadic group leaves the segment sizes
-    /// describing it unchanged.
-    fn place_operand(&self, op: OpId, ty: TypeId) -> usize {
-        let instance = self.get_op(op);
-        let operands = instance.operands();
-        let last = operands.len() - 1;
-        let Some(index) = self.port_index(&operands, ty) else {
-            return last;
-        };
-        let mut inner = self.0.write();
-        if inner.op(op).is_some() {
-            let (mut operands, results, regions) = inner.ports(op);
-            operands[index..].rotate_right(1);
-            inner.set_ports(op, &operands, &results, &regions);
-            inner.edit_op(op);
-        }
-        index
-    }
-
-    /// The same for the entry argument just appended to `block`.
-    fn place_argument(&self, block: BlockId, ty: TypeId) {
-        let arguments: Vec<ValueId> = self
-            .get_block(block)
-            .arguments()
-            .iter()
-            .map(|argument| argument.id())
-            .collect();
-        let Some(index) = self.port_index(&arguments, ty) else {
-            return;
-        };
-        let mut inner = self.0.write();
-        if let Some(entry) = inner.block_mut(block) {
-            entry.arguments_mut()[index..].rotate_right(1);
-            inner.edit_block(block);
-        }
-    }
-
-    /// Give `op` one more result of type `ty`.
+    /// Give `op` one more value result of type `ty`.
     fn append_result(&self, op: OpId, ty: TypeId) -> ValueId {
         let result = self.create_value(ty, Some(op)).id();
         let mut inner = self.0.write();
         if inner.op(op).is_some() {
-            inner.append_result_port(op, result);
+            inner.append_result_port(op, result, false);
             inner.edit_op(op);
         }
         result
@@ -1941,6 +2055,28 @@ impl Context {
         }
     }
 
+    /// How many of the region's ports and results are dependencies.
+    pub(crate) fn region_dep_counts(&self, region: RegionId) -> (usize, usize) {
+        let entry = {
+            let inner = self.0.read();
+            match inner.region(region).expect("live region").body() {
+                crate::region::RegionBody::Nodes {
+                    dep_ports,
+                    dep_results,
+                    ..
+                } => return (*dep_ports as usize, *dep_results as usize),
+                crate::region::RegionBody::Blocks(blocks) => match blocks.first() {
+                    Some(entry) => *entry,
+                    None => return (0, 0),
+                },
+            }
+        };
+        (
+            self.with_block(entry, |block| block.dep_argument_count()),
+            0,
+        )
+    }
+
     pub(crate) fn add_block_to_region(&self, region: RegionId, block: BlockId) {
         let mut inner = self.0.write();
         if let Some(entry) = inner.region_mut(region) {
@@ -2108,6 +2244,17 @@ impl Context {
 
     pub(crate) fn op_results(&self, id: OpId) -> crate::operation::ValueIds {
         self.0.read().op_results(id)
+    }
+
+    /// How many of `id`'s operands and results are dependencies.
+    pub(crate) fn op_dep_counts(&self, id: OpId) -> (usize, usize) {
+        match self.0.read().op(id) {
+            Some(instance) => (
+                instance.dep_operand_count as usize,
+                instance.dep_result_count as usize,
+            ),
+            None => (0, 0),
+        }
     }
 
     pub(crate) fn op_regions(&self, id: OpId) -> crate::operation::RegionIds {

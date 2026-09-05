@@ -224,23 +224,23 @@ fn print_successor(
     args: &[ValueId],
 ) -> Result<(), std::fmt::Error> {
     fmt.write(format!("^bb{}", fmt.region_block_number(block)))?;
-    if args.is_empty() {
+    let deps = context.get_block(block).dep_arguments().len();
+    let (args, dep_args) = args.split_at(args.len() - deps);
+    if args.is_empty() && dep_args.is_empty() {
         return Ok(());
     }
     fmt.write("(")?;
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
-            fmt.write(", ")?;
+    if !args.is_empty() {
+        tir::dependency::print_value_list(fmt, args)?;
+        fmt.write(" : ")?;
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                fmt.write(", ")?;
+            }
+            context.print_type(context.get_value(*arg).ty(), fmt)?;
         }
-        fmt.write(format!("%{}", arg.number()))?;
     }
-    fmt.write(" : ")?;
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
-            fmt.write(", ")?;
-        }
-        context.print_type(context.get_value(*arg).ty(), fmt)?;
-    }
+    tir::dependency::print_dep_list(fmt, dep_args, !args.is_empty())?;
     fmt.write(")")
 }
 
@@ -256,26 +256,31 @@ fn parse_successor(
 
     let mut args = vec![];
     let mut arg_types = vec![];
+    let mut deps = vec![];
     if parser.parse_token("(") {
-        loop {
-            args.push(parse_value_id(parser, context)?);
-            if parser.parse_token(",") {
-                continue;
+        if parser.peek_char() == Some('%') {
+            loop {
+                args.push(parse_value_id(parser, context)?);
+                if parser.parse_token(",") {
+                    continue;
+                }
+                break;
             }
-            break;
-        }
-        expect_token(parser, ":")?;
-        loop {
-            arg_types.push(parse_arg_type(parser, context)?);
-            if parser.parse_token(",") {
-                continue;
+            expect_token(parser, ":")?;
+            loop {
+                arg_types.push(parse_arg_type(parser, context)?);
+                if parser.parse_token(",") {
+                    continue;
+                }
+                break;
             }
-            break;
         }
+        deps = tir::dependency::parse_dep_operands(parser, context)?;
         expect_token(parser, ")")?;
     }
 
-    let block = parser.resolve_region_block_label(context, &label, &arg_types)?;
+    let block = parser.resolve_region_block_label(context, &label, &arg_types, deps.len())?;
+    args.extend(deps);
     Ok((block, args))
 }
 

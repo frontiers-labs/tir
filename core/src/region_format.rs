@@ -23,8 +23,8 @@ pub fn print_block_label(
 ) -> Result<(), std::fmt::Error> {
     fmt.write(format!("^bb{index}"))?;
 
-    let args = block.arguments();
-    if !args.is_empty() {
+    let (args, deps) = (block.value_arguments(), block.dep_arguments());
+    if !args.is_empty() || !deps.is_empty() {
         fmt.write("(")?;
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
@@ -33,6 +33,8 @@ pub fn print_block_label(
             fmt.write(format!("%{}: ", arg.id().number()))?;
             context.print_type(arg.ty(), fmt)?;
         }
+        let deps: Vec<_> = deps.iter().map(crate::Value::id).collect();
+        crate::dependency::print_dep_list(fmt, &deps, !args.is_empty())?;
         fmt.write(")")?;
     }
 
@@ -99,10 +101,12 @@ fn print_nodes_region(
         context.get_op(op).as_dyn_op().print(fmt)?;
     }
     fmt.write("->")?;
-    for (index, result) in region.results().iter().enumerate() {
-        fmt.write(if index == 0 { " " } else { ", " })?;
-        fmt.write(format!("%{}", result.number()))?;
+    let values = region.value_results();
+    if !values.is_empty() {
+        fmt.write(" ")?;
+        crate::dependency::print_value_list(fmt, &values)?;
     }
+    crate::dependency::print_dep_list(fmt, &region.dep_results(), true)?;
     fmt.writeln("")?;
     fmt.pop();
     fmt.writeln("}")?;

@@ -1,0 +1,14 @@
+// RUN: not tir opt --verify %s
+
+// One dependency names one memory, so at most one operation may change it: two
+// stores taking the same dependency describe two futures for that memory.
+
+module {
+  %fn_bad = func.func @bad(%0: !i32) {
+    %1 | %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    | %3 = ptr.store %0, %1 | %2
+    | %4 = ptr.store %0, %1 | %2
+    func.return
+  }
+  module_end
+}

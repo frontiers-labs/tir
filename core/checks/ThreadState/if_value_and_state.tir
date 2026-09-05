@@ -19,11 +19,11 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @h
-// CHECK: %[[VALUE:[0-9]+]], %{{[0-9]+}} = scf.if %0 args(%{{[0-9]+}}) -> !i32, !state (%[[T:[0-9]+]]) {
-// CHECK-NEXT: %[[READ:[0-9]+]] = ptr.load %{{[0-9]+}} : !i32 state(%[[T]] -> %[[T1:[0-9]+]])
-// CHECK-NEXT: scf.yield %[[READ]], %[[T1]]
+// CHECK: %[[VALUE:[0-9]+]] | %{{[0-9]+}} = scf.if %0 args(| %{{[0-9]+}}) -> !i32 (| %[[T:[0-9]+]]) {
+// CHECK-NEXT: %[[READ:[0-9]+]] | %[[T1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[T]] : !i32
+// CHECK-NEXT: scf.yield %[[READ]] | %[[T1]]
 // CHECK-NEXT: }
-// CHECK-NEXT: else (%[[E:[0-9]+]]) {
-// CHECK-NEXT: scf.yield %1, %[[E]]
+// CHECK-NEXT: else (| %[[E:[0-9]+]]) {
+// CHECK-NEXT: scf.yield %1 | %[[E]]
 // CHECK-NEXT: }
 // CHECK-NEXT: func.return %[[VALUE]]

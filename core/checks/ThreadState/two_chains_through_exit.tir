@@ -28,9 +28,9 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: do scope(%[[SCOPE:[0-9]+]])(%[[X:[0-9]+]], %[[Y:[0-9]+]]) {
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[X]] -> %[[X1:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[Y]] -> %[[Y1:[0-9]+]])
-// CHECK-NEXT: %[[G0:[0-9]+]], %[[G1:[0-9]+]] = scf.if %0 args(%[[X1]], %[[Y1]]) -> !state, !state (%[[T0:[0-9]+]], %[[T1:[0-9]+]]) {
-// CHECK-NEXT: scf.break %[[SCOPE]], %[[T0]], %[[T1]]
-// CHECK: scf.yield %[[G0]], %[[G1]]
+// CHECK: do scope(%[[SCOPE:[0-9]+]])(| %[[X:[0-9]+]], %[[Y:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} | %[[X1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[X]] : !i32
+// CHECK-NEXT: | %[[Y1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[Y]]
+// CHECK-NEXT: | %[[G0:[0-9]+]], %[[G1:[0-9]+]] = scf.if %0 args(| %[[X1]], %[[Y1]]) (| %[[T0:[0-9]+]], %[[T1:[0-9]+]]) {
+// CHECK-NEXT: scf.break %[[SCOPE]] | %[[T0]], %[[T1]]
+// CHECK: scf.yield | %[[G0]], %[[G1]]

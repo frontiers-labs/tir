@@ -101,7 +101,7 @@ impl FuncOp {
 
     /// The function's parameters: the body region's arguments.
     pub fn parameters(&self) -> Vec<tir::Value> {
-        self.body_region().ports()
+        self.body_region().value_arguments()
     }
 
     /// The λ value this definition produces: what a call to it takes as callee.
@@ -305,12 +305,10 @@ impl FuncOp {
         if !body.is_nodes() {
             return Ok(());
         }
-        let state = tir::builtin::StateType::new(context);
         let produced: Vec<tir::TypeId> = body
-            .results()
+            .value_results()
             .iter()
             .map(|result| context.get_value(*result).ty())
-            .filter(|ty| *ty != state)
             .collect();
         let declared = match self.ret_type() {
             unit if unit == UnitType::new(context) => vec![],
@@ -387,13 +385,11 @@ operation! {
 }
 
 impl ReturnOp {
-    /// The value the function returns, or `None` for a void return. The trailing
-    /// `!state` operand names the memory handed back to the caller, not a value.
+    /// The value the function returns, or `None` for a void return. The
+    /// dependency operand names the memory handed back to the caller, not a
+    /// value.
     pub fn returned_value(&self) -> Option<crate::ValueId> {
-        let operands = self.operands();
-        operands[..operands.len() - self.state_operand().is_some() as usize]
-            .first()
-            .copied()
+        self.value_operands().first().copied()
     }
 }
 

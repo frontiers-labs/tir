@@ -75,6 +75,12 @@ impl TypeConstraint for Any {
 }
 
 impl TypeId {
+    /// The type of a dependency value: a reserved id the interner never hands
+    /// out, so [`crate::Value::ty`] stays total. A dependency carries no bits
+    /// and prints without a type; only the printer and the verifier compare
+    /// against this.
+    pub const DEPENDENCY: TypeId = TypeId(u32::MAX);
+
     pub(crate) fn as_index(self) -> usize {
         self.0 as usize
     }

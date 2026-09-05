@@ -15,7 +15,7 @@ module {
 
 // CHECK: asm.symbol {name = "caller"
 // CHECK-SAME: %[[CALLEE:[0-9]+]]:GPR[5],
-// CHECK: asm.vcall_indirect %[[CALLEE]] {
+// CHECK: asm.vcall_indirect %[[CALLEE]] | %{{[0-9]+}} {
 
 // jalr x1, 0(x5): the call goes through the scratch register and links ra.
 // OBJ: caller:

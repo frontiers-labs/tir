@@ -10,24 +10,24 @@
 module {
   %1 = func.declare @foo(!i32) -> !unit
   %31 = func.func @main() -> !i32 {
-    %36 = state.entry_state : !state
+    | %36 = state.entry_state
     %11 = constant {value = 0} : !i32
-    %34, %43 = scf.while iter_args(%32 = %11, %39 = %36) -> !i32, !state {
-      func.call %1(%32 : !i32) state(%39 -> %42)
+    %34 | %43 = scf.while iter_args(%32 = %11 | %39 = %36) -> !i32 {
+      | %42 = func.call %1(%32 : !i32) | %39
       %25 = constant {value = 1} : !i32
       %27 = addi %32, %25 : !i32
       %29 = constant {value = 1} : !i1
-      scf.condition %29, %27, %42
+      scf.condition %29, %27 | %42
     }
-     do(%33, %40) {
-      scf.yield %33, %40
+     do(%33 | %40) {
+      scf.yield %33 | %40
     }
-    func.return %34 state(%43)
+    func.return %34 | %43
   }
   module_end
 }
 
 // The parameter is read into the call argument before the back edge writes it.
-// CHECK:      asm.vcall {callee = "foo"
+// CHECK:      asm.vcall | %{{[0-9]+}} {callee = "foo"
 // CHECK:      x86_64.add_imm32
 // CHECK-NEXT: asm.vbr

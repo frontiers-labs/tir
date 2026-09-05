@@ -6,10 +6,10 @@
 module {
   %fn_g = func.declare @g() -> !unit
   %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i32) -> !i32 {
-    %2 = state.entry_state : !state
-    ptr.store %1, %0 state(%2 -> %3)
-    func.call %fn_g() state(%3 -> %4)
-    %5 = ptr.load %0 : !i32 state(%4)
+    | %2 = state.entry_state
+    | %3 = ptr.store %1, %0 | %2
+    | %4 = func.call %fn_g() | %3
+    %5 = ptr.load %0 | %4 : !i32
     func.return %5
   }
   module_end

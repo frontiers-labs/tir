@@ -14,7 +14,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @axpy
-// CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[ENTRY]] -> %[[READ:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[READ]] -> %[[WRITE:[0-9]+]])
-// CHECK-NEXT: func.return state(%[[WRITE]])
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: %{{[0-9]+}} | %[[READ:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[ENTRY]] : !i32
+// CHECK-NEXT: | %[[WRITE:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[READ]]
+// CHECK-NEXT: func.return | %[[WRITE]]

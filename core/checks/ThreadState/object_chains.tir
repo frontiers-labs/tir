@@ -23,15 +23,15 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NEXT: %[[UNKNOWN:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %[[G:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %[[H:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[SLOT:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[G]] -> %[[G1:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[H]] -> %[[H1:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[SLOT]] -> %[[SLOT1:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[G1]] -> %[[G2:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[SLOT1]] -> %{{[0-9]+}})
+// CHECK-NEXT: | %[[UNKNOWN:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[G:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[H:[0-9]+]] = state.entry_state
+// CHECK-NEXT: %{{[0-9]+}} | %[[SLOT:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+// CHECK-NEXT: | %[[G1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[G]]
+// CHECK-NEXT: | %[[H1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[H]]
+// CHECK-NEXT: | %[[SLOT1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[SLOT]]
+// CHECK-NEXT: %{{[0-9]+}} | %[[G2:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[G1]] : !i32
+// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[SLOT1]] : !i32
 // CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
-// CHECK-NEXT: %[[EXPORT:[0-9]+]] = state.join %[[UNKNOWN]], %[[G2]], %[[H1]] : !state
-// CHECK-NEXT: func.return %{{[0-9]+}} state(%[[EXPORT]])
+// CHECK-NEXT: | %[[EXPORT:[0-9]+]] = state.join | %[[UNKNOWN]], %[[G2]], %[[H1]]
+// CHECK-NEXT: func.return %{{[0-9]+}} | %[[EXPORT]]

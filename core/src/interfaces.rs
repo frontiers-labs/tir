@@ -232,8 +232,9 @@ pub trait BranchGuard {
     fn guarded_successors(&self) -> Vec<(BlockId, ValueId, bool)>;
 }
 
-/// An operation whose operands and results all carry one type. Memory state ports
-/// are exempt: `!state` describes a side channel, not the value being computed.
+/// An operation whose value operands and results all carry one type. The
+/// dependency partitions are exempt: they describe ordering, not the value
+/// being computed.
 /// Checked by [`verify_opdef_operands`](crate::verify_opdef_operands).
 pub trait SameOperandAndResultType {}
 

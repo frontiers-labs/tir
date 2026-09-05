@@ -21,6 +21,19 @@ pub(crate) struct RegionParseState {
     /// The arguments the region was opened with, until they become the entry
     /// block's arguments or the region's own ports.
     pub arguments: Vec<crate::Value>,
+    /// The dependencies the region was opened on, trailing `arguments`.
+    pub dep_arguments: Vec<crate::Value>,
+}
+
+impl RegionParseState {
+    /// Take the arguments out, dependencies trailing, with how many there are.
+    pub fn take_arguments(&mut self) -> (Vec<crate::Value>, usize) {
+        let mut arguments = std::mem::take(&mut self.arguments);
+        let deps = std::mem::take(&mut self.dep_arguments);
+        let count = deps.len();
+        arguments.extend(deps);
+        (arguments, count)
+    }
 }
 
 pub struct Parser<'src> {

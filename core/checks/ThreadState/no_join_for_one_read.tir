@@ -16,7 +16,7 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: state.join
-// CHECK: ptr.store %0, %{{[0-9]+}} state(%{{[0-9]+}} -> %[[A1:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %[[R:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[R]] -> %{{[0-9]+}})
+// CHECK: | %[[A1:[0-9]+]] = ptr.store %0, %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK-NEXT: %{{[0-9]+}} | %[[R:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
+// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[R]]
 // CHECK-NOT: state.join

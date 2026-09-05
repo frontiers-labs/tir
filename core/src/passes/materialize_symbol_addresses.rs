@@ -107,7 +107,7 @@ fn collect(context: &Context, root: &OpHandle, uses: &mut Vec<Use>) {
                 {
                     uses.push(Use::Callee(op.clone(), name));
                 }
-                for (index, &operand) in instance.operands().iter().enumerate() {
+                for (index, &operand) in instance.value_operands().iter().enumerate() {
                     // Only a δ's address has a machine form here. A λ reaching
                     // anything but a call or `fn_to_ptr` is left for selection
                     // to reject rather than silently retyped.

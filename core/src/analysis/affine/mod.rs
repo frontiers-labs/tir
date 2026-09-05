@@ -3,7 +3,7 @@
 //! Built on demand over a maximal counted nest and thrown away again — nothing
 //! is interned, no operation or value is created, and no registry holds it. What
 //! it reads is what the IR already states: `CountedLoop` for the bounds,
-//! `LoopLike` for the carried ports the counters ride on, the `!state` edges for
+//! `LoopLike` for the carried ports the counters ride on, the dependency edges for
 //! which memory each access is of, and `ptradd` arithmetic for where in that
 //! memory it lands.
 //!
@@ -16,8 +16,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::builtin::{
-    AddIOp, AndIOp, ExtSIOp, IntegerType, MulIOp, OrIOp, ShlIOp, StateType, SubIOp, TruncIOp,
-    XOrIOp,
+    AddIOp, AndIOp, ExtSIOp, IntegerType, MulIOp, OrIOp, ShlIOp, SubIOp, TruncIOp, XOrIOp,
 };
 use crate::ptr::PtrAddOp;
 use crate::state::{JoinOp, SplitOp};

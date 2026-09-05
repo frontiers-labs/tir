@@ -15,5 +15,5 @@ module {
 // CHECK: arm64.store_float_double {ft = %{{[0-9]+}}:d{{[0-9]+}}, rn = sp, imm = 8}
 // CHECK: arm64.store_float_double {ft = %{{[0-9]+}}:d{{[0-9]+}}, rn = sp, imm = 16}
 // CHECK: arm64.store_float_double {ft = %{{[0-9]+}}:d{{[0-9]+}}, rn = sp, imm = 24}
-// CHECK: asm.vcall {callee = "ext"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "ext"
 // CHECK: arm64.add_imm {rd = sp, rn = sp, imm = 48}

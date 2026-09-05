@@ -76,7 +76,7 @@ impl FactDomain for Uses<'_> {
     fn seed(&self, facts: &mut Facts<ValueId, Escape>) {
         for &op in self.defuse.ops() {
             let instance = self.context.get_op(op);
-            for operand in instance.operands().to_vec() {
+            for operand in instance.value_operands().to_vec() {
                 if is_pointer(self.context, operand) {
                     facts.raise(operand, use_of(&instance, operand));
                 }

@@ -37,9 +37,9 @@ void matmul_local_arrays(int *out)
 // CHECK-LABEL: func.func @matmul_local_arrays
 // CHECK: scf.for
 // CHECK: scf.for
-// CHECK: scf.for {{.*}} iter_args(%[[I:[0-9]+]] = {{.*}} -> !i32, !state, !state, !state {
-// CHECK-NEXT: scf.for {{.*}} iter_args(%[[K:[0-9]+]] = {{.*}} -> !i32, !state, !state, !state {
-// CHECK-NEXT: scf.for {{.*}} iter_args(%[[J:[0-9]+]] = {{.*}} -> !i32, !state, !state, !state {
+// CHECK: scf.for {{.*}} iter_args(%[[I:[0-9]+]] = {{.*}} -> !i32 {
+// CHECK-NEXT: scf.for {{.*}} iter_args(%[[K:[0-9]+]] = {{.*}} -> !i32 {
+// CHECK-NEXT: scf.for {{.*}} iter_args(%[[J:[0-9]+]] = {{.*}} -> !i32 {
 // CHECK-NEXT: extsi %[[I]]
 // CHECK: extsi %[[J]]
 // CHECK: extsi %[[K]]

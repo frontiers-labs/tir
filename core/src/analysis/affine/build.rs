@@ -159,10 +159,7 @@ impl<'a> Builder<'a> {
         if op.is::<SplitOp>() {
             return true;
         }
-        let state = StateType::new(self.context);
-        op.operands()
-            .iter()
-            .any(|&operand| self.context.get_value(operand).ty() == state)
+        !op.dep_operands().is_empty()
     }
 
     fn access(
@@ -364,12 +361,9 @@ impl<'a> Builder<'a> {
         let Some(carried) = op.clone().as_interface::<dyn LoopLike>() else {
             return;
         };
-        let state = StateType::new(self.context);
         let (args, latched, inits) = (carried.carried_args(), carried.latched(), carried.inits());
-        for port in 0..args.len() {
-            if self.context.get_value(args[port]).ty() == state {
-                continue;
-            }
+        let value_ports = args.len() - op.dep_results().len();
+        for port in 0..value_ports {
             self.ports.push(Port {
                 arg: args[port],
                 recurrence: self.recurrence(args[port], latched[port], inits[port]),

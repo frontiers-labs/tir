@@ -25,5 +25,5 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @mixed
 // CHECK: ptr.alloca
 // CHECK: scf.if %0 
-// CHECK: %[[RESULT:[0-9]+]] = ptr.load
+// CHECK: %[[RESULT:[0-9]+]] | %{{[0-9]+}} = ptr.load
 // CHECK: func.return %[[RESULT]]

@@ -14,25 +14,25 @@ module {
     %0 = constant {value = 0} : !i32
     %1 = constant {value = 0} : !i32
     %2 = cmpi %0, %1 {predicate = "ne"} : !i1
-    %3 = state.entry_state : !state
-    %4 = scf.if %2 args(%3) -> !state (%5) {
-      func.call %fn_p() state(%5 -> %6)
-      scf.yield %6
-    } else (%7) {
-      scf.yield %7
+    | %3 = state.entry_state
+    | %4 = scf.if %2 args(| %3) (| %5) {
+      | %6 = func.call %fn_p() | %5
+      scf.yield | %6
+    } else (| %7) {
+      scf.yield | %7
     }
-    %8 = scf.if %2 args(%4) -> !state (%9) {
-      func.call %fn_p() state(%9 -> %10)
-      scf.yield %10
-    } else (%11) {
-      scf.yield %11
+    | %8 = scf.if %2 args(| %4) (| %9) {
+      | %10 = func.call %fn_p() | %9
+      scf.yield | %10
+    } else (| %11) {
+      scf.yield | %11
     }
-    func.return state(%8)
+    func.return | %8
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[FIRST:[0-9]+]] = scf.if
-// CHECK: %[[SECOND:[0-9]+]] = scf.if %{{[0-9]+}} args(%[[FIRST]])
-// CHECK: func.return state(%[[SECOND]])
+// CHECK: | %[[FIRST:[0-9]+]] = scf.if
+// CHECK: | %[[SECOND:[0-9]+]] = scf.if %{{[0-9]+}} args(| %[[FIRST]])
+// CHECK: func.return | %[[SECOND]]

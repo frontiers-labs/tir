@@ -130,7 +130,7 @@ impl tir::Verifiable for ForOp {
 impl ForOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        print_result_prefix(fmt, self)?;
+        tir::dependency::print_result_prefix(fmt, &self.0)?;
         fmt.write(format!(
             "scf.for %{}, %{}, %{}",
             self.operands()[0].number(),
@@ -153,19 +153,19 @@ impl ForOp {
         let step = parse_value_id(parser, context)?;
         let scope = parse_scope(parser, context)?;
         let carried = parse_iter_args(parser, context)?;
-        let body_carried = carried.iter().map(|c| c.acc.clone()).collect();
-        let body = parse_loop_body(parser, context, scope, body_carried)?;
+        let body = parse_loop_body(parser, context, scope, &carried)?;
 
-        Ok(Box::new(
-            ForOpBuilder::new(context)
-                .lower_bound(lower_bound)
-                .upper_bound(upper_bound)
-                .step(step)
-                .body(body)
-                .inits(carried.iter().map(|c| c.init).collect())
-                .result_types(carried.iter().map(|c| c.ty).collect())
-                .build(),
-        ))
+        let mut builder = ForOpBuilder::new(context)
+            .lower_bound(lower_bound)
+            .upper_bound(upper_bound)
+            .step(step)
+            .body(body)
+            .inits(carried.inits())
+            .result_types(carried.types());
+        for dep in carried.dep_inits() {
+            builder = builder.dep_operand(dep).dep_result();
+        }
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -261,7 +261,7 @@ impl tir::Verifiable for WhileOp {
 impl WhileOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        print_result_prefix(fmt, self)?;
+        tir::dependency::print_result_prefix(fmt, &self.0)?;
         fmt.write("scf.while")?;
         print_loop_tail(fmt, &context, self)?;
         tir::region_format::print_op_region(fmt, &context, self, 0)?;
@@ -270,7 +270,7 @@ impl WhileOp {
         let body_carried = carried_arguments(&context, &self.body_block());
         if !body_carried.is_empty() {
             fmt.write("(")?;
-            print_value_list(fmt, &body_carried)?;
+            print_port_list(fmt, &body_carried, self.0.dep_results().len())?;
             fmt.write(")")?;
         }
         tir::region_format::print_op_region(fmt, &context, self, 1)
@@ -281,23 +281,27 @@ impl WhileOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let carried = parse_iter_args(parser, context)?;
-        let condition_args = carried.iter().map(|c| c.acc.clone()).collect();
         let condition_region = parser
-            .parse_region_with_entry_args(context, condition_args)?
+            .parse_region_with_entry_args_and_deps(
+                context,
+                carried.accumulators(),
+                carried.dep_accumulators(),
+            )?
             .id();
         expect_token(parser, "do")?;
         let scope = parse_scope(parser, context)?;
         let body_carried = parse_body_carried(parser, context, &carried)?;
-        let body = parse_loop_body(parser, context, scope, body_carried)?;
+        let body = parse_loop_body(parser, context, scope, &body_carried)?;
 
-        Ok(Box::new(
-            WhileOpBuilder::new(context)
-                .condition_region(condition_region)
-                .body(body)
-                .inits(carried.iter().map(|c| c.init).collect())
-                .result_types(carried.iter().map(|c| c.ty).collect())
-                .build(),
-        ))
+        let mut builder = WhileOpBuilder::new(context)
+            .condition_region(condition_region)
+            .body(body)
+            .inits(carried.inits())
+            .result_types(carried.types());
+        for dep in carried.dep_inits() {
+            builder = builder.dep_operand(dep).dep_result();
+        }
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -319,7 +323,8 @@ impl Terminator for ConditionOp {}
 impl ConditionOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         fmt.write("scf.condition ")?;
-        print_value_list(fmt, &self.operands())?;
+        print_value_list(fmt, &self.value_operands())?;
+        tir::dependency::print_dep_operands(fmt, &self.0)?;
         fmt.write("\n")
     }
 
@@ -328,11 +333,11 @@ impl ConditionOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let condition = parse_value_id(parser, context)?;
+        let builder = ConditionOpBuilder::new(context)
+            .condition(condition)
+            .values(parse_trailing_values(parser, context)?);
         Ok(Box::new(
-            ConditionOpBuilder::new(context)
-                .condition(condition)
-                .values(parse_trailing_values(parser, context)?)
-                .build(),
+            with_dep_operands(builder, parser, context, ConditionOpBuilder::dep_operand)?.build(),
         ))
     }
 }
@@ -422,13 +427,10 @@ impl IfOp {
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        if !self.0.results().is_empty() {
-            print_value_list(fmt, &self.0.results())?;
-            fmt.write(" = ")?;
-        }
+        tir::dependency::print_result_prefix(fmt, &self.0)?;
         fmt.write(format!("scf.if %{}", self.condition().number()))?;
-        print_gamma_inputs(fmt, &self.inputs())?;
-        print_result_types(fmt, &context, &self.0.results())?;
+        print_gamma_inputs(fmt, &self.inputs(), self.0.dep_operands().len())?;
+        print_result_types(fmt, &context, &self.0.value_results())?;
         print_arm_arguments(fmt, self.then_body())?;
         tir::region_format::print_op_region(fmt, &context, self, 0)?;
         fmt.write(" else")?;
@@ -441,21 +443,22 @@ impl IfOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let condition = parse_value_id(parser, context)?;
-        let inputs = parse_gamma_inputs(parser, context)?;
+        let (inputs, dep_inputs) = parse_gamma_inputs(parser, context)?;
         let result_types = parse_result_types(parser, context)?;
-        let then_body = parse_arm(parser, context, &inputs)?;
+        let then_body = parse_arm(parser, context, &inputs, &dep_inputs)?;
         expect_token(parser, "else")?;
-        let else_body = parse_arm(parser, context, &inputs)?;
+        let else_body = parse_arm(parser, context, &inputs, &dep_inputs)?;
 
-        Ok(Box::new(
-            IfOpBuilder::new(context)
-                .condition(condition)
-                .inputs(inputs)
-                .then_body(then_body)
-                .else_body(else_body)
-                .result_types(result_types)
-                .build(),
-        ))
+        let mut builder = IfOpBuilder::new(context)
+            .condition(condition)
+            .inputs(inputs)
+            .then_body(then_body)
+            .else_body(else_body)
+            .result_types(result_types);
+        for dep in dep_inputs {
+            builder = builder.dep_operand(dep);
+        }
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -602,13 +605,10 @@ impl SwitchOp {
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
-        if !self.0.results().is_empty() {
-            print_value_list(fmt, &self.0.results())?;
-            fmt.write(" = ")?;
-        }
+        tir::dependency::print_result_prefix(fmt, &self.0)?;
         fmt.write(format!("scf.switch %{}", self.predicate().number()))?;
-        print_gamma_inputs(fmt, &self.inputs())?;
-        print_result_types(fmt, &context, &self.0.results())?;
+        print_gamma_inputs(fmt, &self.inputs(), self.0.dep_operands().len())?;
+        print_result_types(fmt, &context, &self.0.value_results())?;
         let arms = self.arms().to_vec();
         for (index, case) in self.cases().iter().enumerate() {
             fmt.write(format!(" case {case}"))?;
@@ -626,7 +626,7 @@ impl SwitchOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let predicate = parse_value_id(parser, context)?;
-        let inputs = parse_gamma_inputs(parser, context)?;
+        let (inputs, dep_inputs) = parse_gamma_inputs(parser, context)?;
         let result_types = parse_result_types(parser, context)?;
         let mut cases = vec![];
         let mut arms = vec![];
@@ -635,20 +635,21 @@ impl SwitchOp {
                 .parse_number()
                 .ok_or_else(|| (parser.span(), Error::ExpectedToken("case value")))?;
             cases.push(case);
-            arms.push(parse_arm(parser, context, &inputs)?);
+            arms.push(parse_arm(parser, context, &inputs, &dep_inputs)?);
         }
         expect_token(parser, "default")?;
-        arms.push(parse_arm(parser, context, &inputs)?);
+        arms.push(parse_arm(parser, context, &inputs, &dep_inputs)?);
 
-        Ok(Box::new(
-            SwitchOpBuilder::new(context)
-                .predicate(predicate)
-                .inputs(inputs)
-                .cases(cases)
-                .arms(arms)
-                .result_types(result_types)
-                .build(),
-        ))
+        let mut builder = SwitchOpBuilder::new(context)
+            .predicate(predicate)
+            .inputs(inputs)
+            .cases(cases)
+            .arms(arms)
+            .result_types(result_types);
+        for dep in dep_inputs {
+            builder = builder.dep_operand(dep);
+        }
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -669,7 +670,7 @@ impl Terminator for BreakOp {}
 
 impl BreakOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        print_exit(fmt, "scf.break", &self.operands())
+        print_exit(fmt, "scf.break", &self.0)
     }
 
     fn custom_parse(
@@ -677,11 +678,11 @@ impl BreakOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let scope = parse_value_id(parser, context)?;
+        let builder = BreakOpBuilder::new(context)
+            .scope(scope)
+            .values(parse_trailing_values(parser, context)?);
         Ok(Box::new(
-            BreakOpBuilder::new(context)
-                .scope(scope)
-                .values(parse_trailing_values(parser, context)?)
-                .build(),
+            with_dep_operands(builder, parser, context, BreakOpBuilder::dep_operand)?.build(),
         ))
     }
 }
@@ -703,7 +704,7 @@ impl Terminator for ContinueOp {}
 
 impl ContinueOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        print_exit(fmt, "scf.continue", &self.operands())
+        print_exit(fmt, "scf.continue", &self.0)
     }
 
     fn custom_parse(
@@ -711,11 +712,11 @@ impl ContinueOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
         let scope = parse_value_id(parser, context)?;
+        let builder = ContinueOpBuilder::new(context)
+            .scope(scope)
+            .values(parse_trailing_values(parser, context)?);
         Ok(Box::new(
-            ContinueOpBuilder::new(context)
-                .scope(scope)
-                .values(parse_trailing_values(parser, context)?)
-                .build(),
+            with_dep_operands(builder, parser, context, ContinueOpBuilder::dep_operand)?.build(),
         ))
     }
 }
@@ -724,11 +725,25 @@ impl ContinueOp {
 fn print_exit(
     fmt: &mut tir::IRFormatter,
     mnemonic: &'static str,
-    operands: &[ValueId],
+    op: &tir::OpHandle,
 ) -> Result<(), std::fmt::Error> {
     fmt.write(format!("{mnemonic} "))?;
-    print_value_list(fmt, operands)?;
+    print_value_list(fmt, &op.value_operands())?;
+    tir::dependency::print_dep_operands(fmt, op)?;
     fmt.write("\n")
+}
+
+/// Hand every `| %a, %b` dependency operand the text names to `builder`.
+fn with_dep_operands<B>(
+    mut builder: B,
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+    dep_operand: fn(B, ValueId) -> B,
+) -> Result<B, (tir::parse::Span, Error)> {
+    for dep in tir::dependency::parse_dep_operands(parser, context)? {
+        builder = dep_operand(builder, dep);
+    }
+    Ok(builder)
 }
 
 operation! {
@@ -748,10 +763,11 @@ impl Terminator for YieldOp {}
 impl YieldOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         fmt.write("scf.yield")?;
-        if !self.operands().is_empty() {
+        if !self.value_operands().is_empty() {
             fmt.write(" ")?;
-            print_value_list(fmt, &self.operands())?;
+            print_value_list(fmt, &self.value_operands())?;
         }
+        tir::dependency::print_dep_operands(fmt, &self.0)?;
         fmt.write("\n")
     }
 
@@ -766,8 +782,9 @@ impl YieldOp {
                 break;
             }
         }
+        let builder = YieldOpBuilder::new(context).values(values);
         Ok(Box::new(
-            YieldOpBuilder::new(context).values(values).build(),
+            with_dep_operands(builder, parser, context, YieldOpBuilder::dep_operand)?.build(),
         ))
     }
 }
@@ -811,6 +828,35 @@ struct Carried {
     acc: Value,
     init: ValueId,
     ty: TypeId,
+}
+
+/// The ports a parsed `iter_args` clause carries: the values, then the
+/// dependencies named after the `|`.
+struct CarriedPorts {
+    values: Vec<Carried>,
+    deps: Vec<Carried>,
+}
+
+impl CarriedPorts {
+    fn accumulators(&self) -> Vec<Value> {
+        self.values.iter().map(|port| port.acc.clone()).collect()
+    }
+
+    fn dep_accumulators(&self) -> Vec<Value> {
+        self.deps.iter().map(|port| port.acc.clone()).collect()
+    }
+
+    fn inits(&self) -> Vec<ValueId> {
+        self.values.iter().map(|port| port.init).collect()
+    }
+
+    fn dep_inits(&self) -> Vec<ValueId> {
+        self.deps.iter().map(|port| port.init).collect()
+    }
+
+    fn types(&self) -> Vec<TypeId> {
+        self.values.iter().map(|port| port.ty).collect()
+    }
 }
 
 /// The values a loop body yields on its back edge: the next iteration's carried values.
@@ -863,21 +909,20 @@ fn print_result_types(
     Ok(())
 }
 
-/// Print a `%r0, %r1 = ` binding for a value-producing loop, nothing for a
-/// side-effecting one.
-fn print_result_prefix(
+/// Print `%a, %b | %c` for a port list whose trailing `deps` are dependencies.
+fn print_port_list(
     fmt: &mut tir::IRFormatter,
-    op: &impl LoopOp,
+    ports: &[ValueId],
+    deps: usize,
 ) -> Result<(), std::fmt::Error> {
-    let results = op.loop_results();
-    if results.is_empty() {
-        return Ok(());
-    }
-    print_value_list(fmt, &results)?;
-    fmt.write(" = ")
+    let (values, deps) = ports.split_at(ports.len() - deps);
+    print_value_list(fmt, values)?;
+    tir::dependency::print_dep_list(fmt, deps, !values.is_empty())
 }
 
-/// Print the `iter_args(%acc = %init, ...) -> <ty>, <ty>` clause of a carrying loop.
+/// Print the `iter_args(%acc = %init, ... | %s = %sinit) -> <ty>, <ty>` clause
+/// of a carrying loop: the value ports with their types, then the chains it
+/// carries.
 fn print_loop_tail(
     fmt: &mut tir::IRFormatter,
     context: &Context,
@@ -887,15 +932,19 @@ fn print_loop_tail(
     if results.is_empty() {
         return Ok(());
     }
+    let deps = op.dep_results().len();
+    let values = results.len() - deps;
     fmt.write(" iter_args(")?;
     for (index, (acc, init)) in op.iter_args().iter().zip(op.init_operands()).enumerate() {
         if index > 0 {
-            fmt.write(", ")?;
+            fmt.write(if index == values { " | " } else { ", " })?;
+        } else if index == values {
+            fmt.write("| ")?;
         }
         fmt.write(format!("%{} = %{}", acc.number(), init.number()))?;
     }
     fmt.write(")")?;
-    print_result_types(fmt, context, &results)
+    print_result_types(fmt, context, &results[..values])
 }
 
 fn print_scope(
@@ -931,22 +980,24 @@ fn parse_scope(
     Ok(Some(scope))
 }
 
-/// Print a γ's `args(%a, %b)` clause: the values every arm receives as its entry
-/// arguments. A gate that forwards nothing prints no clause.
+/// Print a γ's `args(%a, %b | %s)` clause: the values every arm receives as its
+/// entry arguments, then the chains. A gate that forwards nothing prints no
+/// clause.
 fn print_gamma_inputs(
     fmt: &mut tir::IRFormatter,
     inputs: &[ValueId],
+    deps: usize,
 ) -> Result<(), std::fmt::Error> {
     if inputs.is_empty() {
         return Ok(());
     }
     fmt.write(" args(")?;
-    print_value_list(fmt, inputs)?;
+    print_port_list(fmt, inputs, deps)?;
     fmt.write(")")
 }
 
-/// Print the `(%a, %b)` binding an arm puts before its body: the names that arm
-/// gives the forwarded inputs.
+/// Print the `(%a, %b | %s)` binding an arm puts before its body: the names
+/// that arm gives the forwarded inputs.
 fn print_arm_arguments(
     fmt: &mut tir::IRFormatter,
     arm: tir::BlockHandle,
@@ -956,7 +1007,11 @@ fn print_arm_arguments(
         return Ok(());
     }
     fmt.write(" (")?;
-    print_value_list(fmt, &arguments.iter().map(Value::id).collect::<Vec<_>>())?;
+    print_port_list(
+        fmt,
+        &arguments.iter().map(Value::id).collect::<Vec<_>>(),
+        arm.dep_arguments().len(),
+    )?;
     fmt.write(")")
 }
 
@@ -965,21 +1020,25 @@ fn arm_block(context: &Context, arm: tir::RegionId) -> tir::BlockHandle {
     context.get_block(context.get_region(arm).block_ids()[0])
 }
 
-/// Parse an optional `args(%a, %b)` clause.
+/// Parse an optional `args(%a, %b | %s)` clause: the values, then the chains.
 fn parse_gamma_inputs(
     parser: &mut tir::parse::text::Parser,
     context: &Context,
-) -> Result<Vec<ValueId>, (tir::parse::Span, Error)> {
+) -> Result<(Vec<ValueId>, Vec<ValueId>), (tir::parse::Span, Error)> {
     if !parser.parse_token("args") {
-        return Ok(vec![]);
+        return Ok((vec![], vec![]));
     }
     expect_token(parser, "(")?;
-    let mut inputs = vec![parse_value_id(parser, context)?];
-    while parser.parse_token(",") {
+    let mut inputs = vec![];
+    if parser.peek_char() == Some('%') {
         inputs.push(parse_value_id(parser, context)?);
+        while parser.parse_token(",") {
+            inputs.push(parse_value_id(parser, context)?);
+        }
     }
+    let deps = tir::dependency::parse_dep_operands(parser, context)?;
     expect_token(parser, ")")?;
-    Ok(inputs)
+    Ok((inputs, deps))
 }
 
 /// Parse a γ arm, seeding its entry block with one argument per forwarded input,
@@ -988,8 +1047,9 @@ fn parse_arm(
     parser: &mut tir::parse::text::Parser,
     context: &Context,
     inputs: &[ValueId],
+    dep_inputs: &[ValueId],
 ) -> Result<tir::RegionId, (tir::parse::Span, Error)> {
-    if inputs.is_empty() {
+    if inputs.is_empty() && dep_inputs.is_empty() {
         return Ok(parser.parse_region(context)?.id());
     }
     expect_token(parser, "(")?;
@@ -1006,10 +1066,32 @@ fn parse_arm(
         parser.define_value(&name, argument.id());
         arguments.push(argument);
     }
+    let deps = parse_dep_arguments(parser, context, dep_inputs.len())?;
     expect_token(parser, ")")?;
     Ok(parser
-        .parse_region_with_entry_args(context, arguments)?
+        .parse_region_with_entry_args_and_deps(context, arguments, deps)?
         .id())
+}
+
+/// Parse the `| %s, %t` naming `count` dependency arguments a region is entered
+/// on, minting one dependency per name.
+fn parse_dep_arguments(
+    parser: &mut tir::parse::text::Parser,
+    context: &Context,
+    count: usize,
+) -> Result<Vec<Value>, (tir::parse::Span, Error)> {
+    let names = tir::dependency::parse_dep_names(parser)?;
+    if names.len() != count {
+        return Err((parser.span(), Error::ExpectedValueRef));
+    }
+    Ok(names
+        .iter()
+        .map(|name| {
+            let argument = context.create_value(TypeId::DEPENDENCY, None);
+            parser.define_value(name, argument.id());
+            argument
+        })
+        .collect())
 }
 
 /// Verify a γ arm's entry signature: it takes one argument per forwarded input,
@@ -1038,25 +1120,40 @@ fn verify_arm_arguments(
     Ok(())
 }
 
-/// Parse an optional `iter_args(%acc = %init, ...) -> <ty>, <ty>` clause, creating one
-/// carried block argument per port, bound to its `%acc` name.
+/// Parse an optional `iter_args(%acc = %init, ... | %s = %sinit) -> <ty>, <ty>`
+/// clause, creating one carried block argument per port, bound to its `%acc`
+/// name; the ports after the `|` carry dependencies and name no type.
 fn parse_iter_args(
     parser: &mut tir::parse::text::Parser,
     context: &Context,
-) -> Result<Vec<Carried>, (tir::parse::Span, Error)> {
+) -> Result<CarriedPorts, (tir::parse::Span, Error)> {
+    let mut carried = CarriedPorts {
+        values: vec![],
+        deps: vec![],
+    };
     if !parser.parse_token("iter_args") {
-        return Ok(vec![]);
+        return Ok(carried);
     }
     expect_token(parser, "(")?;
     let mut ports = vec![];
+    let mut dep_ports = vec![];
+    let mut deps = false;
     loop {
+        if !deps && parser.parse_token("|") {
+            deps = true;
+        }
         let acc_name = parser
             .parse_value_ref()
             .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
             .to_string();
         expect_token(parser, "=")?;
-        ports.push((acc_name, parse_value_id(parser, context)?));
-        if !parser.parse_token(",") {
+        let port = (acc_name, parse_value_id(parser, context)?);
+        if deps {
+            dep_ports.push(port);
+        } else {
+            ports.push(port);
+        }
+        if !parser.parse_token(",") && !(!deps && parser.peek_char() == Some('|')) {
             break;
         }
     }
@@ -1065,15 +1162,21 @@ fn parse_iter_args(
     if types.len() != ports.len() {
         return Err((parser.span(), Error::ExpectedType));
     }
-    Ok(ports
+    let mut bind = |(acc_name, init): (String, ValueId), ty: TypeId| {
+        let acc = context.create_value(ty, None);
+        parser.define_value(&acc_name, acc.id());
+        Carried { acc, init, ty }
+    };
+    carried.values = ports
         .into_iter()
         .zip(types)
-        .map(|((acc_name, init), ty)| {
-            let acc = context.create_value(ty, None);
-            parser.define_value(&acc_name, acc.id());
-            Carried { acc, init, ty }
-        })
-        .collect())
+        .map(|(port, ty)| bind(port, ty))
+        .collect();
+    carried.deps = dep_ports
+        .into_iter()
+        .map(|port| bind(port, TypeId::DEPENDENCY))
+        .collect();
+    Ok(carried)
 }
 
 /// Parse an optional `, %a, %b` trailing operand list.
@@ -1093,40 +1196,57 @@ fn parse_loop_body(
     parser: &mut tir::parse::text::Parser,
     context: &Context,
     scope: Option<Value>,
-    carried: Vec<Value>,
+    carried: &CarriedPorts,
 ) -> Result<tir::RegionId, (tir::parse::Span, Error)> {
-    let entry_args = scope.into_iter().chain(carried).collect();
+    let entry_args = scope.into_iter().chain(carried.accumulators()).collect();
     Ok(parser
-        .parse_region_with_entry_args(context, entry_args)?
+        .parse_region_with_entry_args_and_deps(context, entry_args, carried.dep_accumulators())?
         .id())
 }
 
-/// Parse `scf.while`'s `do(%b0, %b1)` clause, creating one body argument per carried
-/// port; a non-carrying loop has no clause.
+/// Parse `scf.while`'s `do(%b0, %b1 | %s)` clause, creating one body argument
+/// per carried port; a non-carrying loop has no clause.
 fn parse_body_carried(
     parser: &mut tir::parse::text::Parser,
     context: &Context,
-    carried: &[Carried],
-) -> Result<Vec<Value>, (tir::parse::Span, Error)> {
-    if carried.is_empty() {
-        return Ok(vec![]);
+    carried: &CarriedPorts,
+) -> Result<CarriedPorts, (tir::parse::Span, Error)> {
+    let mut body = CarriedPorts {
+        values: vec![],
+        deps: vec![],
+    };
+    if carried.values.is_empty() && carried.deps.is_empty() {
+        return Ok(body);
     }
     expect_token(parser, "(")?;
-    let mut values = vec![];
-    for port in carried {
-        if !values.is_empty() {
+    for port in &carried.values {
+        if !body.values.is_empty() {
             expect_token(parser, ",")?;
         }
         let name = parser
             .parse_value_ref()
             .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
             .to_string();
-        let value = context.create_value(port.ty, None);
-        parser.define_value(&name, value.id());
-        values.push(value);
+        let acc = context.create_value(port.ty, None);
+        parser.define_value(&name, acc.id());
+        body.values.push(Carried {
+            acc,
+            init: port.init,
+            ty: port.ty,
+        });
+    }
+    for (acc, port) in parse_dep_arguments(parser, context, carried.deps.len())?
+        .into_iter()
+        .zip(&carried.deps)
+    {
+        body.deps.push(Carried {
+            acc,
+            init: port.init,
+            ty: port.ty,
+        });
     }
     expect_token(parser, ")")?;
-    Ok(values)
+    Ok(body)
 }
 
 /// The loop body's carried arguments: every entry argument but the token scope.

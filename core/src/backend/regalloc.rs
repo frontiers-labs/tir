@@ -1317,9 +1317,9 @@ fn erase_stack_allocas(
             continue;
         }
         let op_ref = op_ref_in(context, alloca.op_id);
-        if let Some(published) = tir::builtin::trailing_state_result(context, op_ref.op()) {
+        if let Some(published) = op_ref.op().dep_results().first().copied() {
             let root = tir::state::EntryStateOpBuilder::new(context)
-                .result_type(tir::builtin::StateType::new(context))
+                .dep_result()
                 .build();
             let root_state = root.result();
             rewriter.insert_op_before(&op_ref, &root)?;
@@ -1403,7 +1403,7 @@ impl SlotChain {
     ) -> Result<(), PassError> {
         let observed = self.root(context, rewriter, before)?;
         self.read
-            .push(tir::builtin::put_on_chain(context, reload, observed));
+            .push(tir::dependency::put_on_chain(context, reload, observed));
         Ok(())
     }
 
@@ -1423,16 +1423,17 @@ impl SlotChain {
             [] => observed,
             [only] => *only,
             states => {
-                let join = tir::state::JoinOpBuilder::new(context)
-                    .states(states.to_vec())
-                    .result_type(tir::builtin::StateType::new(context))
-                    .build();
+                let mut join = tir::state::JoinOpBuilder::new(context).dep_result();
+                for &state in states {
+                    join = join.dep_operand(state);
+                }
+                let join = join.build();
                 let merged = join.result();
                 rewriter.insert_op_before(before, &join)?;
                 merged
             }
         };
-        self.written = Some(tir::builtin::put_on_chain(context, store, taken));
+        self.written = Some(tir::dependency::put_on_chain(context, store, taken));
         Ok(())
     }
 
@@ -1448,7 +1449,7 @@ impl SlotChain {
             return Ok(written);
         }
         let root = tir::state::EntryStateOpBuilder::new(context)
-            .result_type(tir::builtin::StateType::new(context))
+            .dep_result()
             .build();
         let state = root.result();
         rewriter.insert_op_before(before, &root)?;

@@ -9,10 +9,9 @@
 
 use crate::analysis::{DefUse, execution_regs, op_regs};
 use crate::backend::SymbolOp;
-use crate::builtin::{StateType, trailing_state_operand, trailing_state_result};
 use crate::{
     AnalysisManager, Context, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
-    PassTarget, Rewriter, Terminator, ValueId, func::FuncOp,
+    PassTarget, Rewriter, Terminator, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -95,10 +94,10 @@ fn erase_dead_with(
         // and the reads it hands over move to the state they now name — a write
         // whose state a forwarded reader took is still read.
         if let (Some(published), Some(observed)) = (
-            trailing_state_result(context, &instance),
-            trailing_state_operand(context, &instance),
+            instance.dep_results().first(),
+            instance.dep_operands().first(),
         ) {
-            context.replace_value_uses(published, observed);
+            context.replace_value_uses(*published, *observed);
         }
         // Read before the erase: the op's storage goes away with it.
         let used_regs = op_regs(&instance).uses;
@@ -154,7 +153,7 @@ fn is_erasable(context: &Context, instance: &OpHandle, regions: bool) -> bool {
         Some(mi) => mi.info().effects.reads && !mi.info().effects.writes,
         None => instance.has_interface::<dyn crate::MemoryRead>() && !writes_memory,
     };
-    let forwards_state = reads_only && trailing_state_operand(context, instance).is_some();
+    let forwards_state = reads_only && !instance.dep_operands().is_empty();
     // An allocation is the object its state names. With neither its address nor
     // that state read, the object is one nothing in the function can tell exists
     // — the slot sweep the chains make an ordinary def-use question.
@@ -178,14 +177,15 @@ fn is_erasable(context: &Context, instance: &OpHandle, regions: bool) -> bool {
         return false;
     }
 
-    let state = StateType::new(context);
-    let is_state =
-        |value: &ValueId| context.has_value(*value) && context.get_value(*value).ty() == state;
+    // A read hands its readers the dependency it took, so that result is not
+    // one keeping it alive; every other dependency an op leaves is a definition
+    // like its values.
+    let published = instance.dep_results();
     let mut defines = false;
     for def in regs
         .defs
         .iter()
-        .filter(|def| !(forwards_state && is_state(def)))
+        .chain(published.iter().filter(|_| !forwards_state))
     {
         defines = true;
         if context.is_used(*def) {

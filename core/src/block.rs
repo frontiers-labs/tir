@@ -12,7 +12,9 @@ pub struct BlockId(u32);
 /// through [`BlockHandle`]; nothing outside the context lock holds one of these.
 #[derive(Debug, Clone)]
 pub struct Block {
+    /// The block's arguments: values first, then its trailing dependencies.
     arguments: Vec<Value>,
+    dep_arguments: u32,
     operations: Vec<OpId>,
     /// Discardable metadata scoped to this block (e.g. `fpmath`), printed in the
     /// block label.
@@ -46,6 +48,7 @@ impl Block {
     pub(crate) fn new(arguments: Vec<Value>) -> Self {
         Self {
             arguments,
+            dep_arguments: 0,
             operations: vec![],
             attributes: vec![],
         }
@@ -63,6 +66,15 @@ impl Block {
 
     pub(crate) fn arguments(&self) -> &[Value] {
         &self.arguments
+    }
+
+    /// How many trailing arguments are dependencies.
+    pub(crate) fn dep_argument_count(&self) -> usize {
+        self.dep_arguments as usize
+    }
+
+    pub(crate) fn set_dep_argument_count(&mut self, count: usize) {
+        self.dep_arguments = count as u32;
     }
 
     pub(crate) fn attributes(&self) -> &[NamedAttribute] {
@@ -120,9 +132,26 @@ impl BlockHandle {
         self.id
     }
 
+    /// Every argument: the values, then the trailing dependencies.
     pub fn arguments(&self) -> Vec<Value> {
         self.context()
             .with_block(self.id, |block| block.arguments().to_vec())
+    }
+
+    /// The arguments that carry a value.
+    pub fn value_arguments(&self) -> Vec<Value> {
+        self.context().with_block(self.id, |block| {
+            let values = block.arguments().len() - block.dep_argument_count();
+            block.arguments()[..values].to_vec()
+        })
+    }
+
+    /// The arguments that are dependencies: the chains the block is entered on.
+    pub fn dep_arguments(&self) -> Vec<Value> {
+        self.context().with_block(self.id, |block| {
+            let values = block.arguments().len() - block.dep_argument_count();
+            block.arguments()[values..].to_vec()
+        })
     }
 
     pub fn attributes(&self) -> Vec<NamedAttribute> {

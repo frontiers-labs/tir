@@ -7,10 +7,10 @@
 
 module {data_layout = #data_layout} {
   %fn_f = func.func @f(%0: !ptr.p<!ptr.p<!i32>>, %1: !ptr.p<!i32>) -> !ptr.p<!i32> {
-    %2 = state.entry_state : !state
-    ptr.store %1, %0 state(%2 -> %3)
-    %4 = ptr.load %0 : !ptr.p<!i32> state(%3)
-    func.return %4 state(%3)
+    | %2 = state.entry_state
+    | %3 = ptr.store %1, %0 | %2
+    %4 = ptr.load %0 | %3 : !ptr.p<!i32>
+    func.return %4 | %3
   }
   module_end
 }

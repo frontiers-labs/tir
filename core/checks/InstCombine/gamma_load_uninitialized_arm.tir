@@ -23,8 +23,8 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @guarded
-// CHECK: %[[SLOT:[0-9]+]] = ptr.alloca
-// CHECK-NEXT: %[[UNINIT:[0-9]+]] = ptr.load %[[SLOT]]
+// CHECK: %[[SLOT:[0-9]+]] | %{{[0-9]+}} = ptr.alloca
+// CHECK-NEXT: %[[UNINIT:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[SLOT]]
 // CHECK-NEXT: %[[RESULT:[0-9]+]] = scf.if %0 -> !i32 {
 // CHECK-NEXT: scf.yield %1
 // CHECK-NEXT: }

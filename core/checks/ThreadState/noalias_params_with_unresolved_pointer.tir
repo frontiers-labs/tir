@@ -17,9 +17,9 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !ptr.p state(%[[ENTRY]] -> %[[A:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[ENTRY]] -> %[[B:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = state.join %[[A]], %[[B]] : !state
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%{{[0-9]+}} -> %[[S:[0-9]+]])
-// CHECK-NEXT: func.return state(%[[S]])
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: %{{[0-9]+}} | %[[A:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[ENTRY]] : !ptr.p
+// CHECK-NEXT: %{{[0-9]+}} | %[[B:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[ENTRY]] : !i32
+// CHECK-NEXT: | %{{[0-9]+}} = state.join | %[[A]], %[[B]]
+// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK-NEXT: func.return | %[[S]]

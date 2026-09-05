@@ -155,6 +155,9 @@ pub fn value_class(context: &Context, value: ValueId) -> Option<RegClassId> {
 
 /// The register class `ty` denotes, or `None` if it is not a register class type.
 pub fn type_class(context: &Context, ty: TypeId) -> Option<RegClassId> {
+    if ty == TypeId::DEPENDENCY {
+        return None;
+    }
     let data = context.get_type_data(ty);
     (data.as_ref() as &dyn Any)
         .downcast_ref::<RegClassType>()
@@ -234,8 +237,8 @@ pub fn reg_slots(op: &OpHandle) -> Vec<SlotRef> {
         return Vec::new();
     }
     let context = op.context.upgrade();
-    let operands = op.operands();
-    let results = op.results();
+    let operands = op.value_operands();
+    let results = op.value_results();
     let mut next_operand = 0;
     let mut next_result = 0;
     let mut slots = Vec::with_capacity(ports.len());

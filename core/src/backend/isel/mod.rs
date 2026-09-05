@@ -26,7 +26,6 @@ use tir::{
     AnalysisManager, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
     RegionId, Rewriter, TypeId, ValueId,
     analysis::{DominatorTree, scopes},
-    builtin::{trailing_state_operand, trailing_state_result},
     graph::{Dag, MutDag, NodeId, OperandConstraint},
     sem::{
         EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
@@ -164,7 +163,7 @@ pub struct EmitRequest<'a> {
     pub state: Option<StatePorts>,
 }
 
-/// The `!state` values an emitted instruction takes over from the IR access it
+/// The dependencies an emitted instruction takes over from the IR access it
 /// covers: memory order is the mid-end's, and selection only keeps the edges.
 #[derive(Clone, Copy, Debug)]
 pub struct StatePorts {
@@ -1850,9 +1849,9 @@ impl InstructionSelectPass {
             // that one left it: its readers take the state it observed. Only a
             // read is ever answered this way — a write's term is a state
             // nothing before it names, so no other access can stand for it.
-            if let (Some(published), Some(observed)) = (
-                trailing_state_result(context, &instance),
-                trailing_state_operand(context, &instance),
+            if let (Some(&published), Some(&observed)) = (
+                instance.dep_results().first(),
+                instance.dep_operands().first(),
             ) && !claimed.contains(&published)
                 && instance
                     .clone()
@@ -2099,18 +2098,17 @@ impl InstructionSelectPass {
                 continue;
             };
             let op = context.get_op(op_id);
-            let Some(observed) = trailing_state_operand(context, &op) else {
+            let Some(&observed) = op.dep_operands().first() else {
                 continue;
             };
             state_by_class
                 .entry(fs.egraph.find(root))
                 .or_insert(StatePorts {
                     observed,
-                    published: trailing_state_result(context, &op),
+                    published: op.dep_results().first().copied(),
                 });
         }
 
-        let state_ty = tir::builtin::StateType::new(context);
         let mut destinations = HashMap::new();
         let mut tile_results = HashMap::new();
         for &(class, _) in &tiles {
@@ -2119,11 +2117,8 @@ impl InstructionSelectPass {
             // instruction takes it over as its own, so it is not one of the
             // registers a tile defines.
             let mut results: Vec<ValueId> = source_op
-                .map(|op| context.get_op(op).results().to_vec())
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|value| context.get_value(*value).ty() != state_ty)
-                .collect();
+                .map(|op| context.get_op(op).value_results().to_vec())
+                .unwrap_or_default();
             let mut result_ty = results.first().map(|value| context.get_value(*value).ty());
             if results.is_empty() && node::class_is_pure(&fs.egraph, class) {
                 let ty = class_width(context, &fs.egraph, class)
@@ -2949,10 +2944,11 @@ fn canonical_roots(
 /// result rooting it (a result never used as an operand is absent from
 /// `value_to_class`). Sorted and deduped for a deterministic binding order.
 ///
-/// A `!state` value names memory, not a register. It is interned like any
-/// other operand — a memory term is a term over the chain it reads — but
-/// no tile ever materializes it, so it is not one of the values a class
-/// can be bound to or remapped onto.
+/// A dependency names memory, not a register. It is interned like any other
+/// operand — a memory term is a term over the chain it reads — but no tile
+/// ever materializes it, so it is not one of the values a class can be bound
+/// to or remapped onto. The table holds bare values, so the dependency is
+/// told by what it is rather than by the slot it came from.
 fn class_value_tables(
     context: &Context,
     egraph: &SemEGraph,
@@ -2960,10 +2956,9 @@ fn class_value_tables(
     value_to_def: &HashMap<ValueId, OpId>,
     op_block: &HashMap<OpId, BlockId>,
 ) -> (HashMap<Id, Vec<ValueId>>, HashMap<ValueId, Option<BlockId>>) {
-    let state_ty = crate::builtin::StateType::new(context);
     let mut class_values: HashMap<Id, Vec<ValueId>> = HashMap::new();
     for (&value, &class) in value_to_class {
-        if context.get_value(value).ty() == state_ty {
+        if context.get_value(value).is_dependency() {
             continue;
         }
         class_values

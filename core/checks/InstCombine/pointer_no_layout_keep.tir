@@ -6,15 +6,15 @@
 
 module {
   %fn_f = func.func @f(%0: !ptr.p<!ptr.p<!i32>>, %1: !ptr.p<!i32>) -> !ptr.p<!i32> {
-    %2 = state.entry_state : !state
-    ptr.store %1, %0 state(%2 -> %3)
-    %4 = ptr.load %0 : !ptr.p<!i32> state(%3)
+    | %2 = state.entry_state
+    | %3 = ptr.store %1, %0 | %2
+    %4 = ptr.load %0 | %3 : !ptr.p<!i32>
     func.return %4
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.store %1, %0 state(%[[S0:[0-9]+]] -> %[[S1:[0-9]+]])
-// CHECK-NEXT: %[[V:[0-9]+]] = ptr.load %0 : !ptr.p<!i32> state(%[[S1]])
+// CHECK: | %[[S1:[0-9]+]] = ptr.store %1, %0 | %[[S0:[0-9]+]]
+// CHECK-NEXT: %[[V:[0-9]+]] = ptr.load %0 | %[[S1]] : !ptr.p<!i32>
 // CHECK-NEXT: func.return %[[V]]

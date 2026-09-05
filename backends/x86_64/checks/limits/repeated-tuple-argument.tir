@@ -14,5 +14,5 @@ module {
   module_end
 }
 
-// CHECK:      asm.vcall {callee = "consume"
+// CHECK:      asm.vcall | %{{[0-9]+}} {callee = "consume"
 // CHECK-NOT:  make_tuple

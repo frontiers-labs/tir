@@ -11,7 +11,6 @@ use std::collections::{HashMap, HashSet};
 use tir_relational::{ClassId as Id, Engine};
 
 use crate::analysis::scopes::{carried_operands, port_edges, region_exit, tested_ports};
-use crate::builtin::StateType;
 use crate::sem::egraph::{minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
 use crate::state::JoinOp;
@@ -61,7 +60,6 @@ pub fn seed(context: &Context, root: OpId) -> Seeded {
         value_class: HashMap::new(),
         arg_block: HashMap::new(),
         seeded: HashSet::new(),
-        state_ty: StateType::new(context),
         pointer_width: crate::DataLayout::for_op(context, root)
             .and_then(|layout| layout.pointer_size()),
         loop_ports: Vec::new(),
@@ -83,7 +81,6 @@ struct Seeder<'a> {
     value_class: HashMap<ValueId, Id>,
     arg_block: HashMap<ValueId, BlockId>,
     seeded: HashSet<OpId>,
-    state_ty: TypeId,
     pointer_width: Option<u32>,
     loop_ports: Vec<LoopPorts>,
 }
@@ -318,7 +315,7 @@ impl Seeder<'_> {
             };
             let head = self.class_of(heads[port]);
             let classes: Vec<Id> = values.iter().map(|&value| self.class_of(value)).collect();
-            let state = self.context.get_value(carried[port]).ty() == self.state_ty;
+            let state = port >= carried.len() - instance.dep_results().len();
             let invariant = classes
                 .iter()
                 .all(|&edge| self.eg.find(edge) == self.eg.find(head));

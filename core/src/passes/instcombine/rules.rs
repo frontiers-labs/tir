@@ -514,7 +514,7 @@ fn cmpi(context: &Context, predicate: Predicate, ty: Option<TypeId>, children: V
 
 fn produces_integer(context: &Context, op: crate::OpId) -> bool {
     let instance = context.get_op(op);
-    instance.results().first().is_some_and(|&result| {
+    instance.value_results().first().is_some_and(|&result| {
         let ty = context.get_type_data(context.get_value(result).ty());
         (ty.as_ref() as &dyn std::any::Any)
             .downcast_ref::<IntegerType>()
@@ -525,6 +525,9 @@ fn produces_integer(context: &Context, op: crate::OpId) -> bool {
 /// The width of an integer type, by number; `None` for anything else.
 fn class_int_width_of(context: &Context, ty: u32) -> Option<u32> {
     let ty = TypeId::from_number(ty);
+    if ty == TypeId::DEPENDENCY {
+        return None;
+    }
     (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
         .downcast_ref::<IntegerType>()
         .map(IntegerType::width)

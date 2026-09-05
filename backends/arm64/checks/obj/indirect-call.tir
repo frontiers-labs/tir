@@ -15,7 +15,7 @@ module {
 
 // CHECK: asm.symbol {name = "caller"
 // CHECK-SAME: %[[CALLEE:[0-9]+]]:GPR[2],
-// CHECK: asm.vcall_indirect %[[CALLEE]] {
+// CHECK: asm.vcall_indirect %[[CALLEE]] | %{{[0-9]+}} {
 
 // blr x2: the call goes through the detached callee register.
 // OBJ: caller:

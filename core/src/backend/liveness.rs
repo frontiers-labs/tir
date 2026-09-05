@@ -89,12 +89,11 @@ fn ordered(a: u32, b: u32) -> (u32, u32) {
     (a.min(b), a.max(b))
 }
 
-/// Whether `value` is a register at all. A `!state` port names the memory an
-/// instruction observes and leaves behind: it is an SSA edge like any other, but
-/// it lives in no register, so allocation neither colors it nor interferes on it.
+/// Whether `value` is a register at all: one that still exists. A dependency
+/// port is an SSA edge like any other, but it lives in no register, and the
+/// register slots never name one.
 fn is_register(context: &Context, value: ValueId) -> bool {
     context.has_value(value)
-        && context.get_value(value).ty() != tir::builtin::StateType::new(context)
 }
 
 /// Every virtual register some instruction in `blocks` names, as a use or a def.
@@ -156,7 +155,7 @@ fn collect_block_infos(
         // spilling has rewritten away carries nothing, and keeping it would leave
         // the allocator a candidate whose spilling can never relieve pressure.
         let params: Vec<u32> = block
-            .arguments()
+            .value_arguments()
             .iter()
             .map(|v| v.id().number())
             .filter(|vreg| referenced.contains(vreg))

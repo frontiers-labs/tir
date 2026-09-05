@@ -19,13 +19,13 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NEXT: %[[ENTRY:[0-9]+]] = state.entry_state : !state
-// CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %[[A:[0-9]+]])
-// CHECK-NEXT: ptr.store %0, %{{[0-9]+}} state(%[[A]] -> %[[A1:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %[[R1:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A1]] -> %[[R2:[0-9]+]])
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: %{{[0-9]+}} | %[[A:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+// CHECK-NEXT: | %[[A1:[0-9]+]] = ptr.store %0, %{{[0-9]+}} | %[[A]]
+// CHECK-NEXT: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
+// CHECK-NEXT: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
 // CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
-// CHECK-NEXT: %[[J:[0-9]+]] = state.join %[[R1]], %[[R2]] : !state
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[J]] -> %[[A2:[0-9]+]])
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %{{[0-9]+}} : !i32 state(%[[A2]] -> %{{[0-9]+}})
-// CHECK-NEXT: func.return %{{[0-9]+}} state(%[[ENTRY]])
+// CHECK-NEXT: | %[[J:[0-9]+]] = state.join | %[[R1]], %[[R2]]
+// CHECK-NEXT: | %[[A2:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[J]]
+// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[A2]] : !i32
+// CHECK-NEXT: func.return %{{[0-9]+}} | %[[ENTRY]]

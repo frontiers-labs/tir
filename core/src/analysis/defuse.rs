@@ -44,9 +44,9 @@ pub struct OpRegs {
     pub phys_uses: Vec<PhysReg>,
 }
 
-/// The registers one op reads and writes: its SSA results and operands, the
+/// The registers one op reads and writes: its value results and operands, the
 /// physical registers its register slots name directly, and the registers a
-/// call destroys.
+/// call destroys. Dependencies live in no register and are not among them.
 pub fn op_regs(op: &OpHandle) -> OpRegs {
     op_regs_from(op, &crate::backend::reg_slots(op))
 }
@@ -55,8 +55,8 @@ pub fn op_regs(op: &OpHandle) -> OpRegs {
 /// wants both them and the registers — liveness reads every instruction once.
 pub fn op_regs_from(op: &OpHandle, slots: &[crate::backend::SlotRef]) -> OpRegs {
     let mut regs = OpRegs {
-        defs: op.results().to_vec(),
-        uses: op.operands().to_vec(),
+        defs: op.value_results().to_vec(),
+        uses: op.value_operands().to_vec(),
         phys_defs: Vec::new(),
         phys_uses: Vec::new(),
     };

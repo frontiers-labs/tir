@@ -19,6 +19,6 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.store %{{[0-9]+}}, %[[SLOT:[0-9]+]] state(%[[A:[0-9]+]] -> %[[A1:[0-9]+]])
-// CHECK-NEXT: func.call %{{[0-9]+}}(%[[SLOT]] : !ptr.p<!i32>) state(%[[A1]] -> %[[A2:[0-9]+]])
-// CHECK-NEXT: ptr.store %{{[0-9]+}}, %[[SLOT]] state(%[[A2]] -> %{{[0-9]+}})
+// CHECK: | %[[A1:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[SLOT:[0-9]+]] | %[[A:[0-9]+]]
+// CHECK-NEXT: | %[[A2:[0-9]+]] = func.call %{{[0-9]+}}(%[[SLOT]] : !ptr.p<!i32>) | %[[A1]]
+// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %[[SLOT]] | %[[A2]]

@@ -19,5 +19,5 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.store %1, %0 state(%{{[0-9]+}} -> %[[S:[0-9]+]])
-// CHECK: ptr.store %2, %0 state(%[[S]] -> %{{[0-9]+}})
+// CHECK: | %[[S:[0-9]+]] = ptr.store %1, %0 | %{{[0-9]+}}
+// CHECK: | %{{[0-9]+}} = ptr.store %2, %0 | %[[S]]

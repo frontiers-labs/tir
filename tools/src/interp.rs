@@ -129,7 +129,7 @@ fn format_value(context: &Context, value: &Value, ty: Option<tir::TypeId>) -> St
                 .collect();
             format!("({})", inner.join(", "))
         }
-        Value::Function(_) | Value::State | Value::Token | Value::Unit => spelled.clone(),
+        Value::Function(_) | Value::Token | Value::Unit => spelled.clone(),
     };
     format!("{spelled} {rendered}")
 }

@@ -5,9 +5,9 @@
 
 module {
   %fn_bad = func.func @bad(%0: !i32) {
-    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32> state(-> %2)
-    ptr.store %0, %1 state(%2 -> %3)
-    ptr.store %0, %1 state(%2 -> %4)
+    %1 | %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    | %3 = ptr.store %0, %1 | %2
+    | %4 = ptr.store %0, %1 | %2
     func.return
   }
   module_end

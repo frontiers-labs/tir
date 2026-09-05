@@ -16,7 +16,7 @@ module {
   module_end
 }
 
-// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: arm64.load_word_unsigned {{.*}} state(%[[ENTRY]] -> %[[READ:[0-9]+]])
-// CHECK-NEXT: arm64.store_word {{.*}} state(%[[READ]] -> %[[WRITTEN:[0-9]+]])
-// CHECK-NEXT: arm64.load_word_unsigned {{.*}} state(%[[WRITTEN]] -> %{{[0-9]+}})
+// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[READ:[0-9]+]] = arm64.load_word_unsigned {{.*}} | %[[ENTRY]]
+// CHECK-NEXT: | %[[WRITTEN:[0-9]+]] = arm64.store_word {{.*}} | %[[READ]]
+// CHECK-NEXT: | %{{[0-9]+}} = arm64.load_word_unsigned {{.*}} | %[[WRITTEN]]

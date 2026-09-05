@@ -2,12 +2,12 @@
 
 module {
   %fn_f = func.func @f() {
-    %0 = state.entry_state : !state
+    | %0 = state.entry_state
     func.return
   }
   module_end
 }
 
 // CHECK: %{{[0-9]+}} = func.func @f() {
-// CHECK-NEXT: %{{[0-9]+}} = state.entry_state : !state
+// CHECK-NEXT: | %{{[0-9]+}} = state.entry_state
 // CHECK-NEXT: func.return

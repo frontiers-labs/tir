@@ -8,16 +8,16 @@
 
 module {
   %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) -> !i32 {
-    %3 = state.entry_state : !state
-    ptr.store %1, %0 state(%3 -> %4)
-    %5 = ptr.load %0 : !i32 state(%4 -> %6)
-    ptr.store %2, %0 state(%6 -> %7)
-    func.return %5 state(%7)
+    | %3 = state.entry_state
+    | %4 = ptr.store %1, %0 | %3
+    %5 | %6 = ptr.load %0 | %4 : !i32
+    | %7 = ptr.store %2, %0 | %6
+    func.return %5 | %7
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: ptr.store %2, %0 state(%[[ENTRY]] -> %{{[0-9]+}})
+// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %2, %0 | %[[ENTRY]]
 // CHECK-NOT: ptr.store %1,

@@ -294,7 +294,7 @@ impl CallLowering {
                         .stack_arg_store(context, self.abi, fresh, class, offset)?;
                     rewriter.insert_op_before(op, store.as_ref())?;
                     observed = observed
-                        .map(|state| tir::builtin::put_on_chain(context, store.as_ref(), state));
+                        .map(|state| tir::dependency::put_on_chain(context, store.as_ref(), state));
                 }
             }
         }
@@ -345,7 +345,7 @@ impl CallLowering {
                     .attr("clobbers", clobbers)
                     .attr("uses", uses);
                 if let Some(observed) = observed {
-                    builder = builder.state(observed).state_result();
+                    builder = builder.dep_operand(observed).dep_result();
                 }
                 Box::new(builder.build())
             }
@@ -356,14 +356,14 @@ impl CallLowering {
                     .attr("clobbers", clobbers)
                     .attr("uses", uses);
                 if let Some(observed) = observed {
-                    builder = builder.state(observed).state_result();
+                    builder = builder.dep_operand(observed).dep_result();
                 }
                 Box::new(builder.build())
             }
         };
         if let (Some(published), Some(new)) = (
             published,
-            tir::builtin::trailing_state_result(context, &context.get_op(call.id())),
+            context.get_op(call.id()).dep_results().first().copied(),
         ) {
             context.replace_value_uses(published, new);
         }

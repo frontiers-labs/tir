@@ -109,12 +109,14 @@ pub(crate) fn class_register_type(
         egraph
             .nodes(class)
             .any(|node| {
-                node.ty.is_some_and(|ty| {
-                    let data = ctx.get_type_data(ty);
-                    (data.as_ref() as &dyn std::any::Any)
-                        .downcast_ref::<tir::ptr::PtrType>()
-                        .is_some()
-                })
+                node.ty
+                    .filter(|ty| *ty != tir::TypeId::DEPENDENCY)
+                    .is_some_and(|ty| {
+                        let data = ctx.get_type_data(ty);
+                        (data.as_ref() as &dyn std::any::Any)
+                            .downcast_ref::<tir::ptr::PtrType>()
+                            .is_some()
+                    })
             })
             .then(|| SemType::bits(width))
     })

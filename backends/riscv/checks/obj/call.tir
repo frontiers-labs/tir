@@ -12,7 +12,7 @@ module {
 
 // The call lowers to a virtual call carrying the callee symbol; the argument
 // and result travel through a0 via copies and ra is saved across the call.
-// ISEL: asm.vcall {callee = "foo"
+// ISEL: asm.vcall | %{{[0-9]+}} {callee = "foo"
 // ISEL-SAME: FPR32[0]
 
 // The callee's address is unknown until link time: the jal immediate stays

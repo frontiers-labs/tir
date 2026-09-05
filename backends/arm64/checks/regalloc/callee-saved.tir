@@ -25,7 +25,7 @@ module {
 // CHECK: arm64.sub_imm {rd = sp, rn = sp, imm = 16}
 // CHECK: arm64.store_doubleword {rt = x19, rn = sp, imm = 0}
 // CHECK: arm64.store_doubleword {rt = x20, rn = sp, imm = 8}
-// CHECK: asm.vcall {callee = "ext", outgoing_stack_size = 0, clobbers = [GPR[0], GPR[1], GPR[2], GPR[3], GPR[4], GPR[5], GPR[6], GPR[7], GPR[8], GPR[9], GPR[10], GPR[11], GPR[12], GPR[13], GPR[14], GPR[15], GPR[16], GPR[17], PSTATE[0], PSTATE[1], PSTATE[2], PSTATE[3], VPR[0]
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "ext", outgoing_stack_size = 0, clobbers = [GPR[0], GPR[1], GPR[2], GPR[3], GPR[4], GPR[5], GPR[6], GPR[7], GPR[8], GPR[9], GPR[10], GPR[11], GPR[12], GPR[13], GPR[14], GPR[15], GPR[16], GPR[17], PSTATE[0], PSTATE[1], PSTATE[2], PSTATE[3], VPR[0]
 // CHECK-SAME: VPR[31]]
 // The call reads what the convention placed: x0 holds the argument, and sp
 // holds the return address it pushes.

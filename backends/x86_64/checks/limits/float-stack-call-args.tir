@@ -15,5 +15,5 @@ module {
 // CHECK: x86_64.add_imm {dst = rsp, dst_tied = rsp, imm = -24}
 // CHECK: x86_64.movsd {dst = %{{[0-9]+}}:xmm{{[0-9]+}}, src = %{{[0-9]+}}:xmm0}
 // CHECK: x86_64.movsd_store_disp {base = rsp, src = %{{[0-9]+}}:xmm{{[0-9]+}}, imm = 0}
-// CHECK: asm.vcall {callee = "consume"
+// CHECK: asm.vcall | %{{[0-9]+}} {callee = "consume"
 // CHECK: x86_64.add_imm {dst = rsp, dst_tied = rsp, imm = 24}

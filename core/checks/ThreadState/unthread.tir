@@ -1,9 +1,9 @@
 // RUN: tir opt --pass func.func(thread-state,unthread) --verify %s | filecheck %s
 
-// The inverse of threading. Every `!state` value and every `state` op goes, and
-// what is left is the program the order was drawn over. State ports are the
-// trailing ones on operands, results and block arguments, so removing them is
-// popping suffixes rather than per-chain surgery.
+// The inverse of threading. Every dependency and every `state` op goes, and
+// what is left is the program the order was drawn over. Dependencies are the
+// trailing partition of operands, results and block arguments, so removing them
+// is truncating lists rather than per-chain surgery.
 
 module {
   %g = global @g align 4 bytes [0, 0, 0, 0]
