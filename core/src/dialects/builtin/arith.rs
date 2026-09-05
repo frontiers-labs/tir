@@ -311,7 +311,7 @@ operation! {
         name: "cmpi",
         dialect: "builtin",
         attributes: A {
-            predicate: "Str",
+            predicate: "Predicate in INTEGER",
         },
         operands: O {
             lhs: "crate::builtin::IntegerType",
@@ -335,23 +335,24 @@ impl CmpIOp {
             Leaf = tir::sem::SymPayload<tir::ValueId>,
         >,
     ) -> Option<tir::graph::NodeId> {
+        use tir::attributes::Predicate;
         use tir::sem::SymKind;
 
-        let predicate = match self.0.attr("predicate")? {
-            tir::attributes::AttributeValue::Str(s) => s,
-            _ => return None,
+        let tir::attributes::AttributeValue::Predicate(predicate) = self.0.attr("predicate")?
+        else {
+            return None;
         };
-        let (kind, swap) = match &*predicate {
-            "eq" => (SymKind::Eq, false),
-            "ne" => (SymKind::Ne, false),
-            "slt" => (SymKind::Lt, false),
-            "sgt" => (SymKind::Lt, true),
-            "sge" => (SymKind::Ge, false),
-            "sle" => (SymKind::Ge, true),
-            "ult" => (SymKind::ULt, false),
-            "ugt" => (SymKind::ULt, true),
-            "uge" => (SymKind::UGe, false),
-            "ule" => (SymKind::UGe, true),
+        let swap = matches!(
+            predicate,
+            Predicate::Sgt | Predicate::Sle | Predicate::Ugt | Predicate::Ule
+        );
+        let kind = match if swap { predicate.swapped() } else { predicate } {
+            Predicate::Eq => SymKind::Eq,
+            Predicate::Ne => SymKind::Ne,
+            Predicate::Slt => SymKind::Lt,
+            Predicate::Sge => SymKind::Ge,
+            Predicate::Ult => SymKind::ULt,
+            Predicate::Uge => SymKind::UGe,
             _ => return None,
         };
 
@@ -369,15 +370,6 @@ impl CmpIOp {
         g.add_edge(node, lhs);
         g.add_edge(node, rhs);
         Some(node)
-    }
-}
-
-impl CmpIOpBuilder {
-    pub fn predicate(self, pred: &str) -> Self {
-        self.attr(
-            "predicate",
-            tir::attributes::AttributeValue::Str(pred.to_string().into()),
-        )
     }
 }
 

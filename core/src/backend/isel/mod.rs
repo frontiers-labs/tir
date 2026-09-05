@@ -889,7 +889,8 @@ struct ConditionExpr {
     compare: Option<(Id, SymKind, Id, Id)>,
 }
 
-pub type OpLowering = fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool, PassError>;
+pub type OpLowering =
+    Box<dyn Fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool, PassError> + Send + Sync>;
 
 pub struct InstructionSelectPass {
     rules: Vec<Rule>,
@@ -1252,8 +1253,14 @@ impl InstructionSelectPass {
         self
     }
 
-    pub fn with_op_lowering(mut self, lowering: OpLowering) -> Self {
-        self.op_lowerings.push(lowering);
+    pub fn with_op_lowering(
+        mut self,
+        lowering: impl Fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool, PassError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.op_lowerings.push(Box::new(lowering));
         self
     }
 
@@ -1266,6 +1273,30 @@ impl InstructionSelectPass {
             abi, emitter,
         ));
         self
+    }
+
+    /// Drop the scratch of the previous function when `op` starts a new one.
+    ///
+    /// Everything below is keyed by op, block or value id and describes one
+    /// function; nothing of it is true of the next. An op with regions that
+    /// sits *under* a function already solved is part of that function, and is
+    /// told apart by having a solved op above it.
+    fn begin_function(&mut self, context: &Context, op: &OperationRef) {
+        let mut enclosing = context.parent_op(op.op().id);
+        while let Some(id) = enclosing {
+            if self.solved.contains(&id) {
+                return;
+            }
+            enclosing = context.parent_op(id);
+        }
+        self.solved.clear();
+        self.plans.clear();
+        self.emitted_blocks.clear();
+        self.emitted_values.clear();
+        self.region_values.clear();
+        if let Some(lowering) = &mut self.call_lowering {
+            lowering.reset();
+        }
     }
 
     /// Build the shared function e-graph and solve every block up front. Called
@@ -2826,6 +2857,7 @@ impl Pass for InstructionSelectPass {
         // reads the guard condition's *defining op*, which a dominator's commit
         // would otherwise have replaced by the time the dominated block solves.
         if !op.op().regions().is_empty() {
+            self.begin_function(context, op);
             if let Some(lowering) = &mut self.call_lowering {
                 lowering.prepare_function(context, op, rewriter)?;
             }

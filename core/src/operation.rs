@@ -1,3 +1,4 @@
+use crate::run::{AttrRunId, RunId};
 use crate::{
     BlockId, Context, ContextIterator, Error, GetFromContext,
     context::ContextRef,
@@ -657,6 +658,7 @@ fn attr_type_matches(attr_type: &str, value: &crate::attributes::AttributeValue)
         "Register" => matches!(value, V::Register(_)),
         "Type" => matches!(value, V::Type(_)),
         "Block" => matches!(value, V::Block(_)),
+        "Predicate" => matches!(value, V::Predicate(_)),
         _ => false,
     }
 }
@@ -682,6 +684,22 @@ pub fn verify_opdef_attributes(
                 "{op_name} attribute '{attr_name}' expected type '{attr_type}'"
             )));
         }
+
+        if let crate::attributes::AttributeValue::Predicate(predicate) = value
+            && !spec.vocabulary.is_empty()
+            && !spec.vocabulary.contains(&predicate)
+        {
+            let expected = spec
+                .vocabulary
+                .iter()
+                .map(|p| p.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(crate::Error::VerificationError(format!(
+                "{op_name} predicate '{}' is not in its vocabulary (expected {expected})",
+                predicate.name()
+            )));
+        }
     }
 
     Ok(())
@@ -702,43 +720,17 @@ impl OpNameId {
     }
 }
 
-fn pack_attributes(
-    attributes: Vec<crate::attributes::NamedAttribute>,
-) -> Option<Box<[crate::attributes::NamedAttribute]>> {
-    (!attributes.is_empty()).then(|| attributes.into_boxed_slice())
+/// An operation as it is described before the context stores it: the parts a
+/// builder assembles, handed to [`crate::Context::add_operation`] in one go.
+pub struct NewOp {
+    pub(crate) name: OpNameId,
+    pub(crate) operands: Vec<ValueId>,
+    pub(crate) results: Vec<ValueId>,
+    pub(crate) regions: Vec<RegionId>,
+    pub(crate) attributes: Vec<crate::attributes::NamedAttribute>,
 }
 
-/// SAFETY: `ValueId` is `#[repr(transparent)]` over `u32`, so the slices have
-/// identical layout.
-fn as_values(raw: &[u32]) -> &[ValueId] {
-    unsafe { std::slice::from_raw_parts(raw.as_ptr().cast::<ValueId>(), raw.len()) }
-}
-
-/// SAFETY: `RegionId` is `#[repr(transparent)]` over `u32`, so the slices have
-/// identical layout.
-fn as_regions(raw: &[u32]) -> &[RegionId] {
-    unsafe { std::slice::from_raw_parts(raw.as_ptr().cast::<RegionId>(), raw.len()) }
-}
-
-pub type ValueIds = smallvec::SmallVec<[ValueId; 4]>;
-pub type RegionIds = smallvec::SmallVec<[RegionId; 2]>;
-
-/// An operation's erased state: its identity plus its ports and attributes.
-///
-/// The ports live in one buffer, laid out as operands, then results, then
-/// regions, so that an op costs one allocation rather than four.
-#[derive(Debug, Clone)]
-pub struct OpInstance {
-    pub id: OpId,
-    name: OpNameId,
-    pub context: ContextRef,
-    ports: Vec<u32>,
-    operand_count: u32,
-    result_count: u32,
-    attributes: Option<Box<[crate::attributes::NamedAttribute]>>,
-}
-
-impl OpInstance {
+impl NewOp {
     pub fn new<T: Operation>(
         context: ContextRef,
         operands: Vec<ValueId>,
@@ -747,10 +739,16 @@ impl OpInstance {
         attributes: Vec<crate::attributes::NamedAttribute>,
     ) -> Self {
         let name = context.upgrade().intern_op_name(T::dialect(), T::name());
-        Self::pack(name, context, operands, results, regions, attributes)
+        NewOp {
+            name,
+            operands,
+            results,
+            regions,
+            attributes,
+        }
     }
 
-    /// Constructs an operation selected from textual input at a parser boundary.
+    /// Describes an operation selected from textual input at a parser boundary.
     pub fn new_dynamic(
         identity: (&'static str, &'static str),
         context: ContextRef,
@@ -761,157 +759,65 @@ impl OpInstance {
     ) -> Self {
         let (dialect, name) = identity;
         let name = context.upgrade().intern_op_name(dialect, name);
-        Self::pack(name, context, operands, results, regions, attributes)
-    }
-
-    fn pack(
-        name: OpNameId,
-        context: ContextRef,
-        operands: Vec<ValueId>,
-        results: Vec<ValueId>,
-        regions: Vec<RegionId>,
-        attributes: Vec<crate::attributes::NamedAttribute>,
-    ) -> Self {
-        let mut ports = Vec::with_capacity(operands.len() + results.len() + regions.len());
-        ports.extend(operands.iter().map(|id| id.number()));
-        ports.extend(results.iter().map(|id| id.number()));
-        ports.extend(regions.iter().map(|id| id.number()));
-        Self {
-            id: OpId::invalid(),
+        NewOp {
             name,
-            context,
-            ports,
-            operand_count: operands.len() as u32,
-            result_count: results.len() as u32,
-            attributes: pack_attributes(attributes),
+            operands,
+            results,
+            regions,
+            attributes,
         }
     }
+}
 
-    fn operand_end(&self) -> usize {
-        self.operand_count as usize
-    }
+pub type ValueIds = smallvec::SmallVec<[ValueId; 4]>;
+pub type RegionIds = smallvec::SmallVec<[RegionId; 2]>;
 
-    fn result_end(&self) -> usize {
-        (self.operand_count + self.result_count) as usize
-    }
+/// An operation's stored state: its identity, the cell holding its ports, and
+/// the cell holding its attributes.
+///
+/// Everything an op holds beyond these thirty-two bytes lives in the context's
+/// hives, so storing an operation allocates nothing; reading a port is one
+/// index into its run.
+#[derive(Debug, Clone)]
+pub struct OpInstance {
+    pub id: OpId,
+    pub(crate) name: OpNameId,
+    pub(crate) run: RunId,
+    pub(crate) operand_count: u16,
+    pub(crate) result_count: u16,
+    pub(crate) region_count: u16,
+    pub(crate) attrs: AttrRunId,
+    pub(crate) attr_count: u16,
+    /// Structural version, bumped along the spine by every tree edit; see
+    /// [`crate::Context::op_version`]. Never reset, so an id reused after an
+    /// erase cannot match a cached analysis of the op that held it.
+    pub(crate) version: u32,
+}
 
-    pub fn operands(&self) -> ValueIds {
-        ValueIds::from_slice(as_values(&self.ports[..self.operand_end()]))
-    }
-
-    pub fn results(&self) -> ValueIds {
-        ValueIds::from_slice(as_values(
-            &self.ports[self.operand_end()..self.result_end()],
-        ))
-    }
-
-    pub fn regions(&self) -> RegionIds {
-        RegionIds::from_slice(as_regions(&self.ports[self.result_end()..]))
-    }
-
-    pub fn attributes(&self) -> Vec<crate::attributes::NamedAttribute> {
-        self.attributes.as_deref().unwrap_or_default().to_vec()
-    }
-
+impl OpInstance {
     pub(crate) fn name_id(&self) -> OpNameId {
         self.name
     }
 
-    pub(crate) fn heap_bytes(&self) -> usize {
-        self.ports.capacity() * std::mem::size_of::<u32>()
-            + std::mem::size_of_val(self.attributes.as_deref().unwrap_or_default())
-    }
-
-    pub(crate) fn replace_operand_at(&mut self, index: usize, value: ValueId) {
-        assert!(index < self.operand_end());
-        self.ports[index] = value.number();
-    }
-
-    pub(crate) fn replace_result_at(&mut self, index: usize, value: ValueId) {
-        let port = self.operand_end() + index;
-        assert!(port < self.result_end());
-        self.ports[port] = value.number();
-    }
-
-    pub(crate) fn set_operands(&mut self, operands: Vec<ValueId>) {
-        self.ports.splice(
-            ..self.operand_end(),
-            operands.iter().map(|value| value.number()),
-        );
-        self.operand_count = operands.len() as u32;
-    }
-
-    pub(crate) fn push_operand(&mut self, value: ValueId) {
-        self.ports.insert(self.operand_end(), value.number());
-        self.operand_count += 1;
-    }
-
-    pub(crate) fn pop_operand(&mut self) {
-        if self.operand_count == 0 {
-            return;
-        }
-        self.ports.remove(self.operand_end() - 1);
-        self.operand_count -= 1;
-    }
-
-    pub(crate) fn push_result(&mut self, value: ValueId) {
-        self.ports.insert(self.result_end(), value.number());
-        self.result_count += 1;
-    }
-
-    pub(crate) fn pop_result(&mut self) -> Option<ValueId> {
-        if self.result_count == 0 {
-            return None;
-        }
-        let raw = self.ports.remove(self.result_end() - 1);
-        self.result_count -= 1;
-        Some(ValueId::from_number(raw))
-    }
-
-    pub(crate) fn rotate_operands_from(&mut self, index: usize) {
-        let end = self.operand_end();
-        self.ports[index..end].rotate_right(1);
-    }
-
-    pub(crate) fn rotate_results_from(&mut self, index: usize) {
-        let (start, end) = (self.operand_end(), self.result_end());
-        self.ports[start + index..end].rotate_right(1);
-    }
-
-    pub(crate) fn set_attributes(&mut self, attributes: Vec<crate::attributes::NamedAttribute>) {
-        self.attributes = pack_attributes(attributes);
-    }
-
-    pub(crate) fn attributes_mut(&mut self) -> &mut [crate::attributes::NamedAttribute] {
-        self.attributes.as_deref_mut().unwrap_or_default()
-    }
-
-    /// The attribute called `name`, already interned. Everything an operation
-    /// answers about itself that needs the context — its spelling, its parent —
-    /// is asked of an [`OpHandle`]; a record read here is read under the context
-    /// lock, which is not reentrant.
-    pub(crate) fn attr_sym(
-        &self,
-        name: tir_adt::Sym,
-    ) -> Option<&crate::attributes::AttributeValue> {
-        self.attributes
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .find(|attribute| attribute.name == name)
-            .map(|attribute| &attribute.value)
+    /// How many entries of its run the op is using.
+    pub(crate) fn port_count(&self) -> usize {
+        (self.operand_count + self.result_count + self.region_count) as usize
     }
 }
 
 /// A reference to an operation: the context that owns it, and its id.
 ///
 /// Reads go to the context's storage as they are asked for, so a handle always
-/// answers with the operation as it stands now. A handle to an erased operation
-/// reads as a panic, never as some other operation: ids are never reused.
+/// answers with the operation as it stands now. Ids *are* reused once the
+/// context is told to [`recycle`](crate::Context::recycle), so a handle also
+/// records the generation its id carried when it was minted:
+/// [`OpHandle::is_live`] answers whether it still names its own op, and debug
+/// builds additionally panic on any read through a handle that does not.
 #[derive(Clone)]
 pub struct OpHandle {
     pub context: ContextRef,
     pub id: OpId,
+    pub(crate) generation: u32,
 }
 
 impl std::fmt::Debug for OpHandle {
@@ -921,38 +827,46 @@ impl std::fmt::Debug for OpHandle {
 }
 
 impl OpHandle {
+    /// The owning context, after checking this handle still names its own op.
+    fn context(&self) -> crate::Context {
+        let context = self.context.upgrade();
+        #[cfg(debug_assertions)]
+        context.assert_op_generation(self.id, self.generation);
+        context
+    }
+
+    /// Whether this handle still names the operation it was minted for. False
+    /// once the op is erased, including when another op has taken its id.
+    pub fn is_live(&self) -> bool {
+        self.context.upgrade().op_generation(self.id) == self.generation
+    }
+
     pub fn operands(&self) -> ValueIds {
-        self.context
-            .upgrade()
-            .with_op(self.id, OpInstance::operands)
+        self.context().op_operands(self.id)
     }
 
     pub fn results(&self) -> ValueIds {
-        self.context.upgrade().with_op(self.id, OpInstance::results)
+        self.context().op_results(self.id)
     }
 
     pub fn regions(&self) -> RegionIds {
-        self.context.upgrade().with_op(self.id, OpInstance::regions)
+        self.context().op_regions(self.id)
     }
 
     pub fn attributes(&self) -> Vec<crate::attributes::NamedAttribute> {
-        self.context
-            .upgrade()
-            .with_op(self.id, OpInstance::attributes)
+        self.context().op_attributes(self.id)
     }
 
     /// The value of the attribute called `name`, resolving the name through the
     /// owning context's interner.
     pub fn attr(&self, name: &str) -> Option<crate::attributes::AttributeValue> {
-        self.context.upgrade().op_attr(self.id, name)
+        self.context().op_attr(self.id, name)
     }
 
     /// [`OpHandle::attr`] for a name already interned, which is the form a
     /// repeated lookup wants: the comparison is on `u32`s.
     pub fn attr_sym(&self, name: tir_adt::Sym) -> Option<crate::attributes::AttributeValue> {
-        self.context
-            .upgrade()
-            .with_op(self.id, |instance| instance.attr_sym(name).cloned())
+        self.context().op_attr_sym(self.id, name)
     }
 
     /// Returns an opaque name for textual output, not operation identity.
@@ -971,12 +885,12 @@ impl OpHandle {
     }
 
     fn identity(&self) -> (&'static str, &'static str) {
-        self.context.upgrade().op_identity(self.id)
+        self.context().op_identity(self.id)
     }
 
     /// The block that holds this operation, or `None` if it is detached or the root.
     pub fn parent_block(&self) -> Option<crate::BlockId> {
-        self.context.upgrade().parent_block(self.id)
+        self.context().parent_block(self.id)
     }
 
     /// Returns whether this operation has type `T`.
@@ -997,17 +911,17 @@ impl OpHandle {
     }
 
     pub fn as_dyn_op(self) -> Box<dyn Operation> {
-        let context = self.context.upgrade();
+        let context = self.context();
         context.get_dyn_op(self)
     }
 
     pub fn as_interface<I: ?Sized + 'static>(self) -> Option<Box<I>> {
-        let context = self.context.upgrade();
+        let context = self.context();
         context.get_op_interface::<I>(self)
     }
 
     pub fn has_interface<I: ?Sized + 'static>(&self) -> bool {
-        let context = self.context.upgrade();
+        let context = self.context();
         context.find_op_interface::<I>(self.identity()).is_some()
     }
 }
@@ -1019,6 +933,10 @@ impl Default for OpId {
 }
 
 impl OpId {
+    /// The def site of a value no operation defines: a block or region
+    /// argument. See [`crate::Value::defining_op`].
+    pub const ARGUMENT: OpId = OpId(u32::MAX);
+
     pub fn invalid() -> Self {
         Self::default()
     }
@@ -1029,6 +947,11 @@ impl OpId {
 
     pub(crate) fn index(self) -> usize {
         self.0 as usize
+    }
+
+    /// The hive handle backing this id.
+    pub(crate) fn raw(self) -> u32 {
+        self.0
     }
 
     /// Raw integer id, for stable identification across an FFI boundary.

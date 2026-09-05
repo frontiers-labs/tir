@@ -676,7 +676,9 @@ fn comparison_candidate(
 
 /// The `cmpf` graph for an equality predicate: floating equality is compound,
 /// so it has no single-kind candidate.
-fn floating_equality_candidate(predicate: &str) -> (tir_symbolic::sem::SemGraph, tir_graph::NodeId) {
+fn floating_equality_candidate(
+    predicate: tir_adt::Predicate,
+) -> (tir_symbolic::sem::SemGraph, tir_graph::NodeId) {
     let mut g = tir_symbolic::sem::SemGraph::new();
     let root = tir_symbolic::sem::cmpf_semantics(&mut g, predicate)
         .expect("the builtin floating comparison predicate must be valid");
@@ -711,7 +713,10 @@ fn find_equivalent_comparison(
         return ORDERED
             .iter()
             .map(|(kind, swap)| comparison_candidate(*kind, *swap))
-            .chain(["oeq", "une"].map(floating_equality_candidate))
+            .chain(
+                [tir_adt::Predicate::Oeq, tir_adt::Predicate::Une]
+                    .map(floating_equality_candidate),
+            )
             .find(|(candidate, _)| SmtOracle.equivalent_typed(composed, candidate, &symbols.types));
     }
     let fuzz = FuzzOracle::default();

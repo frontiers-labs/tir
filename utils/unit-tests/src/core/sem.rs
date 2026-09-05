@@ -73,16 +73,17 @@ fn ops_differing_in_attributes_stay_distinct() {
     let mut g: Engine<SemNode> = Engine::new();
     let x = g.add(konst(32, 0));
     let context = Context::with_default_dialects();
-    let cmpi = |pred: &str, args: Vec<Id>| {
+    let cmpi = |pred: tir::attributes::Predicate, args: Vec<Id>| {
         let attrs = vec![context.named_attribute(
             "predicate",
-            tir::attributes::AttributeValue::Str(pred.to_string().into()),
+            tir::attributes::AttributeValue::Predicate(pred),
         )];
         op("cmpi", ty(1), attrs, args)
     };
-    let slt = g.add(cmpi("slt", vec![x]));
-    let sgt = g.add(cmpi("sgt", vec![x]));
-    let slt2 = g.add(cmpi("slt", vec![x]));
+    use tir::attributes::Predicate;
+    let slt = g.add(cmpi(Predicate::Slt, vec![x]));
+    let sgt = g.add(cmpi(Predicate::Sgt, vec![x]));
+    let slt2 = g.add(cmpi(Predicate::Slt, vec![x]));
     assert_ne!(g.find(slt), g.find(sgt));
     assert_eq!(g.find(slt), g.find(slt2));
 }

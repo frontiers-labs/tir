@@ -74,6 +74,14 @@ impl CallLowering {
         }
     }
 
+    /// Drop the scratch of the function just finished. Both maps are keyed by
+    /// op id and describe one function, so they must not outlive it: a later
+    /// function's op reusing an id would otherwise read the old one's answer.
+    pub fn reset(&mut self) {
+        self.prepared_functions.clear();
+        self.tuple_argument_elements.clear();
+    }
+
     pub fn prepare_function(
         &mut self,
         context: &Context,

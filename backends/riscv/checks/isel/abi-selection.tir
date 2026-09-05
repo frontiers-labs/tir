@@ -10,5 +10,7 @@ module {
   module_end
 }
 
-// LP64: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %[[V1:[0-9]+]]:FPR64
-// LP64D: riscv.fsgnj.d {fd = %{{[0-9]+}}:FPR64, fs = %[[V1:[0-9]+]]:FPR64
+// LP64: arg_regs = [%[[V1:[0-9]+]]:GPR]
+// LP64: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %[[V1]]:GPR
+// LP64D: arg_regs = [%[[V1:[0-9]+]]:FPR64]
+// LP64D: riscv.fsgnj.d {fd = %{{[0-9]+}}:FPR64, fs = %[[V1]]:FPR64

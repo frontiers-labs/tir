@@ -189,6 +189,23 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         same_type,
     );
 
+    let predicate_setters: Vec<_> = attributes
+        .iter()
+        .filter(|attr| attr.ty == "Predicate")
+        .map(|attr| {
+            let method = op_fn_ident(&attr.name);
+            let name = attr.name.clone();
+            quote! {
+                pub fn #method(self, #method: tir::attributes::Predicate) -> Self {
+                    self.attr(#name, tir::attributes::AttributeValue::Predicate(#method))
+                }
+            }
+        })
+        .collect();
+    let attribute_pieces = AttributePieces {
+        verifier: attribute_verifier,
+        predicate_setters,
+    };
     let builder_code = emit_builder(
         &builder_name,
         &struct_name,
@@ -196,7 +213,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         &operand_pieces,
         &result_pieces,
         &state_pieces,
-        &attribute_verifier,
+        &attribute_pieces,
     );
     let result_accessor = &result_pieces.accessor;
     let op_fn_code = emit_op_fn(
@@ -313,7 +330,14 @@ fn emit_schema(
     });
     let attr_schema_entries = attributes.iter().map(|a| {
         let (n, t) = (&a.name, &a.ty);
-        quote! { tir::AttrSchema { name: #n, ty: #t } }
+        let vocabulary = match &a.vocabulary {
+            Some(name) => {
+                let ident = format_ident!("{}", name);
+                quote! { tir::attributes::Predicate::#ident }
+            }
+            None => quote! { &[] },
+        };
+        quote! { tir::AttrSchema { name: #n, ty: #t, vocabulary: #vocabulary } }
     });
     let interface_schema_entries = interfaces
         .iter()
@@ -383,6 +407,13 @@ fn emit_opdef_verifier(
     }
 }
 
+/// What an op's attribute declarations contribute to its builder: the
+/// required-attribute check `build` runs, and a typed setter per `Predicate`.
+struct AttributePieces {
+    verifier: proc_macro2::TokenStream,
+    predicate_setters: Vec<proc_macro2::TokenStream>,
+}
+
 fn emit_builder(
     builder_name: &Ident,
     struct_name: &Ident,
@@ -390,8 +421,10 @@ fn emit_builder(
     operands: &OperandPieces,
     results: &ResultPieces,
     state: &StatePieces,
-    attribute_verifier: &proc_macro2::TokenStream,
+    attributes: &AttributePieces,
 ) -> proc_macro2::TokenStream {
+    let (attribute_verifier, predicate_setters) =
+        (&attributes.verifier, &attributes.predicate_setters);
     let (region_fields, region_defaults, region_builders, region_fills) = (
         &regions.fields,
         &regions.defaults,
@@ -444,6 +477,7 @@ fn emit_builder(
 
             #(#region_builders)*
             #(#operand_builders)*
+            #(#predicate_setters)*
             #result_builder_method
             #state_builder_method
 
@@ -476,7 +510,7 @@ fn emit_builder(
                 #attributes_binding
                 #segment_sizes_attr
 
-                let instance = tir::OpInstance::new::<#struct_name>(
+                let instance = tir::NewOp::new::<#struct_name>(
                     self.context.as_context_ref(),
                     operand_vec,
                     result_vec,
@@ -1407,6 +1441,8 @@ fn has_true_flag(expr: &Expr, flag: &str) -> bool {
 struct AttrSpec {
     name: String,
     ty: String,
+    /// The `Predicate` vocabulary named by `"Predicate in INTEGER"`, if any.
+    vocabulary: Option<String>,
 }
 
 fn get_attributes(expr: &Expr) -> Option<Vec<AttrSpec>> {
@@ -1416,8 +1452,18 @@ fn get_attributes(expr: &Expr) -> Option<Vec<AttrSpec>> {
                 .iter()
                 .map(|f| {
                     let name = field_name(f);
-                    let ty = expr_as_string(&f.expr);
-                    AttrSpec { name, ty }
+                    let spelled = expr_as_string(&f.expr);
+                    let (ty, vocabulary) = match spelled.split_once(" in ") {
+                        Some((ty, vocabulary)) => {
+                            (ty.to_string(), Some(vocabulary.trim().to_string()))
+                        }
+                        None => (spelled, None),
+                    };
+                    AttrSpec {
+                        name,
+                        ty,
+                        vocabulary,
+                    }
                 })
                 .collect(),
         )

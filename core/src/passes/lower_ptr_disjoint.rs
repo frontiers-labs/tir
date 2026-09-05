@@ -71,7 +71,7 @@ fn precedes(
     let compare = CmpOpBuilder::new(context)
         .lhs(end.result())
         .rhs(other)
-        .predicate("ule")
+        .predicate(tir_adt::Predicate::Ule)
         .result_type(IntegerType::new(context, 1))
         .build();
     rewriter.insert_op_before(before, &compare)?;

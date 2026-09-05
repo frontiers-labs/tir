@@ -22,7 +22,7 @@ use crate::analysis::slots::{SlotState, agreed_value_type, collect_slots};
 use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::func::FuncOp;
 use crate::{
-    BlockHandle, Context, MemoryRead, MemoryWrite, OpHandle, OpId, OpInstance, OperationRef, Pass,
+    BlockHandle, Context, MemoryRead, MemoryWrite, NewOp, OpHandle, OpId, OperationRef, Pass,
     PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId, scf,
 };
 
@@ -292,7 +292,7 @@ impl Promoter<'_> {
                     .id()
             })
             .collect();
-        let copy = self.context.add_operation(OpInstance::new_dynamic(
+        let copy = self.context.add_operation(NewOp::new_dynamic(
             (template.dialect().as_str(), template.name().as_str()),
             self.context.as_context_ref(),
             template.operands().to_vec(),

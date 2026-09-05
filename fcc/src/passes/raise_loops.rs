@@ -313,7 +313,10 @@ fn counted_test(context: &Context, block: &BlockHandle) -> Option<(ValueId, Boun
         return None;
     }
     let compare = definer(context, rest, terminator.operands()[0])?;
-    if !compare.is::<CmpIOp>() || compare.attr("predicate") != Some(str_attr("slt")) {
+    if !compare.is::<CmpIOp>()
+        || compare.attr("predicate")
+            != Some(AttributeValue::Predicate(tir::attributes::Predicate::Slt))
+    {
         return None;
     }
     let load = definer(context, rest, compare.operands()[0])?;
@@ -440,10 +443,6 @@ fn definition(context: &Context, value: ValueId) -> Option<OpHandle> {
         .get_value(value)
         .defining_op()
         .map(|op| context.get_op(op))
-}
-
-fn str_attr(value: &str) -> AttributeValue {
-    AttributeValue::Str(value.to_string().into())
 }
 
 fn int_attr(op: &OpHandle, name: &str) -> Option<i64> {

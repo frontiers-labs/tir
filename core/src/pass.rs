@@ -333,8 +333,10 @@ pub trait Pass: Send {
 pub struct Rewriter {
     context: Context,
     /// Erased op to the op that took its place, so a pipeline can follow its
-    /// root through [`Rewriter::replace_op`].
-    replacements: HashMap<OpId, OpId>,
+    /// root through [`Rewriter::replace_op`]. Keyed by id *and* generation: an
+    /// erased op's id is handed straight to the next op created, so the id on
+    /// its own would name a stranger.
+    replacements: HashMap<(OpId, u32), OpHandle>,
 }
 
 impl Rewriter {
@@ -343,6 +345,13 @@ impl Rewriter {
             context,
             replacements: HashMap::new(),
         }
+    }
+
+    /// Record that `target` became `new`, so [`refreshed`] can follow a
+    /// pipeline root across the replacement.
+    fn record_replacement(&mut self, target: &OperationRef, new: OpId) {
+        let key = (target.op.id, target.op.generation);
+        self.replacements.insert(key, self.context.get_op(new));
     }
 
     /// The block holding `target`, read live from the context.
@@ -430,7 +439,7 @@ impl Rewriter {
     ) -> Result<(), PassError> {
         let block = self.block_of(target)?;
         if block.replace_op(target.op.id, new_op.id()) {
-            self.replacements.insert(target.op.id, new_op.id());
+            self.record_replacement(target, new_op.id());
             // Rewrite SSA uses of the old results to the new op's results when the
             // shapes line up, so consumers don't dangle on the erased op's values.
             let new_results = self.context.get_op(new_op.id()).results().to_vec();
@@ -475,7 +484,7 @@ impl Rewriter {
     ) -> Result<(), PassError> {
         let block = self.block_of(target)?;
         if block.replace_op(target.op.id, new_op.id()) {
-            self.replacements.insert(target.op.id, new_op.id());
+            self.record_replacement(target, new_op.id());
             let results = target.op.results().to_vec();
             self.context.remove_operation_except(target.op.id, &results);
             Ok(())
@@ -531,12 +540,12 @@ fn matches_op_name(op: &OpHandle, spec: &str) -> bool {
 /// erased root is followed through the replacements the rewriter recorded —
 /// that is how selection's machine symbol takes over from the function it was
 /// made of.
-fn refreshed(context: &Context, rewriter: &Rewriter, root: &OperationRef) -> Option<OperationRef> {
-    let mut id = root.op.id;
-    while !context.has_operation(id) {
-        id = *rewriter.replacements.get(&id)?;
+fn refreshed(rewriter: &Rewriter, root: &OperationRef) -> Option<OperationRef> {
+    let mut op = root.op.clone();
+    while !op.is_live() {
+        op = rewriter.replacements.get(&(op.id, op.generation))?.clone();
     }
-    Some(OperationRef::new(context.get_op(id)))
+    Some(OperationRef::new(op))
 }
 
 /// Whether `op`'s tree has entered the machine layer — it holds a target
@@ -711,7 +720,7 @@ impl PassManager {
     ) -> Result<OperationRef, PassError> {
         for entry in &mut self.passes {
             Self::run_entry(entry, self.verify_ir, context, &root, rewriter, analyses)?;
-            if let Some(current) = refreshed(context, rewriter, &root) {
+            if let Some(current) = refreshed(rewriter, &root) {
                 root = current;
             }
         }
@@ -796,27 +805,34 @@ impl PassManager {
     {
         // Read before the visit: it may erase `root`, and the walk still has to
         // descend into the regions the replacement took over.
-        let regions = root.op.regions();
+        let regions: Vec<_> = root
+            .op
+            .regions()
+            .iter()
+            .map(|id| context.get_region(*id))
+            .collect();
         f(root.clone())?;
-        for region_id in regions {
+        for region in regions {
             // The visit may have erased `root`, reclaiming the regions it owned;
             // a region the replacement took over is still live and still walked.
-            if !context.has_region(region_id) {
+            if !region.is_live() {
                 continue;
             }
-            let region = context.get_region(region_id);
             for block in region.iter(context.clone()) {
-                for op_id in block.op_ids() {
-                    // A pass run earlier in this walk may have erased or replaced a
-                    // later op in the same block (isel rewrites the whole block at
-                    // once); the id list read before the loop still holds the old id.
-                    // Skip ops that are no longer live — a replacement carries a new
-                    // id and isn't revisited.
-                    if !context.has_operation(op_id) {
+                // A pass run earlier in this walk may have erased or replaced a
+                // later op in the same block (isel rewrites the whole block at
+                // once); the snapshot below still holds the erased op. Handles,
+                // not ids: an erased op's id belongs to whatever took its slot.
+                let ops: Vec<_> = block
+                    .op_ids()
+                    .iter()
+                    .map(|id| context.get_op(*id))
+                    .collect();
+                for op in ops {
+                    if !op.is_live() {
                         continue;
                     }
-                    let child = OperationRef::new(context.get_op(op_id));
-                    PassManager::walk_ops(context, &child, f)?;
+                    PassManager::walk_ops(context, &OperationRef::new(op), f)?;
                 }
             }
         }

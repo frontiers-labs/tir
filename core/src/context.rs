@@ -2,12 +2,14 @@ use std::{
     any::Any,
     collections::HashMap,
     hash::{DefaultHasher, Hasher},
-    sync::{Arc, Weak, atomic::AtomicU32},
+    sync::{Arc, Weak},
 };
 
 use parking_lot::RwLock;
 
-use tir_adt::{Interner, Sym};
+use tir_adt::{Hive, Interner, Sym};
+
+use crate::run::{AttrRunId, AttrRuns, Entry, EntryId, NO_ENTRY, RunId, Runs};
 
 use crate::{
     Block, Dialect, Error, OpId, OpInstance, Operation, OperationParser, Region, TypeId,
@@ -107,75 +109,28 @@ fn clear_slot<T>(slab: &mut [Option<T>], idx: usize) {
     }
 }
 
-const NO_SLOT: u32 = u32::MAX;
-
-/// Dense storage for one entity kind: the entities themselves, packed back to
-/// back, plus the table saying where each dense id sits. Nothing may iterate
-/// `items` in place of the ids — an erase closes the hole with the last entity,
-/// so their order is not the ids' order. Walk `slots` instead.
-struct Slab<T> {
-    items: Vec<T>,
-    /// Where each id sits in `items`, or [`NO_SLOT`] for an id never created or
-    /// since erased.
-    slots: Vec<u32>,
+/// Erase counts per entity id, so a handle minted before a slot was reused can
+/// be told from one naming the entity that now holds it.
+#[derive(Default)]
+struct Generations {
+    ops: GenerationTable,
+    blocks: GenerationTable,
+    regions: GenerationTable,
 }
 
-impl<T> Slab<T> {
-    fn new() -> Self {
-        Slab {
-            items: Vec::new(),
-            slots: Vec::new(),
+#[derive(Default)]
+struct GenerationTable(Vec<u32>);
+
+impl GenerationTable {
+    fn get(&self, index: usize) -> u32 {
+        self.0.get(index).copied().unwrap_or(0)
+    }
+
+    fn bump(&mut self, index: usize) {
+        if index >= self.0.len() {
+            self.0.resize(index + 1, 0);
         }
-    }
-
-    fn slot(&self, index: usize) -> Option<usize> {
-        match self.slots.get(index).copied() {
-            Some(slot) if slot != NO_SLOT => Some(slot as usize),
-            _ => None,
-        }
-    }
-
-    fn get(&self, index: usize) -> Option<&T> {
-        self.slot(index).map(|slot| &self.items[slot])
-    }
-
-    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        self.slot(index).map(|slot| &mut self.items[slot])
-    }
-
-    /// Store `item` under `index`, replacing whatever that id held.
-    fn put(&mut self, index: usize, item: T) {
-        if let Some(slot) = self.slot(index) {
-            self.items[slot] = item;
-            return;
-        }
-        if index >= self.slots.len() {
-            self.slots.resize(index + 1, NO_SLOT);
-        }
-        self.slots[index] = self.items.len() as u32;
-        self.items.push(item);
-    }
-
-    /// Give an entity's storage back, closing the hole with the last live entity
-    /// and repairing that entity's slot, which `id_of` reads off it.
-    fn erase(&mut self, index: usize, id_of: impl Fn(&T) -> usize) {
-        let Some(slot) = self.slot(index) else {
-            return;
-        };
-        self.items.swap_remove(slot);
-        if let Some(moved) = self.items.get(slot) {
-            self.slots[id_of(moved)] = slot as u32;
-        }
-        self.slots[index] = NO_SLOT;
-    }
-
-    /// Ids in increasing order, live ones only.
-    fn live_ids(&self) -> impl Iterator<Item = usize> + '_ {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter(|(_, slot)| **slot != NO_SLOT)
-            .map(|(index, _)| index)
+        self.0[index] += 1;
     }
 }
 
@@ -189,16 +144,16 @@ struct Owned {
 }
 
 struct ContextInstance {
-    // Entities live densely in [`Slab`]s keyed by the monotonic id counters below;
-    // the reverse indices after them are plain side tables.
-    ops: Slab<OpInstance>,
-    last_op_id: AtomicU32,
-    values: Slab<Value>,
-    last_value_id: AtomicU32,
-    regions: Slab<Region>,
-    last_region_id: AtomicU32,
-    blocks: Slab<Block>,
-    last_block_id: AtomicU32,
+    // Entities live in chunked [`Hive`]s; an id *is* its hive handle, so a read
+    // costs no indirection. Slots and ids are reused once an entity is erased.
+    ops: Hive<OpInstance>,
+    values: Hive<Value>,
+    regions: Hive<Region>,
+    blocks: Hive<Block>,
+    /// Erase counts per entity kind. A slot is reused as soon as its entity is
+    /// erased, so an id alone no longer identifies an entity across an erase;
+    /// the pair of id and generation does. See [`OpHandle`].
+    generations: Generations,
     /// Reverse index from an operation to the block that holds it, maintained by
     /// `Block`'s membership mutators. Lets `parent_block` answer in O(1) instead of
     /// scanning every block's operation list.
@@ -211,17 +166,24 @@ struct ContextInstance {
     /// entered. The counterpart of [`Value::defining_op`] for values no operation
     /// defines, and what bounds the scope a use of such a value can sit in.
     value_block: Vec<Option<BlockId>>,
-    /// Use lists: value index → the operand slots naming it, one entry per slot.
-    /// Maintained by every operand mutator below, so it mirrors what live op
-    /// storage holds whether or not the op sits in the tree; it is what makes
-    /// "who reads this value" O(uses) instead of a walk.
-    value_uses: Vec<Vec<Use>>,
+    /// Ports: every op's operands, results and region ids, in one cell per op
+    /// drawn from a size-classed pool.
+    runs: Runs,
+    /// Attributes, pooled the same way.
+    attr_runs: AttrRuns,
+    /// Use lists: value index → the first operand entry naming it. The rest of
+    /// the list is threaded through the entries themselves, so a use costs no
+    /// storage beyond the port it already is, and "who reads this value" is
+    /// O(uses) rather than a walk.
+    first_use: Vec<u32>,
     /// Structural version per op, bumped along the spine root-ward by every
     /// tree edit; see [`Context::op_version`].
     op_version: Vec<u32>,
     /// Ops whose own subtree an edit touched since the last
-    /// [`Context::take_dirty_ops`], for scoping post-pass verification.
-    dirty_ops: Vec<OpId>,
+    /// [`Context::take_dirty_ops`], for scoping post-pass verification. Stamped
+    /// with the generation of the id, so an op erased before the drain is
+    /// dropped rather than resurrected as whatever took its slot.
+    dirty_ops: Vec<(OpId, u32)>,
     dialects: HashMap<&'static str, Arc<dyn Dialect>>,
     /// Register-class names of registered targets, for resolving a parsed
     /// `CLASS[n]` register attribute back to a [`RegClassId`].
@@ -245,57 +207,279 @@ struct ContextInstance {
 
 impl ContextInstance {
     fn op(&self, id: OpId) -> Option<&OpInstance> {
-        self.ops.get(id.index())
+        self.ops.get(id.raw())
     }
 
     fn op_mut(&mut self, id: OpId) -> Option<&mut OpInstance> {
-        self.ops.get_mut(id.index())
+        self.ops.get_mut(id.raw())
     }
 
     fn block(&self, id: BlockId) -> Option<&Block> {
-        self.blocks.get(id.index())
+        self.blocks.get(id.raw())
     }
 
     fn block_mut(&mut self, id: BlockId) -> Option<&mut Block> {
-        self.blocks.get_mut(id.index())
+        self.blocks.get_mut(id.raw())
     }
 
     fn region(&self, id: RegionId) -> Option<&Region> {
-        self.regions.get(id.index())
+        self.regions.get(id.raw())
     }
 
     fn region_mut(&mut self, id: RegionId) -> Option<&mut Region> {
-        self.regions.get_mut(id.index())
+        self.regions.get_mut(id.raw())
     }
 
     fn value(&self, id: ValueId) -> Option<&Value> {
-        self.values.get(id.index())
+        self.values.get(id.index() as u32)
     }
 
     fn value_mut(&mut self, id: ValueId) -> Option<&mut Value> {
-        self.values.get_mut(id.index())
+        self.values.get_mut(id.index() as u32)
     }
 
     fn erase_op(&mut self, id: OpId) {
-        self.ops.erase(id.index(), |op| op.id.index());
+        if let Some(instance) = self.ops.get(id.raw()) {
+            let (run, attrs) = (instance.run, instance.attrs);
+            self.runs.free(run);
+            self.attr_runs.free(attrs);
+            self.ops.remove(id.raw());
+            self.generations.ops.bump(id.index());
+        }
     }
 
     fn erase_block(&mut self, id: BlockId) {
-        self.blocks.erase(id.index(), |block| block.id().index());
+        if self.blocks.get(id.raw()).is_some() {
+            self.blocks.remove(id.raw());
+            self.generations.blocks.bump(id.index());
+        }
     }
 
     fn erase_region(&mut self, id: RegionId) {
-        self.regions.erase(id.index(), |region| region.id().index());
+        if self.regions.get(id.raw()).is_some() {
+            self.regions.remove(id.raw());
+            self.generations.regions.bump(id.index());
+        }
     }
 
     fn erase_value(&mut self, id: ValueId) {
-        self.values.erase(id.index(), |value| value.id().index());
+        if self.values.get(id.index() as u32).is_none() {
+            return;
+        }
+        self.values.remove(id.index() as u32);
+    }
+
+    /// Unthread the use list a recycled value id heads.
+    ///
+    /// An erased value keeps its use list: erasing a definition its readers
+    /// have not been rewritten off is how a rewrite stages an erase, and those
+    /// readers still answer "who names this". The list only stops meaning
+    /// anything when the id is handed to a new value, and the old entries have
+    /// to leave it then — a later unlink would otherwise splice through
+    /// whatever took their neighbours' cells.
+    fn clear_uses(&mut self, id: ValueId) {
+        let mut current = self.first_use.get(id.index()).copied().unwrap_or(NO_ENTRY);
+        while current != NO_ENTRY {
+            let entry = self.runs.entry_mut(EntryId::from_raw(current));
+            current = entry.next;
+            entry.next = NO_ENTRY;
+            entry.prev = NO_ENTRY;
+        }
+        if let Some(head) = self.first_use.get_mut(id.index()) {
+            *head = NO_ENTRY;
+        }
+    }
+
+    /// `op`'s ports, split into the three groups the run holds back to back.
+    fn ports(&self, op: OpId) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+        let Some(instance) = self.op(op) else {
+            return (Vec::new(), Vec::new(), Vec::new());
+        };
+        let (operands, results, regions) = (
+            instance.operand_count as usize,
+            instance.result_count as usize,
+            instance.region_count as usize,
+        );
+        let entries = self.runs.entries(instance.run);
+        let ids = |range: std::ops::Range<usize>| entries[range].iter().map(|e| e.id).collect();
+        (
+            ids(0..operands),
+            ids(operands..operands + results),
+            ids(operands + results..operands + results + regions),
+        )
+    }
+
+    /// Replace `op`'s ports wholesale, growing its run to the next size class
+    /// when the three groups no longer fit. Every operand use is relinked, so
+    /// the caller does no bookkeeping of its own.
+    fn set_ports(&mut self, op: OpId, operands: &[u32], results: &[u32], regions: &[u32]) {
+        self.unlink_operands(op);
+        let needed = operands.len() + results.len() + regions.len();
+        let Some(instance) = self.op(op) else {
+            return;
+        };
+        let mut run = instance.run;
+        if self.runs.capacity(run) < needed {
+            let live = self.op(op).expect("live op").port_count();
+            run = self.runs.grow(run, live, needed);
+        }
+        let entries = self.runs.entries_mut(run);
+        for (entry, id) in entries
+            .iter_mut()
+            .zip(operands.iter().chain(results).chain(regions))
+        {
+            entry.id = *id;
+            entry.next = NO_ENTRY;
+            entry.prev = NO_ENTRY;
+        }
+        let instance = self.op_mut(op).expect("live op");
+        instance.run = run;
+        instance.operand_count = operands.len() as u16;
+        instance.result_count = results.len() as u16;
+        instance.region_count = regions.len() as u16;
+        self.link_operands(op);
+    }
+
+    fn op_operands(&self, op: OpId) -> crate::operation::ValueIds {
+        let Some(instance) = self.op(op) else {
+            return Default::default();
+        };
+        self.runs.entries(instance.run)[..instance.operand_count as usize]
+            .iter()
+            .map(|entry| ValueId::from_number(entry.id))
+            .collect()
+    }
+
+    fn op_results(&self, op: OpId) -> crate::operation::ValueIds {
+        let Some(instance) = self.op(op) else {
+            return Default::default();
+        };
+        let start = instance.operand_count as usize;
+        let end = start + instance.result_count as usize;
+        self.runs.entries(instance.run)[start..end]
+            .iter()
+            .map(|entry| ValueId::from_number(entry.id))
+            .collect()
+    }
+
+    fn op_regions(&self, op: OpId) -> crate::operation::RegionIds {
+        let Some(instance) = self.op(op) else {
+            return Default::default();
+        };
+        let start = (instance.operand_count + instance.result_count) as usize;
+        let end = start + instance.region_count as usize;
+        self.runs.entries(instance.run)[start..end]
+            .iter()
+            .map(|entry| RegionId::new(entry.id))
+            .collect()
+    }
+
+    fn op_attrs(&self, op: OpId) -> &[NamedAttribute] {
+        match self.op(op) {
+            Some(instance) => self
+                .attr_runs
+                .get(instance.attrs, instance.attr_count as usize),
+            None => &[],
+        }
+    }
+
+    fn op_attrs_mut(&mut self, op: OpId) -> &mut [NamedAttribute] {
+        let Some(instance) = self.op(op) else {
+            return &mut [];
+        };
+        let (attrs, count) = (instance.attrs, instance.attr_count as usize);
+        self.attr_runs.get_mut(attrs, count)
+    }
+
+    fn set_op_attrs(&mut self, op: OpId, attributes: Vec<NamedAttribute>) {
+        let Some(instance) = self.op(op) else {
+            return;
+        };
+        let old = instance.attrs;
+        let count = attributes.len() as u16;
+        let attrs = self.attr_runs.alloc(attributes);
+        self.attr_runs.free(old);
+        let instance = self.op_mut(op).expect("live op");
+        instance.attrs = attrs;
+        instance.attr_count = count;
+    }
+
+    /// Point `op`'s `index`-th operand slot at `new`, moving the slot from one
+    /// value's use list to the other's.
+    fn replace_operand_at(&mut self, op: OpId, index: usize, new: ValueId) {
+        let entry = self.entry_of(op, index);
+        let old = ValueId::from_number(self.runs.entry(entry).id);
+        self.unlink_use(old, entry);
+        self.runs.entry_mut(entry).id = new.number();
+        self.link_use(new, entry);
+    }
+
+    fn replace_result_at(&mut self, op: OpId, index: usize, new: ValueId) {
+        let offset = self.op(op).expect("live op").operand_count as usize + index;
+        let entry = self.entry_of(op, offset);
+        self.runs.entry_mut(entry).id = new.number();
+    }
+
+    /// Move `op`'s run to a class holding `needed` entries, if its own is too
+    /// small. Entry addresses change with the move, so the operand use lists
+    /// are rebuilt across it.
+    fn reserve_ports(&mut self, op: OpId, needed: usize) {
+        let instance = self.op(op).expect("live op");
+        let (run, live) = (instance.run, instance.port_count());
+        if self.runs.capacity(run) >= needed {
+            return;
+        }
+        self.unlink_operands(op);
+        let grown = self.runs.grow(run, live, needed);
+        self.op_mut(op).expect("live op").run = grown;
+        self.link_operands(op);
+    }
+
+    /// Insert `id` at port position `at`, shifting the ports after it along.
+    ///
+    /// Shifting moves an entry's address, so every operand at or after `at`
+    /// would need relinking; callers pass an `at` no earlier than the end of
+    /// the operand group, and the shifted entries are then results and regions,
+    /// which sit in no use list.
+    /// Append `value` to `op`'s results. Results sit in no use list, so only
+    /// the region ids after them move.
+    fn append_result_port(&mut self, op: OpId, value: ValueId) {
+        let instance = self.op(op).expect("live op");
+        let at = (instance.operand_count + instance.result_count) as usize;
+        self.insert_port(op, at, value.number());
+        self.op_mut(op).expect("live op").result_count += 1;
+    }
+
+    fn insert_port(&mut self, op: OpId, at: usize, id: u32) {
+        let count = self.op(op).expect("live op").port_count();
+        debug_assert!(at >= self.op(op).expect("live op").operand_count as usize);
+        self.reserve_ports(op, count + 1);
+        let run = self.op(op).expect("live op").run;
+        let entries = self.runs.entries_mut(run);
+        entries[at..=count].rotate_right(1);
+        entries[at] = Entry::new(id);
+    }
+
+    /// Drop the port at `at`, shifting the ports after it back.
+    ///
+    /// Everything after `at` moves, so the caller must have unlinked the port
+    /// at `at` and must leave no linked operand behind it: the callers drop the
+    /// *last* operand or a result, so only unlinked entries move.
+    fn remove_port(&mut self, op: OpId, at: usize) -> u32 {
+        debug_assert!(at + 1 >= self.op(op).expect("live op").operand_count as usize);
+        let count = self.op(op).expect("live op").port_count();
+        let run = self.op(op).expect("live op").run;
+        let entries = self.runs.entries_mut(run);
+        let id = entries[at].id;
+        entries[at..count].rotate_left(1);
+        id
     }
 
     /// Record every operand slot of `op` under the value it holds.
     fn link_operands(&mut self, op: OpId) {
         for (index, value) in self.operand_slots(op) {
-            self.link_use(value, Use::new(op, index));
+            let entry = self.entry_of(op, index);
+            self.link_use(value, entry);
         }
     }
 
@@ -303,39 +487,104 @@ impl ContextInstance {
     /// before the op is erased or its operands are rewritten wholesale.
     fn unlink_operands(&mut self, op: OpId) {
         for (index, value) in self.operand_slots(op) {
-            self.unlink_use(value, Use::new(op, index));
+            let entry = self.entry_of(op, index);
+            self.unlink_use(value, entry);
         }
     }
 
-    /// `op`'s operands paired with their slot indices, copied out so the table
-    /// they are recorded in can be borrowed mutably.
+    /// `op`'s operands paired with their slot indices, copied out so the run
+    /// they live in can be borrowed mutably.
     fn operand_slots(&self, op: OpId) -> Vec<(usize, ValueId)> {
-        self.op(op)
-            .map(|instance| instance.operands().iter().copied().enumerate().collect())
-            .unwrap_or_default()
-    }
-
-    fn link_use(&mut self, value: ValueId, r#use: Use) {
-        if value.index() >= self.value_uses.len() {
-            self.value_uses.resize_with(value.index() + 1, Vec::new);
-        }
-        self.value_uses[value.index()].push(r#use);
-    }
-
-    fn unlink_use(&mut self, value: ValueId, r#use: Use) {
-        let Some(uses) = self.value_uses.get_mut(value.index()) else {
-            return;
+        let Some(instance) = self.op(op) else {
+            return Vec::new();
         };
-        if let Some(position) = uses.iter().position(|held| *held == r#use) {
-            uses.remove(position);
-        }
+        self.runs.entries(instance.run)[..instance.operand_count as usize]
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (index, ValueId::from_number(entry.id)))
+            .collect()
     }
 
-    fn uses(&self, value: ValueId) -> &[Use] {
-        self.value_uses
+    /// The address of `op`'s `index`-th port.
+    fn entry_of(&self, op: OpId, index: usize) -> EntryId {
+        let run = self.op(op).expect("live op").run;
+        self.runs.entry_id(run, index)
+    }
+
+    /// Splice `op`'s `index`-th operand slot onto the front of the use list of
+    /// the value it holds.
+    fn link_use(&mut self, value: ValueId, entry: EntryId) {
+        if value.index() >= self.first_use.len() {
+            self.first_use.resize(value.index() + 1, NO_ENTRY);
+        }
+        let head = self.first_use[value.index()];
+        {
+            let slot = self.runs.entry_mut(entry);
+            slot.prev = NO_ENTRY;
+            slot.next = head;
+        }
+        if head != NO_ENTRY {
+            self.runs.entry_mut(EntryId::from_raw(head)).prev = entry.raw();
+        }
+        self.first_use[value.index()] = entry.raw();
+    }
+
+    /// Splice `entry` out of the use list of `value`.
+    fn unlink_use(&mut self, value: ValueId, entry: EntryId) {
+        if value.index() >= self.first_use.len() {
+            return;
+        }
+        let (prev, next) = {
+            let slot = self.runs.entry(entry);
+            (slot.prev, slot.next)
+        };
+        if prev == NO_ENTRY {
+            if self.first_use[value.index()] != entry.raw() {
+                return;
+            }
+            self.first_use[value.index()] = next;
+        } else {
+            self.runs.entry_mut(EntryId::from_raw(prev)).next = next;
+        }
+        if next != NO_ENTRY {
+            self.runs.entry_mut(EntryId::from_raw(next)).prev = prev;
+        }
+        let slot = self.runs.entry_mut(entry);
+        slot.prev = NO_ENTRY;
+        slot.next = NO_ENTRY;
+    }
+
+    /// The head of `value`'s use list, or [`NO_ENTRY`] if nothing names it.
+    fn first_use(&self, value: ValueId) -> u32 {
+        self.first_use
             .get(value.index())
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+            .copied()
+            .unwrap_or(NO_ENTRY)
+    }
+
+    /// The entries naming `value`, newest first.
+    fn use_entries(&self, value: ValueId) -> impl Iterator<Item = EntryId> + '_ {
+        let mut current = self.first_use(value);
+        std::iter::from_fn(move || {
+            let entry = (current != NO_ENTRY).then(|| EntryId::from_raw(current))?;
+            current = self.runs.entry(entry).next;
+            Some(entry)
+        })
+    }
+
+    /// Every operand slot naming `value`, oldest first: the list is threaded
+    /// front-first, so the walk is reversed to restore the order the slots were
+    /// recorded in.
+    fn uses(&self, value: ValueId) -> Vec<Use> {
+        let mut uses: Vec<Use> = self
+            .use_entries(value)
+            .map(|entry| {
+                let (op, index) = self.runs.locate(entry);
+                Use::new(op, index)
+            })
+            .collect();
+        uses.reverse();
+        uses
     }
 
     /// The op enclosing `block`, if the block sits in a region owned by one.
@@ -355,13 +604,18 @@ impl ContextInstance {
             self.op_version.resize(op.index() + 1, 0);
         }
         self.op_version[op.index()] += 1;
+        let version = self.op_version[op.index()];
+        if let Some(instance) = self.op_mut(op) {
+            instance.version = version;
+        }
     }
 
     /// Record that `op`'s subtree changed. Consecutive edits to the same subtree
     /// collapse; [`Context::take_dirty_ops`] removes the rest of the duplicates.
     fn mark_dirty(&mut self, op: OpId) {
-        if self.dirty_ops.last() != Some(&op) {
-            self.dirty_ops.push(op);
+        let entry = (op, self.generations.ops.get(op.index()));
+        if self.dirty_ops.last() != Some(&entry) {
+            self.dirty_ops.push(entry);
         }
     }
 
@@ -426,18 +680,17 @@ impl Context {
     /// Create a new empty context with no registered dialects.
     pub fn new() -> Self {
         Context(Arc::new(RwLock::new(ContextInstance {
-            ops: Slab::new(),
-            last_op_id: AtomicU32::new(0),
-            values: Slab::new(),
-            last_value_id: AtomicU32::new(0),
-            regions: Slab::new(),
-            last_region_id: AtomicU32::new(0),
-            blocks: Slab::new(),
-            last_block_id: AtomicU32::new(0),
+            ops: Hive::new(),
+            values: Hive::new(),
+            regions: Hive::new(),
+            blocks: Hive::new(),
+            generations: Generations::default(),
             op_parent: Vec::new(),
             block_parent: Vec::new(),
             value_block: Vec::new(),
-            value_uses: Vec::new(),
+            runs: Runs::default(),
+            attr_runs: AttrRuns::default(),
+            first_use: Vec::new(),
             op_version: Vec::new(),
             dirty_ops: Vec::new(),
             dialects: HashMap::new(),
@@ -504,37 +757,74 @@ impl Context {
         NamedAttribute::new(self.intern(name), value)
     }
 
-    /// Slab capacities against live-entity counts, for the `TIR_MEM_STATS`
+    /// Hive capacities against live-entity counts, for the `TIR_MEM_STATS`
     /// census (see [`crate::memstats`]).
     pub fn slab_census(&self) -> crate::memstats::SlabCensus {
         let inner = self.0.read();
-        const SLOT_BYTES: usize = 4;
-        let ops_live = inner.ops.items.len();
-        let values_live = inner.values.items.len();
-        let blocks_live = inner.blocks.items.len();
-        let regions_live = inner.regions.items.len();
-        let ops_heap: usize = inner.ops.items.iter().map(OpInstance::heap_bytes).sum();
-        let blocks_heap: usize = inner.blocks.items.iter().map(Block::heap_bytes).sum();
-        let regions_heap: usize = inner.regions.items.iter().map(Region::heap_bytes).sum();
+        let blocks_heap: usize = inner
+            .blocks
+            .handles()
+            .filter_map(|handle| inner.blocks.get(handle))
+            .map(Block::heap_bytes)
+            .sum();
+        let regions_heap: usize = inner
+            .regions
+            .handles()
+            .filter_map(|handle| inner.regions.get(handle))
+            .map(Region::heap_bytes)
+            .sum();
+        let runs = inner.runs.census();
+        let attrs = inner.attr_runs.census();
         crate::memstats::SlabCensus {
-            ops_slab: inner.ops.slots.len(),
-            ops_live,
-            values_slab: inner.values.slots.len(),
-            values_live,
-            blocks_slab: inner.blocks.slots.len(),
-            blocks_live,
-            regions_slab: inner.regions.slots.len(),
-            regions_live,
-            ops_bytes: ops_live * std::mem::size_of::<OpInstance>() + ops_heap,
-            values_bytes: values_live * std::mem::size_of::<Value>(),
-            blocks_bytes: blocks_live * std::mem::size_of::<Block>() + blocks_heap,
-            regions_bytes: regions_live * std::mem::size_of::<Region>() + regions_heap,
-            slab_bytes: (inner.ops.slots.capacity()
-                + inner.values.slots.capacity()
-                + inner.blocks.slots.capacity()
-                + inner.regions.slots.capacity())
-                * SLOT_BYTES,
+            ops_slab: inner.ops.capacity(),
+            ops_live: inner.ops.len(),
+            values_slab: inner.values.capacity(),
+            values_live: inner.values.len(),
+            blocks_slab: inner.blocks.capacity(),
+            blocks_live: inner.blocks.len(),
+            regions_slab: inner.regions.capacity(),
+            regions_live: inner.regions.len(),
+            runs_live: runs.0,
+            runs_chunks: runs.1,
+            runs_bytes: runs.2,
+            attrs_live: attrs.0,
+            attrs_chunks: attrs.1,
+            attrs_bytes: attrs.2,
+            ops_chunks: inner.ops.chunk_count(),
+            values_chunks: inner.values.chunk_count(),
+            blocks_chunks: inner.blocks.chunk_count(),
+            regions_chunks: inner.regions.chunk_count(),
+            ops_bytes: inner.ops.bytes(),
+            values_bytes: inner.values.bytes(),
+            blocks_bytes: inner.blocks.bytes() + blocks_heap,
+            regions_bytes: inner.regions.bytes() + regions_heap,
+            slab_bytes: inner.ops.bytes()
+                + inner.values.bytes()
+                + inner.blocks.bytes()
+                + inner.regions.bytes()
+                + runs.2
+                + attrs.2,
         }
+    }
+
+    /// Hand the storage of erased operations' ports and attributes back for
+    /// reuse, and release the chunks that emptied.
+    ///
+    /// Entity ids are *not* recycled. An id is a value's or an operation's
+    /// name, and names outlive their bearers here: passes carry worklists of
+    /// ids across erases, and register allocation orders virtual registers by
+    /// value id, which reads "created later" off "numbered higher". Handing a
+    /// dead id to a new entity breaks both, and made a function's generated
+    /// code depend on what had been compiled before it. Runs carry no such
+    /// meaning — nothing outside this file ever names one — so they are the
+    /// storage that can be, and is, reused.
+    ///
+    /// The backend calls this once per function, where the function's machine
+    /// IR has been emitted and erased.
+    pub fn recycle(&self) {
+        let mut inner = self.0.write();
+        inner.runs.recycle();
+        inner.attr_runs.recycle();
     }
 
     pub fn as_context_ref(&self) -> ContextRef {
@@ -583,38 +873,69 @@ impl Context {
             })
     }
 
-    pub fn add_operation(&self, mut instance: OpInstance) -> OpHandle {
+    pub fn add_operation(&self, op: crate::operation::NewOp) -> OpHandle {
         let op_id = {
             let mut inner = self.0.write();
+            let op_id = OpId::new(inner.ops.insert_with(|handle| OpInstance {
+                id: OpId::new(handle),
+                name: op.name,
+                run: RunId::NONE,
+                operand_count: op.operands.len() as u16,
+                result_count: op.results.len() as u16,
+                region_count: op.regions.len() as u16,
+                attrs: AttrRunId::NONE,
+                attr_count: op.attributes.len() as u16,
+                version: 0,
+            }));
+            // An id reused after an erase must not answer a cached analysis of
+            // the op that held it; the version carries across the reuse.
+            inner.bump_version(op_id);
 
-            let op_id = OpId::new(
-                inner
-                    .last_op_id
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            );
-
-            instance.id = op_id;
+            let ids: Vec<u32> = op
+                .operands
+                .iter()
+                .map(|value| value.number())
+                .chain(op.results.iter().map(|value| value.number()))
+                .chain(op.regions.iter().map(|region| region.number()))
+                .collect();
+            let run = inner.runs.alloc(op_id, &ids);
+            let attrs = inner.attr_runs.alloc(op.attributes);
+            let instance = inner.op_mut(op_id).expect("just inserted");
+            instance.run = run;
+            instance.attrs = attrs;
 
             // Results are created before op id assignment in builders; patch their def-site now.
-            for result_id in instance.results() {
+            for result_id in op.results {
                 if let Some(value) = inner.value_mut(result_id) {
                     value.set_defining_op(op_id);
                 }
             }
 
-            for r in instance.regions() {
-                inner.region_mut(r).unwrap().set_parent_op(op_id);
+            for region in op.regions {
+                inner.region_mut(region).unwrap().set_parent_op(op_id);
             }
 
-            inner.ops.put(op_id.index(), instance);
             inner.link_operands(op_id);
             op_id
         };
 
+        self.op_handle(op_id)
+    }
+
+    /// Mint a handle for a live op, recording the generation its id carries so
+    /// the handle can tell itself from one naming the op that took the slot.
+    /// Takes the guard the caller already holds: minting is hot enough that a
+    /// second lock acquisition per handle shows up in a profile.
+    fn op_handle_in(&self, inner: &ContextInstance, id: OpId) -> OpHandle {
         OpHandle {
             context: self.as_context_ref(),
-            id: op_id,
+            id,
+            generation: inner.generations.ops.get(id.index()),
         }
+    }
+
+    fn op_handle(&self, id: OpId) -> OpHandle {
+        self.op_handle_in(&self.0.read(), id)
     }
 
     pub fn has_operation(&self, id: OpId) -> bool {
@@ -625,8 +946,8 @@ impl Context {
     /// regions.
     pub fn set_op_attributes(&self, id: OpId, attributes: Vec<crate::attributes::NamedAttribute>) {
         let mut inner = self.0.write();
-        if let Some(existing) = inner.op_mut(id) {
-            existing.set_attributes(attributes);
+        if inner.op(id).is_some() {
+            inner.set_op_attrs(id, attributes);
             inner.edit_op(id);
         }
     }
@@ -635,18 +956,22 @@ impl Context {
     /// to anything under it. Analyses cached against a version are stale as soon
     /// as it moves; see [`crate::analysis::AnalysisManager`].
     pub fn op_version(&self, op: OpId) -> u32 {
-        self.0
-            .read()
-            .op_version
-            .get(op.index())
-            .copied()
-            .unwrap_or(0)
+        let inner = self.0.read();
+        match inner.op(op) {
+            Some(instance) => instance.version,
+            // The retained counter outlives the op, so a cache keyed on an
+            // erased op's version can never match the op that took its id.
+            None => inner.op_version.get(op.index()).copied().unwrap_or(0),
+        }
     }
 
     /// The subtrees edited since the last call, innermost-dirtied op per edit and
     /// deduplicated. The pass manager drains this to scope post-pass verification.
     pub(crate) fn take_dirty_ops(&self) -> Vec<OpId> {
-        let mut dirty = std::mem::take(&mut self.0.write().dirty_ops);
+        let mut inner = self.0.write();
+        let mut dirty = std::mem::take(&mut inner.dirty_ops);
+        dirty.retain(|(op, generation)| inner.generations.ops.get(op.index()) == *generation);
+        let mut dirty: Vec<OpId> = dirty.into_iter().map(|(op, _)| op).collect();
         dirty.sort_unstable();
         dirty.dedup();
         dirty
@@ -677,19 +1002,11 @@ impl Context {
     /// register.
     pub fn set_op_operand(&self, id: OpId, index: usize, new: ValueId) {
         let mut inner = self.0.write();
-        match inner
-            .op(id)
-            .and_then(|op| op.operands().get(index).copied())
-        {
+        match inner.op_operands(id).get(index).copied() {
             Some(old) if old != new => {}
             _ => return,
         }
-        let old = inner.op(id).expect("live op").operands()[index];
-        if let Some(op) = inner.op_mut(id) {
-            op.replace_operand_at(index, new);
-        }
-        inner.unlink_use(old, Use::new(id, index));
-        inner.link_use(new, Use::new(id, index));
+        inner.replace_operand_at(id, index, new);
         inner.edit_op(id);
     }
 
@@ -701,9 +1018,9 @@ impl Context {
         if inner.op(id).is_none() {
             return;
         }
-        inner.unlink_operands(id);
-        inner.op_mut(id).expect("live op").set_operands(operands);
-        inner.link_operands(id);
+        let (_, results, regions) = inner.ports(id);
+        let operands: Vec<u32> = operands.iter().map(|value| value.number()).collect();
+        inner.set_ports(id, &operands, &results, &regions);
         inner.edit_op(id);
     }
 
@@ -712,13 +1029,11 @@ impl Context {
     /// spilled definition onto the fresh value the spill store writes back.
     pub fn set_op_result(&self, id: OpId, index: usize, new: ValueId) {
         let mut inner = self.0.write();
-        match inner.op(id).and_then(|op| op.results().get(index).copied()) {
+        match inner.op_results(id).get(index).copied() {
             Some(old) if old != new => {}
             _ => return,
         }
-        if let Some(op) = inner.op_mut(id) {
-            op.replace_result_at(index, new);
-        }
+        inner.replace_result_at(id, index, new);
         if let Some(value) = inner.value_mut(new) {
             value.set_defining_op(id);
         }
@@ -756,16 +1071,11 @@ impl Context {
     pub fn create_value(&self, ty: TypeId, defining_op: Option<OpId>) -> Value {
         let mut inner = self.0.write();
 
-        let value_id = ValueId::from_number(
-            inner
-                .last_value_id
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-        );
-
-        let value = Value::new(value_id, ty, defining_op);
-        inner.values.put(value_id.index(), value.clone());
-
-        value
+        let handle = inner
+            .values
+            .insert_with(|handle| Value::new(ValueId::from_number(handle), ty, defining_op));
+        inner.clear_uses(ValueId::from_number(handle));
+        inner.values.get(handle).expect("just inserted").clone()
     }
 
     pub fn get_value(&self, id: ValueId) -> Value {
@@ -785,17 +1095,10 @@ impl Context {
         }
 
         let mut inner = self.0.write();
-        let uses = std::mem::take(match inner.value_uses.get_mut(old.index()) {
-            Some(uses) => uses,
-            None => return,
-        });
+        let uses = inner.uses(old);
         let mut edited: Option<OpId> = None;
         for r#use in uses {
-            let Some(instance) = inner.op_mut(r#use.op) else {
-                continue;
-            };
-            instance.replace_operand_at(r#use.index, new);
-            inner.link_use(new, r#use);
+            inner.replace_operand_at(r#use.op, r#use.index, new);
             if edited != Some(r#use.op) {
                 inner.edit_op(r#use.op);
                 edited = Some(r#use.op);
@@ -809,10 +1112,10 @@ impl Context {
     /// after each mutating pass when IR verification is on.
     pub fn verify_use_lists(&self) -> Result<(), Error> {
         let inner = self.0.read();
-        let mut expected: Vec<Vec<Use>> = vec![Vec::new(); inner.value_uses.len()];
-        for index in inner.ops.live_ids() {
-            let op = OpId::new(index as u32);
-            for (slot, value) in inner.op(op).expect("live op").operands().iter().enumerate() {
+        let mut expected: Vec<Vec<Use>> = vec![Vec::new(); inner.first_use.len()];
+        for handle in inner.ops.handles() {
+            let op = OpId::new(handle);
+            for (slot, value) in inner.op_operands(op).iter().enumerate() {
                 if value.index() >= expected.len() {
                     expected.resize_with(value.index() + 1, Vec::new);
                 }
@@ -820,7 +1123,7 @@ impl Context {
             }
         }
         for (index, mut expected) in expected.into_iter().enumerate() {
-            let mut held = inner.value_uses.get(index).cloned().unwrap_or_default();
+            let mut held = inner.uses(ValueId::from_number(index as u32));
             let key = |r#use: &Use| (r#use.op.index(), r#use.index);
             expected.sort_unstable_by_key(key);
             held.sort_unstable_by_key(key);
@@ -844,20 +1147,21 @@ impl Context {
 
     /// The operations reading `value`, one entry per operand slot.
     pub fn users_of(&self, value: ValueId) -> Vec<OpId> {
-        self.0
-            .read()
-            .uses(value)
-            .iter()
-            .map(|r#use| r#use.op)
-            .collect()
+        let inner = self.0.read();
+        let mut users: Vec<OpId> = inner
+            .use_entries(value)
+            .map(|entry| inner.runs.locate(entry).0)
+            .collect();
+        users.reverse();
+        users
     }
 
     pub fn is_used(&self, value: ValueId) -> bool {
-        !self.0.read().uses(value).is_empty()
+        self.0.read().first_use(value) != NO_ENTRY
     }
 
     pub fn use_count(&self, value: ValueId) -> usize {
-        self.0.read().uses(value).len()
+        self.0.read().use_entries(value).count()
     }
 
     pub fn has_value(&self, id: ValueId) -> bool {
@@ -886,40 +1190,47 @@ impl Context {
     pub fn create_region(&self) -> RegionHandle {
         let mut inner = self.0.write();
 
-        let region_id = RegionId::new(
-            inner
-                .last_region_id
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-        );
+        let region_id = RegionId::new(inner.regions.insert(Region::new()));
+        drop(inner);
+        self.region_handle(region_id)
+    }
 
-        inner.regions.put(region_id.index(), Region::new(region_id));
-
+    /// Mint a handle for a live region; see [`Context::op_handle`].
+    fn region_handle_in(&self, inner: &ContextInstance, id: RegionId) -> RegionHandle {
         RegionHandle {
             context: self.as_context_ref(),
-            id: region_id,
+            generation: inner.generations.regions.get(id.index()),
+            id,
         }
+    }
+
+    fn region_handle(&self, id: RegionId) -> RegionHandle {
+        self.region_handle_in(&self.0.read(), id)
     }
 
     pub fn create_block(&self, arguments: Vec<Value>) -> BlockHandle {
         let mut inner = self.0.write();
 
-        let block_id = BlockId::new(
-            inner
-                .last_block_id
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-        );
-
-        for argument in &arguments {
-            slab_put(&mut inner.value_block, argument.id().index(), block_id);
+        let argument_ids: Vec<ValueId> = arguments.iter().map(Value::id).collect();
+        let block_id = BlockId::new(inner.blocks.insert(Block::new(arguments)));
+        for argument in argument_ids {
+            slab_put(&mut inner.value_block, argument.index(), block_id);
         }
-        inner
-            .blocks
-            .put(block_id.index(), Block::new(block_id, arguments));
+        drop(inner);
+        self.block_handle(block_id)
+    }
 
+    /// Mint a handle for a live block; see [`Context::op_handle`].
+    fn block_handle_in(&self, inner: &ContextInstance, id: BlockId) -> BlockHandle {
         BlockHandle {
             context: self.as_context_ref(),
-            id: block_id,
+            generation: inner.generations.blocks.get(id.index()),
+            id,
         }
+    }
+
+    fn block_handle(&self, id: BlockId) -> BlockHandle {
+        self.block_handle_in(&self.0.read(), id)
     }
 
     /// Append `value`'s type as a new entry argument of `block` and return the
@@ -952,8 +1263,11 @@ impl Context {
         let Some(entry) = inner.block_mut(block) else {
             return;
         };
-        entry.arguments_mut().push(adopted.clone());
-        inner.values.put(value.index(), adopted);
+        entry.arguments_mut().push(adopted);
+        inner
+            .value_mut(value)
+            .expect("live value")
+            .clear_defining_op();
         slab_put(&mut inner.value_block, value.index(), block);
         inner.edit_block(block);
     }
@@ -975,13 +1289,16 @@ impl Context {
     pub fn append_operand(&self, op: OpId, value: ValueId) {
         let mut inner = self.0.write();
         let segment_sizes = inner.names.intern("operand_segment_sizes");
-        let Some(instance) = inner.op_mut(op) else {
+        if inner.op(op).is_none() {
             return;
-        };
-        instance.push_operand(value);
-        let index = instance.operands().len() - 1;
-        if let Some(attribute) = instance
-            .attributes_mut()
+        }
+        let index = inner.op(op).expect("live op").operand_count as usize;
+        inner.insert_port(op, index, value.number());
+        inner.op_mut(op).expect("live op").operand_count += 1;
+        let entry = inner.entry_of(op, index);
+        inner.link_use(value, entry);
+        if let Some(attribute) = inner
+            .op_attrs_mut(op)
             .iter_mut()
             .find(|attribute| attribute.name == segment_sizes)
             && let crate::attributes::AttributeValue::Array(sizes) = &mut attribute.value
@@ -989,7 +1306,6 @@ impl Context {
         {
             *last += 1;
         }
-        inner.link_use(value, Use::new(op, index));
         inner.edit_op(op);
     }
 
@@ -998,10 +1314,10 @@ impl Context {
     /// original published this way, so the chain crosses the rewrite intact.
     pub fn adopt_result(&self, op: OpId, value: ValueId) {
         let mut inner = self.0.write();
-        let Some(instance) = inner.op_mut(op) else {
+        if inner.op(op).is_none() {
             return;
-        };
-        instance.push_result(value);
+        }
+        inner.append_result_port(op, value);
         if let Some(value) = inner.value_mut(value) {
             value.set_defining_op(op);
         }
@@ -1013,26 +1329,23 @@ impl Context {
     pub fn pop_operand(&self, op: OpId) {
         let mut inner = self.0.write();
         let segment_sizes = inner.names.intern("operand_segment_sizes");
-        let Some(instance) = inner.op_mut(op) else {
-            return;
+        let count = match inner.op(op) {
+            Some(instance) if instance.operand_count > 0 => instance.operand_count as usize,
+            _ => return,
         };
-        let dropped = instance
-            .operands()
-            .last()
-            .copied()
-            .map(|value| (value, instance.operands().len() - 1));
-        instance.pop_operand();
-        if let Some(attribute) = instance
-            .attributes_mut()
+        let entry = inner.entry_of(op, count - 1);
+        let value = ValueId::from_number(inner.runs.entry(entry).id);
+        inner.unlink_use(value, entry);
+        inner.remove_port(op, count - 1);
+        inner.op_mut(op).expect("live op").operand_count -= 1;
+        if let Some(attribute) = inner
+            .op_attrs_mut(op)
             .iter_mut()
             .find(|attribute| attribute.name == segment_sizes)
             && let crate::attributes::AttributeValue::Array(sizes) = &mut attribute.value
             && let Some(crate::attributes::AttributeValue::UInt(last)) = sizes.last_mut()
         {
             *last -= 1;
-        }
-        if let Some((value, index)) = dropped {
-            inner.unlink_use(value, Use::new(op, index));
         }
         inner.edit_op(op);
     }
@@ -1041,12 +1354,15 @@ impl Context {
     /// with the edit. The inverse of the result [`Context::grow_port`] adds.
     pub fn pop_result(&self, op: OpId) {
         let mut inner = self.0.write();
-        let Some(instance) = inner.op_mut(op) else {
-            return;
+        let at = match inner.op(op) {
+            Some(instance) if instance.result_count > 0 => {
+                (instance.operand_count + instance.result_count) as usize - 1
+            }
+            _ => return,
         };
-        if let Some(result) = instance.pop_result() {
-            inner.erase_value(result);
-        }
+        let result = inner.remove_port(op, at);
+        inner.op_mut(op).expect("live op").result_count -= 1;
+        inner.erase_value(ValueId::from_number(result));
         inner.edit_op(op);
     }
 
@@ -1129,8 +1445,11 @@ impl Context {
             return;
         };
         let mut inner = self.0.write();
-        if let Some(instance) = inner.op_mut(op) {
-            instance.rotate_results_from(index);
+        if let Some(instance) = inner.op(op) {
+            let start = instance.operand_count as usize + index;
+            let end = (instance.operand_count + instance.result_count) as usize;
+            let run = instance.run;
+            inner.runs.entries_mut(run)[start..end].rotate_right(1);
             inner.edit_op(op);
         }
     }
@@ -1147,12 +1466,9 @@ impl Context {
         };
         let mut inner = self.0.write();
         if inner.op(op).is_some() {
-            inner.unlink_operands(op);
-            inner
-                .op_mut(op)
-                .expect("live op")
-                .rotate_operands_from(index);
-            inner.link_operands(op);
+            let (mut operands, results, regions) = inner.ports(op);
+            operands[index..].rotate_right(1);
+            inner.set_ports(op, &operands, &results, &regions);
             inner.edit_op(op);
         }
         index
@@ -1180,8 +1496,8 @@ impl Context {
     fn append_result(&self, op: OpId, ty: TypeId) -> ValueId {
         let result = self.create_value(ty, Some(op)).id();
         let mut inner = self.0.write();
-        if let Some(instance) = inner.op_mut(op) {
-            instance.push_result(result);
+        if inner.op(op).is_some() {
+            inner.append_result_port(op, result);
             inner.edit_op(op);
         }
         result
@@ -1307,10 +1623,10 @@ impl Context {
     /// Drop the storage of entities that have left the IR, and the reverse-index
     /// entries that pointed into it.
     ///
-    /// Slots are emptied, never handed to another entity: ids come from monotonic
-    /// per-context counters and are never reused, so a stale id can only read as
-    /// "gone", never as some later entity. The empty slot costs one entry until
-    /// the context dies; the entity behind it is freed here.
+    /// The hive slot goes back on its chunk's free list, so a later entity of the
+    /// same kind can take the id. A handle minted before the reuse names the
+    /// generation it was minted with and panics rather than reading its
+    /// successor; see [`OpHandle`].
     fn free(&self, owned: Owned) {
         let mut inner = self.0.write();
         for op in owned.ops {
@@ -1332,24 +1648,27 @@ impl Context {
     }
 
     fn find_op(&self, id: OpId) -> Option<OpHandle> {
-        self.0.read().op(id).is_some().then(|| OpHandle {
-            context: self.as_context_ref(),
-            id,
-        })
+        let inner = self.0.read();
+        inner
+            .op(id)
+            .is_some()
+            .then(|| self.op_handle_in(&inner, id))
     }
 
     fn find_block(&self, id: BlockId) -> Option<BlockHandle> {
-        self.0.read().block(id).is_some().then(|| BlockHandle {
-            context: self.as_context_ref(),
-            id,
-        })
+        let inner = self.0.read();
+        inner
+            .block(id)
+            .is_some()
+            .then(|| self.block_handle_in(&inner, id))
     }
 
     fn find_region(&self, id: RegionId) -> Option<RegionHandle> {
-        self.0.read().region(id).is_some().then(|| RegionHandle {
-            context: self.as_context_ref(),
-            id,
-        })
+        let inner = self.0.read();
+        inner
+            .region(id)
+            .is_some()
+            .then(|| self.region_handle_in(&inner, id))
     }
 
     /// Insert `op` into `block` at `index`, recording the new parent.
@@ -1537,20 +1856,16 @@ impl Context {
     /// The handle naming `id`. Panics for an id no live block has: a handle reads
     /// the block as it stands, and an erased one does not stand.
     pub fn get_block(&self, id: BlockId) -> BlockHandle {
-        self.0.read().block(id).expect("live block");
-        BlockHandle {
-            context: self.as_context_ref(),
-            id,
-        }
+        let inner = self.0.read();
+        inner.block(id).expect("live block");
+        self.block_handle_in(&inner, id)
     }
 
     /// The handle naming `id`; see [`Context::get_block`].
     pub fn get_region(&self, id: RegionId) -> RegionHandle {
-        self.0.read().region(id).expect("live region");
-        RegionHandle {
-            context: self.as_context_ref(),
-            id,
-        }
+        let inner = self.0.read();
+        inner.region(id).expect("live region");
+        self.region_handle_in(&inner, id)
     }
 
     /// The handle naming `id`. Panics for an id no live operation has: a handle
@@ -1558,10 +1873,55 @@ impl Context {
     pub fn get_op(&self, id: OpId) -> OpHandle {
         let inner = self.0.read();
         inner.op(id).expect("live operation");
-        OpHandle {
-            context: self.as_context_ref(),
-            id,
-        }
+        self.op_handle_in(&inner, id)
+    }
+
+    /// The number of times `id`'s slot has been erased, so a caller holding an
+    /// id across an erase can tell the entity it named from the one that took
+    /// its place. See [`OpHandle`].
+    pub(crate) fn op_generation(&self, id: OpId) -> u32 {
+        self.0.read().generations.ops.get(id.index())
+    }
+
+    /// [`Context::op_generation`] for a block.
+    pub(crate) fn block_generation(&self, id: BlockId) -> u32 {
+        self.0.read().generations.blocks.get(id.index())
+    }
+
+    /// [`Context::op_generation`] for a region.
+    pub(crate) fn region_generation(&self, id: RegionId) -> u32 {
+        self.0.read().generations.regions.get(id.index())
+    }
+
+    /// Panic if `id`'s slot has been reused since a handle was minted with
+    /// `generation`.
+    #[cfg(debug_assertions)]
+    pub(crate) fn assert_op_generation(&self, id: OpId, generation: u32) {
+        assert_eq!(
+            self.0.read().generations.ops.get(id.index()),
+            generation,
+            "handle to erased operation {id:?}"
+        );
+    }
+
+    /// [`Context::assert_op_generation`] for a block.
+    #[cfg(debug_assertions)]
+    pub(crate) fn assert_block_generation(&self, id: BlockId, generation: u32) {
+        assert_eq!(
+            self.0.read().generations.blocks.get(id.index()),
+            generation,
+            "handle to erased block {id:?}"
+        );
+    }
+
+    /// [`Context::assert_op_generation`] for a region.
+    #[cfg(debug_assertions)]
+    pub(crate) fn assert_region_generation(&self, id: RegionId, generation: u32) {
+        assert_eq!(
+            self.0.read().generations.regions.get(id.index()),
+            generation,
+            "handle to erased region {id:?}"
+        );
     }
 
     /// Read an attribute of `op` in place. For an attribute large enough that
@@ -1577,15 +1937,37 @@ impl Context {
     ) -> Option<R> {
         let inner = self.0.read();
         let name = inner.names.lookup(name)?;
-        inner.op(id)?.attr_sym(name).map(read)
+        inner
+            .op_attrs(id)
+            .iter()
+            .find(|attribute| attribute.name == name)
+            .map(|attribute| read(&attribute.value))
     }
 
-    /// Read an operation's storage record under the context lock.
-    ///
-    /// `read` must not touch the context: the lock is not reentrant.
-    pub(crate) fn with_op<R>(&self, id: OpId, read: impl FnOnce(&OpInstance) -> R) -> R {
-        let inner = self.0.read();
-        read(inner.op(id).expect("live operation"))
+    pub(crate) fn op_operands(&self, id: OpId) -> crate::operation::ValueIds {
+        self.0.read().op_operands(id)
+    }
+
+    pub(crate) fn op_results(&self, id: OpId) -> crate::operation::ValueIds {
+        self.0.read().op_results(id)
+    }
+
+    pub(crate) fn op_regions(&self, id: OpId) -> crate::operation::RegionIds {
+        self.0.read().op_regions(id)
+    }
+
+    pub(crate) fn op_attributes(&self, id: OpId) -> Vec<NamedAttribute> {
+        self.0.read().op_attrs(id).to_vec()
+    }
+
+    /// [`OpHandle::attr_sym`]: the lookup is a `u32` compare per attribute.
+    pub(crate) fn op_attr_sym(&self, id: OpId, name: Sym) -> Option<AttributeValue> {
+        self.0
+            .read()
+            .op_attrs(id)
+            .iter()
+            .find(|attribute| attribute.name == name)
+            .map(|attribute| attribute.value.clone())
     }
 
     /// [`OpHandle::attr`]: the name is resolved in the same lock as the lookup.
@@ -1593,10 +1975,10 @@ impl Context {
         let inner = self.0.read();
         let name = inner.names.lookup(name)?;
         inner
-            .op(id)
-            .expect("live operation")
-            .attr_sym(name)
-            .cloned()
+            .op_attrs(id)
+            .iter()
+            .find(|attribute| attribute.name == name)
+            .map(|attribute| attribute.value.clone())
     }
 
     /// The `(dialect, name)` pair `id` is spelled by.

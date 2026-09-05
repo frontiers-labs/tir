@@ -31,7 +31,7 @@ use crate::analysis::scopes;
 use crate::{
     AnalysisManager, BlockId, ConstantLike, Context, LoopLike, MemoryRead, MemoryWrite, OpId,
     OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
-    attributes::AttributeValue,
+    attributes::{AttributeValue, Predicate},
     builtin::{StateType, ops},
     func::FuncOp,
     utils::APInt,
@@ -634,12 +634,12 @@ impl Driver<'_> {
         if !instance.is::<ops::CmpIOp>() {
             return None;
         }
-        let AttributeValue::Str(predicate) = instance.attr("predicate")? else {
+        let AttributeValue::Predicate(predicate) = instance.attr("predicate")? else {
             return None;
         };
-        let equal = match &*predicate {
-            "eq" => holds,
-            "ne" => !holds,
+        let equal = match predicate {
+            Predicate::Eq => holds,
+            Predicate::Ne => !holds,
             _ => return None,
         };
         let [lhs, rhs] = instance.operands()[..] else {

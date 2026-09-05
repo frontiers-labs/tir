@@ -624,11 +624,11 @@ impl tir::backend::TargetMachine for Arm64Target {
     }
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        vec![obj::lower_sym_addr]
+        vec![Box::new(obj::lower_sym_addr)]
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        vec![obj::finalize_virtual_ops]
+        vec![Box::new(obj::finalize_virtual_ops)]
     }
 
     fn object_format(&self) -> Option<tir::backend::binary::ObjectFormatInfo> {

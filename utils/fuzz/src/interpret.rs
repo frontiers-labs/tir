@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tir::attributes::AttributeValue;
+use tir::attributes::{AttributeValue, Predicate};
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
 use tir::{Context, OpId, Operation, RegionId, ValueId};
@@ -56,16 +56,16 @@ fn run(context: &Context, ops: Vec<OpId>, values: &mut HashMap<ValueId, i64>) ->
             Some(read(0)?.wrapping_mul(read(1)?))
         } else if named("builtin", "cmpi") {
             let (left, right) = (read(0)?, read(1)?);
-            let AttributeValue::Str(predicate) = instance.attr("predicate")? else {
+            let AttributeValue::Predicate(predicate) = instance.attr("predicate")? else {
                 return None;
             };
-            Some(i64::from(match &*predicate {
-                "eq" => left == right,
-                "ne" => left != right,
-                "slt" => left < right,
-                "sgt" => left > right,
-                "sle" => left <= right,
-                "sge" => left >= right,
+            Some(i64::from(match predicate {
+                Predicate::Eq => left == right,
+                Predicate::Ne => left != right,
+                Predicate::Slt => left < right,
+                Predicate::Sgt => left > right,
+                Predicate::Sle => left <= right,
+                Predicate::Sge => left >= right,
                 _ => return None,
             }))
         } else {

@@ -526,6 +526,7 @@ fn hash_attr_value(value: &AttributeValue, h: &mut impl Hasher) {
     std::mem::discriminant(value).hash(h);
     match value {
         AttributeValue::Str(s) => s.hash(h),
+        AttributeValue::Predicate(p) => (*p as u8).hash(h),
         AttributeValue::Int(i) => i.hash(h),
         AttributeValue::UInt(u) => u.hash(h),
         AttributeValue::F32(f) => f.to_bits().hash(h),

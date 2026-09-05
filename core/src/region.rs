@@ -11,22 +11,16 @@ pub struct RegionId(u32);
 /// [`RegionHandle`].
 #[derive(Debug)]
 pub struct Region {
-    id: RegionId,
     blocks: Vec<BlockId>,
     parent_op: OpId,
 }
 
 impl Region {
-    pub(crate) fn new(id: RegionId) -> Region {
+    pub(crate) fn new() -> Region {
         Region {
-            id,
             blocks: vec![],
             parent_op: OpId::invalid(),
         }
-    }
-
-    pub(crate) fn id(&self) -> RegionId {
-        self.id
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
@@ -56,6 +50,7 @@ impl Region {
 #[derive(Clone)]
 pub struct RegionHandle {
     pub context: ContextRef,
+    pub(crate) generation: u32,
     pub id: RegionId,
 }
 
@@ -66,32 +61,46 @@ impl std::fmt::Debug for RegionHandle {
 }
 
 impl RegionHandle {
+    /// The owning context, after checking this handle still names its own region.
+    fn context(&self) -> Context {
+        let context = self.context.upgrade();
+        #[cfg(debug_assertions)]
+        context.assert_region_generation(self.id, self.generation);
+        context
+    }
+
+    /// Whether this handle still names the region it was minted for; see
+    /// [`crate::OpHandle::is_live`].
+    pub fn is_live(&self) -> bool {
+        self.context.upgrade().region_generation(self.id) == self.generation
+    }
+
     pub fn id(&self) -> RegionId {
         self.id
     }
 
     /// The operation owning this region, if it has been attached to one.
     pub fn parent_op(&self) -> Option<OpId> {
-        self.context.upgrade().region_parent_op(self.id)
+        self.context().region_parent_op(self.id)
     }
 
     pub fn add_block(&self, id: BlockId) {
-        self.context.upgrade().add_block_to_region(self.id, id);
+        self.context().add_block_to_region(self.id, id);
     }
 
     pub fn remove_block(&self, id: BlockId) -> bool {
-        self.context.upgrade().remove_block_from_region(self.id, id)
+        self.context().remove_block_from_region(self.id, id)
     }
 
     pub fn block_ids(&self) -> Vec<BlockId> {
-        self.context.upgrade().region_block_ids(self.id)
+        self.context().region_block_ids(self.id)
     }
 
     /// Replace the whole block list at once. Only [`Context::replace_region_contents`]
     /// uses this: it owns the parent bookkeeping and the single version bump the
     /// swap is allowed to make, which the per-block mutators above would each repeat.
     pub(crate) fn set_blocks(&self, blocks: Vec<BlockId>) {
-        self.context.upgrade().set_region_blocks(self.id, blocks);
+        self.context().set_region_blocks(self.id, blocks);
     }
 
     pub fn iter(&self, context: Context) -> ContextIterator<BlockId> {
@@ -135,6 +144,11 @@ impl RegionId {
 
     pub(crate) fn index(self) -> usize {
         self.0 as usize
+    }
+
+    /// The hive handle backing this id.
+    pub(crate) fn raw(self) -> u32 {
+        self.0
     }
 }
 

@@ -18,7 +18,7 @@ use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
 use tir::backend::asm_syntax::{AsmSyntaxPart, InstrSyntax};
 use tir::backend::{SectionOp, SymbolEndOp, SymbolOp};
 use tir::builtin::{ModuleEndOpBuilder, ModuleOp, ModuleOpBuilder};
-use tir::{Context, OpHandle, OpId, OpInstance, Operation};
+use tir::{Context, NewOp, OpHandle, OpId, Operation};
 
 use super::{LabelOp, LabelOpBuilder};
 
@@ -565,7 +565,7 @@ fn parse_instruction(
 }
 
 fn build_op(context: &Context, name: &'static str, attributes: Vec<NamedAttribute>) -> OpId {
-    let inst = OpInstance::new_dynamic(
+    let inst = NewOp::new_dynamic(
         ("ptx", name),
         context.as_context_ref(),
         vec![],

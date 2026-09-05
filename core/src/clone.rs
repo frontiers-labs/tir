@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    BlockId, Context, OpId, OpInstance, RegionId,
+    BlockId, Context, NewOp, OpId, RegionId,
     attributes::{AttributeValue, NamedAttribute},
     value::ValueId,
 };
@@ -113,7 +113,7 @@ fn clone_op_into(context: &Context, op: OpId, mapping: &mut Mapping) -> OpId {
         })
         .collect();
 
-    let instance = OpInstance::new_dynamic(
+    let instance = NewOp::new_dynamic(
         (source.dialect().as_str(), source.name().as_str()),
         context.as_context_ref(),
         operands,

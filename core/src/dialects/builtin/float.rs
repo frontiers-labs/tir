@@ -237,7 +237,7 @@ operation! {
         name: "cmpf",
         dialect: "builtin",
         attributes: A {
-            predicate: "Str",
+            predicate: "Predicate in FLOAT",
         },
         operands: O {
             lhs: "crate::builtin::FloatType",
@@ -260,20 +260,11 @@ impl CmpFOp {
             Leaf = tir::sem::SymPayload<tir::ValueId>,
         >,
     ) -> Option<tir::graph::NodeId> {
-        let predicate = match self.0.attr("predicate")? {
-            tir::attributes::AttributeValue::Str(value) => value,
-            _ => return None,
+        let tir::attributes::AttributeValue::Predicate(predicate) = self.0.attr("predicate")?
+        else {
+            return None;
         };
-        cmpf_semantics(g, &predicate)
-    }
-}
-
-impl CmpFOpBuilder {
-    pub fn predicate(self, predicate: &str) -> Self {
-        self.attr(
-            "predicate",
-            tir::attributes::AttributeValue::Str(predicate.to_string().into()),
-        )
+        cmpf_semantics(g, predicate)
     }
 }
 

@@ -13,7 +13,7 @@
 
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
 use tir::backend::{RegAssignment, reg_slot, slot_register};
-use tir::{Context, OpHandle, OpId, OpInstance};
+use tir::{Context, NewOp, OpHandle, OpId};
 
 use crate::backend::binary::{EncodedFixup, EncodedInst, FixupTarget};
 use crate::backend::regalloc::RegClassId;
@@ -525,7 +525,7 @@ pub fn decode_with(context: &Context, word: u32, spec: &DecodeSpec) -> Option<Op
             panic!("Missing required attribute: {declared}");
         }
     }
-    let instance = OpInstance::new_dynamic(
+    let instance = NewOp::new_dynamic(
         spec.op,
         context.as_context_ref(),
         vec![],

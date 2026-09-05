@@ -12,7 +12,6 @@ pub struct BlockId(u32);
 /// through [`BlockHandle`]; nothing outside the context lock holds one of these.
 #[derive(Debug, Clone)]
 pub struct Block {
-    id: BlockId,
     arguments: Vec<Value>,
     operations: Vec<OpId>,
     /// Discardable metadata scoped to this block (e.g. `fpmath`), printed in the
@@ -36,12 +35,16 @@ impl BlockId {
     pub(crate) fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// The hive handle backing this id.
+    pub(crate) fn raw(self) -> u32 {
+        self.0
+    }
 }
 
 impl Block {
-    pub(crate) fn new(id: BlockId, arguments: Vec<Value>) -> Self {
+    pub(crate) fn new(arguments: Vec<Value>) -> Self {
         Self {
-            id,
             arguments,
             operations: vec![],
             attributes: vec![],
@@ -52,10 +55,6 @@ impl Block {
         self.arguments.capacity() * std::mem::size_of::<Value>()
             + self.operations.capacity() * std::mem::size_of::<OpId>()
             + self.attributes.capacity() * std::mem::size_of::<NamedAttribute>()
-    }
-
-    pub(crate) fn id(&self) -> BlockId {
-        self.id
     }
 
     pub(crate) fn operations(&self) -> &[OpId] {
@@ -92,6 +91,7 @@ impl Block {
 #[derive(Clone)]
 pub struct BlockHandle {
     pub context: ContextRef,
+    pub(crate) generation: u32,
     pub id: BlockId,
 }
 
@@ -102,36 +102,47 @@ impl std::fmt::Debug for BlockHandle {
 }
 
 impl BlockHandle {
+    /// The owning context, after checking this handle still names its own block.
+    fn context(&self) -> Context {
+        let context = self.context.upgrade();
+        #[cfg(debug_assertions)]
+        context.assert_block_generation(self.id, self.generation);
+        context
+    }
+
+    /// Whether this handle still names the block it was minted for; see
+    /// [`crate::OpHandle::is_live`].
+    pub fn is_live(&self) -> bool {
+        self.context.upgrade().block_generation(self.id) == self.generation
+    }
+
     pub fn id(&self) -> BlockId {
         self.id
     }
 
     pub fn arguments(&self) -> Vec<Value> {
-        self.context
-            .upgrade()
+        self.context()
             .with_block(self.id, |block| block.arguments().to_vec())
     }
 
     pub fn attributes(&self) -> Vec<NamedAttribute> {
-        self.context
-            .upgrade()
+        self.context()
             .with_block(self.id, |block| block.attributes().to_vec())
     }
 
     /// The value of the attribute called `name`, resolving the name through the
     /// owning context's interner.
     pub fn attr(&self, name: &str) -> Option<AttributeValue> {
-        self.context.upgrade().block_attr(self.id, name)
+        self.context().block_attr(self.id, name)
     }
 
     /// Set (or replace) a named attribute on this block.
     pub fn set_attr(&self, name: &str, value: AttributeValue) {
-        self.context.upgrade().set_block_attr(self.id, name, value);
+        self.context().set_block_attr(self.id, name, value);
     }
 
     pub fn len(&self) -> usize {
-        self.context
-            .upgrade()
+        self.context()
             .with_block(self.id, |block| block.operations().len())
     }
 
@@ -140,18 +151,17 @@ impl BlockHandle {
     }
 
     pub fn op_ids(&self) -> Vec<OpId> {
-        self.context
-            .upgrade()
+        self.context()
             .with_block(self.id, |block| block.operations().to_vec())
     }
 
     pub fn insert(&self, index: usize, id: OpId) {
-        self.context.upgrade().insert_op(self.id, index, id);
+        self.context().insert_op(self.id, index, id);
     }
 
     /// Add `id` after every operation the block currently holds.
     pub fn append(&self, id: OpId) {
-        self.context.upgrade().append_op(self.id, id);
+        self.context().append_op(self.id, id);
     }
 
     /// Append `op` and hand it back, for building a block in sequence.
@@ -161,9 +171,7 @@ impl BlockHandle {
     }
 
     pub fn replace_op(&self, old: OpId, new: OpId) -> bool {
-        self.context
-            .upgrade()
-            .replace_op_in_block(self.id, old, new)
+        self.context().replace_op_in_block(self.id, old, new)
     }
 
     /// Choose another order for the operations the block already holds; `ops`
@@ -171,16 +179,16 @@ impl BlockHandle {
     /// block is a linearization of its dependence graph, and this is how one is
     /// installed.
     pub fn set_ops(&self, ops: Vec<OpId>) {
-        self.context.upgrade().set_block_ops(self.id, ops);
+        self.context().set_block_ops(self.id, ops);
     }
 
     pub fn remove_op(&self, id: OpId) -> bool {
-        self.context.upgrade().remove_op_from_block(self.id, id)
+        self.context().remove_op_from_block(self.id, id)
     }
 
     /// Returns true if a comes before b in the block, false otherwise
     pub fn is_before(&self, a: OpId, b: OpId) -> bool {
-        self.context.upgrade().with_block(self.id, |block| {
+        self.context().with_block(self.id, |block| {
             let operations = block.operations();
             let a_pos = operations.iter().position(|op_id| *op_id == a);
             let b_pos = operations.iter().position(|op_id| *op_id == b);

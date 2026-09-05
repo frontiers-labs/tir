@@ -777,11 +777,15 @@ mod isa {
         }
 
         fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![lower_float_constant, lower_constant, lower_sym_addr]
+            vec![
+                Box::new(lower_float_constant),
+                Box::new(lower_constant),
+                Box::new(lower_sym_addr),
+            ]
         }
 
         fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-            vec![finalize_virtual_ops]
+            vec![Box::new(finalize_virtual_ops)]
         }
 
         fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {

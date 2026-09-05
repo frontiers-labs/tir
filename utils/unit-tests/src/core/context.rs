@@ -831,3 +831,79 @@ fn replacing_value_uses_reaches_a_detached_op() {
     assert!(!context.is_used(c));
     assert_eq!(context.use_count(d), 4);
 }
+
+/// The whole point of the storage layout: an operation is twenty-eight bytes
+/// and a value twelve, so a hive chunk holds thousands of either and neither
+/// costs an allocation of its own. A field added without a plan breaks this.
+#[test]
+fn stored_entities_keep_their_size_budget() {
+    assert_eq!(std::mem::size_of::<tir::OpInstance>(), 28);
+    assert_eq!(std::mem::size_of::<tir::Value>(), 12);
+    // An attribute is its interned name plus an `AttributeValue`, whose widest
+    // variant is `RegisterAttr::Assigned`.
+    assert_eq!(std::mem::size_of::<tir::attributes::NamedAttribute>(), 32);
+}
+
+/// Growing an op past its run's size class moves the run to the next class,
+/// hands the old cell back, and leaves every use list resolving to the op.
+#[test]
+fn growing_an_op_promotes_its_run_and_keeps_its_uses() {
+    let context = Context::with_default_dialects();
+    let (c, d, add) = add_fixture(&context);
+    let state = builtin::StateType::new(&context);
+
+    let extra: Vec<ValueId> = (0..5)
+        .map(|_| context.create_value(state, None).id())
+        .collect();
+    for value in &extra {
+        context.append_operand(add, *value);
+    }
+
+    let operands = context.get_op(add).operands();
+    assert_eq!(operands.len(), 7);
+    for (index, value) in operands.iter().enumerate() {
+        assert!(
+            context.uses_of(*value).contains(&Use::new(add, index)),
+            "operand {index} lost its use list entry"
+        );
+    }
+    assert!(context.uses_of(c).iter().all(|r#use| r#use.op == add));
+    assert!(context.uses_of(d).iter().all(|r#use| r#use.op == add));
+}
+
+/// Erasing an operation gives its ports' storage back: once the context is
+/// told the runs are free, the chunks that emptied are released. Entity ids
+/// are deliberately not recycled, so the op hive keeps its chunks.
+#[test]
+fn erasing_operations_releases_their_run_chunks() {
+    let context = Context::with_default_dialects();
+    let (_, _, body) = module_with_function(&context);
+    let i32_ty = builtin::IntegerType::new(&context, 32);
+    let seed = builtin::ops::constant(&context, 1, i32_ty).build();
+    body.append(seed.id());
+    let ops: Vec<OpId> = (0..10_000)
+        .map(|_| {
+            let op = builtin::ops::addi(&context, seed.result(), seed.result(), i32_ty).build();
+            body.append(op.id());
+            op.id()
+        })
+        .collect();
+    let peak = context.slab_census();
+
+    let mut rewriter = tir::Rewriter::new(context.clone());
+    for op in ops {
+        rewriter
+            .erase_op(&tir::OperationRef::new(context.get_op(op)))
+            .expect("erase should succeed");
+    }
+    context.recycle();
+    let after = context.slab_census();
+
+    assert!(
+        after.runs_chunks < peak.runs_chunks,
+        "run chunks {} -> {}",
+        peak.runs_chunks,
+        after.runs_chunks
+    );
+    assert_eq!(after.ops_chunks, peak.ops_chunks, "op ids are not recycled");
+}

@@ -200,7 +200,7 @@ impl Pass for LowerCirStructsPass {
         for target in &descendants {
             // An earlier rewrite may have erased this descendant; the list was
             // taken before any of them ran.
-            if !context.has_operation(target.op().id) {
+            if !target.op().is_live() {
                 continue;
             }
             let target = Self::refresh(context, target);
@@ -225,7 +225,7 @@ impl Pass for LowerCirStructsPass {
         }
 
         for target in &descendants {
-            if !context.has_operation(target.op().id) {
+            if !target.op().is_live() {
                 continue;
             }
             if target.as_op::<cir::CopyStructOp>().is_none() {
@@ -246,7 +246,7 @@ impl Pass for LowerCirStructsPass {
         }
 
         for target in &descendants {
-            if !context.has_operation(target.op().id) {
+            if !target.op().is_live() {
                 continue;
             }
             if target.as_op::<cir::DefineStructOp>().is_none() {

@@ -14,7 +14,8 @@ use crate::{TIR_INVALID_ID, into_cstring, op_instance, set_error, with_context};
 /// the `TIR_ATTR_*` macros injected into the generated header.
 fn attr_kind_code(value: &AttributeValue) -> i32 {
     match value {
-        AttributeValue::Str(_) => 0,
+        // A predicate is a string to a C consumer: it reads and prints as one.
+        AttributeValue::Str(_) | AttributeValue::Predicate(_) => 0,
         AttributeValue::Int(_) => 1,
         AttributeValue::UInt(_) => 2,
         AttributeValue::F32(_) => 3,
@@ -465,6 +466,7 @@ pub unsafe extern "C" fn tir_op_attribute_string(
     with_context(ctx, std::ptr::null_mut(), |ctx| {
         match attr_value(ctx, op, i) {
             Some(AttributeValue::Str(s)) => into_cstring(s.to_string()),
+            Some(AttributeValue::Predicate(p)) => into_cstring(p.name().to_string()),
             Some(_) => {
                 set_error("attribute is not a string");
                 std::ptr::null_mut()

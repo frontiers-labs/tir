@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use tir::attributes::AttributeValue;
+use tir::attributes::{AttributeValue, Predicate};
 use tir::backend::abi::{Overflow, ValueKind, type_kind};
 use tir::builtin::{FloatType, FnType, IntegerType, ModuleOp, TupleType, UnitType, ops as b};
 use tir::cfg::ops as cb;
@@ -1740,16 +1740,16 @@ impl FnCodegen<'_> {
     ) -> ValueId {
         let signed = self.typed.integer_is_signed(source_ty).unwrap_or(true);
         let predicate = match (kind, signed) {
-            (AstKind::Lt, true) => "slt",
-            (AstKind::Lt, false) => "ult",
-            (AstKind::Gt, true) => "sgt",
-            (AstKind::Gt, false) => "ugt",
-            (AstKind::Le, true) => "sle",
-            (AstKind::Le, false) => "ule",
-            (AstKind::Ge, true) => "sge",
-            (AstKind::Ge, false) => "uge",
-            (AstKind::Eq, _) => "eq",
-            (AstKind::Ne, _) => "ne",
+            (AstKind::Lt, true) => Predicate::Slt,
+            (AstKind::Lt, false) => Predicate::Ult,
+            (AstKind::Gt, true) => Predicate::Sgt,
+            (AstKind::Gt, false) => Predicate::Ugt,
+            (AstKind::Le, true) => Predicate::Sle,
+            (AstKind::Le, false) => Predicate::Ule,
+            (AstKind::Ge, true) => Predicate::Sge,
+            (AstKind::Ge, false) => Predicate::Uge,
+            (AstKind::Eq, _) => Predicate::Eq,
+            (AstKind::Ne, _) => Predicate::Ne,
             _ => unreachable!(),
         };
         self.builder
@@ -1792,7 +1792,12 @@ impl FnCodegen<'_> {
 
     /// Pointers compare as unsigned addresses, so a relational C comparison of
     /// two of them maps onto the unsigned predicates alone.
-    fn lower_pointer_compare(&mut self, predicate: &str, lhs: ValueId, rhs: ValueId) -> ValueId {
+    fn lower_pointer_compare(
+        &mut self,
+        predicate: Predicate,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> ValueId {
         self.builder
             .append_op(
                 p::CmpOpBuilder::new(self.context)
@@ -1809,12 +1814,12 @@ impl FnCodegen<'_> {
     /// `!=`, which is the unordered-inclusive negation of `==`.
     fn lower_double_compare(&mut self, kind: AstKind, lhs: ValueId, rhs: ValueId) -> ValueId {
         let predicate = match kind {
-            AstKind::Lt => "olt",
-            AstKind::Gt => "ogt",
-            AstKind::Le => "ole",
-            AstKind::Ge => "oge",
-            AstKind::Eq => "oeq",
-            AstKind::Ne => "une",
+            AstKind::Lt => Predicate::Olt,
+            AstKind::Gt => Predicate::Ogt,
+            AstKind::Le => Predicate::Ole,
+            AstKind::Ge => Predicate::Oge,
+            AstKind::Eq => Predicate::Oeq,
+            AstKind::Ne => Predicate::Une,
             _ => unreachable!(),
         };
         self.builder
@@ -2652,7 +2657,7 @@ impl FnCodegen<'_> {
                     b::CmpIOpBuilder::new(self.context)
                         .lhs(value)
                         .rhs(case)
-                        .predicate("eq")
+                        .predicate(Predicate::Eq)
                         .result_type(IntegerType::new(self.context, 1))
                         .build(),
                 )
@@ -2871,7 +2876,7 @@ impl FnCodegen<'_> {
         if ty == IntegerType::new(self.context, 1) {
             return value;
         }
-        self.compare_against_zero(value, "ne")
+        self.compare_against_zero(value, Predicate::Ne)
     }
 
     fn promote_boolean_result(&mut self, value: ValueId, target: TypeId) -> ValueId {
@@ -2886,7 +2891,7 @@ impl FnCodegen<'_> {
     /// `value <predicate> 0`, at `int` width like every other C comparison: a
     /// promoted value is nonzero exactly when the original is, and
     /// zero-extension preserves that for either signedness.
-    fn compare_against_zero(&mut self, value: ValueId, predicate: &str) -> ValueId {
+    fn compare_against_zero(&mut self, value: ValueId, predicate: Predicate) -> ValueId {
         let ty = self.context.get_value(value).ty();
         let narrow = {
             let data = self.context.get_type_data(ty);
@@ -3758,7 +3763,7 @@ impl FnCodegen<'_> {
                         .result()
                 }
                 AstKind::Not => {
-                    let comparison = self.compare_against_zero(operand, "eq");
+                    let comparison = self.compare_against_zero(operand, Predicate::Eq);
                     self.builder
                         .append_op(b::extui(self.context, comparison, result_ty).build())
                         .result()
@@ -3845,12 +3850,12 @@ impl FnCodegen<'_> {
                 TypeKind::Double => self.lower_double_compare(kind, lhs, rhs),
                 TypeKind::Pointer(_) | TypeKind::Array(_, _) => {
                     let predicate = match kind {
-                        AstKind::Lt => "ult",
-                        AstKind::Gt => "ugt",
-                        AstKind::Le => "ule",
-                        AstKind::Ge => "uge",
-                        AstKind::Eq => "eq",
-                        _ => "ne",
+                        AstKind::Lt => Predicate::Ult,
+                        AstKind::Gt => Predicate::Ugt,
+                        AstKind::Le => Predicate::Ule,
+                        AstKind::Ge => Predicate::Uge,
+                        AstKind::Eq => Predicate::Eq,
+                        _ => Predicate::Ne,
                     };
                     self.lower_pointer_compare(predicate, lhs, rhs)
                 }

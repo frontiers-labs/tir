@@ -172,3 +172,82 @@ fn trunci_sem_expr_is_low_bit_extract() {
     assert_eq!(const_value(&g, children[1]), 15); // high = W - 1
     assert_eq!(const_value(&g, children[2]), 0); // low
 }
+
+/// A compare's predicate is a typed attribute: the text parser hands the
+/// attribute list a string, and the op's schema decides what it means.
+mod predicate {
+    use tir::{
+        attributes::{AttributeValue, Predicate},
+        builtin::ModuleOp,
+        parse::ir::parse_ir,
+        verify_op_tree, Context, Operation,
+    };
+
+    fn module(body: &str) -> String {
+        format!(
+            "#data_layout = {{types = {{p = {{abi = 64, size = 64}}}}}}\n\
+             module {{data_layout = #data_layout}} {{\n\
+             %fn = func.func @f(%0: !i32, %1: !f32, %2: !ptr.p) -> !i1 {{\n\
+             {body}\n\
+             func.return %3\n}}\nmodule_end\n}}"
+        )
+    }
+
+    fn parse(context: &Context, body: &str) -> Result<ModuleOp, String> {
+        parse_ir::<ModuleOp>(context, &module(body)).map_err(|(_, error)| error.to_string())
+    }
+
+    fn verify(body: &str) -> Result<(), String> {
+        let context = Context::with_default_dialects();
+        let module = parse(&context, body)?;
+        verify_op_tree(&context, module.id()).map_err(|error| error.to_string())
+    }
+
+    /// The first operation of the function the fixture defines.
+    fn compare(context: &Context, module: &ModuleOp) -> tir::OpHandle {
+        let body = |op| {
+            context
+                .get_region(context.get_op(op).regions()[0])
+                .iter(context.clone())
+                .next()
+                .expect("a single-block body")
+        };
+        let func = body(module.id()).op_ids()[0];
+        context.get_op(body(func).op_ids()[0])
+    }
+
+    #[test]
+    fn a_parsed_predicate_is_typed() {
+        let context = Context::with_default_dialects();
+        let module =
+            parse(&context, r#"%3 = cmpi %0, %0 {predicate = "slt"} : !i1"#).expect("it parses");
+        assert_eq!(
+            compare(&context, &module).attr("predicate"),
+            Some(AttributeValue::Predicate(Predicate::Slt))
+        );
+    }
+
+    #[test]
+    fn a_predicate_outside_the_vocabulary_fails_verification() {
+        let error = verify(r#"%3 = cmpi %0, %0 {predicate = "olt"} : !i1"#)
+            .expect_err("olt is a float comparison");
+        assert!(error.contains("cmpi"), "{error}");
+        assert!(error.contains("olt"), "{error}");
+    }
+
+    #[test]
+    fn an_unknown_predicate_fails_to_parse() {
+        for op in [
+            r#"%3 = cmpi %0, %0 {predicate = "bogus"} : !i1"#,
+            r#"%3 = cmpf %1, %1 {predicate = "bogus"} : !i1"#,
+            r#"%3 = ptr.cmp %2, %2 {predicate = "bogus"} : !i1"#,
+        ] {
+            let context = Context::with_default_dialects();
+            let Err(error) = parse(&context, op) else {
+                panic!("bogus is no comparison");
+            };
+            assert!(error.contains("bogus"), "{error}");
+            assert!(error.contains("cmp"), "{error}");
+        }
+    }
+}

@@ -24,6 +24,8 @@ pub enum Error {
     UnknownValueRef(String),
     #[error("Unknown attribute alias '#{0}'")]
     UnknownAttributeAlias(String),
+    #[error("'{1}' is not a comparison predicate for '{0}'")]
+    InvalidPredicate(String, String),
     #[error("Operation verification failed: {0}")]
     VerificationError(String),
 }

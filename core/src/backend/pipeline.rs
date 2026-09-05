@@ -243,6 +243,9 @@ pub fn lower_and_emit(
         // The bytes exist, so the machine IR behind them goes back to the arenas
         // and the next function is lowered in the space it left.
         rewriter.erase_op(&symbol).map_err(failed)?;
+        // Nothing outlives the function that was just emitted, so the storage
+        // its ops, values and runs held goes back to the pool for the next one.
+        context.recycle();
     }
     tir::memstats::summary();
     Ok(())

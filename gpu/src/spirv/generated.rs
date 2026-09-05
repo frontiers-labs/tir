@@ -1208,7 +1208,7 @@ pub(crate) fn build_generated(
         return None;
     }
     let result = context.create_value(result_type, None).id();
-    let instance = tir::OpInstance::new_dynamic(
+    let instance = tir::NewOp::new_dynamic(
         ("spirv", name),
         context.as_context_ref(),
         operands.to_vec(),

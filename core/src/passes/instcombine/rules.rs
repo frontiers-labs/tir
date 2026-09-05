@@ -10,7 +10,7 @@ use crate::utils::APInt;
 use crate::{
     Conditional, ConstantFold, Context, Operation, OperationRef, PassError, Rewriter, TypeId,
     ValueId,
-    attributes::AttributeValue,
+    attributes::{AttributeValue, Predicate},
     builtin::{IntegerType, ops},
     sem::{IrOp, Kind, Prov, SemNode as Node, SymKind, Value, node::field},
 };
@@ -372,17 +372,17 @@ fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
 
 /// Each comparison predicate paired with its negation at the same operand order:
 /// `!(a < b)` is `a >= b`. Both directions, so knowing either settles the other.
-const COMPLEMENTS: [(&str, &str); 10] = [
-    ("eq", "ne"),
-    ("ne", "eq"),
-    ("slt", "sge"),
-    ("sge", "slt"),
-    ("sle", "sgt"),
-    ("sgt", "sle"),
-    ("ult", "uge"),
-    ("uge", "ult"),
-    ("ule", "ugt"),
-    ("ugt", "ule"),
+const COMPLEMENTS: [(Predicate, Predicate); 10] = [
+    (Predicate::Eq, Predicate::Ne),
+    (Predicate::Ne, Predicate::Eq),
+    (Predicate::Slt, Predicate::Sge),
+    (Predicate::Sge, Predicate::Slt),
+    (Predicate::Sle, Predicate::Sgt),
+    (Predicate::Sgt, Predicate::Sle),
+    (Predicate::Ult, Predicate::Uge),
+    (Predicate::Uge, Predicate::Ult),
+    (Predicate::Ule, Predicate::Ugt),
+    (Predicate::Ugt, Predicate::Ule),
 ];
 
 /// A comparison and its complement over the same operands are one fact: whichever
@@ -395,8 +395,8 @@ const COMPLEMENTS: [(&str, &str); 10] = [
 /// rather than by a scan of every class holding that predicate.
 fn cmp_complement(
     context: &Context,
-    predicate: &'static str,
-    complement: &'static str,
+    predicate: Predicate,
+    complement: Predicate,
 ) -> tir_relational::Rule<Node> {
     // Variables: 0 the settled comparison, 1 and 2 its operands, 3 the
     // complement, 4 the constant the head mints.
@@ -496,14 +496,12 @@ impl Complement {
 
 /// The `builtin.cmpi` node of `predicate` over `children`, at `ty` — `None` for a
 /// pattern template, which matches the comparison at any result type.
-fn cmpi(context: &Context, predicate: &str, ty: Option<TypeId>, children: Vec<Id>) -> Node {
+fn cmpi(context: &Context, predicate: Predicate, ty: Option<TypeId>, children: Vec<Id>) -> Node {
     Node {
         kind: Kind::Ir(IrOp {
             dialect: ops::CmpIOp::dialect(),
             name: ops::CmpIOp::name(),
-            attrs: vec![
-                context.named_attribute("predicate", AttributeValue::Str(predicate.into())),
-            ],
+            attrs: vec![context.named_attribute("predicate", AttributeValue::Predicate(predicate))],
             commutative: false,
             cost: 0,
         }),

@@ -126,6 +126,7 @@ pub(crate) fn parse_single_op<'src>(
             .map_err(|e| (parser.span(), e))?;
 
         let op = op_parser(parser, context)?;
+        coerce_predicates(parser, context, dialect, name, op.id())?;
         let results = context.get_op(op.id()).results().to_vec();
         for (name, result) in result_names.iter().zip(results) {
             parser.define_value(name, result);
@@ -134,6 +135,48 @@ pub(crate) fn parse_single_op<'src>(
     } else {
         Err((parser.span(), Error::ExpectedOpName))
     }
+}
+
+/// Retype the `Str` attributes an op declares as `Predicate`: the attribute
+/// parser has no op in scope, so it produces a string and the op's schema
+/// decides what it means.
+fn coerce_predicates(
+    parser: &TextParser<'_>,
+    context: &Context,
+    dialect: &str,
+    name: &str,
+    op: crate::OpId,
+) -> Result<(), (Span, Error)> {
+    let Some(schema) = crate::OP_SCHEMAS
+        .iter()
+        .find(|schema| schema.dialect == dialect && schema.name == name)
+    else {
+        return Ok(());
+    };
+    if !schema.attributes.iter().any(|attr| attr.ty == "Predicate") {
+        return Ok(());
+    }
+
+    let mut attributes = context.get_op(op).attributes();
+    for attr in schema.attributes.iter().filter(|a| a.ty == "Predicate") {
+        let Some(sym) = context.sym(attr.name) else {
+            continue;
+        };
+        for stored in attributes.iter_mut().filter(|stored| stored.name == sym) {
+            let crate::attributes::AttributeValue::Str(text) = &stored.value else {
+                continue;
+            };
+            let predicate = crate::attributes::Predicate::parse(text).ok_or_else(|| {
+                (
+                    parser.span(),
+                    Error::InvalidPredicate(format!("{dialect}.{name}"), text.to_string()),
+                )
+            })?;
+            stored.value = crate::attributes::AttributeValue::Predicate(predicate);
+        }
+    }
+    context.set_op_attributes(op, attributes);
+    Ok(())
 }
 
 impl<'src> TextParser<'src> {

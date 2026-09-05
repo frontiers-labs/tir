@@ -441,16 +441,34 @@ fn lower_func_and_return_to_asm_symbol(
     context: &tir::Context,
     op: &tir::OperationRef,
     rewriter: &mut tir::Rewriter,
+    abi: &'static tir::backend::abi::AbiInfo,
 ) -> Result<bool, tir::PassError> {
     tir::backend::lower::lower_function_and_return(context, op, rewriter, |ty| {
-        argument_register_class(context, ty)
+        argument_register_class(context, abi, ty)
     })
 }
 
+/// The register class an argument of `ty` is passed in. The ABI decides, not
+/// the type: `lp64` declares no float sequence, so an `!f64` argument travels
+/// in an integer register and must be classed as one.
 fn argument_register_class(
     context: &tir::Context,
+    abi: &tir::backend::abi::AbiInfo,
     ty: tir::TypeId,
 ) -> Result<tir::backend::regalloc::RegClassId, tir::PassError> {
+    let kind = tir::backend::abi::type_kind(context, ty);
+    let sequence = |kind| abi.args.iter().find(|sequence| sequence.kind == kind);
+    if sequence(kind).is_none() {
+        return sequence(tir::backend::abi::ValueKind::Int)
+            .and_then(|sequence| sequence.regs.first())
+            .map(|register| register.0)
+            .ok_or_else(|| {
+                tir::PassError::InvalidRuleSet(format!(
+                    "abi {} passes no arguments in registers",
+                    abi.name
+                ))
+            });
+    }
     let ty = context.get_type_data(ty);
     let ty = ty.as_ref() as &dyn std::any::Any;
     if let Some(vector) = ty.downcast_ref::<tir::vector::VectorType>() {
@@ -590,7 +608,11 @@ fn create_isel_pass_for(
             uncond: tir::backend::emit_uncond_branch,
             cond_nonzero: emit_branch_nonzero,
         })
-        .with_op_lowering(lower_func_and_return_to_asm_symbol)
+        .with_op_lowering(
+            move |context: &tir::Context, op: &tir::OperationRef, rewriter: &mut tir::Rewriter| {
+                lower_func_and_return_to_asm_symbol(context, op, rewriter, abi)
+            },
+        )
         .with_call_lowering(abi, Box::new(RiscvCallEmitter))
         .with_op_lowering(lower_vector_len)
 }
@@ -1064,9 +1086,15 @@ impl tir::backend::TargetMachine for RiscvTarget {
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         if self.config.xlen == 64 {
-            vec![obj::lower_constant_rv64, obj::lower_sym_addr]
+            vec![
+                Box::new(obj::lower_constant_rv64),
+                Box::new(obj::lower_sym_addr),
+            ]
         } else {
-            vec![obj::lower_constant_rv32, obj::lower_sym_addr]
+            vec![
+                Box::new(obj::lower_constant_rv32),
+                Box::new(obj::lower_sym_addr),
+            ]
         }
     }
 
@@ -1080,9 +1108,9 @@ impl tir::backend::TargetMachine for RiscvTarget {
             } else {
                 compress::compress_rv32
             };
-            vec![compress, obj::finalize_virtual_ops]
+            vec![Box::new(compress), Box::new(obj::finalize_virtual_ops)]
         } else {
-            vec![obj::finalize_virtual_ops]
+            vec![Box::new(obj::finalize_virtual_ops)]
         }
     }
 

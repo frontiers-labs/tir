@@ -1,6 +1,7 @@
 //! Float-comparison semantics, shared by the IR's `cmpf` operation and by
 //! backend flag composition so both prove against the very same graph.
 
+use tir_adt::Predicate;
 use tir_graph::{MutDag, NodeId};
 
 use super::ValueId;
@@ -14,22 +15,22 @@ impl<T> SemBuilder for T where T: MutDag<Node = SymKind, Leaf = SymPayload<Value
 /// Build the target-independent semantic graph for a `cmpf` predicate.
 pub fn cmpf_semantics(
     g: &mut impl MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>,
-    predicate: &str,
+    predicate: Predicate,
 ) -> Option<NodeId> {
     let lhs = symbol(g, 0);
     let rhs = symbol(g, 1);
     Some(match predicate {
-        "oeq" => ordered_equal(g, lhs, rhs),
-        "une" => {
+        Predicate::Oeq => ordered_equal(g, lhs, rhs),
+        Predicate::Une => {
             let equal = ordered_equal(g, lhs, rhs);
             let one = g.add_node(SymKind::Constant);
             g.set_leaf_data(one, SymPayload::Int(tir_adt::APInt::new(1, 1)));
             binary(g, SymKind::Xor, equal, one)
         }
-        "olt" => binary(g, SymKind::Lt, lhs, rhs),
-        "ogt" => binary(g, SymKind::Lt, rhs, lhs),
-        "oge" => binary(g, SymKind::Ge, lhs, rhs),
-        "ole" => binary(g, SymKind::Ge, rhs, lhs),
+        Predicate::Olt => binary(g, SymKind::Lt, lhs, rhs),
+        Predicate::Ogt => binary(g, SymKind::Lt, rhs, lhs),
+        Predicate::Oge => binary(g, SymKind::Ge, lhs, rhs),
+        Predicate::Ole => binary(g, SymKind::Ge, rhs, lhs),
         _ => return None,
     })
 }

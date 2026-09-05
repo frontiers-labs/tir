@@ -10,7 +10,10 @@ use std::sync::Arc;
 use crate::ty::TypeConstraint;
 use crate::{
     Context, Error, IRFormatter, MemoryRead, MemoryWrite, Operation, PromotableAllocation, Type,
-    TypeId, attributes::AttributeValue, dialect, operation, parse::Span,
+    TypeId,
+    attributes::{AttributeValue, Predicate},
+    dialect, operation,
+    parse::Span,
 };
 
 use crate as tir;
@@ -234,9 +237,8 @@ operation! {
     CmpOp {
         name: "cmp",
         dialect: "ptr",
-        verifier: "true",
         attributes: A {
-            predicate: "Str",
+            predicate: "Predicate in POINTER",
         },
         operands: O {
             lhs: "crate::ptr::PtrType",
@@ -248,10 +250,6 @@ operation! {
         sem: "(set result $cmp_expr)",
     }
 }
-
-/// Predicates a pointer comparison can express. Addresses are unsigned, so a
-/// signed comparison of two of them has no meaning to declare.
-const POINTER_PREDICATES: [&str; 6] = ["eq", "ne", "ult", "ule", "ugt", "uge"];
 
 impl CmpOp {
     /// The comparison of the two addresses, as unsigned integers at the width
@@ -270,13 +268,13 @@ impl CmpOp {
         let context = self.0.context.upgrade();
         crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
 
-        let (kind, swap) = match predicate(self)?.as_str() {
-            "eq" => (SymKind::Eq, false),
-            "ne" => (SymKind::Ne, false),
-            "ult" => (SymKind::ULt, false),
-            "ugt" => (SymKind::ULt, true),
-            "uge" => (SymKind::UGe, false),
-            "ule" => (SymKind::UGe, true),
+        let pred = predicate(self)?;
+        let swap = matches!(pred, Predicate::Ugt | Predicate::Ule);
+        let kind = match if swap { pred.swapped() } else { pred } {
+            Predicate::Eq => SymKind::Eq,
+            Predicate::Ne => SymKind::Ne,
+            Predicate::Ult => SymKind::ULt,
+            Predicate::Uge => SymKind::UGe,
             _ => return None,
         };
 
@@ -297,30 +295,9 @@ impl CmpOp {
     }
 }
 
-impl CmpOpBuilder {
-    pub fn predicate(self, pred: &str) -> Self {
-        self.attr("predicate", AttributeValue::Str(pred.to_string().into()))
-    }
-}
-
-impl tir::Verifiable for CmpOp {
-    fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
-        match predicate(self) {
-            Some(pred) if POINTER_PREDICATES.contains(&pred.as_str()) => Ok(()),
-            Some(pred) => Err(Error::VerificationError(format!(
-                "ptr.cmp predicate '{pred}' is not a pointer comparison (expected {})",
-                POINTER_PREDICATES.join(", ")
-            ))),
-            None => Err(Error::VerificationError(
-                "ptr.cmp requires a string 'predicate' attribute".to_string(),
-            )),
-        }
-    }
-}
-
-fn predicate(op: &impl Operation) -> Option<String> {
+fn predicate(op: &impl Operation) -> Option<Predicate> {
     match op.attr("predicate")? {
-        AttributeValue::Str(value) => Some(value.into_string()),
+        AttributeValue::Predicate(value) => Some(value),
         _ => None,
     }
 }

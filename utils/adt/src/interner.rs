@@ -6,7 +6,7 @@ use crate::FxBuildHasher;
 ///
 /// Ids are assigned in intern order, so they are reproducible across runs but
 /// only meaningful relative to the interner that produced them.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Sym(u32);
 
 impl Sym {

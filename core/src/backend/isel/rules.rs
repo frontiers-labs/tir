@@ -8,7 +8,7 @@
 use tir::attributes::{AttributeValue, RegisterAttr};
 use tir::graph::OperandConstraint;
 use tir::sem::{ExtendSemBytes, ExtendSemBytesTyped, SymKind};
-use tir::{Context, OpHandle, OpInstance, Operation, PassError};
+use tir::{Context, NewOp, OpHandle, Operation, PassError};
 
 use crate::backend::isel::{
     EmitRequest, ImmRange, RegisterCapability, RegisterRequirement, Rule, RuleEmitFn, RuleKind,
@@ -185,7 +185,7 @@ pub fn emit_with(
         operand_values.push(state.observed);
         result_values.extend(state.published);
     }
-    let instance = OpInstance::new_dynamic(
+    let instance = NewOp::new_dynamic(
         spec.op,
         context.as_context_ref(),
         operand_values,

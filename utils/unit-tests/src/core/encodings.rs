@@ -9,7 +9,7 @@ use tir::backend::binary::{
 use tir::backend::{
     ControlFlow, InstrInfo, MachineInstruction, RegAssignment, RegClassType, RegPort,
 };
-use tir::{Context, OpInstance, Operation};
+use tir::{Context, NewOp, Operation};
 
 use super::fixtures::r;
 
@@ -77,7 +77,7 @@ fn build(
         .into_iter()
         .map(|(name, value)| context.named_attribute(name, value))
         .collect();
-    let instance = OpInstance::new_dynamic(
+    let instance = NewOp::new_dynamic(
         ("test", "inst"),
         context.as_context_ref(),
         vec![],

@@ -332,7 +332,7 @@ impl Program {
                     b::CmpIOpBuilder::new(context)
                         .lhs(condition)
                         .rhs(backward)
-                        .predicate("sgt")
+                        .predicate(tir::attributes::Predicate::Sgt)
                         .result_type(boolean)
                         .build(),
                 )

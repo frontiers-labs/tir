@@ -21,6 +21,9 @@ pub struct FieldSchema {
 pub struct AttrSchema {
     pub name: &'static str,
     pub ty: &'static str,
+    /// For a `Predicate` attribute, the comparisons the op accepts. Empty when
+    /// the kind has no vocabulary to restrict.
+    pub vocabulary: &'static [crate::attributes::Predicate],
 }
 
 /// The declarative shape of one operation.

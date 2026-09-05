@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+pub use tir_adt::Predicate;
 use tir_adt::Sym;
 
 use crate::backend::regalloc::RegClassId;
@@ -16,6 +17,8 @@ pub enum AttributeValue {
     Array(Box<[AttributeValue]>),
     Dict(Box<BTreeMap<String, AttributeValue>>),
     Register(RegisterAttr),
+    /// The comparison a `cmpi`, `cmpf` or `ptr.cmp` performs.
+    Predicate(Predicate),
     /// A reference to an SSA value that is not an operand: the `asm.symbol`
     /// argument list, which names values the ABI places rather than values the
     /// op reads.
@@ -118,6 +121,7 @@ impl AttributeValue {
     ) -> Result<(), std::fmt::Error> {
         match self {
             AttributeValue::Str(s) => fmt.write(format!("\"{}\"", s)),
+            AttributeValue::Predicate(p) => fmt.write(format!("\"{}\"", p.name())),
             AttributeValue::Int(i) => fmt.write(i.to_string()),
             AttributeValue::UInt(u) => fmt.write(u.to_string()),
             // `{:?}` keeps the decimal point (`3.0`, not `3`) so a float
@@ -286,6 +290,12 @@ impl From<TypeId> for AttributeValue {
 impl From<BlockId> for AttributeValue {
     fn from(value: BlockId) -> Self {
         AttributeValue::Block(value)
+    }
+}
+
+impl From<Predicate> for AttributeValue {
+    fn from(value: Predicate) -> Self {
+        AttributeValue::Predicate(value)
     }
 }
 

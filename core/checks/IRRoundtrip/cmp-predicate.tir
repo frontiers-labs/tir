@@ -1,0 +1,18 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+#data_layout = {types = {p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_compare = func.func @compare(%0: !i32, %1: !f32, %2: !ptr.p) -> !i1 {
+    %3 = cmpi %0, %0 {predicate = "slt"} : !i1
+    %4 = cmpf %1, %1 {predicate = "olt"} : !i1
+    %5 = ptr.cmp %2, %2 {predicate = "ule"} : !i1
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @compare(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !f32, %{{[0-9]+}}: !ptr.p) -> !i1 {
+// CHECK-NEXT: %{{[0-9]+}} = cmpi %{{[0-9]+}}, %{{[0-9]+}} {predicate = "slt"} : !i1
+// CHECK-NEXT: %{{[0-9]+}} = cmpf %{{[0-9]+}}, %{{[0-9]+}} {predicate = "olt"} : !i1
+// CHECK-NEXT: %{{[0-9]+}} = ptr.cmp %{{[0-9]+}}, %{{[0-9]+}} {predicate = "ule"} : !i1
