@@ -59,8 +59,12 @@ impl Scope {
 
     fn declare(&mut self, term: &Term) -> Result<(), String> {
         match &term.kind {
-            TermKind::Operation { operands, .. } => {
-                for operand in operands {
+            TermKind::Operation {
+                operands,
+                dependencies,
+                ..
+            } => {
+                for operand in operands.iter().chain(dependencies) {
                     self.declare(operand)?;
                 }
             }
@@ -144,7 +148,14 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
             }
         }
     }
-    let obligation = if contains_kind(&lhs, SymKind::Theta) || contains_kind(&rhs, SymKind::Theta) {
+    let obligation = if contains_kind(&lhs, SymKind::Loop) || contains_kind(&rhs, SymKind::Loop) {
+        if contains_kind(&lhs, SymKind::Theta) || contains_kind(&rhs, SymKind::Theta) {
+            return Err("a rule mixes `#theta` and `#loop`".into());
+        }
+        ProofObligation::LoopInvariant {
+            rhs_loops: contains_kind(&rhs, SymKind::Loop),
+        }
+    } else if contains_kind(&lhs, SymKind::Theta) || contains_kind(&rhs, SymKind::Theta) {
         ProofObligation::ThetaInvariant
     } else {
         ProofObligation::Equivalence
@@ -205,7 +216,10 @@ fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
             ))
         }
         TermKind::Operation {
-            operator, operands, ..
+            operator,
+            operands,
+            dependencies,
+            ..
         } => {
             let Operator::Semantic(name) = operator else {
                 return Err(format!(
@@ -217,6 +231,7 @@ fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
                 op_kind(name).ok_or_else(|| format!("unknown semantic operator `{name}`"))?;
             let children = operands
                 .iter()
+                .chain(dependencies)
                 .map(|operand| node(operand, side, scope))
                 .collect::<Result<_, _>>()?;
             Ok(AxNode::Node(kind, children))

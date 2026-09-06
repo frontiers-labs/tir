@@ -158,8 +158,12 @@ fn collect_binder_types<'a>(
     binders: &mut BTreeMap<&'a str, Option<&'a BindingType>>,
 ) {
     match &term.kind {
-        TermKind::Operation { operands, .. } => {
-            for operand in operands {
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => {
+            for operand in operands.iter().chain(dependencies) {
                 collect_binder_types(operand, binders);
             }
         }
@@ -175,7 +179,7 @@ fn validate_lhs(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
         operator,
         attributes,
         operands,
-        ..
+        dependencies,
     } = &term.kind
     {
         if let Operator::Dialect { dialect, name } = operator
@@ -194,7 +198,7 @@ fn validate_lhs(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
                 term.span,
             ));
         }
-        for operand in operands {
+        for operand in operands.iter().chain(dependencies) {
             validate_lhs(operand, diagnostics);
         }
     }
@@ -232,9 +236,13 @@ fn validate_rhs(
             operator,
             attributes,
             operands,
+            dependencies,
         } => {
             if !root {
                 return;
+            }
+            if !dependencies.is_empty() {
+                diagnostics.push(unsupported("dependency operands on the RHS", term.span));
             }
             if matches!(operator, Operator::Semantic(_)) {
                 diagnostics.push(unsupported("semantic operator emission", term.span));
@@ -542,10 +550,14 @@ impl PatternGenerator {
                 Some(var)
             }
             TermKind::Operation {
-                operator, operands, ..
+                operator,
+                operands,
+                dependencies,
+                ..
             } => {
                 let operands: Vec<u32> = operands
                     .iter()
+                    .chain(dependencies)
                     .map(|operand| self.term(operand))
                     .collect::<Option<_>>()?;
                 let class = self.var();

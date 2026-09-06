@@ -558,7 +558,13 @@ fn eval_node<V, M: Memory>(
         | SymKind::UIToFP
         | SymKind::FPToSI
         | SymKind::FPToUI) => eval_float(kind, &c),
-        kind @ (SymKind::If | SymKind::Theta | SymKind::Clamp) => eval_control(kind, &c),
+        kind @ (SymKind::If | SymKind::Theta | SymKind::Loop | SymKind::Port | SymKind::Clamp) => {
+            eval_control(kind, &c)
+        }
+        SymKind::Switch => {
+            let index = as_int!(c(0), "switch").to_u64() as usize;
+            c((index + 1).min(graph.children(node).count() - 1))
+        }
         kind @ (SymKind::Fma
         | SymKind::Sqrt
         | SymKind::Log2Ceil
@@ -766,7 +772,9 @@ fn eval_control(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
             };
             if cond_zero { c(2) } else { c(1) }
         }
-        SymKind::Theta => panic!("theta requires loop-sequence semantics"),
+        SymKind::Theta | SymKind::Loop | SymKind::Port => {
+            panic!("a loop requires loop-sequence semantics")
+        }
         _ => {
             let input = as_int!(c(0), "clamp");
             let min = as_int!(c(1), "clamp");

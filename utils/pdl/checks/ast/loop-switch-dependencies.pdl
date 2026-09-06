@@ -1,0 +1,12 @@
+// The loop, port and switch operators, and dependency operands after `|`.
+// RUN: tir-pdl %s --emit ast | filecheck %s
+
+rule loop-carries: #loop(x: int<W>, #port(l: int<W>), #port(l), p: int<1>) : int<W> => x;
+rule switch-same: #switch(p: int<8>; x: int<W>, x, x) : int<W> => x;
+rule load-after-store: ptr.load(a | ptr.store(v, a | s)) => v proof definitional;
+
+// CHECK: "loop"
+// CHECK: "port"
+// CHECK: "switch"
+// CHECK: dependencies: [
+// CHECK: "store"

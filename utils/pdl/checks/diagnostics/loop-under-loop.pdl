@@ -1,0 +1,6 @@
+// Unrolling a loop is a structural transform, not a rewrite rule.
+// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
+
+rule unroll: #loop(i: int<W>, n, e, p) => #loop(i, #loop(i, n, e, p), e, p);
+
+// CHECK: unrolls a theta under itself

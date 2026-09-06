@@ -1,0 +1,6 @@
+// A port reads the carried value of the loop it sits in.
+// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
+
+rule stray: #add(#port(l), x) => x;
+
+// CHECK: reads a port outside any loop

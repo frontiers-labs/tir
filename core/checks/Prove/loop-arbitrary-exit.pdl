@@ -1,0 +1,12 @@
+// RUN: not tir prove %s | filecheck %s
+
+// An invariant continue value says nothing about the exit: initial 0, continue
+// port, exit 1, predicate false produces 1 (see Interp/loop-exit-constant.tir),
+// so a rule replacing such a loop by its init is refuted at the exit
+// projection. A continue value that moves the port is refuted at the transition.
+
+rule loop-drops-exit: #loop(x: int<W>, #port(l: int<W>), e: int<W>, p: int<1>) : int<W> => x;
+rule loop-moves-port: #loop(x: int<8>, #add(#port(l: int<8>), const<8>(1)), #port(l), p: int<1>) : int<8> => x;
+
+// CHECK: loop-drops-exit: refuted
+// CHECK: loop-moves-port: refuted

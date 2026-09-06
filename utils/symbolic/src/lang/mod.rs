@@ -57,6 +57,21 @@ pub enum SymKind {
     /// node's e-class recursively.
     // #[arity = 2]
     Theta,
+    /// A loop over one carried value: `[init, next, exit, pred]`. The carried
+    /// value is read inside `next`, `exit` and `pred` through a [`SymKind::Port`]
+    /// of this loop; the node stands for the value the loop produces, which is
+    /// `exit` once `pred` is false.
+    // #[arity = 4]
+    Loop,
+    /// The carried value of a [`SymKind::Loop`] at the current iteration; the
+    /// child identifies the loop and position it belongs to, so two loops
+    /// entered on equal values carry distinct ports.
+    // #[arity = 1]
+    Port,
+    /// A choice among arms by index: `[pred, arm0, arm1, ...]`, a predicate past
+    /// the last arm selecting it. `If` is the two-arm boolean form.
+    // #[arity >= 2]
+    Switch,
     // #[arity = 3]
     Clamp,
     /// Args: address, bytes read, metadata. Metadata is nonsemantic; `SExt`/`ZExt` model signedness.
@@ -193,7 +208,8 @@ impl SymKind {
             | SymKind::Bitcast
             | SymKind::Log2Ceil
             | SymKind::Sqrt
-            | SymKind::AsFloat => 1,
+            | SymKind::AsFloat
+            | SymKind::Port => 1,
             SymKind::IterConcat => 1,
             SymKind::If
             | SymKind::Clamp
@@ -205,7 +221,7 @@ impl SymKind {
             | SymKind::SIToFP
             | SymKind::UIToFP
             | SymKind::FCvt => 3,
-            SymKind::StoreMemory | SymKind::StoreConditional => 4,
+            SymKind::StoreMemory | SymKind::StoreConditional | SymKind::Loop => 4,
             SymKind::AtomicRmw => 5,
             _ => 2,
         }
@@ -218,7 +234,7 @@ impl SymKind {
     pub fn accepts_arity(&self, n: usize) -> bool {
         match self {
             SymKind::Split => n == 2 || n == 3,
-            SymKind::Zip => n >= 2,
+            SymKind::Zip | SymKind::Switch => n >= 2,
             SymKind::IterConcat => n >= 1,
             SymKind::StateAssign
             | SymKind::StateStore
