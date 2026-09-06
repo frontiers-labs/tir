@@ -1,0 +1,12 @@
+// RUN: not tir prove %s 2>&1 | filecheck %s
+
+// The induction relates the ports and the produced values of the loops on
+// the two sides. A term wrapped around a loop would be compared at the port's
+// value instead of the loop's, which proves nothing about the loop, and a
+// loop that is not the whole side is refused before any proof runs. This rule
+// would otherwise be proven while false: the loop carries `x + 1` and leaves
+// `x + 2`, so the left-hand side is `x + 1`, not `x`.
+
+rule bad-nonroot: #if(#ult(#sub(#loop(#add(x: int<8>, const<8>(1)), #port(l: int<8>), #add(#port(l), const<8>(1)), p: int<1>), x), const<8>(2)), x, #add(x, const<8>(1))) : int<8> => x;
+
+// CHECK: a `#loop` must be the whole side it is on

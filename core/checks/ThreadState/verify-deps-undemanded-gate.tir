@@ -1,0 +1,22 @@
+// RUN: not tir opt --pass verify-deps %s 2>&1 | filecheck %s
+
+// The arm demands its store, but nothing demands the gate: under demand
+// evaluation the arm never runs, so the store is in no cone of the function.
+
+module {
+  %f = func.func @f(%c: !i1, %p: !ptr.p<!i32>, %v: !i32) -> !i32 {
+    | %s = state.entry_state
+    | %g = scf.switch2 %c args(| %s) (| %a) {
+      -> | %a
+    }
+    (| %b) {
+      | %s1 = ptr.store %v, %p | %b
+      -> | %s1
+    }
+    %x | %r = ptr.load %p | %s : !i32
+    -> %x | %r
+  }
+  module_end
+}
+
+// CHECK: ptr.store in @f is demanded by nothing

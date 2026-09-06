@@ -1,0 +1,45 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 2 %s | tir opt --pass promote-nodes | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 6 %s | tir opt --pass promote-nodes | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
+
+// A slot read and written in the inner loop of a nest and read after both.
+// Whichever read the pass answers first, the port grows on both loops:
+// spelling the inner loop's init walks the outer loop's port, and the outer
+// latch walks back into the inner loop's result.
+
+module {
+  %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    ptr.store %zero, %p
+    cfg.br ^outer(%zero : !i32)
+  ^outer(%i: !i32):
+    cfg.br ^inner(%zero : !i32)
+  ^inner(%j: !i32):
+    %a = ptr.load %p : !i32
+    %b = addi %a, %one : !i32
+    ptr.store %b, %p
+    %jn = addi %j, %one : !i32
+    %jm = cmpi %jn, %n {predicate = "slt"} : !i1
+    cfg.cond_br %jm, ^inner(%jn : !i32), ^latch
+  ^latch:
+    %in = addi %i, %one : !i32
+    %im = cmpi %in, %n {predicate = "slt"} : !i1
+    cfg.cond_br %im, ^outer(%in : !i32), ^exit
+  ^exit:
+    %r = ptr.load %p : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @f
+// CHECK-NOT: ptr.
+// CHECK: scf.loop
+// CHECK: scf.loop
+// CHECK-NOT: ptr.
+
+// VALUE: i32 9

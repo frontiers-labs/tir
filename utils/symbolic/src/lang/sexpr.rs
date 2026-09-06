@@ -32,6 +32,9 @@ const OP_VOCABULARY: &[(&str, SymKind)] = &[
     ("bitcast", SymKind::Bitcast),
     ("if", SymKind::If),
     ("theta", SymKind::Theta),
+    ("loop", SymKind::Loop),
+    ("port", SymKind::Port),
+    ("switch", SymKind::Switch),
 ];
 
 /// The [`SymKind`] an operator atom names, if any.

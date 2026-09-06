@@ -1,0 +1,47 @@
+// RUN: tir opt --pass restructure-nodes,inline<1000,0>,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f main --args=4 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,inline<1000,0> %s | tir interp -f main --args=4 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 5 %s | tir opt --pass inline<1000,0> | tir interp -f main --args=4 | filecheck %s --check-prefix=VALUE
+
+// A call inside a loop body: the callee's operations join the body, reading
+// the loop's chain where the call did, and the callee's slot is hoisted out to
+// the function's region, as an allocation is once per activation, not once per
+// iteration.
+
+module {
+  %fn_bump = func.func private @bump(%cell: !ptr.p<!i32>, %a: !i32) -> !i32 {
+    %slot = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %a, %slot
+    %v = ptr.load %cell : !i32
+    %held = ptr.load %slot : !i32
+    %s = addi %v, %held : !i32
+    ptr.store %s, %cell
+    func.return %s
+  }
+  %fn_main = func.func @main(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %cell = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %zero, %cell
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    %r = func.call %fn_bump(%cell, %i : !ptr.p<!i32>, !i32) -> !i32
+    %next = addi %i, %one : !i32
+    %more = cmpi %next, %n {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body(%next : !i32), ^exit
+  ^exit:
+    %w = ptr.load %cell : !i32
+    func.return %w
+  }
+  module_end
+}
+
+// CHECK: func.func @main
+// CHECK-NOT: func.call
+// CHECK: ptr.alloca
+// CHECK: ptr.alloca
+// CHECK: scf.loop
+// CHECK-NOT: ptr.alloca
+// CHECK-NOT: func.call
+
+// VALUE: i32 6

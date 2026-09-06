@@ -247,6 +247,18 @@ fn run_compile_action(
                 opts.mabi.as_deref(),
                 opts.nodes,
             );
+            // The unordered pipeline ends at the IR stage, so an optimizing
+            // level runs its mid-end here; -O0 prints the conversion itself,
+            // as the ordered form prints what the backend will be handed.
+            if opts.nodes && opts.opt_level.rounds().is_some() {
+                use tir::Operation;
+                super::compile::mid_end(opts, false)
+                    .run(&context, context.get_op(module.id()))
+                    .unwrap_or_else(|e| {
+                        eprintln!("fcc: error: mid-end failed: {e}");
+                        std::process::exit(1);
+                    });
+            }
             let mut ir = String::new();
             let mut fmt = tir::IRFormatter::new(&mut ir);
             tir::print_ir(&module, &context, &mut fmt).unwrap_or_else(|e| {

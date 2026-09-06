@@ -8,8 +8,7 @@ use super::seed::Seeded;
 use super::state;
 use crate::utils::APInt;
 use crate::{
-    Conditional, ConstantFold, Context, Operation, OperationRef, PassError, Rewriter, TypeId,
-    ValueId,
+    Conditional, ConstantFold, Context, Operation, TypeId, ValueId,
     attributes::{AttributeValue, Predicate},
     builtin::{IntegerType, ops},
     sem::{IrOp, Kind, Prov, SemNode as Node, SymKind, Value, node::field},
@@ -126,11 +125,8 @@ impl Interpretation {
     }
 }
 
-pub type EmitFn = Box<
-    dyn Fn(&Context, &[ValueId], TypeId, &OperationRef, &mut Rewriter) -> Result<ValueId, PassError>
-        + Send
-        + Sync,
->;
+pub type EmitFn =
+    Box<dyn Fn(&Context, &[ValueId], TypeId) -> (Box<dyn crate::Operation>, ValueId) + Send + Sync>;
 
 pub struct Ruleset {
     pub rewrites: Vec<tir_relational::Rule<Node>>,
@@ -174,10 +170,10 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
 }
 
 fn emit_shl() -> EmitFn {
-    Box::new(|context, operands, ty, target, rewriter| {
+    Box::new(|context, operands, ty| {
         let op = ops::shli(context, operands[0], operands[1], ty).build();
-        rewriter.insert_op_before(target, &op)?;
-        Ok(op.result())
+        let result = op.result();
+        (Box::new(op), result)
     })
 }
 

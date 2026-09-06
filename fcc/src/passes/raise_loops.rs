@@ -18,7 +18,7 @@ use tir::ptr::{AllocaOp, LoadOp, StoreOp, ops as p};
 use tir::scf;
 use tir::{
     BlockHandle, BlockId, Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation,
-    OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
+    OperationRef, Pass, PassError, PassTarget, RegionId, RegionKind, Rewriter, TypeId, ValueId,
 };
 
 use crate::cir;
@@ -40,7 +40,7 @@ impl Pass for RaiseLoopsPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(

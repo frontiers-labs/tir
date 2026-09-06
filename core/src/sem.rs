@@ -25,6 +25,20 @@ pub use tir_symbolic::sem::{
 pub(crate) use tir_symbolic::sem::{con, op, sym};
 
 pub(crate) mod axioms;
+
+/// Prove every `proof smt` rule of a PDL source at `width` bits for each of
+/// its width names, answering each rule's name with whether its obligations
+/// were discharged. Definitional and trusted rules are not read.
+pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, bool)>, String> {
+    let axioms = axioms::pdl::axioms_from_pdl(source)?;
+    Ok(axioms
+        .iter()
+        .map(|axiom| {
+            let widths = vec![width; axiom.width_names.len()];
+            (axiom.name.clone(), axiom.prove(&widths))
+        })
+        .collect())
+}
 pub(crate) mod egraph;
 pub mod node;
 pub(crate) mod rewrites;

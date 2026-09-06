@@ -1,0 +1,36 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f f --args=0 | filecheck %s --check-prefix=ZERO
+
+// The slot is first written inside the loop. A port carrying it would be
+// entered on what nothing wrote, and the only spelling of that is a read the
+// program never made: with no iteration the read after the loop is the
+// program's own uninitialized read, with one it is not. The slot stays memory.
+
+module {
+  %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    ptr.store %i, %p
+    %next = addi %i, %one : !i32
+    %more = cmpi %next, %n {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body(%next : !i32), ^exit
+  ^exit:
+    %r = ptr.load %p : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @f
+// CHECK: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: scf.loop
+// CHECK: ptr.store %{{[0-9]+}}, %[[P]]
+// CHECK: ptr.load %[[P]]
+
+// VALUE: i32 2
+// ZERO: i32 0

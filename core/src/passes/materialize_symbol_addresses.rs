@@ -57,12 +57,24 @@ impl Pass for MaterializeSymbolAddressesPass {
                 Use::Address(op, index, name) => {
                     let address = b::symbol_address(context, &name);
                     let value = address.result();
-                    rewriter.insert_op_before(&op, &address)?;
+                    match context.parent_nodes_region(op.op().id) {
+                        Some(region) => context.add(region, address.id()),
+                        None => rewriter.insert_op_before(&op, &address)?,
+                    }
                     context.set_op_operand(op.op().id, index, value);
                 }
                 Use::Conversion(op, name) => {
                     let address = b::symbol_address(context, &name);
-                    rewriter.replace_op(&op, &address)?;
+                    match context.parent_nodes_region(op.op().id) {
+                        Some(region) => {
+                            context.add(region, address.id());
+                            let old = op.op().results()[0];
+                            context.replace_value_uses(old, address.result());
+                            context.rename_region_results(region, old, address.result(), &[]);
+                            rewriter.erase_op(&op)?;
+                        }
+                        None => rewriter.replace_op(&op, &address)?,
+                    }
                 }
                 Use::Callee(op, name) => {
                     let mut attributes = op.op().attributes().to_vec();
@@ -87,8 +99,8 @@ enum Use {
 
 fn collect(context: &Context, root: &OpHandle, uses: &mut Vec<Use>) {
     for region in root.regions() {
-        for block in context.get_region(region).iter(context.clone()) {
-            for op_id in block.op_ids() {
+        {
+            for op_id in context.get_region(region).op_ids() {
                 let instance = context.get_op(op_id);
                 let op = OperationRef::new(instance.clone());
                 collect(context, op.op(), uses);

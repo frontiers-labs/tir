@@ -3,6 +3,7 @@ use std::fmt::Write;
 
 use crate::BlockId;
 use crate::attributes::AttributeValue;
+use crate::utils::Rng;
 
 pub struct IRFormatter<'a> {
     w: &'a mut dyn Write,
@@ -12,6 +13,10 @@ pub struct IRFormatter<'a> {
     /// Attribute values printed as `#name` because the file defines an alias for
     /// them; see [`print_ir`](crate::print_ir).
     attribute_aliases: Vec<(String, AttributeValue)>,
+    /// Set, an unordered region prints one random linearization of its
+    /// dependence graph instead of the canonical one; see
+    /// [`IRFormatter::shuffle_nodes`].
+    shuffle: Option<Rng>,
 }
 
 impl<'a> IRFormatter<'a> {
@@ -22,7 +27,20 @@ impl<'a> IRFormatter<'a> {
             new_line: true,
             region_block_numbers: vec![],
             attribute_aliases: vec![],
+            shuffle: None,
         }
+    }
+
+    /// Print every unordered region in a random order its dependencies allow,
+    /// drawn from `seed`. Parsing the result back assigns ids and insertion
+    /// order along that text, so whatever runs on it walks a different order
+    /// of the same graph: an oracle for code that must not read either.
+    pub fn shuffle_nodes(&mut self, seed: u64) {
+        self.shuffle = Some(Rng::new(seed));
+    }
+
+    pub(crate) fn shuffle(&mut self) -> Option<&mut Rng> {
+        self.shuffle.as_mut()
     }
 
     pub fn set_attribute_aliases(&mut self, aliases: Vec<(String, AttributeValue)>) {

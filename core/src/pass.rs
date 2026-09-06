@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use linkme::distributed_slice;
 
-use crate::{Context, OpHandle, OpId, Operation, Value, analysis::AnalysisManager};
+use crate::{Context, OpHandle, OpId, Operation, RegionKind, Value, analysis::AnalysisManager};
 
 /// A pass made available to the pipeline parser by name.
 ///
@@ -217,6 +217,12 @@ impl PipelineParser<'_> {
 #[derive(Debug)]
 pub enum PassError {
     MissingBlock(&'static str),
+    /// The pass walks one body kind and the operation holds the other.
+    RegionKind {
+        pass: &'static str,
+        op: String,
+        expected: RegionKind,
+    },
     InvalidRuleSet(String),
     RewriteFailed(OpId),
     InvalidIR {
@@ -230,6 +236,17 @@ impl std::fmt::Display for PassError {
         match self {
             PassError::MissingBlock(name) => {
                 write!(f, "operation '{name}' does not have a parent block")
+            }
+            PassError::RegionKind { pass, op, expected } => {
+                let (wanted, held) = if *expected == RegionKind::Nodes {
+                    ("an unordered", "an ordered")
+                } else {
+                    ("an ordered", "an unordered")
+                };
+                write!(
+                    f,
+                    "pass '{pass}' runs on {wanted} body, but {op} holds {held} one"
+                )
             }
             PassError::InvalidRuleSet(message) => write!(f, "invalid rule set: {message}"),
             PassError::RewriteFailed(op) => write!(f, "failed to rewrite op {op:?}"),
@@ -256,18 +273,37 @@ pub enum PassTarget {
 }
 
 #[derive(Debug, Clone, Copy)]
-/// A type-safe operation target stored by [`PassTarget`].
+/// A type-safe operation target stored by [`PassTarget`]. `kind` names the
+/// body kind the pass walks; a pass reading either leaves it `None`.
 pub struct OperationTarget {
     dialect: &'static str,
     name: &'static str,
+    kind: Option<RegionKind>,
 }
 
 impl PassTarget {
-    /// Targets operations of type `T`.
+    /// Targets operations of type `T`, whichever kind of body they hold.
     pub fn operation<T: Operation>() -> Self {
         Self::Operation(OperationTarget {
             dialect: T::dialect(),
             name: T::name(),
+            kind: None,
+        })
+    }
+
+    /// Targets operations of type `T` whose regions are all of `kind`, `Blocks`
+    /// or `Nodes`; the pass manager refuses to run the pass on one holding the
+    /// other kind.
+    pub fn operation_on<T: Operation>(kind: RegionKind) -> Self {
+        assert_ne!(
+            kind,
+            RegionKind::Any,
+            "a pass walking either kind declares none"
+        );
+        Self::Operation(OperationTarget {
+            dialect: T::dialect(),
+            name: T::name(),
+            kind: Some(kind),
         })
     }
 
@@ -276,6 +312,22 @@ impl PassTarget {
             PassTarget::Any => true,
             PassTarget::Operation(target) => op.is_name(target.dialect, target.name),
         }
+    }
+
+    /// The body kind the target asks for when `op` holds a region of the other
+    /// kind.
+    fn kind_mismatch(&self, context: &Context, op: &OpHandle) -> Option<RegionKind> {
+        let PassTarget::Operation(OperationTarget {
+            kind: Some(kind), ..
+        }) = self
+        else {
+            return None;
+        };
+        let wants_nodes = *kind == RegionKind::Nodes;
+        op.regions()
+            .iter()
+            .any(|&region| context.get_region(region).is_nodes() != wants_nodes)
+            .then_some(*kind)
     }
 }
 
@@ -494,6 +546,11 @@ impl Rewriter {
     }
 
     pub fn erase_op(&mut self, target: &OperationRef) -> Result<(), PassError> {
+        if let Some(region) = self.context.parent_nodes_region(target.op.id) {
+            self.context.remove_from_region(region, target.op.id);
+            self.context.remove_operation(target.op.id);
+            return Ok(());
+        }
         let block = self.block_of(target)?;
         if block.remove_op(target.op.id) {
             self.context.remove_operation(target.op.id);
@@ -741,10 +798,18 @@ impl PassManager {
                 let started = timing::enabled().then(std::time::Instant::now);
                 let version_before = context.op_version(root.op.id);
                 PassManager::walk_ops(context, root, &mut |op_ref| {
-                    if pass.target().matches(op_ref.op()) {
-                        pass.run(&op_ref, context, rewriter, analyses)?;
+                    let target = pass.target();
+                    if !target.matches(op_ref.op()) {
+                        return Ok(());
                     }
-                    Ok(())
+                    if let Some(expected) = target.kind_mismatch(context, op_ref.op()) {
+                        return Err(PassError::RegionKind {
+                            pass: pass.name(),
+                            op: describe_op(op_ref.op()),
+                            expected,
+                        });
+                    }
+                    pass.run(&op_ref, context, rewriter, analyses)
                 })?;
                 // Any edit under `root` bumps its version, so this is the "did
                 // the pass touch the IR" signal, taken from the IR itself rather
@@ -818,26 +883,33 @@ impl PassManager {
             if !region.is_live() {
                 continue;
             }
-            for block in region.iter(context.clone()) {
-                // A pass run earlier in this walk may have erased or replaced a
-                // later op in the same block (isel rewrites the whole block at
-                // once); the snapshot below still holds the erased op. Handles,
-                // not ids: an erased op's id belongs to whatever took its slot.
-                let ops: Vec<_> = block
-                    .op_ids()
-                    .iter()
-                    .map(|id| context.get_op(*id))
-                    .collect();
-                for op in ops {
-                    if !op.is_live() {
-                        continue;
-                    }
-                    PassManager::walk_ops(context, &OperationRef::new(op), f)?;
+            // A pass run earlier in this walk may have erased or replaced a
+            // later op in the same region (isel rewrites the whole block at
+            // once); the snapshot below still holds the erased op. Handles,
+            // not ids: an erased op's id belongs to whatever took its slot.
+            let ops: Vec<_> = region
+                .op_ids()
+                .iter()
+                .map(|id| context.get_op(*id))
+                .collect();
+            for op in ops {
+                if !op.is_live() {
+                    continue;
                 }
+                PassManager::walk_ops(context, &OperationRef::new(op), f)?;
             }
         }
         Ok(())
     }
+}
+
+/// `dialect.name`, followed by the symbol an op defines: what an error names.
+fn describe_op(op: &OpHandle) -> String {
+    let mut text = format!("{}.{}", op.dialect().as_str(), op.name().as_str());
+    if let Some(symbol) = op.clone().as_interface::<dyn crate::Symbol>() {
+        text.push_str(&format!(" @{}", symbol.symbol_name()));
+    }
+    text
 }
 
 impl Default for PassManager {

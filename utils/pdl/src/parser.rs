@@ -158,25 +158,47 @@ where
             .delimited_by(just(Token::Less), just(Token::Greater))
             .or_not()
             .map(Option::unwrap_or_default);
-        let operands = term
+        // `(p; a, b)` separates a switch's predicate from its arms, and `(a | s)`
+        // the dependency operands from the values, as the printer spells them.
+        let values = term
             .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect()
+            .then_ignore(just(Token::Semicolon))
+            .or_not()
+            .then(
+                term.clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>(),
+            )
+            .map(|(first, rest)| first.into_iter().chain(rest).collect::<Vec<_>>());
+        let dependencies = just(Token::Pipe)
+            .ignore_then(
+                term.clone()
+                    .separated_by(just(Token::Comma))
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
+            )
+            .or_not()
+            .map(Option::unwrap_or_default);
+        let operands = values
+            .then(dependencies)
             .delimited_by(just(Token::LeftParen), just(Token::RightParen));
         let operation = operator
             .then(attributes)
             .then(operands)
             .then(just(Token::Colon).ignore_then(type_expr()).or_not())
-            .map_with(|(((operator, attributes), operands), ty), extra| Term {
-                kind: TermKind::Operation {
-                    operator,
-                    attributes,
-                    operands,
+            .map_with(
+                |(((operator, attributes), (operands, dependencies)), ty), extra| Term {
+                    kind: TermKind::Operation {
+                        operator,
+                        attributes,
+                        operands,
+                        dependencies,
+                    },
+                    ty,
+                    span: extra.span(),
                 },
-                ty,
-                span: extra.span(),
-            });
+            );
         let constant = just(Token::Const)
             .ignore_then(width_expression().delimited_by(just(Token::Less), just(Token::Greater)))
             .then(expression().delimited_by(just(Token::LeftParen), just(Token::RightParen)))
@@ -199,7 +221,7 @@ where
             });
         // A bare name is a binder; anything else an expression can be is an
         // integer over widths and literals.
-        let value = expression().try_map(|expr, span| match expr.kind {
+        let value = operand_expression().try_map(|expr, span| match expr.kind {
             ExprKind::Name(_) => Err(Rich::custom(span, "a bare name is a binder")),
             _ => Ok(Term {
                 kind: TermKind::Value(expr),
@@ -291,6 +313,22 @@ fn expression<'src, I>() -> impl Parser<'src, I, Expr, Error<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
+    expression_with(true)
+}
+
+/// An expression in operand position: `|` there separates the dependency
+/// operands, so bitwise or is spelled in parentheses.
+fn operand_expression<'src, I>() -> impl Parser<'src, I, Expr, Error<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    expression_with(false)
+}
+
+fn expression_with<'src, I>(bit_or: bool) -> impl Parser<'src, I, Expr, Error<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
     recursive(|expression| {
         let atom = choice((
             integer().map_with(|value, extra| Expr {
@@ -374,10 +412,14 @@ where
                     ),
                     [(Token::Ampersand, BinaryOp::BitAnd)],
                 ),
-                [
-                    (Token::Caret, BinaryOp::BitXor),
-                    (Token::Pipe, BinaryOp::BitOr),
-                ],
+                if bit_or {
+                    vec![
+                        (Token::Caret, BinaryOp::BitXor),
+                        (Token::Pipe, BinaryOp::BitOr),
+                    ]
+                } else {
+                    vec![(Token::Caret, BinaryOp::BitXor)]
+                },
             ),
             [
                 (Token::LogicalAnd, BinaryOp::LogicalAnd),
@@ -404,15 +446,20 @@ where
     ))
 }
 
-fn binary_level<'src, I, P, const N: usize>(
+fn binary_level<'src, I, P>(
     operand: P,
-    operators: [(Token, BinaryOp); N],
+    operators: impl IntoIterator<Item = (Token, BinaryOp)>,
 ) -> impl Parser<'src, I, Expr, Error<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
     P: Parser<'src, I, Expr, Error<'src>> + Clone + 'src,
 {
-    let operator = choice(operators.map(|(token, op)| just(token).to(op)));
+    let operator = choice(
+        operators
+            .into_iter()
+            .map(|(token, op)| just(token).to(op))
+            .collect::<Vec<_>>(),
+    );
     operand
         .clone()
         .foldl(operator.then(operand).repeated(), |lhs, (op, rhs)| Expr {

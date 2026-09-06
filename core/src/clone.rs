@@ -48,6 +48,38 @@ pub fn clone_region_with_mapping(
     clone_region_into(context, region, &mut mapping)
 }
 
+/// Copy the operations of the unordered `region` into `destination`, reading
+/// its ports as `bindings` say, and answer the copies with the values the
+/// copy's result list would name. Splicing a callee body in place of a call
+/// needs no region of its own for the copy to live in first.
+pub fn clone_nodes_ops_into(
+    context: &Context,
+    region: RegionId,
+    bindings: &HashMap<ValueId, ValueId>,
+    destination: RegionId,
+) -> (Vec<OpId>, Vec<ValueId>) {
+    let mut mapping = Mapping {
+        values: bindings.clone(),
+        blocks: HashMap::new(),
+    };
+    let source = context.get_region(region);
+    let ops: Vec<OpId> = crate::region::topological_order(context, region)
+        .unwrap_or_else(|_| source.op_ids())
+        .into_iter()
+        .map(|op| {
+            let copy = clone_op_into(context, op, &mut mapping);
+            context.add(destination, copy);
+            copy
+        })
+        .collect();
+    let results = source
+        .results()
+        .into_iter()
+        .map(|result| remap_value(result, &mapping))
+        .collect();
+    (ops, results)
+}
+
 /// Blocks are created before any operation is copied, so a branch to a block
 /// later in the region already has its copy to name.
 fn clone_region_into(context: &Context, region: RegionId, mapping: &mut Mapping) -> RegionId {

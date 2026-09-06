@@ -82,7 +82,9 @@ pub struct CompileArgs {
     #[arg(long = "shuffle-machine-order")]
     shuffle_machine_order: bool,
     /// Raise control flow into unordered regions (`restructure-nodes`) instead
-    /// of the structured blocks the backend takes. The IR stage only.
+    /// of the structured blocks the backend takes; at -O1 and above the
+    /// unordered mid-end runs at the IR stage, where this pipeline ends. The
+    /// IR stage only.
     #[arg(long)]
     nodes: bool,
     /// C source files, or `-` for stdin.

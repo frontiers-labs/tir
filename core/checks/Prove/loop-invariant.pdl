@@ -1,0 +1,15 @@
+// RUN: tir prove %s | filecheck %s
+
+// A loop whose continue value is its own port carries the value it was
+// entered on, and one whose exit reads that port leaves with it. The proof is
+// by induction: the initial binding, the transition with the ports of both
+// sides assumed equal, and the exit projection where the predicate is false.
+// The `#theta` form the old seeder emits proves the same way until it goes.
+
+rule loop-carries: #loop(x: int<W>, #port(l: int<W>), #port(l), p: int<1>) : int<W> => x;
+rule loop-exit-through-port: #loop(x: int<8>, #port(l: int<8>), #add(#port(l), const<8>(0)), p: int<1>) : int<8> => x;
+rule theta-same: #theta(x: int<W>, x) : int<W> => x;
+
+// CHECK: loop-carries: proven
+// CHECK: loop-exit-through-port: proven
+// CHECK: theta-same: proven

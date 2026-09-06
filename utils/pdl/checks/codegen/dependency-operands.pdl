@@ -1,0 +1,11 @@
+// Dependency operands are pattern children after the value operands, in the
+// order the printer spells them; a switch's predicate leads its arms.
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule switch-same: #switch(p; x, x) => x;
+rule dep-order: builtin.addi(a, b | s) => a;
+
+// CHECK: Node::sym_pattern(SymKind::Switch,
+// CHECK-NEXT: vec![Id::from_raw(0u32), Id::from_raw(1u32), Id::from_raw(1u32)])
+// CHECK: builtin::AddIOp >
+// CHECK-NEXT: (vec![Id::from_raw(0u32), Id::from_raw(1u32), Id::from_raw(2u32)])

@@ -189,6 +189,17 @@ enum ProofObligation {
     /// with no occurrence of the iteration-`t` value for a hypothesis to
     /// constrain.
     ThetaInvariant,
+    /// An identity over a `#loop(init, next, exit, pred)`, discharged by
+    /// induction over the port binders `#port(l)`, each a declared var
+    /// standing for the carried value at the current iteration and shared by
+    /// both sides. The obligations are the initial binding (`init` on each
+    /// side agree), the transition (`next` on each side agree, the ports
+    /// assumed equal), and the exit projection under `not pred`. Against a
+    /// loop-free right-hand side `r`, the port is assumed equal to `r` itself:
+    /// the claim is that the loop carries `r` unchanged and leaves with it, so
+    /// an exit that is not `r` fails, however invariant the continue value.
+    /// When both sides hold loops, their predicates must agree as well.
+    LoopInvariant { rhs_loops: bool },
 }
 
 /// Which loop-carried port a `theta` node realizes as in one proof instance.
@@ -196,6 +207,16 @@ enum ProofObligation {
 enum ThetaPort {
     Init,
     Next,
+}
+
+/// Which obligation of a [`ProofObligation::LoopInvariant`] one instance
+/// discharges, deciding what a `#loop` node realizes as.
+#[derive(Clone, Copy, PartialEq)]
+enum LoopPhase {
+    Init,
+    Next,
+    Exit,
+    Pred,
 }
 
 /// The fixed context of one realized proof instance.
@@ -206,6 +227,11 @@ struct Realization<'a> {
     root_sym: Option<NodeId>,
     /// `None` for an obligation whose realization holds no `theta`.
     theta_port: Option<ThetaPort>,
+    /// `None` for an obligation whose realization holds no `#loop`.
+    loop_phase: Option<LoopPhase>,
+    /// Against a loop-free right-hand side, the term every port binder is
+    /// assumed equal to: the right-hand side itself.
+    hypothesis: Option<&'a AxNode>,
 }
 
 #[derive(Clone)]
@@ -213,7 +239,7 @@ pub struct Axiom {
     pub(crate) name: String,
     /// Width names in declaration order; a resolved `Vec<u64>` in this order is
     /// the proof-memo key.
-    width_names: Vec<String>,
+    pub(crate) width_names: Vec<String>,
     /// Declared pattern vars (name, class-width binding); a var's `SymbolId` in
     /// proof graphs is its index here.
     vars: Vec<(String, WidthBinding)>,
@@ -353,26 +379,52 @@ impl Axiom {
     /// the width names' declaration order (`vars` first, then `root`).
     pub(crate) fn prove(&self, widths: &[u64]) -> bool {
         match self.obligation {
-            ProofObligation::Equivalence => self.prove_instance(widths, None),
+            ProofObligation::Equivalence => self.prove_instance(widths, None, None),
             ProofObligation::ThetaInvariant => {
-                self.prove_instance(widths, Some(ThetaPort::Init))
-                    && self.prove_instance(widths, Some(ThetaPort::Next))
+                self.prove_instance(widths, Some(ThetaPort::Init), None)
+                    && self.prove_instance(widths, Some(ThetaPort::Next), None)
+            }
+            ProofObligation::LoopInvariant { rhs_loops } => {
+                let phases: &[LoopPhase] = if rhs_loops {
+                    &[
+                        LoopPhase::Init,
+                        LoopPhase::Next,
+                        LoopPhase::Exit,
+                        LoopPhase::Pred,
+                    ]
+                } else {
+                    &[LoopPhase::Init, LoopPhase::Next, LoopPhase::Exit]
+                };
+                phases
+                    .iter()
+                    .all(|&phase| self.prove_instance(widths, None, Some(phase)))
             }
         }
     }
 
     /// One equivalence instance of this axiom's obligation, with every `theta`
-    /// realized as `theta_port`.
-    fn prove_instance(&self, widths: &[u64], theta_port: Option<ThetaPort>) -> bool {
+    /// realized as `theta_port` and every `#loop` as `loop_phase` says.
+    fn prove_instance(
+        &self,
+        widths: &[u64],
+        theta_port: Option<ThetaPort>,
+        loop_phase: Option<LoopPhase>,
+    ) -> bool {
         let register_width = self.register_width(widths);
         let mut lhs = SemGraph::new();
         let mut rhs = SemGraph::new();
+        let hypothesis = match self.obligation {
+            ProofObligation::LoopInvariant { rhs_loops: false } => Some(&self.rhs),
+            _ => None,
+        };
         let realization = |side, root_sym| Realization {
             widths,
             register_width,
             side,
             root_sym,
             theta_port,
+            loop_phase,
+            hypothesis,
         };
         let (built, symbol_count) = if self.uses_root {
             // Lemma over an opaque root value: lhs is a bare symbol, `root` in
@@ -408,6 +460,83 @@ impl Axiom {
             .chain([self.root_width.value(widths)])
             .max()
             .unwrap_or_else(|| self.root_width.value(widths)) as u32
+    }
+
+    /// A `#loop(init, next, exit, pred)` in the phase this instance proves.
+    /// Against a loop-free right-hand side `h`, the transition and the exit are
+    /// conditioned on the port binder equalling `h`: `next` becomes `h` where
+    /// the port differs from it, and `exit` becomes `h` where the port differs
+    /// or `pred` still holds, so the instance states exactly the implication the
+    /// induction needs. With loops on both sides the exit is read under `pred`
+    /// false alone, and the predicate itself is a phase of its own.
+    fn realize_loop(
+        &self,
+        children: &[AxNode],
+        g: &mut SemGraph,
+        r: &Realization,
+    ) -> Option<NodeId> {
+        let [init, next, exit, pred] = children else {
+            return None;
+        };
+        let assumed = |g: &mut SemGraph, value: NodeId| -> Option<NodeId> {
+            let Some(hypothesis) = r.hypothesis else {
+                return Some(value);
+            };
+            let Some(binder) = [next, exit, pred]
+                .into_iter()
+                .find_map(|child| self.port_binder(child))
+            else {
+                return Some(value);
+            };
+            let port = self.realize(&AxNode::Node(SymKind::Port, vec![binder.clone()]), g, r)?;
+            let expected = self.realize(hypothesis, g, r)?;
+            let holds = op(g, SymKind::Eq, &[port, expected]);
+            Some(op(g, SymKind::If, &[holds, value, expected]))
+        };
+        // A predicate is one bit on both sides, however wide the register a
+        // right-hand side reads its var from.
+        let bit = |g: &mut SemGraph, value: NodeId| {
+            let zero = con(g, 0, 16);
+            op(g, SymKind::Extract, &[value, zero, zero])
+        };
+        match r.loop_phase? {
+            LoopPhase::Init => self.realize(init, g, r),
+            LoopPhase::Next => {
+                let value = self.realize(next, g, r)?;
+                assumed(g, value)
+            }
+            LoopPhase::Exit => {
+                let value = self.realize(exit, g, r)?;
+                let pred = self.realize(pred, g, r)?;
+                let pred = bit(g, pred);
+                match r.hypothesis {
+                    Some(hypothesis) => {
+                        let expected = self.realize(hypothesis, g, r)?;
+                        let left = op(g, SymKind::If, &[pred, expected, value]);
+                        assumed(g, left)
+                    }
+                    None => {
+                        let zero = con(g, 0, r.register_width);
+                        Some(op(g, SymKind::If, &[pred, zero, value]))
+                    }
+                }
+            }
+            LoopPhase::Pred => {
+                let pred = self.realize(pred, g, r)?;
+                Some(bit(g, pred))
+            }
+        }
+    }
+
+    /// The identity a loop's `#port(l)` binder names, wherever the body reads
+    /// it; a loop reading no port has no binder to assume anything about.
+    fn port_binder<'n>(&self, node: &'n AxNode) -> Option<&'n AxNode> {
+        match node {
+            AxNode::Node(SymKind::Port, children) => children.first(),
+            AxNode::Node(_, children) => children.iter().find_map(|child| self.port_binder(child)),
+            AxNode::Keep(inner) => self.port_binder(inner),
+            _ => None,
+        }
     }
 
     /// Build one side of the proof. A declared var is a register-wide symbol —
@@ -450,6 +579,15 @@ impl Axiom {
                     ThetaPort::Next => 1,
                 };
                 self.realize(&children[port], g, r)
+            }
+            AxNode::Node(SymKind::Loop, children) => self.realize_loop(children, g, r),
+            AxNode::Node(SymKind::Port, children) => {
+                // A port binder inside `init` would read a value no iteration
+                // has produced yet.
+                if r.loop_phase? == LoopPhase::Init {
+                    return None;
+                }
+                self.realize(&children[0], g, r)
             }
             AxNode::Node(kind, children) => {
                 let children = children

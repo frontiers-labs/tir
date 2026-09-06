@@ -17,9 +17,12 @@
 //! The engine holds no op-specific knowledge — identity, cost, folding and
 //! constant-reading come from op interfaces; op construction is owned by the rewrites.
 
+mod nodes;
 pub(crate) mod rules;
 mod seed;
 mod state;
+
+pub use nodes::InstCombineNodesPass;
 
 use seed::{LoopPorts, Port};
 
@@ -30,7 +33,7 @@ use tir_relational::{ClassId as Id, Engine, Extraction};
 use crate::analysis::scopes;
 use crate::{
     AnalysisManager, BlockId, ConstantLike, Context, LoopLike, MemoryRead, MemoryWrite, OpId,
-    OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
+    OperationRef, Pass, PassError, PassTarget, RegionId, RegionKind, Rewriter, TypeId, ValueId,
     attributes::{AttributeValue, Predicate},
     builtin::ops,
     func::FuncOp,
@@ -61,7 +64,7 @@ impl Pass for InstCombinePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(
@@ -574,14 +577,12 @@ impl Driver<'_> {
 
     /// The innermost loop of `loops` holding `op`'s own regions.
     fn enclosing_loop(&self, loops: &[LoopPorts], op: OpId) -> Option<OpId> {
-        let mut block = self.context.get_op(op).parent_block();
-        while let Some(current) = block {
-            let region = self.context.parent_region(current)?;
-            let holder = self.context.get_region(region).parent_op()?;
+        let mut current = self.context.parent_op(op);
+        while let Some(holder) = current {
             if loops.iter().any(|other| other.op == holder) {
                 return Some(holder);
             }
-            block = self.context.get_op(holder).parent_block();
+            current = self.context.parent_op(holder);
         }
         None
     }
@@ -593,17 +594,10 @@ impl Driver<'_> {
     /// How deep in the region tree `op` sits, so the loops are read outermost first.
     fn nesting(&self, op: OpId) -> usize {
         let mut depth = 0;
-        let mut block = self.context.get_op(op).parent_block();
-        while let Some(current) = block {
-            let Some(region) = self.context.parent_region(current) else {
-                break;
-            };
+        let mut current = self.context.parent_op(op);
+        while let Some(holder) = current {
             depth += 1;
-            block = self
-                .context
-                .get_region(region)
-                .parent_op()
-                .and_then(|holder| self.context.get_op(holder).parent_block());
+            current = self.context.parent_op(holder);
         }
         depth
     }
@@ -705,7 +699,9 @@ impl Driver<'_> {
                 let emit = self.ruleset.emits[idx]
                     .as_ref()
                     .expect("an introduced op supplies an emit");
-                emit(self.context, &operands, ty, target, rewriter)?
+                let (op, value) = emit(self.context, &operands, ty);
+                rewriter.insert_op_before(target, op.as_ref())?;
+                value
             }
             (_, Prov::None) => {
                 let Some(literal) = node.int() else {

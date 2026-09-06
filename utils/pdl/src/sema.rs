@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use tir_symbolic::lang::{SymKind, op_kind};
 
 use crate::Diagnostic;
+use crate::Span;
 use crate::ast::*;
 
 pub fn analyze(file: &File) -> Vec<Diagnostic> {
@@ -40,9 +41,18 @@ pub fn analyze(file: &File) -> Vec<Diagnostic> {
         validate_lhs_shape(rule, &mut diagnostics);
         validate_rhs(&rule.rhs, &binders, &widths, &mut diagnostics);
         validate_rhs_shape(&rule.rhs, rule, &mut diagnostics);
+        for side in [&rule.lhs, &rule.rhs] {
+            if let Some(span) = port_outside_loop(side, false) {
+                diagnostics.push(Diagnostic::new(
+                    format!("rule '{}' reads a port outside any loop", rule.name),
+                    "a `#port` sits under the `#loop` whose value it reads",
+                    span,
+                ));
+            }
+        }
         if grows_theta_under_theta(&rule.rhs) {
             diagnostics.push(Diagnostic::new(
-                format!("rule '{}' unrolls a theta under itself", rule.name),
+                format!("rule '{}' unrolls a loop under itself", rule.name),
                 "a theta operand may not hold another theta on the right-hand side",
                 rule.rhs.span,
             ));
@@ -65,6 +75,7 @@ fn collect_lhs_bindings<'a>(
         TermKind::Operation {
             attributes,
             operands,
+            dependencies,
             ..
         } => {
             for attribute in attributes {
@@ -72,7 +83,7 @@ fn collect_lhs_bindings<'a>(
                     binders.insert(name);
                 }
             }
-            for operand in operands {
+            for operand in operands.iter().chain(dependencies) {
                 collect_lhs_bindings(operand, binders, widths, diagnostics);
             }
         }
@@ -129,6 +140,7 @@ fn validate_rhs(
         TermKind::Operation {
             attributes,
             operands,
+            dependencies,
             ..
         } => {
             for attribute in attributes {
@@ -138,7 +150,7 @@ fn validate_rhs(
                     diagnostics.push(unbound(name, attribute.span));
                 }
             }
-            for operand in operands {
+            for operand in operands.iter().chain(dependencies) {
                 validate_rhs(operand, binders, widths, diagnostics);
             }
         }
@@ -171,26 +183,52 @@ fn validate_rhs(
 fn validate_operators(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
     match &term.kind {
         TermKind::Operation {
-            operator, operands, ..
+            operator,
+            operands,
+            dependencies,
+            ..
         } => {
+            let arity = operands.len() + dependencies.len();
             if let Operator::Semantic(name) = operator {
+                if !dependencies.is_empty() {
+                    diagnostics.push(Diagnostic::new(
+                        format!("'#{name}' takes no dependency operands"),
+                        "only an operation observes a dependency",
+                        term.span,
+                    ));
+                }
                 match op_kind(name) {
                     None => diagnostics.push(Diagnostic::new(
                         format!("unknown semantic operator '#{name}'"),
                         "this name is not a semantic operator",
                         term.span,
                     )),
-                    Some(kind) if !kind.accepts_arity(operands.len()) => {
+                    Some(kind) if !kind.accepts_arity(arity) => {
                         diagnostics.push(Diagnostic::new(
                             format!("'#{name}' takes {} operands", kind.arity()),
-                            format!("this term has {}", operands.len()),
+                            format!("this term has {arity}"),
+                            term.span,
+                        ));
+                    }
+                    Some(SymKind::Port)
+                        if !matches!(
+                            operands.as_slice(),
+                            [Term {
+                                kind: TermKind::Binder { .. },
+                                ..
+                            }]
+                        ) =>
+                    {
+                        diagnostics.push(Diagnostic::new(
+                            "'#port' names its loop by a binder",
+                            "this operand is not a binder",
                             term.span,
                         ));
                     }
                     Some(_) => {}
                 }
             }
-            for operand in operands {
+            for operand in operands.iter().chain(dependencies) {
                 validate_operators(operand, diagnostics);
             }
         }
@@ -224,8 +262,12 @@ fn forbid_rhs_forms(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
             "`keep` marks a right-hand-side node as an instruction",
             term.span,
         )),
-        TermKind::Operation { operands, .. } => {
-            for operand in operands {
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => {
+            for operand in operands.iter().chain(dependencies) {
                 forbid_rhs_forms(operand, diagnostics);
             }
         }
@@ -253,8 +295,12 @@ fn validate_rhs_shape(term: &Term, rule: &Rule, diagnostics: &mut Vec<Diagnostic
             }
             validate_rhs_shape(inner, rule, diagnostics);
         }
-        TermKind::Operation { operands, .. } => {
-            for operand in operands {
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => {
+            for operand in operands.iter().chain(dependencies) {
                 validate_rhs_shape(operand, rule, diagnostics);
             }
         }
@@ -262,14 +308,21 @@ fn validate_rhs_shape(term: &Term, rule: &Rule, diagnostics: &mut Vec<Diagnostic
     }
 }
 
-/// Whether a `#theta` on the right-hand side has another `#theta` below it, which
-/// re-grows the shape it matched and never saturates.
+/// Whether a loop term (`#theta` or `#loop`) on the right-hand side has another
+/// below it, which re-grows the shape it matched and never saturates.
 fn grows_theta_under_theta(term: &Term) -> bool {
     match &term.kind {
         TermKind::Operation {
             operator, operands, ..
         } if is_theta(operator) => operands.iter().any(contains_theta),
-        TermKind::Operation { operands, .. } => operands.iter().any(grows_theta_under_theta),
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => operands
+            .iter()
+            .chain(dependencies)
+            .any(grows_theta_under_theta),
         TermKind::Keep(inner) => grows_theta_under_theta(inner),
         _ => false,
     }
@@ -278,15 +331,46 @@ fn grows_theta_under_theta(term: &Term) -> bool {
 fn contains_theta(term: &Term) -> bool {
     match &term.kind {
         TermKind::Operation {
-            operator, operands, ..
-        } => is_theta(operator) || operands.iter().any(contains_theta),
+            operator,
+            operands,
+            dependencies,
+            ..
+        } => is_theta(operator) || operands.iter().chain(dependencies).any(contains_theta),
         TermKind::Keep(inner) => contains_theta(inner),
         _ => false,
     }
 }
 
 fn is_theta(operator: &Operator) -> bool {
-    matches!(operator, Operator::Semantic(name) if op_kind(name) == Some(SymKind::Theta))
+    matches!(
+        operator,
+        Operator::Semantic(name) if matches!(op_kind(name), Some(SymKind::Theta | SymKind::Loop))
+    )
+}
+
+/// A `#port` reads the carried value of the `#loop` it sits in, so one outside
+/// any `#loop` reads nothing.
+fn port_outside_loop(term: &Term, inside: bool) -> Option<Span> {
+    match &term.kind {
+        TermKind::Operation {
+            operator,
+            operands,
+            dependencies,
+            ..
+        } => {
+            let is_loop = matches!(operator, Operator::Semantic(name) if op_kind(name) == Some(SymKind::Loop));
+            let is_port = matches!(operator, Operator::Semantic(name) if op_kind(name) == Some(SymKind::Port));
+            if is_port && !inside {
+                return Some(term.span);
+            }
+            operands
+                .iter()
+                .chain(dependencies)
+                .find_map(|operand| port_outside_loop(operand, inside || is_loop))
+        }
+        TermKind::Keep(inner) => port_outside_loop(inner, inside),
+        _ => None,
+    }
 }
 
 fn validate_expr(

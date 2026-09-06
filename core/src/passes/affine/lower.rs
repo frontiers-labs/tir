@@ -15,11 +15,12 @@
 
 use std::collections::HashMap;
 
-use crate::analysis::affine::{AffineForm, AffineView};
-use crate::builtin::ops as b;
+use crate::analysis::affine::{AffineForm, AffineView, body_ops, carried};
+use crate::attributes::Predicate;
+use crate::builtin::{IntegerType, ops as b};
 use crate::{
-    BlockHandle, Context, CountedLoop, LoopLike, OpId, Operation, OperationRef, PassError,
-    RegionId, Rewriter, TypeId, Value, ValueId, scf,
+    BlockHandle, Context, CountedLoop, OpHandle, OpId, Operation, OperationRef, PassError,
+    RegionId, Rewriter, Theta, TypeId, Value, ValueId, scf,
 };
 
 use super::schedule::{Candidate, Level, divides_evenly, levels};
@@ -30,14 +31,17 @@ pub(super) struct Nest {
     root: OpId,
     /// The bounds of each dimension, as values available where the nest stands.
     bounds: Vec<Bounds>,
-    /// The counter each dimension's body reads, where the body reads one.
-    counters: Vec<Option<ValueId>>,
+    /// The ports each dimension's body reads its counter through.
+    counters: Vec<Vec<ValueId>>,
     /// The innermost body: the region cloned into every copy, its arguments and
-    /// what it yields, split into the counter port and the chains.
+    /// what it yields, split into the ports counting with the loop and the
+    /// chains.
     body: RegionId,
     body_arguments: Vec<ValueId>,
-    body_counter: Option<usize>,
+    body_counters: Vec<usize>,
     body_states: Vec<usize>,
+    /// Whether the nest is unordered, so the rebuilt one is too.
+    nodes: bool,
     /// The loop-invariant operations the outer bodies spell, which the copied
     /// body may name and the rebuild would otherwise erase under it.
     hoist: Vec<OpId>,
@@ -121,15 +125,16 @@ impl Nest {
         let innermost = view.loops.last()?;
         let inner_ports = ports(context, innermost.op, innermost.counter)?;
         let body = *context.get_op(innermost.op).regions().last()?;
-        crate::analysis::affine::body_block(context, innermost.op)?;
+        body_ops(context, innermost.op)?;
 
-        let carried = root.clone().as_interface::<dyn LoopLike>()?;
+        let shape = shape(context, &root)?;
         let root_ports = ports(context, view.root, view.loops[0].counter)?;
         // The counter the nest leaves behind is not a counter of the rebuilt
         // nest, so nothing may be reading it.
         if root_ports
-            .counter
-            .is_some_and(|port| is_used(context, view.root, carried.finals()[port]))
+            .counters
+            .iter()
+            .any(|&port| is_used(context, view.root, shape.finals[port]))
         {
             return None;
         }
@@ -138,49 +143,100 @@ impl Nest {
             root: view.root,
             hoist: hoistable(context, view)?,
             bounds,
-            counters: view.loops.iter().map(|level| level.counter).collect(),
+            counters: view
+                .loops
+                .iter()
+                .map(|level| {
+                    level
+                        .counter
+                        .into_iter()
+                        .chain(level.counter_aliases.iter().copied())
+                        .collect()
+                })
+                .collect(),
             body,
             body_arguments: inner_ports.arguments.clone(),
-            body_counter: inner_ports.counter,
+            body_counters: inner_ports.counters.clone(),
             body_states: inner_ports.states.clone(),
+            nodes: context.get_region(body).is_nodes(),
             entry_states: root_ports
                 .states
                 .iter()
-                .map(|&port| carried.inits()[port])
+                .map(|&port| shape.inits[port])
                 .collect(),
             exit_states: root_ports
                 .states
                 .iter()
-                .map(|&port| carried.finals()[port])
+                .map(|&port| shape.finals[port])
                 .collect(),
         })
     }
 }
 
-/// How a loop's carried ports divide: the counter, and the memory chains. A port
-/// that is neither is a recurrence the rebuild would have to carry through a new
-/// loop order, which v1 does not do.
+/// Every port a loop carries, values then dependencies, however the loop
+/// declares them: what the body reads each on, what the loop is entered on,
+/// what the next iteration takes, and what the loop produces.
+struct Shape {
+    args: Vec<ValueId>,
+    inits: Vec<ValueId>,
+    latched: Vec<ValueId>,
+    finals: Vec<ValueId>,
+}
+
+fn shape(context: &Context, op: &OpHandle) -> Option<Shape> {
+    let values = carried(context, op)?;
+    if let Some(theta) = op.clone().as_interface::<dyn Theta>() {
+        let region = context.get_region(theta.body());
+        let dep_results = region.dep_results();
+        let mut args = values.args;
+        args.extend(region.dep_arguments().iter().map(Value::id));
+        let mut inits = values.inits;
+        inits.extend(op.dep_operands());
+        let mut latched = values.latched;
+        latched.extend(dep_results[..dep_results.len() / 2].iter().copied());
+        let mut finals = values.finals;
+        finals.extend(op.dep_results());
+        return Some(Shape {
+            args,
+            inits,
+            latched,
+            finals,
+        });
+    }
+    Some(Shape {
+        args: values.args,
+        inits: values.inits,
+        latched: values.latched,
+        finals: values.finals,
+    })
+}
+
+/// How a loop's carried ports divide: the ports counting with the loop, and
+/// the memory chains. A port that is neither is a recurrence the rebuild would
+/// have to carry through a new loop order, which v1 does not do.
 struct Ports {
     arguments: Vec<ValueId>,
-    counter: Option<usize>,
+    counters: Vec<usize>,
     states: Vec<usize>,
 }
 
 fn ports(context: &Context, op: OpId, counter: Option<ValueId>) -> Option<Ports> {
-    let deps = context.get_op(op).dep_results().len();
-    let carried = context.get_op(op).as_interface::<dyn LoopLike>()?;
-    let arguments = carried.carried_args();
-    // A loop whose body opens a token scope holds a `break` or a `continue`, and
-    // the copy would name a scope the rebuilt loop does not open.
-    let block = crate::analysis::affine::body_block(context, op)?;
-    if context.get_block(block).arguments().len() != arguments.len() {
+    let handle = context.get_op(op);
+    let deps = handle.dep_results().len();
+    let arguments = shape(context, &handle)?.args;
+    // An ordered body opening a token scope holds a `break` or a `continue`,
+    // and the copy would name a scope the rebuilt loop does not open.
+    if let Some(block) = crate::analysis::affine::body_block(context, op)
+        && context.get_block(block).arguments().len() != arguments.len()
+    {
         return None;
     }
+    let counting = crate::analysis::affine::build::counter_ports(context, &handle);
     let mut states = Vec::new();
-    let mut counter_port = None;
+    let mut counters = Vec::new();
     for (port, &argument) in arguments.iter().enumerate() {
-        if Some(argument) == counter {
-            counter_port = Some(port);
+        if Some(argument) == counter || counting.contains(&argument) {
+            counters.push(port);
         } else if port >= arguments.len() - deps {
             states.push(port);
         } else {
@@ -189,7 +245,7 @@ fn ports(context: &Context, op: OpId, counter: Option<ValueId>) -> Option<Ports>
     }
     Some(Ports {
         arguments,
-        counter: counter_port,
+        counters,
         states,
     })
 }
@@ -200,13 +256,14 @@ fn ports(context: &Context, op: OpId, counter: Option<ValueId>) -> Option<Ports>
 fn chains_through(context: &Context, view: &AffineView, depth: usize, outer: &Ports) -> bool {
     let level = &view.loops[depth];
     let inner = view.loops[depth + 1].op;
-    let Some(block) = crate::analysis::affine::body_block(context, level.op) else {
+    let (Some(ops), Some(outer_shape)) = (
+        body_ops(context, level.op),
+        shape(context, &context.get_op(level.op)),
+    ) else {
         return false;
     };
-    let block = context.get_block(block);
-    let terminator = *block.op_ids().last().expect("a body is terminated");
-    let yielded = context.get_op(terminator).operands().to_vec();
-    let Some(carried) = context.get_op(inner).as_interface::<dyn LoopLike>() else {
+    let yielded = outer_shape.latched;
+    let Some(inner_shape) = shape(context, &context.get_op(inner)) else {
         return false;
     };
     let Some(ports) = ports(context, inner, view.loops[depth + 1].counter) else {
@@ -214,14 +271,14 @@ fn chains_through(context: &Context, view: &AffineView, depth: usize, outer: &Po
     };
     // Nothing else may sit between the two: an op that merges chains would be
     // dropped by a rebuild that only threads them.
-    let holds_only_the_inner_loop = block.op_ids().iter().all(|&op| {
-        op == inner || op == terminator || crate::passes::is_pure_value(&context.get_op(op))
-    });
+    let holds_only_the_inner_loop = ops
+        .iter()
+        .all(|&op| op == inner || crate::passes::is_pure_value(&context.get_op(op)));
     holds_only_the_inner_loop
         && ports.states.len() == outer.states.len()
         && outer.states.iter().zip(&ports.states).all(|(&out, &into)| {
-            carried.inits()[into] == outer.arguments[out]
-                && yielded[out] == context.get_op(inner).results()[into]
+            inner_shape.inits[into] == outer.arguments[out]
+                && yielded[out] == inner_shape.finals[into]
         })
 }
 
@@ -238,9 +295,11 @@ struct Counted {
 }
 
 /// Where the next operation goes.
-enum Site {
+pub(super) enum Site {
     Before(OperationRef),
     Append(BlockHandle),
+    /// An unordered region, where position means nothing.
+    Region(RegionId),
 }
 
 pub(super) struct Lowering<'a> {
@@ -282,16 +341,22 @@ impl<'a> Lowering<'a> {
         if let Some(d) = remainder {
             shape.tiles[d] = 1;
         }
-        self.spell_bounds(rewriter, &target, &shape)?;
-        self.hoist(&target);
+        let mut site = match self.context.parent_nodes_region(self.nest.root) {
+            Some(region) => Site::Region(region),
+            None => Site::Before(target.clone()),
+        };
+        self.spell_bounds(&mut site, &shape);
+        self.hoist(&mut site);
 
         let levels = levels(&shape);
-        let mut site = Site::Before(target.clone());
         let states = self.nest.entry_states.clone();
         let left = self.emit(rewriter, &levels, 0, &mut HashMap::new(), states, &mut site)?;
 
         for (&old, &new) in self.nest.exit_states.iter().zip(&left) {
             self.context.replace_value_uses(old, new);
+            if let Site::Region(region) = site {
+                self.context.rename_region_results(region, old, new, &[]);
+            }
         }
         rewriter.erase_op(&target)?;
         if let Some(d) = remainder {
@@ -307,25 +372,21 @@ impl<'a> Lowering<'a> {
 
     /// Move the levels' loop-invariant operations out ahead of the nest, so what
     /// the copied body names is still defined once the nest is gone.
-    fn hoist(&self, target: &OperationRef) {
-        let mut site = Site::Before(target.clone());
+    fn hoist(&self, site: &mut Site) {
         for op in self.nest.hoist.clone() {
             if let Some(block) = self.context.parent_block(op) {
                 self.context.get_block(block).remove_op(op);
+            } else if let Some(region) = self.context.parent_nodes_region(op) {
+                self.context.remove_from_region(region, op);
             }
-            self.place(&mut site, op);
+            self.place(site, op);
         }
     }
 
     /// Name every bound where the rebuilt nest will stand, so no loop counts
     /// between values the erased nest defined, and the step each tile loop
     /// takes: a whole tile of the dimension's own steps.
-    fn spell_bounds(
-        &mut self,
-        rewriter: &mut Rewriter,
-        target: &OperationRef,
-        shape: &Candidate,
-    ) -> Result<(), PassError> {
+    fn spell_bounds(&mut self, site: &mut Site, shape: &Candidate) {
         for dimension in 0..self.nest.bounds.len() {
             let bounds = &self.nest.bounds[dimension];
             let (lower, upper, stride, ty) = (
@@ -334,29 +395,22 @@ impl<'a> Lowering<'a> {
                 bounds.stride,
                 bounds.counter_type,
             );
-            let lower = self.spell(rewriter, target, lower, ty)?;
-            let upper = self.spell(rewriter, target, upper, ty)?;
-            let step = literal(self.context, rewriter, target, stride, ty)?;
+            let lower = self.spell(site, lower, ty);
+            let upper = self.spell(site, upper, ty);
+            let step = literal_at(self.context, site, stride, ty);
             self.spelled.push((lower, upper, step));
             let tile = shape.tiles[dimension];
             if tile > 1 {
-                let step = literal(self.context, rewriter, target, stride * tile as i128, ty)?;
+                let step = literal_at(self.context, site, stride * tile as i128, ty);
                 self.tile_steps.insert(dimension, step);
             }
         }
-        Ok(())
     }
 
-    fn spell(
-        &self,
-        rewriter: &mut Rewriter,
-        target: &OperationRef,
-        bound: Bound,
-        ty: TypeId,
-    ) -> Result<ValueId, PassError> {
+    fn spell(&self, site: &mut Site, bound: Bound, ty: TypeId) -> ValueId {
         match bound {
-            Bound::Literal(value) => literal(self.context, rewriter, target, value, ty),
-            Bound::Value(value) => Ok(value),
+            Bound::Literal(value) => literal_at(self.context, site, value, ty),
+            Bound::Value(value) => value,
         }
     }
 
@@ -456,6 +510,9 @@ impl<'a> Lowering<'a> {
             step,
         } = counted;
         let ty = self.nest.bounds[dimension].counter_type;
+        if self.nest.nodes {
+            return self.emit_loop_nodes(rewriter, levels, index, bound, states, site, counted);
+        }
         let counter = self.context.create_value(ty, None);
         let arguments: Vec<Value> = std::iter::once(counter.clone())
             .chain(
@@ -508,6 +565,117 @@ impl<'a> Lowering<'a> {
         Ok(results[1..].to_vec())
     }
 
+    /// One unordered counted loop: a `scf.for2` whose body is a fresh graph
+    /// holding the counter, the chains, and the levels below.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_loop_nodes(
+        &mut self,
+        rewriter: &mut Rewriter,
+        levels: &[Level],
+        index: usize,
+        bound: &mut HashMap<usize, ValueId>,
+        states: Vec<ValueId>,
+        site: &mut Site,
+        counted: Counted,
+    ) -> Result<Vec<ValueId>, PassError> {
+        let Counted {
+            dimension,
+            key,
+            lower,
+            upper,
+            step,
+        } = counted;
+        let context = self.context;
+        let ty = self.nest.bounds[dimension].counter_type;
+        let counter = context.create_value(ty, None);
+        let mut ports = vec![counter.clone()];
+        ports.extend(
+            states
+                .iter()
+                .map(|_| context.create_value(TypeId::DEPENDENCY, None)),
+        );
+        let dep_ports: Vec<ValueId> = ports[1..].iter().map(Value::id).collect();
+        let body = context
+            .create_nodes_region(ports, states.len(), vec![], vec![], 0)
+            .id();
+        let mut builder = scf::For2OpBuilder::new(context)
+            .lb(lower)
+            .inits(vec![])
+            .ub(upper)
+            .step(step)
+            .body(body)
+            .result_types(vec![ty]);
+        for &state in &states {
+            builder = builder.dep_operand(state).dep_result();
+        }
+        let loop_op = builder.build();
+        self.place(site, loop_op.id());
+        if key == dimension {
+            self.built.insert(dimension, loop_op.id());
+        }
+
+        let restored = bound.insert(key, counter.id());
+        let mut inner = Site::Region(body);
+        let left = self.emit(
+            rewriter,
+            levels,
+            index + 1,
+            bound,
+            dep_ports.clone(),
+            &mut inner,
+        )?;
+        match restored {
+            Some(previous) => bound.insert(key, previous),
+            None => bound.remove(&key),
+        };
+
+        let boolean = IntegerType::new(context, 1);
+        let compare = b::cmpi(context, counter.id(), upper, Predicate::Slt, boolean).build();
+        context.add(body, compare.id());
+        let advance = b::addi(context, counter.id(), step, ty).build();
+        context.add(body, advance.id());
+        let mut results = vec![compare.result(), advance.result(), counter.id()];
+        results.extend(left);
+        results.extend(dep_ports);
+        context.set_region_results(body, results, 2 * states.len());
+        Ok(context.get_op(loop_op.id()).dep_results().to_vec())
+    }
+
+    /// The bindings a copy of the innermost body reads its ports through: every
+    /// counter the body reads is the loop that now counts its dimension, and
+    /// each chain the body enters on is the port handed down to it.
+    fn body_bindings(
+        &self,
+        bound: &HashMap<usize, ValueId>,
+        states: &[ValueId],
+    ) -> HashMap<ValueId, ValueId> {
+        let mut bindings: HashMap<ValueId, ValueId> = self
+            .nest
+            .counters
+            .iter()
+            .enumerate()
+            .flat_map(|(dimension, counters)| {
+                counters
+                    .iter()
+                    .map(move |&counter| (counter, bound[&dimension]))
+            })
+            .collect();
+        for (port, &argument) in self.nest.body_arguments.iter().enumerate() {
+            let target = if self.nest.body_counters.contains(&port) {
+                bound[&(self.nest.counters.len() - 1)]
+            } else {
+                states[self
+                    .nest
+                    .body_states
+                    .iter()
+                    .position(|&s| s == port)
+                    .expect("a chain port")]
+            };
+            bindings.insert(argument, target);
+        }
+        bindings
+    }
+
     /// Copy the innermost body under the counters the rebuilt nest gives it.
     fn emit_body(
         &mut self,
@@ -516,28 +684,23 @@ impl<'a> Lowering<'a> {
         states: Vec<ValueId>,
         site: &mut Site,
     ) -> Result<Vec<ValueId>, PassError> {
-        // Every counter the body reads is the loop that now counts its dimension,
-        // and each chain the body enters on is the port handed down to it.
-        let mut bindings: HashMap<ValueId, ValueId> = self
-            .nest
-            .counters
-            .iter()
-            .enumerate()
-            .filter_map(|(dimension, counter)| Some(((*counter)?, bound[&dimension])))
-            .collect();
-        for (port, &argument) in self.nest.body_arguments.iter().enumerate() {
-            let target = match self.nest.body_counter {
-                Some(counter) if counter == port => bound[&(self.nest.counters.len() - 1)],
-                _ => {
-                    states[self
-                        .nest
-                        .body_states
-                        .iter()
-                        .position(|&s| s == port)
-                        .expect("a chain port")]
-                }
-            };
-            bindings.insert(argument, target);
+        let bindings = self.body_bindings(bound, &states);
+        if let Site::Region(destination) = *site {
+            let (ops, results) = crate::clone::clone_nodes_ops_into(
+                self.context,
+                self.nest.body,
+                &bindings,
+                destination,
+            );
+            let values = self
+                .context
+                .get_region(self.nest.body)
+                .value_results()
+                .len();
+            let left = results[values..values + states.len()].to_vec();
+            // The copy's own comparison and latch count a loop that is gone.
+            erase_unread(self.context, rewriter, &ops)?;
+            return Ok(left);
         }
         let copy = crate::clone_region_with_mapping(self.context, self.nest.body, &bindings);
         let block = self
@@ -557,10 +720,11 @@ impl<'a> Lowering<'a> {
         // that now counts that dimension steps it, so the copy's latch is left
         // over. Dropping it here rather than leaving it to `dce` keeps what the
         // unroller measures the size of honest.
-        if let Some(latch) = self
+        for latch in self
             .nest
-            .body_counter
-            .and_then(|port| self.context.get_value(operands[port]).defining_op())
+            .body_counters
+            .iter()
+            .filter_map(|&port| self.context.get_value(operands[port]).defining_op())
             .filter(|&latch| block.op_ids().contains(&latch))
             .filter(|&latch| !names(self.context, &block, latch))
         {
@@ -592,8 +756,52 @@ impl<'a> Lowering<'a> {
                 block.insert(position, op);
             }
             Site::Append(block) => block.append(op),
+            Site::Region(region) => self.context.add(*region, op),
         }
     }
+}
+
+/// Erase the pure copies nothing reads: the comparison and the latch a copied
+/// body computed for the loop it used to sit in.
+pub(super) fn erase_unread(
+    context: &Context,
+    rewriter: &mut Rewriter,
+    ops: &[OpId],
+) -> Result<(), PassError> {
+    for &op in ops.iter().rev() {
+        let instance = context.get_op(op);
+        if instance.regions().is_empty()
+            && instance.dep_results().is_empty()
+            && !instance.results().is_empty()
+            && crate::passes::is_pure_value(&instance)
+            && instance
+                .results()
+                .iter()
+                .all(|&result| !context.is_used(result))
+        {
+            rewriter.erase_op(&OperationRef::new(instance))?;
+        }
+    }
+    Ok(())
+}
+
+/// A literal spelled at `site`.
+pub(super) fn literal_at(context: &Context, site: &mut Site, value: i128, ty: TypeId) -> ValueId {
+    let op = b::constant(context, value as i64, ty).build();
+    match site {
+        Site::Before(target) => {
+            let block = context.get_block(target.op().parent_block().expect("in a block"));
+            let position = block
+                .op_ids()
+                .iter()
+                .position(|&other| other == target.op().id)
+                .expect("the target sits in its block");
+            block.insert(position, op.id());
+        }
+        Site::Append(block) => block.append(op.id()),
+        Site::Region(region) => context.add(*region, op.id()),
+    }
+    op.result()
 }
 
 /// The key a tiled dimension's outer counter is kept under, apart from the
@@ -624,13 +832,13 @@ fn hoistable(context: &Context, view: &AffineView) -> Option<Vec<OpId>> {
     let mut hoist: Vec<OpId> = Vec::new();
     let mut spelled: Vec<ValueId> = Vec::new();
     for level in &view.loops[..view.loops.len() - 1] {
-        let block = context.get_block(crate::analysis::affine::body_block(context, level.op)?);
-        let ops = block.op_ids();
-        // The level's own latch goes with the port it steps, which the rebuild
-        // spells again; it is the one operation here that names a counter.
-        let latch = latch_of(context, level.op, level.counter);
-        for &op in &ops[..ops.len().saturating_sub(1)] {
-            if Some(op) == latch {
+        let ops = body_ops(context, level.op)?;
+        // The level's own latches go with the ports they step, which the
+        // rebuild spells again, and so does the comparison a declared counted
+        // loop pins; those are the operations here that name a counter.
+        let counted = counted_shape(context, level.op);
+        for &op in &ops {
+            if counted.contains(&op) {
                 continue;
             }
             if context.get_op(op).regions().is_empty() {
@@ -665,23 +873,36 @@ fn names(context: &Context, block: &BlockHandle, op: OpId) -> bool {
         })
 }
 
-/// The operation stepping a loop's counter.
-fn latch_of(context: &Context, op: OpId, counter: Option<ValueId>) -> Option<OpId> {
-    let carried = context.get_op(op).as_interface::<dyn LoopLike>()?;
-    let port = carried
-        .carried_args()
-        .iter()
-        .position(|&argument| Some(argument) == counter)?;
-    context.get_value(carried.latched()[port]).defining_op()
+/// The operations a loop's shape pins: the latch of every port counting with
+/// it, and the predicate a declared counted loop states.
+fn counted_shape(context: &Context, op: OpId) -> Vec<OpId> {
+    let handle = context.get_op(op);
+    let mut ops = Vec::new();
+    if let Some(theta) = handle.clone().as_interface::<dyn Theta>() {
+        ops.extend(context.get_value(theta.predicate()).defining_op());
+    }
+    let counting = crate::analysis::affine::build::counter_ports(context, &handle);
+    if let Some(shape) = shape(context, &handle) {
+        for (port, argument) in shape.args.iter().enumerate() {
+            if counting.contains(argument) {
+                ops.extend(context.get_value(shape.latched[port]).defining_op());
+            }
+        }
+    }
+    ops
 }
 
 /// Whether `value` is defined outside the nest rooted at `root`.
 fn outside(context: &Context, root: OpId, value: ValueId) -> bool {
-    let mut op = match context.block_of_argument(value) {
-        Some(block) => context
+    let mut op = match (
+        context.block_of_argument(value),
+        context.region_of_port(value),
+    ) {
+        (Some(block), _) => context
             .parent_region(block)
             .and_then(|region| context.get_region(region).parent_op()),
-        None => context.get_value(value).defining_op(),
+        (None, Some(region)) => context.get_region(region).parent_op(),
+        (None, None) => context.get_value(value).defining_op(),
     };
     while let Some(current) = op {
         if current == root {
@@ -692,7 +913,11 @@ fn outside(context: &Context, root: OpId, value: ValueId) -> bool {
     true
 }
 
-/// Whether anything beside the nest itself names `value`.
+/// Whether anything beside the nest itself names `value`: an operation, or
+/// the result list of the region holding the nest, which no use list records.
 fn is_used(context: &Context, root: OpId, value: ValueId) -> bool {
     context.users_of(value).into_iter().any(|user| user != root)
+        || context
+            .parent_nodes_region(root)
+            .is_some_and(|region| context.get_region(region).results().contains(&value))
 }

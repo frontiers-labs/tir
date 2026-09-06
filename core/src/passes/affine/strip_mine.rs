@@ -17,10 +17,11 @@
 //! `lb`, and a remainder entered there would count what the loop never did.
 
 use crate::analysis::affine::counter_port;
+use crate::attributes::Predicate;
 use crate::builtin::ops as b;
 use crate::{
-    Context, CountedLoop, LoopLike, OpId, Operation, OperationRef, PassError, Rewriter, TypeId,
-    Value, ValueId, scf,
+    Context, CountedLoop, LoopLike, OpId, Operation, OperationRef, PassError, RegionId, Rewriter,
+    Theta, TypeId, Value, ValueId, scf,
 };
 
 /// Replace `op` with its tiled form: the loop over whole tiles of `tile`
@@ -32,6 +33,9 @@ pub fn strip_mine(
     tile: i128,
 ) -> Result<(OpId, OpId), PassError> {
     let handle = context.get_op(op);
+    if let Some(region) = context.parent_nodes_region(op) {
+        return strip_mine_nodes(context, rewriter, op, region, tile);
+    }
     let (Some(counted), Some(carried), Some(counter)) = (
         handle.clone().as_interface::<dyn CountedLoop>(),
         handle.clone().as_interface::<dyn LoopLike>(),
@@ -145,4 +149,115 @@ pub fn strip_mine(
     }
     rewriter.erase_op(&target)?;
     Ok((main.id(), remainder.id()))
+}
+
+/// [`strip_mine`] for an unordered counted loop carrying its counter and its
+/// chains alone: the tile loop's body is a graph holding the inner loop, and
+/// the remainder loop is entered on the counter the tile loop ended at.
+fn strip_mine_nodes(
+    context: &Context,
+    rewriter: &mut Rewriter,
+    op: OpId,
+    parent: RegionId,
+    tile: i128,
+) -> Result<(OpId, OpId), PassError> {
+    let handle = context.get_op(op);
+    let (Some(counted), Some(theta)) = (
+        handle.clone().as_interface::<dyn CountedLoop>(),
+        handle.clone().as_interface::<dyn Theta>(),
+    ) else {
+        return Err(PassError::RewriteFailed(op));
+    };
+    let body = theta.body();
+    let deps = handle.dep_results().len();
+    if handle.value_results().len() != 1 || theta.carried().ports.len() != 1 {
+        return Err(PassError::RewriteFailed(op));
+    }
+    let (lower, upper, step) = (counted.lower_bound(), counted.upper_bound(), counted.step());
+    let ty = context.get_value(lower).ty();
+    let place = |op: OpId| context.add(parent, op);
+
+    let tile = b::constant(context, tile as i64, ty).build();
+    place(tile.id());
+    let stride = b::muli(context, step, tile.result(), ty).build();
+    place(stride.id());
+    let span = b::subi(context, upper, lower, ty).build();
+    place(span.id());
+    let tiles = b::divui(context, span.result(), stride.result(), ty).build();
+    place(tiles.id());
+    let covered = b::muli(context, tiles.result(), stride.result(), ty).build();
+    place(covered.id());
+    let last = b::addi(context, lower, covered.result(), ty).build();
+    place(last.id());
+
+    let counted_loop =
+        |body: RegionId, lower: ValueId, upper: ValueId, step: ValueId, states: &[ValueId]| {
+            let mut builder = scf::For2OpBuilder::new(context)
+                .lb(lower)
+                .inits(vec![])
+                .ub(upper)
+                .step(step)
+                .body(body)
+                .result_types(vec![ty]);
+            for &state in states {
+                builder = builder.dep_operand(state).dep_result();
+            }
+            builder.build()
+        };
+
+    let base = context.create_value(ty, None);
+    let mut ports = vec![base.clone()];
+    ports.extend((0..deps).map(|_| context.create_value(TypeId::DEPENDENCY, None)));
+    let dep_ports: Vec<ValueId> = ports[1..].iter().map(Value::id).collect();
+    let tile_body = context
+        .create_nodes_region(ports, deps, vec![], vec![], 0)
+        .id();
+    let end = b::addi(context, base.id(), stride.result(), ty).build();
+    context.add(tile_body, end.id());
+    let inner_body = crate::clone::clone_region(context, body);
+    retarget_predicate(context, inner_body, end.result());
+    let inner = counted_loop(inner_body, base.id(), end.result(), step, &dep_ports);
+    context.add(tile_body, inner.id());
+    let boolean = crate::builtin::IntegerType::new(context, 1);
+    let compare = b::cmpi(context, base.id(), last.result(), Predicate::Slt, boolean).build();
+    context.add(tile_body, compare.id());
+    let mut results = vec![compare.result(), end.result(), base.id()];
+    results.extend(context.get_op(inner.id()).dep_results());
+    results.extend(dep_ports);
+    context.set_region_results(tile_body, results, 2 * deps);
+
+    let main = counted_loop(
+        tile_body,
+        lower,
+        last.result(),
+        stride.result(),
+        &handle.dep_operands(),
+    );
+    place(main.id());
+    let main_handle = context.get_op(main.id());
+    let remainder = counted_loop(
+        crate::clone::clone_region(context, body),
+        main_handle.value_results()[0],
+        upper,
+        step,
+        &main_handle.dep_results(),
+    );
+    place(remainder.id());
+
+    let results = context.get_op(remainder.id()).results().to_vec();
+    for (&old, new) in handle.results().iter().zip(results) {
+        context.replace_value_uses(old, new);
+        context.rename_region_results(parent, old, new, &[]);
+    }
+    rewriter.erase_op(&OperationRef::new(handle))?;
+    Ok((main.id(), remainder.id()))
+}
+
+/// Point a copied counted body's predicate at the bound its new loop counts
+/// to: the copy compares the counter with the bound the original had.
+fn retarget_predicate(context: &Context, body: RegionId, upper: ValueId) {
+    let predicate = context.get_region(body).value_results()[0];
+    if let Some(compare) = context.get_value(predicate).defining_op() {
+        context.set_op_operand(compare, 1, upper);
+    }
 }

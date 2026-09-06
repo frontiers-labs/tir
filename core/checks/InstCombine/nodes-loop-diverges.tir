@@ -1,0 +1,32 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=3 --max-steps 1000 | filecheck %s --check-prefix=LIMIT
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f f --args=3 --max-steps 1000 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=3 --max-steps 1000 | filecheck %s --check-prefix=VALUE
+
+// A loop that never ends, changes no memory, and whose result nothing reads.
+// The ordered program runs it forever and exhausts the step limit the test
+// sets. Under the demand semantics the converted loop is in no cone, so it
+// never runs, before and after the sweep erases it: what the sweep takes is
+// exactly what the demand semantics already left out.
+
+module {
+  %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %yes = constant {value = 1} : !i1
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    %next = addi %i, %one : !i32
+    cfg.cond_br %yes, ^body(%next : !i32), ^exit
+  ^exit:
+    func.return %n
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[N:[0-9]+]]: !i32)
+// CHECK-NOT: scf.loop
+// CHECK: -> %[[N]]
+
+// LIMIT: step limit exceeded
+// VALUE: i32 3

@@ -234,12 +234,10 @@ pub fn region_facts(op: &OpHandle) -> Vec<(RegionId, ValueId, bool)> {
 /// ops of its own regions.
 pub fn region_ops(context: &Context, region: RegionId) -> Vec<OpId> {
     let mut ops = Vec::new();
-    for block in context.get_region(region).iter(context.clone()) {
-        for op_id in block.op_ids() {
-            ops.push(op_id);
-            for nested in context.get_op(op_id).regions() {
-                ops.extend(region_ops(context, nested));
-            }
+    for op_id in context.get_region(region).op_ids() {
+        ops.push(op_id);
+        for nested in context.get_op(op_id).regions() {
+            ops.extend(region_ops(context, nested));
         }
     }
     ops

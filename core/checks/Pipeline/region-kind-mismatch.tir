@@ -1,0 +1,17 @@
+// RUN: not tir opt --pass promote %s 2>&1 | filecheck %s
+// RUN: tir opt --pass restructure-nodes %s | filecheck %s --check-prefix=ANY
+
+// A pass declares the body kind it walks. Asking it to run on the other kind
+// is an error, not a silent skip: `promote` reads blocks, and this body has
+// none. `restructure-nodes` takes either kind, so the same body passes it.
+
+module {
+  %f = func.func @f(%p: !i32) -> !i32 {
+    %y = addi %p, %p : !i32
+    -> %y
+  }
+  module_end
+}
+
+// CHECK: pass 'promote' runs on an ordered body, but func.func @f holds an unordered one
+// ANY: func.func @f

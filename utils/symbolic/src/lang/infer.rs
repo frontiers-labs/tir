@@ -138,6 +138,22 @@ pub fn infer_types<V>(
                 inference.unify(&child(1), &result)?;
                 result
             }
+            SymKind::Loop => {
+                let result = inference.fresh_type();
+                inference.unify(&child(0), &result)?;
+                inference.unify(&child(1), &result)?;
+                inference.unify(&child(2), &result)?;
+                inference.unify(&child(3), &SemType::bits(1))?;
+                result
+            }
+            SymKind::Port => inference.fresh_type(),
+            SymKind::Switch => {
+                let result = inference.fresh_type();
+                for arm in 1..children.len() {
+                    inference.unify(&child(arm), &result)?;
+                }
+                result
+            }
             SymKind::SExt | SymKind::ZExt => {
                 let value = inference.fresh_bits();
                 let width = inference.fresh_bits();
@@ -298,8 +314,9 @@ pub fn infer_widths<V>(
                     .map(|width| width as u32),
 
                 // As wide as its arms (the then-branch).
-                SymKind::If => child_width(1),
-                SymKind::Theta => child_width(0),
+                SymKind::If | SymKind::Switch => child_width(1),
+                SymKind::Theta | SymKind::Loop => child_width(0),
+                SymKind::Port => None,
 
                 SymKind::Extract => {
                     match (

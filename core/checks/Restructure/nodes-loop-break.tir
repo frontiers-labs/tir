@@ -3,6 +3,8 @@
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f brk --args=3 | filecheck --check-prefix=BREAK %s
 // RUN: tir interp %s -f brk --args=9 | filecheck --check-prefix=DONE %s
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f brk --args=9 | filecheck --check-prefix=DONE %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f brk --args=3 | filecheck --check-prefix=BREAK %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp -f brk --args=3 | filecheck --check-prefix=BREAK %s
 // RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f brk --args=3 | filecheck --check-prefix=BREAK %s
 
 // A loop with two exits, each storing a different marker after it. Which

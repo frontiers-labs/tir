@@ -27,7 +27,7 @@
 
 use crate::BlockHandle;
 use crate::analysis::scopes;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::analysis::scopes::{exit_scope, loop_scope, nested_exit_scopes};
 use crate::analysis::{AliasFacts, AnalysisManager, Base, PointerFact};
@@ -36,7 +36,7 @@ use crate::ptr::MemcpyOp;
 use crate::state::{EntryStateOpBuilder, JoinOpBuilder, SplitOpBuilder};
 use crate::{
     Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation, OperationRef, Pass, PassError,
-    PassTarget, PromotableAllocation, Rewriter, ValueId, scf,
+    PassTarget, PromotableAllocation, RegionKind, Rewriter, ValueId, scf,
 };
 
 #[derive(Default)]
@@ -56,7 +56,7 @@ impl Pass for ThreadStatePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(
@@ -695,7 +695,7 @@ impl Pass for UnthreadPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(
@@ -706,5 +706,116 @@ impl Pass for UnthreadPass {
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         unthread(context, rewriter, operation.op()).map(|_| ())
+    }
+}
+
+/// Check the memory order an unordered body carries. The conversion built it
+/// while the input still had blocks, and no pass rebuilds it from an unordered
+/// region: what a transform leaves behind has to keep every edge. So every
+/// operation touching memory names the dependency it observes, every one
+/// changing memory leaves one behind, and every one of them is demanded by the
+/// results of the region holding it — under demand evaluation an effect in no
+/// cone never runs, and the order it was meant to keep is gone with it.
+pub fn verify_deps(context: &Context, function: &OpHandle) -> Result<(), crate::Error> {
+    let name = function
+        .clone()
+        .as_interface::<dyn crate::Symbol>()
+        .map(|symbol| symbol.symbol_name())
+        .unwrap_or_default();
+    let fail = |op: &OpHandle, what: &str| {
+        Err(crate::Error::VerificationError(format!(
+            "{}.{} in @{name} {what}",
+            op.dialect(),
+            op.name()
+        )))
+    };
+    // Demand runs from the body's results: an op is demanded through an operand
+    // of a demanded op or a result of a region of one, and an op in a region
+    // nobody demands is demanded by nothing, however its own region reads it.
+    let mut demanded: HashSet<OpId> = HashSet::new();
+    let defining = |values: Vec<ValueId>| {
+        values
+            .into_iter()
+            .filter_map(|value| context.get_value(value).defining_op())
+            .collect::<Vec<_>>()
+    };
+    let mut worklist: Vec<OpId> = function
+        .regions()
+        .iter()
+        .flat_map(|&region| defining(context.get_region(region).results()))
+        .collect();
+    while let Some(op) = worklist.pop() {
+        if !demanded.insert(op) {
+            continue;
+        }
+        let instance = context.get_op(op);
+        worklist.extend(defining(instance.operands().to_vec()));
+        for region in instance.regions() {
+            worklist.extend(defining(context.get_region(region).results()));
+        }
+    }
+    for region in function
+        .regions()
+        .iter()
+        .flat_map(|&region| context.nested_regions(region))
+    {
+        let handle = context.get_region(region);
+        if !handle.is_nodes() {
+            continue;
+        }
+        for op_id in handle.op_ids() {
+            let op = context.get_op(op_id);
+            let changes = match classify(&op) {
+                Some(Kind::Read(_)) => false,
+                Some(Kind::Write(_) | Kind::Clobber) => true,
+                _ => continue,
+            };
+            if op.dep_operands().is_empty() {
+                return fail(&op, "names no dependency");
+            }
+            if changes && op.dep_results().is_empty() {
+                return fail(&op, "leaves no dependency behind");
+            }
+            if !demanded.contains(&op_id) {
+                return fail(&op, "is demanded by nothing");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// [`verify_deps`] as a pass: the unordered pipeline's stand-in for
+/// `thread-state`, which constructs nothing there and checks instead.
+#[derive(Default)]
+pub struct VerifyDepsPass;
+
+impl VerifyDepsPass {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+crate::register_pass!(VerifyDepsPass, "verify-deps");
+
+impl Pass for VerifyDepsPass {
+    fn name(&self) -> &'static str {
+        "verify-deps"
+    }
+
+    fn target(&self) -> PassTarget {
+        PassTarget::operation_on::<FuncOp>(RegionKind::Nodes)
+    }
+
+    fn run(
+        &mut self,
+        operation: &OperationRef,
+        context: &Context,
+        _rewriter: &mut Rewriter,
+        _analyses: &AnalysisManager,
+    ) -> Result<(), PassError> {
+        verify_deps(context, operation.op()).map_err(|error| PassError::InvalidIR {
+            pass: "verify-deps",
+            error,
+        })
     }
 }

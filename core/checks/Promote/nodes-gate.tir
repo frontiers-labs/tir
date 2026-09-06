@@ -1,0 +1,47 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f pick --args=1,5 | filecheck --check-prefix=THEN %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f pick --args=1,5 | filecheck --check-prefix=THEN %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 3 %s | tir opt --pass promote-nodes | tir interp -f pick --args=1,5 | filecheck --check-prefix=THEN %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir opt --pass promote-nodes | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
+
+// One arm writes the slot, the other leaves the store before the gate. The
+// read after the gate reaches a different write through each arm, so the gate
+// joins the slot's value as a result of its own; the write before it is the
+// value the untouched arm produces. Every access goes with the allocation.
+
+module {
+  %fn_pick = func.func @pick(%0: !i1, %1: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %1, %p
+    cfg.cond_br %0, ^then, ^else
+  ^then:
+    %2 = addi %1, %1 : !i32
+    ptr.store %2, %p
+    cfg.br ^join(%1 : !i32)
+  ^else:
+    %3 = subi %1, %1 : !i32
+    cfg.br ^join(%3 : !i32)
+  ^join(%4: !i32):
+    %5 = ptr.load %p : !i32
+    %6 = addi %4, %5 : !i32
+    func.return %6
+  }
+  module_end
+}
+
+// CHECK: func.func @pick(%[[C:[0-9]+]]: !i1, %[[N:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NOT: ptr.
+// CHECK: %[[V:[0-9]+]], %[[SLOT:[0-9]+]] | %{{[0-9]+}} = scf.switch2 %[[C]] args(| %{{[0-9]+}}) (| %[[EA:[0-9]+]]) {
+// CHECK-NEXT: %[[E:[0-9]+]] = subi %[[N]], %[[N]] : !i32
+// CHECK-NEXT: -> %[[E]], %[[N]] | %[[EA]]
+// CHECK-NEXT: }
+// CHECK-NEXT: (| %[[TA:[0-9]+]]) {
+// CHECK-NEXT: %[[T:[0-9]+]] = addi %[[N]], %[[N]] : !i32
+// CHECK-NEXT: -> %[[N]], %[[T]] | %[[TA]]
+// CHECK-NEXT: }
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[V]], %[[SLOT]] : !i32
+// CHECK-NEXT: -> %[[SUM]] | %{{[0-9]+}}
+
+// THEN: i32 15
+// ELSE: i32 5

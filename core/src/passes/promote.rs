@@ -23,7 +23,7 @@ use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::func::FuncOp;
 use crate::{
     BlockHandle, Context, MemoryRead, MemoryWrite, NewOp, OpHandle, OpId, OperationRef, Pass,
-    PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId, scf,
+    PassError, PassTarget, RegionId, RegionKind, Rewriter, TypeId, ValueId, scf,
 };
 
 #[derive(Default)]
@@ -43,7 +43,7 @@ impl Pass for PromotePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(

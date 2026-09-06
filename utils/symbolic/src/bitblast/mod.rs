@@ -256,6 +256,7 @@ impl<'g, V> Blaster<'g, V> {
             ZExt => self.encode_extend(id, false),
             SExt => self.encode_extend(id, true),
             If => self.encode_ite(id),
+            Switch => self.encode_switch(id),
             SIToFP => self.encode_int_to_float(id, true),
             UIToFP => self.encode_int_to_float(id, false),
             FPToSI => self.encode_float_to_int(id, true),
@@ -344,6 +345,26 @@ impl<'g, V> Blaster<'g, V> {
         let then = self.child_bits(id, 1);
         let els = self.child_bits(id, 2);
         Ok(self.mux_bits(cond, &then, &els))
+    }
+
+    /// `Switch(p, a0, a1, ...)`: the arm `p` indexes, the last arm for any `p`
+    /// past it. A chain of muxes from the last arm down, each selecting arm
+    /// `i` where `p == i`.
+    fn encode_switch(&mut self, id: NodeId) -> Result<Vec<Lit>, BitblastError> {
+        let index = self.child_bits(id, 0);
+        let arms = self.graph.children(id).count() - 1;
+        let mut out = self.child_bits(id, arms);
+        for arm in (0..arms - 1).rev() {
+            let mut selected = self.one;
+            for (bit, &lit) in index.iter().enumerate() {
+                let wanted = bit < 64 && (arm >> bit) & 1 == 1;
+                let matches = if wanted { lit } else { lit.negate() };
+                selected = self.gate_and(selected, matches);
+            }
+            let value = self.child_bits(id, arm + 1);
+            out = self.mux_bits(selected, &value, &out);
+        }
+        Ok(out)
     }
 
     // ----- Tseitin gate primitives -----

@@ -62,6 +62,8 @@ pub enum InterpError {
         address: u64,
         size: u64,
     },
+    /// The run executed the operations it was allowed and stopped.
+    StepLimit,
     Message(String),
 }
 
@@ -81,6 +83,7 @@ impl std::fmt::Display for InterpError {
                 "access of [{address:#x}..{:#x}) hits uninitialized bytes",
                 address + size
             ),
+            InterpError::StepLimit => write!(f, "step limit exceeded"),
             InterpError::Message(text) => write!(f, "{text}"),
         }
     }
@@ -193,10 +196,23 @@ pub fn run_function(
     function: OpId,
     arguments: Vec<Value>,
 ) -> Result<Vec<Value>> {
+    run_function_within(context, function, arguments, None)
+}
+
+/// [`run_function`] that gives up after `steps` operations: a program that
+/// need not terminate can still be compared against another, since both fail
+/// the same way.
+pub fn run_function_within(
+    context: &Context,
+    function: OpId,
+    arguments: Vec<Value>,
+    steps: Option<u64>,
+) -> Result<Vec<Value>> {
     let mut interp = Interpreter {
         context,
         memory: Memory::default(),
         env: HashMap::new(),
+        steps_left: steps,
     };
     interp.call_function(function, arguments)
 }
@@ -218,6 +234,8 @@ struct Interpreter<'c> {
     context: &'c Context,
     memory: Memory,
     env: HashMap<ValueId, Value>,
+    /// Operations this run may still execute, where a limit was set.
+    steps_left: Option<u64>,
 }
 
 /// How one executed region hands control back to its parent.
@@ -326,6 +344,12 @@ impl Interpreter<'_> {
     /// execution continues with the next op: value-producing structured ops
     /// bind their own results here, and leaves are evaluated here too.
     fn exec_control(&mut self, op_id: OpId) -> Result<Option<Flow>> {
+        if let Some(left) = &mut self.steps_left {
+            if *left == 0 {
+                return Err(InterpError::StepLimit);
+            }
+            *left -= 1;
+        }
         let instance = self.context.get_op(op_id);
         if std::env::var_os("TIR_INTERP_TRACE").is_some() {
             eprintln!(

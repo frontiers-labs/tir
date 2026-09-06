@@ -8,10 +8,10 @@
 
 use std::collections::HashMap;
 
-use crate::analysis::affine::{AffineView, Loop, body_block, nests_under};
-use crate::{Context, LoopLike, OpId, OperationRef, PassError, Rewriter, ValueId};
+use crate::analysis::affine::{AffineView, Loop, body_block, body_ops, carried, nests_under};
+use crate::{Context, OpId, OperationRef, PassError, Rewriter, Theta, ValueId};
 
-use super::lower::literal;
+use super::lower::{erase_unread, literal};
 
 /// The most iterations a loop is unrolled whole. A knob.
 pub const UNROLL_TRIP: i128 = 8;
@@ -33,15 +33,19 @@ pub(super) fn run(context: &Context, rewriter: &mut Rewriter, root: OpId) -> Res
 fn worth_unrolling<'a>(context: &Context, view: &'a AffineView) -> Option<&'a Loop> {
     let level = view.loops.last()?;
     let trip = level.trip?;
-    let block = body_block(context, level.op)?;
-    let carried = context.get_op(level.op).as_interface::<dyn LoopLike>()?;
-    // A body that opens a token scope leaves the loop through a `break`, which
-    // is not an iteration a copy can stand for.
+    let ops = body_ops(context, level.op)?;
+    let handle = context.get_op(level.op);
+    // An ordered body that opens a token scope leaves the loop through a
+    // `break`, which is not an iteration a copy can stand for.
+    if let Some(block) = body_block(context, level.op)
+        && context.get_block(block).arguments().len() != carried(context, &handle)?.args.len()
+    {
+        return None;
+    }
     ((1..=UNROLL_TRIP).contains(&trip)
-        && context.get_block(block).arguments().len() == carried.carried_args().len()
         && level.lower.as_constant().is_some()
         && level.step.as_constant().is_some()
-        && context.get_block(block).op_ids().len() <= UNROLL_BUDGET)
+        && ops.len() <= UNROLL_BUDGET)
         .then_some(level)
 }
 
@@ -54,15 +58,29 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
         level.trip.expect("a constant trip count"),
     );
     let handle = context.get_op(level.op);
-    let carried = handle
-        .clone()
-        .as_interface::<dyn LoopLike>()
-        .expect("a counted loop carries ports");
     let target = OperationRef::new(handle.clone());
     let region = *handle.regions().last().expect("a loop has a body");
-    let arguments = carried.carried_args();
+    let (arguments, mut incoming) = match handle.clone().as_interface::<dyn Theta>() {
+        Some(theta) => {
+            let ports = carried(context, &handle).expect("a loop carries ports");
+            let body = context.get_region(theta.body());
+            let mut arguments = ports.args;
+            arguments.extend(body.dep_arguments().iter().map(crate::Value::id));
+            let mut inits = ports.inits;
+            inits.extend(handle.dep_operands());
+            (arguments, inits)
+        }
+        None => {
+            let carried = handle
+                .clone()
+                .as_interface::<dyn crate::LoopLike>()
+                .expect("a counted loop carries ports");
+            (carried.carried_args(), carried.inits())
+        }
+    };
+    let parent = context.parent_nodes_region(level.op);
+    let mut copies = Vec::new();
 
-    let mut incoming = carried.inits();
     for iteration in 0..trip {
         let mut bindings: HashMap<ValueId, ValueId> = arguments
             .iter()
@@ -70,18 +88,61 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
             .map(|(&argument, &value)| (argument, value))
             .collect();
         // The counter is the port the loop steps; every copy names it outright.
-        if let Some(counter) = level.counter {
+        let counting = level.counter.iter().chain(&level.counter_aliases);
+        for &counter in counting {
             let ty = context.get_value(counter).ty();
-            let value = literal(context, rewriter, &target, lower + iteration * step, ty)?;
+            let value = match parent {
+                Some(region) => {
+                    let mut site = super::lower::Site::Region(region);
+                    super::lower::literal_at(context, &mut site, lower + iteration * step, ty)
+                }
+                None => literal(context, rewriter, &target, lower + iteration * step, ty)?,
+            };
             bindings.insert(counter, value);
         }
-        incoming = copy_body(context, rewriter, region, &bindings, &target)?;
+        incoming = match parent {
+            Some(region) => {
+                let (ops, leaving) = copy_body_nodes(context, region, &bindings, &target);
+                copies.extend(ops);
+                leaving
+            }
+            None => copy_body(context, rewriter, region, &bindings, &target)?,
+        };
     }
 
     for (&result, &value) in handle.results().iter().zip(&incoming) {
         context.replace_value_uses(result, value);
+        if let Some(region) = parent {
+            context.rename_region_results(region, result, value, &[]);
+        }
     }
-    rewriter.erase_op(&target)
+    rewriter.erase_op(&target)?;
+    // Only now is it known which copies nothing reads: the last copy's latch
+    // is what the loop's results became.
+    erase_unread(context, rewriter, &copies)
+}
+
+/// [`copy_body`] for an unordered body: the copy joins the loop's own region,
+/// and the values its next iteration would take are what the copy hands on.
+fn copy_body_nodes(
+    context: &Context,
+    destination: crate::RegionId,
+    bindings: &HashMap<ValueId, ValueId>,
+    target: &OperationRef,
+) -> (Vec<OpId>, Vec<ValueId>) {
+    let theta = target
+        .op()
+        .clone()
+        .as_interface::<dyn Theta>()
+        .expect("an unordered loop declares a theta");
+    let body = theta.body();
+    let binding = theta.carried();
+    let (ops, results) = crate::clone::clone_nodes_ops_into(context, body, bindings, destination);
+    let values = context.get_region(body).value_results().len();
+    let deps = (results.len() - values) / 2;
+    let mut leaving = results[binding.continue_.clone()].to_vec();
+    leaving.extend(results[values..values + deps].iter().copied());
+    (ops, leaving)
 }
 
 /// One copy of the body, spelled where the loop stood, and the values its

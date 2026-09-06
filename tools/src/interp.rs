@@ -21,6 +21,11 @@ pub struct ToolArgs {
     #[arg(long, short = 'a', value_delimiter = ',')]
     args: Vec<String>,
 
+    /// Give up after this many executed operations, so a program that need
+    /// not terminate can still be compared against another.
+    #[arg(long = "max-steps")]
+    max_steps: Option<u64>,
+
     /// Input IR file, or `-`/omitted for stdin.
     input: Option<OsString>,
 }
@@ -55,7 +60,15 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         .map(|(&ty, text)| parse_argument(&context, ty, text))
         .collect::<Result<Vec<_>, String>>()?;
 
-    let results = interp::run_function(&context, function, arguments)
+    // Reaching a limit the caller set is an outcome to report, not a failure.
+    let results =
+        match interp::run_function_within(&context, function, arguments, args.max_steps) {
+            Err(interp::InterpError::StepLimit) => {
+                println!("step limit exceeded");
+                return Ok(());
+            }
+            other => other,
+        }
         .map_err(|err| format!("interpretation failed: {err}"))?;
 
     let ret_types = return_types(&context, function);

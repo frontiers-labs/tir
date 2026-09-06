@@ -4,4 +4,4 @@
 
 rule unroll: #theta(i: int<W>, n) => #theta(i, #theta(i, n));
 
-// CHECK: unrolls a theta under itself
+// CHECK: unrolls a loop under itself

@@ -97,6 +97,8 @@ pub enum TermKind {
         operator: Operator,
         attributes: Vec<Attribute>,
         operands: Vec<Term>,
+        /// The dependency operands, spelled after `|` as the printer does.
+        dependencies: Vec<Term>,
     },
     Binder {
         name: String,

@@ -1,0 +1,29 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=5 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=5 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 4 %s | tir opt --pass instcombine-nodes | tir interp -f f --args=5 | filecheck %s --check-prefix=VALUE
+
+// A load observing the state a store of the same address left is that store's
+// value: the load goes, and the memory it observed is handed to whatever read
+// the state it published. The slot is not promoted here, so the store stays:
+// the function's exit demands the memory it leaves.
+
+module {
+  %fn_f = func.func @f(%x: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %x, %p
+    %r = ptr.load %p : !i32
+    %s = addi %r, %r : !i32
+    func.return %s
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[X:[0-9]+]]: !i32)
+// CHECK-NOT: ptr.load
+// CHECK-DAG: %[[R:[0-9]+]] = addi %[[X]], %[[X]] : !i32
+// CHECK-DAG: | %[[S:[0-9]+]] = ptr.store %[[X]], %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK-NOT: ptr.load
+// CHECK: -> %[[R]] | %[[S]]
+
+// VALUE: i32 10
