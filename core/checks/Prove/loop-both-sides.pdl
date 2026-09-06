@@ -1,0 +1,15 @@
+// RUN: tir prove %s | filecheck %s
+
+// Loops on both sides prove as a bisimulation: equal inits, equal transitions
+// with the ports assumed equal, equal predicates, and equal exits where the
+// predicate is false. The predicate is one bit on either side, however wide
+// the register the right-hand side reads it from. A body reading no port
+// assumes nothing about one.
+
+rule ident: #loop(x: int<8>, #port(l: int<8>), #port(l), p: int<1>) : int<8> => #loop(x, #port(l), #port(l), p);
+rule exit-plus-zero: #loop(x: int<8>, #port(l: int<8>), #port(l), p: int<1>) : int<8> => #loop(x, #port(l), #add(#port(l), const<8>(0)), p);
+rule carries-without-reading: #loop(x: int<8>, x, #port(l: int<8>), p: int<1>) : int<8> => x;
+
+// CHECK: ident: proven
+// CHECK: exit-plus-zero: proven
+// CHECK: carries-without-reading: proven

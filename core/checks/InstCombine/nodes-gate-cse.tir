@@ -1,0 +1,43 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=1,6 | filecheck %s --check-prefix=THEN
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=1,6 | filecheck %s --check-prefix=THEN
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=0,6 | filecheck %s --check-prefix=ELSE
+
+// Both arms compute `x + x`, which cannot trap, so the gate's result is that
+// sum spelled once outside the arms; the gate carries nothing and is swept.
+// The division each arm also computes may trap, so it stays inside its arm,
+// and the gate joining the two divisions stays with it.
+
+module {
+  %fn_f = func.func @f(%c: !i1, %x: !i32) -> !i32 {
+    %two = constant {value = 2} : !i32
+    %three = constant {value = 3} : !i32
+    cfg.cond_br %c, ^then, ^else
+  ^then:
+    %a = addi %x, %x : !i32
+    %d = divsi %x, %two : !i32
+    cfg.br ^join(%a, %d : !i32, !i32)
+  ^else:
+    %b = addi %x, %x : !i32
+    %e = divsi %x, %three : !i32
+    cfg.br ^join(%b, %e : !i32, !i32)
+  ^join(%s: !i32, %q: !i32):
+    %r = addi %s, %q : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[C:[0-9]+]]: !i1, %[[X:[0-9]+]]: !i32)
+// CHECK-DAG: %[[SUM:[0-9]+]] = addi %[[X]], %[[X]] : !i32
+// CHECK-DAG: %[[Q:[0-9]+]] = scf.switch2 %[[C]] {
+// CHECK: divsi
+// CHECK: }
+// CHECK: {
+// CHECK: divsi
+// CHECK: }
+// CHECK: %[[R:[0-9]+]] = addi %[[SUM]], %[[Q]] : !i32
+// CHECK: -> %[[R]]
+
+// THEN: i32 15
+// ELSE: i32 14

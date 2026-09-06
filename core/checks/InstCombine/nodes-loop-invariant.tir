@@ -1,0 +1,40 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=4 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes %s | tir interp -f f --args=4 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 5 %s | tir opt --pass promote-nodes,instcombine-nodes | tir interp -f f --args=4 | filecheck %s --check-prefix=VALUE
+
+// A slot holds 7 before the loop and is written back as `7 + 0` each
+// iteration. The hypothesis that the port is the constant it was entered on
+// survives the body, so every read of the port and the loop's result are 7,
+// and the loop keeps only its counter.
+
+module {
+  %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %seven = constant {value = 7} : !i32
+    ptr.store %seven, %p
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    %v = ptr.load %p : !i32
+    %w = addi %v, %zero : !i32
+    ptr.store %w, %p
+    %next = addi %i, %one : !i32
+    %more = cmpi %next, %n {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body(%next : !i32), ^exit
+  ^exit:
+    %r = ptr.load %p : !i32
+    %s = addi %r, %r : !i32
+    func.return %s
+  }
+  module_end
+}
+
+// CHECK: func.func @f
+// CHECK: scf.loop
+// CHECK-NOT: ptr.
+// CHECK: %[[FOURTEEN:[0-9]+]] = constant {value = 14} : !i32
+// CHECK-NEXT: -> %[[FOURTEEN]] | %{{[0-9]+}}
+
+// VALUE: i32 14

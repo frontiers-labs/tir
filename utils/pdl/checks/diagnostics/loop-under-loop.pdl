@@ -3,4 +3,4 @@
 
 rule unroll: #loop(i: int<W>, n, e, p) => #loop(i, #loop(i, n, e, p), e, p);
 
-// CHECK: unrolls a theta under itself
+// CHECK: unrolls a loop under itself

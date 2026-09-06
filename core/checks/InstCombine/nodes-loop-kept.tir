@@ -1,0 +1,23 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+
+// A loop whose result nothing reads stays: whether it terminates is the
+// loop's own affair, and erasing it would erase a divergence.
+
+module {
+  %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    %next = addi %i, %one : !i32
+    %more = cmpi %next, %n {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body(%next : !i32), ^exit
+  ^exit:
+    func.return %n
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[N:[0-9]+]]: !i32)
+// CHECK: scf.loop
+// CHECK: -> %[[N]]

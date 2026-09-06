@@ -1,0 +1,6 @@
+// A semantic operator has no dependency slot; only an operation observes one.
+// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
+
+rule stray: #add(x, y | s) => x;
+
+// CHECK: takes no dependency operands

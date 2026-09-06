@@ -15,8 +15,8 @@ use crate::sem::egraph::{minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
 use crate::state::JoinOp;
 use crate::{
-    BlockId, Commutative, Conditional, ConstantLike, Context, LoopLike, MemoryRead, MemoryWrite,
-    OpHandle, OpId, RegionId, TokenScope, TypeId, ValueId,
+    BlockId, Commutative, Conditional, ConstantLike, Context, Gamma, LoopLike, MemoryRead,
+    MemoryWrite, OpHandle, OpId, RegionId, Theta, TokenScope, TypeId, ValueId,
 };
 
 /// The operands a store term names: the location, the value it writes, and the
@@ -87,11 +87,17 @@ struct Seeder<'a> {
 
 impl Seeder<'_> {
     fn seed_region(&mut self, region: RegionId) {
-        let blocks: Vec<_> = self
-            .context
-            .get_region(region)
-            .iter(self.context.clone())
-            .collect();
+        let handle = self.context.get_region(region);
+        if handle.is_nodes() {
+            for port in handle.ports() {
+                self.class_of(port.id());
+            }
+            for op in handle.op_ids() {
+                self.seed_op(op);
+            }
+            return;
+        }
+        let blocks: Vec<_> = handle.iter(self.context.clone()).collect();
         for block in blocks {
             for argument in block.arguments() {
                 self.arg_block.insert(argument.id(), block.id());
@@ -143,6 +149,14 @@ impl Seeder<'_> {
         let instance = self.context.get_op(op);
 
         if !instance.regions().is_empty() {
+            if let Some(gamma) = instance.clone().as_interface::<dyn Gamma>() {
+                self.seed_switch(&instance, gamma.as_ref());
+                return;
+            }
+            if let Some(theta) = instance.clone().as_interface::<dyn Theta>() {
+                self.seed_loop(&instance, theta.as_ref());
+                return;
+            }
             if let Some(conditional) = instance.clone().as_interface::<dyn Conditional>() {
                 self.seed_gamma(&instance, conditional.as_ref());
                 return;
@@ -241,6 +255,123 @@ impl Seeder<'_> {
                 }
             }
         }
+    }
+
+    /// A declared γ over unordered arms: every arm reads the forwarded inputs
+    /// and the op's dependencies through its ports, and result `index` is the
+    /// choice among the arms' `index`-th results by the predicate. Two arms
+    /// picked by a boolean are the `If` the rules know, the true arm first;
+    /// arms that agree need no choice at all.
+    fn seed_switch(&mut self, instance: &OpHandle, gamma: &dyn Gamma) {
+        let predicate = self.class_of(gamma.predicate());
+        let binding = gamma.forwarded();
+        let inputs = instance.value_operands()[binding.operands.clone()].to_vec();
+        let deps = instance.dep_operands();
+        let arms = gamma.arms();
+        for &arm in &arms {
+            let region = self.context.get_region(arm);
+            let ports = region.value_arguments();
+            for (port, &input) in ports[binding.ports.clone()].iter().zip(&inputs) {
+                let id = self.class_of(input);
+                self.bind_value(port.id(), id);
+            }
+            for (port, &dep) in region.dep_arguments().iter().zip(&deps) {
+                let id = self.class_of(dep);
+                self.bind_value(port.id(), id);
+            }
+            self.seed_region(arm);
+        }
+        let results = instance.value_results()[binding.results.clone()].to_vec();
+        let boolean =
+            type_width(self.context, self.context.get_value(gamma.predicate()).ty()) == Some(1);
+        for (index, &result) in results.iter().enumerate() {
+            let produced: Vec<Id> = arms
+                .iter()
+                .map(|&arm| {
+                    let value =
+                        self.context.get_region(arm).value_results()[binding.exit.start + index];
+                    self.class_of(value)
+                })
+                .collect();
+            let first = self.eg.find(produced[0]);
+            let id = if produced.iter().all(|&arm| self.eg.find(arm) == first) {
+                produced[0]
+            } else if boolean && produced.len() == 2 {
+                self.eg.add(Node::gamma(
+                    result,
+                    vec![predicate, produced[1], produced[0]],
+                ))
+            } else {
+                let mut args = vec![predicate];
+                args.extend(produced);
+                self.eg.add(Node::switch(result, args))
+            };
+            self.bind_value(result, id);
+        }
+        for dep in instance.dep_results() {
+            self.anchor(dep);
+        }
+    }
+
+    /// A declared θ over an unordered body: each carried port is read inside
+    /// the body as a `Port` of its own identity, and the value the loop produces
+    /// for it is `Loop(init, next, exit, pred)`. A port every iteration carries
+    /// unchanged is the value the loop was entered on, and the loop leaves with
+    /// its exit value; any other value port is recorded for the hypothesis
+    /// rounds. Dependencies anchor.
+    fn seed_loop(&mut self, instance: &OpHandle, theta: &dyn Theta) {
+        let binding = theta.carried();
+        let body = theta.body();
+        let region = self.context.get_region(body);
+        let inits = instance.value_operands()[binding.operands.clone()].to_vec();
+        let heads: Vec<ValueId> = region.value_arguments()[binding.ports.clone()]
+            .iter()
+            .map(crate::Value::id)
+            .collect();
+        for &head in &heads {
+            self.anchor(head);
+        }
+        self.seed_region(body);
+        let predicate = self.class_of(theta.predicate());
+        let body_results = region.value_results();
+        let finals = instance.value_results()[binding.results.clone()].to_vec();
+        let mut ports = Vec::new();
+        for (index, &head_value) in heads.iter().enumerate() {
+            let head = self.class_of(head_value);
+            let init = self.class_of(inits[index]);
+            let next = self.class_of(body_results[binding.continue_.start + index]);
+            let exit = self.class_of(body_results[binding.exit.start + index]);
+            let port = self.eg.add(Node::port(head_value, vec![head]));
+            self.eg.union(port, head);
+            let result = self.anchor(finals[index]);
+            let node = self.eg.add(Node::loop_(
+                finals[index],
+                vec![init, next, exit, predicate],
+            ));
+            self.eg.union(node, result);
+            if self.eg.find(next) == self.eg.find(head) {
+                self.eg.union(head, init);
+                self.eg.union(result, exit);
+            } else {
+                ports.push(Port {
+                    head,
+                    init,
+                    edges: vec![next],
+                    result,
+                    published: exit,
+                });
+            }
+        }
+        for dep in instance.dep_results() {
+            self.anchor(dep);
+        }
+        if !ports.is_empty() {
+            self.loop_ports.push(LoopPorts {
+                op: instance.id,
+                ports,
+            });
+        }
+        self.eg.rebuild();
     }
 
     /// An arm's entry arguments are the inputs the gate forwards into it: the

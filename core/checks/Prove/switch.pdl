@@ -1,0 +1,12 @@
+// RUN: tir prove %s | filecheck %s
+
+// A switch whose arms agree is that value; one indexed by a boolean is an
+// `#if` with the true arm second; a predicate past the last arm selects it.
+
+rule switch-same: #switch(p: int<8>; x: int<8>, x, x) : int<8> => x;
+rule switch-is-if: #switch(p: int<1>; a: int<8>, b: int<8>) : int<8> => #if(p, b, a);
+rule switch-past-end: #switch(const<8>(9); a: int<8>, b: int<8>) : int<8> => b;
+
+// CHECK: switch-same: proven
+// CHECK: switch-is-if: proven
+// CHECK: switch-past-end: proven

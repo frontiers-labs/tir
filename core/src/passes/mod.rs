@@ -17,6 +17,7 @@ pub mod thread_state;
 pub use affine::AffineSchedulePass;
 pub use dce::DeadCodeEliminationPass;
 pub use inline::{InlineBudget, InlinePass};
+pub use instcombine::InstCombineNodesPass;
 pub use instcombine::InstCombinePass;
 pub use lower_memory_intrinsics::LowerMemoryIntrinsicsPass;
 pub use lower_ptr_disjoint::LowerPtrDisjointPass;

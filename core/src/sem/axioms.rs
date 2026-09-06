@@ -482,11 +482,22 @@ impl Axiom {
             let Some(hypothesis) = r.hypothesis else {
                 return Some(value);
             };
-            let binder = self.port_binder(next)?;
+            let Some(binder) = [next, exit, pred]
+                .into_iter()
+                .find_map(|child| self.port_binder(child))
+            else {
+                return Some(value);
+            };
             let port = self.realize(&AxNode::Node(SymKind::Port, vec![binder.clone()]), g, r)?;
             let expected = self.realize(hypothesis, g, r)?;
             let holds = op(g, SymKind::Eq, &[port, expected]);
             Some(op(g, SymKind::If, &[holds, value, expected]))
+        };
+        // A predicate is one bit on both sides, however wide the register a
+        // right-hand side reads its var from.
+        let bit = |g: &mut SemGraph, value: NodeId| {
+            let zero = con(g, 0, 16);
+            op(g, SymKind::Extract, &[value, zero, zero])
         };
         match r.loop_phase? {
             LoopPhase::Init => self.realize(init, g, r),
@@ -497,6 +508,7 @@ impl Axiom {
             LoopPhase::Exit => {
                 let value = self.realize(exit, g, r)?;
                 let pred = self.realize(pred, g, r)?;
+                let pred = bit(g, pred);
                 match r.hypothesis {
                     Some(hypothesis) => {
                         let expected = self.realize(hypothesis, g, r)?;
@@ -509,11 +521,15 @@ impl Axiom {
                     }
                 }
             }
-            LoopPhase::Pred => self.realize(pred, g, r),
+            LoopPhase::Pred => {
+                let pred = self.realize(pred, g, r)?;
+                Some(bit(g, pred))
+            }
         }
     }
 
-    /// The identity a loop's `#port(l)` binders name, read off its `next`.
+    /// The identity a loop's `#port(l)` binder names, wherever the body reads
+    /// it; a loop reading no port has no binder to assume anything about.
     fn port_binder<'n>(&self, node: &'n AxNode) -> Option<&'n AxNode> {
         match node {
             AxNode::Node(SymKind::Port, children) => children.first(),

@@ -152,6 +152,18 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
         if contains_kind(&lhs, SymKind::Theta) || contains_kind(&rhs, SymKind::Theta) {
             return Err("a rule mixes `#theta` and `#loop`".into());
         }
+        // The induction relates the ports of the two sides' loops and the
+        // values the loops produce; a term around a loop would be compared at
+        // the port's value instead of the loop's, which proves nothing about
+        // the loop.
+        for side in [&lhs, &rhs] {
+            if contains_kind(side, SymKind::Loop) && !is_root_loop(side) {
+                return Err(format!(
+                    "rule `{}`: a `#loop` must be the whole side it is on, with no loop below it",
+                    rule.name
+                ));
+            }
+        }
         ProofObligation::LoopInvariant {
             rhs_loops: contains_kind(&rhs, SymKind::Loop),
         }
@@ -237,6 +249,17 @@ fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
             Ok(AxNode::Node(kind, children))
         }
         TermKind::String(_) => Err("a string is not a term the prover reads".into()),
+    }
+}
+
+/// Whether `node` is a `#loop` holding no other.
+fn is_root_loop(node: &AxNode) -> bool {
+    match node {
+        AxNode::Node(SymKind::Loop, children) => !children
+            .iter()
+            .any(|child| contains_kind(child, SymKind::Loop)),
+        AxNode::Keep(inner) => is_root_loop(inner),
+        _ => false,
     }
 }
 

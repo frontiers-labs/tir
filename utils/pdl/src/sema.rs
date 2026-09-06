@@ -52,7 +52,7 @@ pub fn analyze(file: &File) -> Vec<Diagnostic> {
         }
         if grows_theta_under_theta(&rule.rhs) {
             diagnostics.push(Diagnostic::new(
-                format!("rule '{}' unrolls a theta under itself", rule.name),
+                format!("rule '{}' unrolls a loop under itself", rule.name),
                 "a theta operand may not hold another theta on the right-hand side",
                 rule.rhs.span,
             ));
@@ -190,6 +190,13 @@ fn validate_operators(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
         } => {
             let arity = operands.len() + dependencies.len();
             if let Operator::Semantic(name) = operator {
+                if !dependencies.is_empty() {
+                    diagnostics.push(Diagnostic::new(
+                        format!("'#{name}' takes no dependency operands"),
+                        "only an operation observes a dependency",
+                        term.span,
+                    ));
+                }
                 match op_kind(name) {
                     None => diagnostics.push(Diagnostic::new(
                         format!("unknown semantic operator '#{name}'"),
@@ -308,7 +315,14 @@ fn grows_theta_under_theta(term: &Term) -> bool {
         TermKind::Operation {
             operator, operands, ..
         } if is_theta(operator) => operands.iter().any(contains_theta),
-        TermKind::Operation { operands, .. } => operands.iter().any(grows_theta_under_theta),
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => operands
+            .iter()
+            .chain(dependencies)
+            .any(grows_theta_under_theta),
         TermKind::Keep(inner) => grows_theta_under_theta(inner),
         _ => false,
     }
@@ -317,8 +331,11 @@ fn grows_theta_under_theta(term: &Term) -> bool {
 fn contains_theta(term: &Term) -> bool {
     match &term.kind {
         TermKind::Operation {
-            operator, operands, ..
-        } => is_theta(operator) || operands.iter().any(contains_theta),
+            operator,
+            operands,
+            dependencies,
+            ..
+        } => is_theta(operator) || operands.iter().chain(dependencies).any(contains_theta),
         TermKind::Keep(inner) => contains_theta(inner),
         _ => false,
     }
@@ -336,7 +353,10 @@ fn is_theta(operator: &Operator) -> bool {
 fn port_outside_loop(term: &Term, inside: bool) -> Option<Span> {
     match &term.kind {
         TermKind::Operation {
-            operator, operands, ..
+            operator,
+            operands,
+            dependencies,
+            ..
         } => {
             let is_loop = matches!(operator, Operator::Semantic(name) if op_kind(name) == Some(SymKind::Loop));
             let is_port = matches!(operator, Operator::Semantic(name) if op_kind(name) == Some(SymKind::Port));
@@ -345,6 +365,7 @@ fn port_outside_loop(term: &Term, inside: bool) -> Option<Span> {
             }
             operands
                 .iter()
+                .chain(dependencies)
                 .find_map(|operand| port_outside_loop(operand, inside || is_loop))
         }
         TermKind::Keep(inner) => port_outside_loop(inner, inside),

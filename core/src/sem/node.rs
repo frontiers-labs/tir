@@ -181,6 +181,25 @@ impl SemNode {
         Self::projection(Kind::Sym(SymKind::Theta), value, args)
     }
 
+    /// The value a loop produces for one carried port, standing for `value`:
+    /// `Loop(init, next, exit, pred)`, the port read inside the last three
+    /// through a [`SemNode::port`].
+    pub fn loop_(value: ValueId, args: Vec<Id>) -> Self {
+        Self::projection(Kind::Sym(SymKind::Loop), value, args)
+    }
+
+    /// The carried value of a loop at the current iteration, standing for the
+    /// port `value`; the child identifies the port.
+    pub fn port(value: ValueId, args: Vec<Id>) -> Self {
+        Self::projection(Kind::Sym(SymKind::Port), value, args)
+    }
+
+    /// The value-level choice among a gamma's arms standing for `value`:
+    /// `Switch(pred, arm0, arm1, ...)`.
+    pub fn switch(value: ValueId, args: Vec<Id>) -> Self {
+        Self::projection(Kind::Sym(SymKind::Switch), value, args)
+    }
+
     /// A memory access standing for `value` — the value a read yields, or the
     /// state a write publishes — over the vocabulary's operands and the state
     /// it reads.
