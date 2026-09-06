@@ -24,7 +24,7 @@ pub use promote::PromotePass;
 pub use restructure::{RestructureNodesPass, RestructurePass};
 pub use shuffle_state::ShuffleStatePass;
 pub use symbol_uniqueness::CheckUniqueSymbolsPass;
-pub use thread_state::{ThreadStatePass, UnthreadPass, unthread};
+pub use thread_state::{ThreadStatePass, UnthreadPass, VerifyDepsPass, unthread, verify_deps};
 
 use crate::{
     ConstantLike, Context, OpHandle, OpId, OperationRef, PassError, Pure, RegionId, Rewriter,

@@ -1,0 +1,16 @@
+// RUN: not tir opt --pass verify-deps %s 2>&1 | filecheck %s
+
+// A store whose dependency result nothing reads is in no cone: under demand
+// evaluation it never runs, so the order it was meant to keep is gone.
+
+module {
+  %f = func.func @f(%p: !ptr.p<!i32>, %v: !i32) -> !i32 {
+    | %s = state.entry_state
+    | %s1 = ptr.store %v, %p | %s
+    %x | %r = ptr.load %p | %s : !i32
+    -> %x | %r
+  }
+  module_end
+}
+
+// CHECK: ptr.store in @f is demanded by nothing

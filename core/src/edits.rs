@@ -89,7 +89,7 @@ impl Context {
     }
 
     /// `region` and every region nested in it.
-    fn nested_regions(&self, region: RegionId) -> Vec<RegionId> {
+    pub(crate) fn nested_regions(&self, region: RegionId) -> Vec<RegionId> {
         let ops = self.get_region(region).op_ids();
         let mut regions = vec![region];
         regions.extend(

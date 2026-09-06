@@ -1,0 +1,15 @@
+// RUN: not tir opt --pass verify-deps %s 2>&1 | filecheck %s
+
+// A store naming no dependency is ordered against nothing.
+
+module {
+  %f = func.func @f(%p: !ptr.p<!i32>, %v: !i32) -> !i32 {
+    | %s = state.entry_state
+    ptr.store %v, %p
+    %x | %r = ptr.load %p | %s : !i32
+    -> %x | %r
+  }
+  module_end
+}
+
+// CHECK: ptr.store in @f names no dependency

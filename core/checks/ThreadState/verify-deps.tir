@@ -1,0 +1,20 @@
+// RUN: tir opt --pass restructure-nodes,verify-deps %s | filecheck %s
+// RUN: not tir opt --pass verify-deps %s 2>&1 | filecheck %s --check-prefix=UNTHREADED
+
+// The unordered form carries its memory order as dependency edges, built once
+// while the input still had blocks. Nothing rebuilds them afterwards, so the
+// check is that they are complete: every operation touching memory names the
+// dependency it observes and is demanded by the region's results. A body that
+// still has blocks holds none of that yet.
+
+module {
+  %f = func.func @f(%p: !ptr.p<!i32>, %v: !i32) -> !i32 {
+    ptr.store %v, %p
+    %x = ptr.load %p : !i32
+    func.return %x
+  }
+  module_end
+}
+
+// CHECK: func.func @f
+// UNTHREADED: pass 'verify-deps' runs on an unordered body, but func.func @f holds an ordered one
