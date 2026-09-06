@@ -6,7 +6,8 @@
 
 // `*p = 1; x = *p; *p = 2` through the unordered form and back: the chain the
 // conversion constructed is the only order the destructured block keeps, so
-// the read still sees the first write and the memory still ends at 2.
+// the read still sees the first write and the memory still ends at 2. The
+// literals sit wherever the block order puts them, right ahead of their reader.
 
 module {
   %fn_main = func.func @main() -> !i32 {
@@ -27,7 +28,7 @@ module {
 
 // CHECK: i32 12
 // CFG: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %{{[0-9]+}}
-// CFG-NEXT: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S1]] : !i32
-// CFG-NEXT: | %[[S2:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[R1]]
-// CFG-NEXT: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S2]] : !i32
+// CFG: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S1]] : !i32
+// CFG: | %[[S2:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[R1]]
+// CFG: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S2]] : !i32
 // CFG: func.return %{{[0-9]+}} | %[[R2]]

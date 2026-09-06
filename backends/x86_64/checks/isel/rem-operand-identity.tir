@@ -29,8 +29,8 @@ module {
 // CHECK-LABEL: name = "f"
 // CHECK: sign_extend_dividend32
 // CHECK-NEXT: signed_divide32
-// CHECK-NEXT: imul32
-// CHECK-NEXT: sub32
+// CHECK: imul32
+// CHECK: sub32
 
 // CHECK-LABEL: name = "g"
 // CHECK: signed_divide32

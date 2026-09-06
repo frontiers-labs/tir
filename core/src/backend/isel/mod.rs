@@ -1675,50 +1675,6 @@ impl InstructionSelectPass {
             implicit: &implicit,
             rules: &self.rules,
         };
-        if std::env::var("TIR_ISEL_DUMP").is_ok() {
-            for op in crate::analysis::scopes::region_ops(context, region) {
-                let instance = context.get_op(op);
-                let tests: Vec<Vec<u32>> = (0..instance.regions().len().saturating_sub(1))
-                    .map(|i| {
-                        crate::passes::destructure::Edges::test_reads(
-                            &edges,
-                            &instance,
-                            crate::passes::destructure::Test::Arm(i),
-                        )
-                        .iter()
-                        .map(|v| v.number())
-                        .collect()
-                    })
-                    .collect();
-                eprintln!(
-                    "PRE {} id={:?} results={:?} operands={:?} region={:?} nested_results={:?} tests={:?}",
-                    instance.name(),
-                    op,
-                    instance
-                        .results()
-                        .iter()
-                        .map(|v| v.number())
-                        .collect::<Vec<_>>(),
-                    instance
-                        .operands()
-                        .iter()
-                        .map(|v| v.number())
-                        .collect::<Vec<_>>(),
-                    context.parent_nodes_region(op),
-                    instance
-                        .regions()
-                        .iter()
-                        .map(|r| context
-                            .get_region(*r)
-                            .results()
-                            .iter()
-                            .map(|v| v.number())
-                            .collect::<Vec<_>>())
-                        .collect::<Vec<_>>(),
-                    tests
-                );
-            }
-        }
         crate::passes::destructure(context, rewriter, region, &edges)?;
         for block in context.get_region(region).block_ids() {
             let block = context.get_block(block);

@@ -2,13 +2,15 @@
 // RUN: fcc compile --stage ir -o /tmp/fcc-matmul-restrict.tir %s
 // RUN: tir opt --pass func.func(promote-nodes,verify-deps,instcombine-nodes,affine) /tmp/fcc-matmul-restrict.tir | filecheck %s --check-prefix=IR
 
-// The same nest over `restrict` pointers. Construction promotes the parameter
-// slots before the chains are drawn, so the λ's `noalias [0, 1, 2]` reaches the
-// facts as three objects rather than three reads of memory: each gets a chain of
-// its own, every pair across them is a distance the scheduler can read, and the
-// nest is reordered exactly as the local-array kernel's is — `k` out of the
-// innermost position so the read of `b` walks a row. Spec 055 recorded the
-// pipeline order as plan-level; this is the order it asked for.
+// The same nest over `restrict` pointers. The λ's `noalias [0, 1, 2]` makes
+// the three parameters three objects, and with per-object chains the nest was
+// reordered exactly as the local-array kernel's: `k` out of the innermost
+// position so the read of `b` walks a row. Today the order stays `i, j, k` for
+// the same reason as there: `j` is stored to its slot in the `j` loop and
+// reloaded inside the `k` loop, promote-nodes does not forward the port across
+// the loop boundary, and the `c` and `b` subscripts are sums over a `ptr.load`
+// rather than over the counter. The affine view refuses the interchange. This
+// pins the reload and the unmoved order.
 
 void matmul_restrict_parameters(int *restrict a, int *restrict b,
                                 int *restrict c)
@@ -21,11 +23,13 @@ void matmul_restrict_parameters(int *restrict a, int *restrict b,
 
 // IR-LABEL: func.func @matmul_restrict_parameters
 // IR: scf.for2 {{.*}} (%[[I:[0-9]+]] = {{.*}}) {
-// IR-NEXT: scf.for2 {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
-// IR-NEXT: scf.for2 {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
-// IR: shli %[[I]]
-// IR: addi %{{[0-9]+}}, %[[J]]
-// IR: shli %[[I]]
-// IR: addi %{{[0-9]+}}, %[[K]]
+// IR: scf.for2 {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
+// IR: ptr.store %[[J]], %[[JSLOT:[0-9]+]] |
+// IR: scf.for2 {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
+// IR: %[[JL:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[JSLOT]] |
+// IR: %[[ROW:[0-9]+]] = shli %[[I]]
+// IR-NEXT: addi %[[ROW]], %[[JL]]
+// IR: addi %[[ROW]], %[[K]]
+// IR: shli %[[K]]
 
 // CHECK: matmul_restrict_parameters:

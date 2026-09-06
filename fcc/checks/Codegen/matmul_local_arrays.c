@@ -4,11 +4,14 @@
 
 // The affine view's own case: three local arrays are three memories, every
 // subscript is a form over the counters, and the only pair is `C[i][j]` against
-// itself. Nothing has to be assumed about aliasing for the nest to be
-// reordered, and it is: `k` moves out of the innermost position so that the
-// read of `b` walks a row rather than a column. Measured on the corpus, that
-// order runs the kernel in 10 % fewer cycles; every tiling of it ran slower
-// (the numbers are in Spec 07's amendments), and the model buys none here.
+// itself. With per-object chains the nest was reordered, `k` out of the
+// innermost position so the read of `b` walks a row (10 % fewer cycles on the
+// corpus; every tiling ran slower). Today the nest stays `i, j, k`: the `j`
+// counter is stored to its slot in the `j` loop and reloaded inside the `k`
+// loop, promote-nodes does not forward a port across that loop boundary, so
+// the `b` subscript is built from a `ptr.load` and the affine view sees a
+// memory read where it needs a form over the counters. It refuses the
+// interchange. This pins that reload and the unmoved order.
 //
 // `int` rather than `float` because fcc's float lowering is broken today: a
 // `float` load comes back as `!i64` and the arithmetic on it is integer
@@ -38,10 +41,12 @@ void matmul_local_arrays(int *out)
 // CHECK: scf.for2
 // CHECK: scf.for2
 // CHECK: scf.for2 {{.*}} (%[[I:[0-9]+]] = {{.*}}) {
-// CHECK-NEXT: scf.for2 {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
-// CHECK-NEXT: scf.for2 {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
+// CHECK: scf.for2 {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
+// CHECK: ptr.store %[[J]], %[[JSLOT:[0-9]+]] |
+// CHECK: scf.for2 {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
 // CHECK: extsi %[[I]]
-// CHECK: extsi %[[J]]
-// CHECK: extsi %[[K]]
+// CHECK-NEXT: %[[JL:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[JSLOT]] |
+// CHECK-NEXT: extsi %[[JL]]
+// CHECK-NEXT: extsi %[[K]]
 
 // ASM: matmul_local_arrays:

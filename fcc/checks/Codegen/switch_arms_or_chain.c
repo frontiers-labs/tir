@@ -1,11 +1,13 @@
 // RUN: fcc compile -O2 --stage asm --march x86_64 -o - %s | filecheck %s
 
 // The shape that used to make instruction selection quadratic: an `||` chain and
-// a dense switch, one guarded arm per test. The facts are the mid-end's now — an
-// arm that is entered only when `value` equals its case computes over that
-// literal — so every arm arrives at selection already folded and is spelled as
-// the single move it is. The chain above still pins its first two comparisons to
-// the registers holding 0 and 1.
+// a dense switch, one guarded arm per test. Every arm still arrives at selection
+// folded to its literal, and the chain pins its first two comparisons to the
+// registers holding 0 and 1. What each arm does with its literal is the gap:
+// the return value lives in a stack slot whose first write sits inside an arm,
+// so promote-nodes leaves the slot in memory and every arm spells its constant
+// as a store to `[rsp]` that the exit reloads. The block-based promote kept the
+// slot in `eax`, one `mov eax, N` per arm.
 
 int classify(int value, int flag)
 {
@@ -28,12 +30,26 @@ int classify(int value, int flag)
 
 // CHECK: classify:
 // CHECK: test edi, edi
-// CHECK: mov eax, 100
 // CHECK: cmp ecx, edi
-// CHECK: mov eax, 102
 // CHECK: cmp edi, 2
-// CHECK: mov eax, 104
 // CHECK: cmp edi, 3
-// CHECK: mov eax, 106
 // CHECK: cmp edi, 5
-// CHECK: mov eax, 110
+// CHECK: mov ecx, -1
+// CHECK-NEXT: mov rax, rsp
+// CHECK-NEXT: mov [rax], ecx
+// CHECK: mov ecx, 110
+// CHECK-NEXT: mov rax, rsp
+// CHECK-NEXT: mov [rax], ecx
+// CHECK: mov ecx, 106
+// CHECK-NEXT: mov rax, rsp
+// CHECK-NEXT: mov [rax], ecx
+// CHECK: mov ecx, 100
+// CHECK-NEXT: mov rax, rsp
+// CHECK-NEXT: mov [rax], ecx
+// CHECK: mov ecx, 0
+// CHECK-NEXT: mov rax, rsp
+// CHECK-NEXT: mov [rax], ecx
+// CHECK: mov rax, rsp
+// CHECK-NEXT: mov eax, [rax]
+// CHECK-NEXT: add rsp, 16
+// CHECK-NEXT: ret

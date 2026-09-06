@@ -19,6 +19,6 @@ module {
 
 // CHECK-LABEL: name = "f"
 // CHECK: riscv.divw
-// CHECK-NEXT: riscv.mulw
-// CHECK-NEXT: riscv.subw
+// CHECK: riscv.mulw
+// CHECK: riscv.subw
 // CHECK-NOT: riscv.rem

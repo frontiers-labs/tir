@@ -747,6 +747,11 @@ impl Lowering<'_> {
 /// its use. Order inside a block is a scheduling matter the backend derives
 /// later; this is the one choice the derivation keeps.
 fn sink_leaves(context: &Context, edges: &dyn Edges, order: &mut Vec<OpId>) {
+    // What an instruction implicitly reads is placed by that instruction.
+    let implicit: HashSet<OpId> = order
+        .iter()
+        .flat_map(|&op| edges.implicit_inputs(op))
+        .collect();
     let place: Vec<(usize, usize)> = order
         .iter()
         .enumerate()
@@ -754,7 +759,8 @@ fn sink_leaves(context: &Context, edges: &dyn Edges, order: &mut Vec<OpId>) {
             let instance = context.get_op(op);
             let leaf = instance.operands().is_empty()
                 && instance.regions().is_empty()
-                && instance.dep_results().is_empty();
+                && instance.dep_results().is_empty()
+                && !implicit.contains(&op);
             if !leaf {
                 return (index, 1);
             }
@@ -797,17 +803,16 @@ fn sink_leaves(context: &Context, edges: &dyn Edges, order: &mut Vec<OpId>) {
 fn abut_implicit_inputs(edges: &dyn Edges, order: &mut Vec<OpId>) {
     let mut index = 0;
     while index < order.len() {
-        let inputs = edges.implicit_inputs(order[index]);
-        let mut moved = 0;
-        for input in inputs {
-            if let Some(at) = order[..index].iter().position(|op| *op == input) {
-                order.remove(at);
-                order.insert(index - 1, input);
-                moved += 1;
-            }
+        let op = order[index];
+        for input in edges.implicit_inputs(op) {
+            let Some(at) = order.iter().position(|held| *held == input) else {
+                continue;
+            };
+            order.remove(at);
+            let target = order.iter().position(|held| *held == op).expect("still held");
+            order.insert(target, input);
         }
-        index += 1;
-        let _ = moved;
+        index = order.iter().position(|held| *held == op).expect("still held") + 1;
     }
 }
 

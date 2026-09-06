@@ -766,6 +766,18 @@ impl<'a> Reader<'a> {
     }
 
     fn read_functions(&mut self, body: &BlockHandle) -> Result<()> {
+        // A constant is declared once for the module; each function spells
+        // the ones it reads at its entry, where a value of its own can stand.
+        let first_function = self
+            .instructions
+            .iter()
+            .position(|inst| inst.opcode == 54)
+            .unwrap_or(self.instructions.len());
+        let constants: Vec<RawInst> = self.instructions[..first_function]
+            .iter()
+            .filter(|inst| inst.opcode == 43)
+            .cloned()
+            .collect();
         let mut index = 0;
         while index < self.instructions.len() {
             if self.instructions[index].opcode != 54 {
@@ -776,7 +788,19 @@ impl<'a> Reader<'a> {
             while self.instructions[index].opcode != 56 {
                 index += 1;
             }
-            let chunk = self.instructions[start..=index].to_vec();
+            let mut chunk = self.instructions[start..=index].to_vec();
+            let read: Vec<RawInst> = constants
+                .iter()
+                .filter(|constant| {
+                    chunk
+                        .iter()
+                        .any(|inst| inst.operands.iter().any(|&id| id == constant.operands[1]))
+                })
+                .cloned()
+                .collect();
+            if let Some(label) = chunk.iter().position(|inst| inst.opcode == 248) {
+                chunk.splice(label + 1..label + 1, read);
+            }
             body.append_op(self.read_function(&chunk)?);
             index += 1;
         }
