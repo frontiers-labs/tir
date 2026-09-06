@@ -913,7 +913,11 @@ fn outside(context: &Context, root: OpId, value: ValueId) -> bool {
     true
 }
 
-/// Whether anything beside the nest itself names `value`.
+/// Whether anything beside the nest itself names `value`: an operation, or
+/// the result list of the region holding the nest, which no use list records.
 fn is_used(context: &Context, root: OpId, value: ValueId) -> bool {
     context.users_of(value).into_iter().any(|user| user != root)
+        || context
+            .parent_nodes_region(root)
+            .is_some_and(|region| context.get_region(region).results().contains(&value))
 }

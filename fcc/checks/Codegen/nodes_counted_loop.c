@@ -40,5 +40,7 @@ int count(int n) {
 // carries: no memory operation is left, and the sum is the loop's result.
 // OPT: func.func @count
 // OPT-NOT: ptr.
+// OPT-NOT: state.join
 // OPT: scf.for2
 // OPT-NOT: ptr.
+// OPT-NOT: state.join

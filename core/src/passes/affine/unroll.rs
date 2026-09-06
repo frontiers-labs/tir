@@ -79,6 +79,7 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
         }
     };
     let parent = context.parent_nodes_region(level.op);
+    let mut copies = Vec::new();
 
     for iteration in 0..trip {
         let mut bindings: HashMap<ValueId, ValueId> = arguments
@@ -100,7 +101,11 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
             bindings.insert(counter, value);
         }
         incoming = match parent {
-            Some(region) => copy_body_nodes(context, rewriter, region, &bindings, &target)?,
+            Some(region) => {
+                let (ops, leaving) = copy_body_nodes(context, region, &bindings, &target);
+                copies.extend(ops);
+                leaving
+            }
             None => copy_body(context, rewriter, region, &bindings, &target)?,
         };
     }
@@ -111,18 +116,20 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
             context.rename_region_results(region, result, value, &[]);
         }
     }
-    rewriter.erase_op(&target)
+    rewriter.erase_op(&target)?;
+    // Only now is it known which copies nothing reads: the last copy's latch
+    // is what the loop's results became.
+    erase_unread(context, rewriter, &copies)
 }
 
 /// [`copy_body`] for an unordered body: the copy joins the loop's own region,
 /// and the values its next iteration would take are what the copy hands on.
 fn copy_body_nodes(
     context: &Context,
-    rewriter: &mut Rewriter,
     destination: crate::RegionId,
     bindings: &HashMap<ValueId, ValueId>,
     target: &OperationRef,
-) -> Result<Vec<ValueId>, PassError> {
+) -> (Vec<OpId>, Vec<ValueId>) {
     let theta = target
         .op()
         .clone()
@@ -135,8 +142,7 @@ fn copy_body_nodes(
     let deps = (results.len() - values) / 2;
     let mut leaving = results[binding.continue_.clone()].to_vec();
     leaving.extend(results[values..values + deps].iter().copied());
-    erase_unread(context, rewriter, &ops)?;
-    Ok(leaving)
+    (ops, leaving)
 }
 
 /// One copy of the body, spelled where the loop stood, and the values its

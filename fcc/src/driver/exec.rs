@@ -252,7 +252,7 @@ fn run_compile_action(
             // as the ordered form prints what the backend will be handed.
             if opts.nodes && opts.opt_level.rounds().is_some() {
                 use tir::Operation;
-                super::compile::mid_end(opts)
+                super::compile::mid_end(opts, false)
                     .run(&context, context.get_op(module.id()))
                     .unwrap_or_else(|e| {
                         eprintln!("fcc: error: mid-end failed: {e}");

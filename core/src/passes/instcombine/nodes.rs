@@ -10,8 +10,10 @@
 //! asks where an operation sits in its region or which came first.
 //!
 //! The commit erases nothing on the way. The sweep after it erases every
-//! operation the region's results do not demand, loops excepted: an effect in
-//! no cone would never run, but a loop nobody reads may still not terminate.
+//! operation the region's results do not demand. Demand runs through
+//! dependencies as through values, so a loop whose body changes memory is
+//! demanded by the state it leaves however unread its values are; a loop in
+//! no cone at all never ran under the demand semantics, and goes.
 
 use std::collections::{HashMap, HashSet};
 
@@ -28,7 +30,7 @@ use crate::func::FuncOp;
 use crate::sem::egraph::type_width;
 use crate::{
     ConstantLike, Context, Gamma, MemoryRead, NewOp, OpHandle, OpId, OperationRef, Pass, PassError,
-    PassTarget, RegionId, RegionKind, Rewriter, Speculatable, Theta, TypeId, ValueId,
+    PassTarget, RegionId, RegionKind, Rewriter, Speculatable, TypeId, ValueId,
 };
 
 #[derive(Default)]
@@ -361,8 +363,8 @@ fn named_by_results(context: &Context, region: RegionId, value: ValueId) -> bool
 
 /// Erase every operation under `body` its region's results do not demand.
 /// Demand runs from the callable's results through operands and nested
-/// regions' results; every loop is demanded outright, since erasing one erases
-/// whether it terminates.
+/// regions' results, dependencies included: what an effect leaves behind is
+/// what demands it.
 fn sweep(context: &Context, body: RegionId, rewriter: &mut Rewriter) -> Result<(), PassError> {
     let defining = |values: Vec<ValueId>| {
         values
@@ -371,19 +373,6 @@ fn sweep(context: &Context, body: RegionId, rewriter: &mut Rewriter) -> Result<(
             .collect::<Vec<_>>()
     };
     let mut worklist = defining(context.get_region(body).results());
-    for region in context.nested_regions(body) {
-        for op in context.get_region(region).op_ids() {
-            if context.get_op(op).has_interface::<dyn Theta>() {
-                let mut current = Some(op);
-                while let Some(holder) =
-                    current.filter(|&holder| holder != body_owner(context, body))
-                {
-                    worklist.push(holder);
-                    current = context.parent_op(holder);
-                }
-            }
-        }
-    }
     let mut demanded: HashSet<OpId> = HashSet::new();
     while let Some(op) = worklist.pop() {
         if !demanded.insert(op) {
@@ -396,13 +385,6 @@ fn sweep(context: &Context, body: RegionId, rewriter: &mut Rewriter) -> Result<(
         }
     }
     sweep_region(context, body, &demanded, rewriter)
-}
-
-fn body_owner(context: &Context, body: RegionId) -> OpId {
-    context
-        .get_region(body)
-        .parent_op()
-        .expect("a callable owns its body")
 }
 
 fn sweep_region(

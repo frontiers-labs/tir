@@ -1,14 +1,20 @@
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
 
-// A loop whose result nothing reads stays: whether it terminates is the
-// loop's own affair, and erasing it would erase a divergence.
+// A loop whose values nothing reads but whose body writes memory: the state
+// it leaves is what the function returns its memory through, so the loop is
+// demanded and stays with its store, however unread its counter is. The slot
+// is not promoted here, so the store is the effect that keeps the loop.
 
 module {
   %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %zero = constant {value = 0} : !i32
     %one = constant {value = 1} : !i32
     cfg.br ^body(%zero : !i32)
   ^body(%i: !i32):
+    ptr.store %i, %p
     %next = addi %i, %one : !i32
     %more = cmpi %next, %n {predicate = "slt"} : !i1
     cfg.cond_br %more, ^body(%next : !i32), ^exit
@@ -20,4 +26,7 @@ module {
 
 // CHECK: func.func @f(%[[N:[0-9]+]]: !i32)
 // CHECK: scf.loop
-// CHECK: -> %[[N]]
+// CHECK: ptr.store
+// CHECK: -> %[[N]] | %{{[0-9]+}}
+
+// VALUE: i32 3

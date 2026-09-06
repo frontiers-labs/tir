@@ -222,7 +222,7 @@ pub(super) fn emit_machine_code(
         false,
     );
 
-    let mut pm = mid_end(opts);
+    let mut pm = mid_end(opts, true);
     pm.run(&context, context.get_op(module.id()))
         .unwrap_or_else(|e| {
             eprintln!("fcc: error: control-flow lowering failed: {e}");
@@ -417,8 +417,8 @@ fn add_instcombine(pm: &mut tir::PassManager, nodes: bool) {
 }
 
 /// The mid-end pipeline the driver options ask for, ending in the data
-/// lowering every pipeline needs.
-pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
+/// lowering the backend needs when `materialize`.
+pub(super) fn mid_end(opts: &DriverOptions, materialize: bool) -> tir::PassManager {
     let mut pm = tir::PassManager::new();
     if let Some(spec) = &opts.pipeline {
         pm = tir::parse_pipeline(spec).unwrap_or_else(|e| {
@@ -467,6 +467,8 @@ pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
     }
     // Data lowering consumes the δ ops, so the functions that name them must
     // hold symbol addresses of their own by then.
-    pm.add_pass(tir::passes::MaterializeSymbolAddressesPass::new());
+    if materialize {
+        pm.add_pass(tir::passes::MaterializeSymbolAddressesPass::new());
+    }
     pm
 }
