@@ -22,6 +22,10 @@ pub struct Block {
 }
 
 impl BlockId {
+    /// A block no context holds: what a branch is bound to before the block it
+    /// will reach exists.
+    pub const PLACEHOLDER: BlockId = BlockId(u32::MAX);
+
     pub(crate) fn new(id: u32) -> Self {
         Self(id)
     }

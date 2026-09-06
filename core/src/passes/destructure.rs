@@ -25,14 +25,14 @@
 //! the `cfg` dialect for core IR, a target's branches once the region holds
 //! machine operations.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::analysis::AnalysisManager;
 use crate::attributes::{AttributeValue, Predicate};
 use crate::builtin::{CmpIOpBuilder, ConstantOpBuilder, IntegerType};
 use crate::cfg::{BranchOpBuilder, CondBranchOpBuilder};
 use crate::func::{FuncOp, ReturnOpBuilder};
-use crate::region::{topological_order, values_read};
+use crate::region::values_read;
 use crate::{
     BlockId, Context, Gamma, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
     RegionId, Rewriter, Theta, ValueId,
@@ -78,7 +78,8 @@ pub trait Edges {
     fn jump(&self, block: BlockId, edge: &Edge);
 
     /// End `block` with a branch deciding `test` of `op`: along `taken` when
-    /// it holds, along `fallthrough` otherwise.
+    /// it holds, along `fallthrough` otherwise. A branch needing a block of
+    /// its own on the way takes one from `mint`, which lists it.
     fn branch(
         &self,
         block: BlockId,
@@ -86,10 +87,32 @@ pub trait Edges {
         test: Test,
         taken: &Edge,
         fallthrough: &Edge,
+        mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError>;
 
     /// End `block` by leaving the callable with `values` and `deps`.
     fn leave(&self, block: BlockId, values: &[ValueId], deps: &[ValueId]) -> Result<(), PassError>;
+
+    /// Whether `test` of `op` is already decided: the edge it picks is taken
+    /// outright, and an arm no edge reaches is never placed.
+    fn decided(&self, _op: &OpHandle, _test: Test) -> Option<bool> {
+        None
+    }
+
+    /// What deciding `test` of `op` reads besides the operation's own operands
+    /// and results: a machine test bound to registers its region's tiles
+    /// define, which are demanded along with the test.
+    fn test_reads(&self, _op: &OpHandle, _test: Test) -> Vec<ValueId> {
+        Vec::new()
+    }
+
+    /// Operations `op` runs after besides those defining what it reads: a
+    /// machine instruction's implicit register inputs, defined by an
+    /// instruction selection put ahead of it. They are demanded along with
+    /// `op`, and the region's insertion order keeps them ahead of it.
+    fn implicit_inputs(&self, _op: OpId) -> Vec<OpId> {
+        Vec::new()
+    }
 }
 
 /// The `cfg` dialect's edges over core IR.
@@ -141,6 +164,7 @@ impl Edges for CfgEdges<'_> {
         test: Test,
         taken: &Edge,
         fallthrough: &Edge,
+        _mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
         let (condition, holds) = match test {
             Test::Repeat => (theta(op)?.predicate(), true),
@@ -216,7 +240,8 @@ fn decline(op: &OpHandle, reason: &str) -> PassError {
 pub struct LoopBlocks {
     /// Entered on the ports; decides whether to iterate.
     pub header: BlockId,
-    /// Holds what only the next iteration demands; jumps back to the header.
+    /// Holds what only the next iteration demands and jumps back to the
+    /// header; the header itself when the next iteration demands nothing more.
     pub continue_: BlockId,
     /// Entered on the loop's results.
     pub merge: BlockId,
@@ -316,23 +341,76 @@ impl Lowering<'_> {
         self.ops(rewriter, region, &order, &demanded, block)
     }
 
+    /// Every operation `op` runs after: those defining what it reads, what
+    /// its tests read, and its implicit inputs.
+    fn inputs(&self, op: OpId) -> Vec<OpId> {
+        let instance = self.context.get_op(op);
+        let mut read = values_read(self.context, op);
+        if let Some(gamma) = instance.clone().as_interface::<dyn Gamma>() {
+            for index in 0..gamma.arms().len().saturating_sub(1) {
+                read.extend(self.edges.test_reads(&instance, Test::Arm(index)));
+            }
+        }
+        let mut inputs: Vec<OpId> = read
+            .into_iter()
+            .filter_map(|value| self.context.get_value(value).defining_op())
+            .collect();
+        inputs.extend(self.edges.implicit_inputs(op));
+        inputs
+    }
+
+    /// The region's operations in a topological order, ties broken by
+    /// insertion order: the order a machine region was emitted in keeps an
+    /// instruction's implicit inputs ahead of it.
     fn order(&self, region: RegionId) -> Result<Vec<OpId>, PassError> {
-        topological_order(self.context, region)
-            .map_err(|error| PassError::InvalidRuleSet(error.to_string()))
+        let ops = self.context.get_region(region).op_ids();
+        let held: HashSet<OpId> = ops.iter().copied().collect();
+        let mut pending: HashMap<OpId, usize> = HashMap::new();
+        let mut readers: HashMap<OpId, Vec<OpId>> = HashMap::new();
+        for &op in &ops {
+            let inputs: HashSet<OpId> = self
+                .inputs(op)
+                .into_iter()
+                .filter(|input| held.contains(input))
+                .collect();
+            for &input in &inputs {
+                readers.entry(input).or_default().push(op);
+            }
+            pending.insert(op, inputs.len());
+        }
+        let mut order = Vec::with_capacity(ops.len());
+        let mut ready: Vec<OpId> = ops.iter().rev().copied().filter(|op| pending[op] == 0).collect();
+        while let Some(op) = ready.pop() {
+            order.push(op);
+            for &reader in readers.get(&op).into_iter().flatten() {
+                let count = pending.get_mut(&reader).expect("a reader of a region op");
+                *count -= 1;
+                if *count == 0 {
+                    ready.push(reader);
+                    ready.sort_by_key(|op| std::cmp::Reverse(ops.iter().position(|held| held == op)));
+                }
+            }
+        }
+        if order.len() != ops.len() {
+            return Err(PassError::InvalidRuleSet(
+                "an unordered region holds a dependency cycle".to_string(),
+            ));
+        }
+        Ok(order)
     }
 
     /// The operations of `region` that computing `roots` demands.
     fn cone(&self, region: RegionId, roots: &[ValueId]) -> HashSet<OpId> {
         let mut cone = HashSet::new();
-        let mut pending: Vec<ValueId> = roots.to_vec();
-        while let Some(value) = pending.pop() {
-            let Some(op) = self.context.get_value(value).defining_op() else {
-                continue;
-            };
+        let mut pending: Vec<OpId> = roots
+            .iter()
+            .filter_map(|&value| self.context.get_value(value).defining_op())
+            .collect();
+        while let Some(op) = pending.pop() {
             if self.context.parent_nodes_region(op) != Some(region) || !cone.insert(op) {
                 continue;
             }
-            pending.extend(values_read(self.context, op));
+            pending.extend(self.inputs(op));
         }
         cone
     }
@@ -461,31 +539,76 @@ impl Lowering<'_> {
         let mut inputs = op.value_operands()[binding.operands.clone()].to_vec();
         inputs.extend(op.dep_operands());
 
-        let mut arms = Vec::new();
-        for arm in gamma.arms() {
-            let entry = self.entered_on(&self.context.get_region(arm).ports());
-            self.blocks.push(entry);
-            let results = self.context.get_region(arm).results();
-            let last = self.region(rewriter, arm, entry)?;
-            self.edges.jump(last, &Edge::with(merge, &results));
-            arms.push(entry);
+        // The arms the chain of tests can reach: a test already decided
+        // takes its arm and ends the chain, or skips it; the last arm takes
+        // whatever reaches it.
+        let regions = gamma.arms();
+        let last = regions.len() - 1;
+        let mut reachable = Vec::new();
+        for index in 0..=last {
+            let decided = (index < last)
+                .then(|| self.edges.decided(op, Test::Arm(index)))
+                .flatten();
+            if decided != Some(false) {
+                reachable.push(index);
+            }
+            if index == last || decided == Some(true) {
+                break;
+            }
         }
 
-        let last = arms.len() - 1;
+        // An arm that computes nothing is not a block: what it produces rides
+        // the edge into it, straight to the merge block.
+        let mut arms: HashMap<usize, Edge> = HashMap::new();
+        for &index in &reachable {
+            let arm = regions[index];
+            let handle = self.context.get_region(arm);
+            let results = handle.results();
+            if self.cone(arm, &results).is_empty() {
+                let ports: Vec<ValueId> = handle.ports().iter().map(|port| port.id()).collect();
+                let forwarded: Vec<ValueId> = results
+                    .iter()
+                    .map(|result| match ports.iter().position(|port| port == result) {
+                        Some(index) => inputs[index],
+                        None => *result,
+                    })
+                    .collect();
+                arms.insert(index, Edge::with(merge, &forwarded));
+                continue;
+            }
+            let entry = self.entered_on(&handle.ports());
+            self.blocks.push(entry);
+            let end = self.region(rewriter, arm, entry)?;
+            self.edges.jump(end, &Edge::with(merge, &results));
+            arms.insert(index, Edge::with(entry, &inputs));
+        }
+
+        // The chain: each reachable arm but the last is tested for, the one
+        // after it being where a failed test falls through to.
         let mut current = block;
-        for index in 0..last {
-            let next = if index + 1 == last {
-                Edge::with(arms[last], &inputs)
+        for (place, &index) in reachable.iter().enumerate() {
+            let Some(&following) = reachable.get(place + 1) else {
+                if place == 0 {
+                    self.edges.jump(current, &arms[&index]);
+                }
+                break;
+            };
+            let next = if place + 2 == reachable.len() {
+                arms[&following].clone()
             } else {
                 Edge::to(self.block())
             };
-            let arm = Edge::with(arms[index], &inputs);
-            self.edges
-                .branch(current, op, Test::Arm(index), &arm, &next)?;
+            let context = self.context;
+            let blocks = &mut self.blocks;
+            self.edges.branch(
+                current,
+                op,
+                Test::Arm(index),
+                &arms[&index],
+                &next,
+                &mut || mint(context, blocks),
+            )?;
             current = next.dest;
-        }
-        if last == 0 {
-            self.edges.jump(current, &Edge::with(arms[0], &inputs));
         }
         self.record.gates.push(GateBlocks { head: block, merge });
         rewriter.erase_op(&OperationRef::new(op.clone()))
@@ -516,7 +639,9 @@ impl Lowering<'_> {
         let mut exit_values = values[binding.exit.clone()].to_vec();
         exit_values.extend(&deps[chains..]);
 
-        let predicate = self.cone(body, &[theta.predicate()]);
+        let mut tested = vec![theta.predicate()];
+        tested.extend(self.edges.test_reads(op, Test::Repeat));
+        let predicate = self.cone(body, &tested);
         let continue_cone = self.cone(body, &continue_values);
         let exit_cone = self.cone(body, &exit_values);
         let header_ops: HashSet<OpId> = predicate
@@ -529,28 +654,48 @@ impl Lowering<'_> {
         let order = self.order(body)?;
 
         let header_end = self.ops(rewriter, body, &order, &header_ops, header)?;
-        let (continue_, continue_entered) = self.cone_block(&continue_only, &mut continue_values);
-        let continue_end = self.ops(rewriter, body, &order, &continue_only, continue_)?;
-        self.edges
-            .jump(continue_end, &Edge::with(header, &continue_values));
-        let (exit, exit_entered) = self.cone_block(&exit_only, &mut exit_values);
-        let exit_end = self.ops(rewriter, body, &order, &exit_only, exit)?;
-        self.edges.jump(exit_end, &Edge::with(merge, &exit_values));
+        // A cone that computes nothing is not a block either: the header's own
+        // branch carries what it leaves with.
+        let continue_ = if continue_only.is_empty() {
+            Edge::with(header, &continue_values)
+        } else {
+            let (block, entered) = self.cone_block(&continue_only, &mut continue_values);
+            let end = self.ops(rewriter, body, &order, &continue_only, block)?;
+            self.edges.jump(end, &Edge::with(header, &continue_values));
+            Edge::with(block, &entered)
+        };
+        let exit = if exit_only.is_empty() {
+            Edge::with(merge, &exit_values)
+        } else {
+            let (block, entered) = self.cone_block(&exit_only, &mut exit_values);
+            let end = self.ops(rewriter, body, &order, &exit_only, block)?;
+            self.edges.jump(end, &Edge::with(merge, &exit_values));
+            Edge::with(block, &entered)
+        };
+        let context = self.context;
+        let blocks = &mut self.blocks;
         self.edges.branch(
             header_end,
             op,
             Test::Repeat,
-            &Edge::with(continue_, &continue_entered),
-            &Edge::with(exit, &exit_entered),
+            &continue_,
+            &exit,
+            &mut || mint(context, blocks),
         )?;
 
         self.record.loops.push(LoopBlocks {
             header,
-            continue_,
+            continue_: continue_.dest,
             merge,
         });
         rewriter.erase_op(&OperationRef::new(op.clone()))
     }
+}
+
+fn mint(context: &Context, blocks: &mut Vec<BlockId>) -> BlockId {
+    let block = context.create_block(vec![]).id();
+    blocks.push(block);
+    block
 }
 
 /// Rename the reads of `op` and of everything nested in it.

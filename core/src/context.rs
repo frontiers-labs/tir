@@ -1350,6 +1350,22 @@ impl Context {
         inner.edit_region(region);
     }
 
+    /// Choose another insertion order for the operations the unordered
+    /// `region` already holds; `ops` must be a permutation of them. Insertion
+    /// order decides nothing about the region, but it is the tie-break a
+    /// linearization reads, and selection leaves the order it meant in it.
+    pub fn set_region_ops(&self, region: RegionId, ops: Vec<OpId>) {
+        let mut inner = self.0.write();
+        match inner.region_mut(region).map(Region::body_mut) {
+            Some(crate::region::RegionBody::Nodes { ops: held, .. }) => {
+                debug_assert_eq!(held.len(), ops.len());
+                *held = ops;
+            }
+            _ => panic!("only an unordered region holds an insertion order"),
+        }
+        inner.edit_region(region);
+    }
+
     /// Name the values the unordered `region` produces, the trailing
     /// `dep_results` of them dependencies.
     pub fn set_region_results(&self, region: RegionId, results: Vec<ValueId>, dep_results: usize) {

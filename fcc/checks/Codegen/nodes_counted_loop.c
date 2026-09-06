@@ -1,11 +1,11 @@
-// RUN: fcc compile --stage ir --nodes -o - %s | filecheck %s
+// RUN: fcc compile --stage ir -o - %s | filecheck %s
 // RUN: fcc compile --stage ir -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
-// RUN: fcc compile --stage ir --nodes -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: fcc compile --stage ir -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
 // RUN: fcc compile --stage ir -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
-// RUN: fcc compile --stage ir --nodes -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
-// RUN: fcc compile --stage ir -O2 --nodes -o - %s | filecheck --check-prefix=OPT %s
-// RUN: fcc compile --stage ir -O2 --nodes -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
-// RUN: fcc compile --stage ir -O2 --nodes -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: fcc compile --stage ir -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: fcc compile --stage ir -O2 -o - %s | filecheck --check-prefix=OPT %s
+// RUN: fcc compile --stage ir -O2 -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: fcc compile --stage ir -O2 -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
 
 // The unordered pipeline: `raise-loops` then `restructure-nodes`. A counted
 // `for` becomes `scf.for2` with the counter as port 0, the carried slot copy

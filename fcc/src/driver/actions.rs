@@ -94,8 +94,6 @@ pub struct DriverOptions {
     /// The `shuffle-machine-order` oracle (see
     /// [`tir::backend::pipeline::Oracles`]).
     pub shuffle_machine_order: bool,
-    /// Raise control flow with `restructure-nodes` rather than `restructure`.
-    pub nodes: bool,
     pub dry_run: bool,
 }
 

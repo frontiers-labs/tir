@@ -22,20 +22,18 @@ impl LowerMemoryIntrinsicsPass {
             sets: &mut Vec<OperationRef>,
         ) {
             for region in operation.regions() {
-                for block in context.get_region(region).iter(context.clone()) {
-                    for operation in block.op_ids() {
-                        let operation = context.get_op(operation);
-                        if operation.is::<ModuleOp>() {
-                            continue;
-                        }
-                        let operation = OperationRef::new(operation);
-                        if operation.is::<MemcpyOp>() {
-                            copies.push(operation.clone());
-                        } else if operation.is::<MemsetOp>() {
-                            sets.push(operation.clone());
-                        }
-                        visit(context, operation.op(), copies, sets);
+                for operation in context.get_region(region).op_ids() {
+                    let operation = context.get_op(operation);
+                    if operation.is::<ModuleOp>() {
+                        continue;
                     }
+                    let operation = OperationRef::new(operation);
+                    if operation.is::<MemcpyOp>() {
+                        copies.push(operation.clone());
+                    } else if operation.is::<MemsetOp>() {
+                        sets.push(operation.clone());
+                    }
+                    visit(context, operation.op(), copies, sets);
                 }
             }
         }

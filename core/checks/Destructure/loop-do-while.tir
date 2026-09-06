@@ -2,7 +2,8 @@
 // RUN: tir opt --pass destructure %s | tir interp | filecheck --check-prefix=VALUE %s
 
 // A do-while: the predicate reads what the iteration computed, so the whole
-// body sits in the header and the continue and exit blocks only forward.
+// body sits in the header, and with nothing left for either cone the header's
+// own branch carries the value back or out.
 
 module {
   %fn_main = func.func @main() -> !i32 {
@@ -25,12 +26,8 @@ module {
 // CHECK-NEXT: ^bb1(%[[PORT:[0-9]+]]: !i32):
 // CHECK-NEXT: %[[SQ:[0-9]+]] = muli %[[PORT]], %[[PORT]] : !i32
 // CHECK-NEXT: %[[AGAIN:[0-9]+]] = cmpi %[[SQ]], %[[LIMIT]] {predicate = "slt"} : !i1
-// CHECK-NEXT: cfg.cond_br %[[AGAIN]], ^bb2, ^bb3
-// CHECK-NEXT: ^bb2:
-// CHECK-NEXT: cfg.br ^bb1(%[[SQ]] : !i32)
-// CHECK-NEXT: ^bb3:
-// CHECK-NEXT: cfg.br ^bb4(%[[SQ]] : !i32)
-// CHECK-NEXT: ^bb4(%[[RESULT:[0-9]+]]: !i32):
+// CHECK-NEXT: cfg.cond_br %[[AGAIN]], ^bb1(%[[SQ]] : !i32), ^bb2(%[[SQ]] : !i32)
+// CHECK-NEXT: ^bb2(%[[RESULT:[0-9]+]]: !i32):
 // CHECK-NEXT: func.return %[[RESULT]]
 
 // VALUE: i32 256

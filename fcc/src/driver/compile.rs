@@ -53,7 +53,6 @@ pub(super) fn lower_to_ir(
     options: LangOptions,
     march: Option<&str>,
     mabi: Option<&str>,
-    nodes: bool,
 ) -> tir::builtin::ModuleOp {
     let fail = |error: String| -> ! {
         eprintln!("fcc: error: {error}; pass --march explicitly");
@@ -78,8 +77,7 @@ pub(super) fn lower_to_ir(
     // Restructuring accepts CFG form only, so no `cir` operation may survive
     // into it: struct ops become pointer arithmetic, loop ops become `scf.for`
     // where the counted shape is provable and blocks with branches otherwise.
-    // The unordered form takes the same input and turns a raised `scf.for`
-    // into `scf.for2` on the way.
+    // The conversion turns a raised `scf.for` into `scf.for2` on the way.
     run_pass(
         context,
         &module,
@@ -94,23 +92,13 @@ pub(super) fn lower_to_ir(
         true,
         crate::passes::RaiseLoopsPass::new(),
     );
-    if nodes {
-        run_pass(
-            context,
-            &module,
-            "restructuring",
-            true,
-            tir::passes::RestructureNodesPass::new(),
-        );
-    } else {
-        run_pass(
-            context,
-            &module,
-            "restructuring",
-            true,
-            tir::passes::RestructurePass::new(),
-        );
-    }
+    run_pass(
+        context,
+        &module,
+        "restructuring",
+        true,
+        tir::passes::RestructureNodesPass::new(),
+    );
     describe_target(context, &module, machine.as_ref())
 }
 
@@ -187,10 +175,6 @@ pub(super) fn emit_machine_code(
         eprintln!("fcc: error: --march is required for the asm and obj stages");
         std::process::exit(1);
     };
-    if opts.nodes {
-        eprintln!("fcc: error: --nodes stops at the IR stage; the backend takes structured blocks");
-        std::process::exit(1);
-    }
     let target = tir::backend::select_target_with_abi(
         march,
         opts.mcpu.as_deref(),
@@ -219,7 +203,6 @@ pub(super) fn emit_machine_code(
         opts.lang_options,
         Some(march),
         opts.mabi.as_deref(),
-        false,
     );
 
     let mut pm = mid_end(opts, true);
@@ -407,13 +390,8 @@ pub(super) fn parse_source(
     })
 }
 
-/// The simplifier for the body kind the pipeline produces.
-fn add_instcombine(pm: &mut tir::PassManager, nodes: bool) {
-    if nodes {
-        pm.add_pass(tir::passes::InstCombineNodesPass::new());
-    } else {
-        pm.add_pass(tir::passes::InstCombinePass::new());
-    }
+fn add_instcombine(pm: &mut tir::PassManager) {
+    pm.add_pass(tir::passes::InstCombineNodesPass::new());
 }
 
 /// The mid-end pipeline the driver options ask for, ending in the data
@@ -429,41 +407,31 @@ pub(super) fn mid_end(opts: &DriverOptions, materialize: bool) -> tir::PassManag
         // callers select a reduced mid-end pipeline. Without this final
         // cleanup, unfolded address arithmetic can reach instruction
         // selection and change the program's observable behavior.
-        add_instcombine(pm.nest::<tir::func::FuncOp>(), opts.nodes);
+        add_instcombine(pm.nest::<tir::func::FuncOp>());
     } else if let Some(rounds) = opts.opt_level.rounds() {
         let fixpoint = pm.fixpoint(rounds.cap);
         fixpoint.add_pass(tir::passes::InlinePass::new(rounds.inline));
         let round = fixpoint.nest::<tir::func::FuncOp>();
         // Inlining is the only thing that makes a slot promotable that was
-        // not, so promote follows it inside the round.
-        if opts.nodes {
-            // The unordered pipeline: the chain the conversion built is kept
-            // and checked, never drawn again, and the simplifier's own sweep
-            // takes what nothing demands.
-            round.add_pass(tir::passes::PromoteNodesPass::new());
-            round.add_pass(tir::passes::VerifyDepsPass::new());
-            round.add_pass(tir::passes::InstCombineNodesPass::new());
-        } else {
-            round.add_pass(tir::passes::PromotePass::new());
-            round.add_pass(tir::passes::ThreadStatePass::new());
-            round.add_pass(tir::passes::InstCombinePass::new());
-            // Inlining is what makes a gate's decision a constant, and the arms it
-            // then cannot reach are what the rest of the round would walk.
-            round.add_pass(tir::passes::DeadCodeEliminationPass::new());
-        }
+        // not, so promote follows it inside the round. The chain the
+        // conversion built is kept and checked, never drawn again, and the
+        // simplifier's own sweep takes what nothing demands.
+        round.add_pass(tir::passes::PromoteNodesPass::new());
+        round.add_pass(tir::passes::VerifyDepsPass::new());
+        round.add_pass(tir::passes::InstCombineNodesPass::new());
         if rounds.affine {
             // Loop scheduling reads the chains too, and what it leaves behind — a
             // rebuilt nest, an unrolled body — is address arithmetic nobody has
             // folded yet, so the simplifier runs once more over it.
             round.add_pass(tir::passes::AffineSchedulePass::new());
-            add_instcombine(round, opts.nodes);
+            add_instcombine(round);
         }
     } else {
         // -O0 runs no round. What is left is the normalising simplifier every
         // pipeline needs: instruction selection reads unfolded address
         // arithmetic as a different program, which is a backend defect this
         // level inherits.
-        add_instcombine(pm.nest::<tir::func::FuncOp>(), opts.nodes);
+        add_instcombine(pm.nest::<tir::func::FuncOp>());
     }
     // Data lowering consumes the δ ops, so the functions that name them must
     // hold symbol addresses of their own by then.

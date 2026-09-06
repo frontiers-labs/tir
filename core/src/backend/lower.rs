@@ -43,7 +43,22 @@ pub fn lower_function_and_return(
         };
         let mut tuple_extracts = Vec::new();
         let mut arguments = Vec::new();
-        let function_arguments = func.body().value_arguments().to_vec();
+        // The ABI reads the signature, not the arguments' current types:
+        // selection retypes an argument to the class of the instruction
+        // reading it, and the register it arrives in is the signature's.
+        let signature = tir::builtin::FnType::signature_of(context, func.fn_value())
+            .map(|(params, _)| params)
+            .unwrap_or_default();
+        let function_arguments: Vec<(tir::Value, tir::TypeId)> = func
+            .body()
+            .value_arguments()
+            .into_iter()
+            .enumerate()
+            .map(|(index, argument)| {
+                let ty = signature.get(index).copied().unwrap_or(argument.ty());
+                (argument, ty)
+            })
+            .collect();
         let mut argument_alignments = func.argument_alignments();
         if argument_alignments.is_empty() {
             argument_alignments.resize(function_arguments.len(), 1);
@@ -55,23 +70,23 @@ pub fn lower_function_and_return(
         let mut function_arguments = function_arguments.into_iter();
         let mut argument_alignments = argument_alignments.into_iter();
         let result_address = if func.has_result_address() {
-            let argument = function_arguments.next().ok_or_else(|| {
+            let (argument, ty) = function_arguments.next().ok_or_else(|| {
                 PassError::InvalidRuleSet(
                     "result-address function has no destination argument".to_string(),
                 )
             })?;
             argument_alignments.next();
-            let class = argument_class(argument.ty())?;
+            let class = argument_class(ty)?;
             retype(context, argument.id(), class);
             Some(AttributeValue::Value(argument.id()))
         } else {
             None
         };
-        for (argument, alignment) in function_arguments.zip(argument_alignments) {
-            let ty = context.get_type_data(argument.ty());
+        for ((argument, ty), alignment) in function_arguments.zip(argument_alignments) {
+            let ty = context.get_type_data(ty);
             let Some(tuple) = (ty.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>()
             else {
-                let class = argument_class(argument.ty())?;
+                let class = argument_class(context.get_type_id(ty))?;
                 retype(context, argument.id(), class);
                 arguments.push(AttributeValue::Value(argument.id()));
                 continue;

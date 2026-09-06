@@ -366,6 +366,26 @@ pub(crate) fn shuffled_topological_order(
     })
 }
 
+/// [`topological_order`] with the tie among ready operations broken by
+/// insertion order: the order the region was built in, which a converter
+/// leaves as source order.
+pub(crate) fn insertion_topological_order(
+    context: &Context,
+    region: RegionId,
+) -> Result<Vec<OpId>, crate::Error> {
+    let inserted: std::collections::HashMap<OpId, usize> = context
+        .get_region(region)
+        .op_ids()
+        .into_iter()
+        .enumerate()
+        .map(|(index, op)| (op, index))
+        .collect();
+    topological_order_picking(context, region, |ready| {
+        let pick = ready.iter().copied().min_by_key(|op| inserted[op])?;
+        ready.take(&pick)
+    })
+}
+
 fn topological_order_picking(
     context: &Context,
     region: RegionId,

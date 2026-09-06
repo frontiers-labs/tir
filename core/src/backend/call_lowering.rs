@@ -82,6 +82,21 @@ impl CallLowering {
         self.tuple_argument_elements.clear();
     }
 
+    /// The operations each call runs after besides those defining its
+    /// operands: the extractions of a tuple argument, which the lowering reads
+    /// off to the side.
+    pub fn implicit_inputs(&self, context: &Context) -> HashMap<OpId, Vec<OpId>> {
+        let mut inputs: HashMap<OpId, Vec<OpId>> = HashMap::new();
+        for (&(call, _), elements) in &self.tuple_argument_elements {
+            inputs.entry(call).or_default().extend(
+                elements
+                    .iter()
+                    .filter_map(|&element| context.get_value(element).defining_op()),
+            );
+        }
+        inputs
+    }
+
     pub fn prepare_function(
         &mut self,
         context: &Context,
@@ -92,9 +107,9 @@ impl CallLowering {
             return Ok(());
         }
         for region_id in function.op().regions() {
-            let region = context.get_region(region_id);
-            for block in region.iter(context.clone()) {
-                for op_id in block.op_ids() {
+            self.assemble_tuple_result(context, region_id)?;
+            {
+                for op_id in crate::analysis::scopes::region_ops(context, region_id) {
                     let instance = context.get_op(op_id);
                     if let Some(ret) = instance.clone().as_op::<ReturnOp>()
                         && let Some(value) = ret.returned_value()
@@ -165,6 +180,55 @@ impl CallLowering {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// An unordered body handing back a tuple it did not assemble assembles
+    /// it: the elements are extracted and put back together, so the return
+    /// lowering finds the `make_tuple` it takes apart.
+    fn assemble_tuple_result(
+        &self,
+        context: &Context,
+        region: tir::RegionId,
+    ) -> Result<(), PassError> {
+        let handle = context.get_region(region);
+        if !handle.is_nodes() {
+            return Ok(());
+        }
+        let Some(&value) = handle.value_results().first() else {
+            return Ok(());
+        };
+        let ty = context.get_value(value).ty();
+        let data = context.get_type_data(ty);
+        let Some(tuple) = (data.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>() else {
+            return Ok(());
+        };
+        let assembled = context
+            .get_value(value)
+            .defining_op()
+            .is_some_and(|definition| context.get_op(definition).is::<MakeTupleOp>());
+        if assembled {
+            return Ok(());
+        }
+        let mut elements = Vec::new();
+        for (index, element_ty) in tuple.elements(context).into_iter().enumerate() {
+            let extract = TupleGetOpBuilder::new(context)
+                .tuple(value)
+                .attr("index", AttributeValue::UInt(index as u64))
+                .result_type(element_ty)
+                .build();
+            context.add(region, extract.id());
+            elements.push(extract.result());
+        }
+        let make_tuple = MakeTupleOpBuilder::new(context)
+            .elements(elements)
+            .result_type(ty)
+            .build();
+        context.add(region, make_tuple.id());
+        let mut results = handle.results();
+        results[0] = make_tuple.result();
+        let deps = handle.dep_results().len();
+        context.set_region_results(region, results, deps);
         Ok(())
     }
 
