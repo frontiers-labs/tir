@@ -2,6 +2,7 @@
 // RUN: tir interp %s -f f --args=1,6 | filecheck %s --check-prefix=THEN
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=1,6 | filecheck %s --check-prefix=THEN
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=0,6 | filecheck %s --check-prefix=ELSE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 2 %s | tir opt --pass instcombine-nodes | tir interp -f f --args=1,6 | filecheck %s --check-prefix=THEN
 
 // Both arms compute `x + x`, which cannot trap, so the gate's result is that
 // sum spelled once outside the arms; the gate carries nothing and is swept.
@@ -29,13 +30,15 @@ module {
 }
 
 // CHECK: func.func @f(%[[C:[0-9]+]]: !i1, %[[X:[0-9]+]]: !i32)
-// CHECK-DAG: %[[SUM:[0-9]+]] = addi %[[X]], %[[X]] : !i32
-// CHECK-DAG: %[[Q:[0-9]+]] = scf.switch2 %[[C]] {
+// CHECK: %[[SUM:[0-9]+]] = addi %[[X]], %[[X]] : !i32
+// CHECK-NOT: addi %[[X]], %[[X]]
+// CHECK: %[[Q:[0-9]+]] = scf.switch2 %[[C]] {
 // CHECK: divsi
 // CHECK: }
 // CHECK: {
 // CHECK: divsi
 // CHECK: }
+// CHECK-NOT: addi %[[X]], %[[X]]
 // CHECK: %[[R:[0-9]+]] = addi %[[SUM]], %[[Q]] : !i32
 // CHECK: -> %[[R]]
 

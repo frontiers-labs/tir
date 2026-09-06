@@ -40,10 +40,8 @@ pub(crate) fn regions_under(context: &Context, root: OpId) -> Vec<RegionId> {
     let mut pending = context.get_op(root).regions().to_vec();
     while let Some(region) = pending.pop() {
         found.push(region);
-        for block in context.get_region(region).iter(context.clone()) {
-            for op in block.op_ids() {
-                pending.extend(context.get_op(op).regions().iter().copied());
-            }
+        for op in context.get_region(region).op_ids() {
+            pending.extend(context.get_op(op).regions().iter().copied());
         }
     }
     found

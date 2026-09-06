@@ -19,8 +19,7 @@ mod unroll;
 use crate::analysis::affine::{AffineView, nests_under};
 use crate::func::FuncOp;
 use crate::{
-    AnalysisManager, Context, DataLayout, OperationRef, Pass, PassError, PassTarget, RegionKind,
-    Rewriter,
+    AnalysisManager, Context, DataLayout, OperationRef, Pass, PassError, PassTarget, Rewriter,
 };
 
 pub use strip_mine::strip_mine;
@@ -42,7 +41,7 @@ impl Pass for AffineSchedulePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
+        PassTarget::operation::<FuncOp>()
     }
 
     fn run(

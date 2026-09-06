@@ -76,10 +76,11 @@ impl<'a> Builder<'a> {
             let step = self.bound(counted.step());
             let trip = trip_count(&lower, &upper, &step);
             self.iteration_ranges.push(iteration_range(trip, width));
-            let counter = counter_port(self.context, &op);
-            if let Some(counter) = counter {
-                self.counters.insert(counter, depth);
+            let mut counting = counter_ports(self.context, &op);
+            for &port in &counting {
+                self.counters.insert(port, depth);
             }
+            let counter = (!counting.is_empty()).then(|| counting.remove(0));
             self.loops.push(Loop {
                 op: self.nest[depth],
                 lower,
@@ -87,6 +88,7 @@ impl<'a> Builder<'a> {
                 step,
                 width,
                 counter,
+                counter_aliases: counting,
                 trip,
             });
         }
@@ -105,18 +107,15 @@ impl<'a> Builder<'a> {
     /// Every access of the innermost body, and whatever there stops the view from
     /// describing it.
     fn body(&mut self) {
-        let Some(block) = body_block(self.context, *self.nest.last().expect("a rooted nest"))
-        else {
+        let Some(ops) = body_ops(self.context, *self.nest.last().expect("a rooted nest")) else {
             self.opaque = true;
             return;
         };
-        self.scan(block, false);
+        self.scan(&ops, false);
     }
 
-    fn scan(&mut self, block: BlockId, guarded: bool) {
-        let ops = self.context.get_block(block).op_ids();
-        let (&_terminator, rest) = ops.split_last().expect("a block ends in a terminator");
-        for &op_id in rest {
+    fn scan(&mut self, ops: &[OpId], guarded: bool) {
+        for &op_id in ops {
             let op = self.context.get_op(op_id);
             if let Some(read) = op.clone().as_interface::<dyn MemoryRead>() {
                 let access = self.access(
@@ -138,10 +137,17 @@ impl<'a> Builder<'a> {
                     guarded,
                 );
                 self.accesses.push(access);
-            } else if op.clone().as_op::<scf::IfOp>().is_some() {
+            } else if op.clone().as_op::<scf::IfOp>().is_some() || op.has_interface::<dyn Gamma>() {
                 for region in op.regions().to_vec() {
-                    for block in self.context.get_region(region).block_ids() {
-                        self.scan(block, true);
+                    let region = self.context.get_region(region);
+                    if region.is_nodes() {
+                        self.scan(&region.op_ids(), true);
+                    } else {
+                        for block in region.block_ids() {
+                            let mut ops = self.context.get_block(block).op_ids();
+                            ops.pop();
+                            self.scan(&ops, true);
+                        }
                     }
                 }
             } else if !op.regions().is_empty() || self.touches_memory(&op) {
@@ -358,11 +364,11 @@ impl<'a> Builder<'a> {
         let op = self
             .context
             .get_op(*self.nest.last().expect("a rooted nest"));
-        let Some(carried) = op.clone().as_interface::<dyn LoopLike>() else {
+        let Some(carried) = carried(self.context, &op) else {
             return;
         };
-        let (args, latched, inits) = (carried.carried_args(), carried.latched(), carried.inits());
-        let value_ports = args.len() - op.dep_results().len();
+        let (args, latched, inits) = (carried.args, carried.latched, carried.inits);
+        let value_ports = args.len() - op.dep_results().len().min(args.len());
         for port in 0..value_ports {
             self.ports.push(Port {
                 arg: args[port],
@@ -414,10 +420,8 @@ impl<'a> Builder<'a> {
             };
             pending.extend(op.operands().iter().copied());
             for region in crate::passes::regions_under(self.context, op.id) {
-                for block in self.context.get_region(region).block_ids() {
-                    for inner in self.context.get_block(block).op_ids() {
-                        pending.extend(self.context.get_op(inner).operands().iter().copied());
-                    }
+                for inner in self.context.get_region(region).op_ids() {
+                    pending.extend(self.context.get_op(inner).operands().iter().copied());
                 }
             }
         }
@@ -442,16 +446,33 @@ impl<'a> Builder<'a> {
 /// starts at the lower bound and gains the step every iteration, which is the
 /// recurrence `CountedLoop` states and raising establishes.
 pub(crate) fn counter_port(context: &Context, op: &OpHandle) -> Option<ValueId> {
-    let counted = op.clone().as_interface::<dyn CountedLoop>()?;
-    let carried = op.clone().as_interface::<dyn LoopLike>()?;
-    let args = carried.carried_args();
-    let inits = carried.inits();
-    let latched = carried.latched();
-    (0..args.len()).find_map(|port| {
-        (inits[port] == counted.lower_bound()
-            && gains(context, latched[port], args[port], counted.step()))
-        .then_some(args[port])
-    })
+    counter_ports(context, op).first().copied()
+}
+
+/// Every carried port counting with the loop: the declared induction first,
+/// then each port entered on the lower bound and stepped by the step.
+pub(crate) fn counter_ports(context: &Context, op: &OpHandle) -> Vec<ValueId> {
+    let (Some(counted), Some(carried)) = (
+        op.clone().as_interface::<dyn CountedLoop>(),
+        carried(context, op),
+    ) else {
+        return Vec::new();
+    };
+    let (args, inits, latched) = (carried.args, carried.inits, carried.latched);
+    let mut ports: Vec<ValueId> = counted
+        .induction()
+        .and_then(|induction| args.get(induction).copied())
+        .into_iter()
+        .collect();
+    for port in 0..args.len() {
+        if inits[port] == counted.lower_bound()
+            && gains(context, latched[port], args[port], counted.step())
+            && !ports.contains(&args[port])
+        {
+            ports.push(args[port]);
+        }
+    }
+    ports
 }
 
 /// Whether `latched` is `carried + step`, either way round.
@@ -541,13 +562,11 @@ fn interior_values(context: &Context, root: OpId) -> HashSet<ValueId> {
     let mut pending = vec![root];
     while let Some(op_id) = pending.pop() {
         for region in context.get_op(op_id).regions().to_vec() {
-            for block in context.get_region(region).block_ids() {
-                let block = context.get_block(block);
-                values.extend(block.arguments().iter().map(crate::Value::id));
-                for op in block.op_ids() {
-                    values.extend(context.get_op(op).results().iter().copied());
-                    pending.push(op);
-                }
+            let region = context.get_region(region);
+            values.extend(region.ports().iter().map(crate::Value::id));
+            for op in region.op_ids() {
+                values.extend(context.get_op(op).results().iter().copied());
+                pending.push(op);
             }
         }
     }
@@ -564,7 +583,7 @@ pub(crate) fn chain_root(context: &Context, state: ValueId) -> Option<ValueId> {
         if !seen.insert(current) {
             return None;
         }
-        if context.is_block_argument(current) {
+        if context.is_block_argument(current) || context.region_of_port(current).is_some() {
             current = incoming(context, current)?;
             continue;
         }
@@ -599,6 +618,29 @@ pub(crate) fn chain_root(context: &Context, state: ValueId) -> Option<ValueId> {
             current = observed;
             continue;
         }
+        if op.has_interface::<dyn Theta>() {
+            // A dependency result of a theta is entered on the dependency
+            // operand at the same index; a value result on the init.
+            let deps = op.dep_results();
+            if let Some(port) = deps.iter().position(|&r| r == current) {
+                current = op.dep_operands()[port];
+                continue;
+            }
+            let carried = carried(context, &op)?;
+            let port = carried.finals.iter().position(|&r| r == current)?;
+            current = carried.inits[port];
+            continue;
+        }
+        if let Some(gamma) = op.clone().as_interface::<dyn Gamma>() {
+            let deps = op.dep_results();
+            let port = deps.iter().position(|&r| r == current)?;
+            let mut roots = gamma
+                .arms()
+                .iter()
+                .map(|&arm| chain_root(context, *context.get_region(arm).dep_results().get(port)?))
+                .collect::<Option<BTreeSet<_>>>()?;
+            return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));
+        }
         if let Some(carried) = op.clone().as_interface::<dyn LoopLike>() {
             let port = carried.finals().iter().position(|&r| r == current)?;
             current = carried.inits()[port];
@@ -619,6 +661,37 @@ pub(crate) fn chain_root(context: &Context, state: ValueId) -> Option<ValueId> {
 
 /// The value a region entry argument stands for outside the region.
 fn incoming(context: &Context, argument: ValueId) -> Option<ValueId> {
+    if let Some(region) = context.region_of_port(argument) {
+        let handle = context.get_region(region);
+        let owner = context.get_op(handle.parent_op()?);
+        let deps: Vec<ValueId> = handle
+            .dep_arguments()
+            .iter()
+            .map(crate::Value::id)
+            .collect();
+        if let Some(index) = deps.iter().position(|&port| port == argument) {
+            return owner.dep_operands().get(index).copied();
+        }
+        let values: Vec<ValueId> = handle
+            .value_arguments()
+            .iter()
+            .map(crate::Value::id)
+            .collect();
+        let index = values.iter().position(|&port| port == argument)?;
+        if let Some(theta) = owner.clone().as_interface::<dyn Theta>() {
+            let binding = theta.carried();
+            return owner
+                .value_operands()
+                .get(binding.operands.start + index - binding.ports.start)
+                .copied();
+        }
+        let gamma = owner.clone().as_interface::<dyn Gamma>()?;
+        let binding = gamma.forwarded();
+        return owner
+            .value_operands()
+            .get(binding.operands.start + index - binding.ports.start)
+            .copied();
+    }
     let block = context.block_of_argument(argument)?;
     let region = context.parent_region(block)?;
     let op_id = context.get_region(region).parent_op()?;

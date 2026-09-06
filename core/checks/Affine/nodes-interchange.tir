@@ -1,0 +1,65 @@
+// RUN: tir opt --pass restructure-nodes,affine,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,affine %s | tir interp - | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 4 %s | tir opt --pass affine | tir interp - | filecheck %s --check-prefix=VALUE
+
+// The nest of `interchange.tir` in the unordered form: `A[j][i]` walks a row
+// per `j` and a word per `i`, so the loop that should run innermost is `i`.
+// The rebuilt nest is two counted loops over graphs, the chain threaded
+// through both, and the checksum after it reads what the nest wrote.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @main() -> !i32 {
+    %1 = ptr.alloca {size = 1024, align = 4} : !ptr.p
+    %2 = constant {value = 0} : !i32
+    %3 = constant {value = 16} : !i32
+    %4 = constant {value = 1} : !i32
+    %5 = constant {value = 64} : !i64
+    %6 = constant {value = 4} : !i64
+    %30 = constant {value = 1024} : !i64
+    %31 = constant {value = 4} : !i32
+    %32 = constant {value = 0} : !i8
+    ptr.memset %1, %32, %30
+    %7 = scf.for %2, %3, %4 iter_args(%8 = %2) -> !i32 {
+      %9 = scf.for %2, %3, %4 iter_args(%10 = %2) -> !i32 {
+        %11 = extsi %8 : !i64
+        %12 = extsi %10 : !i64
+        %13 = muli %12, %5 : !i64
+        %14 = muli %11, %6 : !i64
+        %15 = ptr.ptradd %1, %13 : !ptr.p
+        %16 = ptr.ptradd %15, %14 : !ptr.p
+        %17 = ptr.load %16 : !i32
+        %18 = addi %17, %8 : !i32
+        %19 = addi %18, %10 : !i32
+        ptr.store %19, %16
+        %20 = addi %10, %4 : !i32
+        scf.yield %20
+      }
+      %21 = addi %8, %4 : !i32
+      scf.yield %21
+    }
+    %22 = ptr.ptradd %1, %5 : !ptr.p
+    %23 = ptr.ptradd %22, %6 : !ptr.p
+    %24 = ptr.load %23 : !i32
+    %25 = ptr.ptradd %1, %5 : !ptr.p
+    %26 = ptr.load %25 : !i32
+    %27 = muli %24, %31 : !i32
+    %28 = addi %27, %26 : !i32
+    func.return %28
+  }
+  module_end
+}
+
+// CHECK: func.func @main
+// CHECK: scf.for2 %[[OUTER:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (| %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: scf.for2 %[[INNER:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (| %{{[0-9]+}} = %{{[0-9]+}}) {
+// The row index is now the outer counter and the word index the inner one.
+// CHECK-DAG: %[[WORD:[0-9]+]] = extsi %[[INNER]]
+// CHECK-DAG: %[[ROW:[0-9]+]] = extsi %[[OUTER]]
+// CHECK-DAG: muli %[[ROW]], %{{[0-9]+}}
+// CHECK-DAG: muli %[[WORD]], %{{[0-9]+}}
+
+// A[1][1] = 2, A[1][0] = 1: 2 * 4 + 1.
+// VALUE: i32 9

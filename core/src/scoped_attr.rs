@@ -46,9 +46,7 @@ fn own_dict(context: &Context, op: OpId, key: &str) -> Option<AttributeDict> {
 }
 
 fn parent_op(context: &Context, op: OpId) -> Option<OpId> {
-    let block = context.parent_block(op)?;
-    let region = context.parent_region(block)?;
-    context.get_region(region).parent_op()
+    context.parent_op(op)
 }
 
 /// Rejects a malformed metadata spec.

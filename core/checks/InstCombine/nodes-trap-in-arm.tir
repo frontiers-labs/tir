@@ -1,0 +1,38 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=1,6,2 | filecheck %s --check-prefix=THEN
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=1,6,2 | filecheck %s --check-prefix=THEN
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=0,6,0 | filecheck %s --check-prefix=ELSE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 5 %s | tir opt --pass instcombine-nodes | tir interp -f f --args=0,6,0 | filecheck %s --check-prefix=ELSE
+
+// One arm divides by a value the other arm never looks at, and with the
+// predicate false that divisor is zero. The division may trap, so it stays
+// inside its arm: the gate is what keeps it from running. The doubling both
+// arms compute cannot trap and is spelled once outside.
+
+module {
+  %fn_f = func.func @f(%c: !i1, %x: !i32, %d: !i32) -> !i32 {
+    cfg.cond_br %c, ^then, ^else
+  ^then:
+    %a = addi %x, %x : !i32
+    %q = divsi %x, %d : !i32
+    cfg.br ^join(%a, %q : !i32, !i32)
+  ^else:
+    %b = addi %x, %x : !i32
+    cfg.br ^join(%b, %x : !i32, !i32)
+  ^join(%s: !i32, %v: !i32):
+    %r = addi %s, %v : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[C:[0-9]+]]: !i1, %[[X:[0-9]+]]: !i32, %[[D:[0-9]+]]: !i32)
+// CHECK: %[[SUM:[0-9]+]] = addi %[[X]], %[[X]] : !i32
+// CHECK: scf.switch2 %[[C]]
+// CHECK: divsi %[[X]], %[[D]]
+// CHECK: }
+// CHECK-NOT: addi %[[X]], %[[X]]
+// CHECK: addi %[[SUM]], %{{[0-9]+}}
+
+// THEN: i32 15
+// ELSE: i32 18

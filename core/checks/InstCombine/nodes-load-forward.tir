@@ -1,6 +1,7 @@
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
 // RUN: tir interp %s -f f --args=5 | filecheck %s --check-prefix=VALUE
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=5 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 4 %s | tir opt --pass instcombine-nodes | tir interp -f f --args=5 | filecheck %s --check-prefix=VALUE
 
 // A load observing the state a store of the same address left is that store's
 // value: the load goes, and the memory it observed is handed to whatever read

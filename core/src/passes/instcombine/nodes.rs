@@ -15,6 +15,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// The spelling a class already has, so a form rebuilt for one reader answers
+/// every reader that can see it. `add_auto` places a rebuilt form where its
+/// operands allow, which may be well outside the reader's own region.
+type Memo = HashMap<Id, ValueId>;
+
 use tir_relational::{ClassId as Id, Extraction};
 
 use super::{Driver, Node, Prov, cost};
@@ -69,7 +74,7 @@ impl Pass for InstCombineNodesPass {
         driver.hypothesize(loop_ports);
         let extraction = driver.eg.extract_best(|_, node| cost(node));
         let body = context.get_op(root).regions()[0];
-        driver.commit_nodes(body, &extraction)?;
+        driver.commit_nodes(body, &extraction, &mut HashMap::new())?;
         let result = sweep(context, body, rewriter);
         tir_relational::report_saturation("instcombine-nodes");
         result
@@ -84,10 +89,11 @@ impl Driver<'_> {
         &mut self,
         region: RegionId,
         extraction: &Extraction<'_, Node>,
+        memo: &mut Memo,
     ) -> Result<(), PassError> {
         let handle = self.context.get_region(region);
         for port in handle.value_arguments() {
-            self.rewire_nodes(port.id(), region, extraction)?;
+            self.rewire_nodes(port.id(), region, extraction, memo)?;
         }
         let ops = handle.op_ids();
         for &op in &ops {
@@ -96,7 +102,7 @@ impl Driver<'_> {
                 continue;
             }
             for result in instance.value_results() {
-                let replaced = self.rewire_nodes(result, region, extraction)?;
+                let replaced = self.rewire_nodes(result, region, extraction, memo)?;
                 if replaced {
                     self.forward_read_state(&instance, region);
                 }
@@ -121,13 +127,15 @@ impl Driver<'_> {
                         self.saturate();
                         let dirty = self.eg.innermost_dirty();
                         let scoped = extraction.refresh(&self.eg, &dirty, |_, node| cost(node));
-                        self.commit_nodes(arm, &scoped)?;
+                        // A spelling built under this arm's fact answers only here.
+                        let mut scoped_memo = memo.clone();
+                        self.commit_nodes(arm, &scoped, &mut scoped_memo)?;
                         self.eg.pop_context();
                     }
                 }
                 None => {
                     for sub in instance.regions() {
-                        self.commit_nodes(sub, extraction)?;
+                        self.commit_nodes(sub, extraction, memo)?;
                     }
                 }
             }
@@ -157,6 +165,7 @@ impl Driver<'_> {
         value: ValueId,
         region: RegionId,
         extraction: &Extraction<'_, Node>,
+        memo: &mut Memo,
     ) -> Result<bool, PassError> {
         let Some(&class) = self.value_class.get(&value) else {
             return Ok(false);
@@ -166,7 +175,7 @@ impl Driver<'_> {
         }
         let ty = self.context.get_value(value).ty();
         self.replacing.set(Some(value));
-        let spelled = self.materialize_nodes(extraction, class, ty, region, &mut HashMap::new());
+        let spelled = self.materialize_nodes(extraction, class, ty, region, memo);
         self.replacing.set(None);
         let Some(new_value) = spelled else {
             return Ok(false);
@@ -175,8 +184,20 @@ impl Driver<'_> {
             return Ok(false);
         }
         self.context.replace_value_uses(value, new_value);
-        self.context
-            .rename_region_results(region, value, new_value, &[]);
+        // A port's own region may pin a result entry to the port — a counted
+        // loop's exit is its port — so the entries a port's region names stay;
+        // the regions nested in it read the port like any other value.
+        if self.context.region_of_port(value) == Some(region) {
+            for op in self.context.get_region(region).op_ids() {
+                for sub in self.context.get_op(op).regions() {
+                    self.context
+                        .rename_region_results(sub, value, new_value, &[]);
+                }
+            }
+        } else {
+            self.context
+                .rename_region_results(region, value, new_value, &[]);
+        }
         Ok(true)
     }
 
@@ -189,10 +210,12 @@ impl Driver<'_> {
         class: Id,
         expected_ty: TypeId,
         region: RegionId,
-        memo: &mut HashMap<Id, ValueId>,
+        memo: &mut Memo,
     ) -> Option<ValueId> {
         let class = self.eg.find(class);
-        if let Some(&value) = memo.get(&class) {
+        if let Some(&value) = memo.get(&class)
+            && visible(self.context, value, region)
+        {
             return Some(value);
         }
         let node = extraction.node(class)?;
@@ -210,7 +233,8 @@ impl Driver<'_> {
             }
             Prov::Introduced(idx) => {
                 let ty = node.ty.expect("an op node carries its result type");
-                let operands = self.materialize_children(extraction, node, ty, region, memo)?;
+                let types = vec![ty; node.children.len()];
+                let operands = self.materialize_children(extraction, node, &types, region, memo)?;
                 let emit = self.ruleset.emits[idx]
                     .as_ref()
                     .expect("an introduced op supplies an emit");
@@ -240,7 +264,7 @@ impl Driver<'_> {
         extraction: &Extraction<'_, Node>,
         node: &Node,
         region: RegionId,
-        memo: &mut HashMap<Id, ValueId>,
+        memo: &mut Memo,
     ) -> Option<ValueId> {
         let Prov::Op(op) = node.prov else {
             return None;
@@ -255,7 +279,17 @@ impl Driver<'_> {
             return None;
         }
         let ty = node.ty?;
-        let operands = self.materialize_children(extraction, node, ty, region, memo)?;
+        // Each operand is spelled at the type the original read it at: a
+        // comparison's operands are not its boolean.
+        let types: Vec<TypeId> = source
+            .operands()
+            .iter()
+            .map(|&operand| self.context.get_value(operand).ty())
+            .collect();
+        if types.len() != node.children.len() {
+            return None;
+        }
+        let operands = self.materialize_children(extraction, node, &types, region, memo)?;
         let result = self.context.create_value(ty, None).id();
         let copy = self.context.add_operation(NewOp::new_dynamic(
             (source.dialect().as_str(), source.name().as_str()),
@@ -273,13 +307,14 @@ impl Driver<'_> {
         &self,
         extraction: &Extraction<'_, Node>,
         node: &Node,
-        ty: TypeId,
+        types: &[TypeId],
         region: RegionId,
-        memo: &mut HashMap<Id, ValueId>,
+        memo: &mut Memo,
     ) -> Option<Vec<ValueId>> {
         node.children
             .iter()
-            .map(|&arg| self.materialize_nodes(extraction, arg, ty, region, memo))
+            .zip(types)
+            .map(|(&arg, &ty)| self.materialize_nodes(extraction, arg, ty, region, memo))
             .collect()
     }
 }

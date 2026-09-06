@@ -21,8 +21,8 @@ use crate::builtin::{
 use crate::ptr::PtrAddOp;
 use crate::state::{JoinOp, SplitOp};
 use crate::{
-    BlockId, Conditional, ConstantLike, Context, CountedLoop, DataLayout, LoopLike, MemoryRead,
-    MemoryWrite, OpHandle, OpId, TypeId, ValueId, scf,
+    BlockId, Conditional, ConstantLike, Context, CountedLoop, DataLayout, Gamma, LoopLike,
+    MemoryRead, MemoryWrite, OpHandle, OpId, Theta, TypeId, ValueId, scf,
 };
 
 pub(crate) mod build;
@@ -54,6 +54,9 @@ pub struct Loop {
     /// one. `CountedLoop` names no counter value, so a nest whose body never
     /// looks at its counter has none to name.
     pub counter: Option<ValueId>,
+    /// Further carried ports that count the same: entered on the lower bound
+    /// and stepped by the step, so the body reads the counter through them too.
+    pub counter_aliases: Vec<ValueId>,
     /// How many iterations the loop runs, where the bounds spell a number.
     pub trip: Option<i128>,
 }
@@ -186,7 +189,7 @@ pub fn nests_under(context: &Context, root: OpId) -> Vec<AffineView> {
     let mut pending = vec![root];
     while let Some(op_id) = pending.pop() {
         let op = context.get_op(op_id);
-        if op.clone().as_op::<scf::ForOp>().is_some()
+        if op.has_interface::<dyn CountedLoop>()
             && !covered.contains(&op_id)
             && let Some(view) = AffineView::build(context, op_id)
         {
@@ -194,9 +197,7 @@ pub fn nests_under(context: &Context, root: OpId) -> Vec<AffineView> {
             views.push(view);
         }
         for region in op.regions().to_vec() {
-            for block in context.get_region(region).block_ids() {
-                pending.extend(context.get_block(block).op_ids());
-            }
+            pending.extend(context.get_region(region).op_ids());
         }
     }
     views.sort_by_key(|view| view.root.index());
@@ -206,7 +207,9 @@ pub fn nests_under(context: &Context, root: OpId) -> Vec<AffineView> {
 /// The counted nest rooted at `root`: `root` itself, then every loop that is the
 /// whole of the body above it, innermost last.
 pub fn counted_nest(context: &Context, root: OpId) -> Option<Vec<OpId>> {
-    context.get_op(root).as_op::<scf::ForOp>()?;
+    if !context.get_op(root).has_interface::<dyn CountedLoop>() {
+        return None;
+    }
     let mut nest = vec![root];
     while nest.len() < MAX_DEPTH {
         let Some(inner) = counted_level(context, *nest.last().expect("a rooted nest")) else {
@@ -221,14 +224,11 @@ pub fn counted_nest(context: &Context, root: OpId) -> Option<Vec<OpId>> {
 /// bookkeeping around it: the constants its bounds are spelled with, the latch
 /// that steps the counter, and the joins state threading left behind.
 fn counted_level(context: &Context, outer: OpId) -> Option<OpId> {
-    let block = context.get_block(body_block(context, outer)?);
-    let ops = block.op_ids();
-    let (&_terminator, rest) = ops.split_last()?;
     let mut inner = None;
-    for &op_id in rest {
+    for op_id in body_ops(context, outer)? {
         let op = context.get_op(op_id);
         if !op.regions().is_empty() {
-            if inner.is_some() || op.as_op::<scf::ForOp>().is_none() {
+            if inner.is_some() || !op.has_interface::<dyn CountedLoop>() {
                 return None;
             }
             inner = Some(op_id);
@@ -239,11 +239,59 @@ fn counted_level(context: &Context, outer: OpId) -> Option<OpId> {
     inner
 }
 
-/// The single block of a loop's body region.
+/// The single block of a loop's ordered body region.
 pub(crate) fn body_block(context: &Context, op: OpId) -> Option<BlockId> {
     let region = *context.get_op(op).regions().last()?;
     match context.get_region(region).block_ids()[..] {
         [block] => Some(block),
         _ => None,
     }
+}
+
+/// The operations a loop's body computes, whichever kind of region holds it:
+/// an unordered body's operations, or an ordered single block's short of its
+/// terminator.
+pub(crate) fn body_ops(context: &Context, op: OpId) -> Option<Vec<OpId>> {
+    let region = context.get_region(*context.get_op(op).regions().last()?);
+    if region.is_nodes() {
+        return Some(region.op_ids());
+    }
+    let block = context.get_block(body_block(context, op)?);
+    let mut ops = block.op_ids();
+    ops.pop()?;
+    Some(ops)
+}
+
+/// The carried value ports of a loop, however it declares them: the port the
+/// body reads each on, the value the next iteration takes, the value the loop
+/// is entered on, and the result it produces.
+pub(crate) struct Carried {
+    pub args: Vec<ValueId>,
+    pub latched: Vec<ValueId>,
+    pub inits: Vec<ValueId>,
+    pub finals: Vec<ValueId>,
+}
+
+pub(crate) fn carried(context: &Context, op: &OpHandle) -> Option<Carried> {
+    if let Some(theta) = op.clone().as_interface::<dyn Theta>() {
+        let binding = theta.carried();
+        let region = context.get_region(theta.body());
+        let results = region.value_results();
+        return Some(Carried {
+            args: region.value_arguments()[binding.ports]
+                .iter()
+                .map(crate::Value::id)
+                .collect(),
+            latched: results[binding.continue_].to_vec(),
+            inits: op.value_operands()[binding.operands].to_vec(),
+            finals: op.value_results()[binding.results].to_vec(),
+        });
+    }
+    let carried = op.clone().as_interface::<dyn LoopLike>()?;
+    Some(Carried {
+        args: carried.carried_args(),
+        latched: carried.latched(),
+        inits: carried.inits(),
+        finals: carried.finals(),
+    })
 }
