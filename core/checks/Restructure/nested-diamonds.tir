@@ -1,4 +1,4 @@
-// RUN: tir opt --pass restructure --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A branch inside a branch: the inner join is the continuation of the inner
 // conditional, the outer join the continuation of the outer one.
@@ -22,18 +22,18 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @nest
 // CHECK-NOT: br
-// CHECK: %[[OUTER:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {
-// CHECK-NEXT: %[[INNER:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {
-// CHECK-NEXT: %[[T:[0-9]+]] = addi
-// CHECK-NEXT: scf.yield %[[T]]
+// CHECK: %[[OUTER:[0-9]+]] = scf.switch %{{[0-9]+}} {
+// CHECK-NEXT: -> %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: else {
+// CHECK-NEXT: {
+// CHECK-NEXT: %[[INNER:[0-9]+]] = scf.switch %{{[0-9]+}} {
 // CHECK-NEXT: %[[E:[0-9]+]] = subi
-// CHECK-NEXT: scf.yield %[[E]]
+// CHECK-NEXT: -> %[[E]]
 // CHECK-NEXT: }
-// CHECK-NEXT: scf.yield %[[INNER]]
+// CHECK-NEXT: {
+// CHECK-NEXT: %[[T:[0-9]+]] = addi
+// CHECK-NEXT: -> %[[T]]
 // CHECK-NEXT: }
-// CHECK-NEXT: else {
-// CHECK-NEXT: scf.yield %{{[0-9]+}}
+// CHECK-NEXT: -> %[[INNER]]
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[OUTER]]
+// CHECK-NEXT: -> %[[OUTER]]

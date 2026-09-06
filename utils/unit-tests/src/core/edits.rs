@@ -467,7 +467,7 @@ fn unwrapping_a_loop_that_may_iterate_is_refused() {
 
 const COUNTED: &str = r#"module {
   %fn_main = func.func @main(%0: !i32, %1: !i32, %2: !i32) -> !i32 {
-    %3 = scf.r#for %4 = %0 to %1 step %2 {
+    %3 = scf.for %4 = %0 to %1 step %2 {
       ->
     }
     -> %3

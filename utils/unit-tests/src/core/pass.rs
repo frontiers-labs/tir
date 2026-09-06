@@ -479,10 +479,8 @@ fn count_ops(context: &Context, op: tir::OpId) -> usize {
     let instance = context.get_op(op);
     let mut total = 1;
     for region in instance.regions() {
-        for block in context.get_region(region).block_ids() {
-            for nested in context.get_block(block).op_ids() {
-                total += count_ops(context, nested);
-            }
+        for nested in context.get_region(region).op_ids() {
+            total += count_ops(context, nested);
         }
     }
     total
@@ -493,7 +491,7 @@ fn restructure_source(source: &str) -> (Context, FuncOp, usize) {
     let func = tir::parse::ir::parse_ir::<FuncOp>(&context, source).expect("parse");
     let before = count_ops(&context, func.id());
     let mut manager = PassManager::new();
-    manager.add_pass(tir::passes::RestructurePass::new());
+    manager.add_pass(tir::passes::RestructureNodesPass::new());
     manager
         .run(&context, context.get_op(func.id()))
         .expect("restructure");

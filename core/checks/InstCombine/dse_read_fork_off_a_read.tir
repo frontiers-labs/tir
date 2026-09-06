@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The reads that forked off what the first write published name bytes it never
 // wrote, so nothing they answer would change if they read the memory before it.
@@ -31,9 +31,11 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: | %[[S0:[0-9]+]] = ptr.store %0, %3 | %{{[0-9]+}}
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %1, %3 | %[[S0]]
-// CHECK: %[[R:[0-9]+]] | %{{[0-9]+}} = ptr.load %6 | %[[S1]] : !i32
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[A:[0-9]+]]: !i64, %[[B:[0-9]+]]: !i32, %{{[0-9]+}}: !i32)
+// CHECK: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: %[[Q:[0-9]+]] = ptr.ptradd %[[P]]
+// CHECK: | %[[S0:[0-9]+]] = ptr.store %[[A]], %[[P]] | %{{[0-9]+}}
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %[[B]], %[[P]] | %[[S0]]
+// CHECK: %[[R:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[Q]] | %[[S1]] : !i32
 // CHECK: addi %[[R]], %[[R]]
-// CHECK: addi %0,
+// CHECK: addi %[[A]],

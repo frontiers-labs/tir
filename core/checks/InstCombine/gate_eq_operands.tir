@@ -1,44 +1,57 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
 
 // An equality gate's then-arm knows its two operands name one value, so the
 // subtraction inside it is zero. The else-arm knows nothing and keeps its
 // subtraction. `ne` states the same fact the other way round: the else-arm folds.
+// Each arm shifts the difference by its own operand, so the arms share no term
+// that could be spelled once outside the gate.
 
 module {
-  %fn_eq = func.func @eq(%a: !i64, %b: !i64) -> !i64 {
+  %fn_eq = func.func @eq(%a: !i64, %b: !i64, %k: !i64, %m: !i64) -> !i64 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
-    %r = scf.if %c -> !i64 {
-      %s = subi %a, %b : !i64
-      scf.yield %s
-    } else {
+    %r = scf.switch %c {
       %t = subi %a, %b : !i64
-      scf.yield %t
+      %u = addi %t, %m : !i64
+      -> %u
     }
-    func.return %r
+    {
+      %s = subi %a, %b : !i64
+      %v = addi %s, %k : !i64
+      -> %v
+    }
+    -> %r
   }
-  %fn_ne = func.func @ne(%a: !i64, %b: !i64) -> !i64 {
+  %fn_ne = func.func @ne(%a: !i64, %b: !i64, %k: !i64, %m: !i64) -> !i64 {
     %c = cmpi %a, %b {predicate = "ne"} : !i1
-    %r = scf.if %c -> !i64 {
-      %s = subi %a, %b : !i64
-      scf.yield %s
-    } else {
+    %r = scf.switch %c {
       %t = subi %a, %b : !i64
-      scf.yield %t
+      %u = addi %t, %m : !i64
+      -> %u
     }
-    func.return %r
+    {
+      %s = subi %a, %b : !i64
+      %v = addi %s, %k : !i64
+      -> %v
+    }
+    -> %r
   }
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @eq
-// CHECK: scf.if
-// CHECK-NEXT: constant {value = 0}
-// CHECK: else
-// CHECK-NEXT: subi
+// CHECK-LABEL: %{{[0-9]+}} = func.func @eq(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64, %[[K:[0-9]+]]: !i64
+// CHECK: scf.switch
+// CHECK-NEXT: %[[D:[0-9]+]] = subi
+// CHECK-NEXT: addi %[[D]]
+// CHECK: }
+// CHECK-NEXT: {
+// CHECK-NEXT: -> %[[K]]
+// CHECK-NOT: subi
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @ne
-// CHECK: scf.if
-// CHECK-NEXT: subi
-// CHECK: else
-// CHECK-NEXT: constant {value = 0}
+// CHECK-LABEL: %{{[0-9]+}} = func.func @ne(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64, %[[K:[0-9]+]]: !i64, %[[M:[0-9]+]]: !i64
+// CHECK: %[[D:[0-9]+]] = subi
+// CHECK: scf.switch
+// CHECK-NEXT: -> %[[M]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: addi %[[D]], %[[K]]
+// CHECK-NOT: subi

@@ -71,7 +71,7 @@ pub struct CompileArgs {
     )]
     opt_level: u8,
     /// Mid-end pass pipeline in MLIR-style syntax, e.g.
-    /// `func.func(thread-state,instcombine)`. Replaces the default function
+    /// `func.func(verify-deps,instcombine-nodes)`. Replaces the default function
     /// pipeline; frontend lowering and the backend are unaffected.
     #[arg(long = "pipeline", value_name = "PIPELINE")]
     pipeline: Option<String>,

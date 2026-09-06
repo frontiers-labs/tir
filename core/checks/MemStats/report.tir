@@ -1,20 +1,20 @@
-// RUN: env TIR_MEM_STATS=1 tir opt --pass instcombine %s 2>&1 | filecheck %s
-// RUN: tir opt --pass instcombine %s 2>&1 | filecheck --check-prefix=QUIET %s
+// RUN: env TIR_MEM_STATS=1 tir opt --pass instcombine-nodes %s 2>&1 | filecheck %s
+// RUN: tir opt --pass instcombine-nodes %s 2>&1 | filecheck --check-prefix=QUIET %s
 
 module {
   %fn_f = func.func @f(%0: !i32) -> !i32 {
     %1 = constant {value = 0} : !i32
     %2 = addi %0, %1 : !i32
-    func.return %2
+    -> %2
   }
   module_end
 }
 
 // CHECK: tir-mem: egraph label=instcombine nodes=
-// CHECK: tir-mem: pass name=instcombine vmhwm_kb=
+// CHECK: tir-mem: pass name=instcombine-nodes vmhwm_kb=
 // CHECK-SAME: hwm_delta_kb=
 // CHECK-SAME: rss_delta_kb=
-// CHECK: tir-mem: context after=instcombine ops_slab=
+// CHECK: tir-mem: context after=instcombine-nodes ops_slab=
 // CHECK-SAME: ops_live=
 // CHECK-SAME: values_slab=
 // CHECK-SAME: values_live=
@@ -23,6 +23,6 @@ module {
 // CHECK-SAME: regions_slab=
 // CHECK-SAME: regions_live=
 // CHECK: tir-mem: summary peak_vmhwm_kb=
-// CHECK: tir-mem: top-pass name=instcombine hwm_delta_kb=
+// CHECK: tir-mem: top-pass name=instcombine-nodes hwm_delta_kb=
 
 // QUIET-NOT: tir-mem:

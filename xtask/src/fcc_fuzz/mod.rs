@@ -29,28 +29,18 @@ use harness::{FccVariant, Outcome};
 /// Mid-end pipelines exercised besides the default. All are semantically
 /// neutral orderings of the registered passes; a correct compiler must give
 /// identical behavior under each.
-const EXTRA_PIPELINES: [&str; 6] = [
-    "func.func(promote),fixpoint<3>(func.func(thread-state,instcombine,affine,instcombine))",
-    "func.func(promote),fixpoint<3>(func.func(thread-state,affine,instcombine))",
-    "func.func(promote),fixpoint<3>(func.func(thread-state,instcombine,instcombine))",
+const EXTRA_PIPELINES: [&str; 5] = [
+    "func.func(promote-nodes),fixpoint<3>(func.func(verify-deps,instcombine-nodes,affine,instcombine-nodes))",
+    "func.func(promote-nodes),fixpoint<3>(func.func(verify-deps,affine,instcombine-nodes))",
+    "func.func(promote-nodes),fixpoint<3>(func.func(verify-deps,instcombine-nodes,instcombine-nodes))",
     // Scheduling with nothing folded before it and nothing after: the rebuilt
     // nest has to be right on its own, not because a later pass tidied it.
-    "func.func(promote),fixpoint<3>(func.func(thread-state,affine))",
+    "func.func(promote-nodes),fixpoint<3>(func.func(verify-deps,affine))",
     // Every eligible call site taken, which is the shape the rest of the
-    // mid-end has to stay correct on: bodies spliced into bodies, and callers
-    // handed back unthreaded for the round to thread again.
-    "fixpoint<3>(inline<1000,0>,func.func(promote,thread-state,instcombine,dce,affine,instcombine))",
-    // The inverse on its own, with no inliner to justify it: threading a
-    // function the strip just emptied has to derive the same order every time.
-    "func.func(promote),fixpoint<3>(func.func(thread-state,unthread,thread-state,instcombine))",
+    // mid-end has to stay correct on: bodies spliced into bodies, and the
+    // chains they brought checked again.
+    "fixpoint<3>(inline<1000,0>,func.func(promote-nodes,verify-deps,instcombine-nodes,affine,instcombine-nodes))",
 ];
-
-/// The pipeline that proves the state edges are the whole memory order: every
-/// block is re-linearized by another topological order of the value and state
-/// DAG, once on the threaded IR and once more on what the optimizers left. A
-/// divergence under it is an edge the threader did not draw.
-const SHUFFLE_PIPELINE: &str = "func.func(promote),fixpoint<3>(func.func(thread-state,\
-                                shuffle-state,instcombine,shuffle-state,affine,shuffle-state))";
 
 const CORPUS_DIRS: [&str; 3] = ["fcc/checks", "fcc/tests", "utils/unit-tests/src/fcc/corpus"];
 
@@ -233,10 +223,9 @@ fn variants(seed: u64) -> Vec<harness::Variant> {
     let mut variants = vec![
         harness::Variant::fcc(FccVariant::default()),
         harness::Variant::fcc(FccVariant::pipeline(extra_pipeline(seed))),
-        harness::Variant::fcc(FccVariant::pipeline(SHUFFLE_PIPELINE)),
-        // The backend half of the same question: order inside a machine block
-        // is a linearization of its dependence graph, so another one is the
-        // same program.
+        // The mid-end holds no order to shuffle: an unordered region is its
+        // dependence graph. The backend's linearization of it is the question,
+        // and another linearization is the same program.
         harness::Variant::fcc(FccVariant::shuffle_machine_order()),
     ];
     variants.extend(reference_variants());

@@ -10,13 +10,12 @@ use std::collections::{HashMap, HashSet};
 
 use tir_relational::{ClassId as Id, Engine};
 
-use crate::analysis::scopes::{carried_operands, port_edges, region_exit, tested_ports};
 use crate::sem::egraph::{minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
 use crate::state::JoinOp;
 use crate::{
-    BlockId, Commutative, Conditional, ConstantLike, Context, Gamma, LoopLike, MemoryRead,
-    MemoryWrite, OpHandle, OpId, RegionId, Theta, TokenScope, TypeId, ValueId,
+    Commutative, ConstantLike, Context, Gamma, MemoryRead, MemoryWrite, OpHandle, OpId, RegionId,
+    Theta, TypeId, ValueId,
 };
 
 /// The operands a store term names: the location, the value it writes, and the
@@ -29,7 +28,6 @@ const STORE_OPERANDS: usize = 3;
 pub struct Seeded {
     pub eg: Engine<Node>,
     pub value_class: HashMap<ValueId, Id>,
-    pub arg_block: HashMap<ValueId, BlockId>,
     pub loop_ports: Vec<LoopPorts>,
 }
 
@@ -58,7 +56,6 @@ pub fn seed(context: &Context, root: OpId) -> Seeded {
         context,
         eg: Engine::new(),
         value_class: HashMap::new(),
-        arg_block: HashMap::new(),
         seeded: HashSet::new(),
         pointer_width: crate::DataLayout::for_op(context, root)
             .and_then(|layout| layout.pointer_size()),
@@ -70,7 +67,6 @@ pub fn seed(context: &Context, root: OpId) -> Seeded {
     Seeded {
         eg: seeder.eg,
         value_class: seeder.value_class,
-        arg_block: seeder.arg_block,
         loop_ports: seeder.loop_ports,
     }
 }
@@ -79,7 +75,6 @@ struct Seeder<'a> {
     context: &'a Context,
     eg: Engine<Node>,
     value_class: HashMap<ValueId, Id>,
-    arg_block: HashMap<ValueId, BlockId>,
     seeded: HashSet<OpId>,
     pointer_width: Option<u32>,
     loop_ports: Vec<LoopPorts>,
@@ -100,7 +95,6 @@ impl Seeder<'_> {
         let blocks: Vec<_> = handle.iter(self.context.clone()).collect();
         for block in blocks {
             for argument in block.arguments() {
-                self.arg_block.insert(argument.id(), block.id());
                 self.class_of(argument.id());
             }
             for op in block.op_ids() {
@@ -157,20 +151,10 @@ impl Seeder<'_> {
                 self.seed_loop(&instance, theta.as_ref());
                 return;
             }
-            if let Some(conditional) = instance.clone().as_interface::<dyn Conditional>() {
-                self.seed_gamma(&instance, conditional.as_ref());
-                return;
-            }
-            match instance.clone().as_interface::<dyn LoopLike>() {
-                Some(loop_like) => self.seed_theta(&instance, loop_like.as_ref()),
-                // A loop the vocabulary cannot spell carries no reasoning: its
-                // ports and results anchor, but its body is read like any other
-                // region.
-                None => {
-                    for region in instance.regions().to_vec() {
-                        self.seed_region(region);
-                    }
-                }
+            // An operation the vocabulary cannot spell carries no reasoning:
+            // its results anchor, but its regions are read like any other.
+            for region in instance.regions().to_vec() {
+                self.seed_region(region);
             }
         } else if let (Some(constant), [result]) = (
             instance.clone().as_interface::<dyn ConstantLike>(),
@@ -207,53 +191,6 @@ impl Seeder<'_> {
 
         for result in instance.results().to_vec() {
             self.anchor(result);
-        }
-    }
-
-    /// γ: each arm's entry arguments bind to the inputs forwarded into it, and
-    /// result `index` is the choice between the arms' `index`-th yielded values.
-    ///
-    /// An arm leaving the enclosing loop never reaches what follows the gate, so
-    /// what it would have yielded is never read: a gate one arm leaves through
-    /// publishes what the arm that stays yields, and one every arm leaves through
-    /// publishes nothing the graph can name.
-    fn seed_gamma(&mut self, instance: &OpHandle, conditional: &dyn Conditional) {
-        let decision = self.class_of(conditional.decision());
-        for region in instance.regions().to_vec() {
-            self.bind_arm_arguments(instance, region);
-            self.seed_region(region);
-        }
-        let cases = conditional.case_values();
-        let arms: Vec<RegionId> = cases
-            .iter()
-            .map(|&(region, _)| region)
-            .filter(|&region| region_exit(self.context, region).is_none())
-            .collect();
-        for (index, &result) in instance.results().to_vec().iter().enumerate() {
-            let yields: Option<Vec<ValueId>> = arms
-                .iter()
-                .map(|&region| conditional.region_yields(region).get(index).copied())
-                .collect();
-            match yields.as_deref() {
-                Some(&[value]) => {
-                    let id = self.class_of(value);
-                    self.bind_value(result, id);
-                }
-                // Every arm answers, so the γ is the choice between them, one
-                // child per arm in the order the cases are reported — the order
-                // the commit maps back onto the regions.
-                Some(values) if values.len() == cases.len() => {
-                    let mut args = vec![decision];
-                    for &value in values {
-                        args.push(self.class_of(value));
-                    }
-                    let id = self.eg.add(Node::gamma(result, args));
-                    self.bind_value(result, id);
-                }
-                _ => {
-                    self.anchor(result);
-                }
-            }
         }
     }
 
@@ -304,7 +241,7 @@ impl Seeder<'_> {
             } else {
                 let mut args = vec![predicate];
                 args.extend(produced);
-                self.eg.add(Node::switch(result, args))
+                self.eg.add(Node::gamma(result, args))
             };
             self.bind_value(result, id);
         }
@@ -374,135 +311,6 @@ impl Seeder<'_> {
         self.eg.rebuild();
     }
 
-    /// An arm's entry arguments are the inputs the gate forwards into it: the
-    /// operation's trailing operands, one per argument.
-    fn bind_arm_arguments(&mut self, instance: &OpHandle, region: RegionId) {
-        let Some(block) = self
-            .context
-            .get_region(region)
-            .iter(self.context.clone())
-            .next()
-        else {
-            return;
-        };
-        let arguments: Vec<ValueId> = block.arguments().iter().map(|a| a.id()).collect();
-        let first = instance.operands().len().saturating_sub(arguments.len());
-        for (&argument, &input) in arguments.iter().zip(&instance.operands()[first..]) {
-            let id = self.class_of(input);
-            self.bind_value(argument, id);
-        }
-    }
-
-    /// θ: a loop's state-typed carried port is the θ over the state the loop was
-    /// entered with and the one each edge back into the port carries — the body's
-    /// latch, and every `break`/`continue` leaving its scope. The port's argument
-    /// anchors first, so the regions can be read on it, and the θ joins that class
-    /// after — an edge is a term over the argument itself. The loop's result is
-    /// the port read where the loop was left.
-    ///
-    /// A port of any type every edge carries unchanged is the value the loop was
-    /// entered with, wherever it is read. What the loop does change is a fact no
-    /// term states: a value port that is not invariant is recorded for the
-    /// hypothesis rounds, which prove or refute it in a scope of their own.
-    fn seed_theta(&mut self, instance: &OpHandle, loop_like: &dyn LoopLike) {
-        let carried = loop_like.carried_args();
-        let tested = tested_ports(self.context, instance, carried.len());
-        let heads = match &tested {
-            Some((_, arguments, _)) => arguments.clone(),
-            None => carried.clone(),
-        };
-        for &head in &heads {
-            self.anchor(head);
-        }
-        // The body reads what the test forwards into it, so the test's region is
-        // read first and its forwarded values name the body's arguments.
-        if let Some((region, _, forwarded)) = tested.clone() {
-            self.seed_region(region);
-            for (port, &argument) in carried.iter().enumerate() {
-                let id = self.class_of(forwarded[port]);
-                self.bind_value(argument, id);
-            }
-        }
-        for region in instance.regions().to_vec() {
-            self.seed_region(region);
-        }
-        let (inits, finals) = (loop_like.inits(), loop_like.finals());
-        let edges: Vec<OpHandle> = instance
-            .clone()
-            .as_interface::<dyn TokenScope>()
-            .into_iter()
-            .flat_map(|scope| scope.token_scope_regions())
-            .flat_map(|body| port_edges(self.context, body))
-            .map(|edge| self.context.get_op(edge))
-            .collect();
-        if edges.is_empty() {
-            return;
-        }
-        let mut ports = Vec::new();
-        for port in 0..carried.len() {
-            let init = self.class_of(inits[port]);
-            let Some(values) = self.carried_values(&edges, port, carried.len()) else {
-                continue;
-            };
-            let head = self.class_of(heads[port]);
-            let classes: Vec<Id> = values.iter().map(|&value| self.class_of(value)).collect();
-            let state = port >= carried.len() - instance.dep_results().len();
-            let invariant = classes
-                .iter()
-                .all(|&edge| self.eg.find(edge) == self.eg.find(head));
-            if invariant {
-                self.eg.union(head, init);
-            } else if state {
-                let mut args = vec![init];
-                args.extend(classes.iter().copied());
-                let theta = self.eg.add(Node::theta(finals[port], args));
-                self.eg.union(theta, head);
-            }
-            let published = match &tested {
-                Some((_, _, forwarded)) => self.class_of(forwarded[port]),
-                None => head,
-            };
-            if state || invariant {
-                self.bind_value(finals[port], published);
-            } else {
-                let result = self.anchor(finals[port]);
-                ports.push(Port {
-                    head,
-                    init,
-                    edges: classes,
-                    result,
-                    published,
-                });
-            }
-        }
-        if !ports.is_empty() {
-            self.loop_ports.push(LoopPorts {
-                op: instance.id,
-                ports,
-            });
-        }
-        self.eg.rebuild();
-    }
-
-    /// The value each edge carries into the `port`-th of a loop's `ports` carried
-    /// ports: the ports are the trailing values an edge carries, in the loop's own
-    /// order. `None` where an edge carries too few to name them.
-    fn carried_values(
-        &self,
-        edges: &[OpHandle],
-        port: usize,
-        ports: usize,
-    ) -> Option<Vec<ValueId>> {
-        edges
-            .iter()
-            .map(|edge| {
-                let carried = carried_operands(edge);
-                let first = carried.len().checked_sub(ports)?;
-                carried.get(first + port).copied()
-            })
-            .collect()
-    }
-
     /// A join names the memory its inputs merge into, so its identity is the tuple
     /// of them: a read after a join has observed the writes before every input and
     /// is the read of no single one. Where the inputs are one state — the fork of
@@ -544,10 +352,30 @@ impl Seeder<'_> {
         let (Some(bits), Some(state)) = (self.access_width(ty), read.state_operand()) else {
             return false;
         };
-        let address = self.class_of(read.read_location());
+        let location = read.read_location();
+        let observed = state;
+        let state = self.class_of(state);
+        if let Some(published) = read.state_result() {
+            self.bind_value(published, state);
+        }
+        // A write to another object leaves this one as it was, so the read
+        // observes every state before such writes above it too: a write of
+        // its own location and type there answers it, and the read *is* the
+        // value written. Bound one way, as that value: a read term of its own
+        // in the class could be picked as the spelling of the value the write
+        // stores, which the read comes after.
+        let mut above = observed;
+        while let Some(before) = super::state_before_distinct_write(self.context, above, location) {
+            if let Some(written) = self.same_access_written(before, location, ty) {
+                let written = self.class_of(written);
+                self.bind_value(value, written);
+                return true;
+            }
+            above = before;
+        }
+        let address = self.class_of(location);
         let bytes = self.int(bits / 8);
         let metadata = self.int(0);
-        let state = self.class_of(state);
         let id = self.eg.add(
             Node::access(
                 SymKind::LoadMemory,
@@ -557,10 +385,31 @@ impl Seeder<'_> {
             .typed(ty),
         );
         self.bind_value(value, id);
-        if let Some(published) = read.state_result() {
-            self.bind_value(published, state);
-        }
         true
+    }
+
+    /// The value the write publishing `state` stores, when it writes exactly
+    /// `location` as a value of `ty`.
+    fn same_access_written(
+        &mut self,
+        state: ValueId,
+        location: ValueId,
+        ty: TypeId,
+    ) -> Option<ValueId> {
+        let op = self.context.get_value(state).defining_op()?;
+        let write = self.context.get_op(op).as_interface::<dyn MemoryWrite>()?;
+        if write.state_result() != Some(state) {
+            return None;
+        }
+        let written = write.written_value();
+        if self.context.get_value(written).ty() != ty {
+            return None;
+        }
+        let (a, b) = (
+            self.class_of(location),
+            self.class_of(write.write_location()),
+        );
+        (self.eg.find(a) == self.eg.find(b)).then_some(written)
     }
 
     /// A write's term *is* the state the accesses after it read. The term names

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // A memset writes an extent its operands name and the store term cannot spell,
 // so it is no store term and a one-byte store to its address does not overwrite

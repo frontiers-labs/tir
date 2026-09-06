@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // The n-ary gate carries the chain the same way: every arm takes the state
 // entering the switch, the default one included, and the arm that runs decides
@@ -7,26 +7,41 @@
 module {
   %fn_h = func.func @h(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3 = constant {value = 1} : !i32
+    %4 = constant {value = 2} : !i32
     ptr.store %1, %2
-    scf.switch_legacy %0 case 1 {
-      ptr.store %1, %2
-      scf.yield
-    }
-    default {
-      scf.yield
-    }
-    %3 = ptr.load %2 : !i32
-    func.return %3
+    %5 = cmpi %0, %3 {predicate = "eq"} : !i1
+    cfg.cond_br %5, ^case1, ^test2
+  ^test2:
+    %6 = cmpi %0, %4 {predicate = "eq"} : !i1
+    cfg.cond_br %6, ^case2, ^join
+  ^case1:
+    ptr.store %1, %2
+    cfg.br ^join
+  ^case2:
+    ptr.store %3, %2
+    cfg.br ^join
+  ^join:
+    %7 = ptr.load %2 : !i32
+    func.return %7
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @h
-// CHECK: | %[[GATE:[0-9]+]] = scf.switch_legacy %0 args(| %{{[0-9]+}}) case 1 (| %[[C:[0-9]+]]) {
-// CHECK-NEXT: | %[[C1:[0-9]+]] = ptr.store %1, %{{[0-9]+}} | %[[C]]
-// CHECK-NEXT: scf.yield | %[[C1]]
+// CHECK: | %[[OUTER:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %{{[0-9]+}}) (| %[[N1:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} = cmpi
+// CHECK-NEXT: | %[[INNER:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[N1]]) (| %[[D:[0-9]+]]) {
+// CHECK-NEXT: -> | %[[D]]
 // CHECK-NEXT: }
-// CHECK-NEXT: default (| %[[D:[0-9]+]]) {
-// CHECK-NEXT: scf.yield | %[[D]]
+// CHECK-NEXT: (| %[[C2:[0-9]+]]) {
+// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[C2]]
+// CHECK-NEXT: -> | %[[S2]]
 // CHECK-NEXT: }
-// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[GATE]] : !i32
+// CHECK-NEXT: -> | %[[INNER]]
+// CHECK-NEXT: }
+// CHECK-NEXT: (| %[[C1:[0-9]+]]) {
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[C1]]
+// CHECK-NEXT: -> | %[[S1]]
+// CHECK-NEXT: }
+// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[OUTER]] : !i32

@@ -1,24 +1,30 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
 
-// Inside scf.if %cond the engine assumes cond==1, so muli(cond, y) folds to y
-// there. The identical multiply outside the gate stays (cond is unknown).
+// Inside the arm the gate enters on %0 the engine assumes %0 is 1, so
+// muli(%0, %1) folds to %1 there. The identical multiply outside the gate stays
+// (%0 is unknown).
 
 module {
   %fn_f = func.func @f(%0: !i1, %1: !i1) -> !i1 {
     %2 = muli %0, %1 : !i1
-    %4 = scf.if %0 -> !i1 {
-      %3 = muli %0, %1 : !i1
-      scf.yield %3
-    } else {
-      scf.yield %2
+    %4 = scf.switch %0 {
+      -> %0
     }
-    func.return %4
+    {
+      %3 = muli %0, %1 : !i1
+      -> %3
+    }
+    %5 = xori %2, %4 : !i1
+    -> %5
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: muli
-// CHECK: scf.yield %1
+// CHECK: %[[OUTER:[0-9]+]] = muli %0, %1
+// CHECK: scf.switch
+// CHECK: }
+// CHECK-NEXT: {
+// CHECK-NEXT: -> %1
 // CHECK-NOT: muli
+// CHECK: xori %[[OUTER]]

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Two writes of one value to one address. Law S2 equates the memory the second
 // leaves with the memory writing it over the state the first was handed, and
@@ -19,4 +19,4 @@ module {data_layout = #data_layout} {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @twice
 // CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK-NEXT: | %[[ONLY:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[ENTRY]]
-// CHECK-NEXT: func.return | %[[ONLY]]
+// CHECK-NEXT: -> | %[[ONLY]]

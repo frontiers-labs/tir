@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // The counter is not the only recurrence a loop carries. A port whose latch
 // accumulates the iteration's value under one operator is a reduction, and
@@ -28,4 +28,5 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK: port 0 %{{[0-9]+}} induction init %{{[0-9]+}} step 1
-// CHECK-NEXT: port 1 %{{[0-9]+}} reduction add
+// CHECK-NEXT: port 1 %{{[0-9]+}} induction init %{{[0-9]+}} step 1
+// CHECK-NEXT: port 2 %{{[0-9]+}} reduction add

@@ -91,15 +91,13 @@ impl Jit {
             .map_err(JitError::UnknownTarget)?;
         let module_op = context.get_op(module.id());
 
-        // Promote memory to SSA so alloca/load/store IR reaches selectable form,
-        // mirroring the frontend pipeline: promotion reads structured control
-        // flow, so bodies are raised first, and the memory order they leave is
-        // the one the backend keeps.
+        // Raise bodies to unordered regions and simplify them, mirroring the
+        // frontend pipeline: the memory order restructuring leaves is the one
+        // the backend keeps.
         let mut pm = PassManager::new();
         let function_pipeline = pm.nest::<FuncOp>();
-        function_pipeline.add_pass(tir::passes::RestructurePass::new());
-        function_pipeline.add_pass(tir::passes::ThreadStatePass::new());
-        function_pipeline.add_pass(tir::passes::InstCombinePass::new());
+        function_pipeline.add_pass(tir::passes::RestructureNodesPass::new());
+        function_pipeline.add_pass(tir::passes::InstCombineNodesPass::new());
         pm.run(context, module_op.clone())
             .map_err(|e| JitError::Pipeline(format!("mid-end: {e}")))?;
 

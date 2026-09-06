@@ -33,6 +33,11 @@ impl Builder<'_> {
             return Dependence::Unknown;
         }
         if a.base != b.base {
+            // Two allocations are two objects: nothing derived from one
+            // reaches the other.
+            if self.is_allocation(a.base) && self.is_allocation(b.base) {
+                return Dependence::Independent;
+            }
             return match (self.extremes(a, left), self.extremes(b, right)) {
                 (Some(left), Some(right)) => Dependence::Conditional(Box::new((left, right))),
                 _ => Dependence::Unknown,
@@ -58,6 +63,17 @@ impl Builder<'_> {
             Some(components) => Dependence::Distances(components),
             None => Dependence::Independent,
         }
+    }
+
+    fn is_allocation(&self, base: ValueId) -> bool {
+        self.context
+            .get_value(base)
+            .defining_op()
+            .is_some_and(|op| {
+                self.context
+                    .get_op(op)
+                    .has_interface::<dyn crate::PromotableAllocation>()
+            })
     }
 
     /// The bytes an access can touch, as forms over the nest's symbols: every

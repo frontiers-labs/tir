@@ -355,9 +355,26 @@ fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
     if !context.has_operation(gate) {
         return None;
     }
+    let instance = context.get_op(gate);
+    // A declared γ indexes its arms by the predicate, the last arm taking every
+    // value past it. The seeding spells a boolean one as `If(p, arm 1, arm 0)`,
+    // so its node lists the case-1 arm first.
+    if let Some(gamma) = instance.clone().as_interface::<dyn crate::Gamma>() {
+        let arms = gamma.arms().len();
+        let boolean =
+            crate::sem::egraph::type_width(context, context.get_value(gamma.predicate()).ty())
+                == Some(1);
+        return Some(if boolean && arms == 2 {
+            vec![Some(1), None]
+        } else {
+            (0..arms - 1)
+                .map(|case| Some(case as i64))
+                .chain([None])
+                .collect()
+        });
+    }
     Some(
-        context
-            .get_op(gate)
+        instance
             .as_interface::<dyn Conditional>()?
             .case_values()
             .into_iter()

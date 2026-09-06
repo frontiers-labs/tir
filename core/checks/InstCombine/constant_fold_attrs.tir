@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // An op whose identity carries attributes (cmpi's predicate) folds over constant
 // operands like any other: the search index must key on the attributes too.

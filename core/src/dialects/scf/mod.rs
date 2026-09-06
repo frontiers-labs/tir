@@ -15,8 +15,8 @@ pub use nodes::{ForOp, ForOpBuilder, LoopOp, LoopOpBuilder, SwitchOp, SwitchOpBu
 pub mod ops {
     pub use super::nodes::{r#for, r#loop, switch};
     pub use super::{
-        BreakOp, ConditionOp, ContinueOp, ForLegacyOp, IfOp, SwitchLegacyOp, WhileOp, YieldOp, r#break,
-        condition, r#continue, for_legacy, r#if, switch_legacy, r#while, r#yield,
+        BreakOp, ConditionOp, ContinueOp, ForLegacyOp, IfOp, SwitchLegacyOp, WhileOp, YieldOp,
+        r#break, condition, r#continue, for_legacy, r#if, switch_legacy, r#while, r#yield,
     };
 }
 

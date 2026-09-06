@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes --verify %s | filecheck %s
 
 // The slot's own address is stored into a second slot and the write comes back
 // through what that slot holds. The graph names that pointer — the read of the
@@ -22,6 +22,6 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @stored_pointer
+// CHECK: func.func @stored_pointer(%{{[0-9]+}}: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK-NOT: ptr.load
-// CHECK: func.return %1
+// CHECK: -> %[[B]]

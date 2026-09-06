@@ -14,15 +14,13 @@
 //! operations it *creates* are `scf` ones plus the integer constants the
 //! predicates need.
 //!
-//! Two emissions share the analysis. `restructure` produces the structured
-//! blocks the backend takes today; `restructure-nodes` produces unordered
-//! regions of `scf.switch`, `scf.loop` and `scf.for`, constructing memory
-//! order first, since an unordered region keeps none of its own.
+//! `restructure-nodes` produces unordered regions of `scf.switch`, `scf.loop`
+//! and `scf.for`, constructing memory order first, since an unordered region
+//! keeps none of its own.
 
 mod branches;
 mod cfg;
 mod deps;
-mod emit;
 mod emit_nodes;
 mod liveness;
 mod loops;
@@ -30,47 +28,7 @@ mod ports;
 
 use crate::analysis::AnalysisManager;
 use crate::func::FuncOp;
-use crate::{Context, OperationRef, Pass, PassError, PassTarget, RegionKind, Rewriter};
-
-pub struct RestructurePass;
-
-impl RestructurePass {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for RestructurePass {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-crate::register_pass!(RestructurePass, "restructure");
-
-impl Pass for RestructurePass {
-    fn name(&self) -> &'static str {
-        "restructure"
-    }
-
-    fn target(&self) -> PassTarget {
-        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
-    }
-
-    fn run(
-        &mut self,
-        op: &OperationRef,
-        context: &Context,
-        _rewriter: &mut Rewriter,
-        _analyses: &AnalysisManager,
-    ) -> Result<(), PassError> {
-        let region = op.op().regions()[0];
-        if context.get_region(region).block_ids().len() < 2 {
-            return Ok(());
-        }
-        restructure_region(context, region, Form::Blocks)
-    }
-}
+use crate::{Context, OperationRef, Pass, PassError, PassTarget, Rewriter};
 
 /// The unordered-region conversion. A function whose body is already
 /// unordered is left alone; any ordered one is converted, a single block
@@ -112,34 +70,20 @@ impl Pass for RestructureNodesPass {
         if context.get_region(region).is_nodes() {
             return Ok(());
         }
-        restructure_region(
-            context,
-            region,
-            Form::Nodes {
-                thread: deps::wants_chain(context, region),
-            },
-        )
+        restructure_region(context, region, deps::wants_chain(context, region))
     }
 }
 
-enum Form {
-    Blocks,
-    Nodes { thread: bool },
-}
-
-/// Restructure one CFG region into structured operations of the chosen form.
+/// Restructure one CFG region into an unordered region of structured
+/// operations, constructing memory order on the way when `thread`.
 fn restructure_region(
     context: &Context,
     region: crate::RegionId,
-    form: Form,
+    thread: bool,
 ) -> Result<(), PassError> {
-    let thread = matches!(form, Form::Nodes { thread: true });
     let mut graph = cfg::Cfg::build(context, region, thread)?;
     loops::restructure(&mut graph);
     let tree = branches::restructure(&mut graph)?;
     let live = liveness::compute(&graph);
-    match form {
-        Form::Blocks => emit::emit(context, region, &graph, &tree, &live),
-        Form::Nodes { .. } => emit_nodes::emit(context, region, &graph, &tree, &live),
-    }
+    emit_nodes::emit(context, region, &graph, &tree, &live)
 }

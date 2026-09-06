@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // Without the qualifier two parameters may name the same memory, so both
 // accesses sit on the one conservative chain and the store is ordered after the
@@ -12,9 +12,8 @@ module {
   }
   module_end
 }
-
 // CHECK-LABEL: %{{[0-9]+}} = func.func @axpy
 // CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK-NEXT: %{{[0-9]+}} | %[[READ:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[ENTRY]] : !i32
 // CHECK-NEXT: | %[[WRITE:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[READ]]
-// CHECK-NEXT: func.return | %[[WRITE]]
+// CHECK-NEXT: -> | %[[WRITE]]

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,affine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,affine) --verify %s | filecheck %s
 
 // A 32-square matmul: 12 KB, which the modelled hierarchy holds whole, so no
 // tiling fetches fewer lines than the loops already do and the arranger buys
@@ -55,9 +55,9 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @small_matmul
-// CHECK: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[I:[0-9]+]] = %{{[0-9]+}}
-// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[K:[0-9]+]] = %{{[0-9]+}}
-// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[J:[0-9]+]] = %{{[0-9]+}}
+// CHECK: scf.for %[[I:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (| %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: scf.for %[[K:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (| %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: scf.for %[[J:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (| %{{[0-9]+}} = %{{[0-9]+}}) {
 // CHECK-NEXT: extsi %[[I]]
 // CHECK-NEXT: extsi %[[J]]
 // CHECK-NEXT: extsi %[[K]]

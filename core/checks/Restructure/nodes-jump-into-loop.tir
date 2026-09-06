@@ -5,7 +5,6 @@
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f into --args=0,3 | filecheck --check-prefix=SIDE %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f into --args=1,3 | filecheck --check-prefix=HEAD %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp -f into --args=1,3 | filecheck --check-prefix=HEAD %s
-// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f into --args=1,3 | filecheck --check-prefix=HEAD %s
 
 // An edge from outside the loop landing past its header: the loop keeps two
 // entries, and the dispatch picking the one an iteration wants is a gamma

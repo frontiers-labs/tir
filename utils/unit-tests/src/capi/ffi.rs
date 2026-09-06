@@ -42,7 +42,7 @@ fn parse_run_pipeline_print_roundtrip() {
         "expected allocas before promotion:\n{before}"
     );
 
-    let spec = CString::new("func.func(promote),fixpoint<3>(func.func(thread-state,instcombine))")
+    let spec = CString::new("func.func(restructure-nodes,promote-nodes),fixpoint<3>(func.func(verify-deps,instcombine-nodes))")
         .unwrap();
     let pm = unsafe { tir_pipeline_parse(spec.as_ptr()) };
     assert!(!pm.is_null(), "pipeline parse failed: {}", last_error());
@@ -58,8 +58,19 @@ fn parse_run_pipeline_print_roundtrip() {
         !after.contains("ptr.alloca"),
         "promotion should remove allocas:\n{after}"
     );
+    let header = after
+        .lines()
+        .find(|line| line.contains("func.func @f("))
+        .expect("the function prints");
+    let ports: Vec<&str> = header
+        .split(['(', ')'])
+        .nth(1)
+        .expect("ports")
+        .split(", ")
+        .map(|port| port.split(':').next().unwrap())
+        .collect();
     assert!(
-        after.contains("muli %0, %1"),
+        after.contains(&format!("muli {}, {}", ports[0], ports[1])),
         "expected promoted operands:\n{after}"
     );
 

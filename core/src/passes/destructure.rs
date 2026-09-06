@@ -421,7 +421,7 @@ impl Lowering<'_> {
             }
         }
         if order.len() == ops.len() {
-            sink_leaves(self.context, self.edges, &mut order);
+            self.sink_leaves(&mut order);
             abut_implicit_inputs(self.edges, &mut order);
         }
         if order.len() != ops.len() {
@@ -741,60 +741,66 @@ impl Lowering<'_> {
     }
 }
 
-/// Move every operation that reads nothing — a literal, an address — to just
-/// ahead of its first reader, or to the end when only what leaves the block
-/// reads it, so a value is not held in a register from the region's start to
-/// its use. Order inside a block is a scheduling matter the backend derives
-/// later; this is the one choice the derivation keeps.
-fn sink_leaves(context: &Context, edges: &dyn Edges, order: &mut Vec<OpId>) {
-    // What an instruction implicitly reads is placed by that instruction.
-    let implicit: HashSet<OpId> = order
-        .iter()
-        .flat_map(|&op| edges.implicit_inputs(op))
-        .collect();
-    let place: Vec<(usize, usize)> = order
-        .iter()
-        .enumerate()
-        .map(|(index, &op)| {
-            let instance = context.get_op(op);
-            let leaf = instance.operands().is_empty()
-                && instance.regions().is_empty()
-                && instance.dep_results().is_empty()
-                && !implicit.contains(&op);
-            if !leaf {
-                return (index, 1);
-            }
-            let results = instance.results();
-            let reader = order[index + 1..].iter().position(|&later| {
-                values_read(context, later)
-                    .iter()
-                    .any(|value| results.contains(value))
-            });
-            match reader {
-                Some(distance) => {
-                    // What the reader implicitly reads sits right ahead of
-                    // it and stays there.
-                    let reader = index + 1 + distance;
-                    let ahead = edges
-                        .implicit_inputs(order[reader])
-                        .iter()
-                        .filter_map(|input| order.iter().position(|op| op == input))
-                        .min()
-                        .unwrap_or(reader);
-                    (ahead.min(reader), 0)
+impl Lowering<'_> {
+    /// Move every operation that reads nothing — a literal, an address — to
+    /// just ahead of its first reader, or to the end when only what leaves the
+    /// block reads it, so a value is not held in a register from the region's
+    /// start to its use. A reader is anything [`Self::inputs`] says runs after
+    /// the leaf, the tests of nested gates included. Order inside a block is a
+    /// scheduling matter the backend derives later; this is the one choice the
+    /// derivation keeps.
+    fn sink_leaves(&self, order: &mut Vec<OpId>) {
+        let edges = self.edges;
+        // What an instruction implicitly reads is placed by that instruction.
+        let implicit: HashSet<OpId> = order
+            .iter()
+            .flat_map(|&op| edges.implicit_inputs(op))
+            .collect();
+        let inputs: Vec<HashSet<OpId>> = order
+            .iter()
+            .map(|&op| self.inputs(op).into_iter().collect())
+            .collect();
+        let place: Vec<(usize, usize)> = order
+            .iter()
+            .enumerate()
+            .map(|(index, &op)| {
+                let instance = self.context.get_op(op);
+                let leaf = instance.operands().is_empty()
+                    && instance.regions().is_empty()
+                    && instance.dep_results().is_empty()
+                    && !implicit.contains(&op);
+                if !leaf {
+                    return (index, 1);
                 }
-                None => (order.len(), 0),
-            }
-        })
-        .collect();
-    let mut placed: Vec<(usize, OpId)> = order
-        .iter()
-        .copied()
-        .zip(place)
-        .map(|(op, key)| (key.0 * 2 + key.1, op))
-        .collect();
-    placed.sort_by_key(|&(key, _)| key);
-    *order = placed.into_iter().map(|(_, op)| op).collect();
+                let reader = inputs[index + 1..]
+                    .iter()
+                    .position(|later| later.contains(&op));
+                match reader {
+                    Some(distance) => {
+                        // What the reader implicitly reads sits right ahead of
+                        // it and stays there.
+                        let reader = index + 1 + distance;
+                        let ahead = edges
+                            .implicit_inputs(order[reader])
+                            .iter()
+                            .filter_map(|input| order.iter().position(|op| op == input))
+                            .min()
+                            .unwrap_or(reader);
+                        (ahead.min(reader), 0)
+                    }
+                    None => (order.len(), 0),
+                }
+            })
+            .collect();
+        let mut placed: Vec<(usize, OpId)> = order
+            .iter()
+            .copied()
+            .zip(place)
+            .map(|(op, key)| (key.0 * 2 + key.1, op))
+            .collect();
+        placed.sort_by_key(|&(key, _)| key);
+        *order = placed.into_iter().map(|(_, op)| op).collect();
+    }
 }
 
 /// Put what an instruction implicitly reads right ahead of it: a rule's
@@ -809,10 +815,17 @@ fn abut_implicit_inputs(edges: &dyn Edges, order: &mut Vec<OpId>) {
                 continue;
             };
             order.remove(at);
-            let target = order.iter().position(|held| *held == op).expect("still held");
+            let target = order
+                .iter()
+                .position(|held| *held == op)
+                .expect("still held");
             order.insert(target, input);
         }
-        index = order.iter().position(|held| *held == op).expect("still held") + 1;
+        index = order
+            .iter()
+            .position(|held| *held == op)
+            .expect("still held")
+            + 1;
     }
 }
 

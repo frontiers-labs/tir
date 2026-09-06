@@ -1,5 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
 
 // Inside `x == 7` the two classes are one, and extraction prefers the literal:
 // every term over %x in that arm is a term over 7 and folds.
@@ -9,18 +8,21 @@ module {
     %seven = constant {value = 7} : !i32
     %hundred = constant {value = 100} : !i32
     %c = cmpi %x, %seven {predicate = "eq"} : !i1
-    %r = scf.if %c -> !i32 {
-      %s = addi %x, %hundred : !i32
-      scf.yield %s
-    } else {
-      scf.yield %hundred
+    %r = scf.switch %c {
+      -> %hundred
     }
-    func.return %r
+    {
+      %s = addi %x, %hundred : !i32
+      -> %s
+    }
+    -> %r
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: scf.if
+// CHECK: scf.switch
+// CHECK: }
+// CHECK-NEXT: {
 // CHECK-NEXT: constant {value = 107}
 // CHECK-NOT: addi

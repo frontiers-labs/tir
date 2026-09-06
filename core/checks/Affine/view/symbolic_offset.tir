@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // `a[n + i]` against itself: the parameter was widened before the nest, and the
 // form's range is the range of what was widened — a 32-bit `n` scaled by four

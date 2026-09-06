@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // An arm that touches nothing still names the state entering the gate: it takes
 // the chain as an argument and yields it untouched, so the memory the gate leaves
@@ -8,12 +8,11 @@ module {
   %fn_h = func.func @h(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
-    scf.if %0 {
-      ptr.store %1, %2
-      scf.yield
-    } else {
-      scf.yield
-    }
+    cfg.cond_br %0, ^then, ^join
+  ^then:
+    ptr.store %1, %2
+    cfg.br ^join
+  ^join:
     %3 = ptr.load %2 : !i32
     func.return %3
   }
@@ -21,11 +20,11 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @h
-// CHECK: | %[[GATE:[0-9]+]] = scf.if %0 args(| %[[IN:[0-9]+]]) (| %[[T:[0-9]+]]) {
-// CHECK-NEXT: | %[[T1:[0-9]+]] = ptr.store %1, %{{[0-9]+}} | %[[T]]
-// CHECK-NEXT: scf.yield | %[[T1]]
+// CHECK: | %[[GATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[IN:[0-9]+]]) (| %[[E:[0-9]+]]) {
+// CHECK-NEXT: -> | %[[E]]
 // CHECK-NEXT: }
-// CHECK-NEXT: else (| %[[E:[0-9]+]]) {
-// CHECK-NEXT: scf.yield | %[[E]]
+// CHECK-NEXT: (| %[[T:[0-9]+]]) {
+// CHECK-NEXT: | %[[T1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[T]]
+// CHECK-NEXT: -> | %[[T1]]
 // CHECK-NEXT: }
 // CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[GATE]] : !i32

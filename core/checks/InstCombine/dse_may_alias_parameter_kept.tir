@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // A parameter pointer is an object the analysis cannot tell apart from another
 // parameter's, so a write through one may be read back through the other and
@@ -15,6 +15,6 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: | %[[S:[0-9]+]] = ptr.store %2, %0 | %{{[0-9]+}}
-// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %2, %1 | %[[S]]
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: !ptr.p<!i32>, %[[Q:[0-9]+]]: !ptr.p<!i32>, %[[V:[0-9]+]]: !i32)
+// CHECK: | %[[S:[0-9]+]] = ptr.store %[[V]], %[[P]] | %{{[0-9]+}}
+// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %[[V]], %[[Q]] | %[[S]]

@@ -40,7 +40,13 @@ fn count_region(
     values: &mut HashSet<tir::ValueId>,
     pending: &mut Vec<OpId>,
 ) {
-    for block in context.get_region(region).iter(context.clone()) {
+    let region = context.get_region(region);
+    if region.is_nodes() {
+        values.extend(region.ports().iter().map(|port| port.id()));
+        pending.extend(region.op_ids());
+        return;
+    }
+    for block in region.iter(context.clone()) {
         live.blocks += 1;
         values.extend(block.arguments().iter().map(|argument| argument.id()));
         pending.extend(block.op_ids());
@@ -82,15 +88,18 @@ fn passes_do_not_leak_entities() {
 
     for (name, pass) in [
         (
-            "restructure",
-            Box::new(tir::passes::RestructurePass::new()) as Box<dyn tir::Pass>,
+            "restructure-nodes",
+            Box::new(tir::passes::RestructureNodesPass::new()) as Box<dyn tir::Pass>,
         ),
-        ("promote", Box::new(tir::passes::PromotePass::new())),
         (
-            "thread-state",
-            Box::new(tir::passes::ThreadStatePass::new()),
+            "promote-nodes",
+            Box::new(tir::passes::PromoteNodesPass::new()),
         ),
-        ("instcombine", Box::new(tir::passes::InstCombinePass::new())),
+        ("verify-deps", Box::new(tir::passes::VerifyDepsPass::new())),
+        (
+            "instcombine-nodes",
+            Box::new(tir::passes::InstCombineNodesPass::new()),
+        ),
     ] {
         let mut pm = PassManager::new();
         pm.nest::<tir::func::FuncOp>().add_boxed_pass(pass);

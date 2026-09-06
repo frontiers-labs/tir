@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // The store wrote four bytes and the load reads two of them, so the load is not
 // the stored value.

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // Refusal is per access. `a[i·i]` is no affine form, so that one access has
 // none; the access beside it keeps the form it always had, and the pair the two

@@ -1,5 +1,5 @@
-// RUN: tir opt --pass restructure --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(restructure,instcombine) %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 
 // Restructuring turns the guarded edge into a gate, and the driver assumes the
 // gate's condition inside the arm it guards. The redundant compare in that arm
@@ -20,7 +20,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: cmpi
-// CHECK: scf.if
-// CHECK-NEXT: constant {value = 1}
+// CHECK: %[[C:[0-9]+]] = cmpi
 // CHECK-NOT: cmpi
+// CHECK-NOT: scf.switch
+// CHECK: -> %[[C]]

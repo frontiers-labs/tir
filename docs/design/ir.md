@@ -29,10 +29,10 @@ object ◀─ emission ◀─ machine CFG ◀─ selection from the e-graph view
 - **cir** (and any future frontend dialect) owns frontend control flow, and
   may emit its own structured ops (preferred where the AST is structured —
   they preserve loop bounds for a mid-end pass to read) or an arbitrary CFG. Unstructured
-  control flow is first-class *input*: the `restructure` pass (§5.2)
-  totally converts any CFG region — irreducible included — to the structured
-  form. Structure is a guarantee the compiler provides, never a restriction
-  on input.
+  control flow is first-class *input*: the `restructure-nodes` pass (§5.2)
+  totally converts any CFG region — irreducible included — to one unordered
+  region of structured ops. Structure is a guarantee the compiler provides,
+  never a restriction on input.
 - **scf** is the middle-end form: structured regions whose conditional and
   loop semantics are read through interfaces. This form is RVSDG in the
   paper's sense — an acyclic, region-hierarchical, state-threaded program —
@@ -145,8 +145,9 @@ The **port-edit primitive** deserves emphasis: any transform that threads a
 new value through a structured op (a promoted scalar, a state chain, a
 hoisted loop-carried value) needs to extend the op's results, the region's
 arguments, and the terminator's operands coherently. That is one primitive
-here, not a per-pass idiom. Consumers: `thread-state` (§6), e-graph commit
-(§7.2), and any future structural transform (unrolling, inlining, SROA).
+here, not a per-pass idiom. Consumers: `restructure-nodes` drawing the chain
+(§6), `promote-nodes` (§5.3), e-graph commit (§7.2), and any future structural
+transform (unrolling, inlining, SROA).
 
 There is no separate `IRBuilder` and no free-floating mutation helpers; the
 insertion-point conveniences are methods on the same API.
@@ -215,7 +216,7 @@ or implementing an interface; it never means teaching core code about an op.
 | `LoopLike` | n-ary iteration: `inits() / carried_args() / latched() / finals()`, arity-verified. Counted loops additionally expose bounds/step untouched |
 | `TokenScope` | regions whose entry args are non-forwarding control tokens |
 | `Terminator`, `BranchTerminator` | CFG structure where a CFG exists (frontend dialects, boundary input, machine IR): successors and per-edge operands |
-| `BranchGuard` | guarded successors of a conditional terminator; consumed by `restructure` at the CFG boundary |
+| `BranchGuard` | guarded successors of a conditional terminator; consumed by `restructure-nodes` at the CFG boundary |
 | `MemoryRead` / `MemoryWrite` | location, value, **and state accessors**: the state operand read, and (for writes) the state result produced (§6) |
 | `PromotableAllocation` | the value naming an allocation eligible for chain-splitting |
 | `ConstantLike`, `ConstantFold`, `Commutative`, `IntegerArithmetic`, `SameOperandType`, `OpCost` | value semantics for folding, e-graph seeding, and extraction cost |
@@ -257,9 +258,11 @@ Corollaries developers should internalize:
 ### 5.2 Arbitrary CFG: total restructuring
 
 The middle end is structured, period — and that is a *conversion guarantee*,
-not an input restriction. The `restructure` pass implements
+not an input restriction. The `restructure-nodes` pass implements
 Bahmann-Reissmann control-flow restructuring over any CFG region, read
-through `Terminator`/`BranchTerminator`/`BranchGuard` (dialect-agnostic):
+through `Terminator`/`BranchTerminator`/`BranchGuard` (dialect-agnostic), and
+emits one unordered region of `scf.for`, `scf.switch` and `scf.loop`, drawing
+the memory chain (§6) while the block order is still there to read:
 
 1. **Loop restructuring**: strongly connected components become
    single-entry/single-exit tail-controlled loops; multiple entries and
@@ -275,10 +278,11 @@ pass turns into `scf.for` where the counted shape is provable and into the
 same blocks and branches otherwise. Flat CFG is what a whole function gets
 when it holds a `goto` or a label, or a `return` under a loop — both name
 edges a loop region cannot carry — and what every refused loop gets;
-`restructure` raises them all, and there are no refused shapes. Hand-written
-CFG-form `.tir` and tir-jit input take the same path. The backend contract
-is *structured regions in, machine CFG out*; the machine CFG reappears only
-at emission-time destruction.
+`restructure-nodes` raises them all, and there are no refused shapes.
+Hand-written CFG-form `.tir` and tir-jit input take the same path. The backend contract
+is *unordered regions in, machine CFG out*; the machine CFG reappears only
+when `destructure` lowers the region to blocks, inside selection and for
+SPIR-V export, placing each op by the cone that demands it.
 
 Correctness is pinned two ways: LIT snapshots for the canonical hard shapes
 (irreducible double-entry loops, multi-exit loops, jumps into loop bodies,
@@ -288,19 +292,20 @@ versus original CFGs through the JIT.
 ### 5.3 Demand annotation: the values on the ports
 
 Restructuring gives control structure over memory; construction is not done
-until the *values* are on ports. The `promote` pass is that last step, and it
-is construction, not optimization: for every stack slot whose address never
+until the *values* are on ports. The `promote-nodes` pass is that last step,
+and it is construction, not optimization: for every stack slot whose address never
 leaves the function, whose accesses all name it whole and agree on one type,
 the region that reads it takes its value as an argument, the region that
 writes it yields it, and a loop that does either carries it. The allocation
 goes with the last access.
 
-The walk needs no dominance and places no φ — the region tree *is* the
-dominance — and it grows a port only where the value is demanded: a region
-that reads the slot before writing it, or a write something after the op can
-read. What stays a slot — an escaping address, arithmetic reaching part of
-it, accesses disagreeing on a type — keeps every access and reaches
-`thread-state` as the memory it is.
+The walk needs no dominance and places no φ — the chain the converter drew
+says which write a read sees — and it grows a port only where the value is
+demanded: a loop the walk leaves through its dependency port carries the
+value, a gate it leaves through its dependency result joins what each arm
+leaves. What stays a slot — an escaping address, arithmetic reaching part of
+it, accesses disagreeing on a type, an access off the chain — keeps every
+access and stays on the chain as the memory it is.
 
 ## 6. Memory: explicit state
 
@@ -323,8 +328,8 @@ derived from them, not the other way round (§6.3).
 | `state.split` | takes one dependency, produces one name per chain carrying on from it |
 
 These ports are the dependency partitions of §2: a pass grows them with
-`grow_dep_port`, `append_dep_operand` and `append_dep_result`, and `unthread`
-truncates every list at its partition. No chain enters a function *signature*:
+`grow_dep_port`, `append_dep_operand` and `append_dep_result`, and the value
+accessors stop at the partition. No chain enters a function *signature*:
 a call's arguments must be exactly what the callee's `!fn` type takes, and ABI
 lowering maps region arguments to registers — a dependency parameter would
 break both. Hence the entry-state op and the return's dependency operand.
@@ -345,9 +350,11 @@ liveness and colouring never see one (`son-backend` B2).
 
 ### 6.2 Chains
 
-The `thread-state` pass materializes chains, using `AliasFacts` for object
-identity and the shared escape classifier (one implementation, also the gate for
-promotion rewrites §7.2):
+`restructure-nodes` draws the chains as it converts the CFG (§5.2), one chain
+over every access, and `verify-deps` checks after every later pass that the
+chain is still whole rather than drawing it again. Splitting the chain per
+object is what `AliasFacts` and the shared escape classifier (also the gate for
+promotion, §5.3) are for:
 
 - **One chain per object.** Every base object the facts tell apart from all the
   others the function names — a global, a parameter, a stack slot — is a memory
@@ -390,10 +397,12 @@ including each other. The next write, call, export or carried port on that chain
 takes `state.join` of what the fork left, and that join edge is the WAR
 dependence. RAW and WAW are the chain edge.
 
-That the edges are complete is checked rather than argued: the `shuffle-state`
-pass re-linearizes every block by a seeded random topological order of the value
-and state DAG, and the differential fuzzer runs a pipeline containing it. A
-missing edge is a divergence with a reproducer.
+That the edges are complete is checked rather than argued. An unordered region
+has no order to shuffle, so the check sits in the backend: the
+`shuffle-machine-order` oracle re-linearizes every machine block by a seeded
+random topological order of its dependence DAG, after selection and again after
+allocation, and the differential fuzzer runs a variant with it on. A missing
+edge is a divergence with a reproducer.
 
 ### 6.4 Discipline (verified)
 
@@ -403,8 +412,8 @@ missing edge is a divergence with a reproducer.
   its inputs merge into — and any number of those may. One operation naming a
   state twice observes it once: joining a memory with itself is that memory.
 - The check is structural, so it cannot see chains. That every access of a chain
-  is in the cone of the state its next write takes is what `shuffle-state` is
-  for; the verifier is not that net.
+  is in the cone of the state its next write takes is what `verify-deps` and
+  the `shuffle-machine-order` oracle are for; the verifier is not that net.
 - A state crossing a region boundary does so as a carried argument, which is a
   fresh value, so the check is one walk of the whole tree. A machine block
   parameter is the same fresh value, and a branch forwarding a state along an
@@ -452,8 +461,8 @@ address class alone, so `p + 4` and `p + 2 + 2` are the one extent they are.
 
 Every *other* memory equality remains an SMT obligation or does not exist.
 Scalar promotion is not a law: it is construction (§5.1's demand annotation,
-the `promote` pass), and by the time the view is built a local slot's value
-is already a value the regions carry on ports.
+the `promote-nodes` pass), and by the time the view is built a local slot's
+value is already a value the regions carry on ports.
 
 ## 7. Red views
 
@@ -572,7 +581,7 @@ and their single survivors:
 |---|---|---|
 | `core/src/sea` (parallel IR: arenas, kinds, raise/lower, view, commit) | second IR ≠ the IR | this design |
 | GSA / `gated_ssa.rs`, `SemNode::Merge(η/φ)` | derived gates from CFG; the structured form *states* gates | interfaces, read by the seeder |
-| `mem2reg` (both variants) | dominance/φ machinery obsolete by structure: the region tree *is* the dominance, and a local slot's value belongs on the ports construction should have put it on | `promote` (demand annotation) + `thread-state` + shared escape classifier |
+| `mem2reg` (both variants) | dominance/φ machinery obsolete by structure: the region tree *is* the dominance, and a local slot's value belongs on the ports construction should have put it on | `promote-nodes` (demand annotation) over the chain `restructure-nodes` drew + shared escape classifier |
 | mid-end DCE pass | a rewrite's cascade belongs to the commit that caused it | the commit's sweep (DCE remains for machine IR) |
 | `sccp` + `ConstantFacts` | a second engine for a fact the first one can state: constants are classes, reachability is a gate's own scope | the e-graph's scopes, hypothesis rounds included |
 | `dse` | same-chain overwrite is an extent question the placement facts answer; a slot with no reader is a dead definition | §6.5 + DCE on chains |
@@ -583,7 +592,7 @@ and their single survivors:
 | PBQP in `core` with dead coherence machinery | generic math stranded behind the compiler | `tir-pbqp` utils crate (§9) |
 | `DominatingEdgeFacts` | dominator-scoped facts on a CFG the mid-end no longer has | gate-context scoping in selection |
 | loop-rotation / scf canonicalization | γ∘θ is the *view's* reading, not an IR shape | guard-aware seeding |
-| fcc's AST-level goto machinery (per-construct predicate insertion, one refused shape) | one restructurer for one frontend, with a hole | the total `restructure` pass (§5.2) |
+| fcc's AST-level goto machinery (per-construct predicate insertion, one refused shape) | one restructurer for one frontend, with a hole | the total `restructure-nodes` pass (§5.2) |
 
 The pattern behind every row: compute a thing in one place, from the form
 that states it most directly, and store it in exactly one representation.

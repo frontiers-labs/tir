@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // Reads do not serialize. Both loads observe the state the first store left, so
 // nothing orders them against each other; the next write on the chain takes the
@@ -17,15 +17,14 @@ module {
   }
   module_end
 }
-
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
 // CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: %{{[0-9]+}} | %[[A:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: | %[[A1:[0-9]+]] = ptr.store %0, %{{[0-9]+}} | %[[A]]
+// CHECK-NEXT: | %[[A1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[ENTRY]]
 // CHECK-NEXT: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
 // CHECK-NEXT: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
 // CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
 // CHECK-NEXT: | %[[J:[0-9]+]] = state.join | %[[R1]], %[[R2]]
 // CHECK-NEXT: | %[[A2:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[J]]
-// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[A2]] : !i32
-// CHECK-NEXT: func.return %{{[0-9]+}} | %[[ENTRY]]
+// CHECK-NEXT: %{{[0-9]+}} | %[[R3:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A2]] : !i32
+// CHECK-NEXT: -> %{{[0-9]+}} | %[[R3]]

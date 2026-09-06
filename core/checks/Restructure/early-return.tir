@@ -1,4 +1,4 @@
-// RUN: tir opt --pass restructure --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // Two returns become one: each arm assigns the value the single exit reports.
 
@@ -16,12 +16,12 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @early
 // CHECK-NOT: br
-// CHECK: %[[R:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {
-// CHECK-NEXT: scf.yield %{{[0-9]+}}
-// CHECK-NEXT: }
-// CHECK-NEXT: else {
+// CHECK: %[[R:[0-9]+]] = scf.switch %{{[0-9]+}} {
 // CHECK-NEXT: %[[E:[0-9]+]] = addi
-// CHECK-NEXT: scf.yield %[[E]]
+// CHECK-NEXT: -> %[[E]]
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[R]]
+// CHECK-NEXT: {
+// CHECK-NEXT: -> %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[R]]
 // CHECK-NOT: func.return

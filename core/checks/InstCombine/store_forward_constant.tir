@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // The stored value is a literal, which carries the type of the operation that
 // holds it, so the load reads it like any other stored value.
@@ -17,4 +17,4 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[V:[0-9]+]] = constant {value = 7}
 // CHECK-NOT: ptr.load
-// CHECK: func.return %[[V]]
+// CHECK: -> %[[V]]

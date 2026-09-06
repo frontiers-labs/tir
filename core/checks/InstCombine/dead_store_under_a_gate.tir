@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
 
 // Both arms enter the gate on one state and write one value to one address, so
 // their stores are one term. The then arm overwrites it. That the else arm
@@ -9,22 +9,24 @@
 module {
   %fn_f = func.func @f(%0: !i1, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) {
     | %4 = state.entry_state
-    | %5 = scf.if %0 args(| %4) (| %6) {
+    | %5 = scf.switch %0 args(| %4) (| %9) {
+      | %10 = ptr.store %2, %1 | %9
+      -> | %10
+    }
+    (| %6) {
       | %7 = ptr.store %2, %1 | %6
       | %8 = ptr.store %3, %1 | %7
-      scf.yield | %8
-    } else (| %9) {
-      | %10 = ptr.store %2, %1 | %9
-      scf.yield | %10
+      -> | %8
     }
-    func.return | %5
+    -> | %5
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: scf.if
-// CHECK-NEXT: ptr.store %3,
-// CHECK-NEXT: scf.yield
-// CHECK: else
-// CHECK: ptr.store %2,
+// CHECK: scf.switch
+// CHECK-NEXT: ptr.store %2,
+// CHECK-NEXT: ->
+// CHECK: {
+// CHECK: ptr.store %3,
+// CHECK-NEXT: ->

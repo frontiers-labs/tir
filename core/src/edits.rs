@@ -131,6 +131,35 @@ impl Context {
         }
     }
 
+    /// [`Context::rename_region_results`] for a set of renames, in one walk:
+    /// finding the nested regions costs the whole subtree, so a rename per
+    /// value is quadratic in the operations under `region`. A result named by
+    /// `renames` follows the chain to the value nothing renames.
+    pub(crate) fn rename_region_results_batch(
+        &self,
+        region: RegionId,
+        renames: &std::collections::HashMap<ValueId, ValueId>,
+    ) {
+        if renames.is_empty() {
+            return;
+        }
+        for nested in self.nested_regions(region) {
+            let handle = self.get_region(nested);
+            let mut results = handle.results();
+            let mut renamed = false;
+            for result in &mut results {
+                while let Some(&next) = renames.get(result) {
+                    *result = next;
+                    renamed = true;
+                }
+            }
+            if renamed {
+                let deps = handle.dep_results().len();
+                self.set_region_results(nested, results, deps);
+            }
+        }
+    }
+
     /// The non-local exits under `roots` that leave `target`.
     fn exits_leaving(&self, roots: &[OpId], target: OpId) -> Vec<OpId> {
         self.subtree_ops(roots)

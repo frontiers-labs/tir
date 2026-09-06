@@ -1,11 +1,9 @@
 // RUN: fcc compile -O2 --stage asm --march x86_64 -o - %s | filecheck %s
 
 // The loop writes one loop-invariant value to one loop-invariant address, so
-// unrolling it leaves copies whose stored values all fold to the one constant.
-// The address is computed once and the value is one `mov ecx, 0`, but all three
-// stores stay: they sit in order on the function's one conservative memory
-// chain, and nothing on that chain proves the first two dead before the third.
-// Per-object chains let the block-based mid-end keep the last store only.
+// unrolling it leaves three stores of the same constant to the same address.
+// The first two are dead: each is overwritten by the next with no read in
+// between, so the mid-end keeps the last store only.
 
 void invariant_store(int *p, int a)
 {
@@ -15,7 +13,5 @@ void invariant_store(int *p, int a)
 // CHECK-LABEL: invariant_store:
 // CHECK: and esi, 3
 // CHECK: mov ecx, 0
-// CHECK-NEXT: mov [rax], ecx
-// CHECK-NEXT: mov [rax], ecx
 // CHECK-NEXT: mov [rax], ecx
 // CHECK-NEXT: ret

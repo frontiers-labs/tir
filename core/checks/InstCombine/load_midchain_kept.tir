@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // No write reached this address before the load, so nothing stands in for its
 // value and the read stays — with the state edge the store after it observes.
@@ -16,4 +16,4 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[V:[0-9]+]] | %[[S:[0-9]+]] = ptr.load %[[P:[0-9]+]] | %{{[0-9]+}} : !i32
 // CHECK: | %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %[[P]] | %[[S]]
-// CHECK: func.return %[[V]]
+// CHECK: -> %[[V]]

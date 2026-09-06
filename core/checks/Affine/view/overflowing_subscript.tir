@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // Three products by the widest literal there is: what the form would name is
 // past what any width holds, and past what the view's own arithmetic holds. The

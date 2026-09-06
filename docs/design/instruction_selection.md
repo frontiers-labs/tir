@@ -254,8 +254,8 @@ becomes a leaf, and a write's term is the state the accesses after it read, whic
 is exactly the node the read's state operand names. A read publishes the memory it
 observed, so its state result names the same class as its operand.
 
-What the chains say is therefore what `thread-state` said — one chain per object,
-a fork of reads off each write, a join before the next write — and nothing weaker.
+What the chains say is therefore what `restructure-nodes` drew — a fork of reads
+off each write, a join before the next write — and nothing weaker.
 Two accesses of one address on one chain are one term wherever they sit, including
 in different blocks: the cover reuses the tile that dominates and the other access
 is erased, its state result forwarded to the state it read.
@@ -503,7 +503,7 @@ immediate / width requirements kept in `node_meta`. `specificity` counts
 type-constrained nodes — the tie-breaker (see below).
 
 `collect_block_matches` e-matches every value pattern against the shared e-graph
-(via the `tir_relational` evaluator — the same matcher instcombine uses
+(via the `tir_relational` evaluator — the same matcher `instcombine-nodes` uses
 — with operand constraints and match legality supplied as a legality callback),
 then **restricts every hit to the solving block B**: a match survives only if its
 root is a value B computes (an op of B, a class a destruction reads there, or a

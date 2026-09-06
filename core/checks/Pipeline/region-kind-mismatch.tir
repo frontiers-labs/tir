@@ -1,17 +1,18 @@
-// RUN: not tir opt --pass promote %s 2>&1 | filecheck %s
+// RUN: not tir opt --pass promote-nodes %s 2>&1 | filecheck %s
 // RUN: tir opt --pass restructure-nodes %s | filecheck %s --check-prefix=ANY
 
 // A pass declares the body kind it walks. Asking it to run on the other kind
-// is an error, not a silent skip: `promote` reads blocks, and this body has
-// none. `restructure-nodes` takes either kind, so the same body passes it.
+// is an error, not a silent skip: `promote-nodes` reads an unordered graph,
+// and this body is blocks. `restructure-nodes` takes either kind, so the same
+// body passes it.
 
 module {
   %f = func.func @f(%p: !i32) -> !i32 {
     %y = addi %p, %p : !i32
-    -> %y
+    func.return %y
   }
   module_end
 }
 
-// CHECK: pass 'promote' runs on an ordered body, but func.func @f holds an unordered one
+// CHECK: pass 'promote-nodes' runs on an unordered body, but func.func @f holds an ordered one
 // ANY: func.func @f

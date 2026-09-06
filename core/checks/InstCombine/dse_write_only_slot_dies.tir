@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The counter `raise-loops` leaves behind: a private slot whose loads folding
 // removed, still written once per iteration. Nothing can read those bytes back,
@@ -21,5 +21,11 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NOT: ptr.store
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[LO:[0-9]+]]: !i32, %[[HI:[0-9]+]]: !i32)
+// CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: scf.for %{{[0-9]+}} = %[[LO]] to %[[HI]] step %[[ONE]] (%[[I:[0-9]+]] = %[[LO]] | %[[DEP:[0-9]+]] = %[[ENTRY]]) {
+// CHECK-NEXT: %[[N:[0-9]+]] = addi %[[I]], %[[ONE]] : !i32
+// CHECK-NEXT: -> %[[N]] | %[[DEP]]
+// CHECK-NEXT: }
+// CHECK-NOT: ptr.

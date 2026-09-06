@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The laws compose over an n-ary gate too: the state the loop carries is a θ
 // whose latch is the switch the body ends on, so the read distributes over the θ
@@ -8,47 +8,45 @@
 module {
   %fn_dispatch = func.func @dispatch(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %2, %3
-    scf.while {
-      scf.condition %0
-    } do {
-      %4 = ptr.load %3 : !i32
-      scf.switch_legacy %1 case 1 {
-        %5 = addi %4, %4 : !i32
-        ptr.store %5, %3
-        scf.yield
+    | %4 = state.entry_state
+    | %5 = ptr.store %2, %3 | %4
+    | %6 = scf.loop (| %7 = %5) {
+      %8 | %9 = scf.switch %0 args(| %7) (| %10) {
+        %11 = constant {value = 0} : !i1
+        -> %11 | %10
       }
-      case 2 {
-        ptr.store %2, %3
-        scf.yield
+      (| %12) {
+        %13 | %14 = ptr.load %3 | %12 : !i32
+        | %15 = scf.switch %1 args(| %14) (| %16) {
+          -> | %16
+        }
+        (| %17) {
+          %18 = addi %13, %13 : !i32
+          | %19 = ptr.store %18, %3 | %17
+          -> | %19
+        }
+        (| %20) {
+          | %21 = ptr.store %2, %3 | %20
+          -> | %21
+        }
+        %22 = constant {value = 1} : !i1
+        -> %22 | %15
       }
-      default {
-        scf.yield
-      }
-      scf.yield
+      -> %8 | %9, %9
     }
-    %6 = ptr.load %3 : !i32
-    func.return %6
+    %23 | %24 = ptr.load %3 | %6 : !i32
+    -> %23 | %24
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @dispatch
 // CHECK-NOT: ptr.
-// CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%[[COND:[0-9]+]] = %2) -> !i32 {
-// CHECK-NEXT: scf.condition %0, %[[COND]]
-// CHECK-NEXT: }
-// CHECK-NEXT: do(%[[BODY:[0-9]+]]) {
-// CHECK-NEXT: %[[GATE:[0-9]+]] = scf.switch_legacy %1 -> !i32 case 1 {
-// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[BODY]], %[[BODY]] : !i32
-// CHECK-NEXT: scf.yield %[[NEXT]]
-// CHECK-NEXT: }
-// CHECK-NEXT: case 2 {
-// CHECK-NEXT: scf.yield %2
-// CHECK-NEXT: }
-// CHECK-NEXT: default {
-// CHECK-NEXT: scf.yield %[[BODY]]
-// CHECK-NEXT: }
-// CHECK-NEXT: scf.yield %[[GATE]]
-// CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK: %[[RESULT:[0-9]+]] | %{{[0-9]+}} = scf.loop (%[[PORT:[0-9]+]] = %2 | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK: %[[GATE:[0-9]+]] | %{{[0-9]+}} = scf.switch %1 args(| %{{[0-9]+}}) (| %{{[0-9]+}}) {
+// CHECK-NEXT: -> %[[PORT]] | %{{[0-9]+}}
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[PORT]], %[[PORT]] : !i32
+// CHECK-NEXT: -> %[[NEXT]] | %{{[0-9]+}}
+// CHECK: -> %2 | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, %[[GATE]] | %{{[0-9]+}}
+// CHECK: -> %[[RESULT]] | %{{[0-9]+}}

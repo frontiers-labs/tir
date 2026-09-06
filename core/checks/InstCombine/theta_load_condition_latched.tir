@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The shape restructuring leaves a `goto`/`while` loop in: the whole body sits
 // in the condition region, so the update happens before `scf.condition` and the
@@ -9,37 +9,35 @@
 module {
   %fn_sum = func.func @sum(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %1, %2
-    %3 = scf.while {
-      %4 = scf.if %0 -> !i1 {
-        %5 = ptr.load %2 : !i32
-        %6 = addi %5, %5 : !i32
-        ptr.store %6, %2
-        %7 = constant {value = 1} : !i1
-        scf.yield %7
-      } else {
-        %8 = constant {value = 0} : !i1
-        scf.yield %8
+    | %3 = state.entry_state
+    | %4 = ptr.store %1, %2 | %3
+    | %5 = scf.loop (| %6 = %4) {
+      %7 | %8 = scf.switch %0 args(| %6) (| %9) {
+        %10 = constant {value = 0} : !i1
+        -> %10 | %9
       }
-      scf.condition %4
-    } do {
-      scf.yield
+      (| %11) {
+        %12 | %13 = ptr.load %2 | %11 : !i32
+        %14 = addi %12, %12 : !i32
+        | %15 = ptr.store %14, %2 | %13
+        %16 = constant {value = 1} : !i1
+        -> %16 | %15
+      }
+      -> %7 | %8, %8
     }
-    %9 = ptr.load %2 : !i32
-    func.return %9
+    %17 | %18 = ptr.load %2 | %5 : !i32
+    -> %17 | %18
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @sum
 // CHECK-NOT: ptr.
-// CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%[[HEAD:[0-9]+]] = %1) -> !i32 {
-// CHECK: %[[COND:[0-9]+]], %[[LATCH:[0-9]+]] = scf.if %0 -> !i1, !i32 {
-// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[HEAD]], %[[HEAD]] : !i32
-// CHECK: scf.yield %{{[0-9]+}}, %[[NEXT]]
-// CHECK: scf.yield %{{[0-9]+}}, %[[HEAD]]
-// CHECK: scf.condition %[[COND]], %[[LATCH]]
-// CHECK: do(%[[BODY:[0-9]+]]) {
-// CHECK-NEXT: scf.yield %[[BODY]]
+// CHECK: %[[RESULT:[0-9]+]] | %{{[0-9]+}} = scf.loop (%[[HEAD:[0-9]+]] = %1 | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: %[[COND:[0-9]+]], %[[LATCH:[0-9]+]] | %[[DEP:[0-9]+]] = scf.switch %0 args(| %{{[0-9]+}}) (| %{{[0-9]+}}) {
+// CHECK: -> %{{[0-9]+}}, %[[HEAD]] | %{{[0-9]+}}
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[HEAD]], %[[HEAD]] : !i32
+// CHECK: -> %{{[0-9]+}}, %[[NEXT]] | %{{[0-9]+}}
+// CHECK: -> %[[COND]], %[[LATCH]], %[[LATCH]] | %[[DEP]], %[[DEP]]
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-NEXT: -> %[[RESULT]] | %{{[0-9]+}}

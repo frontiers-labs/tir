@@ -1,5 +1,5 @@
 // RUN: tir interp %s | filecheck %s
-// RUN: tir opt --pass inline<1000,0> %s | tir interp - | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0> %s | tir interp - | filecheck %s
 
 // The program the inliner leaves behind computes what the one it was handed
 // computed: a cell the caller owns and the callee writes through, a slot the

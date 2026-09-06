@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // A slot the body only reads: nothing inside the loop writes it, so every edge
 // back into its state port carries the port's own argument and the θ over them
@@ -7,7 +7,7 @@
 // leaves memory without the loop growing a port for it.
 
 module {
-  %fn_accumulate = func.func @accumulate(%0: !index, %1: !index, %2: !index, %3: !i32, %4: !i32) -> !i32 {
+  %fn_accumulate = func.func @accumulate(%0: !i64, %1: !i64, %2: !i64, %3: !i32, %4: !i32) -> !i32 {
     %5 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %5
     %6 = scf.for_legacy %0, %1, %2 iter_args(%7 = %4) -> !i32 {
@@ -20,10 +20,10 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @accumulate
+// CHECK-LABEL: %{{[0-9]+}} = func.func @accumulate(%[[LB:[0-9]+]]: !i64, %[[UB:[0-9]+]]: !i64, %[[STEP:[0-9]+]]: !i64, %[[A:[0-9]+]]: !i32, %[[INIT:[0-9]+]]: !i32)
 // CHECK-NOT: ptr.
-// CHECK: %[[RESULT:[0-9]+]] = scf.for_legacy %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %4) -> !i32 {
-// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[CARRIED]], %3 : !i32
-// CHECK-NEXT: scf.yield %[[NEXT]]
+// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] | %[[OUT:[0-9]+]] = scf.for %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[STEP]] (%[[CARRIED:[0-9]+]] = %[[INIT]] | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[CARRIED]], %[[A]] : !i32
+// CHECK-NEXT: -> %[[NEXT]] | %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-NEXT: -> %[[RESULT]] | %[[OUT]]

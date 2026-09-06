@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The `restrict` counterpart of `may_alias_parameter_kept`: the qualifier says
 // the write through the other parameter cannot be a read of this one, so the
@@ -17,9 +17,8 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NEXT: state.entry_state
-// CHECK-NEXT: state.entry_state
-// CHECK-NEXT: state.entry_state
-// CHECK-NEXT: ptr.store %2, %1
-// CHECK-NEXT: ptr.store %3, %0
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: {{.*}}, %[[Q:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: {{.*}}, %[[B:[0-9]+]]: {{.*}})
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %[[A]], %[[Q]] | %[[ENTRY]]
+// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.store %[[B]], %[[P]] | %[[S1]]
+// CHECK-NEXT: -> | %[[S2]]

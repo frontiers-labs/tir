@@ -61,18 +61,17 @@ fn restructure(context: &Context, module: &ModuleOp) -> Result<(), tir::PassErro
     let mut passes = PassManager::new();
     passes
         .nest::<FuncOp>()
-        .add_pass(tir::passes::RestructurePass::new());
+        .add_pass(tir::passes::RestructureNodesPass::new());
     passes.run(context, context.get_op(module.id()))
 }
 
-/// A block ends with a branch only where restructuring left control flow
-/// behind: the pass must leave a single block of structured operations.
+/// Restructuring must leave every body an unordered region: a function still
+/// made of blocks is control flow it left behind.
 fn has_branches(context: &Context, module: &ModuleOp) -> bool {
     module.body().iter(context.clone()).any(|op| {
-        op.clone().as_op::<FuncOp>().is_some_and(|func| {
-            func.regions()
-                .any(|region| region.iter(context.clone()).len() > 1)
-        })
+        op.clone()
+            .as_op::<FuncOp>()
+            .is_some_and(|func| func.regions().any(|region| !region.is_nodes()))
     })
 }
 

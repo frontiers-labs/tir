@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // A bound nothing computes before the nest runs is a parameter, not a refusal.
 // The trip count is unknown, so the distance test has no box to bound `δ` with —

@@ -24,13 +24,14 @@ type Memo = HashMap<Id, ValueId>;
 
 use tir_relational::{ClassId as Id, Extraction};
 
-use super::{Driver, Node, Prov, cost};
+use super::{Driver, Node, Prov, SymKind, cost, state};
 use crate::analysis::AnalysisManager;
 use crate::func::FuncOp;
 use crate::sem::egraph::type_width;
 use crate::{
-    ConstantLike, Context, Gamma, MemoryRead, NewOp, OpHandle, OpId, OperationRef, Pass, PassError,
-    PassTarget, RegionId, RegionKind, Rewriter, Speculatable, TypeId, ValueId,
+    ConstantLike, Context, Gamma, MemoryRead, MemoryWrite, NewOp, OpHandle, OpId, OperationRef,
+    Pass, PassError, PassTarget, PromotableAllocation, RegionId, RegionKind, Rewriter,
+    Speculatable, TypeId, ValueId,
 };
 
 #[derive(Default)]
@@ -68,7 +69,6 @@ impl Pass for InstCombineNodesPass {
             context,
             eg: seeded.eg,
             value_class: seeded.value_class,
-            arg_block: seeded.arg_block,
             ruleset,
             replacing: std::cell::Cell::new(None),
         };
@@ -77,6 +77,7 @@ impl Pass for InstCombineNodesPass {
         let extraction = driver.eg.extract_best(|_, node| cost(node));
         let body = context.get_op(root).regions()[0];
         driver.commit_nodes(body, &extraction, &mut HashMap::new())?;
+        forget_write_only_slots(context, body);
         let result = sweep(context, body, rewriter);
         tir_relational::report_saturation("instcombine-nodes");
         result
@@ -122,6 +123,14 @@ impl Driver<'_> {
                 }
             }
         }
+        // Once every read the rewrites answered has let go of its state, a
+        // write nothing else observes is unread. Finding the regions a result
+        // list can sit in walks every operation under `region`, and nothing in
+        // this loop adds or removes one, so it is found once.
+        let scope = self.context.nested_regions(region);
+        for &op in &ops {
+            self.forward_dead_write(op, &scope);
+        }
         for &op in &ops {
             let instance = self.context.get_op(op);
             let arms = instance
@@ -155,6 +164,92 @@ impl Driver<'_> {
             }
         }
         Ok(())
+    }
+
+    /// A write nothing observes before the next write of its own extent is
+    /// overwritten unread: its readers take the state it was handed, and the
+    /// sweep takes it. On the way to that next write the chain may pass writes
+    /// to other objects, which leave this one as it was, and reads nothing
+    /// demands, which the sweep takes too.
+    fn forward_dead_write(&self, op: OpId, scope: &[RegionId]) {
+        let instance = self.context.get_op(op);
+        let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>() else {
+            return;
+        };
+        let (Some(taken), Some(published)) = (write.state_operand(), write.state_result()) else {
+            return;
+        };
+        let Some(extent) = self.extent(published) else {
+            return;
+        };
+        let base = super::object_base(self.context, write.write_location());
+        let mut state = published;
+        loop {
+            if self.published(scope, state) {
+                return;
+            }
+            let readers: Vec<OpId> = self
+                .context
+                .users_of(state)
+                .into_iter()
+                .filter(|&reader| !self.is_dead_read(scope, reader))
+                .collect();
+            let [reader] = readers[..] else {
+                return;
+            };
+            let Some(next) = self
+                .context
+                .get_op(reader)
+                .as_interface::<dyn MemoryWrite>()
+            else {
+                return;
+            };
+            let (Some(observed), Some(left)) = (next.state_operand(), next.state_result()) else {
+                return;
+            };
+            if observed != state {
+                return;
+            }
+            if self.extent(left) == Some(extent) {
+                break;
+            }
+            let other = super::object_base(self.context, next.write_location());
+            if !super::distinct_objects(self.context, base, other) {
+                return;
+            }
+            state = left;
+        }
+        // The loop's first guard found no region result naming `published`,
+        // so no result list here names it either.
+        debug_assert!(!self.published(scope, published));
+        self.context.replace_value_uses(published, taken);
+    }
+
+    /// The extent the write publishing `state` covers: the object its address
+    /// derives from, the offset into it and the byte count.
+    fn extent(&self, state: ValueId) -> Option<(Id, i64, u64)> {
+        let class = self.eg.find(*self.value_class.get(&state)?);
+        let node = self
+            .eg
+            .nodes(class)
+            .find(|node| node.prov == Prov::Value(state))?;
+        if node.sym() != Some(SymKind::StoreMemory) || node.children.len() != state::STORE_ARITY {
+            return None;
+        }
+        let (object, offset) = self.eg.object_of(node.children[state::ADDRESS])?;
+        let bytes = self
+            .eg
+            .nodes(self.eg.find(node.children[state::BYTES]))
+            .find_map(|node| node.int())?;
+        Some((self.eg.find(object), offset, bytes.to_u64()))
+    }
+
+    fn is_dead_read(&self, scope: &[RegionId], op: OpId) -> bool {
+        is_dead_read(self.context, scope, op)
+    }
+
+    fn published(&self, scope: &[RegionId], value: ValueId) -> bool {
+        published(self.context, scope, value)
     }
 
     /// A read whose value was rewritten leaves memory as it found it: the state
@@ -333,23 +428,117 @@ impl Driver<'_> {
     }
 }
 
-/// Whether `value` is in scope throughout `region`: defined in it, in a region
-/// enclosing it, or at module level.
+/// Whether `region` can read `value`: it is defined in `region` or in one
+/// enclosing it, by an operation other than the one carrying `region`, whose
+/// results are what its regions produce.
 fn visible(context: &Context, value: ValueId, region: RegionId) -> bool {
     let Some(defined) = crate::region::defining_region(context, value) else {
         return true;
     };
+    let defining_op = context.get_value(value).defining_op();
     let mut current = Some(region);
     while let Some(here) = current {
         if here == defined {
             return true;
         }
-        current = context
-            .get_region(here)
-            .parent_op()
-            .and_then(|op| context.region_of_op(op));
+        let carrier = context.get_region(here).parent_op();
+        if carrier.is_some() && carrier == defining_op {
+            return false;
+        }
+        current = carrier.and_then(|op| context.region_of_op(op));
     }
     false
+}
+
+/// A slot whose address reaches only writes is a memory nothing observes: each
+/// write leaves the state it was handed, and the sweep takes the writes and
+/// the allocation with nothing left demanding them.
+fn forget_write_only_slots(context: &Context, body: RegionId) {
+    let scope = context.nested_regions(body);
+    let mut renames: HashMap<ValueId, ValueId> = HashMap::new();
+    for op in context.get_region(body).op_ids() {
+        let instance = context.get_op(op);
+        let Some(allocation) = instance.clone().as_interface::<dyn PromotableAllocation>() else {
+            continue;
+        };
+        let mut writes = Vec::new();
+        if !only_written(context, &scope, allocation.promoted_location(), &mut writes) {
+            continue;
+        }
+        for write in writes {
+            let instance = context.get_op(write);
+            let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>() else {
+                continue;
+            };
+            let (Some(taken), Some(published)) = (write.state_operand(), write.state_result())
+            else {
+                continue;
+            };
+            context.replace_value_uses(published, taken);
+            renames.insert(published, taken);
+        }
+    }
+    context.rename_region_results_batch(body, &renames);
+}
+
+/// A read nothing demands: its value and state are read by nothing, so the
+/// sweep takes it and the state it observed has one reader fewer.
+fn is_dead_read(context: &Context, scope: &[RegionId], op: OpId) -> bool {
+    let instance = context.get_op(op);
+    instance.has_interface::<dyn MemoryRead>()
+        && !instance.has_interface::<dyn MemoryWrite>()
+        && instance.results().iter().all(|&result| {
+            context.users_of(result).is_empty() && !published(context, scope, result)
+        })
+}
+
+/// Whether any region in `scope` publishes `value` as a result, which no use
+/// list says. Only a region that can see `value` names it, so a `scope` wider
+/// than the one it is defined in answers the same.
+fn published(context: &Context, scope: &[RegionId], value: ValueId) -> bool {
+    scope
+        .iter()
+        .any(|&region| context.get_region(region).results().contains(&value))
+}
+
+/// Whether every use of `address`, through pointer arithmetic, is as the
+/// location of a write or of a read nothing demands; the writes are collected.
+fn only_written(
+    context: &Context,
+    scope: &[RegionId],
+    address: ValueId,
+    writes: &mut Vec<OpId>,
+) -> bool {
+    context.users_of(address).into_iter().all(|user| {
+        if is_dead_read(context, scope, user) {
+            return true;
+        }
+        let instance = context.get_op(user);
+        if instance.is::<crate::ptr::PtrAddOp>() {
+            return instance
+                .results()
+                .iter()
+                .all(|&derived| only_written(context, scope, derived, writes));
+        }
+        match instance.clone().as_interface::<dyn MemoryWrite>() {
+            // The address is the write's location and nothing else: a write
+            // storing the address itself lets it out.
+            Some(write)
+                if write.write_location() == address
+                    && !instance.has_interface::<dyn MemoryRead>()
+                    && instance
+                        .operands()
+                        .iter()
+                        .filter(|&&v| v == address)
+                        .count()
+                        == 1 =>
+            {
+                writes.push(user);
+                true
+            }
+            _ => false,
+        }
+    }) && !published(context, scope, address)
 }
 
 /// Whether the result list of `region` or of any region nested in it names

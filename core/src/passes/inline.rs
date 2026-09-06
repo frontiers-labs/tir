@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 use crate::analysis::AnalysisManager;
 use crate::builtin::{MakeTupleOp, ModuleOp, TupleGetOp};
-use crate::func::{CallOp, FuncOp, ReturnOp};
-use crate::passes::thread_state::unthread;
+use crate::func::{CallOp, FuncOp};
 use crate::ptr::AllocaOp;
 use crate::{
     ConstantLike, Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
@@ -86,9 +85,7 @@ impl Pass for InlinePass {
         let mut graph = CallGraph::read(context, module.op());
         for index in graph.callees_first() {
             let caller = graph.nodes[index].func;
-            let ordered = !context.get_region(graph.nodes[index].body).is_nodes();
             let mut caller_ops = cost_of(context, caller);
-            let mut edited = false;
             for site in std::mem::take(&mut graph.nodes[index].sites) {
                 if caller_ops >= MAX_CALLER_OPS {
                     break;
@@ -97,23 +94,8 @@ impl Pass for InlinePass {
                     continue;
                 }
                 caller_ops += cost_of(context, graph.nodes[site.callee].func);
-                if !edited && ordered {
-                    // Before the first splice: erasing a call whose state
-                    // result is still named leaves the split behind it holding
-                    // a definition that is gone. An unordered body keeps its
-                    // chain: the splice wires the callee's into it.
-                    unthread(context, rewriter, &context.get_op(caller))?;
-                }
-                edited = true;
-                let copied = if ordered {
-                    splice(context, rewriter, &graph, &site)?
-                } else {
-                    splice_nodes(context, rewriter, &graph, &site)?
-                };
+                let copied = splice_nodes(context, rewriter, &graph, &site)?;
                 graph.inlined(&site, &copied);
-            }
-            if edited && ordered {
-                unthread(context, rewriter, &context.get_op(caller))?;
             }
         }
         graph.erase_dead_private(context, rewriter)
@@ -348,82 +330,6 @@ impl Tarjan {
             }
         }
     }
-}
-
-fn splice(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    graph: &CallGraph,
-    site: &Site,
-) -> Result<Vec<usize>, PassError> {
-    let call = site.call.op().clone().as_op::<CallOp>().expect("a call");
-    let callee = &graph.nodes[site.callee];
-    let bindings: HashMap<ValueId, ValueId> = context
-        .get_region(callee.body)
-        .value_arguments()
-        .iter()
-        .map(Value::id)
-        .zip(call.args())
-        .collect();
-
-    let copy = crate::clone_region_with_mapping(context, callee.body, &bindings);
-    let block = context.get_block(context.get_region(copy).block_ids()[0]);
-    // The copy duplicates every call the callee held, so the λs they name gain
-    // a user the graph read before any of this existed.
-    let copied: Vec<usize> = block
-        .op_ids()
-        .iter()
-        .flat_map(|&op| {
-            let instance = context.get_op(op);
-            let mut calls = calls_under(context, &instance);
-            if instance.is::<CallOp>() {
-                calls.push(OperationRef::new(instance));
-            }
-            calls
-        })
-        .filter_map(|call| callee_node(context, &call, &graph.by_op))
-        .collect();
-    let ops = block.op_ids();
-    let (&last, _) = ops.split_last().expect("a body is terminated");
-    let returned = context
-        .get_op(last)
-        .as_op::<ReturnOp>()
-        .expect("a λ body ends in a return")
-        .returned_value();
-    rewriter.erase_op(&OperationRef::new(context.get_op(last)))?;
-
-    let entry = context
-        .get_region(graph.nodes[site.caller].body)
-        .entry_block();
-    let destination = context
-        .parent_block(site.call.op().id)
-        .expect("the call sits in a block");
-    for op in block.op_ids() {
-        block.remove_op(op);
-        if context.get_op(op).is::<AllocaOp>() {
-            context.get_block(entry).insert(0, op);
-            continue;
-        }
-        let position = context
-            .get_block(destination)
-            .op_ids()
-            .iter()
-            .position(|&other| other == site.call.op().id)
-            .expect("the call sits in the block holding it");
-        context.get_block(destination).insert(position, op);
-    }
-
-    if let Some(returned) = returned {
-        context.replace_value_uses(call.result(), returned);
-    }
-    rewriter.erase_op(&site.call)?;
-    rewriter.erase_block(block.id());
-
-    let caller = context.get_op(graph.nodes[site.caller].func);
-    let body = graph.nodes[site.caller].body;
-    let tuples = fold_tuple_gets(context, rewriter, body, &ops_under(context, &caller))?;
-    erase_unused(context, rewriter, &tuples)?;
-    Ok(copied)
 }
 
 /// [`splice`] for an unordered callee body: its operations join the region

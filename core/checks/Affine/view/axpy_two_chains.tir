@@ -1,9 +1,9 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // Two allocations are two memories, which is what a `restrict` pair claims about
-// two parameters. Law S3 makes it structural: the accesses sit on different
-// chains, so no pair spans them at all and there is nothing for the dependence
-// test to decide.
+// two parameters. The accesses share one chain, but a pair whose bases are
+// two allocations is independent by the objects alone, with nothing left for
+// the dependence test to decide.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
@@ -33,8 +33,9 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK: access 0 read %{{[0-9]+}} chain %[[X:[0-9]+]] base %{{[0-9]+}} offset 4*d0 extent 4
-// CHECK-NEXT: access 1 read %{{[0-9]+}} chain %[[Y:[0-9]+]] base %{{[0-9]+}} offset 4*d0 extent 4
-// CHECK-NEXT: access 2 write %{{[0-9]+}} chain %[[Y]] base %{{[0-9]+}} offset 4*d0 extent 4
+// CHECK: access 0 read %{{[0-9]+}} chain %[[S:[0-9]+]] base %[[X:[0-9]+]] offset 4*d0 extent 4
+// CHECK-NEXT: access 1 read %{{[0-9]+}} chain %[[S]] base %[[Y:[0-9]+]] offset 4*d0 extent 4
+// CHECK-NEXT: access 2 write %{{[0-9]+}} chain %[[S]] base %[[Y]] offset 4*d0 extent 4
+// CHECK-NEXT: dep 0 2 independent
 // CHECK-NEXT: dep 1 2 independent
 // CHECK-NEXT: port 0

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Two spellings of one address: `+4` and `+2+2` land on the same byte of the
 // same object. The extent a law reads is the object an address is derived from
@@ -24,7 +24,7 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NOT: ptr.store
-// CHECK-NOT: ptr.load
-// CHECK: func.return %1
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !i32, %[[B:[0-9]+]]: !i32)
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: -> %[[B]] | %[[ENTRY]]
+// CHECK-NOT: ptr.

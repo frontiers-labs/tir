@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,affine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,affine) --verify %s | filecheck %s
 
 // A 1024-square matmul over local arrays: 12 MB, past what the modelled
 // hierarchy absorbs, so the fetched lines are worth a loop. Every dependence
@@ -59,11 +59,11 @@ module {data_layout = #data_layout} {
 // CHECK: %[[T:[0-9]+]] = constant {value = 64} : !i32
 // The tiled dimension counts in steps of a tile, and the loop inside it runs
 // from where that one stands to one tile further.
-// CHECK: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %[[T]] iter_args(%[[TO:[0-9]+]] = %{{[0-9]+}}
+// CHECK: scf.for %[[TO:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %[[T]] (| %{{[0-9]+}} = %{{[0-9]+}}) {
 // CHECK-NEXT: %[[END:[0-9]+]] = addi %[[TO]], %[[T]]
-// CHECK-NEXT: scf.for_legacy %[[TO]], %[[END]], %{{[0-9]+}} iter_args(%[[I:[0-9]+]] = %[[TO]]
-// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[K:[0-9]+]] = %{{[0-9]+}}
-// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[J:[0-9]+]] = %{{[0-9]+}}
+// CHECK-NEXT: scf.for %[[I:[0-9]+]] = %[[TO]] to %[[END]] step %{{[0-9]+}} (| %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: scf.for %[[K:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (| %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: scf.for %[[J:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (| %{{[0-9]+}} = %{{[0-9]+}}) {
 // CHECK-NEXT: extsi %[[I]]
 // CHECK-NEXT: extsi %[[J]]
 // CHECK-NEXT: extsi %[[K]]

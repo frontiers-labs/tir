@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // A loop entered at `n` counts `n + i` on iteration `i`: the lower bound is a
 // parameter of the form, and the range predicate a caller could be asked

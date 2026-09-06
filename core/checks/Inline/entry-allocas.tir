@@ -1,8 +1,8 @@
-// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0> --verify %s | filecheck %s
 
-// C gives a callee's locals function lifetime and `promote` takes only an
-// entry-block slot, so the callee's allocations land at the head of the caller's
-// entry block however deep in it the call stood.
+// C gives a callee's locals function lifetime and `promote-nodes` takes only a
+// slot of the function's own body, so the callee's allocations land in the
+// caller's body however deep in it the call stood.
 
 module {
   %fn_box = func.func @box(%a: !i32) -> !i32 {
@@ -21,8 +21,9 @@ module {
 }
 
 // CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32)
-// CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
 // CHECK: %[[D:[0-9]+]] = addi %[[X]], %{{[0-9]+}} : !i32
-// CHECK-NEXT: ptr.store %[[D]], %[[SLOT]]
-// CHECK-NEXT: %[[V:[0-9]+]] = ptr.load %[[SLOT]] : !i32
-// CHECK-NEXT: func.return %[[V]]
+// CHECK-NEXT: | %[[S:[0-9]+]] = state.entry_state
+// CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
+// CHECK-NEXT: | %[[ST:[0-9]+]] = ptr.store %[[D]], %[[SLOT]] | %[[S]]
+// CHECK-NEXT: %[[V:[0-9]+]] | %[[LD:[0-9]+]] = ptr.load %[[SLOT]] | %[[ST]] : !i32
+// CHECK-NEXT: -> %[[V]] | %[[LD]]

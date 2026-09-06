@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // A pointer is a value of the width the data layout gives it, so a store of one
 // covers the extent the load reads and the load is the value the store wrote.
@@ -18,4 +18,4 @@ module {data_layout = #data_layout} {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: ptr.store %[[V:[0-9]+]],
 // CHECK-NOT: ptr.load
-// CHECK: func.return %[[V]]
+// CHECK: -> %[[V]]

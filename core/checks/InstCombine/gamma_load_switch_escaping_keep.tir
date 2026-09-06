@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The slot's own pointer is stored into another slot, so its contents may be
 // reached by a name the term graph never sees. Distributing over the arms of a
@@ -9,25 +9,26 @@ module {
   %fn_stored_pointer = func.func @stored_pointer(%0: !i32, %1: !i32, %2: !i32) -> !i32 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %4 = ptr.alloca {size = 8, align = 8} : !ptr.p<!ptr.p<!i32>>
-    ptr.store %3, %4
-    scf.switch_legacy %0 case 1 {
-      ptr.store %1, %3
-      scf.yield
+    | %s0 = state.entry_state
+    | %s1 = ptr.store %3, %4 | %s0
+    | %s2 = scf.switch %0 args(| %s1) (| %a) {
+      | %a1 = ptr.store %1, %3 | %a
+      -> | %a1
     }
-    case 2 {
-      ptr.store %2, %3
-      scf.yield
+    (| %b) {
+      | %b1 = ptr.store %2, %3 | %b
+      -> | %b1
     }
-    default {
-      scf.yield
+    (| %c) {
+      -> | %c
     }
-    %5 = ptr.load %3 : !i32
-    func.return %5
+    %5 | %s3 = ptr.load %3 | %s2 : !i32
+    -> %5 | %s3
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @stored_pointer
-// CHECK: scf.switch_legacy %0
+// CHECK: scf.switch %0
 // CHECK: %[[RESULT:[0-9]+]] | %{{[0-9]+}} = ptr.load
-// CHECK: func.return %[[RESULT]]
+// CHECK: -> %[[RESULT]]

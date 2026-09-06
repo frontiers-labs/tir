@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes --verify %s | filecheck %s
 
 // Pointer arithmetic reaches part of the slot, so no single value stands for
 // what it holds and the allocation stays.
@@ -17,9 +17,8 @@ module {data_layout = #data_layout} {
   }
   module_end
 }
-
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK: ptr.alloca
-// CHECK: ptr.store %0
-// CHECK: ptr.store %1
+// CHECK: ptr.store %[[A]]
+// CHECK: ptr.store %[[B]]
 // CHECK: ptr.load

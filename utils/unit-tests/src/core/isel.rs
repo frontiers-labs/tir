@@ -86,6 +86,13 @@ marker_info!(ShrsMarkerOp, "shrsi");
 marker_info!(SubMarkerOp, "subi");
 marker_info!(MulMarkerOp, "muli");
 
+tir::helpers::dialect! {
+    TestDialect {
+        name: "test",
+        operations: [ShlMarkerOp, ShrsMarkerOp, SubMarkerOp, MulMarkerOp],
+    }
+}
+
 /// Build one of the marker instructions over `value`, producing `result_ty`.
 macro_rules! marker {
     ($op:ident, $builder:ident, $context:expr, $value:expr, $result_ty:expr) => {{
@@ -107,6 +114,7 @@ fn function(
     args: &[TypeId],
     ret: TypeId,
 ) -> (ModuleOp, FuncOp, RegionId, Vec<ValueId>) {
+    context.register_dialect::<TestDialect>();
     let module = ops::module(context, None).build();
     let values: Vec<_> = args
         .iter()
@@ -130,7 +138,9 @@ fn run_pass(
     module.body().append_op(func);
     module.body().append_op(ops::module_end(context).build());
     let mut pm = PassManager::new();
-    pm.nest::<FuncOp>().add_pass(pass);
+    let functions = pm.nest::<FuncOp>();
+    functions.add_pass(tir::passes::RestructureNodesPass::new());
+    functions.add_pass(pass);
     pm.run(context, context.get_op(module.id()))
 }
 
@@ -139,22 +149,17 @@ fn select(context: &Context, module: &ModuleOp, func: FuncOp, rules: Vec<Rule>) 
         .expect("pass pipeline should succeed");
 }
 
-/// The op names of the region's first block.
+/// The op names of the selected body, in the order selection left them.
 fn body_names(context: &Context, region: RegionId) -> Vec<&'static str> {
-    context
-        .get_region(region)
-        .iter(context.clone())
-        .next()
-        .unwrap()
-        .op_ids()
-        .into_iter()
-        .map(|op_id| context.get_op(op_id).name().as_str())
+    body_ops(context, region)
+        .iter()
+        .map(|op| op.name().as_str())
         .collect()
 }
 
-fn block_op_list(context: &Context, block: tir::BlockId) -> Vec<tir::OpHandle> {
+fn body_ops(context: &Context, region: RegionId) -> Vec<tir::OpHandle> {
     context
-        .get_block(block)
+        .get_region(region)
         .op_ids()
         .into_iter()
         .map(|op_id| context.get_op(op_id))
@@ -266,7 +271,7 @@ fn pbqp_selector_consumes_internal_nodes_of_selected_pattern() {
 
     select(&context, &module, func, add_mul_rules());
 
-    assert_eq!(body_names(&context, region), vec!["addi", "return"]);
+    assert_eq!(body_names(&context, region), vec!["addi"]);
 
     let mut buf = String::new();
     let mut fmt = IRFormatter::new(&mut buf);
@@ -379,7 +384,7 @@ fn pbqp_selector_duplicates_shared_pure_internal_nodes() {
 
     select(&context, &module, func, add_mul_rules());
 
-    assert_eq!(body_names(&context, region), vec!["addi", "addi", "return"]);
+    assert_eq!(body_names(&context, region), vec!["addi", "addi"]);
 }
 
 /// An unused consumer does not demand its result or operands.
@@ -400,7 +405,7 @@ fn unused_consumer_does_not_create_demand() {
 
     select(&context, &module, func, add_mul_rules());
 
-    assert_eq!(body_names(&context, region), vec!["muli", "return"]);
+    assert_eq!(body_names(&context, region), vec!["muli"]);
 }
 
 fn add_mul_add_pattern() -> SemGraph {
@@ -456,7 +461,7 @@ fn cost_model_override_changes_selection() {
     run_pass(&context, &module, func, pass).expect("pass pipeline should succeed");
 
     // With fusion priced out, the default add-mul cost-1 win is overridden.
-    assert_eq!(body_names(&context, region), vec!["muli", "addi", "return"]);
+    assert_eq!(body_names(&context, region), vec!["muli", "addi"]);
 }
 
 #[test]
@@ -505,10 +510,7 @@ fn composite_rule_falls_back_to_atomic_cover() {
 
     select(&context, &module, func, rules);
 
-    assert_eq!(
-        body_names(&context, region),
-        vec!["addi", "muli", "addi", "return"]
-    );
+    assert_eq!(body_names(&context, region), vec!["addi", "muli", "addi"]);
 }
 
 /// A binary pattern constrained to a specific result type via the pattern
@@ -556,7 +558,7 @@ fn unused_typed_operation_is_not_selected() {
 
     select(&context, &module, func, rules);
 
-    assert_eq!(body_names(&context, region), vec!["addi", "return"]);
+    assert_eq!(body_names(&context, region), vec!["addi"]);
 }
 
 /// Build `add(add(a,b), c)` over i32 values and select it with a fused
@@ -609,12 +611,9 @@ fn internal_node_type_constraint_is_enforced() {
     // Inner add inferred as i32 from i32 operands. A matching i32 constraint
     // (or no constraint) lets the fused rule consume it; an i64 constraint
     // forbids the match, falling back to two atomic adds.
-    assert_eq!(run_inner_typed_fusion(Some(32)), vec!["subi", "return"]);
-    assert_eq!(run_inner_typed_fusion(None), vec!["subi", "return"]);
-    assert_eq!(
-        run_inner_typed_fusion(Some(64)),
-        vec!["addi", "addi", "return"]
-    );
+    assert_eq!(run_inner_typed_fusion(Some(32)), vec!["subi"]);
+    assert_eq!(run_inner_typed_fusion(None), vec!["subi"]);
+    assert_eq!(run_inner_typed_fusion(Some(64)), vec!["addi", "addi"]);
 }
 
 fn emit_add_imm_marker(
@@ -651,13 +650,12 @@ fn emit_materializer_marker(
     req: &EmitRequest,
     _m: &RuleMatch,
 ) -> Result<Box<dyn Operation>, PassError> {
-    let result = *req
-        .results
-        .first()
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
     let result_ty = req.result_ty.expect("typed result");
+    MulMarkerOp::register_interfaces(context);
     Ok(Box::new(
-        ops::muli(context, result, result, result_ty).build(),
+        MulMarkerOpBuilder::new(context)
+            .result_types(vec![result_ty])
+            .build(),
     ))
 }
 
@@ -782,7 +780,7 @@ fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
     run_pass(&context, &module, func, InstructionSelectPass::new(rules))
         .expect("selection should materialize the register operand");
 
-    assert_eq!(body_names(&context, region), vec!["muli", "subi", "return"]);
+    assert_eq!(body_names(&context, region), vec!["muli", "subi"]);
 }
 
 /// Select `add(a, constant)` with a cheap immediate rule bounded to a signed
@@ -834,18 +832,12 @@ fn run_immediate_range(constant: i64) -> Vec<&'static str> {
 fn immediate_range_gates_immediate_rules() {
     // The signed 12-bit boundaries fold into the immediate form; the constant
     // op is swept.
-    assert_eq!(run_immediate_range(2047), vec!["subi", "return"]);
-    assert_eq!(run_immediate_range(-2048), vec!["subi", "return"]);
+    assert_eq!(run_immediate_range(2047), vec!["subi"]);
+    assert_eq!(run_immediate_range(-2048), vec!["subi"]);
     // One past either boundary must not bind the immediate rule: the register
     // form is selected and the constant stays materialized.
-    assert_eq!(
-        run_immediate_range(2048),
-        vec!["constant", "addi", "return"]
-    );
-    assert_eq!(
-        run_immediate_range(-2049),
-        vec!["constant", "addi", "return"]
-    );
+    assert_eq!(run_immediate_range(2048), vec!["constant", "addi"]);
+    assert_eq!(run_immediate_range(-2049), vec!["constant", "addi"]);
 }
 
 fn shift_imm_pattern(kind: SymKind) -> SemGraph {
@@ -961,7 +953,7 @@ fn square_sign_extension_lowers_to_shift_pair() {
     let body_ops = select_sign_extension(slli_rule);
 
     // add (from the addi), then the slli/srai sign-extension idiom, then return.
-    assert_eq!(body_ops, vec!["addi", "shli", "shrsi", "return"]);
+    assert_eq!(body_ops, vec!["addi", "shli", "shrsi"]);
 }
 
 #[test]
@@ -976,7 +968,7 @@ fn introduced_rule_emits_prelude_before_instruction() {
     .with_prelude_emitter(emit_shift_prelude);
     let body_ops = select_sign_extension(slli_rule);
 
-    assert_eq!(body_ops, vec!["addi", "subi", "shli", "shrsi", "return"]);
+    assert_eq!(body_ops, vec!["addi", "subi", "shli", "shrsi"]);
 }
 
 /// `LoadMemory(Add(base, offset), bytes, metadata)` — the shape the builder
@@ -1094,10 +1086,7 @@ fn memory_ops_select_via_interfaces() {
         .expect("memory ops should select through their interfaces");
 
     // store -> muli marker, load -> shli marker; the alloca is untouched.
-    assert_eq!(
-        body_names(&context, region),
-        vec!["alloca", "muli", "shli", "return"]
-    );
+    assert_eq!(body_names(&context, region), vec!["alloca", "muli", "shli"]);
 }
 
 /// Equivalent definitions extract to one tile.
@@ -1189,18 +1178,9 @@ fn merged_value_classes_resolve_to_earliest_def() {
     let pass = InstructionSelectPass::new(rules).with_theory(theory);
     run_pass(&context, &module, func, pass).expect("merged classes should still select");
 
-    let block_ref = context
-        .get_region(region)
-        .iter(context.clone())
-        .next()
-        .unwrap();
-    let body: Vec<_> = block_ref
-        .op_ids()
-        .into_iter()
-        .map(|op_id| context.get_op(op_id))
-        .collect();
+    let body = body_ops(&context, region);
     let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
-    assert_eq!(names, vec!["muli", "subi", "return"]);
+    assert_eq!(names, vec!["muli", "subi"]);
 
     let sub_op = &body[1];
     assert_eq!(sub_op.operands()[0], body[0].results()[0]);
@@ -1239,14 +1219,17 @@ fn equal_cost_tie_breaks_to_more_specific_rule() {
 
     select(&context, &module, func, rules);
 
-    assert_eq!(body_names(&context, region), vec!["subi", "return"]);
+    assert_eq!(body_names(&context, region), vec!["subi"]);
 }
 
-/// A demanded class is extracted in the block containing its live definition.
+/// A value recomputed in another block of the CFG is one class once the body
+/// is unordered: the add binds the single selected definition, and the
+/// recomputation nothing reads is swept.
 #[test]
-fn refuses_cross_block_binding_to_non_escaping_value() {
+fn recomputation_across_blocks_binds_to_its_selected_definition() {
     let context = Context::with_default_dialects();
     let i64_ty = IntegerType::new(&context, 64);
+    context.register_dialect::<TestDialect>();
     let module = ops::module(&context, None).build();
     let a = context.create_value(i64_ty, None);
     let b = context.create_value(i64_ty, None);
@@ -1296,18 +1279,12 @@ fn refuses_cross_block_binding_to_non_escaping_value() {
     run_pass(&context, &module, func, InstructionSelectPass::new(rules))
         .expect("selection should succeed");
 
-    let entry_names: Vec<_> = block_op_list(&context, entry.id())
-        .iter()
-        .map(|op| op.name().as_str())
-        .collect();
-    assert_eq!(entry_names, vec!["br"]);
-    let bb1_ops = block_op_list(&context, bb1.id());
-    let names: Vec<_> = bb1_ops.iter().map(|op| op.name().as_str()).collect();
-    assert_eq!(names, vec!["subi", "addi", "return"]);
-    let bb1_sub = bb1_ops[0].results()[0];
-    let addi = &bb1_ops[1];
+    let body = body_ops(&context, region.id());
+    let names: Vec<_> = body.iter().map(|op| op.name().as_str()).collect();
+    assert_eq!(names, vec!["subi", "addi"]);
+    let sub = body[0].results()[0];
     assert!(
-        addi.operands().contains(&bb1_sub),
-        "the add binds the block-local recomputation"
+        body[1].operands().contains(&sub),
+        "the add binds the selected recomputation"
     );
 }

@@ -28,7 +28,7 @@ fn reduced_pipeline_preserves_backend_semantics() {
     let expected = compile_asm(&source);
     let custom = compile_asm_with_pipeline(
         &source,
-        Some("inline<40,5>,func.func(promote,thread-state,affine)"),
+        Some("inline<40,5>,func.func(promote-nodes,verify-deps,affine)"),
     );
     assert_eq!(custom, expected);
 }

@@ -2,10 +2,10 @@
 // RUN: tir interp %s -f f --args=3 | filecheck %s --check-prefix=VALUE
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
 
-// A loop whose values nothing reads but whose body writes memory: the state
-// it leaves is what the function returns its memory through, so the loop is
-// demanded and stays with its store, however unread its counter is. The slot
-// is not promoted here, so the store is the effect that keeps the loop.
+// A loop whose values nothing reads but whose body writes memory: the read
+// after it observes the state it leaves, so the loop is demanded and stays
+// with its store, however unread its counter is. The slot is not promoted
+// here, so the store is the effect that keeps the loop.
 
 module {
   %fn_f = func.func @f(%n: !i32) -> !i32 {
@@ -19,14 +19,16 @@ module {
     %more = cmpi %next, %n {predicate = "slt"} : !i1
     cfg.cond_br %more, ^body(%next : !i32), ^exit
   ^exit:
-    func.return %n
+    %last = ptr.load %p : !i32
+    func.return %last
   }
   module_end
 }
 
-// CHECK: func.func @f(%[[N:[0-9]+]]: !i32)
+// CHECK: func.func @f(%{{[0-9]+}}: !i32)
 // CHECK: scf.loop
 // CHECK: ptr.store
-// CHECK: -> %[[N]] | %{{[0-9]+}}
+// CHECK: %[[V:[0-9]+]] | %[[S:[0-9]+]] = ptr.load
+// CHECK: -> %[[V]] | %[[S]]
 
-// VALUE: i32 3
+// VALUE: i32 2

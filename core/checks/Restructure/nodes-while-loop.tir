@@ -5,7 +5,6 @@
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f sum --args=0 | filecheck --check-prefix=ZERO %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
-// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
 
 // A head-controlled counted loop accumulating into a slot. The loop becomes an
 // `scf.loop` whose body tests first and stores only when it repeats; the

@@ -517,7 +517,7 @@ impl Emitter<'_> {
     }
 
     fn constant(&self, region: RegionId, value: i64, ty: TypeId) -> Result<ValueId, PassError> {
-        if !super::emit::is_integer(self.context, ty) {
+        if !is_integer(self.context, ty) {
             return Err(unsupported(&format!(
                 "a value of type {} it would have to invent",
                 self.context.type_to_string(ty)
@@ -535,4 +535,13 @@ impl Emitter<'_> {
 enum Decision {
     If(Src),
     Switch(VarId, Vec<i64>),
+}
+
+/// Whether `ty` is an integer, the only type this pass knows how to invent a
+/// value of.
+fn is_integer(context: &Context, ty: TypeId) -> bool {
+    let data = context.get_type_data(ty);
+    (data.as_ref() as &dyn std::any::Any)
+        .downcast_ref::<crate::builtin::IntegerType>()
+        .is_some()
 }

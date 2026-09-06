@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // The same nest over pointer parameters. No two parameters are told apart, so
 // all three accesses are of one chain, and the pairs across objects are decided
@@ -60,4 +60,5 @@ module {data_layout = #data_layout} {
 // CHECK-NEXT: dep 1 3 conditional disjoint %[[B]][0, 255] %[[C]][0, 255]
 // CHECK-NEXT: dep 2 3 (0, 0, +)
 // CHECK-NEXT: port 0 %{{[0-9]+}} induction init %{{[0-9]+}} step 1
+// CHECK-NEXT: port 1 %{{[0-9]+}} induction init %{{[0-9]+}} step 1
 // CHECK-NEXT: }

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The mirror of theta_load_for_iter_arg for a slot holding a pointer: the loop
 // grows the port carrying it, spelled at the pointer type the accesses agree on,
@@ -7,7 +7,7 @@
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  %fn_advance = func.func @advance(%0: !index, %1: !index, %2: !index, %3: !ptr.p, %4: !i64) -> !ptr.p {
+  %fn_advance = func.func @advance(%0: !i64, %1: !i64, %2: !i64, %3: !ptr.p, %4: !i64) -> !ptr.p {
     %5 = ptr.alloca {size = 8, align = 8} : !ptr.p
     ptr.store %3, %5
     scf.for_legacy %0, %1, %2 {
@@ -22,12 +22,12 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @advance
+// CHECK-LABEL: %{{[0-9]+}} = func.func @advance(%[[LB:[0-9]+]]: !i64, %[[UB:[0-9]+]]: !i64, %[[STEP:[0-9]+]]: !i64, %[[INIT:[0-9]+]]: !ptr.p, %[[D:[0-9]+]]: !i64)
 // CHECK-NOT: ptr.alloca
 // CHECK-NOT: ptr.store
 // CHECK-NOT: ptr.load
-// CHECK: %[[RESULT:[0-9]+]] = scf.for_legacy %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %3) -> !ptr.p {
-// CHECK-NEXT: %[[NEXT:[0-9]+]] = ptr.ptradd %[[CARRIED]], %4 : !ptr.p
-// CHECK-NEXT: scf.yield %[[NEXT]]
+// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] | %[[OUT:[0-9]+]] = scf.for %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[STEP]] (%[[CARRIED:[0-9]+]] = %[[INIT]] | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = ptr.ptradd %[[CARRIED]], %[[D]] : !ptr.p
+// CHECK-NEXT: -> %[[NEXT]] | %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-NEXT: -> %[[RESULT]] | %[[OUT]]

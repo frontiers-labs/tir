@@ -1,7 +1,8 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
-// Three local arrays are three memories, so the only pair the nest has is C's
-// read against its own write: one equation, `32·δi + 4·δj = 0`, which the
+// Three local arrays are three memories, so the pairs across them are
+// independent and the one left to decide is C's read against its own write:
+// one equation, `32·δi + 4·δj = 0`, which the
 // iteration space admits only at `δi = δj = 0`, with `k` free.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
@@ -56,10 +57,13 @@ module {data_layout = #data_layout} {
 // CHECK-NEXT: loop 0 %[[NEST]] i32 [0, 8) step 1 counter %[[I:[0-9]+]] trip 8
 // CHECK-NEXT: loop 1 %{{[0-9]+}} i32 [0, 8) step 1 counter %{{[0-9]+}} trip 8
 // CHECK-NEXT: loop 2 %{{[0-9]+}} i32 [0, 8) step 1 counter %[[K:[0-9]+]] trip 8
-// CHECK-NEXT: access 0 read %{{[0-9]+}} chain %{{[0-9]+}} base %[[A:[0-9]+]] offset 32*d0 + 4*d2 extent 4
-// CHECK-NEXT: access 1 read %{{[0-9]+}} chain %{{[0-9]+}} base %{{[0-9]+}} offset 4*d1 + 32*d2 extent 4
-// CHECK-NEXT: access 2 read %{{[0-9]+}} chain %[[C:[0-9]+]] base %[[CB:[0-9]+]] offset 32*d0 + 4*d1 extent 4
-// CHECK-NEXT: access 3 write %{{[0-9]+}} chain %[[C]] base %[[CB]] offset 32*d0 + 4*d1 extent 4
+// CHECK-NEXT: access 0 read %{{[0-9]+}} chain %[[S:[0-9]+]] base %[[A:[0-9]+]] offset 32*d0 + 4*d2 extent 4
+// CHECK-NEXT: access 1 read %{{[0-9]+}} chain %[[S]] base %{{[0-9]+}} offset 4*d1 + 32*d2 extent 4
+// CHECK-NEXT: access 2 read %{{[0-9]+}} chain %[[S]] base %[[CB:[0-9]+]] offset 32*d0 + 4*d1 extent 4
+// CHECK-NEXT: access 3 write %{{[0-9]+}} chain %[[S]] base %[[CB]] offset 32*d0 + 4*d1 extent 4
+// CHECK-NEXT: dep 0 3 independent
+// CHECK-NEXT: dep 1 3 independent
 // CHECK-NEXT: dep 2 3 (0, 0, +)
 // CHECK-NEXT: port 0 %[[K]] induction init %{{[0-9]+}} step 1
+// CHECK-NEXT: port 1 %{{[0-9]+}} induction init %{{[0-9]+}} step 1
 // CHECK-NEXT: }

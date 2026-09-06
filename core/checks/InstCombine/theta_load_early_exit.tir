@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // A body leaving through `scf.break` never reaches its yield, so the break edge
 // is where the slot's value leaves the loop. The carried port is fed on that
@@ -8,22 +8,30 @@
 module {
   %fn_early = func.func @early(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %1, %2
-    scf.while {
-      scf.condition %0
-    } do scope(%3) {
-      ptr.store %1, %2
-      scf.break %3
+    | %3 = state.entry_state
+    | %4 = ptr.store %1, %2 | %3
+    | %5 = scf.loop (| %6 = %4) {
+      %7 | %8 = scf.switch %0 args(| %6) (| %9) {
+        %10 = constant {value = 0} : !i1
+        -> %10 | %9
+      }
+      (| %11) {
+        | %12 = ptr.store %1, %2 | %11
+        %13 = constant {value = 0} : !i1
+        -> %13 | %12
+      }
+      -> %7 | %8, %8
     }
-    %4 = ptr.load %2 : !i32
-    func.return %4
+    %14 | %15 = ptr.load %2 | %5 : !i32
+    -> %14 | %15
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @early
 // CHECK-NOT: ptr.
-// CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%{{[0-9]+}} = %1) -> !i32 {
-// CHECK: do scope(%[[SCOPE:[0-9]+]])(%{{[0-9]+}}) {
-// CHECK-NEXT: scf.break %[[SCOPE]], %1
-// CHECK: func.return %[[RESULT]]
+// CHECK: %[[RESULT:[0-9]+]] | %{{[0-9]+}} = scf.loop (%[[PORT:[0-9]+]] = %1 | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK: -> %{{[0-9]+}}, %[[PORT]] | %{{[0-9]+}}
+// CHECK: %[[BREAK:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT: -> %[[BREAK]], %1 | %{{[0-9]+}}
+// CHECK: -> %[[RESULT]] | %{{[0-9]+}}

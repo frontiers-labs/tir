@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // A fresh allocation is nothing else, so the two slots are two memories: the
 // write to the second is not on the first's chain at all, and the write that
@@ -23,7 +23,7 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !i32, %[[B:[0-9]+]]: !i32, %[[C:[0-9]+]]: !i32)
 // CHECK-NOT: ptr.
-// CHECK: %[[SUM:[0-9]+]] = addi %2, %1 : !i32
-// CHECK-NEXT: func.return %[[SUM]]
+// CHECK: %[[SUM:[0-9]+]] = addi %[[C]], %[[B]] : !i32
+// CHECK: -> %[[SUM]]

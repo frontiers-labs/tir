@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --pass func.func(dce) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --pass func.func(dce) --verify %s | filecheck %s
 
 // The counterpart: a slot whose value is read back is a memory something can
 // tell, so nothing of it goes — the sweep is a question about readers, not a
@@ -15,7 +15,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.alloca
-// CHECK: ptr.store %0, %1
-// CHECK: %2 | %{{[0-9]+}} = ptr.load %1
-// CHECK: func.return %2
+// CHECK: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %{{[0-9]+}}
+// CHECK: %[[V:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %[[P]] | %[[S]] : !i32
+// CHECK: -> %[[V]] | %[[R]]

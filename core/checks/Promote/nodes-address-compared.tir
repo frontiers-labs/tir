@@ -1,0 +1,19 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes --verify %s | filecheck %s
+
+// A slot whose address is read as a value, here by a comparison, stays: once
+// the slot is a value there is no address left for the comparison to name.
+
+module {
+  %fn_f = func.func @f(%0: !i32) -> !i1 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %1
+    %2 = ptr.cmp %1, %1 {predicate = "eq"} : !i1
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: func.func @f
+// CHECK: %[[SLOT:[0-9]+]] = ptr.alloca
+// CHECK-DAG: ptr.cmp %[[SLOT]], %[[SLOT]]
+// CHECK-DAG: ptr.store %{{[0-9]+}}, %[[SLOT]]

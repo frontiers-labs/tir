@@ -368,7 +368,13 @@ impl<'a> Builder<'a> {
             return;
         };
         let (args, latched, inits) = (carried.args, carried.latched, carried.inits);
-        let value_ports = args.len() - op.dep_results().len().min(args.len());
+        // A declared loop carries its dependencies apart from its value ports;
+        // a legacy one lists them among its arguments.
+        let value_ports = if op.has_interface::<dyn Theta>() {
+            args.len()
+        } else {
+            args.len() - op.dep_results().len().min(args.len())
+        };
         for port in 0..value_ports {
             self.ports.push(Port {
                 arg: args[port],
@@ -420,7 +426,9 @@ impl<'a> Builder<'a> {
             };
             pending.extend(op.operands().iter().copied());
             for region in crate::passes::regions_under(self.context, op.id) {
-                for inner in self.context.get_region(region).op_ids() {
+                let handle = self.context.get_region(region);
+                pending.extend(handle.results());
+                for inner in handle.op_ids() {
                     pending.extend(self.context.get_op(inner).operands().iter().copied());
                 }
             }

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes %s | filecheck %s
 
 // The module is one region, so a δ value is in scope at every use inside it:
 // a store of one forwards to the load that reads it back, and the slot dies.
@@ -18,4 +18,4 @@ module {data_layout = #data_layout} {
 
 // CHECK: %[[MESSAGE:[0-9]+]] = global private @.L.str0
 // CHECK-NOT: ptr.alloca
-// CHECK: func.return %[[MESSAGE]]
+// CHECK: -> %[[MESSAGE]]

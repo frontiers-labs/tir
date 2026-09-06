@@ -1,11 +1,11 @@
-// RUN: tir opt --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // A port every edge carries round unchanged is the value the loop was entered
 // with, at every read of it inside the loop and after it. A port the body
 // increments is refuted: it is not the same value twice.
 
 module {
-  %fn_f = func.func @f(%lb: !index, %ub: !index, %step: !index) -> !i32 {
+  %fn_f = func.func @f(%lb: !i64, %ub: !i64, %step: !i64) -> !i32 {
     %0 = constant {value = 7} : !i32
     %1 = constant {value = 0} : !i32
     %2 = constant {value = 1} : !i32
@@ -21,8 +21,8 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[C:[0-9]+]] = constant {value = 7} : !i32
-// CHECK: %{{[0-9]+}}, %[[N:[0-9]+]] = scf.for_legacy {{.*}} iter_args(%[[P:[0-9]+]] = %[[C]]
+// CHECK: %{{[0-9]+}}, %{{[0-9]+}}, %[[N:[0-9]+]] | %{{[0-9]+}} = scf.for {{.*}} (%[[P:[0-9]+]] = %[[C]]
 // CHECK: %[[NEXT:[0-9]+]] = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
-// CHECK-NEXT: scf.yield %[[P]], %[[NEXT]]
+// CHECK-NEXT: -> %[[P]], %[[NEXT]]
 // CHECK: %[[SUM:[0-9]+]] = addi %[[C]], %[[N]] : !i32
-// CHECK-NEXT: func.return %[[SUM]]
+// CHECK-NEXT: -> %[[SUM]]

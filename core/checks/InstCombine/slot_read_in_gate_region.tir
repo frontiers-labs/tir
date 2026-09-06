@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The read is inside a gate's arm, on the state the store before the gate left:
 // entering a region does not rename the state it was handed, so forwarding
@@ -8,21 +8,26 @@
 module {
   %fn_forward = func.func @forward(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %1, %2
-    %5 = scf.if %0 -> !i32 {
-      %3 = ptr.load %2 : !i32
-      %4 = addi %3, %3 : !i32
-      scf.yield %4
-    } else {
-      scf.yield %1
+    | %s0 = state.entry_state
+    | %s1 = ptr.store %1, %2 | %s0
+    %5 | %s2 = scf.switch %0 args(| %s1) (| %e) {
+      -> %1 | %e
     }
-    func.return %5
+    (| %t) {
+      %3 | %t1 = ptr.load %2 | %t : !i32
+      %4 = addi %3, %3 : !i32
+      -> %4 | %t1
+    }
+    -> %5 | %s2
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @forward
 // CHECK-NOT: ptr.
-// CHECK: scf.if %0 -> !i32 {
+// CHECK: scf.switch %0 args(| %{{[0-9]+}}) (| %[[EA:[0-9]+]]) {
+// CHECK-NEXT: -> %1 | %[[EA]]
+// CHECK-NEXT: }
+// CHECK-NEXT: (| %[[TA:[0-9]+]]) {
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %1, %1
-// CHECK-NEXT: scf.yield %[[SUM]]
+// CHECK-NEXT: -> %[[SUM]] | %[[TA]]

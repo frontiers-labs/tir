@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A function that touches no memory has no memory order to describe, so it gets
 // no entry state and no ports.
@@ -10,8 +10,7 @@ module {
   }
   module_end
 }
-
 // CHECK-LABEL: %{{[0-9]+}} = func.func @pure
 // CHECK-NOT: state.entry_state
 // CHECK-NOT: |
-// CHECK: func.return %1
+// CHECK: -> %1

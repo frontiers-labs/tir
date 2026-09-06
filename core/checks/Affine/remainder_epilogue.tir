@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,affine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,affine) --verify %s | filecheck %s
 
 // A dimension no tile size divides. The tiled loop stops at the last whole tile —
 // `lb + ((ub - lb) / stride)·stride`, the span divided unsigned so a loop
@@ -55,11 +55,11 @@ module {data_layout = #data_layout} {
 // CHECK-NEXT: %[[COVERED:[0-9]+]] = muli %[[TILES]], %[[T]]
 // CHECK-NEXT: %[[LAST:[0-9]+]] = addi %[[LB]], %[[COVERED]]
 // The whole tiles run first, and the symbolic dimension runs inside each.
-// CHECK-NEXT: %[[FINAL:[0-9]+]] | %[[S0:[0-9]+]], %[[S1:[0-9]+]] = scf.for_legacy %[[LB]], %[[LAST]], %[[T]] iter_args(%[[TO:[0-9]+]] = %[[LB]]
+// CHECK-NEXT: %[[FINAL:[0-9]+]] | %[[S:[0-9]+]] = scf.for %[[TO:[0-9]+]] = %[[LB]] to %[[LAST]] step %[[T]] (| %{{[0-9]+}} = %{{[0-9]+}}) {
 // CHECK-NEXT: %[[END:[0-9]+]] = addi %[[TO]], %[[T]]
-// CHECK-NEXT: scf.for_legacy %[[TO]], %[[END]], %{{[0-9]+}}
-// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %[[N]], %{{[0-9]+}}
+// CHECK-NEXT: scf.for %{{[0-9]+}} = %[[TO]] to %[[END]] step %{{[0-9]+}}
+// CHECK-NEXT: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %[[N]] step %{{[0-9]+}}
 // Then one copy over what is left, entered where the tiles stopped and on the
-// chains they left behind.
-// CHECK: scf.for_legacy %[[FINAL]], %[[UB]], %{{[0-9]+}} iter_args(%{{[0-9]+}} = %[[FINAL]] | %{{[0-9]+}} = %[[S0]], %{{[0-9]+}} = %[[S1]])
-// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %[[N]], %{{[0-9]+}}
+// chain they left behind.
+// CHECK: scf.for %{{[0-9]+}} = %[[FINAL]] to %[[UB]] step %{{[0-9]+}} (| %{{[0-9]+}} = %[[S]]) {
+// CHECK-NEXT: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %[[N]] step %{{[0-9]+}}

@@ -1,5 +1,5 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 
 // Two structurally identical ops hash-cons into one e-class, so the redundant second
 // computation is eliminated.

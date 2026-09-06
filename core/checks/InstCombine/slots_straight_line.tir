@@ -1,5 +1,5 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
-// RUN: tir opt --pass func.func(promote) --pass func.func(thread-state) --pass func.func(instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 // RUN: not tir opt --pass func.func(nope) %s
 
 // The shape a front end leaves for a straight-line function: one slot per name,
@@ -26,9 +26,10 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK: func.func @f(%[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK-NOT: ptr.
-// CHECK: %[[PRODUCT:[0-9]+]] = muli %0, %1 : !i32
+// CHECK: %[[PRODUCT:[0-9]+]] = muli %[[A]], %[[B]] : !i32
 // CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[PRODUCT]], %[[ONE]] : !i32
-// CHECK-NEXT: func.return %[[SUM]]
+// CHECK-NOT: ptr.
+// CHECK: -> %[[SUM]]

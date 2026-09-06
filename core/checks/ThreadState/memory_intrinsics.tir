@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // The intrinsics name whole ranges of unknown memory, so they thread the
 // conservative chain in the order they are written.
@@ -11,9 +11,8 @@ module {
   }
   module_end
 }
-
-// CHECK-LABEL: %{{[0-9]+}} = func.func @c
+// CHECK-LABEL: %{{[0-9]+}} = func.func @c(%[[DST:[0-9]+]]: !ptr.p, %[[SRC:[0-9]+]]: !ptr.p, %[[BYTE:[0-9]+]]: !i8, %[[LEN:[0-9]+]]: !i64)
 // CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.memset %0, %2, %3 | %[[ENTRY]]
-// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.memcpy %1, %0, %3 | %[[S1]]
-// CHECK-NEXT: func.return | %[[S2]]
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.memset %[[DST]], %[[BYTE]], %[[LEN]] | %[[ENTRY]]
+// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.memcpy %[[SRC]], %[[DST]], %[[LEN]] | %[[S1]]
+// CHECK-NEXT: -> | %[[S2]]

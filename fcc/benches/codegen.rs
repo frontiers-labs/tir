@@ -20,7 +20,7 @@ use fcc::sema::{TypedAst, analyze};
 use tir::backend::TargetMachine;
 use tir::backend::pipeline::{Oracles, StopAfter, build_pipeline};
 use tir::func::FuncOp;
-use tir::passes::{InstCombinePass, PromotePass, RestructurePass, ThreadStatePass};
+use tir::passes::{InstCombineNodesPass, PromoteNodesPass, RestructureNodesPass, VerifyDepsPass};
 use tir::{Context, Operation, PassManager};
 
 const GCC_20011219_1: &str = r#"
@@ -130,9 +130,9 @@ fn lower_before_instcombine(ast: &TypedAst) -> (Context, tir::builtin::ModuleOp)
     let mut pm = PassManager::new();
     pm.add_pass(LowerCirStructsPass::new());
     let function_pipeline = pm.nest::<FuncOp>();
-    function_pipeline.add_pass(RestructurePass::new());
-    function_pipeline.add_pass(PromotePass::new());
-    function_pipeline.add_pass(ThreadStatePass::new());
+    function_pipeline.add_pass(RestructureNodesPass::new());
+    function_pipeline.add_pass(PromoteNodesPass::new());
+    function_pipeline.add_pass(VerifyDepsPass::new());
     pm.run(&context, context.get_op(module.id())).unwrap();
     (context, module)
 }
@@ -145,7 +145,7 @@ fn lower_before_isel(ast: &TypedAst) -> (Context, tir::builtin::ModuleOp, Box<dy
 
     let mut pm = PassManager::new();
     let function_pipeline = pm.nest::<FuncOp>();
-    function_pipeline.add_pass(InstCombinePass::new());
+    function_pipeline.add_pass(InstCombineNodesPass::new());
     pm.run(&context, context.get_op(module.id())).unwrap();
     fcc::codegen::lower_data(&context, &module).unwrap();
     (context, module, target)
@@ -196,7 +196,7 @@ fn bench_promote(c: &mut Criterion) {
             },
             |(ctx, module)| {
                 let mut pm = tir::parse_pipeline(
-                    "func.func(promote),fixpoint<3>(func.func(thread-state,instcombine))",
+                    "func.func(restructure-nodes,promote-nodes),fixpoint<3>(func.func(instcombine-nodes))",
                 )
                 .unwrap();
                 pm.run(&ctx, ctx.get_op(module.id())).unwrap();
@@ -233,7 +233,7 @@ fn bench_gcc_20011219_1(c: &mut Criterion) {
             || lower_before_instcombine(&ast),
             |(context, module)| {
                 let mut pm = PassManager::new();
-                pm.nest::<FuncOp>().add_pass(InstCombinePass::new());
+                pm.nest::<FuncOp>().add_pass(InstCombineNodesPass::new());
                 pm.run(&context, context.get_op(module.id())).unwrap();
             },
             BatchSize::SmallInput,

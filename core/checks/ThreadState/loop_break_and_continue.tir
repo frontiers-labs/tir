@@ -1,41 +1,47 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
-// One loop left through both a `continue` and a `break`: the chain reaches the
+// One loop left through both a continue and a break: the chain reaches the
 // port on all three edges out of the body, each along the state its own path left.
 
 module {
-  %fn_spin = func.func @spin(%0: !i1, %1: !i32) -> !i32 {
-    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %1, %2
-    scf.while {
-      scf.condition %0
-    } do scope(%3) {
-      %4 = ptr.load %2 : !i32
-      scf.if %0 {
-        scf.continue %3
-      } else {
-        scf.yield
-      }
-      ptr.store %4, %2
-      scf.if %0 {
-        scf.break %3
-      } else {
-        scf.yield
-      }
-      scf.yield
-    }
-    %5 = ptr.load %2 : !i32
-    func.return %5
+  %fn_spin = func.func @spin(%0: !i1, %1: !i1, %2: !i1, %3: !i32) -> !i32 {
+    %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %3, %4
+    cfg.br ^head
+  ^head:
+    cfg.cond_br %0, ^body, ^exit
+  ^body:
+    %5 = ptr.load %4 : !i32
+    cfg.cond_br %1, ^head, ^rest
+  ^rest:
+    ptr.store %5, %4
+    cfg.cond_br %2, ^exit, ^head
+  ^exit:
+    %6 = ptr.load %4 : !i32
+    func.return %6
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @spin
-// CHECK: do scope(%[[SCOPE:[0-9]+]])(| %[[BODY:[0-9]+]]) {
-// CHECK-NEXT: %{{[0-9]+}} | %[[A:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[BODY]] : !i32
-// CHECK-NEXT: | %[[FIRST:[0-9]+]] = scf.if %0 args(| %[[A]]) (| %[[T:[0-9]+]]) {
-// CHECK-NEXT: scf.continue %[[SCOPE]] | %[[T]]
-// CHECK: | %[[B:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[FIRST]]
-// CHECK-NEXT: | %[[SECOND:[0-9]+]] = scf.if %0 args(| %[[B]]) (| %[[U:[0-9]+]]) {
-// CHECK-NEXT: scf.break %[[SCOPE]] | %[[U]]
-// CHECK: scf.yield | %[[SECOND]]
+// CHECK: | %[[FINAL:[0-9]+]] = scf.loop (| %[[CARRIED:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK-NEXT: %[[REPEAT:[0-9]+]] | %[[STATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[CARRIED]]) (| %[[E:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
+// CHECK-NEXT: -> %{{[0-9]+}} | %[[E]]
+// CHECK-NEXT: }
+// CHECK-NEXT: (| %[[B:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} | %[[A:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[B]] : !i32
+// CHECK-NEXT: %[[INNER:[0-9]+]] | %[[LEFT:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[A]]) (| %[[R:[0-9]+]]) {
+// CHECK-NEXT: | %[[W:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[R]]
+// CHECK-NEXT: %[[SEL:[0-9]+]] = scf.switch %{{[0-9]+}} {
+// CHECK: -> %[[SEL]] | %[[W]]
+// CHECK-NEXT: }
+// CHECK-NEXT: (| %[[K:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 1} : !i1
+// CHECK-NEXT: -> %{{[0-9]+}} | %[[K]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[INNER]] | %[[LEFT]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[REPEAT]] | %[[STATE]], %[[STATE]]
+// CHECK-NEXT: }
+// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[FINAL]] : !i32

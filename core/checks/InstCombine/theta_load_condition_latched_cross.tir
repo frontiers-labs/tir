@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Two slots the test region updates, one reading the other. The second port is
 // asked for from inside the arm, where the arm's own assumption makes the whole
@@ -10,40 +10,40 @@ module {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = constant {value = 0} : !i32
-    ptr.store %3, %1
-    ptr.store %3, %2
-    %4 = scf.while {
-      %5 = scf.if %0 -> !i1 {
-        %6 = ptr.load %1 : !i32
-        %7 = ptr.load %2 : !i32
-        %8 = addi %6, %7 : !i32
-        ptr.store %8, %1
-        %9 = constant {value = 1} : !i32
-        %10 = addi %7, %9 : !i32
-        ptr.store %10, %2
-        %11 = constant {value = 1} : !i1
-        scf.yield %11
-      } else {
+    | %4 = state.entry_state
+    | %5 = ptr.store %3, %1 | %4
+    | %6 = ptr.store %3, %2 | %5
+    | %7 = scf.loop (| %8 = %6) {
+      %9 | %10 = scf.switch %0 args(| %8) (| %11) {
         %12 = constant {value = 0} : !i1
-        scf.yield %12
+        -> %12 | %11
       }
-      scf.condition %5
-    } do {
-      scf.yield
+      (| %13) {
+        %14 | %15 = ptr.load %1 | %13 : !i32
+        %16 | %17 = ptr.load %2 | %15 : !i32
+        %18 = addi %14, %16 : !i32
+        | %19 = ptr.store %18, %1 | %17
+        %20 = constant {value = 1} : !i32
+        %21 = addi %16, %20 : !i32
+        | %22 = ptr.store %21, %2 | %19
+        %23 = constant {value = 1} : !i1
+        -> %23 | %22
+      }
+      -> %9 | %10, %10
     }
-    %13 = ptr.load %1 : !i32
-    func.return %13
+    %24 | %25 = ptr.load %1 | %7 : !i32
+    -> %24 | %25
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @sum_to
 // CHECK-NOT: ptr.
-// CHECK: %[[SUM:[0-9]+]], %{{[0-9]+}} = scf.while iter_args(%[[HS:[0-9]+]] = %3, %[[HC:[0-9]+]] = %3) -> !i32, !i32 {
-// CHECK: %{{[0-9]+}}, %[[LS:[0-9]+]], %[[LC:[0-9]+]] = scf.if %0 -> !i1, !i32, !i32 {
-// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[HS]], %[[HC]] : !i32
+// CHECK: %[[SUM:[0-9]+]], %{{[0-9]+}} | %{{[0-9]+}} = scf.loop (%[[HS:[0-9]+]] = %3, %[[HC:[0-9]+]] = %3 | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: %{{[0-9]+}}, %[[LS:[0-9]+]], %[[LC:[0-9]+]] | %{{[0-9]+}} = scf.switch %0
+// CHECK: -> %{{[0-9]+}}, %[[HS]], %[[HC]] | %{{[0-9]+}}
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[HS]], %[[HC]] : !i32
 // CHECK: %[[STEP:[0-9]+]] = addi %[[HC]], %{{[0-9]+}} : !i32
-// CHECK: scf.yield %{{[0-9]+}}, %[[NEXT]], %[[STEP]]
-// CHECK: scf.yield %{{[0-9]+}}, %[[HS]], %[[HC]]
-// CHECK: scf.condition %{{[0-9]+}}, %[[LS]], %[[LC]]
-// CHECK: func.return %[[SUM]]
+// CHECK: -> %{{[0-9]+}}, %[[NEXT]], %[[STEP]] | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, %[[LS]], %[[LC]], %[[LS]], %[[LC]] | %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK: -> %[[SUM]] | %{{[0-9]+}}

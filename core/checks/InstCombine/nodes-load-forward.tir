@@ -20,10 +20,9 @@ module {
 }
 
 // CHECK: func.func @f(%[[X:[0-9]+]]: !i32)
-// CHECK-NOT: ptr.load
-// CHECK-DAG: %[[R:[0-9]+]] = addi %[[X]], %[[X]] : !i32
-// CHECK-DAG: | %[[S:[0-9]+]] = ptr.store %[[X]], %{{[0-9]+}} | %{{[0-9]+}}
-// CHECK-NOT: ptr.load
-// CHECK: -> %[[R]] | %[[S]]
+// CHECK-NOT: ptr.
+// CHECK: %[[R:[0-9]+]] = addi %[[X]], %[[X]] : !i32
+// CHECK-NOT: ptr.
+// CHECK: -> %[[R]] | %{{[0-9]+}}
 
 // VALUE: i32 10

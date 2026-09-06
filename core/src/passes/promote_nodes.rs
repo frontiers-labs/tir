@@ -10,9 +10,8 @@
 //! and the gate joins them. Region membership decides nothing: two accesses in
 //! one region are ordered by the chain alone, and insertion order is never read.
 //!
-//! What stays a slot is what [`promote`](super::promote) leaves too — an
-//! escaping address, a partial access, disagreeing types — and, here, an access
-//! off the chain, which nothing can order.
+//! What stays a slot: an escaping address, a partial access, disagreeing
+//! types, and an access off the chain, which nothing can order.
 
 use std::collections::{HashMap, HashSet};
 
@@ -97,6 +96,9 @@ fn promotable(
     if accesses().any(|op| !names_whole_slot(context, op, slot)) {
         return None;
     }
+    if !address_only_accessed(context, slot, state) {
+        return None;
+    }
     let ty = agreed_value_type(context, state)?;
     if !accesses().all(|op| crosses_declared_bindings(context, op, body)) {
         return None;
@@ -116,6 +118,22 @@ fn promotable(
                 .all(|&dep| written_before(context, slot, dep, &writers))
         })
         .then_some(ty)
+}
+
+/// Whether every use of the slot's `address`, through pointer arithmetic, is
+/// as the location of one of its collected accesses: a comparison or an
+/// address kept as a value would go on naming a slot that is a value now.
+fn address_only_accessed(context: &Context, address: ValueId, state: &SlotState) -> bool {
+    context.users_of(address).into_iter().all(|user| {
+        let instance = context.get_op(user);
+        if instance.is::<crate::ptr::PtrAddOp>() {
+            return instance
+                .results()
+                .iter()
+                .all(|&derived| address_only_accessed(context, derived, state));
+        }
+        state.loads.contains(&user) || state.stores.contains(&user)
+    })
 }
 
 /// The loops and gates between `op` and `body`, innermost first.

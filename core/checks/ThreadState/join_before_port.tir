@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A gate is a consumer of the chain like any other, so the fork of reads open
 // where it sits is joined before the port: the state each arm is entered with
@@ -10,13 +10,14 @@ module {
     ptr.store %1, %2
     %3 = ptr.load %2 : !i32
     %4 = ptr.load %2 : !i32
-    scf.if %0 {
-      ptr.store %3, %2
-      scf.yield
-    } else {
-      ptr.store %4, %2
-      scf.yield
-    }
+    cfg.cond_br %0, ^then, ^else
+  ^then:
+    ptr.store %3, %2
+    cfg.br ^join
+  ^else:
+    ptr.store %4, %2
+    cfg.br ^join
+  ^join:
     %5 = ptr.load %2 : !i32
     func.return %5
   }
@@ -24,8 +25,8 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @h
-// CHECK: | %[[A1:[0-9]+]] = ptr.store %1, %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK: | %[[A1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %{{[0-9]+}}
 // CHECK-NEXT: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
 // CHECK-NEXT: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
 // CHECK-NEXT: | %[[J:[0-9]+]] = state.join | %[[R1]], %[[R2]]
-// CHECK-NEXT: | %{{[0-9]+}} = scf.if %0 args(| %[[J]]) (| %{{[0-9]+}}) {
+// CHECK-NEXT: | %{{[0-9]+}} = scf.switch %{{[0-9]+}} args(| %[[J]]) (| %{{[0-9]+}}) {

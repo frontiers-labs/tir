@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine-nodes) --verify %s | filecheck %s
 
 // Both guards fold to false, so the e-graph proves the state leaving the second
 // gate equal to the entry state. The gates stay (instcombine never collapses a
@@ -8,31 +8,33 @@
 
 module {
   %fn_p = func.func @p() {
-    func.return
+    ->
   }
   %fn_f = func.func @f() {
     %0 = constant {value = 0} : !i32
     %1 = constant {value = 0} : !i32
     %2 = cmpi %0, %1 {predicate = "ne"} : !i1
     | %3 = state.entry_state
-    | %4 = scf.if %2 args(| %3) (| %5) {
-      | %6 = func.call %fn_p() | %5
-      scf.yield | %6
-    } else (| %7) {
-      scf.yield | %7
+    | %4 = scf.switch %2 args(| %3) (| %5) {
+      -> | %5
     }
-    | %8 = scf.if %2 args(| %4) (| %9) {
-      | %10 = func.call %fn_p() | %9
-      scf.yield | %10
-    } else (| %11) {
-      scf.yield | %11
+    (| %6) {
+      | %7 = func.call %fn_p() | %6
+      -> | %7
     }
-    func.return | %8
+    | %8 = scf.switch %2 args(| %4) (| %9) {
+      -> | %9
+    }
+    (| %10) {
+      | %11 = func.call %fn_p() | %10
+      -> | %11
+    }
+    -> | %8
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: | %[[FIRST:[0-9]+]] = scf.if
-// CHECK: | %[[SECOND:[0-9]+]] = scf.if %{{[0-9]+}} args(| %[[FIRST]])
-// CHECK: func.return | %[[SECOND]]
+// CHECK: | %[[FIRST:[0-9]+]] = scf.switch
+// CHECK: | %[[SECOND:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[FIRST]])
+// CHECK: -> | %[[SECOND]]

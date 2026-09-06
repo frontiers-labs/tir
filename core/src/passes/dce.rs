@@ -9,9 +9,11 @@
 
 use crate::analysis::{DefUse, execution_regs, op_regs};
 use crate::backend::SymbolOp;
+use std::collections::HashSet;
+
 use crate::{
     AnalysisManager, Context, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
-    PassTarget, Rewriter, Terminator, func::FuncOp,
+    PassTarget, RegionId, Rewriter, Terminator, ValueId, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -48,35 +50,24 @@ impl Pass for DeadCodeEliminationPass {
         }
 
         let defuse = analyses.get::<DefUse>(context, op.op().id);
-        erase_dead_with(context, rewriter, &defuse, true)
+        let regions = super::regions_under(context, op.op().id);
+        erase_dead_with(context, rewriter, &defuse, &regions)
     }
 }
 
-/// Erase every operation nothing can tell the absence of, cascading: an erased
-/// op's operands whose def is then unread are revisited without rescanning.
-///
-/// The cascade is what a rewrite leaves behind, so
-/// [`instcombine`](super::instcombine) runs it as part of its own commit; this
-/// pass is the same walk where no rewrite caused it — after instruction
-/// selection, which leaves values its fusions recomputed.
-pub(crate) fn erase_dead(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    defuse: &DefUse,
-) -> Result<(), PassError> {
-    erase_dead_with(context, rewriter, defuse, false)
-}
-
-/// `regions` admits a gate or a loop nothing under which can be told to have
-/// happened. A rewrite's own commit leaves that alone: the control it orphaned
-/// is still the shape the rewrite was read against, and removing it is this
-/// pass's sweep rather than the rewriter's.
+/// A gate or a loop goes with the rest once nothing under it can be told to
+/// have happened. The results of `regions` sit in no use list, so what they
+/// name is read here and renamed here.
 fn erase_dead_with(
     context: &Context,
     rewriter: &mut Rewriter,
     defuse: &DefUse,
-    regions: bool,
+    regions: &[RegionId],
 ) -> Result<(), PassError> {
+    let mut named: HashSet<ValueId> = regions
+        .iter()
+        .flat_map(|&region| context.get_region(region).results())
+        .collect();
     // LIFO over walk order visits consumers before their producers.
     let mut queue: Vec<OpId> = defuse.ops().to_vec();
 
@@ -85,7 +76,7 @@ fn erase_dead_with(
             continue;
         }
         let instance = context.get_op(op_id);
-        if !is_erasable(context, &instance, regions) {
+        if !is_erasable(context, &instance, &named) {
             continue;
         }
 
@@ -98,6 +89,12 @@ fn erase_dead_with(
             instance.dep_operands().first(),
         ) {
             context.replace_value_uses(*published, *observed);
+            if named.remove(published) {
+                named.insert(*observed);
+                for &region in regions {
+                    context.rename_region_results(region, *published, *observed, &[]);
+                }
+            }
         }
         // Read before the erase: the op's storage goes away with it.
         let used_regs = op_regs(&instance).uses;
@@ -126,14 +123,14 @@ fn erase_dead_with(
 /// either, and its readers are handed the state it observed. Where no chain is
 /// threaded a write publishes nothing, defines nothing, and the last test below
 /// leaves it alone.
-fn is_erasable(context: &Context, instance: &OpHandle, regions: bool) -> bool {
+fn is_erasable(context: &Context, instance: &OpHandle, named: &HashSet<ValueId>) -> bool {
     if instance.clone().as_interface::<dyn Terminator>().is_some() {
         return false;
     }
     // A gate or a loop is an ordinary def-use question once nothing under it can
     // be told to have happened: the arms a decided gate leaves behind are the
     // common case, and they are what every later pass would otherwise walk.
-    let pure_regions = regions && !instance.regions().is_empty() && pure_subtree(context, instance);
+    let pure_regions = !instance.regions().is_empty() && pure_subtree(context, instance);
     if !instance.regions().is_empty() && !pure_regions {
         return false;
     }
@@ -188,7 +185,7 @@ fn is_erasable(context: &Context, instance: &OpHandle, regions: bool) -> bool {
         .chain(published.iter().filter(|_| !forwards_state))
     {
         defines = true;
-        if context.is_used(*def) {
+        if context.is_used(*def) || named.contains(def) {
             return false;
         }
     }

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass restructure --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A tail-controlled loop needs no dispatch: the value the body computes leaves
 // through a carried port, since the structure closes the loop before the exit
@@ -19,7 +19,7 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @dowhile
 // CHECK-NOT: br
-// CHECK: scf.while iter_args
-// CHECK: %[[SUM:[0-9]+]] = addi
-// CHECK: cmpi
-// CHECK: scf.condition %{{[0-9]+}}, %{{[0-9]+}}, %[[SUM]]
+// CHECK: scf.loop (%[[IV:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[IV]], %[[IV]] : !i32
+// CHECK-NEXT: cmpi %[[SUM]]
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[SUM]], %{{[0-9]+}}, %[[SUM]]

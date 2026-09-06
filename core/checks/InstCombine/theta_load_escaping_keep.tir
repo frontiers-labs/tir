@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The slot's pointer is handed to a call, so the term graph does not see every
 // access of it: a value the θ reconstructed would answer for memory the graph
@@ -6,7 +6,7 @@
 
 module {
   %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !i32
-  %fn_escapes = func.func @escapes(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
+  %fn_escapes = func.func @escapes(%0: !i64, %1: !i64, %2: !i64, %3: !i32) -> !i32 {
     %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %4
     scf.for_legacy %0, %1, %2 {

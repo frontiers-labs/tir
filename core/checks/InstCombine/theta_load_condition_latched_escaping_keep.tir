@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The same geometry over a slot whose pointer is handed to a call: the term
 // graph does not see every access, so no port grows however the loop latches,
@@ -8,25 +8,25 @@ module {
   %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !i32
   %fn_escapes = func.func @escapes(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %1, %2
-    %3 = scf.while {
-      %4 = scf.if %0 -> !i1 {
-        %5 = ptr.load %2 : !i32
-        %6 = func.call %fn_sink(%2 : !ptr.p<!i32>) -> !i32
-        %7 = addi %5, %6 : !i32
-        ptr.store %7, %2
-        %8 = constant {value = 1} : !i1
-        scf.yield %8
-      } else {
-        %9 = constant {value = 0} : !i1
-        scf.yield %9
+    | %3 = state.entry_state
+    | %4 = ptr.store %1, %2 | %3
+    | %5 = scf.loop (| %6 = %4) {
+      %7 | %8 = scf.switch %0 args(| %6) (| %9) {
+        %10 = constant {value = 0} : !i1
+        -> %10 | %9
       }
-      scf.condition %4
-    } do {
-      scf.yield
+      (| %11) {
+        %12 | %13 = ptr.load %2 | %11 : !i32
+        %14 | %15 = func.call %fn_sink(%2 : !ptr.p<!i32>) -> !i32 | %13
+        %16 = addi %12, %14 : !i32
+        | %17 = ptr.store %16, %2 | %15
+        %18 = constant {value = 1} : !i1
+        -> %18 | %17
+      }
+      -> %7 | %8, %8
     }
-    %10 = ptr.load %2 : !i32
-    func.return %10
+    %19 | %20 = ptr.load %2 | %5 : !i32
+    -> %19 | %20
   }
   module_end
 }
@@ -34,7 +34,7 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @escapes
 // CHECK: ptr.alloca
 // CHECK: ptr.store
-// CHECK: scf.while
+// CHECK: scf.loop
 // CHECK: ptr.load
 // CHECK: ptr.store
 // CHECK: ptr.load

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Pointer arithmetic does not let an address out of the function, so a slot only
 // reached through it is still a memory of its own: its accesses get a chain the
@@ -20,5 +20,8 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NOT: ptr.load
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[X:[0-9]+]]: !i32)
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[CALL:[0-9]+]] = func.call %{{[0-9]+}}() | %[[ENTRY]]
+// CHECK-NEXT: -> %[[X]] | %[[CALL]]
+// CHECK-NOT: ptr.

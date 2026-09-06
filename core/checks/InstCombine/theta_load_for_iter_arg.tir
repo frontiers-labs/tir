@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The state a loop carries is the θ over the state it starts with and the one
 // its body leaves, so a load of it is the θ of the two loads: what the slot
@@ -7,7 +7,7 @@
 // loop its result, and the slot leaves memory.
 
 module {
-  %fn_count = func.func @count(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
+  %fn_count = func.func @count(%0: !i64, %1: !i64, %2: !i64, %3: !i32) -> !i32 {
     %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %4
     scf.for_legacy %0, %1, %2 {
@@ -22,10 +22,10 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @count
+// CHECK-LABEL: %{{[0-9]+}} = func.func @count(%[[LB:[0-9]+]]: !i64, %[[UB:[0-9]+]]: !i64, %[[STEP:[0-9]+]]: !i64, %[[INIT:[0-9]+]]: !i32)
 // CHECK-NOT: ptr.
-// CHECK: %[[RESULT:[0-9]+]] = scf.for_legacy %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %3) -> !i32 {
+// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] | %[[OUT:[0-9]+]] = scf.for %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[STEP]] (%[[CARRIED:[0-9]+]] = %[[INIT]] | %{{[0-9]+}} = %{{[0-9]+}}) {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[CARRIED]], %[[CARRIED]] : !i32
-// CHECK-NEXT: scf.yield %[[NEXT]]
+// CHECK-NEXT: -> %[[NEXT]] | %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-NEXT: -> %[[RESULT]] | %[[OUT]]

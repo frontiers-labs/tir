@@ -1,5 +1,5 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 
 // Saturation chains: fold 1*4->4 first, then strength-reduce x*4->x<<2.
 // The shift only becomes visible after the fold produces a power-of-two constant.

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The slot's address never leaves the function, so it is a memory of its own and
 // no call is on its chain: the first write is overwritten with nothing able to
@@ -20,7 +20,7 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK-NOT: ptr.
-// CHECK: func.call
-// CHECK-NEXT: func.return %2
+// CHECK: | %[[CALL:[0-9]+]] = func.call
+// CHECK-NEXT: -> %[[B]] | %[[CALL]]

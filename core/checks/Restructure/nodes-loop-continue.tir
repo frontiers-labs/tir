@@ -3,7 +3,6 @@
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f evens --args=6 | filecheck --check-prefix=VALUE %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f evens --args=6 | filecheck --check-prefix=VALUE %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp -f evens --args=6 | filecheck --check-prefix=VALUE %s
-// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f evens --args=6 | filecheck --check-prefix=VALUE %s
 
 // Two edges close the loop: one skipping the store, one after it. Both reach
 // the same tail, so the body is one region whose gamma carries the memory the

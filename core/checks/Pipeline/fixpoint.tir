@@ -1,54 +1,33 @@
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s --check-prefix=ONCE
-// RUN: tir opt --pass fixpoint<3>(func.func(instcombine)) %s | filecheck %s --check-prefix=ROUND
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes),fixpoint<3>(func.func(instcombine-nodes)) %s | filecheck %s
 
-// A counted loop with an early exit. One run of the simplifier proves the
-// carried flag is the constant it was entered on; only a second run reads that
-// fact where the loop exits on it. The fixpoint is what runs the second.
+// A counted loop with an early exit carrying a flag it never changes. One run
+// of the simplifier proves the carried flag is the constant it was entered on
+// and spells it wherever the loop yields it, so the fixpoint wrapper, which
+// reruns the same pass until nothing moves, reaches the same graph.
 
 module {
-  %63 = func.func @f(%0: !i32) -> !i32 {
-    %4 = constant {value = 0} : !i32
-    %5 = constant {value = 0} : !i1
-    %6 = constant {value = 0} : !i32
-    %13 = constant {value = 0} : !i32
-    %44, %45, %46, %68 = scf.while iter_args(%14 = %4, %15 = %5, %16 = %6, %64 = %13) -> !i32, !i1, !i32, !i32 {
-      %19 = cmpi %64, %0 {predicate = "slt"} : !i1
-      %37, %38, %39, %40, %66 = scf.if %19 -> !i32, !i1, !i32, !i1, !i32 {
-        %20 = constant {value = 6} : !i32
-        %22 = cmpi %64, %20 {predicate = "eq"} : !i1
-        %31, %32, %33, %34, %65 = scf.if %22 -> !i32, !i1, !i32, !i1, !i32 {
-          %23 = constant {value = 0} : !i1
-          %24 = constant {value = 1} : !i32
-          %25 = constant {value = 0} : !i1
-          %26 = constant {value = 1} : !i32
-          scf.yield %24, %23, %26, %25, %64
-        }
-         else {
-          %27 = constant {value = 1} : !i32
-          %29 = addi %64, %27 : !i32
-          %30 = constant {value = 1} : !i1
-          scf.yield %14, %15, %16, %30, %29
-        }
-        scf.yield %31, %32, %33, %34, %65
-      }
-       else {
-        %35 = constant {value = 0} : !i1
-        %36 = constant {value = 0} : !i32
-        scf.yield %14, %15, %36, %35, %64
-      }
-      scf.condition %40, %37, %38, %39, %66
-    }
-     do(%41, %42, %43, %67) {
-      scf.yield %41, %42, %43, %67
-    }
-    func.return %44
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %false = constant {value = 0} : !i1
+    %one = constant {value = 1} : !i32
+    %six = constant {value = 6} : !i32
+    cfg.br ^head(%zero, %false, %zero, %zero : !i32, !i1, !i32, !i32)
+  ^head(%a: !i32, %flag: !i1, %c: !i32, %i: !i32):
+    %more = cmpi %i, %0 {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body, ^exit(%a, %flag, %zero, %i : !i32, !i1, !i32, !i32)
+  ^body:
+    %hit = cmpi %i, %six {predicate = "eq"} : !i1
+    %next = addi %i, %one : !i32
+    cfg.cond_br %hit, ^exit(%one, %false, %one, %i : !i32, !i1, !i32, !i32), ^head(%a, %flag, %c, %next : !i32, !i1, !i32, !i32)
+  ^exit(%ra: !i32, %rf: !i1, %rc: !i32, %ri: !i32):
+    func.return %ra
   }
   module_end
 }
 
-// ONCE: %[[FALSE:[0-9]+]] = constant {value = 0} : !i1
-// ONCE: iter_args({{.*}}%[[PORT:[0-9]+]] = %[[FALSE]],
-// ONCE: scf.condition %{{[0-9]+}}, %{{[0-9]+}}, %[[PORT]],
-
-// ROUND: %[[FALSE:[0-9]+]] = constant {value = 0} : !i1
-// ROUND: scf.condition %{{[0-9]+}}, %{{[0-9]+}}, %[[FALSE]],
+// CHECK: %[[FALSE:[0-9]+]] = constant {value = 0} : !i1
+// CHECK: scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, %[[PORT:[0-9]+]] = %[[FALSE]],
+// CHECK-NOT: %[[PORT]]
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[FALSE]], %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %[[FALSE]],
+// CHECK-NEXT: }

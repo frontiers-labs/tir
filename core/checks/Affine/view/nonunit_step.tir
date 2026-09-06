@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // The counter is not the iteration: `for (i = 0; i < 16; i += 2)` names the
 // even numbers, and a distance is a number of iterations. The forms are over
