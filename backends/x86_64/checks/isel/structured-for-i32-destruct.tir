@@ -1,30 +1,34 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// A counted loop counts through the type its bounds name. Bounds of a concrete
-// integer width make the counter that width, so the wrapping the source language
-// defines survives destruction instead of being widened to the index type.
+// A counted loop counts through the type its counter carries. A 32-bit counter
+// is compared, advanced and re-entered 32 bits wide, so the wrapping the source
+// language defines survives destruction instead of being widened.
 
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
   %fn_count = func.func @count(%lb: !i32, %ub: !i32, %st: !i32, %init: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
-    %r = scf.for %lb, %ub, %st iter_args(%acc = %init) -> !i64 {
-      %n = addi %acc, %c : !i64
-      scf.yield %n
-    }
-    func.return %r
+    cfg.br ^bb1(%lb, %init : !i32, !i64)
+  ^bb1(%i: !i32, %acc: !i64):
+    %cond = cmpi %i, %ub {predicate = "slt"} : !i1
+    cfg.cond_br %cond, ^bb2, ^bb3
+  ^bb2:
+    %n = addi %acc, %c : !i64
+    %ni = addi %i, %st : !i32
+    cfg.br ^bb1(%ni, %n : !i32, !i64)
+  ^bb3:
+    func.return %acc
   }
   module_end
 }
 
 // CHECK-NOT: scf.
-// The zero-trip guard compares the bounds at their own width.
-// CHECK: x86_64.cmp32 {dst = %[[V0:[0-9]+]]:GPR, src = %[[V1:[0-9]+]]:GPR}
-// The counter is minted as a 32-bit body argument, advanced and tested 32 bits wide.
-// CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !x86_64.GPR, %[[IV:[0-9]+]]: !x86_64.GPR):
-// CHECK: x86_64.add32 {dst = %[[NEXT:[0-9]+]]:GPR32, dst_tied = %[[IV]]:GPR, src = %[[V2:[0-9]+]]:GPR}
-// The accumulator's tile falls between the two: no dependence orders the
-// counter's advance against it, so neither claims the other's place.
-// CHECK: x86_64.cmp32 {dst = %[[NEXT]]:GPR32, src = %[[V1]]:GPR}
+// The header holds the counter in a 32-bit register and tests it at that width.
+// CHECK: ^{{bb[0-9]+}}(%[[IV:[0-9]+]]: !x86_64.GPR32, %{{[0-9]+}}: !x86_64.GPR):
+// CHECK-NEXT: x86_64.cmp32 {dst = %[[IV]]:GPR32, src = %[[UB:[0-9]+]]:GPR}
+// The body advances it 32 bits wide; the accumulator's tile sits beside it, as
+// no dependence orders the two.
+// CHECK: x86_64.lea_base_disp
+// CHECK-NEXT: x86_64.add32 {dst = %{{[0-9]+}}:GPR32, dst_tied = %[[IV]]:GPR32, src = %{{[0-9]+}}:GPR}
 // CHECK-NOT: scf.

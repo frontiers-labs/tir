@@ -23,7 +23,8 @@ module {
 // CHECK-NEXT: x86_64.test
 // CHECK-NEXT: x86_64.jne {imm = ^[[OTHER:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
-// CHECK:      ^[[JOIN]]
-// CHECK: x86_64.add {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, dst_tied = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %{{[0-9]+}}:[[V]]}
 // CHECK:      ^[[OTHER]]:
 // CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:[[V]], src = %{{[0-9]+}}:rdx}
+// CHECK-NEXT: asm.vbr ^[[JOIN]]
+// CHECK:      ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR):
+// CHECK: x86_64.add {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, dst_tied = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %{{[0-9]+}}:[[V]]}

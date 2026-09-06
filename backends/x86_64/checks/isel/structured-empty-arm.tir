@@ -6,11 +6,8 @@
 
 module {
   %fn_pick = func.func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
-    %r = scf.if %c args(%a, %b) -> !i64 (%p, %q) {
-      scf.yield %p
-    } else (%u, %v) {
-      scf.yield %v
-    }
+    cfg.cond_br %c, ^bb1(%a : !i64), ^bb1(%b : !i64)
+  ^bb1(%r: !i64):
     func.return %r
   }
   module_end
@@ -20,7 +17,7 @@ module {
 // CHECK-NEXT: x86_64.jne {imm = ^[[TAKEN:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
 // CHECK-NEXT: asm.symbol_end
-// CHECK-NEXT: ^[[JOIN]](%[[R:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: asm.vret %[[R]]
 // CHECK-NEXT: ^[[TAKEN]]:
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
+// CHECK-NEXT: ^[[JOIN]](%[[R:[0-9]+]]: !x86_64.GPR):
+// CHECK-NEXT: asm.vret %[[R]]

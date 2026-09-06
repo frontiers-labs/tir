@@ -1,24 +1,29 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// A gate with case values destructs into the chain its cases describe: each case
-// tests the decision and branches to its arm, the last falling through to the arm
-// no case names. The tests are terms the seeder built from the case attributes —
-// no operation of the IR spells them — so the cover selects them like any other.
+// A comparison chain restructures into nested gates and destructs back into the
+// chain it came from: each test compares the decision in its own block and
+// branches to its arm, the last falling through to the arm no case names. The
+// inner gate's arms rejoin before that value rides on to the outer join.
 
 module {
   %fn_select = func.func @select(%p: !i32) -> !i32 {
-    %r = scf.switch %p -> !i32 case 1 {
-      %a = constant {value = 10} : !i32
-      scf.yield %a
-    }
-    case 2 {
-      %b = constant {value = 20} : !i32
-      scf.yield %b
-    }
-    default {
-      %d = constant {value = 30} : !i32
-      scf.yield %d
-    }
+    %one = constant {value = 1} : !i32
+    %c1 = cmpi %p, %one {predicate = "eq"} : !i1
+    cfg.cond_br %c1, ^bb1, ^bb2
+  ^bb1:
+    %a = constant {value = 10} : !i32
+    cfg.br ^bb5(%a : !i32)
+  ^bb2:
+    %two = constant {value = 2} : !i32
+    %c2 = cmpi %p, %two {predicate = "eq"} : !i1
+    cfg.cond_br %c2, ^bb3, ^bb4
+  ^bb3:
+    %b = constant {value = 20} : !i32
+    cfg.br ^bb5(%b : !i32)
+  ^bb4:
+    %d = constant {value = 30} : !i32
+    cfg.br ^bb5(%d : !i32)
+  ^bb5(%r: !i32):
     func.return %r
   }
   module_end
@@ -29,19 +34,21 @@ module {
 // CHECK: x86_64.cmp_imm32 {dst = %[[V0:[0-9]+]]:GPR, imm = 1}
 // CHECK-NEXT: x86_64.je {imm = ^[[ONE:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[CHAIN:bb[0-9]+]]
+// CHECK: ^[[CHAIN]]:
+// CHECK-NEXT: x86_64.cmp_imm32 {dst = %[[V0]]:GPR, imm = 2}
+// CHECK-NEXT: x86_64.je {imm = ^[[TWO:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[DEFAULT:bb[0-9]+]]
+// CHECK: ^[[DEFAULT]]:
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 30}
+// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[INNER:bb[0-9]+]]
+// CHECK: ^[[TWO]]:
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 20}
+// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[INNER]]
+// CHECK: ^[[INNER]](%[[R:[0-9]+]]: !x86_64.GPR):
+// CHECK-NEXT: asm.vbr %[[R]] ^[[JOIN:bb[0-9]+]]
 // CHECK: ^[[ONE]]:
 // CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 10}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
-// CHECK: ^[[TWO:bb[0-9]+]]:
-// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 20}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
-// CHECK: ^[[DEFAULT:bb[0-9]+]]:
-// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 30}
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
 // CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR):
 // CHECK-NEXT: asm.vret
-// CHECK: ^[[CHAIN]]:
-// CHECK-NEXT: x86_64.cmp_imm32 {dst = %[[V0]]:GPR, imm = 2}
-// CHECK-NEXT: x86_64.je {imm = ^[[TWO]]}
-// CHECK-NEXT: asm.vbr ^[[DEFAULT]]
 // CHECK-NOT: scf.

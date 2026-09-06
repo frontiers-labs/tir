@@ -23,8 +23,11 @@ module {
 
 // CHECK:      asm.symbol {name = "count"
 // CHECK:      asm.vbr %{{[0-9]+}} ^[[HDR:bb[0-9]+]]
-// CHECK:      ^[[HDR]](%{{[0-9]+}}: !riscv.GPR):
-// CHECK:      riscv.blt
-// The back edge carries the latch value into the header parameter.
-// CHECK:      asm.vbr %{{[0-9]+}} ^[[HDR]]
-// CHECK:      riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %{{[0-9]+}}:GPR, imm = 1}
+// CHECK:      ^[[HDR]](%[[IV:[0-9]+]]: !riscv.GPR):
+// CHECK:      riscv.blt {rs1 = %[[IV]]:GPR
+// CHECK:      riscv.addi {rd = %[[NEXT:[0-9]+]]:GPR, rs1 = %[[IV]]:GPR, imm = 1}
+// The latch value reaches the merge block, whose continue test carries it
+// back into the header parameter.
+// CHECK:      asm.vbr %[[NEXT]], %{{[0-9]+}} ^[[MERGE:bb[0-9]+]]
+// CHECK:      ^[[MERGE]](%[[CARRY:[0-9]+]]: !riscv.GPR, %{{[0-9]+}}: !riscv.GPR):
+// CHECK:      asm.vbr %[[CARRY]] ^[[HDR]]

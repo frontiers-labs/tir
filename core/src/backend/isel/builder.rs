@@ -16,7 +16,6 @@ use tir::{
 use tir_adt::APInt;
 use tir_relational::ClassId as Id;
 
-
 use super::node::class_is_pure;
 
 /// What a walk records for the cover: the class each operation is rooted at, and
@@ -65,6 +64,10 @@ impl RegionControl {
 pub(crate) struct SemDagBuilder<'a> {
     context: &'a Context,
     value_to_def: &'a HashMap<ValueId, OpId>,
+    /// Each region's operations in the order they are solved in: a value is
+    /// lowered by its defining operation before anything reading it, whatever
+    /// order the region was built in.
+    order: &'a HashMap<RegionId, Vec<OpId>>,
     egraph: &'a mut SemEGraph,
     pointer_width: Option<u32>,
     /// The e-class built for each already-lowered IR value (operand sharing / CSE).
@@ -77,12 +80,14 @@ impl<'a> SemDagBuilder<'a> {
     pub(crate) fn new(
         context: &'a Context,
         value_to_def: &'a HashMap<ValueId, OpId>,
+        order: &'a HashMap<RegionId, Vec<OpId>>,
         egraph: &'a mut SemEGraph,
         pointer_width: Option<u32>,
     ) -> Self {
         Self {
             context,
             value_to_def,
+            order,
             egraph,
             pointer_width,
             value_to_class: HashMap::new(),
@@ -97,7 +102,8 @@ impl<'a> SemDagBuilder<'a> {
         float_widths: &HashSet<u32>,
         seeds: &mut Seeds,
     ) {
-        for op_id in self.context.get_region(region).op_ids() {
+        let ops = self.order[&region].clone();
+        for op_id in ops {
             let op = self.context.get_op(op_id);
             if !op.regions().is_empty() {
                 self.build_region_op(&op, float_widths, seeds);
@@ -151,9 +157,16 @@ impl<'a> SemDagBuilder<'a> {
             let binding = gamma.forwarded();
             let inputs = op.value_operands()[binding.operands.clone()].to_vec();
             for arm in gamma.arms() {
-                let ports = self.context.get_region(arm).value_arguments();
+                let region = self.context.get_region(arm);
+                let ports = region.value_arguments();
                 for (port, &input) in ports[binding.ports.clone()].iter().zip(&inputs) {
                     let class = self.build_from_value(input);
+                    self.value_to_class.insert(port.id(), class);
+                }
+                // A gate forwards its memory states into every arm unchanged,
+                // so an access in an arm reads the state the gate was handed.
+                for (port, &state) in region.dep_arguments().iter().zip(&op.dep_operands()) {
+                    let class = self.build_from_value(state);
                     self.value_to_class.insert(port.id(), class);
                 }
                 self.build_region(arm, float_widths, seeds);
@@ -183,7 +196,9 @@ impl<'a> SemDagBuilder<'a> {
         {
             let produced: Vec<ValueId> = arms
                 .iter()
-                .map(|&arm| self.context.get_region(arm).value_results()[binding.exit.clone()][index])
+                .map(|&arm| {
+                    self.context.get_region(arm).value_results()[binding.exit.clone()][index]
+                })
                 .collect();
             let class = match produced.as_slice() {
                 &[value] => self.build_from_value(value),

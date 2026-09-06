@@ -457,7 +457,7 @@ fn splice_nodes(
     let destination = context
         .parent_nodes_region(call.id)
         .expect("a call in an unordered body sits in a region");
-    let (ops, produced) =
+    let (ops, mut produced) =
         crate::clone::clone_nodes_ops_into(context, callee.body, &bindings, destination);
 
     let body = graph.nodes[site.caller].body;
@@ -484,7 +484,15 @@ fn splice_nodes(
             let Some(entered) = entered else {
                 return Err(PassError::RewriteFailed(call.id));
             };
-            rename(context, destination, instance.dep_results()[0], entered);
+            let root = instance.dep_results()[0];
+            rename(context, destination, root, entered);
+            // A callee touching no memory hands back the state it was entered
+            // on, which the copy's result list names by the root just erased.
+            for value in &mut produced {
+                if *value == root {
+                    *value = entered;
+                }
+            }
             rewriter.erase_op(&OperationRef::new(instance))?;
         }
     }

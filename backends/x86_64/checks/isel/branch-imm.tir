@@ -19,8 +19,8 @@ module {
   }
   // CHECK: asm.symbol {name = "slt_imm"
   // CHECK: x86_64.cmp_imm {dst = %[[V36:[0-9]+]]:GPR, imm = 5}
-  // CHECK-NEXT: x86_64.jl {imm = ^bb1}
-  // CHECK-NEXT: asm.vbr ^bb2
+  // CHECK-NEXT: x86_64.jl {imm = ^bb2}
+  // CHECK-NEXT: asm.vbr ^bb1
 
   %fn_eq_imm = func.func @eq_imm(%0: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
@@ -35,7 +35,7 @@ module {
   }
   // CHECK: asm.symbol {name = "eq_imm"
   // CHECK: x86_64.cmp_imm {dst = %{{[0-9]+}}:GPR, imm = 5}
-  // CHECK-NEXT: x86_64.je {imm = ^bb1}
+  // CHECK-NEXT: x86_64.je {imm = ^bb2}
 
   %fn_ne_imm = func.func @ne_imm(%0: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
@@ -50,7 +50,7 @@ module {
   }
   // CHECK: asm.symbol {name = "ne_imm"
   // CHECK: x86_64.cmp_imm {dst = %{{[0-9]+}}:GPR, imm = 5}
-  // CHECK-NEXT: x86_64.jne {imm = ^bb1}
+  // CHECK-NEXT: x86_64.jne {imm = ^bb2}
 
   %fn_ult_imm = func.func @ult_imm(%0: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
@@ -65,7 +65,7 @@ module {
   }
   // CHECK: asm.symbol {name = "ult_imm"
   // CHECK: x86_64.cmp_imm {dst = %{{[0-9]+}}:GPR, imm = 5}
-  // CHECK-NEXT: x86_64.jb {imm = ^bb1}
+  // CHECK-NEXT: x86_64.jb {imm = ^bb2}
 
   %fn_slt_zero = func.func @slt_zero(%0: !i64) -> !i64 {
     %c = constant {value = 0} : !i64
@@ -81,7 +81,7 @@ module {
   // A zero constant fuses the same way (x86 has no compare-against-zero branch).
   // CHECK: asm.symbol {name = "slt_zero"
   // CHECK: x86_64.cmp_imm {dst = %{{[0-9]+}}:GPR, imm = 0}
-  // CHECK-NEXT: x86_64.jl {imm = ^bb1}
+  // CHECK-NEXT: x86_64.jl {imm = ^bb2}
 
   %fn_eq_zero = func.func @eq_zero(%0: !i64) -> !i64 {
     %c = constant {value = 0} : !i64
@@ -99,7 +99,7 @@ module {
   // CHECK: asm.symbol {name = "eq_zero"
   // CHECK-NOT: x86_64.cmp_imm
   // CHECK: x86_64.test {dst = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
-  // CHECK-NEXT: x86_64.je {imm = ^bb1}
+  // CHECK-NEXT: x86_64.je {imm = ^bb2}
 
   module_end
 }

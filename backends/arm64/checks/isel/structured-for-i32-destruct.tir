@@ -19,12 +19,14 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-NOT: scf.
-// The zero-trip guard compares the bounds at their own width.
-// CHECK: arm64.cmp_w {rn = %[[V0:[0-9]+]]:GPR, rm = %[[V1:[0-9]+]]:GPR}
-// The counter is minted as a 32-bit body argument, advanced and tested 32 bits wide.
-// CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !arm64.GPR, %[[IV:[0-9]+]]: !arm64.GPR):
-// CHECK: arm64.add_w {rd = %[[NEXT:[0-9]+]]:GPR32, rn = %[[IV]]:GPR, rm = %[[V2:[0-9]+]]:GPR}
-// The accumulator's tile falls between the two: no dependence orders the
-// counter's advance against it, so neither claims the other's place.
-// CHECK: arm64.cmp_w {rn = %[[NEXT]]:GPR32, rm = %[[V1]]:GPR}
+// The counter is minted as a 32-bit header argument and tested 32 bits wide
+// against the bound before every iteration.
+// CHECK: ^[[HDR:bb[0-9]+]](%[[IV:[0-9]+]]: !arm64.GPR32, %{{[0-9]+}}: !arm64.GPRsp | %{{[0-9]+}}):
+// CHECK: arm64.cmp_w {rn = %[[IV]]:GPR32, rm = %[[UB:[0-9]+]]:GPR}
+// CHECK: arm64.b.lt {imm = ^[[BODY:bb[0-9]+]]}
+// The body advances the counter 32 bits wide and carries it round the back edge.
+// CHECK: ^[[BODY]](| %{{[0-9]+}}):
+// CHECK-NEXT: arm64.add_imm {rd = %{{[0-9]+}}:GPRsp, rn = %{{[0-9]+}}:GPRsp, imm = 5}
+// CHECK-NEXT: arm64.add_w {rd = %[[NEXT:[0-9]+]]:GPR32, rn = %[[IV]]:GPR32, rm = %{{[0-9]+}}:GPR}
+// CHECK-NEXT: asm.vbr %[[NEXT]], %{{[0-9]+}}, %{{[0-9]+}} ^[[HDR]]
 // CHECK-NOT: scf.

@@ -1,32 +1,31 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 // An arm may not read a sibling arm's value. Both arms are entered with the same
-// outer sum, but each names it as an argument of its own block, and a block
-// argument holds its value only where that block has run. So the sum is computed
-// once before the gate, each edge carries it, and each arm reads the argument it
-// was entered with — never the one the other arm was.
+// outer sum, and the converter hoists it out of the edges: the sum is computed
+// once in the block before the gate, no edge carries it, and each arm reads the
+// register that block wrote — never a value the other arm defined.
 
 module {
   %fn_sibling = func.func @sibling(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
     %s = addi %a, %b : !i64
-    %r = scf.if %c args(%s) -> !i64 (%p) {
-      %x = muli %p, %a : !i64
-      scf.yield %x
-    } else (%q) {
-      %y = subi %q, %b : !i64
-      scf.yield %y
-    }
+    cfg.cond_br %c, ^bb1(%s : !i64), ^bb2(%s : !i64)
+  ^bb1(%p: !i64):
+    %x = muli %p, %a : !i64
+    cfg.br ^bb3(%x : !i64)
+  ^bb2(%q: !i64):
+    %y = subi %q, %b : !i64
+    cfg.br ^bb3(%y : !i64)
+  ^bb3(%r: !i64):
     func.return %r
   }
   module_end
 }
 
 // CHECK: x86_64.add {dst = %[[SUM:[0-9]+]]:GPR
-// CHECK: x86_64.jne {imm = ^[[TRAMPOLINE:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[SUM]] ^[[ELSE:bb[0-9]+]]
-// CHECK: ^[[THEN:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.imul {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
-// CHECK: ^[[ELSE]](%[[Q:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.sub {dst = %{{[0-9]+}}:GPR
-// CHECK: ^[[TRAMPOLINE]]:
-// CHECK-NEXT: asm.vbr %[[SUM]] ^[[THEN]]
+// CHECK-NEXT: x86_64.test_imm32
+// CHECK-NEXT: x86_64.jne {imm = ^[[THEN:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[ELSE:bb[0-9]+]]
+// CHECK: ^[[ELSE]]:
+// CHECK-NEXT: x86_64.sub {dst = %{{[0-9]+}}:GPR, dst_tied = %[[SUM]]:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK: ^[[THEN]]:
+// CHECK-NEXT: x86_64.imul {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, src = %[[SUM]]:GPR}

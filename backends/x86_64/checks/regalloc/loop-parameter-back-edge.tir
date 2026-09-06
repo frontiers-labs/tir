@@ -1,8 +1,8 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 // Block-parameter destruction leaves machine IR that is not SSA: the back edge
-// of a self-loop assigns the block's own parameter, so the register the block
-// read on entry is written again at its end. That copy is not the definition
+// of a loop assigns the header's own parameter, so the register the header read
+// on entry is written again on the way around. That copy is not the definition
 // the readers ahead of it depend on — they read the value the block was entered
 // with — so the order between them is a copy that follows its readers, not
 // readers that follow a copy.
@@ -10,24 +10,26 @@
 module {
   %1 = func.declare @foo(!i32) -> !unit
   %31 = func.func @main() -> !i32 {
-    | %36 = state.entry_state
     %11 = constant {value = 0} : !i32
-    %34 | %43 = scf.while iter_args(%32 = %11 | %39 = %36) -> !i32 {
-      | %42 = func.call %1(%32 : !i32) | %39
-      %25 = constant {value = 1} : !i32
-      %27 = addi %32, %25 : !i32
-      %29 = constant {value = 1} : !i1
-      scf.condition %29, %27 | %42
-    }
-     do(%33 | %40) {
-      scf.yield %33 | %40
-    }
-    func.return %34 | %43
+    cfg.br ^bb1(%11 : !i32)
+  ^bb1(%32: !i32):
+    func.call %1(%32 : !i32)
+    %25 = constant {value = 1} : !i32
+    %27 = addi %32, %25 : !i32
+    %29 = constant {value = 1} : !i1
+    cfg.cond_br %29, ^bb1(%27 : !i32), ^bb2
+  ^bb2:
+    func.return %27
   }
   module_end
 }
 
-// The parameter is read into the call argument before the back edge writes it.
+// The parameter is read into the call argument in the header; only the back
+// edge's own block writes its register again, right before re-entering.
+// CHECK:      ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR32, %{{[0-9]+}}: !x86_64.GPR | %{{[0-9]+}}):
+// CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %[[P]]:[[REG:[a-z0-9]+]]}
 // CHECK:      asm.vcall | %{{[0-9]+}} {callee = "foo"
 // CHECK:      x86_64.add_imm32
 // CHECK-NEXT: asm.vbr
+// CHECK:      x86_64.mov {dst = %[[P]]:[[REG]], src = %{{[0-9]+}}:{{r[a-z0-9]+}}}
+// CHECK-NEXT: asm.vbr ^[[HEAD]]

@@ -5,6 +5,7 @@ use tir::attributes::AttributeValue;
 use tir::builtin::{FloatType, IntegerType, ModuleOp as BuiltinModuleOp, UnitType, ops as bops};
 use tir::cfg::ops as cbops;
 use tir::func::{FuncOp, ops as func_ops};
+use tir::passes::Destructured;
 use tir::vector::VectorType;
 use tir::{BlockHandle, BlockId, Context, Operation, TypeId, ValueId};
 
@@ -192,9 +193,43 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
+    /// A function with an unordered body is written from a destructured copy:
+    /// the copy's blocks carry the structure the copy was made from, which is
+    /// what the merge instructions state.
     fn write_function(
         &mut self,
         func: &FuncOp,
+        debug: &mut Vec<u32>,
+        out: &mut Vec<u32>,
+    ) -> Result<()> {
+        if !func.body_region().is_nodes() {
+            return self.write_blocks(func, &Destructured::default(), debug, out);
+        }
+        let mut rewriter = tir::Rewriter::new(self.context.clone());
+        let copy = rewriter.clone_op(func.id());
+        self.module.body().append(copy);
+        let copy = FuncOp::from_op_instance(self.context.get_op(copy));
+        let name = attr_str(func, "sym_name")?;
+        let structure = tir::passes::destructure(
+            self.context,
+            &mut rewriter,
+            copy.body_region().id(),
+            &tir::passes::CfgEdges {
+                context: self.context,
+            },
+        )
+        .map_err(|error| format!("cannot destructure {name}: {error}"))?;
+        let written = self.write_blocks(&copy, &structure, debug, out);
+        rewriter
+            .erase_op(&tir::OperationRef::new(self.context.get_op(copy.id())))
+            .map_err(|error| error.to_string())?;
+        written
+    }
+
+    fn write_blocks(
+        &mut self,
+        func: &FuncOp,
+        structure: &Destructured,
         debug: &mut Vec<u32>,
         out: &mut Vec<u32>,
     ) -> Result<()> {
@@ -204,7 +239,7 @@ impl<'a> Writer<'a> {
         let return_type = attr_type(func, "ret_type")?;
         let return_id = self.type_id(return_type)?;
         let entry = func.body();
-        let params = entry.arguments();
+        let params = entry.value_arguments();
         let param_types = params.iter().map(|value| value.ty()).collect::<Vec<_>>();
         let function_type = self.function_type(return_type, &param_types)?;
         instruction(out, 54, &[return_id, function_id, 0, function_type]);
@@ -225,7 +260,7 @@ impl<'a> Writer<'a> {
             .collect::<HashMap<_, _>>();
         for (block_index, block) in blocks.iter().enumerate() {
             if block_index != 0 {
-                for argument in block.arguments() {
+                for argument in block.value_arguments() {
                     let id = self.id();
                     self.value_ids.insert(argument.id(), id);
                 }
@@ -237,10 +272,22 @@ impl<'a> Writer<'a> {
                 }
             }
         }
+        // A selection's header ends in a merge instruction naming where its
+        // arms rejoin; a loop's header names its merge and continue blocks.
+        let mut merges: HashMap<BlockId, Vec<u32>> = HashMap::new();
+        for gate in &structure.gates {
+            merges.insert(gate.head, vec![block_ids[&gate.merge], 0]);
+        }
+        for looped in &structure.loops {
+            merges.insert(
+                looped.header,
+                vec![block_ids[&looped.merge], block_ids[&looped.continue_], 0],
+            );
+        }
         for (block_index, block) in blocks.iter().enumerate() {
             instruction(out, 248, &[block_ids[&block.id()]]);
             if block_index != 0 {
-                for (index, argument) in block.arguments().iter().enumerate() {
+                for (index, argument) in block.value_arguments().iter().enumerate() {
                     let mut operands =
                         vec![self.type_id(argument.ty())?, self.value_ids[&argument.id()]];
                     for pred in &blocks {
@@ -258,8 +305,15 @@ impl<'a> Writer<'a> {
                     instruction(out, 245, &operands);
                 }
             }
-            for operation in block.iter(self.context.clone()) {
-                self.write_operation(operation, &block_ids, out)?;
+            let ops = block.iter(self.context.clone()).collect::<Vec<_>>();
+            for (index, operation) in ops.iter().enumerate() {
+                if index + 1 == ops.len()
+                    && let Some(merge) = merges.get(&block.id())
+                {
+                    let opcode = if merge.len() == 2 { 247 } else { 246 };
+                    instruction(out, opcode, merge);
+                }
+                self.write_operation(operation.clone(), &block_ids, out)?;
             }
         }
         instruction(out, 56, &[]);
@@ -272,20 +326,25 @@ impl<'a> Writer<'a> {
         block_ids: &HashMap<BlockId, u32>,
         out: &mut Vec<u32>,
     ) -> Result<()> {
+        // Memory order is a dependency, which is a fact about the program the
+        // binary states through instruction order alone.
+        if op.dialect().as_str() == "state" {
+            return Ok(());
+        }
         if let Some(load) = op.clone().as_op::<LoadOp>() {
-            self.write_result_op(61, load.result(), &load.operands(), out)
+            self.write_result_op(61, load.result(), &load.value_operands(), out)
         } else if let Some(store) = op.clone().as_op::<StoreOp>() {
             instruction(
                 out,
                 62,
                 &[
-                    self.value(store.operands()[0])?,
-                    self.value(store.operands()[1])?,
+                    self.value(store.value_operands()[0])?,
+                    self.value(store.value_operands()[1])?,
                 ],
             );
             Ok(())
         } else if let Some(access) = op.clone().as_op::<AccessChainOp>() {
-            self.write_result_op(65, access.result(), &access.operands(), out)
+            self.write_result_op(65, access.result(), &access.value_operands(), out)
         } else if let Some(barrier) = op.clone().as_op::<ControlBarrierOp>() {
             instruction(
                 out,
@@ -320,13 +379,15 @@ impl<'a> Writer<'a> {
             instruction(out, 81, &operands);
             Ok(())
         } else if let Some(constant) = op.clone().as_op::<ConstantOp>() {
+            // A constant is a module-level declaration, wherever the function
+            // spells it.
             let mut operands = self.result_prefix(constant.result())?;
             operands.extend(constant_words(
                 self.context,
                 constant.result(),
                 &attr_value(&constant, "value")?,
             )?);
-            instruction(out, 43, &operands);
+            instruction(&mut self.type_words, 43, &operands);
             Ok(())
         } else if let Some(branch) = op.clone().as_op::<tir::cfg::BranchOp>() {
             instruction(out, 249, &[block_ids[&branch.dest()]]);
@@ -349,13 +410,19 @@ impl<'a> Writer<'a> {
                 instruction(out, 254, &[self.value(ret.operands()[0])?]);
             }
             Ok(())
+        } else if let Some(ret) = op.clone().as_op::<tir::func::ReturnOp>() {
+            match ret.returned_value() {
+                None => instruction(out, 253, &[]),
+                Some(value) => instruction(out, 254, &[self.value(value)?]),
+            }
+            Ok(())
         } else if op.dialect().as_str() == "spirv" {
             let opcode = opcode_for_name(op.name().as_str())
                 .ok_or_else(|| format!("unsupported SPIR-V operation {}", op.name()))?;
             if op.results().len() != 1 {
                 return Err(format!("unsupported result count for {}", op.name()));
             }
-            self.write_result_op(opcode, op.results()[0], &op.operands(), out)
+            self.write_result_op(opcode, op.results()[0], &op.value_operands(), out)
         } else {
             Err(format!(
                 "unsupported operation {}.{} in SPIR-V function",
@@ -891,7 +958,9 @@ impl<'a> Reader<'a> {
                         .id(),
                     None,
                 ),
-                54 | 55 | 56 | 245 => continue,
+                // Merge instructions describe the structure the blocks
+                // already have; a caller asking for it restructures.
+                54 | 55 | 56 | 245 | 246 | 247 => continue,
                 opcode => {
                     if o.len() < 2 {
                         return Err(format!("unsupported SPIR-V opcode {opcode}"));

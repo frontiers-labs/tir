@@ -1,9 +1,9 @@
 // RUN: fcc compile --stage asm --march x86_64 -o - %s | filecheck %s
 // RUN: fcc compile --stage ir -o /tmp/fcc-matmul-restrict.tir %s
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine,affine) /tmp/fcc-matmul-restrict.tir | filecheck %s --check-prefix=IR
+// RUN: tir opt --pass func.func(promote-nodes,verify-deps,instcombine-nodes,affine) /tmp/fcc-matmul-restrict.tir | filecheck %s --check-prefix=IR
 
 // The same nest over `restrict` pointers. Construction promotes the parameter
-// slots before `thread-state` runs, so the λ's `noalias [0, 1, 2]` reaches the
+// slots before the chains are drawn, so the λ's `noalias [0, 1, 2]` reaches the
 // facts as three objects rather than three reads of memory: each gets a chain of
 // its own, every pair across them is a distance the scheduler can read, and the
 // nest is reordered exactly as the local-array kernel's is — `k` out of the
@@ -20,9 +20,9 @@ void matmul_restrict_parameters(int *restrict a, int *restrict b,
 }
 
 // IR-LABEL: func.func @matmul_restrict_parameters
-// IR: scf.for {{.*}} iter_args(%[[I:[0-9]+]] = {{.*}} -> !i32 {
-// IR-NEXT: scf.for {{.*}} iter_args(%[[K:[0-9]+]] = {{.*}} -> !i32 {
-// IR-NEXT: scf.for {{.*}} iter_args(%[[J:[0-9]+]] = {{.*}} -> !i32 {
+// IR: scf.for2 {{.*}} (%[[I:[0-9]+]] = {{.*}}) {
+// IR-NEXT: scf.for2 {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
+// IR-NEXT: scf.for2 {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
 // IR: shli %[[I]]
 // IR: addi %{{[0-9]+}}, %[[J]]
 // IR: shli %[[I]]

@@ -1,13 +1,14 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// A switch with no case arms always runs its default arm: there is no case to
-// test, so the chain destruction mints is empty and nothing decides anything.
+// A gate with a single arm always runs it: there is no case to test, so nothing
+// decides anything and the entry jumps straight into the arm. No CFG spells this
+// shape, so the fixture writes the gate itself.
 
 module {
   %fn_only_default = func.func @only_default(%p: !i32) -> !i32 {
-    %r = scf.switch %p -> !i32 default {
+    %r = scf.switch2 %p () {
       %d = addi %p, %p : !i32
-      scf.yield %d
+      -> %d
     }
     func.return %r
   }

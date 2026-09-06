@@ -1,9 +1,14 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_conditional.c | filecheck %s
 
+// A conditional expression is an `scf.switch2` whose arms each compute their
+// operand and whose result is the value the expression takes.
+
 // CHECK: %{{[0-9]+}} = func.func @conditional
-// CHECK: scf.if
+// CHECK: %[[V:[0-9]+]] | %{{[0-9]+}} = scf.switch2 %{{[0-9]+}} args(
 // CHECK: addi
-// CHECK: scf.yield
-// CHECK: else
+// CHECK: ->
+// CHECK: }
+// CHECK-NEXT: (| %{{[0-9]+}}) {
 // CHECK: addi
-// CHECK: scf.yield
+// CHECK: ->
+// CHECK: ptr.store %[[V]]

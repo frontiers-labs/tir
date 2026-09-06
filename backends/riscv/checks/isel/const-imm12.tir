@@ -62,8 +62,8 @@ module {
   }
   // CHECK: asm.symbol {name = "fold_and_escape"
   // CHECK-NOT: constant
-  // CHECK: riscv.addi {rd = %[[V13:[0-9]+]]:GPR, rs1 = x0, imm = 9}
   // CHECK: riscv.addi {rd = %[[V14:[0-9]+]]:GPR, rs1 = %[[V12:[0-9]+]]:GPR, imm = 9}
+  // CHECK: riscv.addi {rd = %[[V13:[0-9]+]]:GPR, rs1 = x0, imm = 9}
   // CHECK: riscv.sd
   module_end
 }

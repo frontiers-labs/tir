@@ -12,26 +12,27 @@ module {
     %2 = addi %0, %1 : !i64
     %z = constant {value = 0} : !i64
     %c = cmpi %z, %2 {predicate = "sgt"} : !i1
-    %r = scf.if %c -> !i64 {
-      %zi = constant {value = 0} : !i64
-      %t = constant {value = 1} : !i1
-      %zo = constant {value = 0} : !i64
-      %g = scf.if %t -> !i64 {
-        scf.yield %zi
-      }
-       else {
-        scf.yield %z
-      }
-      scf.yield %zo
-    }
-     else {
-      scf.yield %2
-    }
+    cfg.cond_br %c, ^bb1, ^bb4(%2 : !i64)
+  ^bb1:
+    %t = cmpi %0, %1 {predicate = "eq"} : !i1
+    cfg.cond_br %t, ^bb2, ^bb3
+  ^bb2:
+    %zi = constant {value = 0} : !i64
+    cfg.br ^bb4(%zi : !i64)
+  ^bb3:
+    cfg.br ^bb4(%z : !i64)
+  ^bb4(%r: !i64):
     %p = muli %r, %2 : !i64
     func.return %p
   }
   module_end
 }
 
-// CHECK: ^bb3([[JOIN:%[0-9]+]]: !x86_64.GPR):
-// CHECK-NOT: asm.vbr [[JOIN]]
+// Both edges into the inner join carry the zero register the block before the
+// gates defined.
+// CHECK: x86_64.mov_imm {dst = %[[Z:[0-9]+]]:GPR, imm = 0}
+// CHECK: x86_64.je {imm = ^[[ARM:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr %[[Z]] ^[[INNER:bb[0-9]+]]
+// CHECK-NEXT: ^[[ARM]]:
+// CHECK-NEXT: asm.vbr %[[Z]] ^[[INNER]]
+// CHECK-NEXT: ^[[INNER]](%{{[0-9]+}}: !x86_64.GPR):

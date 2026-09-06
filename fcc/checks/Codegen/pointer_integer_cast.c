@@ -20,6 +20,7 @@ void *aligned(void *pointer)
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @aligned
-// CHECK: ptr.ptrdiff
+// CHECK: ptr.null : !ptr.p
 // CHECK: %[[NULL2:[0-9]+]] = ptr.null : !ptr.p
-// CHECK-NEXT: ptr.ptradd %[[NULL2]], %{{[0-9]+}} : !ptr.p
+// CHECK: ptr.ptrdiff
+// CHECK: ptr.ptradd %[[NULL2]], %{{[0-9]+}} : !ptr.p

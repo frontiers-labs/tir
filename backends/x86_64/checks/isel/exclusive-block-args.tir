@@ -39,7 +39,7 @@ module {
   module_end
 }
 
-// CHECK:      ^bb6(%[[G1:[0-9]+]]: !x86_64.GPR):
+// CHECK:      ^bb{{[0-9]+}}(%[[G1:[0-9]+]]: !x86_64.GPR):
 // CHECK-NEXT: x86_64.sub {dst = %{{[a-z0-9]+}}:GPR, dst_tied = %[[G1]]:GPR
-// CHECK:      ^bb9(%[[G2:[0-9]+]]: !x86_64.GPR):
+// CHECK:      ^bb{{[0-9]+}}(%[[G2:[0-9]+]]: !x86_64.GPR):
 // CHECK-NEXT: x86_64.sub {dst = %{{[a-z0-9]+}}:GPR, dst_tied = %[[G2]]:GPR

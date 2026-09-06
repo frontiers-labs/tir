@@ -1,5 +1,5 @@
 // RUN: fcc compile --stage ir -o /tmp/fcc-matmul-local.tir %s
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine,affine) /tmp/fcc-matmul-local.tir | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,verify-deps,instcombine-nodes,affine) /tmp/fcc-matmul-local.tir | filecheck %s
 // RUN: fcc compile --stage asm --march x86_64 -o - %s | filecheck %s --check-prefix=ASM
 
 // The affine view's own case: three local arrays are three memories, every
@@ -35,12 +35,12 @@ void matmul_local_arrays(int *out)
 }
 
 // CHECK-LABEL: func.func @matmul_local_arrays
-// CHECK: scf.for
-// CHECK: scf.for
-// CHECK: scf.for {{.*}} iter_args(%[[I:[0-9]+]] = {{.*}} -> !i32 {
-// CHECK-NEXT: scf.for {{.*}} iter_args(%[[K:[0-9]+]] = {{.*}} -> !i32 {
-// CHECK-NEXT: scf.for {{.*}} iter_args(%[[J:[0-9]+]] = {{.*}} -> !i32 {
-// CHECK-NEXT: extsi %[[I]]
+// CHECK: scf.for2
+// CHECK: scf.for2
+// CHECK: scf.for2 {{.*}} (%[[I:[0-9]+]] = {{.*}}) {
+// CHECK-NEXT: scf.for2 {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
+// CHECK-NEXT: scf.for2 {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
+// CHECK: extsi %[[I]]
 // CHECK: extsi %[[J]]
 // CHECK: extsi %[[K]]
 

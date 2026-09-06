@@ -92,7 +92,17 @@ fn compress(
     xlen: u32,
 ) -> Result<bool, tir::PassError> {
     match compressed_form(context, op, xlen) {
-        Some(new_op) => rewriter.replace_op(op, new_op.as_ref()).map(|()| true),
+        Some(new_op) => {
+            // The memory order the instruction sits in is its own: the
+            // compressed form reads and publishes the same states.
+            for state in op.op().dep_operands() {
+                context.append_dep_operand(new_op.id(), state);
+            }
+            for _ in op.op().dep_results() {
+                context.append_dep_result(new_op.id());
+            }
+            rewriter.replace_op(op, new_op.as_ref()).map(|()| true)
+        }
         None => Ok(false),
     }
 }

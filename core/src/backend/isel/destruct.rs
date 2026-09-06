@@ -49,7 +49,10 @@ impl MachineEdges<'_> {
         let (slot, holds) = match test {
             Test::Repeat => (AuxSlot::Test(0), true),
             Test::Arm(index) => {
-                if self.region_values.contains_key(&(op.id, AuxSlot::Unless(index))) {
+                if self
+                    .region_values
+                    .contains_key(&(op.id, AuxSlot::Unless(index)))
+                {
                     (AuxSlot::Unless(index), false)
                 } else {
                     (AuxSlot::Test(index), true)

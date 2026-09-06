@@ -1,25 +1,28 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// A tested loop's body is covered under the condition its test yields. That
-// condition is spelled over the ports' per-iteration heads, so it holds on every
+// A loop's body is covered under the condition its header tests. That condition
+// is spelled over the ports' per-iteration heads, so it holds on every
 // iteration, not only the first: this body runs knowing its two carried values
 // are equal and subtracts one register from itself. Without the body's scope the
 // two ports stay distinct classes and the subtraction reads both.
 
 module {
   %fn_equal_body = func.func @equal_body(%n: !i64, %acc: !i64) -> !i64 {
-    %r = scf.while iter_args(%a = %acc, %i = %n) -> !i64, !i64 {
-      %c = cmpi %i, %a {predicate = "eq"} : !i1
-      scf.condition %c, %a, %i
-    } do scope(%tok)(%ca, %ci) {
-      %d = subi %ci, %ca : !i64
-      scf.yield %d, %ci
-    }
-    func.return %r
+    cfg.br ^bb1(%acc, %n : !i64, !i64)
+  ^bb1(%a: !i64, %i: !i64):
+    %c = cmpi %i, %a {predicate = "eq"} : !i1
+    cfg.cond_br %c, ^bb2, ^bb3
+  ^bb2:
+    %d = subi %i, %a : !i64
+    cfg.br ^bb1(%d, %i : !i64, !i64)
+  ^bb3:
+    func.return %a
   }
   module_end
 }
 
-// CHECK: x86_64.je
 // CHECK: ^bb{{[0-9]+}}(%[[CA:[0-9]+]]: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
+// CHECK-NEXT: x86_64.cmp
+// CHECK-NEXT: x86_64.je {imm = ^[[BODY:bb[0-9]+]]}
+// CHECK: ^[[BODY]]:
 // CHECK-NEXT: x86_64.sub {dst = %{{[0-9]+}}:GPR, dst_tied = %[[CA]]:GPR, src = %[[CA]]:GPR}

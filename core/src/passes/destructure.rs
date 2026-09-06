@@ -164,7 +164,7 @@ impl Edges for CfgEdges<'_> {
         test: Test,
         taken: &Edge,
         fallthrough: &Edge,
-        _mint: &mut dyn FnMut() -> BlockId,
+        mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
         let (condition, holds) = match test {
             Test::Repeat => (theta(op)?.predicate(), true),
@@ -193,10 +193,17 @@ impl Edges for CfgEdges<'_> {
                 }
             }
         };
+        // Two edges into one block carrying different values are two edges a
+        // phi cannot tell apart, so one of them goes through a block of its own.
+        let mut hop = taken.clone();
+        if taken.dest == fallthrough.dest && taken.args != fallthrough.args {
+            hop = Edge::to(mint());
+            self.jump(hop.dest, taken);
+        }
         if holds {
-            self.cond_br(block, condition, taken, fallthrough);
+            self.cond_br(block, condition, &hop, fallthrough);
         } else {
-            self.cond_br(block, condition, fallthrough, taken);
+            self.cond_br(block, condition, fallthrough, &hop);
         }
         Ok(())
     }
@@ -394,7 +401,12 @@ impl Lowering<'_> {
             pending.insert(op, inputs.len());
         }
         let mut order = Vec::with_capacity(ops.len());
-        let mut ready: Vec<OpId> = ops.iter().rev().copied().filter(|op| pending[op] == 0).collect();
+        let mut ready: Vec<OpId> = ops
+            .iter()
+            .rev()
+            .copied()
+            .filter(|op| pending[op] == 0)
+            .collect();
         while let Some(op) = ready.pop() {
             order.push(op);
             for &reader in readers.get(&op).into_iter().flatten() {
@@ -402,9 +414,15 @@ impl Lowering<'_> {
                 *count -= 1;
                 if *count == 0 {
                     ready.push(reader);
-                    ready.sort_by_key(|op| std::cmp::Reverse(ops.iter().position(|held| held == op)));
+                    ready.sort_by_key(|op| {
+                        std::cmp::Reverse(ops.iter().position(|held| held == op))
+                    });
                 }
             }
+        }
+        if order.len() == ops.len() {
+            sink_leaves(self.context, self.edges, &mut order);
+            abut_implicit_inputs(self.edges, &mut order);
         }
         if order.len() != ops.len() {
             let stuck: Vec<String> = ops
@@ -601,10 +619,12 @@ impl Lowering<'_> {
                 let ports: Vec<ValueId> = handle.ports().iter().map(|port| port.id()).collect();
                 let forwarded: Vec<ValueId> = results
                     .iter()
-                    .map(|result| match ports.iter().position(|port| port == result) {
-                        Some(index) => inputs[index],
-                        None => *result,
-                    })
+                    .map(
+                        |result| match ports.iter().position(|port| port == result) {
+                            Some(index) => inputs[index],
+                            None => *result,
+                        },
+                    )
                     .collect();
                 arms.insert(index, Edge::with(merge, &forwarded));
                 continue;
@@ -707,14 +727,10 @@ impl Lowering<'_> {
         };
         let context = self.context;
         let blocks = &mut self.blocks;
-        self.edges.branch(
-            header_end,
-            op,
-            Test::Repeat,
-            &continue_,
-            &exit,
-            &mut || mint(context, blocks),
-        )?;
+        self.edges
+            .branch(header_end, op, Test::Repeat, &continue_, &exit, &mut || {
+                mint(context, blocks)
+            })?;
 
         self.record.loops.push(LoopBlocks {
             header,
@@ -722,6 +738,76 @@ impl Lowering<'_> {
             merge,
         });
         rewriter.erase_op(&OperationRef::new(op.clone()))
+    }
+}
+
+/// Move every operation that reads nothing — a literal, an address — to just
+/// ahead of its first reader, or to the end when only what leaves the block
+/// reads it, so a value is not held in a register from the region's start to
+/// its use. Order inside a block is a scheduling matter the backend derives
+/// later; this is the one choice the derivation keeps.
+fn sink_leaves(context: &Context, edges: &dyn Edges, order: &mut Vec<OpId>) {
+    let place: Vec<(usize, usize)> = order
+        .iter()
+        .enumerate()
+        .map(|(index, &op)| {
+            let instance = context.get_op(op);
+            let leaf = instance.operands().is_empty()
+                && instance.regions().is_empty()
+                && instance.dep_results().is_empty();
+            if !leaf {
+                return (index, 1);
+            }
+            let results = instance.results();
+            let reader = order[index + 1..].iter().position(|&later| {
+                values_read(context, later)
+                    .iter()
+                    .any(|value| results.contains(value))
+            });
+            match reader {
+                Some(distance) => {
+                    // What the reader implicitly reads sits right ahead of
+                    // it and stays there.
+                    let reader = index + 1 + distance;
+                    let ahead = edges
+                        .implicit_inputs(order[reader])
+                        .iter()
+                        .filter_map(|input| order.iter().position(|op| op == input))
+                        .min()
+                        .unwrap_or(reader);
+                    (ahead.min(reader), 0)
+                }
+                None => (order.len(), 0),
+            }
+        })
+        .collect();
+    let mut placed: Vec<(usize, OpId)> = order
+        .iter()
+        .copied()
+        .zip(place)
+        .map(|(op, key)| (key.0 * 2 + key.1, op))
+        .collect();
+    placed.sort_by_key(|&(key, _)| key);
+    *order = placed.into_iter().map(|(_, op)| op).collect();
+}
+
+/// Put what an instruction implicitly reads right ahead of it: a rule's
+/// prelude defines a register nothing names, and the order the block ends up
+/// with pairs a register's reader with the latest writer ahead of it.
+fn abut_implicit_inputs(edges: &dyn Edges, order: &mut Vec<OpId>) {
+    let mut index = 0;
+    while index < order.len() {
+        let inputs = edges.implicit_inputs(order[index]);
+        let mut moved = 0;
+        for input in inputs {
+            if let Some(at) = order[..index].iter().position(|op| *op == input) {
+                order.remove(at);
+                order.insert(index - 1, input);
+                moved += 1;
+            }
+        }
+        index += 1;
+        let _ = moved;
     }
 }
 

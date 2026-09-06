@@ -662,7 +662,11 @@ fn chain_root_walk(
                 .arms()
                 .iter()
                 .map(|&arm| {
-                    chain_root_memo(context, *context.get_region(arm).dep_results().get(port)?, memo)
+                    chain_root_memo(
+                        context,
+                        *context.get_region(arm).dep_results().get(port)?,
+                        memo,
+                    )
                 })
                 .collect::<Option<BTreeSet<_>>>()?;
             return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));

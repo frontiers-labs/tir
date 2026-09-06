@@ -24,9 +24,9 @@ module {
 // The fallthrough arm forwards %b into the merge parameter's register (a0 = x10).
 // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:x10, rs1 = %{{[0-9]+}}:x13, imm = 0}
 // CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !riscv.GPR):
-// CHECK-NEXT: asm.vret
 // The taken arm forwards %a into the very same register.
 // CHECK: ^[[TAKEN]]:
 // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:x10, rs1 = %{{[0-9]+}}:x12, imm = 0}
 // CHECK-NEXT: asm.vbr ^[[JOIN]]
+// CHECK: ^[[JOIN]](%{{[0-9]+}}: !riscv.GPR):
+// CHECK-NEXT: asm.vret

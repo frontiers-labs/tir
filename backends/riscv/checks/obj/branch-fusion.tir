@@ -17,14 +17,15 @@ module {
   module_end
 }
 
-// blt a0, a1, +8 (B-type fixup patched), jal x0, +12, then each block:
-// addi a0, x0, imm and a jump on to the single exit, which does jalr x0, x1, 0.
+// blt a0, a1, +16 (B-type fixup patched) to the true arm, jal x0, +4 to the
+// false arm laid out first, then each arm: addi a0, x0, imm and a jump on to
+// the single exit, which does jalr x0, x1, 0.
 // CHECK: .section .text
 // CHECK-NEXT: pick:
-// CHECK-NEXT: [0x63, 0x44, 0xB5, 0x00]
+// CHECK-NEXT: [0x63, 0x48, 0xB5, 0x00]
+// CHECK-NEXT: [0x6F, 0x00, 0x40, 0x00]
+// CHECK-NEXT: [0x13, 0x05, 0x00, 0x00]
 // CHECK-NEXT: [0x6F, 0x00, 0xC0, 0x00]
 // CHECK-NEXT: [0x13, 0x05, 0x10, 0x00]
-// CHECK-NEXT: [0x6F, 0x00, 0xC0, 0x00]
-// CHECK-NEXT: [0x13, 0x05, 0x00, 0x00]
 // CHECK-NEXT: [0x6F, 0x00, 0x40, 0x00]
 // CHECK-NEXT: [0x67, 0x80, 0x00, 0x00]

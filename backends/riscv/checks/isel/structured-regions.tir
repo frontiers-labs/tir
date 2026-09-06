@@ -7,31 +7,33 @@
 module {
   %fn_choose = func.func @choose(%0: !i1, %1: !i64) -> !i64 {
     %c = constant {value = 7} : !i64
-    %r = scf.if %0 -> !i64 {
-      %a = addi %1, %c : !i64
-      scf.yield %a
-    } else {
-      %b = subi %1, %c : !i64
-      scf.yield %b
-    }
+    cfg.cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    %a = addi %1, %c : !i64
+    cfg.br ^bb3(%a : !i64)
+  ^bb2:
+    %b = subi %1, %c : !i64
+    cfg.br ^bb3(%b : !i64)
+  ^bb3(%r: !i64):
     func.return %r
   }
 
   %fn_accumulate = func.func @accumulate(%0: !i1, %1: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
-    %r = scf.while iter_args(%acc = %1) -> !i64 {
-      scf.condition %0, %acc
-    } do scope(%tok)(%cur) {
-      %n = addi %cur, %c : !i64
-      scf.yield %n
-    }
-    func.return %r
+    cfg.br ^bb1(%1 : !i64)
+  ^bb1(%acc: !i64):
+    cfg.cond_br %0, ^bb2, ^bb3
+  ^bb2:
+    %n = addi %acc, %c : !i64
+    cfg.br ^bb1(%n : !i64)
+  ^bb3:
+    func.return %acc
   }
   module_end
 }
 
 // CHECK: asm.symbol {name = "choose"
-// CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %[[V1:[0-9]+]]:GPR, imm = 7}
-// CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %[[V1]]:GPR, imm = -7}
+// CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %[[V1:[0-9]+]]:GPR, imm = -7}
+// CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %[[V1]]:GPR, imm = 7}
 // CHECK: asm.symbol {name = "accumulate"
 // CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %{{[0-9]+}}:GPR, imm = 5}

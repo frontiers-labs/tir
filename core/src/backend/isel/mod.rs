@@ -1254,11 +1254,7 @@ impl InstructionSelectPass {
     /// Called when the pass first visits the function op — a region's entry
     /// fact reads its condition's *defining op*, which an enclosing region's
     /// commit would replace by the time the guarded region solves.
-    fn solve_function(
-        &mut self,
-        context: &Context,
-        op: &OperationRef,
-    ) -> Result<bool, PassError> {
+    fn solve_function(&mut self, context: &Context, op: &OperationRef) -> Result<bool, PassError> {
         let root = op.op().id;
         if !self.solved.insert(root) {
             return Ok(false);
@@ -1443,8 +1439,14 @@ impl InstructionSelectPass {
         let pointer_width = layout.as_ref().and_then(crate::DataLayout::pointer_size);
 
         let mut egraph = SemEGraph::new();
-        let mut lowering =
-            self.lower_regions(context, op, &scopes, &value_to_def, &mut egraph, pointer_width);
+        let mut lowering = self.lower_regions(
+            context,
+            op,
+            &scopes,
+            &value_to_def,
+            &mut egraph,
+            pointer_width,
+        );
 
         // Standalone constants have no semantic root. When the target patterns
         // describe a matching materializer, their operand-built class becomes
@@ -1525,7 +1527,8 @@ impl InstructionSelectPass {
         let mut prepared: HashMap<ValueId, ConditionExpr> = HashMap::new();
         let mut region_facts: HashMap<RegionId, (ValueId, bool)> = HashMap::new();
         let mut region_control = builder::RegionControl::default();
-        let mut builder = SemDagBuilder::new(context, value_to_def, egraph, pointer_width);
+        let mut builder =
+            SemDagBuilder::new(context, value_to_def, &scopes.order, egraph, pointer_width);
         let mut seeds = builder::Seeds::default();
         for &body in op.op().regions().iter() {
             builder.build_region(body, &self.float_constant_materializer_widths, &mut seeds);
@@ -1675,8 +1678,45 @@ impl InstructionSelectPass {
         if std::env::var("TIR_ISEL_DUMP").is_ok() {
             for op in crate::analysis::scopes::region_ops(context, region) {
                 let instance = context.get_op(op);
-                let tests: Vec<Vec<u32>> = (0..instance.regions().len().saturating_sub(1)).map(|i| crate::passes::destructure::Edges::test_reads(&edges, &instance, crate::passes::destructure::Test::Arm(i)).iter().map(|v| v.number()).collect()).collect();
-                eprintln!("PRE {} id={:?} results={:?} operands={:?} region={:?} nested_results={:?} tests={:?}", instance.name(), op, instance.results().iter().map(|v| v.number()).collect::<Vec<_>>(), instance.operands().iter().map(|v| v.number()).collect::<Vec<_>>(), context.parent_nodes_region(op), instance.regions().iter().map(|r| context.get_region(*r).results().iter().map(|v| v.number()).collect::<Vec<_>>()).collect::<Vec<_>>(), tests);
+                let tests: Vec<Vec<u32>> = (0..instance.regions().len().saturating_sub(1))
+                    .map(|i| {
+                        crate::passes::destructure::Edges::test_reads(
+                            &edges,
+                            &instance,
+                            crate::passes::destructure::Test::Arm(i),
+                        )
+                        .iter()
+                        .map(|v| v.number())
+                        .collect()
+                    })
+                    .collect();
+                eprintln!(
+                    "PRE {} id={:?} results={:?} operands={:?} region={:?} nested_results={:?} tests={:?}",
+                    instance.name(),
+                    op,
+                    instance
+                        .results()
+                        .iter()
+                        .map(|v| v.number())
+                        .collect::<Vec<_>>(),
+                    instance
+                        .operands()
+                        .iter()
+                        .map(|v| v.number())
+                        .collect::<Vec<_>>(),
+                    context.parent_nodes_region(op),
+                    instance
+                        .regions()
+                        .iter()
+                        .map(|r| context
+                            .get_region(*r)
+                            .results()
+                            .iter()
+                            .map(|v| v.number())
+                            .collect::<Vec<_>>())
+                        .collect::<Vec<_>>(),
+                    tests
+                );
             }
         }
         crate::passes::destructure(context, rewriter, region, &edges)?;
@@ -1733,7 +1773,6 @@ impl InstructionSelectPass {
         mut plan: RegionPlan,
         rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
-
         // The place each surviving operation holds, and — as each tile is
         // emitted — the place it inherits: its root operation's, clamped so the
         // plan's own order is never broken, since that is the order the values
@@ -2014,18 +2053,6 @@ impl InstructionSelectPass {
                 .map(|op| context.get_op(*op).name().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            if std::env::var("TIR_ISEL_DEBUG").is_ok() {
-                for &class in &covered {
-                    let hits = matches.iter().filter(|m| fs.egraph.find(m.root) == class).count();
-                    eprintln!(
-                        "COVER {region:?} class {class:?} demanded={} available={} matches={hits} values={:?} root_op={:?}",
-                        demanded.contains(&class),
-                        available(class),
-                        fs.class_values.get(&class).map(|v| v.iter().map(|v| v.number()).collect::<Vec<_>>()),
-                        region_op_by_root.get(&class).map(|op| context.get_op(*op).name().to_string()),
-                    );
-                }
-            }
             format!("no feasible instruction cover for {region:?}: {ops}")
         })?;
 
@@ -2156,9 +2183,7 @@ impl InstructionSelectPass {
                 continue;
             }
             let ask = fs.region_ask(region, class).or(consumer);
-            if let Some(destination) = fs
-                .resolve_binding(context, class, region, ask, false)
-                .value
+            if let Some(destination) = fs.resolve_binding(context, class, region, ask, false).value
             {
                 remap_class_values(class, destination);
             }
@@ -2192,7 +2217,6 @@ impl InstructionSelectPass {
         let erase_ops = op_ids
             .iter()
             .copied()
-
             .filter(|op| fs.op_root.contains_key(op))
             .filter(|op| {
                 fs.op_root.get(op).is_none_or(|class| {
@@ -2210,10 +2234,10 @@ impl InstructionSelectPass {
             .map(|&(op, slot, class)| ((op, slot), fs.chase_low_extract(fs.egraph.find(class))))
             .collect();
         let resolve_class = |class: Id, at: Option<OpId>| {
-            destinations.get(&class).copied().or_else(|| {
-                fs.resolve_binding(context, class, region, at, true)
-                    .value
-            })
+            destinations
+                .get(&class)
+                .copied()
+                .or_else(|| fs.resolve_binding(context, class, region, at, true).value)
         };
         let aux = aux_branches
             .into_iter()
@@ -2664,7 +2688,9 @@ fn entry_facts(context: &Context, op: &OpHandle) -> Vec<(RegionId, ValueId, bool
     };
     let predicate = gamma.predicate();
     let arms = gamma.arms();
-    if arms.len() != 2 || context.get_value(predicate).ty() != tir::builtin::IntegerType::new(context, 1) {
+    if arms.len() != 2
+        || context.get_value(predicate).ty() != tir::builtin::IntegerType::new(context, 1)
+    {
         return Vec::new();
     }
     vec![(arms[0], predicate, false), (arms[1], predicate, true)]
@@ -2842,7 +2868,10 @@ fn class_value_tables(
     value_to_class: &HashMap<ValueId, Id>,
     value_to_def: &HashMap<ValueId, OpId>,
     op_region: &HashMap<OpId, RegionId>,
-) -> (HashMap<Id, Vec<ValueId>>, HashMap<ValueId, Option<RegionId>>) {
+) -> (
+    HashMap<Id, Vec<ValueId>>,
+    HashMap<ValueId, Option<RegionId>>,
+) {
     let mut class_values: HashMap<Id, Vec<ValueId>> = HashMap::new();
     for (&value, &class) in value_to_class {
         if context.get_value(value).is_dependency() {

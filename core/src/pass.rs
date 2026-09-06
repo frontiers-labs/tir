@@ -525,8 +525,7 @@ impl Rewriter {
         let results = target.op.results().to_vec();
         if let Some(region) = self.context.parent_nodes_region(target.op.id) {
             self.context.remove_from_region(region, target.op.id);
-            self.context
-                .remove_operation_except(target.op.id, &results);
+            self.context.remove_operation_except(target.op.id, &results);
             return Ok(());
         }
         let block = self.block_of(target)?;

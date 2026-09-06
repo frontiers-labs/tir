@@ -3,18 +3,22 @@
 // A gate whose arms both yield the same value publishes that value's own class:
 // the gate's result is a name adopted from it, not a second definition of it. A
 // use standing *before* the gate must still read the register the block's own
-// definition writes, so the load is selected here rather than treated as already
-// available because the gate names it later.
+// definition writes, so the load is selected there rather than treated as
+// already available because the gate names it later; the use after the gate
+// reads that same register, not a join parameter. The arm's store keeps the
+// gate from folding away.
 
 module {
-  %fn_adopt = func.func @adopt(%p: !ptr.p, %c: !i1) -> !i32 {
+  %fn_adopt = func.func @adopt(%p: !ptr.p, %q: !ptr.p<!i32>, %c: !i1) -> !i32 {
     %v = ptr.load %p : !i8
     %z = extui %v : !i32
-    %g = scf.if %c -> !i8 {
-      scf.yield %v
-    } else {
-      scf.yield %v
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    ptr.store %z, %q
+    cfg.br ^bb3(%v : !i8)
+  ^bb2:
+    cfg.br ^bb3(%v : !i8)
+  ^bb3(%g: !i8):
     %w = extui %g : !i32
     %s = addi %z, %w : !i32
     func.return %s
@@ -22,5 +26,8 @@ module {
   module_end
 }
 
-// CHECK: x86_64.mov_load8_disp
+// CHECK: x86_64.mov_load8_disp {dst = %[[V:[0-9]+]]:GPR8
+// CHECK-NEXT: x86_64.and_imm32 {dst = %[[Z:[0-9]+]]:GPR32, dst_tied = %[[V]]:GPR8, imm = 255}
+// CHECK-NEXT: x86_64.test_imm32
+// CHECK: x86_64.add32 {dst = %{{[0-9]+}}:GPR32, dst_tied = %[[Z]]:GPR32, src = %[[Z]]:GPR32}
 // CHECK-NOT: scf.

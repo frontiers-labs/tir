@@ -11,7 +11,7 @@ module {
   module_end
 }
 
-// CHECK: arm64.add_w {rd = %{{[0-9]+}}:{{w[0-9]+}}, rn = %11:x0, rm = %12:x1}
+// CHECK: arm64.add_w {rd = %{{[0-9]+}}:{{w[0-9]+}}, rn = %{{[0-9]+}}:x0, rm = %{{[0-9]+}}:x1}
 // CHECK: arm64.sub_w
 // CHECK: arm64.and_w
 // CHECK: arm64.orr_w {rd = %{{[0-9]+}}:w0

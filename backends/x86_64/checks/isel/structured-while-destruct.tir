@@ -1,40 +1,50 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// A loop tested before each iteration destructs into its test region followed by
-// its body: the test's own terminator becomes the branch, carrying what it
-// forwards into the body and the same values out to the continuation, and the
-// body's yield is the back edge. The taken edge carries assignments, so it goes
-// through a block only that edge reaches.
+// A loop tested before each iteration destructs into its header followed by the
+// arms of its test: the header's comparison fuses into the branch, the body arm
+// advances the ports and the exit arm forwards them, both carrying a continue
+// flag to the latch, whose branch is the back edge or the exit. The header's own
+// parameters are the loop's ports, entered from the function's first block.
 
 module {
   %fn_sum = func.func @sum(%n: !i64, %acc: !i64) -> !i64 {
-    %r = scf.while iter_args(%a = %acc, %i = %n) -> !i64, !i64 {
-      %z = constant {value = 0} : !i64
-      %c = cmpi %i, %z {predicate = "sgt"} : !i1
-      scf.condition %c, %a, %i
-    } do scope(%tok)(%ca, %ci) {
-      %one = constant {value = 1} : !i64
-      %na = addi %ca, %ci : !i64
-      %ni = subi %ci, %one : !i64
-      scf.yield %na, %ni
-    }
-    func.return %r
+    cfg.br ^bb1(%acc, %n : !i64, !i64)
+  ^bb1(%a: !i64, %i: !i64):
+    %z = constant {value = 0} : !i64
+    %c = cmpi %i, %z {predicate = "sgt"} : !i1
+    cfg.cond_br %c, ^bb2, ^bb3
+  ^bb2:
+    %one = constant {value = 1} : !i64
+    %na = addi %a, %i : !i64
+    %ni = subi %i, %one : !i64
+    cfg.br ^bb1(%na, %ni : !i64, !i64)
+  ^bb3:
+    func.return %a
   }
   module_end
 }
 
 // CHECK-NOT: scf.
-// CHECK: asm.vbr %1, %0 ^[[TEST:bb[0-9]+]]
-// CHECK: ^[[TEST]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
+// CHECK: asm.vbr %[[ACC:[0-9]+]], %[[N:[0-9]+]] ^[[HEAD:bb[0-9]+]]
+// CHECK: ^[[HEAD]](%[[A:[0-9]+]]: !x86_64.GPR, %[[I:[0-9]+]]: !x86_64.GPR):
 // The test fuses into the branch exactly as a guarded terminator's would.
-// CHECK-NEXT: x86_64.cmp_imm {dst = %{{[0-9]+}}:GPR, imm = 0}
-// CHECK-NEXT: x86_64.jg {imm = ^[[ENTER:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[EXIT:bb[0-9]+]]
-// CHECK: ^[[BODY:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// CHECK: x86_64.add
-// CHECK: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[TEST]]
-// CHECK: ^[[EXIT]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: asm.vret
-// CHECK: ^[[ENTER]]:
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[BODY]]
+// CHECK-NEXT: x86_64.cmp_imm {dst = %[[I]]:GPR, imm = 0}
+// CHECK-NEXT: x86_64.jg {imm = ^[[BODY:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[DONE:bb[0-9]+]]
+// CHECK: ^[[DONE]]:
+// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[STOP:[0-9]+]]:GPR8, imm = 0}
+// CHECK-NEXT: asm.vbr %[[A]], %[[I]], %[[STOP]] ^[[LATCH:bb[0-9]+]]
+// CHECK: ^[[BODY]]:
+// CHECK-NEXT: x86_64.add {dst = %[[NA:[0-9]+]]:GPR, dst_tied = %[[A]]:GPR, src = %[[I]]:GPR}
+// CHECK-NEXT: x86_64.lea_base_disp {dst = %[[NI:[0-9]+]]:GPR, base = %[[I]]:GPR, imm = -1}
+// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[GO:[0-9]+]]:GPR8, imm = 1}
+// CHECK-NEXT: asm.vbr %[[NA]], %[[NI]], %[[GO]] ^[[LATCH]]
+// CHECK: ^[[LATCH]](%[[A2:[0-9]+]]: !x86_64.GPR, %[[I2:[0-9]+]]: !x86_64.GPR, %[[FLAG:[0-9]+]]: !x86_64.GPR):
+// CHECK-NEXT: x86_64.test_imm32 {dst = %[[FLAG]]:GPR, imm = 1}
+// CHECK-NEXT: x86_64.jne {imm = ^[[BACK:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr %[[A2]], %[[I2]] ^[[EXIT:bb[0-9]+]]
+// CHECK: ^[[BACK]]:
+// CHECK-NEXT: asm.vbr %[[A2]], %[[I2]] ^[[HEAD]]
+// CHECK: ^[[EXIT]](%[[R:[0-9]+]]: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
+// CHECK-NEXT: asm.vret %[[R]]
 // CHECK-NOT: scf.

@@ -1,10 +1,12 @@
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
 
-// An invariant loop still becomes a canonical scf.while, never a branch.
+// An invariant loop still becomes a canonical scf.loop whose predicate is
+// the gamma over the condition, never a branch.
 
 int f(void) { while (1) {} return 0; }
 
 // CHECK-NOT: cfg.
-// CHECK: scf.while {
-// CHECK: scf.condition
+// CHECK: scf.loop {
+// CHECK: %[[P:[0-9]+]] = scf.switch2
+// CHECK: -> %[[P]]
 // CHECK-NOT: cfg.

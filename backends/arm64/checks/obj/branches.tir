@@ -14,15 +14,16 @@ module {
 }
 
 // The i1 condition defines only bit 0, so it is masked first: and x0, x0, #1;
-// then cbnz x0, +8 (CONDBR19 fixup patched); b +12 (imm26 fixup patched);
-// then each block: movz x0, #imm and a branch to the single exit, which rets.
+// then cbnz x0, +16 (CONDBR19 fixup patched) to the true arm; b +4 (imm26
+// fixup patched) to the false arm laid out first; then each arm: movz x0, #imm
+// and a branch to the single exit, which rets.
 // CHECK: .section .text
 // CHECK-NEXT: select:
 // CHECK-NEXT: [0x00, 0x00, 0x40, 0x92]
-// CHECK-NEXT: [0x40, 0x00, 0x00, 0xB5]
+// CHECK-NEXT: [0x80, 0x00, 0x00, 0xB5]
+// CHECK-NEXT: [0x01, 0x00, 0x00, 0x14]
+// CHECK-NEXT: [0x00, 0x00, 0x80, 0xD2]
 // CHECK-NEXT: [0x03, 0x00, 0x00, 0x14]
 // CHECK-NEXT: [0x20, 0x00, 0x80, 0xD2]
-// CHECK-NEXT: [0x03, 0x00, 0x00, 0x14]
-// CHECK-NEXT: [0x00, 0x00, 0x80, 0xD2]
 // CHECK-NEXT: [0x01, 0x00, 0x00, 0x14]
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]

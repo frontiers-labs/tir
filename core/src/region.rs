@@ -282,14 +282,22 @@ impl RegionHandle {
                 )));
             }
         }
-        for &value in ops
-            .iter()
-            .flat_map(|op| context.get_op(*op).operands())
-            .collect::<Vec<_>>()
-            .iter()
-            .chain(self.results().iter())
-        {
-            self.verify_in_scope(context, value)?;
+        for op in &ops {
+            let instance = context.get_op(*op);
+            for value in instance.operands() {
+                self.verify_in_scope(context, value).map_err(|error| {
+                    crate::Error::VerificationError(format!(
+                        "{}.{} reads {error}",
+                        instance.dialect(),
+                        instance.name()
+                    ))
+                })?;
+            }
+        }
+        for value in self.results() {
+            self.verify_in_scope(context, value).map_err(|error| {
+                crate::Error::VerificationError(format!("a region result names {error}"))
+            })?;
         }
         topological_order(context, self.id).map(|_| ())
     }
