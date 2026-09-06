@@ -115,8 +115,11 @@ pub fn print_nodes_region_with(
     results: &[crate::ValueId],
     dep_results: &[crate::ValueId],
 ) -> Result<(), std::fmt::Error> {
-    let ops =
-        crate::region::topological_order(context, region.id()).unwrap_or_else(|_| region.op_ids());
+    let ops = match fmt.shuffle() {
+        Some(rng) => crate::region::shuffled_topological_order(context, region.id(), rng),
+        None => crate::region::topological_order(context, region.id()),
+    }
+    .unwrap_or_else(|_| region.op_ids());
     fmt.writeln(open_brace(fmt))?;
     fmt.push();
     for op in ops {

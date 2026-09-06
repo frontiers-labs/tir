@@ -30,7 +30,7 @@ use tir_relational::{ClassId as Id, Engine, Extraction};
 use crate::analysis::scopes;
 use crate::{
     AnalysisManager, BlockId, ConstantLike, Context, LoopLike, MemoryRead, MemoryWrite, OpId,
-    OperationRef, Pass, PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
+    OperationRef, Pass, PassError, PassTarget, RegionId, RegionKind, Rewriter, TypeId, ValueId,
     attributes::{AttributeValue, Predicate},
     builtin::ops,
     func::FuncOp,
@@ -61,7 +61,7 @@ impl Pass for InstCombinePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(

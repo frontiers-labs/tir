@@ -1,0 +1,38 @@
+// RUN: tir opt %s | filecheck %s
+// RUN: tir opt --shuffle-seed 1 %s | filecheck %s --check-prefix=SEED
+// RUN: tir opt --shuffle-seed 1 %s | tir opt --verify | filecheck %s --check-prefix=SEED
+// RUN: tir opt --shuffle-seed 1 %s | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir interp %s -f f --args=3 | filecheck %s --check-prefix=VALUE
+
+// Three independent operations print in id order; a seed picks another order
+// their dependencies allow. Parsing the shuffled text back numbers the values
+// along it, so the reader walks a different order of the same graph, verifies
+// it, and computes the same result.
+
+module {
+  %f = func.func @f(%p: !i32) -> !i32 {
+    %a = addi %p, %p : !i32
+    %b = subi %p, %p : !i32
+    %c = muli %p, %p : !i32
+    %d = addi %a, %b : !i32
+    %e = addi %d, %c : !i32
+    -> %e
+  }
+  module_end
+}
+
+// CHECK:      %[[A:[0-9]+]] = addi
+// CHECK-NEXT: %[[B:[0-9]+]] = subi
+// CHECK-NEXT: %[[C:[0-9]+]] = muli
+// CHECK-NEXT: %[[D:[0-9]+]] = addi %[[A]], %[[B]]
+// CHECK-NEXT: %[[E:[0-9]+]] = addi %[[D]], %[[C]]
+// CHECK-NEXT: -> %[[E]]
+
+// SEED:      func.func @f
+// SEED-NEXT: muli
+// SEED-NEXT: subi
+// SEED-NEXT: addi
+// SEED-NEXT: addi
+// SEED-NEXT: addi
+
+// VALUE: i32 15

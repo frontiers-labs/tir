@@ -20,6 +20,12 @@ pub struct ToolArgs {
     #[arg(long = "print-affine")]
     print_affine: bool,
 
+    /// Print every unordered region in a random dependency-respecting order
+    /// drawn from this seed, so the reader of the output walks a different
+    /// order of the same graph.
+    #[arg(long = "shuffle-seed")]
+    shuffle_seed: Option<u64>,
+
     /// Output file, or `-` for stdout.
     #[arg(short = 'o', default_value = "-")]
     output: OsString,
@@ -61,6 +67,9 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
 
     let mut rendered = String::new();
     let mut fmt = IRFormatter::new(&mut rendered);
+    if let Some(seed) = args.shuffle_seed {
+        fmt.shuffle_nodes(seed);
+    }
     tir::print_ir(&module, &context, &mut fmt).map_err(|e| format!("failed to print IR: {e}"))?;
 
     write_output(args.output.as_os_str(), &rendered).map_err(|e| e.into())

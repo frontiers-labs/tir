@@ -3,7 +3,7 @@
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f pick --args=1,5 | filecheck --check-prefix=THEN %s
 // RUN: tir interp %s -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
-// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
 
 // Each arm stores to the slot and computes a value. A gamma forwards nothing:
 // the arms read the enclosing scope, and only what the continuation needs

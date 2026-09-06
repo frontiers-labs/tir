@@ -36,7 +36,7 @@ use crate::ptr::MemcpyOp;
 use crate::state::{EntryStateOpBuilder, JoinOpBuilder, SplitOpBuilder};
 use crate::{
     Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation, OperationRef, Pass, PassError,
-    PassTarget, PromotableAllocation, Rewriter, ValueId, scf,
+    PassTarget, PromotableAllocation, RegionKind, Rewriter, ValueId, scf,
 };
 
 #[derive(Default)]
@@ -56,7 +56,7 @@ impl Pass for ThreadStatePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(
@@ -695,7 +695,7 @@ impl Pass for UnthreadPass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(

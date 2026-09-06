@@ -347,6 +347,30 @@ pub(crate) fn topological_order(
     context: &Context,
     region: RegionId,
 ) -> Result<Vec<OpId>, crate::Error> {
+    topological_order_picking(context, region, |ready| ready.pop_first())
+}
+
+/// [`topological_order`] with the tie among ready operations broken by `rng`
+/// instead of by id: one random linearization of the same graph.
+pub(crate) fn shuffled_topological_order(
+    context: &Context,
+    region: RegionId,
+    rng: &mut crate::utils::Rng,
+) -> Result<Vec<OpId>, crate::Error> {
+    topological_order_picking(context, region, |ready| {
+        if ready.is_empty() {
+            return None;
+        }
+        let pick = *ready.iter().nth(rng.below(ready.len()))?;
+        ready.take(&pick)
+    })
+}
+
+fn topological_order_picking(
+    context: &Context,
+    region: RegionId,
+    mut pick: impl FnMut(&mut std::collections::BTreeSet<OpId>) -> Option<OpId>,
+) -> Result<Vec<OpId>, crate::Error> {
     use std::collections::{BTreeSet, HashMap, HashSet};
 
     let ops: HashSet<OpId> = context.get_region(region).op_ids().into_iter().collect();
@@ -372,7 +396,7 @@ pub(crate) fn topological_order(
         .map(|(op, _)| *op)
         .collect();
     let mut order = Vec::with_capacity(ops.len());
-    while let Some(op) = ready.pop_first() {
+    while let Some(op) = pick(&mut ready) {
         order.push(op);
         for reader in readers.get(&op).into_iter().flatten() {
             let count = pending.get_mut(reader).expect("reader of a region op");
