@@ -1,0 +1,42 @@
+// RUN: tir opt --pass destructure --verify %s | filecheck %s
+// RUN: tir opt --pass destructure %s | tir interp --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: tir opt --pass destructure %s | tir interp --args=1 | filecheck --check-prefix=ONE %s
+// RUN: tir opt --pass destructure %s | tir interp --args=2 | filecheck --check-prefix=LAST %s
+// RUN: tir opt --pass destructure %s | tir interp --args=9 | filecheck --check-prefix=LAST %s
+// RUN: tir interp %s --args=9 | filecheck --check-prefix=LAST %s
+
+// A gate with more arms than a bit decides becomes a chain of equality tests,
+// one block per test, the last falling through to the arm no index names:
+// past-the-end selects it, as the predicate's own rule says.
+
+module {
+  %fn_main = func.func @main(%0: !i32) -> !i32 {
+    %1 = scf.switch2 %0 args() () {
+      %2 = constant {value = 10} : !i32
+      -> %2
+    }
+    () {
+      %3 = constant {value = 11} : !i32
+      -> %3
+    }
+    () {
+      %4 = constant {value = 12} : !i32
+      -> %4
+    }
+    func.return %1
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @main(%[[P:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT: %[[K0:[0-9]+]] = constant {value = 0} : !i32
+// CHECK-NEXT: %[[T0:[0-9]+]] = cmpi %[[P]], %[[K0]] {predicate = "eq"} : !i1
+// CHECK-NEXT: cfg.cond_br %[[T0]], ^bb1, ^bb4
+// CHECK: ^bb4:
+// CHECK-NEXT: %[[K1:[0-9]+]] = constant {value = 1} : !i32
+// CHECK-NEXT: %[[T1:[0-9]+]] = cmpi %[[P]], %[[K1]] {predicate = "eq"} : !i1
+// CHECK-NEXT: cfg.cond_br %[[T1]], ^bb2, ^bb3
+
+// ZERO: i32 10
+// ONE: i32 11
+// LAST: i32 12

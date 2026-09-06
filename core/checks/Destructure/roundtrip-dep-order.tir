@@ -1,0 +1,33 @@
+// RUN: tir interp %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,destructure --verify %s | tir interp | filecheck %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir opt --pass destructure | tir interp | filecheck %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir opt --pass destructure | tir interp | filecheck %s
+// RUN: tir opt --pass restructure-nodes,destructure %s | filecheck --check-prefix=CFG %s
+
+// `*p = 1; x = *p; *p = 2` through the unordered form and back: the chain the
+// conversion constructed is the only order the destructured block keeps, so
+// the read still sees the first write and the memory still ends at 2.
+
+module {
+  %fn_main = func.func @main() -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %one = constant {value = 1} : !i32
+    %two = constant {value = 2} : !i32
+    %ten = constant {value = 10} : !i32
+    ptr.store %one, %p
+    %x = ptr.load %p : !i32
+    ptr.store %two, %p
+    %final = ptr.load %p : !i32
+    %scaled = muli %x, %ten : !i32
+    %sum = addi %scaled, %final : !i32
+    func.return %sum
+  }
+  module_end
+}
+
+// CHECK: i32 12
+// CFG: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %{{[0-9]+}}
+// CFG-NEXT: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S1]] : !i32
+// CFG-NEXT: | %[[S2:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[R1]]
+// CFG-NEXT: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S2]] : !i32
+// CFG: func.return %{{[0-9]+}} | %[[R2]]

@@ -1,5 +1,6 @@
-// RUN: tir interp %s -f count | filecheck --check-prefix=COUNT %s
-// RUN: tir interp %s -f marker | filecheck --check-prefix=MARKER %s
+// RUN: tir opt --pass destructure %s | tir interp -f count | filecheck --check-prefix=COUNT %s
+// RUN: tir opt --pass destructure %s | tir interp -f marker | filecheck --check-prefix=MARKER %s
+// RUN: tir opt --pass destructure --verify %s
 
 // The continue cone stores once per iteration and the exit cone stores once
 // on the way out: three iterations count to 3, and the marker written on exit

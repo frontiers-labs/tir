@@ -265,7 +265,11 @@ pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), E
     while let Some(op_id) = worklist.pop() {
         let instance = context.get_op(op_id);
         let observes = observes_only(&instance);
-        for operand in instance.dep_operands() {
+        // A terminator's dependency is the state an edge is entered on, or
+        // handed back: a rename across the edge, like a region result, and the
+        // paths it forks a state along are exclusive.
+        let carried = instance.has_interface::<dyn crate::Terminator>();
+        for operand in instance.dep_operands().iter().copied().filter(|_| !carried) {
             let taken = consumers.entry(operand).or_default();
             if !taken.iter().any(|(taker, _)| *taker == op_id) {
                 taken.push((op_id, observes));

@@ -1,0 +1,22 @@
+// RUN: tir opt --pass destructure %s | tir interp --args=5 | filecheck %s
+// RUN: tir opt --pass destructure %s | tir interp --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: tir opt --pass destructure --verify %s
+
+// A counted loop sums 0..n; with n = 0 the body never runs and the loop
+// produces its init.
+
+module {
+  %fn_main = func.func @main(%0: !i32) -> !i32 {
+    %1 = constant {value = 0} : !i32
+    %2 = constant {value = 1} : !i32
+    %3, %4 = scf.for2 %5 = %1 to %0 step %2 (%6 = %1) {
+      %7 = addi %6, %5 : !i32
+      -> %7
+    }
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK: i32 10
+// ZERO: i32 0

@@ -264,7 +264,7 @@ impl Interpreter<'_> {
                     let arguments: Vec<ValueId> = self
                         .context
                         .get_block(dest)
-                        .arguments()
+                        .value_arguments()
                         .iter()
                         .map(|v| v.id())
                         .collect();
@@ -443,8 +443,10 @@ impl Interpreter<'_> {
         } else {
             edges[0].clone()
         };
+        // A dependency names no value: the edge carries it, nothing binds it.
         let args = arg_ids
             .iter()
+            .filter(|&&id| !self.context.get_value(id).is_dependency())
             .map(|&id| self.value_of(id))
             .collect::<Result<Vec<_>>>()?;
         Ok(Flow::Goto(dest, args))

@@ -1,4 +1,5 @@
-// RUN: tir interp %s | filecheck %s
+// RUN: tir opt --pass destructure %s | tir interp | filecheck %s
+// RUN: tir opt --pass destructure --verify %s
 
 // One store per iteration feeds both the predicate and the exit value; the
 // operation runs once per iteration however many cones demand it, so the

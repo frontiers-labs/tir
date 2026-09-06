@@ -2,6 +2,7 @@
 
 pub mod affine;
 pub mod dce;
+pub mod destructure;
 pub mod inline;
 pub mod instcombine;
 pub mod lower_memory_intrinsics;
@@ -16,6 +17,9 @@ pub mod thread_state;
 
 pub use affine::{AffineSchedulePass, strip_mine};
 pub use dce::DeadCodeEliminationPass;
+pub use destructure::{
+    CfgEdges, DestructurePass, Destructured, Edges, GateBlocks, LoopBlocks, Test, destructure,
+};
 pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombineNodesPass;
 pub use instcombine::InstCombinePass;
