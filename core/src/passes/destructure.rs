@@ -406,6 +406,49 @@ impl Lowering<'_> {
         ids.iter().map(|&id| self.context.get_value(id)).collect()
     }
 
+    /// The block a loop's cone runs in, entered on every memory state the cone
+    /// reads from the header: the states are renamed on the way in, so that
+    /// what a block consumes is defined in that block, as in any threaded CFG.
+    /// Answers the block and what the edge into it carries; `leaving` is
+    /// renamed along with the cone's operations.
+    fn cone_block(
+        &mut self,
+        cone: &HashSet<OpId>,
+        leaving: &mut [ValueId],
+    ) -> (BlockId, Vec<ValueId>) {
+        let block = self.block();
+        let mut entered = Vec::new();
+        let mut renames: Vec<(ValueId, ValueId)> = Vec::new();
+        let mut read: Vec<ValueId> = cone
+            .iter()
+            .flat_map(|&op| values_read(self.context, op))
+            .chain(leaving.iter().copied())
+            .filter(|&value| self.context.get_value(value).is_dependency())
+            .filter(|&value| {
+                self.context
+                    .get_value(value)
+                    .defining_op()
+                    .is_none_or(|def| !cone.contains(&def))
+            })
+            .collect();
+        read.sort();
+        read.dedup();
+        for value in read {
+            let argument = self.context.append_dep_block_argument(block).id();
+            entered.push(value);
+            renames.push((value, argument));
+        }
+        for &op in cone {
+            rename_within(self.context, op, &renames);
+        }
+        for value in leaving.iter_mut() {
+            if let Some(&(_, new)) = renames.iter().find(|(old, _)| old == value) {
+                *value = new;
+            }
+        }
+        (block, entered)
+    }
+
     fn gamma(
         &mut self,
         rewriter: &mut Rewriter,
@@ -486,19 +529,19 @@ impl Lowering<'_> {
         let order = self.order(body)?;
 
         let header_end = self.ops(rewriter, body, &order, &header_ops, header)?;
-        let continue_ = self.block();
+        let (continue_, continue_entered) = self.cone_block(&continue_only, &mut continue_values);
         let continue_end = self.ops(rewriter, body, &order, &continue_only, continue_)?;
         self.edges
             .jump(continue_end, &Edge::with(header, &continue_values));
-        let exit = self.block();
+        let (exit, exit_entered) = self.cone_block(&exit_only, &mut exit_values);
         let exit_end = self.ops(rewriter, body, &order, &exit_only, exit)?;
         self.edges.jump(exit_end, &Edge::with(merge, &exit_values));
         self.edges.branch(
             header_end,
             op,
             Test::Repeat,
-            &Edge::to(continue_),
-            &Edge::to(exit),
+            &Edge::with(continue_, &continue_entered),
+            &Edge::with(exit, &exit_entered),
         )?;
 
         self.record.loops.push(LoopBlocks {
@@ -507,6 +550,36 @@ impl Lowering<'_> {
             merge,
         });
         rewriter.erase_op(&OperationRef::new(op.clone()))
+    }
+}
+
+/// Rename the reads of `op` and of everything nested in it.
+fn rename_within(context: &Context, op: OpId, renames: &[(ValueId, ValueId)]) {
+    let instance = context.get_op(op);
+    for (index, operand) in instance.operands().iter().enumerate() {
+        if let Some(&(_, new)) = renames.iter().find(|(old, _)| old == operand) {
+            context.set_op_operand(op, index, new);
+        }
+    }
+    for region in instance.regions() {
+        let handle = context.get_region(region);
+        let results: Vec<ValueId> = handle
+            .results()
+            .iter()
+            .map(|result| {
+                renames
+                    .iter()
+                    .find(|(old, _)| old == result)
+                    .map_or(*result, |&(_, new)| new)
+            })
+            .collect();
+        if results != handle.results() {
+            let deps = handle.dep_results().len();
+            context.set_region_results(region, results, deps);
+        }
+        for child in handle.op_ids() {
+            rename_within(context, child, renames);
+        }
     }
 }
 

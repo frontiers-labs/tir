@@ -1,0 +1,38 @@
+// RUN: tir opt --pass destructure --verify %s | filecheck %s
+// RUN: tir opt --pass destructure %s | tir interp | filecheck --check-prefix=VALUE %s
+
+// The continue edge carries the header's state back while the exit cone
+// stores through it. Each cone block is entered on the states it reads, so
+// what a block consumes is defined there, as the fork rule expects.
+
+module {
+  %fn_main = func.func @main() -> !i32 {
+    %0 = constant {value = 0} : !i32
+    %1 = constant {value = 1} : !i32
+    %2 = constant {value = 3} : !i32
+    %3 = constant {value = 42} : !i32
+    %4 | %5 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    | %6 = ptr.store %0, %4 | %5
+    %7 | %8 = scf.loop (%9 = %0 | %10 = %6) {
+      %11 = cmpi %9, %2 {predicate = "slt"} : !i1
+      %12 = addi %9, %1 : !i32
+      | %13 = ptr.store %3, %4 | %10
+      -> %11, %12, %9 | %10, %13
+    }
+    %14 = ptr.load %4 | %8 : !i32
+    func.return %14
+  }
+  module_end
+}
+
+// CHECK: ^bb1(%[[I:[0-9]+]]: !i32 | %[[S:[0-9]+]]):
+// CHECK-NEXT: %[[AGAIN:[0-9]+]] = cmpi %[[I]]
+// CHECK-NEXT: cfg.cond_br %[[AGAIN]], ^bb2(| %[[S]]), ^bb3(| %[[S]])
+// CHECK-NEXT: ^bb2(| %[[CS:[0-9]+]]):
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[I]]
+// CHECK-NEXT: cfg.br ^bb1(%[[NEXT]] : !i32 | %[[CS]])
+// CHECK-NEXT: ^bb3(| %[[ES:[0-9]+]]):
+// CHECK-NEXT: | %[[STORED:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[ES]]
+// CHECK-NEXT: cfg.br ^bb4(%[[I]] : !i32 | %[[STORED]])
+
+// VALUE: i32 42
