@@ -1,0 +1,46 @@
+// RUN: tir opt --pass restructure-nodes,inline<1000,0>,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,inline<1000,0> %s | tir interp - | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 3 %s | tir opt --pass inline<1000,0> | tir interp - | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 9 %s | tir opt --pass inline<1000,0> | tir interp - | filecheck %s --check-prefix=VALUE
+
+// Splicing an unordered callee keeps the memory order: the state the callee's
+// body was entered on becomes the state the call observed, and the state it
+// leaves is what the call left, so the load after the second call still sees
+// both stores. The callee's slot is hoisted twice and the copies stay apart.
+// Nothing is unthreaded and no second memory order is drawn.
+
+module {
+  %fn_bump = func.func private @bump(%cell: !ptr.p<!i32>, %a: !i32) -> !i32 {
+    %slot = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %a, %slot
+    %v = ptr.load %cell : !i32
+    %held = ptr.load %slot : !i32
+    %s = addi %v, %held : !i32
+    ptr.store %s, %cell
+    func.return %s
+  }
+  %fn_main = func.func @main() -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %three = constant {value = 3} : !i32
+    %four = constant {value = 4} : !i32
+    %cell = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %zero, %cell
+    %r = func.call %fn_bump(%cell, %three : !ptr.p<!i32>, !i32) -> !i32
+    %s = func.call %fn_bump(%cell, %four : !ptr.p<!i32>, !i32) -> !i32
+    %w = ptr.load %cell : !i32
+    %t = addi %r, %s : !i32
+    %u = addi %t, %w : !i32
+    func.return %u
+  }
+  module_end
+}
+
+// CHECK-NOT: @bump
+// CHECK: func.func @main
+// CHECK-NOT: func.call
+// CHECK: | %[[E:[0-9]+]] = state.entry_state
+// CHECK-NOT: state.entry_state
+// CHECK: ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[E]]
+
+// VALUE: i32 17

@@ -6,8 +6,8 @@ use crate::func::{CallOp, FuncOp, ReturnOp};
 use crate::passes::thread_state::unthread;
 use crate::ptr::AllocaOp;
 use crate::{
-    BlockId, ConstantLike, Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError,
-    PassTarget, RegionId, Rewriter, Symbol, Terminator, Value, ValueId, Visibility,
+    ConstantLike, Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
+    RegionId, Rewriter, Symbol, Terminator, Value, ValueId, Visibility,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +86,7 @@ impl Pass for InlinePass {
         let mut graph = CallGraph::read(context, module.op());
         for index in graph.callees_first() {
             let caller = graph.nodes[index].func;
+            let ordered = !context.get_region(graph.nodes[index].body).is_nodes();
             let mut caller_ops = cost_of(context, caller);
             let mut edited = false;
             for site in std::mem::take(&mut graph.nodes[index].sites) {
@@ -96,17 +97,22 @@ impl Pass for InlinePass {
                     continue;
                 }
                 caller_ops += cost_of(context, graph.nodes[site.callee].func);
-                if !edited {
+                if !edited && ordered {
                     // Before the first splice: erasing a call whose state
                     // result is still named leaves the split behind it holding
-                    // a definition that is gone.
+                    // a definition that is gone. An unordered body keeps its
+                    // chain: the splice wires the callee's into it.
                     unthread(context, rewriter, &context.get_op(caller))?;
-                    edited = true;
                 }
-                let copied = splice(context, rewriter, &graph, &site)?;
+                edited = true;
+                let copied = if ordered {
+                    splice(context, rewriter, &graph, &site)?
+                } else {
+                    splice_nodes(context, rewriter, &graph, &site)?
+                };
                 graph.inlined(&site, &copied);
             }
-            if edited {
+            if edited && ordered {
                 unthread(context, rewriter, &context.get_op(caller))?;
             }
         }
@@ -145,7 +151,6 @@ struct CallGraph {
 struct Node {
     func: OpId,
     body: RegionId,
-    entry: BlockId,
     value: ValueId,
     private: bool,
     users: u32,
@@ -176,7 +181,6 @@ impl CallGraph {
                 Node {
                     func: op,
                     body,
-                    entry: context.get_region(body).block_ids()[0],
                     value: function.fn_value(),
                     private: function.symbol_visibility() == Visibility::Private,
                     users: 0,
@@ -193,7 +197,12 @@ impl CallGraph {
                 };
                 let op = call.op().clone().as_op::<CallOp>().expect("a call");
                 let args = op.args();
-                if args.len() != context.get_block(nodes[callee].entry).arguments().len() {
+                if args.len()
+                    != context
+                        .get_region(nodes[callee].body)
+                        .value_arguments()
+                        .len()
+                {
                     continue;
                 }
                 let constant_args = args
@@ -350,8 +359,8 @@ fn splice(
     let call = site.call.op().clone().as_op::<CallOp>().expect("a call");
     let callee = &graph.nodes[site.callee];
     let bindings: HashMap<ValueId, ValueId> = context
-        .get_block(callee.entry)
-        .arguments()
+        .get_region(callee.body)
+        .value_arguments()
         .iter()
         .map(Value::id)
         .zip(call.args())
@@ -383,7 +392,9 @@ fn splice(
         .returned_value();
     rewriter.erase_op(&OperationRef::new(context.get_op(last)))?;
 
-    let entry = graph.nodes[site.caller].entry;
+    let entry = context
+        .get_region(graph.nodes[site.caller].body)
+        .entry_block();
     let destination = context
         .parent_block(site.call.op().id)
         .expect("the call sits in a block");
@@ -412,6 +423,89 @@ fn splice(
     let tuples = fold_tuple_gets(context, rewriter, &ops_under(context, &caller))?;
     erase_unused(context, rewriter, &tuples)?;
     Ok(copied)
+}
+
+/// [`splice`] for an unordered callee body: its operations join the region
+/// holding the call, reading the call's arguments through the ports they were
+/// declared on. The callee's memory order is wired into the caller's: the
+/// state its body was entered on is the one the call observed, and the state
+/// the body leaves behind is what the call left. Nothing is unthreaded.
+fn splice_nodes(
+    context: &Context,
+    rewriter: &mut Rewriter,
+    graph: &CallGraph,
+    site: &Site,
+) -> Result<Vec<usize>, PassError> {
+    let call = site.call.op();
+    let callee = &graph.nodes[site.callee];
+    let source = context.get_region(callee.body);
+    let args = call.clone().as_op::<CallOp>().expect("a call").args();
+    let bindings: HashMap<ValueId, ValueId> = source
+        .value_arguments()
+        .iter()
+        .map(Value::id)
+        .zip(args)
+        .chain(
+            source
+                .dep_arguments()
+                .iter()
+                .map(Value::id)
+                .zip(call.dep_operands()),
+        )
+        .collect();
+    let destination = context
+        .parent_nodes_region(call.id)
+        .expect("a call in an unordered body sits in a region");
+    let (ops, produced) =
+        crate::clone::clone_nodes_ops_into(context, callee.body, &bindings, destination);
+
+    let body = graph.nodes[site.caller].body;
+    let copied: Vec<usize> = ops
+        .iter()
+        .flat_map(|&op| {
+            let instance = context.get_op(op);
+            let mut calls = calls_under(context, &instance);
+            if instance.is::<CallOp>() {
+                calls.push(OperationRef::new(instance));
+            }
+            calls
+        })
+        .filter_map(|call| callee_node(context, &call, &graph.by_op))
+        .collect();
+    let entered = call.dep_operands().first().copied();
+    for &op in &ops {
+        let instance = context.get_op(op);
+        if instance.is::<AllocaOp>() && destination != body {
+            context.remove_from_region(destination, op);
+            context.add(body, op);
+        }
+        if instance.is::<crate::state::EntryStateOp>() {
+            let entered = entered.expect("a call into memory observes a dependency");
+            rename(context, destination, instance.dep_results()[0], entered);
+            rewriter.erase_op(&OperationRef::new(instance))?;
+        }
+    }
+
+    let values = source.value_results().len();
+    for (&old, &new) in call.value_results().iter().zip(&produced[..values]) {
+        rename(context, destination, old, new);
+    }
+    for (&old, &new) in call.dep_results().iter().zip(&produced[values..]) {
+        rename(context, destination, old, new);
+    }
+    rewriter.erase_op(&site.call)?;
+
+    let caller = context.get_op(graph.nodes[site.caller].func);
+    let tuples = fold_tuple_gets(context, rewriter, &ops_under(context, &caller))?;
+    erase_unused(context, rewriter, &tuples)?;
+    Ok(copied)
+}
+
+/// Hand every reader of `old` under `region` the value `new`, the result
+/// lists of the regions there included.
+fn rename(context: &Context, region: RegionId, old: ValueId, new: ValueId) {
+    context.replace_value_uses(old, new);
+    context.rename_region_results(region, old, new, &[]);
 }
 
 /// Resolve `tuple_get(make_tuple(..), i)` in `ops` to the element it selects.
@@ -513,8 +607,7 @@ fn ops_under(context: &Context, root: &OpHandle) -> Vec<OpId> {
 fn region_ops(context: &Context, root: &OpHandle) -> Vec<OpId> {
     root.regions()
         .iter()
-        .flat_map(|&region| context.get_region(region).iter(context.clone()))
-        .flat_map(|block| block.op_ids())
+        .flat_map(|&region| context.get_region(region).op_ids())
         .collect()
 }
 
